@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 
 from kyc_tool.checkstore import repo as checkstore
-from kyc_tool.db.tables import Case, DecisionRow, ReviewTask, Run
+from kyc_tool.db.tables import Case, DecisionRow, Event, ReviewTask, Run
 from kyc_tool.events.ingest import ingest_event
 
 router = APIRouter()
@@ -129,12 +129,19 @@ async def complete_review_task(task_id: str, request: Request) -> JSONResponse:
     if result not in ("pass", "fail") or not reviewer_id:
         raise HTTPException(status_code=422, detail="result (pass|fail) and reviewer_id required")
 
+    idempotency_key = f"review-task-complete-{task_id}"
     with request.app.state.session_factory() as session:
         task = session.get(ReviewTask, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="review task not found")
         case_id = task.case_id
         task_type = task.task_type
+        # replay: the completion event already exists — return its stored outcome
+        existing = session.execute(
+            select(Event.response_snapshot).where(Event.idempotency_key == idempotency_key)
+        ).scalar_one_or_none()
+        if existing is not None:
+            return JSONResponse(status_code=200, content=dict(existing))
 
     if task_type != "website":
         # poc_email_unavailable tasks close with audit only (AUDIT_FINDINGS §C2)
@@ -158,7 +165,7 @@ async def complete_review_task(task_id: str, request: Request) -> JSONResponse:
         request.app.state.session_factory,
         request.app.state.policy,
         case_id=case_id,
-        idempotency_key=f"review-task-complete-{task_id}",
+        idempotency_key=idempotency_key,
         envelope=envelope,
     )
     return JSONResponse(status_code=outcome.status_code, content=outcome.body)

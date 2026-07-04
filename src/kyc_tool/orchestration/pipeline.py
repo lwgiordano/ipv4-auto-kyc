@@ -39,6 +39,7 @@ from kyc_tool.domain.models import (
     DecisionResult,
     RunState,
 )
+from kyc_tool.orchestration.side_effects import SideEffects
 from kyc_tool.orchestration.triggers import RunPlan, plan_for
 from kyc_tool.outbox.publisher import enqueue_decision_callback
 from kyc_tool.policy.loader import PolicyBundle
@@ -46,15 +47,9 @@ from kyc_tool.queue import jobs
 from kyc_tool.queue.jobs import ClaimedJob
 from kyc_tool.storage.object_store import ObjectStore
 from kyc_tool.validators.base import CheckIntent, ValidationContext
+from kyc_tool.validators.build import build_intents
 
 log = structlog.get_logger(__name__)
-
-# Builder hook: Phase 1/2 install the real validators; Phase 0 has none.
-IntentBuilder = "callable[[PolicyBundle, ValidationContext], list[CheckIntent]]"
-
-
-def _no_intents(policy: PolicyBundle, ctx: ValidationContext) -> list[CheckIntent]:
-    return []
 
 
 class Pipeline:
@@ -76,8 +71,8 @@ class Pipeline:
         self.settings = settings
         self.adapters = adapters or {}
         self.broker_matcher = broker_matcher
-        self.intent_builder = intent_builder or _no_intents
-        self.side_effects = side_effects
+        self.intent_builder = intent_builder or build_intents
+        self.side_effects = side_effects if side_effects is not None else SideEffects(settings)
 
     # ------------------------------------------------------------------ job
 
@@ -314,6 +309,8 @@ class Pipeline:
                 rubric=self.policy.rubric,
                 run_id=run_id,
             )
+            if self.side_effects is not None:
+                self.side_effects.on_event(session, case, event, intents)
             audit(session, "run.stage", case_id=case.id, run_id=run_id, stage="WRITE_CHECKS",
                   written=len(intents))
 
