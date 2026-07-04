@@ -1,0 +1,22 @@
+{
+  "id": "G1",
+  "description": "Clean UK company: company email, Companies House match, website pass, LinkedIn match, ORG-ID pass -> approve with buying enabled.",
+  "steps": [
+    {
+      "checks": [
+        {"type": "verified_company_email", "status": "pass"},
+        {"type": "verified_email", "status": "pass"},
+        {"type": "official_registry_match", "status": "pass"},
+        {"type": "website_verified", "status": "pass"},
+        {"type": "linkedin_company_match", "status": "pass"},
+        {"type": "org_id_match", "status": "pass", "detail": {"org_handle": "ORG-ACME-1"}}
+      ],
+      "expect": {
+        "decision": "approve",
+        "buy_enablement": "enabled",
+        "gates_all_pass": true,
+        "live_pass_types": ["verified_company_email", "verified_email", "official_registry_match", "website_verified", "linkedin_company_match", "org_id_match"]
+      }
+    }
+  ]
+}

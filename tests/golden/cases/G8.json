@@ -1,0 +1,27 @@
+{
+  "id": "G8",
+  "description": "ORG-ID change after approval: new ORG-ID fails, old superseded; verified POC belonged to the old ORG-ID so the cascade supersedes it too; score drops, buying re-locks.",
+  "steps": [
+    {
+      "checks": [
+        {"type": "verified_company_email", "status": "pass"},
+        {"type": "verified_email", "status": "pass"},
+        {"type": "official_registry_match", "status": "pass"},
+        {"type": "website_verified", "status": "pass"},
+        {"type": "linkedin_company_match", "status": "pass"},
+        {"type": "org_id_match", "status": "pass", "detail": {"org_handle": "ORG-ACME-1"}},
+        {"type": "poc_verified", "status": "pass", "detail": {"org_handle": "ORG-ACME-1"}}
+      ],
+      "expect": {"decision": "approve", "buy_enablement": "enabled"}
+    },
+    {
+      "checks": [{"type": "org_id_match", "status": "fail", "detail": {"org_handle": "ORG-NEW-9"}}],
+      "expect": {
+        "decision": "manual_review_insufficient",
+        "buy_enablement": "locked_org_id_required",
+        "live_pass_types": ["verified_company_email", "verified_email", "official_registry_match", "website_verified", "linkedin_company_match"],
+        "not_live_pass": ["org_id_match", "poc_verified"]
+      }
+    }
+  ]
+}

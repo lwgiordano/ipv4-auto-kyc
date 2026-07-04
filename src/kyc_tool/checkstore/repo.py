@@ -6,6 +6,8 @@ that inserts its successor. The partial unique index (AUDIT:D3) makes a second
 live check of the same type impossible to persist.
 """
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -72,7 +74,16 @@ def write_check(
         .with_for_update()
     ).scalar_one_or_none()
 
+    # Stamp the prior BEFORE inserting its successor: the live partial-unique
+    # index evaluates per statement, and the deferrable FK lets the stamp
+    # reference an id that only exists later in this same transaction.
+    new_id = uuid.uuid4().hex
+    if prior is not None:
+        prior.superseded_by_check_id = new_id
+        session.flush()
+
     new_check = Check(
+        id=new_id,
         case_id=case_id,
         check_type=check_type,
         status=status.value,
@@ -87,7 +98,6 @@ def write_check(
     session.flush()
 
     if prior is not None:
-        prior.superseded_by_check_id = new_check.id
         audit(
             session,
             "check.superseded",
@@ -117,7 +127,7 @@ def supersede_without_replacement(
     """Cascade path (e.g. ORG-ID change invalidates a verified POC): the old
     check is superseded by a successor carrying the cascade reason, status
     needs_review, zero points."""
-    successor = write_check(
+    write_check(
         session,
         case_id=check.case_id,
         check_type=check.check_type,
@@ -129,6 +139,60 @@ def supersede_without_replacement(
         source_detail={"cascaded_from": check.id},
         created_by_run_id=run_id,
     )
-    # write_check already stamped the prior; nothing else to do — successor
-    # exists purely to keep the supersession chain explicit for audit.
-    _ = successor
+
+
+def apply_check_intents(
+    session: Session,
+    *,
+    case_id: str,
+    intents: list,
+    rubric,
+    run_id: str | None,
+) -> list[Check]:
+    """Record validated intents and apply the spec's dynamic cascade rules
+    (scoring_rubric.json dynamic_rules):
+
+    - every intent supersedes the prior live check of its type (write_check);
+    - an ORG-ID change revalidates a live verified POC — a POC whose recorded
+      org association no longer matches the new ORG-ID handle is superseded
+      too (points removed).
+    """
+    written: list[Check] = []
+    for intent in intents:
+        item = rubric.item(intent.check_type)
+        written.append(
+            write_check(
+                session,
+                case_id=case_id,
+                check_type=intent.check_type,
+                status=intent.status,
+                points_awarded=item.points,
+                category=item.category,
+                source=intent.source or item.source,
+                reason_codes=list(intent.reason_codes),
+                source_detail=dict(intent.source_detail),
+                created_by_run_id=run_id,
+            )
+        )
+
+    # ORG-ID → POC cascade
+    org_intents = [i for i in intents if i.check_type == "org_id_match"]
+    if org_intents:
+        new_handle = (org_intents[-1].source_detail or {}).get("org_handle")
+        live_poc = session.execute(
+            select(Check).where(
+                Check.case_id == case_id,
+                Check.check_type == "poc_verified",
+                Check.superseded_by_check_id.is_(None),
+            )
+        ).scalar_one_or_none()
+        if live_poc is not None:
+            poc_org = (live_poc.source_detail_json or {}).get("org_handle")
+            if new_handle is None or poc_org != new_handle:
+                supersede_without_replacement(
+                    session,
+                    live_poc,
+                    run_id=run_id,
+                    reason="poc_not_associated",
+                )
+    return written

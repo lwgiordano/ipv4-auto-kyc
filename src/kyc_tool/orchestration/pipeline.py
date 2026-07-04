@@ -306,21 +306,14 @@ class Pipeline:
                 intents=len(intents),
             )
 
-            # WRITE_CHECKS (logical stage)
-            for intent in intents:
-                rubric_item = self.policy.rubric.item(intent.check_type)
-                checkstore.write_check(
-                    session,
-                    case_id=case.id,
-                    check_type=intent.check_type,
-                    status=intent.status,
-                    points_awarded=rubric_item.points,
-                    category=rubric_item.category,
-                    source=intent.source or rubric_item.source,
-                    reason_codes=list(intent.reason_codes),
-                    source_detail=intent.source_detail,
-                    created_by_run_id=run_id,
-                )
+            # WRITE_CHECKS (logical stage) — includes the ORG-ID→POC cascade
+            checkstore.apply_check_intents(
+                session,
+                case_id=case.id,
+                intents=intents,
+                rubric=self.policy.rubric,
+                run_id=run_id,
+            )
             audit(session, "run.stage", case_id=case.id, run_id=run_id, stage="WRITE_CHECKS",
                   written=len(intents))
 

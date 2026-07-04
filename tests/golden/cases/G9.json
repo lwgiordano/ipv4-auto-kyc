@@ -1,0 +1,21 @@
+{
+  "id": "G9",
+  "description": "POC email hidden at the RIR: no points, decision unchanged. (The poc_email_unavailable review task itself is asserted in the Phase 2 integration suite.)",
+  "steps": [
+    {
+      "checks": [
+        {"type": "verified_email", "status": "pass"},
+        {"type": "website_verified", "status": "pass"}
+      ],
+      "expect": {"decision": "manual_review_insufficient"}
+    },
+    {
+      "checks": [{"type": "poc_verified", "status": "needs_review", "reasons": ["poc_email_hidden"]}],
+      "expect": {
+        "decision": "manual_review_insufficient",
+        "live_pass_types": ["verified_email", "website_verified"],
+        "not_live_pass": ["poc_verified"]
+      }
+    }
+  ]
+}

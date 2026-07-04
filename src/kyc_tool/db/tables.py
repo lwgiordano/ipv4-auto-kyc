@@ -141,7 +141,12 @@ class Check(Base):
     source_detail_json: Mapped[dict] = mapped_column(JSONB, default=dict)
     reason_codes: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     created_by_run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"))
-    superseded_by_check_id: Mapped[str | None] = mapped_column(ForeignKey("checks.id"))
+    # Deferrable: the supersession stamp is written BEFORE its successor row
+    # exists (same txn), so the live partial-unique index never sees two live
+    # rows; the FK validates at commit.
+    superseded_by_check_id: Mapped[str | None] = mapped_column(
+        ForeignKey("checks.id", deferrable=True, initially="DEFERRED")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     # AUDIT:D3 — at most one live check per (case, type); enforced in migration 003

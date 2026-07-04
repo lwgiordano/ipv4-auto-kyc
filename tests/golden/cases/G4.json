@@ -1,0 +1,15 @@
+{
+  "id": "G4",
+  "description": "Exact blocked broker (Larus by ORG-ID) -> reject; adapters after the gate are skipped so no checks exist.",
+  "steps": [
+    {
+      "broker_status": "blocked",
+      "checks": [],
+      "expect": {
+        "decision": "reject",
+        "live_pass_types": [],
+        "gates": {"broker_ok": false}
+      }
+    }
+  ]
+}

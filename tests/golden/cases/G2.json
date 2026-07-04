@@ -1,0 +1,22 @@
+{
+  "id": "G2",
+  "description": "AUDIT:B2 - approval at threshold WITHOUT ORG-ID (document instead, per the doc's own correction) -> approve_buy_locked.",
+  "steps": [
+    {
+      "checks": [
+        {"type": "verified_company_email", "status": "pass"},
+        {"type": "verified_email", "status": "pass"},
+        {"type": "official_registry_match", "status": "pass"},
+        {"type": "website_verified", "status": "pass"},
+        {"type": "linkedin_company_match", "status": "pass"},
+        {"type": "business_document_verified", "status": "pass"}
+      ],
+      "expect": {
+        "decision": "approve_buy_locked",
+        "buy_enablement": "locked_org_id_required",
+        "gates_all_pass": true,
+        "live_pass_types": ["verified_company_email", "verified_email", "official_registry_match", "website_verified", "linkedin_company_match", "business_document_verified"]
+      }
+    }
+  ]
+}

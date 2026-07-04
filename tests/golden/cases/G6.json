@@ -1,0 +1,22 @@
+{
+  "id": "G6",
+  "description": "Registry active but RIR entity is a different company: hard conflict (gate 5) fails -> not approvable regardless of points (AUDIT:A1 - only the JSON catch-all covers this).",
+  "steps": [
+    {
+      "checks": [
+        {"type": "verified_company_email", "status": "pass"},
+        {"type": "verified_email", "status": "pass"},
+        {"type": "official_registry_match", "status": "pass"},
+        {"type": "website_verified", "status": "pass"},
+        {"type": "linkedin_company_match", "status": "pass"},
+        {"type": "org_id_match", "status": "pass", "detail": {"org_handle": "ORG-OTHER-9"}, "reasons": ["hard_conflict"]}
+      ],
+      "expect": {
+        "decision": "manual_review_insufficient",
+        "gates_all_pass": false,
+        "gates": {"score_met": true, "no_hard_conflict": false},
+        "live_pass_types": ["verified_company_email", "verified_email", "official_registry_match", "website_verified", "linkedin_company_match", "org_id_match"]
+      }
+    }
+  ]
+}

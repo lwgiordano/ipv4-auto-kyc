@@ -27,7 +27,15 @@ def upgrade() -> None:
         sa.Column("source_detail_json", JSONB(), nullable=False, server_default=sa.text("'{}'::jsonb")),
         sa.Column("reason_codes", ARRAY(sa.Text()), nullable=False, server_default="{}"),
         sa.Column("created_by_run_id", sa.Text(), sa.ForeignKey("runs.id"), nullable=True),
-        sa.Column("superseded_by_check_id", sa.Text(), sa.ForeignKey("checks.id"), nullable=True),
+        # deferrable: supersession stamps the prior row before the successor
+        # insert in the same txn (live-unique index stays satisfied); the FK
+        # validates at commit
+        sa.Column(
+            "superseded_by_check_id",
+            sa.Text(),
+            sa.ForeignKey("checks.id", deferrable=True, initially="DEFERRED"),
+            nullable=True,
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
     op.create_index("ix_checks_case_id", "checks", ["case_id"])
