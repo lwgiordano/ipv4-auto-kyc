@@ -8,7 +8,6 @@ Raw responses land in object storage; upstream errors never create checks.
 
 import json
 import re
-from pathlib import Path
 
 import httpx
 import pytest
@@ -25,46 +24,14 @@ from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
+from tests.integration.shared import ACME_KYB, POC_DIRECTORY, registry_transport
 
 pytestmark = pytest.mark.postgres
-
-RECORDED = Path(__file__).parent.parent / "fixtures" / "recorded"
-
-ACME_KYB = {
-    "company_legal_name": "Acme Networks Ltd",
-    "address": "1 Main Street, London, EC1A 1AA",
-    "registration_number": "12345678",
-    "jurisdiction": "GB",
-    "website": "https://acme.example",
-}
-
-POC_DIRECTORY = {
-    "arin:JD123-ARIN": {
-        "found": True,
-        "associated_org_handles": ["ORG-ACME-1"],
-        "rir_listed_email": "noc@acme.example",
-    },
-    "ripe:HIDDEN-RIPE": {
-        "found": True,
-        "associated_org_handles": ["ORG-HIDE-1"],
-        "rir_listed_email": None,
-    },
-}
-
-
-def _registry_transport(request: httpx.Request) -> httpx.Response:
-    if "/search/companies" in request.url.path:
-        return httpx.Response(
-            200, json=json.loads((RECORDED / "companies_house_acme.json").read_text())
-        )
-    if "lei-records" in request.url.path:
-        return httpx.Response(200, json={"data": []})
-    return httpx.Response(404)
 
 
 @pytest.fixture()
 def phase2_pipeline(session_factory, policy, settings, evidence_store):
-    transport = httpx.MockTransport(_registry_transport)
+    transport = httpx.MockTransport(registry_transport)
     adapters = {
         "email_verification": EmailVerificationAdapter(),
         "companies_house": CompaniesHouseAdapter(

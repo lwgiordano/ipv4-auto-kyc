@@ -245,9 +245,6 @@ class Pipeline:
                     run_row = session.get(Run, run_id)
                     case_row = session.get(Case, case_id, with_for_update=True)
                     self.side_effects(session, run_row, case_row, output)
-            if adapter_id == "floqer_company_enrichment" and output.normalized.get("discovered"):
-                # later adapters in this same run (website review) see discovery context
-                snapshot = {**snapshot, "floqer_context": output.normalized}
                 audit(
                     session,
                     "adapter.recorded",
@@ -259,6 +256,9 @@ class Pipeline:
                     raw_ref=raw_ref,
                     error=(output.error or None),
                 )
+            if adapter_id == "floqer_company_enrichment" and output.normalized.get("discovered"):
+                # later adapters in this same run (website review) see discovery context
+                snapshot = {**snapshot, "floqer_context": output.normalized}
 
         with uow(self.session_factory) as session:
             if self._hop(session, run_id, RunState.RUN_ADAPTERS, RunState.VALIDATE):

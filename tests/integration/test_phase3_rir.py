@@ -4,94 +4,17 @@ points alone, and the buy-lock upgrade path (approve_buy_locked → org_id pass
 
 import json
 
-import httpx
 import pytest
 from sqlalchemy import text
 
-from kyc_tool.adapters.companies_house import CompaniesHouseAdapter
-from kyc_tool.adapters.document_ocr import DocumentOcrAdapter
-from kyc_tool.adapters.email_verification import EmailVerificationAdapter
 from kyc_tool.adapters.floqer import FixtureFloqerClient, FloqerAdapter
-from kyc_tool.adapters.gleif import GleifAdapter
-from kyc_tool.adapters.ocr import JsonScanOcrEngine
-from kyc_tool.adapters.rir_rdap.adapter import FixtureRirStrategy, RirRdapAdapter
-from kyc_tool.adapters.website_manual_review import WebsiteManualReviewAdapter
 from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
-from tests.integration.test_phase2_adapters import ACME_KYB, _registry_transport
+from tests.integration.shared import ACME_KYB, ACME_KYB_WITH_CONTACT, FLOQER_RECORDS
 
 pytestmark = pytest.mark.postgres
-
-RDAP_RECORDS = {
-    "ORG-ACME-1": {
-        "org_handle": "ORG-ACME-1",
-        "entity_name": "ACME NETWORKS LTD",
-        "address": "1 Main Street, London, EC1A 1AA",
-    },
-    "ORG-AMBIG-1": {
-        "org_handle": "ORG-AMBIG-1",
-        "entity_name": "ACME NETWORKS LTD",
-        "address": "1 Main Street, London, EC1A 1AA",
-        "parent_subsidiary_ambiguity": True,
-    },
-    "ORG-CONFLICT-1": {
-        "org_handle": "ORG-CONFLICT-1",
-        "entity_name": "ACME NETWORKS LTD",
-        "address": "1 Main Street, London, EC1A 1AA",
-        "conflicting_entity": True,
-    },
-}
-
-FLOQER_RECORDS = {
-    "acme networks ltd": {
-        "company_domain": "acme.example",
-        "website": "https://acme.example",
-        "linkedin": {
-            "person_name": "Jane Doe",
-            "company": "Acme Networks Ltd",
-            "title": "Director",
-            "company_domain": "acme.example",
-        },
-        "aliases": ["Acme Networks"],
-        "registry_candidates": [{"registry": "companies_house", "number": "12345678"}],
-    }
-}
-
-ACME_KYB_WITH_CONTACT = {**ACME_KYB, "contact": {"name": "Jane Doe", "title": "Director"}}
-
-
-@pytest.fixture()
-def phase3_pipeline(session_factory, policy, settings):
-    store = FsStore(settings.object_store_root)
-    transport = httpx.MockTransport(_registry_transport)
-    adapters = {
-        "email_verification": EmailVerificationAdapter(),
-        "companies_house": CompaniesHouseAdapter(
-            client=httpx.Client(transport=transport, base_url="https://ch.test")
-        ),
-        "gleif": GleifAdapter(
-            client=httpx.Client(transport=transport, base_url="https://gleif.test")
-        ),
-        "floqer_company_enrichment": FloqerAdapter(FixtureFloqerClient(FLOQER_RECORDS)),
-        "rir_rdap": RirRdapAdapter({"arin": FixtureRirStrategy(RDAP_RECORDS)}),
-        "document_ocr": DocumentOcrAdapter(store, JsonScanOcrEngine()),
-        "website_manual_review": WebsiteManualReviewAdapter(),
-    }
-    return Pipeline(
-        session_factory, policy, store, settings, adapters=adapters, broker_matcher=BrokerGate()
-    )
-
-
-@pytest.fixture()
-def phase3_worker(session_factory, phase3_pipeline):
-    return Worker(
-        session_factory,
-        {"run_transition": phase3_pipeline.handle_job},
-        backoff_base_seconds=0,
-        on_dead_letter=phase3_pipeline.on_dead_letter,
-    )
 
 
 def _live(client, case_id):
