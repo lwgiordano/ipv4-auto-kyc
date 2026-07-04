@@ -1,0 +1,24 @@
+name: kit-tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run end-to-end tests
+        run: bash tests/run-tests.sh
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck kit scripts and templates
+        run: |
+          shellcheck -x bootstrap.sh lib/*.sh tests/run-tests.sh \
+            templates/manage.sh templates/substrate/lib.sh \
+            templates/substrate/checks.d/*.sh templates/substrate/hooks/pre-commit

@@ -1,0 +1,7 @@
+# full — everything in standard, plus .claude/settings.json and a CI workflow.
+PROFILE_AGENTS_MD=1
+PROFILE_CLAUDE_MD=1
+PROFILE_EDITORCONFIG=1
+PROFILE_HOOKS=1
+PROFILE_CLAUDE_SETTINGS=1
+PROFILE_CI=1

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./manage.sh setup)",
+      "Bash(./manage.sh doctor)",
+      "Bash(./manage.sh fmt)",
+      "Bash(./manage.sh lint)",
+      "Bash(./manage.sh test)",
+      "Bash(./manage.sh info)"
+    ]
+  }
+}
