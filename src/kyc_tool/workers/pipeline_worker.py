@@ -3,9 +3,16 @@
 from kyc_tool.adapters.companies_house import CompaniesHouseAdapter
 from kyc_tool.adapters.document_ocr import DocumentOcrAdapter
 from kyc_tool.adapters.email_verification import EmailVerificationAdapter
+from kyc_tool.adapters.floqer import FixtureFloqerClient, FloqerAdapter
 from kyc_tool.adapters.gleif import GleifAdapter
 from kyc_tool.adapters.ocr import JsonScanOcrEngine
 from kyc_tool.adapters.rir_poc import FixturePocDirectory, RirPocAdapter
+from kyc_tool.adapters.rir_rdap.adapter import RirRdapAdapter
+from kyc_tool.adapters.rir_rdap.afrinic import AfrinicStrategy
+from kyc_tool.adapters.rir_rdap.apnic import ApnicStrategy
+from kyc_tool.adapters.rir_rdap.arin import ArinStrategy
+from kyc_tool.adapters.rir_rdap.lacnic import LacnicStrategy
+from kyc_tool.adapters.rir_rdap.ripe import RipeStrategy
 from kyc_tool.adapters.website_manual_review import WebsiteManualReviewAdapter
 from kyc_tool.config import Settings, get_settings
 from kyc_tool.db.session import make_engine, make_session_factory
@@ -17,16 +24,27 @@ from kyc_tool.storage.object_store import ObjectStore, make_object_store
 
 
 def build_adapters(settings: Settings, store: ObjectStore) -> dict:
-    """Production adapter registry (Phase 3 adds rir_rdap + floqer).
+    """Production adapter registry.
 
-    TODO(integration): the POC directory is fixture-backed until the RDAP
-    clients land; the OCR engine is the JSON-scan dev engine until the
-    platform team picks a production OCR provider (AUDIT_FINDINGS §C4).
+    TODO(integration) (AUDIT_FINDINGS §C4): the Floqer client is
+    fixture-backed until the real API contract lands; the POC directory needs
+    the RDAP POC lookup wired to the strategies; the OCR engine is the
+    JSON-scan dev engine until the platform team picks a production provider.
     """
     return {
         "email_verification": EmailVerificationAdapter(),
         "companies_house": CompaniesHouseAdapter(),
         "gleif": GleifAdapter(),
+        "floqer_company_enrichment": FloqerAdapter(FixtureFloqerClient({})),
+        "rir_rdap": RirRdapAdapter(
+            {
+                "arin": ArinStrategy(),
+                "ripe": RipeStrategy(),
+                "apnic": ApnicStrategy(),
+                "lacnic": LacnicStrategy(),
+                "afrinic": AfrinicStrategy(),
+            }
+        ),
         "document_ocr": DocumentOcrAdapter(store, JsonScanOcrEngine()),
         "rir_poc": RirPocAdapter(FixturePocDirectory({})),
         "website_manual_review": WebsiteManualReviewAdapter(),

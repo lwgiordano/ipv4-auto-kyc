@@ -202,8 +202,23 @@ def callback_capture() -> CallbackCapture:
 
 
 @pytest.fixture()
-def publisher(session_factory, settings, callback_capture) -> OutboxPublisher:
+def email_sender():
+    from kyc_tool.outbox.emails import LoggingEmailSender
+
+    return LoggingEmailSender()
+
+
+@pytest.fixture()
+def publisher(session_factory, settings, callback_capture, email_sender) -> OutboxPublisher:
     transport = httpx.MockTransport(callback_capture.handler)
     return OutboxPublisher(
-        session_factory, settings, http_client=httpx.Client(transport=transport)
+        session_factory,
+        settings,
+        http_client=httpx.Client(transport=transport),
+        email_sender=email_sender,
     )
+
+
+@pytest.fixture()
+def evidence_store(settings) -> FsStore:
+    return FsStore(settings.object_store_root)

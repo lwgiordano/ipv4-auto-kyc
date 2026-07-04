@@ -60,6 +60,15 @@ class SideEffects:
             self._website_task(session, run, case, output.normalized)
         elif output.adapter_id == "rir_poc":
             self._poc_effects(session, run, case, output.normalized)
+        elif output.adapter_id == "floqer_company_enrichment" and output.normalized.get(
+            "discovered"
+        ):
+            # persist discovery context: it seeds website-review context and
+            # future registry candidate lookups (discovery-only, never points)
+            case.submitted_json = {
+                **(case.submitted_json or {}),
+                "floqer_context": output.normalized,
+            }
 
     def _website_task(self, session: Session, run: Run, case: Case, normalized: dict) -> None:
         request = normalized.get("task_request")

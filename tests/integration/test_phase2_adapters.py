@@ -23,8 +23,6 @@ from kyc_tool.adapters.rir_poc import FixturePocDirectory, RirPocAdapter
 from kyc_tool.adapters.website_manual_review import WebsiteManualReviewAdapter
 from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.pipeline import Pipeline
-from kyc_tool.outbox.emails import LoggingEmailSender
-from kyc_tool.outbox.publisher import OutboxPublisher
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
 
@@ -65,11 +63,6 @@ def _registry_transport(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.fixture()
-def evidence_store(settings):
-    return FsStore(settings.object_store_root)
-
-
-@pytest.fixture()
 def phase2_pipeline(session_factory, policy, settings, evidence_store):
     transport = httpx.MockTransport(_registry_transport)
     adapters = {
@@ -104,32 +97,17 @@ def phase2_worker(session_factory, phase2_pipeline):
     )
 
 
-@pytest.fixture()
-def email_sender():
-    return LoggingEmailSender()
-
-
-@pytest.fixture()
-def phase2_publisher(session_factory, settings, callback_capture, email_sender):
-    return OutboxPublisher(
-        session_factory,
-        settings,
-        http_client=httpx.Client(transport=httpx.MockTransport(callback_capture.handler)),
-        email_sender=email_sender,
-    )
-
-
 def _live_checks(client, case_id: str) -> dict[str, str]:
     return {
         c["type"]: c["status"] for c in client.get(f"/v1/cases/{case_id}").json()["live_checks"]
     }
 
 
-def test_clean_uk_company_full_run(client, engine, post_event, phase2_worker, phase2_publisher, settings):
+def test_clean_uk_company_full_run(client, engine, post_event, phase2_worker, publisher, settings):
     response, _ = post_event("case-uk-1", "kyb.run_requested", ACME_KYB)
     run_id = response.json()["run_id"]
     phase2_worker.run_until_idle()
-    phase2_publisher.process_pending()
+    publisher.process_pending()
 
     checks = _live_checks(client, "case-uk-1")
     assert checks["official_registry_match"] == "pass"
@@ -156,7 +134,7 @@ def test_clean_uk_company_full_run(client, engine, post_event, phase2_worker, ph
     assert client.get("/v1/cases/case-uk-1").json()["latest_decision"] == "manual_review_insufficient"
 
 
-def test_email_verified_event_creates_both_checks(client, post_event, phase2_worker, phase2_publisher):
+def test_email_verified_event_creates_both_checks(client, post_event, phase2_worker, publisher):
     post_event("case-uk-2", "kyb.run_requested", ACME_KYB)
     phase2_worker.run_until_idle()
     post_event(
@@ -171,14 +149,14 @@ def test_email_verified_event_creates_both_checks(client, post_event, phase2_wor
 
 
 def test_blocked_broker_short_circuits(
-    client, engine, post_event, phase2_worker, phase2_publisher, callback_capture
+    client, engine, post_event, phase2_worker, publisher, callback_capture
 ):
     response, _ = post_event(
         "case-larus", "kyb.run_requested", {**ACME_KYB, "company_legal_name": "Larus"}
     )
     run_id = response.json()["run_id"]
     phase2_worker.run_until_idle()
-    phase2_publisher.process_pending()
+    publisher.process_pending()
 
     case = client.get("/v1/cases/case-larus").json()
     assert case["latest_decision"] == "reject"
@@ -297,7 +275,7 @@ def test_website_task_dedupe_on_rerun(client, post_event, phase2_worker):
     assert len([t for t in tasks if t["case_id"] == "case-dedupe"]) == 1
 
 
-def test_poc_token_round_trip(client, engine, post_event, phase2_worker, phase2_publisher, email_sender):
+def test_poc_token_round_trip(client, engine, post_event, phase2_worker, publisher, email_sender):
     post_event("case-poc", "kyb.run_requested", ACME_KYB)
     phase2_worker.run_until_idle()
     post_event(
@@ -306,7 +284,7 @@ def test_poc_token_round_trip(client, engine, post_event, phase2_worker, phase2_
         {"rir": "arin", "poc_handle": "JD123-ARIN", "org_handle": "ORG-ACME-1"},
     )
     phase2_worker.run_until_idle()
-    phase2_publisher.process_pending()
+    publisher.process_pending()
 
     assert len(email_sender.sent) == 1
     email = email_sender.sent[0]
@@ -337,7 +315,7 @@ def test_poc_token_round_trip(client, engine, post_event, phase2_worker, phase2_
 
 
 def test_poc_resend_supersedes_old_token(
-    client, engine, post_event, phase2_worker, phase2_publisher, email_sender
+    client, engine, post_event, phase2_worker, publisher, email_sender
 ):
     post_event("case-poc2", "kyb.run_requested", ACME_KYB)
     phase2_worker.run_until_idle()
@@ -350,7 +328,7 @@ def test_poc_resend_supersedes_old_token(
             force_new_body=True,
         )
         phase2_worker.run_until_idle()
-        phase2_publisher.process_pending()
+        publisher.process_pending()
 
     assert len(email_sender.sent) == 2
     old_token = re.search(r"token: (\S+)", email_sender.sent[0]["body"]).group(1)
