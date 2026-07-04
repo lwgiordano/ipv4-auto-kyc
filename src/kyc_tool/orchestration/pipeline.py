@@ -39,6 +39,7 @@ from kyc_tool.domain.models import (
     DecisionResult,
     RunState,
 )
+from kyc_tool.orchestration.rate_limit import RateLimiter
 from kyc_tool.orchestration.side_effects import SideEffects
 from kyc_tool.orchestration.triggers import RunPlan, plan_for
 from kyc_tool.outbox.publisher import enqueue_decision_callback
@@ -73,6 +74,7 @@ class Pipeline:
         self.broker_matcher = broker_matcher
         self.intent_builder = intent_builder or build_intents
         self.side_effects = side_effects if side_effects is not None else SideEffects(settings)
+        self.rate_limiter = RateLimiter(settings.adapter_rate_limits)
 
     # ------------------------------------------------------------------ job
 
@@ -209,6 +211,7 @@ class Pipeline:
             input_hash = adapter.input_hash(snapshot, event_dict)
             if (adapter_id, input_hash) in recorded:
                 continue  # resumability: already fetched on a prior attempt
+            self.rate_limiter.acquire(adapter_id)  # per-upstream cap, held outside txns
             started = time.monotonic()
             try:
                 output = adapter.run(snapshot, event_dict)

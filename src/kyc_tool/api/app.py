@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from kyc_tool import __version__
 from kyc_tool.api.routes_events import router as events_router
+from kyc_tool.api.routes_metrics import router as metrics_router
 from kyc_tool.api.routes_read import router as read_router
 from kyc_tool.config import Settings, get_settings
 from kyc_tool.db.session import make_engine, make_session_factory
@@ -35,6 +36,7 @@ def create_app(
 
     app.include_router(events_router)
     app.include_router(read_router)
+    app.include_router(metrics_router)
 
     @app.get("/healthz")
     def healthz() -> dict:

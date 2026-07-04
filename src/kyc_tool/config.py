@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     job_max_attempts: int = 5
     job_backoff_base_seconds: int = 5
 
+    # Per-upstream rate limits (requests/second per adapter_id); JSON in env,
+    # e.g. KYC_ADAPTER_RATE_LIMITS='{"rir_rdap": 2, "companies_house": 5}'.
+    # Process-local — divide by worker count when scaling out.
+    adapter_rate_limits: dict[str, float] = {}
+
     # Outbox delivery
     outbox_max_attempts: int = 8
     outbox_backoff_base_seconds: int = 10
