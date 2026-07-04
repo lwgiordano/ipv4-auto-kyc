@@ -1,0 +1,92 @@
+[
+  {
+    "adapter_id": "broker_policy",
+    "source": "local broker entity list",
+    "tier": "policy_gate",
+    "mode": "automated",
+    "order": 1,
+    "match_on": ["legal_name", "aliases", "domains", "email_domains", "rir_org_ids", "poc_handles", "asns"],
+    "behavior": "exact match only; blocked -> reject + short-circuit remaining adapters; allowed -> tag and continue; none -> clear"
+  },
+  {
+    "adapter_id": "email_verification",
+    "source": "IPv4.Global platform email verification",
+    "tier": "approval_grade",
+    "mode": "automated",
+    "order": 2,
+    "provides": ["email_verified_event", "email_domain_class"],
+    "scoring_use": "verified_email +10; verified_company_email +25"
+  },
+  {
+    "adapter_id": "companies_house",
+    "source": "UK Companies House API",
+    "tier": "approval_grade",
+    "mode": "automated",
+    "order": 3,
+    "provides": ["legal_name", "company_number", "status", "registered_address"],
+    "scoring_use": "official_registry_match +25"
+  },
+  {
+    "adapter_id": "gleif",
+    "source": "GLEIF LEI API",
+    "tier": "approval_grade",
+    "mode": "automated",
+    "order": 3,
+    "provides": ["lei", "legal_name", "address", "entity_status", "relationships"],
+    "scoring_use": "official_registry_match +25 (deterministic match only)"
+  },
+  {
+    "adapter_id": "floqer_company_enrichment",
+    "source": "Floqer",
+    "tier": "discovery_only",
+    "mode": "automated",
+    "order": 4,
+    "provides": ["company_domain", "website", "linkedin", "aliases", "registry_candidates", "broker_context"],
+    "scoring_use": "linkedin_company_match +20 after deterministic match; seeds registry lookups and website review context; NEVER satisfies email/org-id/poc/registry points alone"
+  },
+  {
+    "adapter_id": "rir_rdap",
+    "source": "ARIN Whois-RWS/RDAP, RIPE DB REST/RDAP, APNIC RDAP, LACNIC RDAP, AFRINIC RDAP",
+    "tier": "approval_grade",
+    "mode": "automated",
+    "order": 5,
+    "provides": ["org_handle", "entity_name", "address", "pocs", "asn_ip_resources"],
+    "scoring_use": "org_id_match +25",
+    "needs_review_routing": [
+      "parent/subsidiary ambiguity",
+      "address missing or stale",
+      "handle belongs to related but non-identical entity",
+      "resources held by ISP/broker/customer/technical provider",
+      "handle found only via broad name search"
+    ]
+  },
+  {
+    "adapter_id": "rir_poc",
+    "source": "RIR POC/contact records + email token",
+    "tier": "approval_grade",
+    "mode": "automated_plus_user_token",
+    "order": 6,
+    "provides": ["poc_record", "association_with_org_or_resource", "rir_listed_email"],
+    "scoring_use": "poc_verified +25 after token verified from the RIR-listed email",
+    "fallback": "if RIR email hidden: no points; create poc_email_unavailable review task"
+  },
+  {
+    "adapter_id": "document_ocr",
+    "source": "uploaded document + OCR pipeline",
+    "tier": "legal_proof",
+    "mode": "automated",
+    "order": 7,
+    "provides": ["extracted_name", "extracted_address", "extracted_number", "jurisdiction"],
+    "scoring_use": "business_document_verified +25"
+  },
+  {
+    "adapter_id": "website_manual_review",
+    "source": "human reviewer (queue task)",
+    "tier": "supporting",
+    "mode": "manual",
+    "order": 8,
+    "provides": ["reviewer_verdict", "reason_codes"],
+    "scoring_use": "website_verified +10 on reviewer pass",
+    "notes": "No automated crawler in v1. The tool creates the task with domain + discovery context; a human completes it."
+  }
+]

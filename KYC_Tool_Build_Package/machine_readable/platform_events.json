@@ -1,0 +1,49 @@
+[
+  {
+    "event_type": "kyb.run_requested",
+    "source": "platform (user or ops initiates KYB)",
+    "tool_action": "full run: broker gate -> all eligible adapters -> validate -> checks -> score -> decide",
+    "creates_review_tasks": ["website"],
+    "returns": "decision callback"
+  },
+  {
+    "event_type": "email.verified",
+    "source": "platform email verification",
+    "tool_action": "evaluate verified_email / verified_company_email checks; supersede as needed; rescore; redecide"
+  },
+  {
+    "event_type": "org_id.submitted",
+    "source": "user adds ORG-ID on the platform",
+    "tool_action": "RIR RDAP validation; supersede prior org_id check; cascade POC revalidation if ORG-ID changed; rescore; redecide (may upgrade approve_buy_locked -> approve)"
+  },
+  {
+    "event_type": "poc.submitted",
+    "source": "user adds POC handle on the platform",
+    "tool_action": "confirm POC association with ORG-ID/resource; extract RIR-listed email; send token to that email (never the submitted one); create poc_email_unavailable review task if hidden"
+  },
+  {
+    "event_type": "poc.token_verified",
+    "source": "user clicks token sent to RIR-listed email",
+    "tool_action": "award poc_verified check (+25); rescore; redecide"
+  },
+  {
+    "event_type": "document.uploaded",
+    "source": "user uploads business registration document on the platform",
+    "tool_action": "OCR + field match vs submission and registry evidence; create/supersede business_document_verified check; rescore; redecide"
+  },
+  {
+    "event_type": "website.review_completed",
+    "source": "human reviewer completes the manual website task",
+    "tool_action": "write website_verified check (pass +10 / fail 0) with reviewer identity; rescore; redecide"
+  },
+  {
+    "event_type": "reviewer.manual_approve",
+    "source": "reviewer approves directly on the platform",
+    "tool_action": "mark case approved_manual; record reviewer + timestamp in audit; no gating; buy enablement still requires passed org_id"
+  },
+  {
+    "event_type": "recalculate.requested",
+    "source": "platform ops",
+    "tool_action": "recompute score + gates + decision from current live checks; no adapter calls"
+  }
+]

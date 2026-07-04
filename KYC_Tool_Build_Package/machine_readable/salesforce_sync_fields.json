@@ -1,0 +1,41 @@
+{
+  "version": "2.0",
+  "direction": "platform_to_salesforce_only",
+  "rules": [
+    "The KYC Tool never reads from or writes to Salesforce.",
+    "No Salesforce automation may invoke the tool or platform KYC actions.",
+    "Manual approve is never initiated from Salesforce.",
+    "Upsert by external ID (platform case id); idempotent; ordered per case.",
+    "Salesforce outage must never block platform enforcement."
+  ],
+  "kyc_case_fields": {
+    "KYC_Status__c": {
+      "source": "decision/case status",
+      "values": ["Registered", "Email Verification Pending", "Email Verified", "Enrichment Running", "KYC Pending", "Manual Review - Insufficient Score", "Account Approved", "Rejected"]
+    },
+    "KYC_Score__c": { "source": "tool score", "type": "integer" },
+    "Buy_Enablement_Status__c": {
+      "source": "buy_enablement",
+      "values": ["Not Applicable", "Buy Locked - ORG-ID Required", "ORG-ID Validation Pending", "ORG-ID Failed", "Buy Enabled", "Buy Suspended"]
+    },
+    "Platform_Action_Taken__c": {
+      "source": "platform enforcement",
+      "values": ["Approve Account", "Approve Account - Buy Locked", "Reject", "Suspend", "Manual Approve"]
+    },
+    "ORG_ID__c": { "source": "org_id check", "type": "text" },
+    "ORG_ID_Status__c": { "values": ["Pending", "Pass", "Fail", "Superseded"] },
+    "POC_Handle__c": { "source": "poc check", "type": "text" },
+    "POC_Verification_Status__c": { "values": ["Pending", "Token Sent", "Verified", "Failed", "Superseded"] },
+    "Business_Document_Status__c": { "values": ["None", "Uploaded", "Verified", "Failed"] },
+    "Website_Review_Status__c": { "values": ["Open", "Pass", "Fail"] },
+    "Broker_Status__c": { "values": ["Clear", "Allowed Broker", "Blocked"] },
+    "Hard_Conflict__c": { "type": "boolean" },
+    "Review_Reason_Codes__c": { "type": "multiselect_or_delimited_text" },
+    "Manual_Approved_By__c": { "type": "text" },
+    "Manual_Approved_At__c": { "type": "datetime" }
+  },
+  "kyc_check_child_object": {
+    "object": "KYC_Check__c",
+    "fields": ["Check_Type__c", "Status__c", "Points__c", "Category__c", "Source__c", "Superseded__c", "Reason_Codes__c", "Created_At__c"]
+  }
+}

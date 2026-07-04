@@ -1,0 +1,11 @@
+managed manage.sh
+managed .substrate/lib.sh
+managed .substrate/checks.d/10-git.sh
+managed .substrate/checks.d/20-substrate.sh
+managed .substrate/checks.d/30-hooks.sh
+managed .substrate/checks.d/40-toolchain.sh
+managed .substrate/checks.d/50-state.sh
+managed .substrate/hooks/pre-commit
+seeded AGENTS.md
+seeded CLAUDE.md
+seeded .editorconfig

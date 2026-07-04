@@ -1,0 +1,4 @@
+# agent-substrate-kit local artifacts
+.substrate/state/
+.venv/
+__pycache__/

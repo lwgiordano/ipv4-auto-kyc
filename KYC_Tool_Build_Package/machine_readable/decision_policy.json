@@ -1,0 +1,51 @@
+{
+  "version": "2.0",
+  "decisions": [
+    {
+      "decision": "reject",
+      "priority": 1,
+      "condition": "exact_match_blocked_broker OR hard_block",
+      "platform_enforcement": "reject_or_suspend_account",
+      "notes": "Short-circuits: remaining adapters are skipped; no further enrichment spend."
+    },
+    {
+      "decision": "approve",
+      "priority": 2,
+      "condition": "score >= 100 AND legal_proof AND control_proof AND broker_ok AND NOT hard_conflict AND org_id_check_passed",
+      "platform_enforcement": "approve_account_enable_buying"
+    },
+    {
+      "decision": "approve_buy_locked",
+      "priority": 3,
+      "condition": "score >= 100 AND legal_proof AND control_proof AND broker_ok AND NOT hard_conflict AND NOT org_id_check_passed",
+      "platform_enforcement": "approve_account_lock_buying",
+      "upgrade": "org_id pass event -> recalculate -> approve (platform enables buying)"
+    },
+    {
+      "decision": "manual_review_insufficient",
+      "priority": 4,
+      "condition": "otherwise (score < 100 or a non-broker gate failing, with no hard block)",
+      "platform_enforcement": "hold_account_pending",
+      "auto_clear": true,
+      "notes": "Holding state, not a human queue. Auto-clears when a recalculation satisfies approve/approve_buy_locked."
+    }
+  ],
+  "manual_approve_exception": {
+    "initiated_from": "platform_only",
+    "bypasses": ["score", "hard_gates"],
+    "tool_role": "record audit (approved_manual, reviewer id, timestamp); no gating",
+    "buy_enablement": "still requires passed org_id check; otherwise buy_locked",
+    "salesforce_role": "receives mirrored result only; manual approve is never initiated from Salesforce"
+  },
+  "future_extension_not_in_v1": {
+    "decision": "manual_review_risk_flag",
+    "why_omitted": "v1 broker rejection is exact-match only, so every case either rejects or passes through scoring; there are no non-deterministic risk signals computed.",
+    "add_when_signals_exist": [
+      "fuzzy name match to blocked broker (rename/alias)",
+      "shared ASN, ORG-ID, POC handle, or domain with a blocked broker",
+      "broker-like language on website or in discovery data",
+      "known broker already active on the platform"
+    ],
+    "behavioral_contract": "must NOT auto-clear; requires reviewer clearance — the key difference from manual_review_insufficient"
+  }
+}
