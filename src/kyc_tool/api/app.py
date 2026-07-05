@@ -37,6 +37,10 @@ def create_app(
     app.include_router(events_router)
     app.include_router(read_router)
     app.include_router(metrics_router)
+    if settings.ui_enabled:
+        from kyc_tool.ui.routes import router as ui_router  # deferred: reads console.html
+
+        app.include_router(ui_router)
 
     @app.get("/healthz")
     def healthz() -> dict:

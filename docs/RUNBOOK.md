@@ -10,6 +10,18 @@
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily); prunes per KYC_RETENTION_DAYS |
 | Migrations | `alembic upgrade head` | before rollout; all revisions downgrade cleanly |
 
+## Ops console (`/ui`)
+
+The built-in console covers most of this runbook visually: Overview (health
+tiles, dead-letter tables with one-click requeue), Cases (score meter, gates,
+supersession chains, per-run state machine, audit trail), Integrations
+(stub/live/needs-config per adapter, env presence, reachability probes),
+Field Map (live Salesforce projection per case), Policy, and a Composer that
+sends signed events server-side. **Security**: same trust domain as the read
+API, and the composer/requeue endpoints mutate — set `KYC_UI_ENABLED=false`
+in production, or restrict the port to the ops network. Local dev:
+`bash scripts/dev.sh` boots the whole stack and prints the console URL.
+
 ## Health & dashboards
 
 - `GET /healthz` — liveness + the policy bundle hash. **A hash change without a

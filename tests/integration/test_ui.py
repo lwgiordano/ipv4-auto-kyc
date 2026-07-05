@@ -1,0 +1,124 @@
+"""Ops console: page serves, JSON endpoints, composer drives the real
+pipeline, requeue repairs dead letters, and the gate flag hides everything."""
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+from kyc_tool.api.app import create_app
+from tests.integration.shared import ACME_KYB_WITH_CONTACT
+
+pytestmark = pytest.mark.postgres
+
+
+def test_console_page_and_gate(settings, session_factory, policy, clean_db):
+    on = TestClient(create_app(settings, session_factory=session_factory, policy=policy))
+    page = on.get("/ui")
+    assert page.status_code == 200
+    assert "Ops Console" in page.text
+
+    off_settings = settings.model_copy(update={"ui_enabled": False})
+    off = TestClient(create_app(off_settings, session_factory=session_factory, policy=policy))
+    assert off.get("/ui").status_code == 404
+    assert off.get("/ui/api/overview").status_code == 404
+
+
+def test_overview_shape(client):
+    body = client.get("/ui/api/overview").json()
+    assert body["policy"]["bundle_hash"]
+    assert "runs_by_state" in body["metrics"]
+    assert body["config"]["hmac_secret_set"] is True
+    assert body["dead_jobs"] == []
+
+
+def test_composer_drives_pipeline_and_case_full_projects(client, phase3_worker, publisher):
+    sent = client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-acme", "event_type": "kyb.run_requested",
+              "payload": ACME_KYB_WITH_CONTACT},
+    )
+    assert sent.status_code == 202
+    assert sent.json()["jobs_queued"] >= 1
+    phase3_worker.run_until_idle()
+    publisher.process_pending()
+
+    cases = client.get("/ui/api/cases?q=ui-acme").json()["cases"]
+    assert cases[0]["id"] == "ui-acme"
+
+    full = client.get("/ui/api/cases/ui-acme/full").json()
+    assert full["score"]["threshold"] == 100
+    assert len(full["score"]["items"]) == 8  # rubric-ordered, includes missing
+    assert full["salesforce"]["Broker_Status__c"] == "Clear"
+    assert full["salesforce"]["Website_Review_Status__c"] == "Open"  # task created
+    assert any(a["action"] == "run.decided" for a in full["audit"])
+    assert full["field_sources"]["KYC_Status__c"].startswith("case status")
+
+
+def test_composer_validates_payloads(client):
+    bad = client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-bad", "event_type": "org_id.submitted",
+              "payload": {"rir": "not-a-rir", "org_handle": "X"}},
+    )
+    assert bad.status_code == 422
+
+
+def test_event_templates_cover_all_types(client, policy):
+    body = client.get("/ui/api/event-templates").json()
+    assert set(body["event_types"]) == set(policy.events.event_types)
+    assert set(body["templates"]) == set(body["event_types"])
+
+
+def test_integrations_report_classifies_stubs(client):
+    body = client.get("/ui/api/integrations").json()
+    by_id = {a["adapter_id"]: a for a in body["adapters"]}
+    assert len(by_id) == 9
+    assert by_id["floqer_company_enrichment"]["status"] == "stub"
+    assert by_id["rir_poc"]["status"] == "stub"
+    assert by_id["document_ocr"]["status"] == "dev"
+    assert by_id["website_manual_review"]["status"] == "manual"
+    assert by_id["broker_policy"]["status"] == "live"
+    assert body["email_sender"]["status"] == "stub"
+    assert body["platform_callback"]["status"] in ("live", "needs-config")
+
+
+def test_probe_reports_not_probeable_for_stub(client):
+    body = client.post("/ui/api/integrations/floqer_company_enrichment/probe").json()
+    assert body["probeable"] is False
+
+
+def test_requeue_outbox_dead_row(client, engine, post_event, worker):
+    post_event("ui-requeue", "recalculate.requested", {})
+    worker.run_until_idle()
+    with engine.begin() as conn:
+        outbox_id = conn.execute(
+            text("UPDATE outbox SET status='dead' WHERE case_id='ui-requeue' RETURNING id")
+        ).scalar_one()
+    assert client.post(f"/ui/api/requeue/outbox/{outbox_id}").status_code == 200
+    with engine.connect() as conn:
+        status = conn.execute(
+            text("SELECT status FROM outbox WHERE id=:id"), {"id": outbox_id}
+        ).scalar_one()
+    assert status == "pending"
+    assert client.post(f"/ui/api/requeue/outbox/{outbox_id}").status_code == 409  # not dead now
+
+
+def test_requeue_dead_job_resets_failed_run(client, engine, post_event):
+    response, _ = post_event("ui-deadjob", "recalculate.requested", {})
+    run_id = response.json()["run_id"]
+    with engine.begin() as conn:
+        job_id = conn.execute(
+            text("UPDATE jobs SET status='dead', last_error='boom' WHERE case_id='ui-deadjob' RETURNING id")
+        ).scalar_one()
+        conn.execute(text("UPDATE runs SET state='FAILED', error='boom' WHERE id=:r"), {"r": run_id})
+    body = client.post(f"/ui/api/requeue/job/{job_id}").json()
+    assert body["run_reset"] == run_id
+    with engine.connect() as conn:
+        job_status, run_state = conn.execute(
+            text(
+                "SELECT (SELECT status FROM jobs WHERE id=:j), (SELECT state FROM runs WHERE id=:r)"
+            ),
+            {"j": job_id, "r": run_id},
+        ).one()
+    assert job_status == "queued"
+    assert run_state == "QUEUED"

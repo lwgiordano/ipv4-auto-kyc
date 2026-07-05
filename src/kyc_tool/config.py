@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     # Retention (compliance default: 7 years)
     retention_days: int = 7 * 365
 
+    # Ops console (/ui): debug tooling in the same trust domain as the read
+    # API. The composer/requeue endpoints MUTATE — disable in production or
+    # front the port with network controls (see runbook).
+    ui_enabled: bool = True
+
 
 def get_settings() -> Settings:
     return Settings()

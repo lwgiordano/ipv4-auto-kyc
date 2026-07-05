@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KYC Tool · Ops Console</title>
+<style>
+  /* Role tokens (reference palette; light + dark are both selected) */
+  :root{
+    --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+    --hairline:#e1e0d9; --ring:rgba(11,11,11,.10);
+    --accent:#2a78d6; --accent-soft:#cde2fb;
+    --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --critical:#d03b3b;
+    --good-text:#006300;
+    --s1:#2a78d6; --s2:#1baf7a; --s3:#eda100; --s4:#008300; --s5:#4a3aa7; --s6:#e34948; --s7:#e87ba4; --s8:#eb6834;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink-2:#c3c2b7; --muted:#898781;
+      --hairline:#2c2c2a; --ring:rgba(255,255,255,.10);
+      --accent:#3987e5; --accent-soft:#184f95;
+      --good-text:#0ca30c;
+      --s1:#3987e5; --s2:#199e70; --s3:#c98500; --s4:#008300; --s5:#9085e9; --s6:#e66767; --s7:#d55181; --s8:#d95926;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--ink);
+       font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  header{display:flex;align-items:center;gap:14px;padding:10px 18px;background:var(--surface);
+         border-bottom:1px solid var(--hairline);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;font-weight:650}
+  header .sub{color:var(--muted);font-size:12px}
+  nav{display:flex;gap:2px;margin-left:auto;flex-wrap:wrap}
+  nav a{padding:6px 11px;border-radius:7px;color:var(--ink-2);font-weight:500}
+  nav a.active{background:var(--accent-soft);color:var(--ink)}
+  main{padding:18px;max-width:1240px;margin:0 auto}
+  h2{font-size:13px;font-weight:650;color:var(--ink-2);text-transform:uppercase;
+     letter-spacing:.04em;margin:26px 0 10px}
+  h2:first-child{margin-top:0}
+  .card{background:var(--surface);border:1px solid var(--ring);border-radius:10px;padding:14px 16px}
+  .grid{display:grid;gap:12px}
+  .tiles{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+  .tile .v{font-size:26px;font-weight:650;margin-top:2px}
+  .tile .k{color:var(--muted);font-size:12px}
+  .tile .n{color:var(--ink-2);font-size:12px;margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{color:var(--muted);font-weight:550;text-align:left;padding:6px 10px 6px 0;
+     border-bottom:1px solid var(--hairline);white-space:nowrap}
+  td{padding:7px 10px 7px 0;border-bottom:1px solid var(--hairline);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tbody tr.click{cursor:pointer}
+  tbody tr.click:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+  .chip{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;
+        font-size:12px;font-weight:550;border:1px solid var(--ring);white-space:nowrap}
+  .chip .dot{width:8px;height:8px;border-radius:50%}
+  .c-good{color:var(--good-text)} .c-good .dot{background:var(--good)}
+  .c-warn .dot{background:var(--warn)} .c-serious .dot{background:var(--serious)}
+  .c-crit{color:var(--critical)} .c-crit .dot{background:var(--critical)}
+  .c-mut{color:var(--muted)} .c-mut .dot{background:var(--muted)}
+  .c-acc .dot{background:var(--accent)}
+  .strike{text-decoration:line-through;color:var(--muted)}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+  pre{background:var(--page);border:1px solid var(--hairline);border-radius:8px;
+      padding:10px;overflow:auto;font-size:12px;max-height:340px}
+  button{font:inherit;font-size:12.5px;font-weight:550;padding:5px 12px;border-radius:7px;
+         border:1px solid var(--ring);background:var(--surface);color:var(--ink);cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  input,select,textarea{font:inherit;background:var(--surface);color:var(--ink);
+      border:1px solid var(--hairline);border-radius:7px;padding:6px 9px}
+  textarea{width:100%;min-height:170px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .meter{position:relative;height:22px;background:var(--page);border:1px solid var(--hairline);
+         border-radius:6px;overflow:visible;margin:6px 0 4px}
+  .meter .seg{position:absolute;top:3px;bottom:3px;border-radius:4px}
+  .meter .tick{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink-2)}
+  .meter .tick span{position:absolute;top:-16px;left:-14px;font-size:10.5px;color:var(--muted);white-space:nowrap}
+  .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--ink-2);margin-top:10px}
+  .legend .dot{width:9px;height:9px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:-1px}
+  .pipe{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:11px}
+  .pipe .st{padding:2px 7px;border-radius:5px;border:1px solid var(--hairline);color:var(--muted)}
+  .pipe .st.done{color:var(--ink-2);border-color:var(--ring);background:color-mix(in srgb,var(--good) 9%,transparent)}
+  .pipe .st.cur{background:var(--accent-soft);color:var(--ink);border-color:var(--accent)}
+  .pipe .st.fail{background:color-mix(in srgb,var(--critical) 12%,transparent);color:var(--critical)}
+  .pipe .arr{color:var(--muted)}
+  .kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;font-size:13px}
+  .kv .k{color:var(--muted)}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:900px){.split{grid-template-columns:1fr}}
+  .note{color:var(--muted);font-size:12px}
+  .timeline{border-left:2px solid var(--hairline);padding-left:14px;display:grid;gap:8px}
+  .timeline .ev{position:relative;font-size:12.5px}
+  .timeline .ev::before{content:"";position:absolute;left:-19px;top:5px;width:8px;height:8px;
+      border-radius:50%;background:var(--muted)}
+  .timeline .ev.hot::before{background:var(--accent)}
+  details summary{cursor:pointer;color:var(--ink-2);font-weight:550;font-size:13px}
+  .toast{position:fixed;bottom:16px;right:16px;background:var(--surface);border:1px solid var(--ring);
+         border-radius:9px;padding:10px 14px;box-shadow:0 4px 18px rgba(0,0,0,.18);font-size:13px;
+         max-width:420px;z-index:20}
+  .banner{border-left:3px solid var(--critical);padding:8px 12px;background:var(--surface);
+          border-radius:0 8px 8px 0;margin-bottom:12px;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>KYC Tool · Ops Console</h1>
+  <span class="sub" id="hdr-policy" title="policy bundle hash"></span>
+  <span class="sub" id="hdr-env"></span>
+  <nav id="nav">
+    <a href="#/overview">Overview</a>
+    <a href="#/cases">Cases</a>
+    <a href="#/integrations">Integrations</a>
+    <a href="#/fieldmap">Field Map</a>
+    <a href="#/policy">Policy</a>
+    <a href="#/composer">Composer</a>
+  </nav>
+  <label class="sub" style="display:flex;gap:5px;align-items:center">
+    <input type="checkbox" id="autorefresh"> auto-refresh
+  </label>
+</header>
+<main id="main">Loading…</main>
+
+<script>
+"use strict";
+const $ = (s, el=document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtT = s => s ? new Date(s).toLocaleString(undefined,{hour12:false}) : "—";
+const short = (s,n=10) => s ? `<span class="mono" title="${esc(s)}">${esc(String(s).slice(0,n))}…</span>` : "—";
+async function j(url, opts){
+  const r = await fetch(url, opts);
+  const body = await r.json().catch(()=>({}));
+  if(!r.ok && r.status >= 500) throw new Error(`${r.status}: ${JSON.stringify(body)}`);
+  return {status:r.status, body};
+}
+function toast(msg, ms=4200){
+  const t = document.createElement("div"); t.className="toast"; t.innerHTML=msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(), ms);
+}
+
+/* -- status vocabulary: icon + label, never color alone ------------------- */
+const CHIP = {
+  pass:      ["c-good","✓","pass"],        fail:     ["c-crit","✕","fail"],
+  needs_review:["c-warn","⚠","needs review"], missing: ["c-mut","·","missing"],
+  approve:   ["c-good","✓","approve"],
+  approve_buy_locked:["c-warn","🔒","approve · buy locked"],
+  manual_review_insufficient:["c-warn","⏳","insufficient"],
+  reject:    ["c-crit","✕","reject"],
+  live:      ["c-good","●","live"],        stub:     ["c-warn","◌","stub"],
+  dev:       ["c-warn","◌","dev engine"],  "needs-config":["c-serious","⚙","needs config"],
+  manual:    ["c-acc","👤","manual"],      missing_adapter:["c-crit","✕","missing"],
+  open:      ["c-warn","⏳","open"],       done:     ["c-good","✓","done"],
+  delivered: ["c-good","✓","delivered"],   pending:  ["c-warn","⏳","pending"],
+  dead:      ["c-crit","☠","dead"],        queued:   ["c-mut","⏳","queued"],
+  running:   ["c-acc","▶","running"],      COMPLETE: ["c-good","✓","COMPLETE"],
+  FAILED:    ["c-crit","✕","FAILED"],
+};
+function chip(key, label){
+  const [cls, icon, def] = CHIP[key] || ["c-mut","·",key];
+  return `<span class="chip ${cls}"><span class="dot"></span>${icon} ${esc(label ?? def)}</span>`;
+}
+const gateChip = (name, ok) =>
+  `<span class="chip ${ok?"c-good":"c-crit"}"><span class="dot"></span>${ok?"✓":"✕"} ${esc(name)}</span>`;
+
+/* -- score meter: categorical slots follow rubric order (fixed, not cycled) */
+const SLOTS = ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"];
+function meter(score){
+  const max = Math.max(score.threshold + 30, score.total + 10);
+  let acc = 0, segs = "";
+  score.items.forEach((it, i) => {
+    if(it.awarded > 0){
+      const l = acc/max*100, w = it.awarded/max*100;
+      segs += `<div class="seg" title="${esc(it.check_type)} +${it.awarded}"
+        style="left:calc(${l}% + 2px);width:calc(${w}% - 3px);background:var(${SLOTS[i%8]})"></div>`;
+      acc += it.awarded;
+    }
+  });
+  const tick = score.threshold/max*100;
+  const legend = score.items.map((it,i) => {
+    const on = it.awarded > 0;
+    const state = it.status === "pass" ? `+${it.awarded}` : it.status.replace("_"," ");
+    return `<span style="${on?"":"opacity:.55"}"><span class="dot" style="background:var(${SLOTS[i%8]})"></span>${esc(it.check_type)} <b>${esc(state)}</b></span>`;
+  }).join("");
+  const gap = Math.max(0, score.threshold - score.total);
+  return `<div class="meter">${segs}<div class="tick" style="left:${tick}%"><span>${score.threshold} · threshold</span></div></div>
+    <div class="note"><b style="color:var(--ink)">${score.total}</b> points ·
+      ${gap>0 ? `${gap} to threshold` : `<span style="color:var(--good-text)">threshold met</span>`}</div>
+    <div class="legend">${legend}</div>`;
+}
+
+const RUN_STATES = ["QUEUED","RESOLVE_INPUTS","BROKER_GATE","RUN_ADAPTERS","VALIDATE","PUBLISH_DECISION","COMPLETE"];
+function pipeline(state){
+  if(state === "FAILED") return `<span class="pipe"><span class="st fail">FAILED</span></span>`;
+  const idx = RUN_STATES.indexOf(state);
+  return `<span class="pipe">` + RUN_STATES.map((s,i) =>
+    `<span class="st ${i<idx?"done":i===idx?"cur":""}">${s.replace(/_/g," ")}</span>`
+  ).join(`<span class="arr">›</span>`) + `</span>`;
+}
+
+/* -- views ----------------------------------------------------------------- */
+const main = $("#main");
+let refreshTimer = null;
+
+async function viewOverview(){
+  const {body:o} = await j("/ui/api/overview");
+  $("#hdr-policy").textContent = "policy " + o.policy.bundle_hash.slice(0,12) + "…";
+  $("#hdr-env").innerHTML = o.config.auth_disabled
+    ? chip("needs-config","auth disabled") : chip("live","HMAC auth");
+  const m = o.metrics;
+  const g = (obj,k) => (obj?.[k] ?? 0);
+  const deadJobs = g(m.jobs_by_status,"dead"), deadOut = g(m.outbox_by_status,"dead");
+  const tiles = [
+    ["Runs complete", g(m.runs_by_state,"COMPLETE"), ""],
+    ["Runs failed", g(m.runs_by_state,"FAILED"), deadJobs?"needs attention":""],
+    ["Jobs queued", g(m.jobs_by_status,"queued"), "worker input"],
+    ["Jobs dead", deadJobs, deadJobs?"⚠ dead-letter":""],
+    ["Outbox pending", g(m.outbox_by_status,"pending"), "callbacks waiting"],
+    ["Outbox dead", deadOut, deadOut?"⚠ undeliverable":""],
+    ["Open reviews", Object.values(m.review_tasks_open_by_type||{}).reduce((a,b)=>a+b,0),
+      Object.entries(m.review_tasks_open_by_type||{}).map(([k,v])=>`${k}: ${v}`).join(" · ")],
+    ["p95 event→decision", (m.event_to_decision_seconds?.p95??0).toFixed(1)+"s", "budget <10s light"],
+  ];
+  const decisions = Object.entries(m.decisions_by_type||{})
+    .map(([k,v]) => `<tr><td>${chip(k)}</td><td class="num">${v}</td></tr>`).join("")
+    || `<tr><td colspan="2" class="note">no decisions yet</td></tr>`;
+  const adapters = (m.adapter_latency||[]).map(a => `<tr>
+      <td class="mono">${esc(a.adapter_id)}</td><td class="num">${a.calls}</td>
+      <td class="num">${(a.error_rate*100).toFixed(0)}%</td>
+      <td class="num">${a.p95_ms.toFixed(0)} ms</td></tr>`).join("")
+    || `<tr><td colspan="4" class="note">no adapter calls yet</td></tr>`;
+  const deadRows = list => list.map(d => `<tr>
+      <td class="num">${d.id}</td><td class="mono">${esc(d.kind)}</td>
+      <td>${d.case_id?caseLink(d.case_id):"—"}</td><td class="num">${d.attempts}</td>
+      <td class="mono" style="max-width:340px;overflow:hidden;text-overflow:ellipsis">${esc(d.last_error||"")}</td>
+      <td><button data-requeue="${d.kind==="run_transition"||d.kind==="adapter_call"?"job":"outbox"}:${d.id}">requeue</button></td></tr>`).join("");
+  main.innerHTML = `
+    ${deadJobs+deadOut ? `<div class="banner">${chip("dead")} <b>${deadJobs+deadOut} dead-lettered item(s)</b> — the alerting signal. Inspect below, fix the cause, requeue.</div>`:""}
+    <h2>Health</h2>
+    <div class="grid tiles">${tiles.map(([k,v,n]) =>
+      `<div class="card tile"><div class="k">${esc(k)}</div><div class="v">${esc(String(v))}</div><div class="n">${esc(n)}</div></div>`).join("")}</div>
+    <div class="split" style="margin-top:12px">
+      <div class="card"><h2>Decisions</h2><table><tbody>${decisions}</tbody></table></div>
+      <div class="card"><h2>Adapter latency</h2><table>
+        <thead><tr><th>adapter</th><th class="num">calls</th><th class="num">err</th><th class="num">p95</th></tr></thead>
+        <tbody>${adapters}</tbody></table></div>
+    </div>
+    ${o.dead_jobs.length ? `<h2>Dead jobs</h2><div class="card"><table>
+      <thead><tr><th class="num">id</th><th>kind</th><th>case</th><th class="num">attempts</th><th>last error</th><th></th></tr></thead>
+      <tbody>${deadRows(o.dead_jobs.map(d=>({...d,kind:d.kind})))}</tbody></table></div>`:""}
+    ${o.dead_outbox.length ? `<h2>Dead outbox (undelivered callbacks)</h2><div class="card"><table>
+      <thead><tr><th class="num">id</th><th>kind</th><th>case</th><th class="num">attempts</th><th>last error</th><th></th></tr></thead>
+      <tbody>${deadRows(o.dead_outbox.map(d=>({...d,kind:"outbox:"+d.kind})))}</tbody></table></div>`:""}
+    <h2>Configuration</h2>
+    <div class="card kv">
+      <span class="k">policy bundle</span><span class="mono">${esc(o.policy.bundle_hash)}</span>
+      <span class="k">rubric</span><span>v${esc(o.policy.rubric_version)} · threshold ${o.policy.threshold}</span>
+      <span class="k">callback URL</span><span class="mono">${esc(o.config.callback_url)}</span>
+      <span class="k">HMAC secret</span><span>${o.config.hmac_secret_set?chip("live","set"):chip("needs-config","missing")}</span>
+      <span class="k">object store</span><span>${esc(o.config.object_store)}</span>
+      <span class="k">policy dir</span><span class="mono">${esc(o.config.policy_dir)}</span>
+    </div>`;
+  main.querySelectorAll("[data-requeue]").forEach(b => b.onclick = async () => {
+    const [kind,id] = b.dataset.requeue.split(":");
+    const target = kind === "job" ? `/ui/api/requeue/job/${id}` : `/ui/api/requeue/outbox/${id}`;
+    const r = await j(target, {method:"POST"});
+    toast(r.status<300 ? `✓ requeued ${kind} ${id}` : `✕ ${esc(JSON.stringify(r.body.detail??r.body))}`);
+    route();
+  });
+}
+
+const caseLink = id => `<a href="#/case/${encodeURIComponent(id)}" class="mono">${esc(id)}</a>`;
+
+async function viewCases(){
+  const q = sessionStorage.getItem("caseq") || "";
+  const {body} = await j(`/ui/api/cases?q=${encodeURIComponent(q)}`);
+  const rows = body.cases.map(c => `<tr class="click" data-id="${esc(c.id)}">
+      <td class="mono">${esc(c.id)}</td><td>${esc(c.company_name||"—")}</td>
+      <td>${chip(c.latest_decision||"missing", c.latest_decision||"no decision")}</td>
+      <td class="num">${c.current_score}</td>
+      <td>${esc(c.status)}</td><td>${esc(c.buy_status)}</td><td>${esc(c.broker_status)}</td>
+      <td class="note">${fmtT(c.updated_at)}</td></tr>`).join("")
+    || `<tr><td colspan="8" class="note">no cases — send a kyb.run_requested from the Composer</td></tr>`;
+  main.innerHTML = `
+    <div class="row" style="margin-bottom:12px">
+      <input id="q" placeholder="search id / company…" value="${esc(q)}" style="width:280px">
+      <span class="note">${body.cases.length} case(s)</span>
+    </div>
+    <div class="card"><table>
+      <thead><tr><th>case</th><th>company</th><th>decision</th><th class="num">score</th>
+      <th>status</th><th>buy</th><th>broker</th><th>updated</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  $("#q").addEventListener("input", e => {
+    sessionStorage.setItem("caseq", e.target.value);
+    clearTimeout(window.__qt); window.__qt = setTimeout(viewCases, 250);
+  });
+  main.querySelectorAll("tr.click").forEach(tr =>
+    tr.onclick = () => location.hash = `#/case/${encodeURIComponent(tr.dataset.id)}`);
+}
+
+async function viewCase(id){
+  const {status, body:d} = await j(`/ui/api/cases/${encodeURIComponent(id)}/full`);
+  if(status === 404){ main.innerHTML = `<div class="card">case <code>${esc(id)}</code> not found</div>`; return; }
+  const c = d.case;
+  const latest = d.decisions[0] || {};
+  const gates = latest.gates_json || {};
+
+  const byType = {};
+  d.checks.forEach(ch => (byType[ch.check_type] ??= []).push(ch));
+  const chains = Object.entries(byType).map(([type, list]) => {
+    const chain = list.map(ch => {
+      const live = !ch.superseded_by_check_id;
+      const reasons = (ch.reason_codes||[]).map(r=>`<code>${esc(r)}</code>`).join(" ");
+      return `<span class="${live?"":"strike"}" title="${esc(ch.id)} · ${fmtT(ch.created_at)}">
+        ${chip(ch.status)}${live && ch.points_awarded ? ` <b>+${ch.points_awarded}</b>`:""}</span>${reasons?` <span class="note">${reasons}</span>`:""}`;
+    }).join(` <span class="arr note">⟶ superseded by ⟶</span> `);
+    return `<tr><td class="mono">${esc(type)}</td><td>${chain}</td>
+      <td class="note">${esc(list.at(-1).source||"")}</td></tr>`;
+  }).join("") || `<tr><td colspan="3" class="note">no checks yet</td></tr>`;
+
+  const runRows = d.runs.map(r => {
+    const ads = d.adapter_results.filter(a => a.run_id === r.id)
+      .map(a => `<span class="chip ${a.status==="ok"?"c-good":a.status==="upstream_error"?"c-crit":"c-mut"}">
+        <span class="dot"></span>${esc(a.adapter_id)} · ${esc(a.status)} · ${a.latency_ms??0}ms</span>`).join(" ");
+    return `<tr><td>${short(r.id,8)}${r.partial?` ${chip("needs_review","partial")}`:""}</td>
+      <td>${pipeline(r.state)}${r.error?`<div class="note" style="color:var(--critical)">${esc(r.error)}</div>`:""}</td>
+      <td>${ads||"<span class='note'>gate short-circuit / no adapters</span>"}</td>
+      <td class="note">${fmtT(r.started_at)}</td></tr>`;
+  }).join("") || `<tr><td colspan="4" class="note">no runs yet</td></tr>`;
+
+  const taskRows = d.review_tasks.map(t => `<tr>
+      <td>${short(t.id,8)}</td><td>${esc(t.task_type)}</td><td>${chip(t.status)}</td>
+      <td>${t.result?chip(t.result):"—"} ${esc(t.reviewer_id||"")}</td>
+      <td class="note">${esc(JSON.stringify(t.context_json))}</td>
+      <td>${t.status==="open" && t.task_type==="website" ? `
+        <button class="primary" data-complete="${esc(t.id)}:pass">✓ pass</button>
+        <button data-complete="${esc(t.id)}:fail">✕ fail</button>`:""}</td></tr>`).join("")
+    || `<tr><td colspan="6" class="note">no review tasks</td></tr>`;
+
+  const tokenRows = d.poc_tokens.map(t => {
+    const state = t.verified_at ? chip("pass","verified")
+      : (new Date(t.expired_at) < new Date() ? chip("fail","expired") : chip("pending","outstanding"));
+    return `<tr><td>${short(t.id,8)}</td><td class="mono">${esc(t.poc_handle)}</td>
+      <td class="mono">${esc(t.rir_listed_email)}</td><td>${state}</td>
+      <td class="note">${fmtT(t.sent_at)}</td></tr>`;}).join("");
+
+  const sfRows = Object.entries(d.salesforce).filter(([k])=>k!=="KYC_Check__c").map(([k,v]) => `<tr>
+      <td class="mono">${esc(k)}</td><td><b>${v===null?"<span class='note'>—</span>":esc(String(v))}</b></td>
+      <td class="note">${esc(d.field_sources[k]||"")}</td></tr>`).join("");
+
+  const audit = d.audit.map(a => `<div class="ev ${["run.decided","reviewer.manual_approve","check.superseded"].includes(a.action)?"hot":""}">
+      <span class="note">${fmtT(a.at)}</span> · <b>${esc(a.action)}</b> <span class="note">by ${esc(a.actor)}</span>
+      <div class="note mono" style="max-width:900px;overflow-wrap:anywhere">${esc(JSON.stringify(a.detail_json))}</div></div>`).join("");
+
+  main.innerHTML = `
+    <div class="row" style="justify-content:space-between">
+      <div class="row">
+        <h1 style="font-size:17px;margin:0">${esc(c.company_name||c.id)}</h1>
+        <span class="mono note">${esc(c.id)}</span>
+        ${chip(c.latest_decision||"missing", c.latest_decision||"no decision")}
+        ${chip(c.status==="approved_manual"?"manual":"live", c.status)}
+        <span class="chip c-mut"><span class="dot"></span>buy: ${esc(c.buy_status)}</span>
+        <span class="chip ${c.broker_status==="blocked"?"c-crit":c.broker_status==="allowed_broker"?"c-warn":"c-good"}">
+          <span class="dot"></span>broker: ${esc(c.broker_status)}</span>
+      </div>
+      <a href="#/composer" onclick="sessionStorage.setItem('composerCase','${esc(c.id)}')">send event →</a>
+    </div>
+    <h2>Score</h2><div class="card">${meter(d.score)}</div>
+    <h2>Hard gates (5)</h2><div class="card row">
+      ${["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"]
+        .map(g0 => gateChip(g0.replace(/_/g," "), !!gates[g0])).join("")}
+      <span class="note">from latest decision ${latest.decided_at?`· ${fmtT(latest.decided_at)}`:""}</span></div>
+    <h2>Checks & supersession</h2><div class="card"><table>
+      <thead><tr><th>type</th><th>chain (oldest → live)</th><th>source</th></tr></thead>
+      <tbody>${chains}</tbody></table></div>
+    <h2>Runs</h2><div class="card"><table>
+      <thead><tr><th>run</th><th>state machine</th><th>adapters</th><th>started</th></tr></thead>
+      <tbody>${runRows}</tbody></table></div>
+    <h2>Review tasks</h2><div class="card"><table>
+      <thead><tr><th>task</th><th>type</th><th>status</th><th>result</th><th>context</th><th></th></tr></thead>
+      <tbody>${taskRows}</tbody></table></div>
+    ${tokenRows?`<h2>POC tokens</h2><div class="card"><table>
+      <thead><tr><th>token</th><th>handle</th><th>RIR-listed email</th><th>state</th><th>sent</th></tr></thead>
+      <tbody>${tokenRows}</tbody></table></div>`:""}
+    <h2>Salesforce projection <span class="note" style="text-transform:none;letter-spacing:0">— what the platform should mirror (read-only preview)</span></h2>
+    <div class="card"><table>
+      <thead><tr><th>field</th><th>value</th><th>source of truth</th></tr></thead>
+      <tbody>${sfRows}</tbody></table>
+      <details style="margin-top:8px"><summary>KYC_Check__c child records (${d.salesforce.KYC_Check__c.length})</summary>
+      <pre>${esc(JSON.stringify(d.salesforce.KYC_Check__c,null,2))}</pre></details></div>
+    <h2>Decisions</h2><div class="card"><table>
+      <thead><tr><th>decision</th><th class="num">score</th><th>buy</th><th>manual</th><th>decided</th><th>published</th></tr></thead>
+      <tbody>${d.decisions.map(x=>`<tr><td>${chip(x.decision)}</td><td class="num">${x.score}</td>
+        <td>${esc(x.buy_enablement)}</td><td>${x.manual?`👤 ${esc(x.reviewer_id||"")}`:"—"}</td>
+        <td class="note">${fmtT(x.decided_at)}</td><td class="note">${fmtT(x.published_at)}</td></tr>`).join("")
+        || `<tr><td colspan="6" class="note">none</td></tr>`}</tbody></table></div>
+    <h2>Audit trail</h2><div class="card"><div class="timeline">${audit||"<span class='note'>empty</span>"}</div></div>
+    <h2>Submitted snapshot</h2><div class="card"><pre>${esc(JSON.stringify(c.submitted_json,null,2))}</pre></div>`;
+
+  main.querySelectorAll("[data-complete]").forEach(b => b.onclick = async () => {
+    const [taskId, result] = b.dataset.complete.split(":");
+    const r = await j(`/v1/review-tasks/${taskId}/complete`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({result, reviewer_id:"ops-console"})});
+    toast(r.status<300 ? `✓ review ${result} recorded — worker will rescore` : `✕ ${esc(JSON.stringify(r.body.detail))}`);
+    setTimeout(route, 700);
+  });
+}
+
+async function viewIntegrations(){
+  const {body:d} = await j("/ui/api/integrations");
+  const envHtml = list => list.map(e =>
+    `<div>${e.present?chip("live","")+"":chip("needs-config","")} <code>${esc(e.note)}</code></div>`).join("") || "<span class='note'>none</span>";
+  const rows = d.adapters.map(a => `<tr>
+      <td class="mono"><b>${esc(a.adapter_id)}</b><div class="note">${esc(a.kind)}</div></td>
+      <td>${chip(a.status)}<div class="note" style="max-width:260px">${esc(a.detail)}</div></td>
+      <td>${envHtml(a.env)}</td>
+      <td>${a.stats?`${a.stats.calls} calls · ${(a.stats.error_rate*100).toFixed(0)}% err · p95 ${a.stats.p95_ms.toFixed(0)}ms<div class="note">last ${fmtT(a.stats.last_call_at)}</div>`:"<span class='note'>never called</span>"}</td>
+      <td>${a.todo?`<span class="note">⚠ ${esc(a.todo)}</span>`:"—"}</td>
+      <td>${a.probeable?`<button data-probe="${esc(a.adapter_id)}">probe</button><div class="note" id="probe-${esc(a.adapter_id)}"></div>`:"<span class='note'>n/a</span>"}</td>
+    </tr>`).join("");
+  const p = d.platform_callback;
+  main.innerHTML = `
+    <h2>Platform ↔ tool</h2>
+    <div class="card"><table><tbody>
+      <tr><td><b>decision callback</b><div class="note">POST {PLATFORM_CALLBACK_URL}/kyc/decision · HMAC-signed · at-least-once</div></td>
+        <td>${chip(p.status)}</td>
+        <td>${p.callback_url_is_default_stub?chip("needs-config","default stub URL"):chip("live","URL set")}
+            ${p.hmac_secret_set?chip("live","secret set"):chip("needs-config","secret missing")}
+            ${p.auth_disabled?chip("needs-config","auth disabled"):""}</td>
+        <td class="note">${esc(p.todo||"ready")}</td></tr>
+      <tr><td><b>POC token email</b></td><td>${chip(d.email_sender.status)}</td>
+        <td class="note">${esc(d.email_sender.detail)}</td><td class="note">⚠ ${esc(d.email_sender.todo)}</td></tr>
+      <tr><td><b>raw evidence store</b></td><td>${chip("live", d.object_store.kind)}</td>
+        <td class="mono note" colspan="2">${esc(d.object_store.root)}</td></tr>
+    </tbody></table></div>
+    <h2>Evidence adapters (9, catalog order)</h2>
+    <div class="card"><table>
+      <thead><tr><th>adapter</th><th>status</th><th>config</th><th>recent calls</th><th>open items</th><th>reachability</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <p class="note">status legend: ${chip("live")} wired to a real source · ${chip("stub")} fixture-backed, returns canned data ·
+    ${chip("dev")} dev implementation · ${chip("needs-config")} missing credentials/URL · ${chip("manual")} human queue by design</p>`;
+  main.querySelectorAll("[data-probe]").forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "probing…";
+    const {body} = await j(`/ui/api/integrations/${b.dataset.probe}/probe`, {method:"POST"});
+    const out = $(`#probe-${CSS.escape(b.dataset.probe)}`);
+    out.innerHTML = body.targets
+      ? Object.entries(body.targets).map(([k,v]) =>
+          `${v.reachable?"✓":"✕"} ${esc(k)}: ${esc(v.note||v.error||"")} ${v.latency_ms}ms`).join("<br>")
+      : esc(body.note||"");
+    b.disabled = false; b.textContent = "probe";
+  });
+}
+
+async function viewFieldMap(){
+  const {body:pol} = await j("/ui/api/policy");
+  const {body:cl} = await j("/ui/api/cases?limit=100");
+  const selected = sessionStorage.getItem("fmCase") || "";
+  let values = {};
+  if(selected){
+    const r = await j(`/ui/api/cases/${encodeURIComponent(selected)}/full`);
+    if(r.status < 300) values = r.body.salesforce;
+  }
+  const rows = Object.entries(pol.field_sources).map(([field, src]) => {
+    const v = values[field];
+    const shown = field === "KYC_Check__c"
+      ? (v ? `${v.length} child record(s)` : "")
+      : (v === undefined || v === null ? "" : String(v));
+    return `<tr><td class="mono">${esc(field)}</td>
+      <td>${selected ? (shown===""?"<span class='note'>—</span>":`<b>${esc(shown)}</b>`) : "<span class='note'>pick a case →</span>"}</td>
+      <td class="note">${esc(src)}</td></tr>`;
+  }).join("");
+  main.innerHTML = `
+    <div class="row" style="margin-bottom:12px">
+      <b>Salesforce field map</b>
+      <span class="note">tool → KYC_Case__c, one-way, platform-owned sync (docs/SALESFORCE_MAPPING.md, executable form)</span>
+      <select id="fmcase" style="margin-left:auto">
+        <option value="">— preview with a case… —</option>
+        ${cl.cases.map(c=>`<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.id)} · ${esc(c.company_name||"")}</option>`).join("")}
+      </select>
+    </div>
+    <div class="card"><table>
+      <thead><tr><th style="width:260px">Salesforce field</th><th style="width:260px">value for selected case</th><th>source of truth in the tool</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <p class="note">Delivery rules: upsert by platform case id · dedupe on (case_id, run_id) · ordered per case ·
+    a Salesforce outage never blocks enforcement. Fields are read-only for non-integration users.</p>`;
+  $("#fmcase").onchange = e => { sessionStorage.setItem("fmCase", e.target.value); viewFieldMap(); };
+}
+
+async function viewPolicy(){
+  const {body:p} = await j("/ui/api/policy");
+  const rubric = p.rubric.map((r,i) => `<tr>
+      <td><span class="dot" style="background:var(${SLOTS[i%8]});display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px"></span><code>${esc(r.check_type)}</code></td>
+      <td class="num"><b>+${r.points}</b></td><td>${esc(r.category)}</td><td>${esc(r.mode)}</td>
+      <td class="note">${esc(r.pass_rule)}</td></tr>`).join("");
+  const decisions = p.decisions.map(d0 => `<tr><td class="num">${d0.priority}</td><td>${chip(d0.decision)}</td>
+      <td class="note">${esc(d0.condition)}</td><td class="note">${esc(d0.platform_enforcement)}</td></tr>`).join("");
+  const brokers = p.broker_entities.map(b => {
+    const ids = ["aliases","domains","email_domains","org_ids","poc_handles","asns"]
+      .flatMap(k => (b[k]||[]).map(v=>`<code>${esc(v)}</code>`)).join(" ");
+    return `<tr><td><b>${esc(b.name)}</b></td>
+      <td>${b.policy==="blocked"?chip("fail","blocked · auto-reject"):chip("pass","allowed · tagged")}</td>
+      <td>${ids||"<span class='note'>name only — ops can add identifiers via SQL</span>"}</td></tr>`;}).join("");
+  main.innerHTML = `
+    <h2>Scoring rubric · threshold ${p.threshold} <span class="note" style="text-transform:none">bundle ${esc(p.bundle_hash.slice(0,12))}…</span></h2>
+    <div class="card"><table>
+      <thead><tr><th>check</th><th class="num">points</th><th>category</th><th>mode</th><th>pass rule (deterministic)</th></tr></thead>
+      <tbody>${rubric}</tbody></table></div>
+    <h2>Hard gates (5)</h2><div class="card"><pre>${esc(JSON.stringify(p.hard_gates,null,2))}</pre></div>
+    <h2>Decision policy (priority order)</h2><div class="card"><table>
+      <thead><tr><th class="num">#</th><th>decision</th><th>condition</th><th>platform enforcement</th></tr></thead>
+      <tbody>${decisions}</tbody></table></div>
+    <h2>Broker policy (exact match only)</h2><div class="card"><table>
+      <thead><tr><th>entity</th><th>policy</th><th>identifiers (aliases / domains / org-ids / pocs / asns)</th></tr></thead>
+      <tbody>${brokers}</tbody></table></div>
+    <h2>Event catalog</h2><div class="card">${p.events.map(e=>`<code style="margin-right:10px">${esc(e)}</code>`).join("")}</div>`;
+}
+
+async function viewComposer(){
+  const {body:t} = await j("/ui/api/event-templates");
+  const caseId = sessionStorage.getItem("composerCase") || "demo-case-001";
+  main.innerHTML = `
+    <div class="split">
+      <div class="card">
+        <h2>Send a platform event</h2>
+        <div class="kv" style="margin-bottom:10px">
+          <span class="k">case id</span><input id="c-case" value="${esc(caseId)}" style="width:100%">
+          <span class="k">event type</span><select id="c-type" style="width:100%">
+            ${t.event_types.map(e=>`<option ${e==="kyb.run_requested"?"selected":""}>${esc(e)}</option>`).join("")}</select>
+        </div>
+        <div class="note" style="margin-bottom:4px">payload (JSON)</div>
+        <textarea id="c-payload"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="c-send">Send event</button>
+          <span class="note">signed server-side · idempotency key auto-generated · the <b>pipeline worker must be running</b> to process it</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Result</h2><pre id="c-out">—</pre>
+        <div class="note" id="c-hint"></div>
+        <h2>Journey shortcut</h2>
+        <p class="note">The dev-stack fixtures recognise <b>Acme Networks Ltd</b>: kyb.run_requested →
+        email.verified → org_id.submitted (ORG-ACME-1) walks a case to <b>approve</b>. Complete the
+        website task from the case page for +10.</p>
+      </div>
+    </div>`;
+  const fill = () => $("#c-payload").value =
+    JSON.stringify(t.templates[$("#c-type").value] ?? {}, null, 2);
+  $("#c-type").onchange = fill; fill();
+  $("#c-send").onclick = async () => {
+    let payload;
+    try{ payload = JSON.parse($("#c-payload").value || "{}"); }
+    catch(e){ toast("✕ payload is not valid JSON"); return; }
+    const r = await j("/ui/api/send-event", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({case_id:$("#c-case").value.trim(), event_type:$("#c-type").value, payload})});
+    $("#c-out").textContent = `HTTP ${r.status}\n` + JSON.stringify(r.body, null, 2);
+    sessionStorage.setItem("composerCase", $("#c-case").value.trim());
+    if(r.status < 300){
+      $("#c-hint").innerHTML = `queued jobs: <b>${r.body.jobs_queued}</b> — open ${caseLink($("#c-case").value.trim())} to watch it process`;
+    }
+  };
+}
+
+/* -- router ----------------------------------------------------------------- */
+const routes = [
+  [/^#\/overview$/, viewOverview],
+  [/^#\/cases$/, viewCases],
+  [/^#\/case\/(.+)$/, m => viewCase(decodeURIComponent(m[1]))],
+  [/^#\/integrations$/, viewIntegrations],
+  [/^#\/fieldmap$/, viewFieldMap],
+  [/^#\/policy$/, viewPolicy],
+  [/^#\/composer$/, viewComposer],
+];
+async function route(){
+  const h = location.hash || "#/overview";
+  document.querySelectorAll("nav a").forEach(a =>
+    a.classList.toggle("active", h.startsWith(a.getAttribute("href").replace("#/case","#/case"))
+      && (a.getAttribute("href") === h || (a.getAttribute("href")==="#/cases" && h.startsWith("#/case/")))
+      || a.getAttribute("href") === h));
+  for(const [re, fn] of routes){
+    const m = h.match(re);
+    if(m){ try{ await fn(m); }catch(e){ main.innerHTML = `<div class="card">✕ ${esc(e.message)}</div>`; } return; }
+  }
+  location.hash = "#/overview";
+}
+window.addEventListener("hashchange", route);
+$("#autorefresh").addEventListener("change", e => {
+  clearInterval(refreshTimer);
+  if(e.target.checked) refreshTimer = setInterval(route, 5000);
+});
+route();
+</script>
+</body>
+</html>
