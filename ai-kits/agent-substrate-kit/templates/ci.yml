@@ -20,3 +20,36 @@ jobs:
         run: ./manage.sh lint
       - name: Test
         run: ./manage.sh test
+
+  # Wake-on-green (a substrate convention turned into mechanism): CI *success*
+  # is the one transition GitHub never delivers as a webhook, so a watcher must
+  # otherwise poll to learn a PR went green. This job emits that transition as a
+  # PR comment — a subscribed agent then wakes exactly once, at closure, instead
+  # of re-reading context on a timer. CI *failure* already arrives as a native
+  # check event; new pushes re-run CI, so they're covered transitively. Cost:
+  # one comment per green run (the thread self-tidies to a single comment).
+  signal-green:
+    needs: [verify]
+    # Only on same-repo PRs: fork PRs get a read-only GITHUB_TOKEN and can't comment.
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Signal all-green on the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          marker='<!-- substrate:ci-green -->'
+          # Replace any prior signal so the thread keeps a single up-to-date
+          # comment — but the replacement is a *new* comment, because an edit
+          # fires issue_comment.edited, which does not reliably wake a watcher;
+          # a freshly created comment does.
+          gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" \
+            | while read -r id; do gh api -X DELETE "repos/$REPO/issues/comments/$id" || true; done
+          printf '%s\n✅ All required checks passed for `%s`.\n' "$marker" "$SHA" \
+            | gh pr comment "$PR" --repo "$REPO" --body-file -

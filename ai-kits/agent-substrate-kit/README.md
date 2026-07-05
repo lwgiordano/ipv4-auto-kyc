@@ -115,6 +115,27 @@ The pre-commit hook runs lint in **warn-only** mode by default; export
 already sets `core.hooksPath`, the kit leaves it alone (take over with
 `--force`).
 
+## Wake-on-green (CI closure signal)
+
+The `full` profile's CI (`.github/workflows/substrate-ci.yml`) includes a
+`signal-green` job that posts a marked comment (`<!-- substrate:ci-green -->`)
+on the PR when all checks pass. This exists because CI **success** is the one
+state transition GitHub never delivers as a webhook — so an agent watching a PR
+would otherwise have to *poll* to learn it went green, re-reading its whole
+context on a timer. Emitting the transition as a comment turns it into an event:
+a subscribed agent wakes exactly once, at closure, at (near) zero idle cost.
+
+- CI **failure** already arrives as a native check event; new pushes re-run CI,
+  so those are covered transitively. The only gap left is a merge-conflict
+  appearing with no new run — rare and low-stakes.
+- The comment is **created** (not edited) each run, because `issue_comment.edited`
+  does not reliably wake a watcher; the job deletes the prior signal first so the
+  thread stays tidy. Cost: one comment per green run.
+- A watcher keying off this signal must treat it as **terminal** (record "green,
+  done" and stop) — never respond by pushing, or it re-triggers CI and loops.
+- Fork PRs are skipped (their `GITHUB_TOKEN` is read-only). Turn the whole thing
+  off by deleting the `signal-green` job.
+
 ## Other operations
 
 ```sh
