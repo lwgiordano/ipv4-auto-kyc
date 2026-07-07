@@ -6,7 +6,7 @@
 <title>KYC Tool · Ops Console</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b5bd6'/%3E%3Ctext x='16' y='22' font-family='system-ui,sans-serif' font-size='17' font-weight='700' fill='white' text-anchor='middle'%3EK%3C/text%3E%3C/svg%3E">
 <style>
-/* ── Semantic tokens (reference palette; dark derived from the same roles) ── */
+/* ── Semantic tokens (light + dark) ── */
 :root{
   --bg:#f5f6f8; --surface:#ffffff; --surface-muted:#f1f2f5;
   --ink:#16191d; --text:#3d434b; --muted:#6b7280; --faint:#9aa1ac;
@@ -103,7 +103,7 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth}
 .kpi .num.bad{color:var(--red)} .kpi .num.ok{color:var(--green)}
 .kpi .foot{font-size:12px;color:var(--faint);margin-top:4px}
 
-/* ── Pills / status (icon + label, never color alone) ── */
+/* ── Pills / status ── */
 .pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:100px;
       font-size:12px;font-weight:600;white-space:nowrap;line-height:1.6}
 .pill svg{width:11px;height:11px}
@@ -118,7 +118,7 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth}
 .tag.warn{background:var(--amber-soft);color:var(--amber)}
 .tag.err{background:var(--red-soft);color:var(--red)}
 
-/* ── Tables: quiet header, data is the figure ── */
+/* ── Tables ── */
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{font-size:12px;font-weight:500;color:var(--faint);text-align:left;
    padding:10px 16px;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -306,7 +306,7 @@ function rel(s){if(!s)return"—";const d=new Date(s),now=Date.now(),sec=(now-d)
   if(sec<172800)return"yesterday";return d.toLocaleDateString(undefined,{month:"short",day:"numeric"})}
 const when=s=>`<span class="when" title="${esc(fmtExact(s))}">${esc(rel(s))}</span>`;
 
-/* status vocabulary — icon + label, color never alone */
+/* status pills */
 const ICONS={check:"✓",cross:"✕",clock:"⏳",dot:"·",warn:"!",lock:"🔒",person:"👤",skull:"☠"};
 const PILL={
   pass:["p-green","✓","Pass"],fail:["p-red","✕","Fail"],needs_review:["p-amber","!","Needs review"],
@@ -525,7 +525,6 @@ async function viewCase(id){
       <details><summary>raw</summary><pre>${esc(JSON.stringify(a.detail_json,null,2))}</pre></details>
       ${when(a.at)}
     </div>`}).filter(Boolean);
-  // chronological trail; keep the recent story visible, fold the early runs away
   const FEED_TAIL=15;
   const feed=fitems.length===0?`<div class="empty"><b>No activity</b></div>`
     :fitems.length<=FEED_TAIL+5?fitems.join("")
@@ -667,7 +666,6 @@ async function viewIntegrations(){
 async function viewFieldMap(){
   const{body:pol}=await j("/ui/api/policy");
   const{body:cl}=await j("/ui/api/cases?limit=100");
-  // always show current state: default to the most recent case rather than a blank preview
   const selected=sessionStorage.getItem("fmCase")||cl.cases[0]?.id||"";
   let values={};
   if(selected){const r=await j(`/ui/api/cases/${encodeURIComponent(selected)}/full`);
