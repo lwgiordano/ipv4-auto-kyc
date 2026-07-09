@@ -4,11 +4,6 @@ A complete reference for the IPv4.Global KYC/KYB verification tool: what it is,
 how it works, what's built, what's planned, and what it needs to go live. The
 early sections are plain-language; the later sections are technical.
 
-> **Companion docs:** [`README.md`](../README.md) (quick start),
-> [`docs/RUNBOOK.md`](RUNBOOK.md) (operations), [`docs/SALESFORCE_MAPPING.md`](SALESFORCE_MAPPING.md)
-> (the Salesforce field mirror), [`AUDIT_FINDINGS.md`](../AUDIT_FINDINGS.md)
-> (spec defects and how they were resolved).
-
 ---
 
 ## 1. What this is
@@ -78,7 +73,7 @@ Step by step, for one customer ("case"):
 7. **Decide.** One of the four verdicts.
 8. **Return the decision.** The tool POSTs the decision back to the platform
    (signed) with the score, gate results, checks, and buy-enablement flag. The
-   platform enforces it and mirrors it into Salesforce.
+   platform enforces it.
 9. **Re-runs as evidence arrives.** When the customer does more, the platform
    sends another event and the cycle repeats: new checks supersede old ones and
    an updated decision goes back. A case naturally walks from *insufficient →
@@ -184,13 +179,6 @@ Delivery is **at-least-once** — the platform must dedupe on `(case_id, run_id)
 `/v1/review-tasks` · `/v1/metrics` · `/healthz`. The webhook is the primary
 path; these are for querying state directly.
 
-### Salesforce
-
-The tool does **not** write to Salesforce. It exposes a read-only projection
-(~17 fields: `KYC_Status__c`, `KYC_Score__c`, `Buy_Enablement_Status__c`, …)
-that the **platform** mirrors. Full mapping in
-[`docs/SALESFORCE_MAPPING.md`](SALESFORCE_MAPPING.md).
-
 ### The handshake — what must be exchanged to connect
 
 1. **Platform → tool:** the tool's base URL + the shared HMAC secret.
@@ -219,7 +207,7 @@ end-to-end. A green draft PR carries the entire build.
 - A full audit trail — every decision reconstructs from event → evidence →
   checks → score → gates → decision → callback.
 - An **ops console** at `/ui` — cases, scores, gates, run state, integrations
-  status, the Salesforce field preview, and a composer for sending test events.
+  status, and a composer for sending test events.
 - A one-command local dev stack (`scripts/dev.sh`) and a **Dockerfile** for
   containerized hosting.
 - A broad automated test suite (policy-generated + golden cases + integration
@@ -255,6 +243,31 @@ determine how rich the automated verification is at launch.
 | **Floqer** | A Floqer *workflow* that returns the contact's LinkedIn match, plus the API key + trigger endpoint. Account already exists. | Hilco | **No** — fast-follow |
 | **Hosting** | AWS environment: containers, Postgres, S3, secrets (see §8). | Platform / Hilco | **Yes** |
 
+### Document extraction (OCR) — detail
+
+The `document.uploaded` event carries a reference to the stored file, not the
+bytes. Two ways to get the four fields the tool needs:
+
+- **Platform extracts.** The platform reads the document and sends the four
+  fields (company legal name, registered address, registration number,
+  jurisdiction) as structured data on the event. The tool does no OCR.
+- **Tool extracts.** The tool fetches the file and runs OCR behind a one-method
+  interface: `extract(bytes, doc_type) → {name, address, number, jurisdiction}`.
+  AWS Textract (plain-text tier, roughly cents per document) or self-hosted
+  Tesseract both fit; supported formats are PDF, JPEG, PNG, TIFF. Many documents
+  are native PDFs whose text extracts with no OCR cost.
+
+### Floqer enrichment — detail
+
+Floqer feeds one supporting check (`linkedin_company_match`, +20) and never
+drives a decision on its own. Hilco has an account. Floqer is workflow-based
+rather than a plain REST API, so integration is two steps: (1) build a Floqer
+workflow that takes a company name + domain and returns the contact's LinkedIn
+match (name, title, company, domain); (2) trigger it over Floqer's HTTP API,
+which the tool's client (already stubbed behind a fixed interface) calls with
+the API key and endpoint. It is credit-metered per lookup. Fast-follow, not
+required for v1.
+
 ---
 
 ## 7. What's NOT needed
@@ -263,8 +276,8 @@ Deliberately out of scope:
 
 - **A new email provider.** The platform's existing transactional email sends
   the POC token; no separate service to buy.
-- **The tool doing OCR.** If the platform extracts document fields (Theresa's
-  stated preference), the tool needs no OCR engine at all.
+- **The tool doing OCR.** If the platform extracts the document fields and sends
+  them as data, the tool needs no OCR engine at all.
 - **Floqer at launch.** It contributes only a supporting +20 signal and never
   decides an outcome; the approval math clears 100 without it. A fast-follow,
   not a launch dependency.
@@ -273,8 +286,6 @@ Deliberately out of scope:
   structured "forms" OCR isn't required.
 - **A polling/synchronous interface.** The tool is already async with webhook
   callbacks; the platform never waits on a request.
-- **Salesforce write access.** The platform owns the Salesforce mirror; the tool
-  only exposes the field projection.
 
 ---
 
@@ -301,9 +312,18 @@ platform needs to reach it).
 **Outbound egress needed to:** Companies House, GLEIF, the RIR RDAP endpoints,
 the platform's callback URL (and Floqer once wired).
 
-**Configuration** is entirely environment variables — see
-[`.env.example`](../.env.example). Operations playbooks are in
-[`docs/RUNBOOK.md`](RUNBOOK.md).
+**Configuration** is entirely environment variables (prefix `KYC_`):
+
+| Variable | Purpose |
+|---|---|
+| `KYC_DATABASE_URL` | PostgreSQL connection string. |
+| `KYC_PLATFORM_CALLBACK_URL` | Where the tool POSTs decisions. |
+| `KYC_PLATFORM_HMAC_SECRET` | Shared secret signing both directions. |
+| `KYC_OBJECT_STORE` | `fs` (dev) or `s3` (production). |
+| `KYC_S3_BUCKET` | Evidence bucket when `KYC_OBJECT_STORE=s3`. |
+| `CH_API_KEY` | Companies House key (optional; raises rate limits). |
+| `ARIN_API_KEY` | Optional; raises RIR RDAP rate limits. |
+| `KYC_UI_ENABLED` | Set `false` in production. |
 
 **Security:** the ops console (`/ui`) is debug tooling — set `KYC_UI_ENABLED=false`
 in production or keep the port on the internal network.
@@ -326,11 +346,11 @@ in production or keep the port on the internal network.
 
 ## 9. Open decisions
 
-1. **Who extracts document fields — platform or tool?** Theresa preferred the
-   platform. If so, the platform sends the four fields (company name, address,
-   registration number, jurisdiction) as structured data and the tool needs no
-   OCR. If the tool does it, it OCRs the file (PDF/JPEG/PNG/TIFF). This decides
-   the `document.uploaded` event payload.
+1. **Who extracts document fields — platform or tool?** If the platform
+   extracts, it sends the four fields (company name, address, registration
+   number, jurisdiction) as structured data and the tool needs no OCR. If the
+   tool does it, it OCRs the file (PDF/JPEG/PNG/TIFF). This decides the
+   `document.uploaded` event payload.
 2. **Callback URL + secret exchange** — the platform provides the endpoint and
    both sides agree on the shared HMAC secret (and a rotation plan).
 3. **Registration-flow alignment** — the platform's registration is a
@@ -378,6 +398,3 @@ in production or keep the port on the internal network.
   "approved" message can't be injected.
 - **The tool scores; the platform enforces.** Clean separation: the tool is a
   pure decision engine with no side effects on customers.
-
-> The tool was built against a normative spec; known defects in that spec and
-> how each was resolved are documented in [`AUDIT_FINDINGS.md`](../AUDIT_FINDINGS.md).
