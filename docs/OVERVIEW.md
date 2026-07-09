@@ -1,9 +1,8 @@
 # KYC/KYB Tool — Overview & Guide
 
 A complete reference for the IPv4.Global KYC/KYB verification tool: what it is,
-how it works, what's built today, what's planned, and what it needs to go live.
-Written to be read by both business stakeholders and developers — the early
-sections are plain-language; the later sections get technical.
+how it works, what's built, what's planned, and what it needs to go live. The
+early sections are plain-language; the later sections are technical.
 
 > **Companion docs:** [`README.md`](../README.md) (quick start),
 > [`docs/RUNBOOK.md`](RUNBOOK.md) (operations), [`docs/SALESFORCE_MAPPING.md`](SALESFORCE_MAPPING.md)
@@ -12,13 +11,13 @@ sections are plain-language; the later sections get technical.
 
 ---
 
-## 1. What this is (in one minute)
+## 1. What this is
 
 The platform (IPv4.Global) is the storefront where customers register and
 transact. The KYC tool is an automated **back-office verification clerk** the
 platform consults: the platform hands it a customer's information, the tool
 investigates using external evidence, and it returns a **verdict**. The tool
-never talks to customers and never takes action itself — it scores and answers;
+never talks to customers and never takes action itself. It scores and answers;
 the platform enforces.
 
 The closest analogy is a **credit check**: the storefront sends an applicant's
@@ -63,7 +62,7 @@ Step by step, for one customer ("case"):
 1. **Event arrives.** The platform POSTs a signed event (e.g. "submitted
    company details," "verified email," "uploaded a document," "submitted an
    ORG-ID"). The tool records it, queues the work, and instantly returns a run
-   ID — it does not block.
+   ID; it does not block.
 2. **A worker picks it up.** A background worker claims the job. Events for the
    same case are processed in order.
 3. **Broker check first.** The company's identifiers are matched against the
@@ -71,7 +70,7 @@ Step by step, for one customer ("case"):
 4. **Gather evidence.** The tool calls the external sources it needs for
    whatever's missing (registries, IP-registry lookups, document extraction,
    enrichment). Raw responses are stored for audit. If a source is down, that
-   check simply isn't made — the tool never invents a failure.
+   check simply isn't made; the tool never invents a failure.
 5. **Validate into checks.** Each piece of evidence becomes a pass/fail check
    by fixed, deterministic rules. Each check is worth points.
 6. **Score + gates.** Points from all currently-valid checks are summed
@@ -81,7 +80,7 @@ Step by step, for one customer ("case"):
    (signed) with the score, gate results, checks, and buy-enablement flag. The
    platform enforces it and mirrors it into Salesforce.
 9. **Re-runs as evidence arrives.** When the customer does more, the platform
-   sends another event and the cycle repeats — new checks supersede old ones and
+   sends another event and the cycle repeats: new checks supersede old ones and
    an updated decision goes back. A case naturally walks from *insufficient →
    approve_buy_locked → approve* as proof accumulates.
 
@@ -126,8 +125,8 @@ All five must pass for automatic approval:
    yet verified → account approved, purchasing locked until it is.
 4. **`manual_review_insufficient`** — anything else.
 
-Note that a customer can clear the 100-point threshold multiple ways — the
-rubric is intentionally redundant so no single source is a hard dependency.
+A customer can clear the 100-point threshold multiple ways: the rubric is
+intentionally redundant, so no single source is a hard dependency.
 
 ---
 
@@ -244,7 +243,7 @@ end-to-end. A green draft PR carries the entire build.
 
 ## 6. What's needed to go live
 
-These are the open integration items. None block the *core* engine — they
+These are the open integration items. None block the *core* engine; they
 determine how rich the automated verification is at launch.
 
 | Item | What's needed | Owner | Required for v1? |
@@ -260,22 +259,22 @@ determine how rich the automated verification is at launch.
 
 ## 7. What's NOT needed
 
-Being explicit about scope keeps the build lean:
+Deliberately out of scope:
 
-- **A new email provider** — the platform's existing transactional email sends
+- **A new email provider.** The platform's existing transactional email sends
   the POC token; no separate service to buy.
-- **The tool doing OCR** — *if* the platform extracts document fields (Theresa's
+- **The tool doing OCR.** If the platform extracts document fields (Theresa's
   stated preference), the tool needs no OCR engine at all.
-- **Floqer at launch** — it contributes only a supporting +20 signal and never
-  decides an outcome; the approval math clears 100 without it. It's a
-  fast-follow, not a launch dependency.
-- **Expensive OCR tiers** — even if the tool does OCR, plain text extraction
+- **Floqer at launch.** It contributes only a supporting +20 signal and never
+  decides an outcome; the approval math clears 100 without it. A fast-follow,
+  not a launch dependency.
+- **Expensive OCR tiers.** Even if the tool does OCR, plain text extraction
   (cents per document) is enough; the tool does its own field matching, so
   structured "forms" OCR isn't required.
-- **A polling/synchronous interface** — the tool is already async with webhook
+- **A polling/synchronous interface.** The tool is already async with webhook
   callbacks; the platform never waits on a request.
-- **Salesforce write access** — the platform owns the Salesforce mirror; the
-  tool only exposes the field projection.
+- **Salesforce write access.** The platform owns the Salesforce mirror; the tool
+  only exposes the field projection.
 
 ---
 
@@ -311,15 +310,15 @@ in production or keep the port on the internal network.
 
 ### How updates work
 
-- **Code changes** ship as standard rolling container deploys — each version is
-  tested automatically in CI before it goes live, rolled out with zero
-  downtime, and reversible by redeploying the prior image. RDS/S3 data is
-  untouched across deploys.
-- **Settings** (URLs, secrets, toggles) are environment variables — changed in
-  the hosting config, no code change.
+- **Code changes** ship as standard rolling container deploys. Each version is
+  tested automatically in CI before it goes live, rolled out with zero downtime,
+  and reversible by redeploying the prior image. RDS/S3 data is untouched across
+  deploys.
+- **Settings** (URLs, secrets, toggles) are environment variables, changed in
+  the hosting config with no code change.
 - **Scoring rules** (points, threshold, blocklist) are data-driven and
   **versioned**: a change is made deliberately, tested, and released, and every
-  decision records which policy version produced it — so the audit trail always
+  decision records which policy version produced it, so the audit trail always
   holds. There is intentionally no hot-reload; the blocklist can be updated in
   the database for urgent additions.
 
@@ -338,8 +337,8 @@ in production or keep the port on the internal network.
    lightweight "get through the door" step (ORG-ID not required up front, with a
    tooltip that providing it improves approval odds); heavier verification is
    deferred to transaction time. The tool already supports this via the
-   `approve_buy_locked` path — worth confirming the platform's tiers map to the
-   four verdicts as intended.
+   `approve_buy_locked` path; confirm the platform's tiers map to the four
+   verdicts as intended.
 
 ---
 
@@ -356,9 +355,9 @@ in production or keep the port on the internal network.
     engine).
 - **Future (as needs emerge):**
   - A **self-service admin screen** so authorized staff can adjust thresholds,
-    point values, and the blocklist without a developer — with changes still
-    versioned and audit-logged. Recommend building this once you know which
-    knobs you actually turn often.
+    point values, and the blocklist without a developer, with changes still
+    versioned and audit-logged. Build this once you know which knobs you turn
+    often.
   - Additional registry sources beyond Companies House / GLEIF for jurisdictions
     they don't cover.
 
@@ -367,17 +366,17 @@ in production or keep the port on the internal network.
 ## 11. Why it's built this way (key design decisions)
 
 - **Policy-as-data, versioned per release.** Scoring rules live in data files,
-  not code; each decision records the exact policy version — so any past
+  not code; each decision records the exact policy version, so any past
   decision is fully explainable. No silent rule edits.
 - **Deterministic validation.** Given the same evidence, the tool always
-  produces the same decision — essential for a compliance tool and for testing.
+  produces the same decision, essential for a compliance tool and for testing.
 - **Append-only checks + supersession.** Evidence is never overwritten; a case
   re-scores cleanly and the full history is preserved.
 - **Postgres-backed queue + transactional outbox.** Reliable, crash-safe
   processing and at-least-once callback delivery without extra infrastructure.
 - **HMAC-signed both directions.** Neither side can be spoofed; a forged
   "approved" message can't be injected.
-- **The tool scores; the platform enforces.** Clean separation — the tool is a
+- **The tool scores; the platform enforces.** Clean separation: the tool is a
   pure decision engine with no side effects on customers.
 
 > The tool was built against a normative spec; known defects in that spec and
