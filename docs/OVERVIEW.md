@@ -80,7 +80,7 @@ Step by step, for one customer ("case"):
    approve_buy_locked → approve* as proof accumulates.
 
 **Two defining properties:** the tool is **deterministic** (the same evidence
-always yields the same decision — no black-box judgment) and **fully auditable**
+always yields the same decision, with no black-box judgment) and **fully auditable**
 (every decision traces back through checks → raw evidence → the triggering
 event, and records which policy version produced it).
 
@@ -129,13 +129,13 @@ intentionally redundant, so no single source is a hard dependency.
 
 ### Inbound: one endpoint, all events
 
-`POST /v1/cases/{case_id}/events` — every event uses the same envelope and is
+`POST /v1/cases/{case_id}/events`. Every event uses the same envelope and is
 authenticated:
 
 - **Auth:** headers `X-KYC-Timestamp` + `X-KYC-Signature` =
   `HMAC-SHA256(shared_secret, "{timestamp}.{raw_body}")`. Requests older than
   300 s are rejected (replay protection).
-- **Idempotency:** an `Idempotency-Key` header per event — safe to retry; a
+- **Idempotency:** an `Idempotency-Key` header per event, so retries are safe; a
   repeat returns the original response, never a duplicate run.
 - **Envelope:** `event_type`, `occurred_at`, `actor {type, id}`, `payload`.
 
@@ -171,7 +171,7 @@ checks[]{ type, status, points, source, reason_codes },
 decided_at
 ```
 
-Delivery is **at-least-once** — the platform must dedupe on `(case_id, run_id)`.
+Delivery is **at-least-once**, so the platform must dedupe on `(case_id, run_id)`.
 
 ### Read endpoints (pull, on demand)
 
@@ -204,9 +204,9 @@ end-to-end. A green draft PR carries the entire build.
   callback delivery (at-least-once, retried with backoff).
 - Append-only checks with supersession (exactly one live check per type; a case
   re-scores cleanly as new evidence arrives).
-- A full audit trail — every decision reconstructs from event → evidence →
+- A full audit trail: every decision reconstructs from event → evidence →
   checks → score → gates → decision → callback.
-- An **ops console** at `/ui` — cases, scores, gates, run state, integrations
+- An **ops console** at `/ui`: cases, scores, gates, run state, integrations
   status, and a composer for sending test events.
 - A one-command local dev stack (`scripts/dev.sh`) and a **Dockerfile** for
   containerized hosting.
@@ -239,7 +239,7 @@ determine how rich the automated verification is at launch.
 | **Platform callback URL + shared secret** | The endpoint the tool POSTs decisions to, and a shared HMAC secret. | Platform team | **Yes** — the integration handshake. |
 | **Companies House key** | `CH_API_KEY` (optional; works without, key raises rate limits). | Hilco | Recommended |
 | **Document extraction** | Decide who reads uploaded documents (see §9). If the tool does it: pick an OCR engine (AWS Textract recommended). If the platform does it: it sends the four extracted fields as data. | Platform / Hilco | Decision needed |
-| **POC token email** | Resolved: the **platform's existing transactional email** delivers the POC token — nothing to procure. | Platform | Wire-up only |
+| **POC token email** | Resolved: the **platform's existing transactional email** delivers the POC token; nothing to procure. | Platform | Wire-up only |
 | **Floqer** | A Floqer *workflow* that returns the contact's LinkedIn match, plus the API key + trigger endpoint. Account already exists. | Hilco | **No** — fast-follow |
 | **Hosting** | AWS environment: containers, Postgres, S3, secrets (see §8). | Platform / Hilco | **Yes** |
 
@@ -312,7 +312,7 @@ platform needs to reach it).
 **Outbound egress needed to:** Companies House, GLEIF, the RIR RDAP endpoints,
 the platform's callback URL (and Floqer once wired).
 
-**Configuration** is entirely environment variables (prefix `KYC_`):
+**Configuration** is entirely environment variables:
 
 | Variable | Purpose |
 |---|---|
@@ -325,7 +325,7 @@ the platform's callback URL (and Floqer once wired).
 | `ARIN_API_KEY` | Optional; raises RIR RDAP rate limits. |
 | `KYC_UI_ENABLED` | Set `false` in production. |
 
-**Security:** the ops console (`/ui`) is debug tooling — set `KYC_UI_ENABLED=false`
+**Security:** the ops console (`/ui`) is debug tooling; set `KYC_UI_ENABLED=false`
 in production or keep the port on the internal network.
 
 ### How updates work
@@ -364,10 +364,10 @@ in production or keep the port on the internal network.
 
 ## 10. Roadmap — where it's going
 
-- **v1 (launch):** the core verification path — email verification, registry
-  match (Companies House / GLEIF), ORG-ID (RDAP), and documents — with signed
-  webhook callbacks to the platform. Everything needed for this is built; it
-  waits on the callback handshake, the document-extraction decision, and
+- **v1 (launch):** the core verification path (email verification, registry
+  match via Companies House / GLEIF, ORG-ID via RDAP, and documents), with
+  signed webhook callbacks to the platform. Everything needed for this is built;
+  it waits on the callback handshake, the document-extraction decision, and
   hosting.
 - **Fast-follows (shortly after launch):**
   - Wire Floqer (build the workflow, supply the API key).
