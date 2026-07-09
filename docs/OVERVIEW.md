@@ -281,11 +281,6 @@ Deliberately out of scope:
 - **Floqer at launch.** It contributes only a supporting +20 signal and never
   decides an outcome; the approval math clears 100 without it. A fast-follow,
   not a launch dependency.
-- **Expensive OCR tiers.** Even if the tool does OCR, plain text extraction
-  (cents per document) is enough; the tool does its own field matching, so
-  structured "forms" OCR isn't required.
-- **A polling/synchronous interface.** The tool is already async with webhook
-  callbacks; the platform never waits on a request.
 
 ---
 
