@@ -203,15 +203,27 @@ def test_document_match_awards_legal_proof(client, post_event, phase2_worker, ev
     assert checks["business_document_verified"] == "pass"
 
 
-def test_website_review_completion_writes_check_and_rescore(client, post_event, phase2_worker):
+def test_review_complete_rejects_unsigned_request(client):
+    # The completion endpoint mutates state and emits a signed callback — it must
+    # require HMAC like every other write, not just the read API's trust domain.
+    resp = client.post(
+        "/v1/review-tasks/any-task/complete",
+        json={"result": "pass", "reviewer_id": "attacker"},
+    )
+    assert resp.status_code == 401
+
+
+def test_website_review_completion_writes_check_and_rescore(
+    client, post_event, phase2_worker, sign
+):
     post_event("case-web", "kyb.run_requested", ACME_KYB)
     phase2_worker.run_until_idle()
     tasks = client.get("/v1/review-tasks?status=open").json()["tasks"]
     task = next(t for t in tasks if t["case_id"] == "case-web" and t["task_type"] == "website")
 
+    body = json.dumps({"result": "pass", "reviewer_id": "rev-7"}).encode()
     complete = client.post(
-        f"/v1/review-tasks/{task['id']}/complete",
-        json={"result": "pass", "reviewer_id": "rev-7"},
+        f"/v1/review-tasks/{task['id']}/complete", content=body, headers=sign(body)
     )
     assert complete.status_code == 202
     phase2_worker.run_until_idle()
@@ -226,8 +238,7 @@ def test_website_review_completion_writes_check_and_rescore(client, post_event, 
 
     # AUDIT:D4 — the endpoint is idempotent via the synthesized event
     replay = client.post(
-        f"/v1/review-tasks/{task['id']}/complete",
-        json={"result": "pass", "reviewer_id": "rev-7"},
+        f"/v1/review-tasks/{task['id']}/complete", content=body, headers=sign(body)
     )
     assert replay.status_code == 200
 

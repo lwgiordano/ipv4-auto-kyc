@@ -31,10 +31,17 @@ _CLAIM_SQL = text(
     UPDATE outbox
     SET next_attempt_at = now() + make_interval(secs => :lease_seconds)
     WHERE id = (
-        SELECT id FROM outbox
-        WHERE status = 'pending' AND next_attempt_at <= now()
-        ORDER BY id
-        FOR UPDATE SKIP LOCKED
+        SELECT o.id FROM outbox o
+        WHERE o.status = 'pending' AND o.next_attempt_at <= now()
+          AND (
+                o.case_id IS NULL
+                OR o.id = (
+                    SELECT min(o2.id) FROM outbox o2
+                    WHERE o2.case_id = o.case_id AND o2.status = 'pending'
+                )
+              )
+        ORDER BY o.id
+        FOR UPDATE OF o SKIP LOCKED
         LIMIT 1
     )
     RETURNING id, kind, case_id, run_id, payload_json, attempts
@@ -130,6 +137,13 @@ class OutboxPublisher:
                 ),
                 {"id": row.id, "now": now},
             )
+            if row.kind == POC_EMAIL:
+                # the raw POC token existed only to be emailed; don't retain it
+                # at rest (delivered rows live for the full retention window).
+                session.execute(
+                    text("UPDATE outbox SET payload_json = CAST(:p AS jsonb) WHERE id=:id"),
+                    {"id": row.id, "p": json.dumps({"redacted": True})},
+                )
             if row.kind == DECISION_CALLBACK and row.run_id:
                 # callback delivered → run reaches its terminal state
                 session.execute(

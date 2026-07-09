@@ -23,5 +23,7 @@ class JsonScanOcrEngine:
     def extract(self, data: bytes, doc_type: str) -> dict:
         try:
             return dict(json.loads(data).get("fields", {}))
-        except (json.JSONDecodeError, AttributeError):
+        except (ValueError, AttributeError, TypeError):
+            # Real binary uploads (PDF/PNG) raise UnicodeDecodeError here; the
+            # fixture engine must degrade to "no fields", never crash the adapter.
             return {}

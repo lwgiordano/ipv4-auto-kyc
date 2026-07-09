@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from kyc_tool.db.audit import audit
 from kyc_tool.db.tables import Check
 from kyc_tool.domain.models import CheckStatus, CheckView
+from kyc_tool.validators.normalize import canon_id
 
 
 def live_checks(session: Session, case_id: str) -> list[Check]:
@@ -187,8 +188,11 @@ def apply_check_intents(
             )
         ).scalar_one_or_none()
         if live_poc is not None:
-            poc_org = (live_poc.source_detail_json or {}).get("org_handle")
-            if new_handle is None or poc_org != new_handle:
+            # canonicalize both handles: a case/format-only difference
+            # ("org-acme-1" vs "ORG-ACME-1") must not supersede a valid POC.
+            new_org = canon_id(new_handle)
+            poc_org = canon_id((live_poc.source_detail_json or {}).get("org_handle"))
+            if not new_org or poc_org != new_org:
                 supersede_without_replacement(
                     session,
                     live_poc,

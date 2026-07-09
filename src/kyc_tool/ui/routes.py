@@ -18,6 +18,8 @@ from sqlalchemy import text
 
 from kyc_tool.api.routes_metrics import metrics as collect_metrics
 from kyc_tool.api.schemas import PAYLOAD_MODELS, EventEnvelope
+from kyc_tool.db.audit import audit
+from kyc_tool.db.session import uow
 from kyc_tool.events.ingest import ingest_event
 from kyc_tool.ui import integrations as integrations_report
 from kyc_tool.ui.salesforce_projection import FIELD_SOURCES, project_salesforce_fields
@@ -309,11 +311,32 @@ def policy_view(request: Request) -> dict:
     )
 
 
+def _adapter_registry(request: Request) -> dict:
+    """Build the worker adapter registry once per process and cache it. The
+    integration report only introspects adapter types; rebuilding per request
+    leaks an httpx client pool each time."""
+    cached = getattr(request.app.state, "_adapter_registry", None)
+    if cached is None:
+        from kyc_tool.storage.object_store import make_object_store
+        from kyc_tool.workers.pipeline_worker import build_adapters
+
+        settings = request.app.state.settings
+        store = make_object_store(
+            settings.object_store, fs_root=settings.object_store_root, s3_bucket=settings.s3_bucket
+        )
+        cached = build_adapters(settings, store)
+        request.app.state._adapter_registry = cached
+    return cached
+
+
 @router.get("/ui/api/integrations")
 def integrations(request: Request) -> dict:
+    adapters = _adapter_registry(request)
     with request.app.state.session_factory() as session:
         return _json_safe(
-            integrations_report.integration_report(request.app.state.settings, session)
+            integrations_report.integration_report(
+                request.app.state.settings, session, adapters
+            )
         )
 
 
@@ -377,9 +400,9 @@ async def send_event(request: Request) -> JSONResponse:
 def requeue_job(job_id: int, request: Request) -> dict:
     """Runbook §dead-letter as a button: requeue the job and reset its FAILED
     run to QUEUED — transitions are guarded, adapter fetches resume."""
-    with request.app.state.session_factory() as session, session.begin():
+    with uow(request.app.state.session_factory) as session:
         row = session.execute(
-            text("SELECT payload_json, status FROM jobs WHERE id=:id"), {"id": job_id}
+            text("SELECT payload_json, status, case_id FROM jobs WHERE id=:id"), {"id": job_id}
         ).first()
         if row is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -401,19 +424,21 @@ def requeue_job(job_id: int, request: Request) -> dict:
                 ),
                 {"run_id": run_id},
             )
+        audit(session, "job.requeued", case_id=row.case_id, run_id=run_id, job_id=job_id)
     return {"requeued": job_id, "run_reset": run_id}
 
 
 @router.post("/ui/api/requeue/outbox/{outbox_id}")
 def requeue_outbox(outbox_id: int, request: Request) -> dict:
-    with request.app.state.session_factory() as session, session.begin():
-        updated = session.execute(
+    with uow(request.app.state.session_factory) as session:
+        row = session.execute(
             text(
                 "UPDATE outbox SET status='pending', attempts=0, next_attempt_at=now(), "
-                "last_error=NULL WHERE id=:id AND status='dead'"
+                "last_error=NULL WHERE id=:id AND status='dead' RETURNING case_id, run_id"
             ),
             {"id": outbox_id},
-        )
-        if updated.rowcount == 0:
+        ).first()
+        if row is None:
             raise HTTPException(status_code=409, detail="outbox row not found or not dead")
+        audit(session, "outbox.requeued", case_id=row.case_id, run_id=row.run_id, outbox_id=outbox_id)
     return {"requeued": outbox_id}

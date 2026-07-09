@@ -107,7 +107,7 @@ def test_redelivery_carries_identical_dedupe_key(
 
 
 def test_full_staging_scenario_g3_to_approval(
-    client, engine, post_event, phase3_worker, publisher, callback_capture, evidence_store
+    client, engine, post_event, phase3_worker, publisher, callback_capture, evidence_store, sign
 ):
     """The acceptance journey: registration-time KYB (insufficient) → evidence
     accumulates through the platform loop (registry, email, website reviewer,
@@ -133,9 +133,11 @@ def test_full_staging_scenario_g3_to_approval(
     website_task = next(
         t for t in tasks if t["case_id"] == case_id and t["task_type"] == "website"
     )
+    review_body = json.dumps({"result": "pass", "reviewer_id": "rev-9"}).encode()
     client.post(
         f"/v1/review-tasks/{website_task['id']}/complete",
-        json={"result": "pass", "reviewer_id": "rev-9"},
+        content=review_body,
+        headers=sign(review_body),
     )
     phase3_worker.run_until_idle()
     publisher.process_pending()

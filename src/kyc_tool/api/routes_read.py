@@ -1,10 +1,13 @@
 """Read endpoints + review-task completion (04 §2)."""
 
+import json
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 
+from kyc_tool.api.auth import require_valid_signature
 from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.db.tables import Case, DecisionRow, Event, ReviewTask, Run
 from kyc_tool.events.ingest import ingest_event
@@ -121,8 +124,14 @@ def list_review_tasks(request: Request, status: str = Query(default="open")) -> 
 @router.post("/v1/review-tasks/{task_id}/complete")
 async def complete_review_task(task_id: str, request: Request) -> JSONResponse:
     """AUDIT:D4 — synthesizes the website.review_completed event so both
-    completion paths share one idempotent, audited pipeline."""
-    body = await request.json()
+    completion paths share one idempotent, audited pipeline. Signed like every
+    other mutation; the ops console completes via /ui/api/send-event."""
+    raw = await request.body()
+    require_valid_signature(request.app.state.settings, request.headers, raw)
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid JSON: {exc}") from exc
     result = body.get("result")
     reviewer_id = body.get("reviewer_id")
     reason_codes = body.get("reason_codes", [])

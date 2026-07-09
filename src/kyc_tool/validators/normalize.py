@@ -24,6 +24,12 @@ def norm_equal(a: str | None, b: str | None) -> bool:
     return norm(a) != "" and norm(a) == norm(b)
 
 
+def canon_id(value: str | None) -> str:
+    """Canonicalize an identifier (RIR org handle, POC handle) for exact
+    comparison: case- and whitespace-insensitive, no punctuation collapsing."""
+    return (value or "").strip().lower()
+
+
 def domain_of(value: str | None) -> str:
     """Extract a bare lowercase domain from an email, URL, or naked host."""
     if not value:

@@ -111,16 +111,10 @@ def _classify(adapter_id: str, adapter: object) -> tuple[str, str]:
     return "live", type(adapter).__name__
 
 
-def integration_report(settings: Settings, session: Session) -> dict:
-    # Import here: workers builds real HTTP clients; keep app startup light.
-    from kyc_tool.storage.object_store import make_object_store
-    from kyc_tool.workers.pipeline_worker import build_adapters
-
-    store = make_object_store(
-        settings.object_store, fs_root=settings.object_store_root, s3_bucket=settings.s3_bucket
-    )
-    adapters = build_adapters(settings, store)
-
+def integration_report(settings: Settings, session: Session, adapters: dict) -> dict:
+    # `adapters` is the worker registry, built and cached once by the caller.
+    # Rebuilding it per request leaked an httpx client pool per adapter; this
+    # function only reads their types for classification.
     stats = {
         row.adapter_id: {
             "calls": row.calls,

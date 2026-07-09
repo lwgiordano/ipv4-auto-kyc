@@ -29,3 +29,11 @@ def test_verify_rejects_stale_timestamp():
 
 def test_verify_rejects_garbage_timestamp():
     assert not security.verify("secret", "not-a-number", b"body", "sig")
+
+
+def test_verify_rejects_non_finite_timestamp():
+    # 'nan'/'inf' parse via float() but must not slip past the skew window —
+    # a correctly-signed nan timestamp must still be rejected.
+    for ts in ("nan", "inf", "-inf"):
+        sig = security.sign("secret", ts, b"body")
+        assert not security.verify("secret", ts, b"body", sig, now=1700000000.0)

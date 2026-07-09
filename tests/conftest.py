@@ -125,6 +125,13 @@ def sign_headers(body: bytes, *, key: str | None = None) -> dict[str, str]:
     }
 
 
+@pytest.fixture()
+def sign():
+    """Sign a raw request body for endpoints hit outside the post_event helper
+    (e.g. the now-authenticated review-task completion endpoint)."""
+    return sign_headers
+
+
 def envelope(event_type: str, payload: dict, actor: dict | None = None) -> dict:
     return {
         "event_type": event_type,

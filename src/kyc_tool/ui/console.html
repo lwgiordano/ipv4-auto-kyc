@@ -374,6 +374,7 @@ async function viewOverview(){
       ${kpi("Runs completed",g(m.runs_by_state,"COMPLETE"),"state machine reached COMPLETE")}
       ${kpi("Queue depth",g(m.jobs_by_status,"queued")+g(m.jobs_by_status,"running"),"jobs waiting or running")}
       ${kpi("Dead letters",dead,dead?"needs attention":"jobs + callbacks",dead?"bad":"")}
+      ${kpi("Callbacks pending",g(m.outbox_by_status,"pending"),"awaiting delivery — climbing means the outbox worker is stalled")}
       ${kpi("Open reviews",reviews.reduce((a,[,v])=>a+v,0),esc(reviews.map(([k,v])=>`${k} ${v}`).join(" · "))||"website · POC email")}
       ${kpi("p95 event→decision",(m.event_to_decision_seconds?.p95??0).toFixed(1)+"s","budget <10s adapter-light")}
     </div>
@@ -600,9 +601,11 @@ async function viewCase(id){
   const fm=$("#feedmore");if(fm)fm.onclick=()=>{$("#feedhead").hidden=false;fm.parentElement.remove()};
   page.querySelectorAll("[data-complete]").forEach(b=>b.onclick=async()=>{
     const[taskId,result]=b.dataset.complete.split(":");
-    const r=await j(`/v1/review-tasks/${taskId}/complete`,{method:"POST",
+    const r=await j(`/ui/api/send-event`,{method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({result,reviewer_id:"ops-console"})});
+      body:JSON.stringify({case_id:c.id,event_type:"website.review_completed",
+        idempotency_key:"review-task-complete-"+taskId,
+        payload:{task_id:taskId,result,reviewer_id:"ops-console",reason_codes:[]}})});
     toast(r.status<300?`✓ Review ${result} recorded — the worker will rescore`:`✕ ${esc(JSON.stringify(r.body.detail))}`);
     setTimeout(route,700)});
 }

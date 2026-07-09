@@ -45,7 +45,9 @@ class GleifAdapter:
             candidates.append(
                 {
                     "legal_name": (entity.get("legalName") or {}).get("name"),
-                    "company_number": (record.get("attributes") or {}).get("lei"),
+                    # registeredAs is the national registry number the submission
+                    # carries; the LEI is GLEIF's own id and never matches it.
+                    "company_number": entity.get("registeredAs"),
                     "status": entity.get("status"),
                     "address": address,
                 }

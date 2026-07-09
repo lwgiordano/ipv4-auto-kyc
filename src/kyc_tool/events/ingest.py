@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from kyc_tool.checkstore import repo as checkstore
+from kyc_tool.config import get_settings
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Case, DecisionRow, Event, Run
@@ -136,7 +137,13 @@ def ingest_event(
         session.add(run)
         session.flush()
         event.run_id = run.id
-        jobs.enqueue(session, "run_transition", {"run_id": run.id}, case_id=case_id)
+        jobs.enqueue(
+            session,
+            "run_transition",
+            {"run_id": run.id},
+            case_id=case_id,
+            max_attempts=get_settings().job_max_attempts,
+        )
         audit(session, "run.created", case_id=case_id, run_id=run.id, event_id=event.id)
 
         body = {"run_id": run.id, "status": "queued"}

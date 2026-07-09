@@ -47,7 +47,13 @@ class Worker:
             )
         if claimed is None:
             with uow(self.session_factory) as session:
-                jobs.reap_expired(session)
+                dead = jobs.reap_expired(session)
+            # Lease-expiry dead-letters must fail their runs too, not just the
+            # handler-exception path below — else a crashed run stays a zombie.
+            for job in dead:
+                log.error("job_dead_letter", job_id=job.id, kind=job.kind, reason="lease_expired")
+                if self.on_dead_letter is not None:
+                    self.on_dead_letter(job, "lease expired; attempts exhausted")
             return False
 
         handler = self.handlers[claimed.kind]

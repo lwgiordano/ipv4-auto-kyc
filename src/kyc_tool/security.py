@@ -6,6 +6,7 @@ f"{timestamp}.{raw_body}")). Timestamp must be within the configured skew.
 
 import hashlib
 import hmac
+import math
 import time
 
 
@@ -26,6 +27,8 @@ def verify(
     try:
         ts = float(timestamp)
     except (TypeError, ValueError):
+        return False
+    if not math.isfinite(ts):  # 'nan'/'inf' parse fine but defeat the skew check
         return False
     current = time.time() if now is None else now
     if abs(current - ts) > max_skew_seconds:

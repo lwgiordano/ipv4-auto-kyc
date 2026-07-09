@@ -125,9 +125,11 @@ def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: in
     return False
 
 
-def reap_expired(session: Session) -> list[int]:
+def reap_expired(session: Session) -> list[ClaimedJob]:
     """Requeue running jobs whose lease expired (crashed worker); dead-letter
-    the ones already out of attempts. Returns ids of dead-lettered jobs."""
+    the ones already out of attempts. Returns the dead-lettered jobs so the
+    caller can fail their runs — the crash-safety invariant that a dead job's
+    run is FAILED."""
     session.execute(
         text(
             """
@@ -145,8 +147,18 @@ def reap_expired(session: Session) -> list[int]:
                 last_error = coalesce(last_error, 'lease expired; attempts exhausted'),
                 updated_at=now()
             WHERE status='running' AND lease_expires_at < now() AND attempts >= max_attempts
-            RETURNING id
+            RETURNING id, kind, case_id, payload_json, attempts, max_attempts
             """
         )
     ).fetchall()
-    return [r.id for r in dead_rows]
+    return [
+        ClaimedJob(
+            id=r.id,
+            kind=r.kind,
+            case_id=r.case_id,
+            payload=r.payload_json,
+            attempts=r.attempts,
+            max_attempts=r.max_attempts,
+        )
+        for r in dead_rows
+    ]
