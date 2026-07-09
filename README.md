@@ -8,6 +8,9 @@ four decisions (`approve`, `approve_buy_locked`, `manual_review_insufficient`,
 `reject`) for the platform to enforce. Salesforce is a one-way mirror owned by
 the platform.
 
+**Full guide**: [`docs/OVERVIEW.md`](docs/OVERVIEW.md) — how it works, current
+state, roadmap, what's needed, and the integration contract, for both business
+and dev readers.
 **Normative spec**: [`KYC_Tool_Build_Package/`](KYC_Tool_Build_Package/)
 (committed unmodified; the `machine_readable/*.json` files win over prose).
 **Spec audit**: [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) — every known defect
