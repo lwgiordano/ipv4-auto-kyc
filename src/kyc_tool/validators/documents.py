@@ -43,9 +43,10 @@ def document_intent(
         (c for c in live_checks if c.check_type == "official_registry_match"), None
     )
     if registry is not None and registry.status is CheckStatus.PASS:
-        registry_number = (normalized.get("registry_detail") or {}).get("company_number")
-        # the registry detail travels via extras when available; a mismatch on
-        # the registration number is a hard contradiction
+        # the authoritative registration number lives on the registry check's
+        # source_detail (registry_intent stamps it); a mismatch is a hard
+        # contradiction that must fail gate 5, not silently pass.
+        registry_number = (registry.source_detail or {}).get("company_number")
         if (
             registry_number
             and extracted.get("number")

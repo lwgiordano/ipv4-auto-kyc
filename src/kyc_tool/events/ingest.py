@@ -27,6 +27,7 @@ from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Case, DecisionRow, Event, Run
 from kyc_tool.domain import scoring
+from kyc_tool.domain.decision import buy_enablement_for
 from kyc_tool.domain.models import BuyStatus, CaseStatus
 from kyc_tool.policy.loader import PolicyBundle
 from kyc_tool.queue import jobs
@@ -171,7 +172,7 @@ def _handle_manual_approve(
             decision="approve",
             score=case.current_score,
             gates_json={"bypassed": True},
-            buy_enablement="enabled" if org_passed else "locked_org_id_required",
+            buy_enablement=buy_enablement_for(org_passed).value,
             policy_shas=policy.shas,
             manual=True,
             reviewer_id=reviewer_id,

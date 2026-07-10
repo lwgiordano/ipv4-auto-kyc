@@ -47,6 +47,7 @@ def as_view(check: Check) -> CheckView:
         category=check.category,
         source=check.source,
         reason_codes=tuple(check.reason_codes or ()),
+        source_detail=dict(check.source_detail_json or {}),
     )
 
 

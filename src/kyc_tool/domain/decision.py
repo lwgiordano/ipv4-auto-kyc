@@ -21,13 +21,21 @@ from kyc_tool.domain.models import (
 )
 
 
+def buy_enablement_for(org_id_passed: bool) -> BuyEnablement:
+    """Single source of truth for the buy-enablement rule: buying is enabled
+    only when a live ORG-ID check has passed, else locked pending ORG-ID.
+    Used by decide() and the reviewer.manual_approve path so the rule can never
+    diverge between the two."""
+    return BuyEnablement.ENABLED if org_id_passed else BuyEnablement.LOCKED_ORG_ID_REQUIRED
+
+
 def decide(
     total_score: int,
     gates: Gates,
     org_id_passed: bool,
     broker_status: BrokerStatus,
 ) -> DecisionResult:
-    buy = BuyEnablement.ENABLED if org_id_passed else BuyEnablement.LOCKED_ORG_ID_REQUIRED
+    buy = buy_enablement_for(org_id_passed)
 
     # priority 1 — reject (short-circuit path lands here too)
     if broker_status is BrokerStatus.BLOCKED:

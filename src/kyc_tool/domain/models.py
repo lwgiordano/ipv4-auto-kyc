@@ -91,6 +91,7 @@ class CheckView:
     category: str
     source: str
     reason_codes: tuple[str, ...] = ()
+    source_detail: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

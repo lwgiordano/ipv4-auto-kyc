@@ -81,6 +81,18 @@ class RdapStrategy:
         return response.content, normalized
 
     def postprocess(self, normalized: dict) -> dict:
-        """Per-RIR quirk hook (default: mark obviously stale/missing data)."""
+        """Per-RIR quirk hook (default: mark obviously stale/missing data).
+
+        TODO(integration) — KNOWN LIMITATION: four of the five needs_review
+        routing rules (parent/subsidiary ambiguity, related-entity-only,
+        resources-held-by-provider, via-broad-search) and the gate-5
+        `conflicting_entity` flag require per-RIR relationship analysis against
+        live RDAP data. They are NOT computed here — only fixtures inject them —
+        so those human-review routes are currently unreachable in production.
+        We deliberately do not fake the detection: guessing RIR semantics could
+        wrongly fail legitimate orgs. Exposure is bounded because org_id_match
+        still requires positive name + address matching to PASS. Implementing
+        the real detection is scoped to the RIR integration work (validators
+        already consume the flags; only the producer is missing)."""
         normalized["address_missing_or_stale"] = not normalized.get("address")
         return normalized

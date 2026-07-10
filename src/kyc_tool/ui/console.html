@@ -323,7 +323,7 @@ const PILL={
 const pill=(k,label)=>{const[c,i,d]=PILL[k]||["p-neutral","·",k];
   return`<span class="pill ${c}">${i}${NBSP}${esc(label??d)}</span>`};
 
-const RUN_STATES=["QUEUED","RESOLVE_INPUTS","BROKER_GATE","RUN_ADAPTERS","VALIDATE","PUBLISH_DECISION","COMPLETE"];
+const RUN_STATES=["QUEUED","RESOLVE_INPUTS","BROKER_GATE","RUN_ADAPTERS","VALIDATE","WRITE_CHECKS","SCORE","DECIDE","PUBLISH_DECISION","COMPLETE"];
 function pipe(state){if(state==="FAILED")return`<span class="pipe"><span class="st fail">FAILED</span></span>`;
   const i=RUN_STATES.indexOf(state);
   return`<span class="pipe">`+RUN_STATES.map((s,k)=>
