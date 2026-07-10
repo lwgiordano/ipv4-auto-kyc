@@ -60,15 +60,10 @@ class SideEffects:
             self._website_task(session, run, case, output.normalized)
         elif output.adapter_id == "rir_poc":
             self._poc_effects(session, run, case, output.normalized)
-        elif output.adapter_id == "floqer_company_enrichment" and output.normalized.get(
-            "discovered"
-        ):
-            # persist discovery context: it seeds website-review context and
-            # future registry candidate lookups (discovery-only, never points)
-            case.submitted_json = {
-                **(case.submitted_json or {}),
-                "floqer_context": output.normalized,
-            }
+        # Floqer discovery context is NOT written back to case.submitted_json:
+        # that leaked one run's enrichment into every later run's snapshot. It is
+        # seeded into the in-run snapshot for later adapters (pipeline._run_adapters)
+        # and consumed there; it never persists or awards points.
 
     def _website_task(self, session: Session, run: Run, case: Case, normalized: dict) -> None:
         request = normalized.get("task_request")

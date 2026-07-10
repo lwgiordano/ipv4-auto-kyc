@@ -150,6 +150,15 @@ class Pipeline:
         event = session.get(Event, run.triggering_event_id)
         return run, case, event
 
+    @staticmethod
+    def _run_snapshot(run: Run, case: Case) -> dict:
+        """The run's FROZEN inputs — what broker matching, adapters and
+        validators evaluate. Never the case's evolving `submitted_json`, so a
+        later event or another run can't change what this run sees. Falls back
+        to the case snapshot only for pre-008 runs that never recorded one."""
+        snapshot = run.input_snapshot_json
+        return snapshot if snapshot is not None else (case.submitted_json or {})
+
     def _resolve_inputs(self, run_id: str) -> None:
         with uow(self.session_factory) as session:
             run, case, event = self._load(session, run_id)
@@ -161,7 +170,7 @@ class Pipeline:
                 case_id=case.id,
                 run_id=run_id,
                 event_type=event.event_type,
-                snapshot_keys=sorted((case.submitted_json or {}).keys()),
+                snapshot_keys=sorted(self._run_snapshot(run, case).keys()),
             )
 
     def _broker_gate(self, run_id: str) -> None:
@@ -170,7 +179,7 @@ class Pipeline:
             plan = plan_for(event.event_type)
             status = BrokerStatus(case.broker_status)
             if plan.run_broker_gate and self.broker_matcher is not None:
-                status = self.broker_matcher(session, case.submitted_json or {})
+                status = self.broker_matcher(session, self._run_snapshot(run, case))
                 case.broker_status = status.value
             blocked = status is BrokerStatus.BLOCKED
             target = RunState.DECIDE if blocked else RunState.RUN_ADAPTERS
@@ -192,7 +201,7 @@ class Pipeline:
         with uow(self.session_factory) as session:
             run, case, event = self._load(session, run_id)
             plan: RunPlan = plan_for(event.event_type)
-            snapshot = dict(case.submitted_json or {})
+            snapshot = dict(self._run_snapshot(run, case))
             event_dict = {"event_type": event.event_type, "payload": event.payload_json or {}}
             recorded = {
                 (r.adapter_id, r.input_hash)
@@ -294,7 +303,7 @@ class Pipeline:
                     checkstore.as_view(c) for c in checkstore.live_checks(session, case.id)
                 )
                 ctx = ValidationContext(
-                    case_snapshot=dict(case.submitted_json or {}),
+                    case_snapshot=dict(self._run_snapshot(run, case)),
                     event_type=event.event_type,
                     event_payload=dict(event.payload_json or {}),
                     adapter_outputs=adapter_outputs,
@@ -427,7 +436,7 @@ class Pipeline:
     def _callback_body(
         self, case: Case, run: Run, event: Event, result: DecisionResult, views: list
     ) -> dict:
-        return {
+        body = {
             "case_id": case.id,
             "run_id": run.id,
             "event_id": event.id,
@@ -447,3 +456,8 @@ class Pipeline:
             ],
             "decided_at": datetime.now(UTC).isoformat(),
         }
+        # D1: the per-case ordinal of the triggering event, so the platform can
+        # order callbacks. Gated behind the M3 cutover flag until accepted.
+        if self.settings.callback_include_event_sequence:
+            body["event_sequence"] = event.event_sequence
+        return body

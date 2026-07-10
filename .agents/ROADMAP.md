@@ -69,15 +69,17 @@ DB. `/readyz` resolves the head **dynamically** (shipped in PR 1 — do not regr
 
 - **M1 — PR 1 merged, CI green.** ✅ `c37c052`.
 - **M2 — Enable auto-enforcement. HARD STOP.** Flipping
-  `KYC_ENFORCE_POSITIVE_DECISIONS` requires **all** of: PR 1.1 (read/PII auth);
-  PR 5a (HMAC v2 **path+key binding**) + PR 5b (reviewer identity); PR 9 (real
-  provider contracts) + a **staging E2E on real adapters**; RDAP #6 **closed or
-  RDAP-positives disabled**. The flag is **PERMANENT** — default `false` forever,
-  enabled explicitly per production environment, wiring **never removed**.
-  _Why: HMAC signs `{timestamp}.{body}` only; `case_id` is unsigned in the path,
-  and D3 makes a key reusable across cases, so a captured signed clean-company
-  event can be redirected to another case within the 300s skew and auto-approve it
-  — until HMAC v2 (PR 5a) binds the path._
+  `KYC_ENFORCE_POSITIVE_DECISIONS` requires **M4 complete + a staging E2E on real
+  adapters + platform cutover complete**. Gating on M4 (the whole backlog —
+  including queue/outbox ordering, evidence containment, policy revalidation,
+  broker provenance, and RDAP #6 resolved) rather than a hand-picked subset
+  prevents a prerequisite being accidentally omitted. The flag is **PERMANENT** —
+  default `false` forever, enabled explicitly per production environment, wiring
+  **never removed**. _Why it can't be earlier: HMAC signs `{timestamp}.{body}`
+  only; `case_id` is unsigned in the path, and D3 makes a key reusable across
+  cases, so a captured signed clean-company event could be redirected to another
+  case within the 300s skew and auto-approve it — until HMAC v2 (PR 5a) binds the
+  path, and until the rest of the durability/evidence/provenance work lands._
 - **M3 — Platform contract cutovers** (schedule with platform, ship flagged): PR 2
   (`event_sequence`), PR 5a/5b-HMAC (canonical v2 dual-accept + split secrets),
   PR 7b (`decision_sequence` + platform high-water-mark dedupe), PR 8 (`ObjectRef`),
@@ -123,13 +125,21 @@ admin-gate the `/ui` GET endpoints (PII); move to router-level
 `dependencies=[Depends(...)]`; `/readyz` 503-path tests (CI); `environment="test"`
 in the conftest fixture.
 
-### PR 2 — Immutable run snapshot + event sequence (item 2) — **GO**
-Migration 008 (D2). ingest: lock case `FOR UPDATE`, assign `event_sequence`, pin
-snapshot on case+run; `_apply_submission` returns a new dict (no in-place mutate);
-**delete Floqer write-back** (`side_effects.py:63-71`). Pipeline reads
-`run.input_snapshot_json`. Callback carries `event_sequence` (D1). Tests: stale-input
-pin, Floqer no-writeback, cross-run isolation, monotonic sequence, replay/409 no
-increment, NULL snapshot tolerated for history + rejected for new runs.
+### PR 2 — Immutable run snapshot + event sequence (item 2) — IMPLEMENTED (CI pending)
+Migration 008 (D2, nullable `input_snapshot_json`). ingest: lock case `FOR UPDATE`,
+allocate `event_sequence`, pin the frozen snapshot on case+run; `_apply_submission`
+split into a pure `_apply_event_to_snapshot` (returns a new dict) + `_update_case_metadata`;
+**Floqer write-back deleted** (`side_effects.py`). Pipeline reads `run.input_snapshot_json`
+(`_run_snapshot` helper, pre-008 fallback). Accepted acceptance details, all folded in:
+- **`UNIQUE(case_id, event_sequence)`** backstop on events.
+- **`cases.event_sequence` backfilled** to each case's max reconstructed sequence.
+- **`events.sequence_backfilled`** persists whether a sequence was assigned live
+  or reconstructed by the migration (D2 honesty).
+- Concurrency test: **simultaneous same-case ingest + `reviewer.manual_approve`**
+  (FOR UPDATE serializes; distinct gap-free sequences; UNIQUE holds).
+- Callback `event_sequence` (D1) **behind the M3 flag** `callback_include_event_sequence`
+  (default off — not shipped until the platform accepts it).
+Offline unit tests green here; DB tests run in CI.
 
 ### PR 3 — Fail-closed validators + gate-5 (items 3, 4)
 Make registry/org_id/documents/email/rir_poc/poc fail-closed; add handle-equality,

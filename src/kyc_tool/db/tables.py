@@ -40,6 +40,9 @@ class Case(Base):
     company_name: Mapped[str | None] = mapped_column(Text)
     jurisdiction: Mapped[str | None] = mapped_column(Text)
     submitted_json: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # Per-case event counter (last assigned event_sequence). Incremented under a
+    # FOR UPDATE lock in ingest so sequence allocation is race-free.
+    event_sequence: Mapped[int] = mapped_column(BigInteger, server_default=text("0"), default=0)
     status: Mapped[str] = mapped_column(Text, default="kyc_pending")
     buy_status: Mapped[str] = mapped_column(Text, default="not_applicable")
     broker_status: Mapped[str] = mapped_column(Text, default="clear")
@@ -58,6 +61,13 @@ class Event(Base):
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), index=True)
     idempotency_key: Mapped[str] = mapped_column(Text, unique=True)
     payload_hash: Mapped[str] = mapped_column(Text)
+    # Gap-free per-case ordinal (D1: this is the wire's `event_sequence`).
+    # sequence_backfilled marks rows whose sequence was RECONSTRUCTED by the 008
+    # migration (arrival order) rather than assigned live at ingest.
+    event_sequence: Mapped[int | None] = mapped_column(BigInteger)
+    sequence_backfilled: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), default=False
+    )
     event_type: Mapped[str] = mapped_column(Text)
     actor_json: Mapped[dict] = mapped_column(JSONB, default=dict)
     payload_json: Mapped[dict] = mapped_column(JSONB, default=dict)
@@ -73,6 +83,9 @@ class Run(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), index=True)
     triggering_event_id: Mapped[str] = mapped_column(ForeignKey("events.id"))
+    # Frozen inputs the run evaluates — pinned at run creation, never mutated by
+    # later events/runs/side effects. NULLABLE only for pre-008 historical runs.
+    input_snapshot_json: Mapped[dict | None] = mapped_column(JSONB)
     state: Mapped[str] = mapped_column(Text, default="QUEUED")
     partial: Mapped[bool] = mapped_column(Boolean, default=False)
     policy_bundle_hash: Mapped[str | None] = mapped_column(Text)

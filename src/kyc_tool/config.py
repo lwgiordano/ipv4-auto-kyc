@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     auth_disabled: bool = False  # test/dev escape hatch — never set in production
     hmac_max_skew_seconds: int = 300
 
+    # M3 compatibility gate: don't emit the new `event_sequence` callback field
+    # until the platform has agreed to consume it. Off until the cutover.
+    callback_include_event_sequence: bool = False
+
     # Operator authentication. Both default OFF so local dev/test run open;
     # validate_for_production() forces them on. read_auth_required gates the
     # /v1 read GETs behind a signed request; ui_admin_token is the bearer

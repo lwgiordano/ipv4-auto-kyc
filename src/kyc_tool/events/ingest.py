@@ -47,14 +47,16 @@ def payload_hash(envelope: dict) -> str:
     ).hexdigest()
 
 
-def _apply_submission(case: Case, event_type: str, payload: dict) -> None:
-    """Merge submitted evidence into the case snapshot (RESOLVE_INPUTS data)."""
+def _apply_event_to_snapshot(case: Case, event_type: str, payload: dict) -> dict:
+    """Return a NEW cumulative snapshot with this event's evidence merged in.
+
+    Pure w.r.t. the case: it copies `case.submitted_json` and never mutates it,
+    so the caller can pin the result on the run (frozen inputs) independently of
+    the case's evolving snapshot.
+    """
     snapshot = dict(case.submitted_json or {})
     if event_type == "kyb.run_requested":
         snapshot.update(payload)
-        case.company_name = payload.get("company_legal_name") or case.company_name
-        case.jurisdiction = payload.get("jurisdiction") or case.jurisdiction
-        case.platform_account_id = payload.get("platform_account_id") or case.platform_account_id
     elif event_type == "email.verified":
         snapshot["email"] = payload
     elif event_type == "org_id.submitted":
@@ -63,7 +65,15 @@ def _apply_submission(case: Case, event_type: str, payload: dict) -> None:
         snapshot["poc"] = payload
     elif event_type == "document.uploaded":
         snapshot["documents"] = [*snapshot.get("documents", []), payload]
-    case.submitted_json = snapshot
+    return snapshot
+
+
+def _update_case_metadata(case: Case, event_type: str, payload: dict) -> None:
+    """Denormalized case-level display fields (not run inputs)."""
+    if event_type == "kyb.run_requested":
+        case.company_name = payload.get("company_legal_name") or case.company_name
+        case.jurisdiction = payload.get("jurisdiction") or case.jurisdiction
+        case.platform_account_id = payload.get("platform_account_id") or case.platform_account_id
 
 
 def ingest_event(
@@ -84,6 +94,11 @@ def ingest_event(
         session.execute(
             pg_insert(Case).values(id=case_id).on_conflict_do_nothing(index_elements=["id"])
         )
+        # Lock the case BEFORE allocating a sequence — this serializes concurrent
+        # same-case ingestion (incl. reviewer.manual_approve), so the per-case
+        # event_sequence is race-free.
+        case = session.get(Case, case_id, with_for_update=True)
+        next_sequence = case.event_sequence + 1
 
         inserted = session.execute(
             pg_insert(Event)
@@ -95,13 +110,15 @@ def ingest_event(
                 event_type=event_type,
                 actor_json=actor,
                 payload_json=payload,
+                event_sequence=next_sequence,
+                sequence_backfilled=False,  # assigned live
             )
             .on_conflict_do_nothing(index_elements=["idempotency_key"])
             .returning(Event.id)
         ).scalar_one_or_none()
 
         if inserted is None:
-            # replay (or key misuse) — the original row is committed by now
+            # replay (or key misuse) — the sequence was NOT consumed
             existing = session.execute(
                 select(Event).where(Event.idempotency_key == idempotency_key)
             ).scalar_one()
@@ -115,9 +132,12 @@ def ingest_event(
                 )
             return IngestOutcome(200, dict(existing.response_snapshot or {}))
 
+        # genuine new event — commit the sequence and pin the frozen snapshot
+        case.event_sequence = next_sequence
         event = session.get(Event, inserted)
-        case = session.get(Case, case_id, with_for_update=True)
-        _apply_submission(case, event_type, payload)
+        new_snapshot = _apply_event_to_snapshot(case, event_type, payload)
+        case.submitted_json = new_snapshot
+        _update_case_metadata(case, event_type, payload)
         audit(
             session,
             "event.received",
@@ -125,6 +145,7 @@ def ingest_event(
             actor=str(actor.get("id", "platform")),
             event_id=event.id,
             event_type=event_type,
+            event_sequence=next_sequence,
             idempotency_key=idempotency_key,
         )
 
@@ -134,7 +155,12 @@ def ingest_event(
             event.processed_at = datetime.now(UTC)
             return IngestOutcome(200, body)
 
-        run = Run(case_id=case_id, triggering_event_id=event.id, policy_bundle_hash=policy.bundle_hash)
+        run = Run(
+            case_id=case_id,
+            triggering_event_id=event.id,
+            policy_bundle_hash=policy.bundle_hash,
+            input_snapshot_json=dict(new_snapshot),  # freeze the run's inputs
+        )
         session.add(run)
         session.flush()
         event.run_id = run.id
