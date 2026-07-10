@@ -13,6 +13,10 @@ class ObjectStore(Protocol):
 
     def get(self, ref: str) -> bytes: ...
 
+    def verify_access(self) -> None:
+        """Raise if the backing store is unreachable/misconfigured (for /readyz)."""
+        ...
+
 
 class FsStore:
     """Filesystem store for dev/test. Refs look like fs://relative/key."""
@@ -31,6 +35,10 @@ class FsStore:
         if not ref.startswith("fs://"):
             raise ValueError(f"not an fs ref: {ref}")
         return (self.root / ref.removeprefix("fs://")).read_bytes()
+
+    def verify_access(self) -> None:
+        if not self.root.is_dir():
+            raise RuntimeError(f"object store root is not a directory: {self.root}")
 
 
 class S3Store:
@@ -52,6 +60,9 @@ class S3Store:
         _, _, rest = ref.partition("s3://")
         bucket, _, key = rest.partition("/")
         return self.client.get_object(Bucket=bucket, Key=key)["Body"].read()
+
+    def verify_access(self) -> None:
+        self.client.head_bucket(Bucket=self.bucket)
 
 
 def make_object_store(kind: str, *, fs_root: Path, s3_bucket: str = "") -> ObjectStore:

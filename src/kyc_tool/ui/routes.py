@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import ValidationError
 from sqlalchemy import text
 
+from kyc_tool.api.auth import require_admin
 from kyc_tool.api.routes_metrics import metrics as collect_metrics
 from kyc_tool.api.schemas import PAYLOAD_MODELS, EventEnvelope
 from kyc_tool.db.audit import audit
@@ -341,7 +342,8 @@ def integrations(request: Request) -> dict:
 
 
 @router.post("/ui/api/integrations/{adapter_id}/probe")
-async def integration_probe(adapter_id: str) -> dict:
+async def integration_probe(adapter_id: str, request: Request) -> dict:
+    require_admin(request.app.state.settings, request.headers)
     return await run_in_threadpool(integrations_report.probe, adapter_id)
 
 
@@ -354,6 +356,7 @@ def event_templates() -> dict:
 async def send_event(request: Request) -> JSONResponse:
     """Composer: server-side ingestion (same trust domain as holding the HMAC
     secret — dev/debug tool; see module docstring)."""
+    require_admin(request.app.state.settings, request.headers)
     body = await request.json()
     case_id = (body.get("case_id") or "").strip()
     if not case_id:
@@ -400,6 +403,7 @@ async def send_event(request: Request) -> JSONResponse:
 def requeue_job(job_id: int, request: Request) -> dict:
     """Runbook §dead-letter as a button: requeue the job and reset its FAILED
     run to QUEUED — transitions are guarded, adapter fetches resume."""
+    require_admin(request.app.state.settings, request.headers)
     with uow(request.app.state.session_factory) as session:
         row = session.execute(
             text("SELECT payload_json, status, case_id FROM jobs WHERE id=:id"), {"id": job_id}
@@ -430,6 +434,7 @@ def requeue_job(job_id: int, request: Request) -> dict:
 
 @router.post("/ui/api/requeue/outbox/{outbox_id}")
 def requeue_outbox(outbox_id: int, request: Request) -> dict:
+    require_admin(request.app.state.settings, request.headers)
     with uow(request.app.state.session_factory) as session:
         row = session.execute(
             text(

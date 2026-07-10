@@ -2,14 +2,32 @@
 
 import structlog
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from kyc_tool import __version__
 from kyc_tool.api.routes_events import router as events_router
 from kyc_tool.api.routes_metrics import router as metrics_router
 from kyc_tool.api.routes_read import router as read_router
-from kyc_tool.config import Settings, get_settings
+from kyc_tool.config import (
+    REPO_ROOT,
+    Settings,
+    get_settings,
+    production_config_violations,
+    validate_for_production,
+)
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.policy.loader import PolicyBundle, load_policy
+
+
+def _alembic_head() -> str | None:
+    """Head revision the migration chain declares (for the /readyz drift check)."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    return ScriptDirectory.from_config(cfg).get_current_head()
 
 
 def create_app(
@@ -18,6 +36,9 @@ def create_app(
     policy: PolicyBundle | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
+    # Production kill switch: refuse to boot on unsafe/stub configuration.
+    if settings.environment == "production":
+        validate_for_production(settings)
     if session_factory is None:
         session_factory = make_session_factory(make_engine(settings.database_url))
     policy = policy or load_policy(settings.policy_dir)
@@ -44,10 +65,62 @@ def create_app(
 
     @app.get("/healthz")
     def healthz() -> dict:
+        """Liveness only — the process is up and the policy bundle loaded."""
         return {
             "ok": True,
             "version": __version__,
             "policy_bundle_hash": policy.bundle_hash,
         }
+
+    @app.get("/readyz")
+    def readyz() -> JSONResponse:
+        """Readiness — safe to receive traffic: configuration is valid, the
+        database is reachable and migrated to head, and (in S3 mode) the
+        evidence bucket is accessible. 503 on any failing check."""
+        checks: dict[str, dict] = {}
+        ready = True
+
+        violations = (
+            production_config_violations(settings)
+            if settings.environment == "production"
+            else []
+        )
+        checks["config"] = {"ok": not violations, "violations": violations}
+        ready = ready and not violations
+
+        try:
+            with session_factory() as session:
+                session.execute(text("SELECT 1"))
+                current = session.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one_or_none()
+            head = _alembic_head()
+            checks["database"] = {"ok": True}
+            checks["migration"] = {
+                "ok": current == head,
+                "current": current,
+                "head": head,
+            }
+            ready = ready and current == head
+        except Exception as exc:  # noqa: BLE001 — any failure means not-ready
+            checks["database"] = {"ok": False, "error": str(exc)[:200]}
+            ready = False
+
+        if settings.object_store == "s3":
+            try:
+                from kyc_tool.storage.object_store import make_object_store
+
+                store = make_object_store(
+                    "s3", fs_root=settings.object_store_root, s3_bucket=settings.s3_bucket
+                )
+                store.verify_access()
+                checks["object_store"] = {"ok": True}
+            except Exception as exc:  # noqa: BLE001
+                checks["object_store"] = {"ok": False, "error": str(exc)[:200]}
+                ready = False
+
+        return JSONResponse(
+            status_code=200 if ready else 503, content={"ready": ready, "checks": checks}
+        )
 
     return app

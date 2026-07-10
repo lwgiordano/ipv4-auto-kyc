@@ -28,7 +28,7 @@ from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import AdapterResult, Case, DecisionRow, Event, Run
 from kyc_tool.domain import scoring
-from kyc_tool.domain.decision import decide
+from kyc_tool.domain.decision import decide, hold_positive_for_manual_review
 from kyc_tool.domain.models import (
     AdapterStatus,
     BrokerStatus,
@@ -335,7 +335,16 @@ class Pipeline:
                   score=breakdown.score, by_check=breakdown.by_check, gates=gates.as_dict())
 
             # DECIDE (logical stage)
-            result = decide(breakdown.score, gates, org_passed, BrokerStatus(case.broker_status))
+            computed = decide(breakdown.score, gates, org_passed, BrokerStatus(case.broker_status))
+            # Emergency enforcement overlay (temporary): while approval-grade
+            # validators are known-permissive, hold auto-enforceable positives
+            # for manual review. The computed decision stays in the audit trail.
+            result = (
+                computed
+                if self.settings.enforce_positive_decisions
+                else hold_positive_for_manual_review(computed)
+            )
+            enforcement_held = result.decision is not computed.decision
             decision_row = DecisionRow(
                 case_id=case.id,
                 run_id=run_id,
@@ -351,6 +360,11 @@ class Pipeline:
             event.processed_at = datetime.now(UTC)
 
             body = self._callback_body(case, run, event, result, views)
+            if enforcement_held:
+                body["enforcement_held"] = {
+                    "computed_decision": computed.decision.value,
+                    "reason": "positive_enforcement_disabled",
+                }
             enqueue_decision_callback(session, case_id=case.id, run_id=run_id, body=body)
             # job completion is atomic with the decision commit
             jobs.complete(session, job_id)
@@ -360,6 +374,8 @@ class Pipeline:
                 case_id=case.id,
                 run_id=run_id,
                 decision=result.decision.value,
+                computed_decision=computed.decision.value,
+                enforcement_held=enforcement_held,
                 score=result.score,
                 gates=result.gates.as_dict(),
                 buy_enablement=result.buy_enablement.value,

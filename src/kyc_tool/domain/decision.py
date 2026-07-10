@@ -11,6 +11,8 @@ Kept enum-in/enum-out so the documented future extension
 is additive.
 """
 
+from dataclasses import replace
+
 from kyc_tool.domain.models import (
     BrokerStatus,
     BuyEnablement,
@@ -19,6 +21,20 @@ from kyc_tool.domain.models import (
     Gates,
     RejectReason,
 )
+
+POSITIVE_DECISIONS = (Decision.APPROVE, Decision.APPROVE_BUY_LOCKED)
+
+
+def hold_positive_for_manual_review(result: DecisionResult) -> DecisionResult:
+    """Emergency enforcement overlay (temporary — remove with remediation items
+    3–5). While the approval-grade validators are known-permissive, the tool
+    must not emit an auto-enforceable positive decision, so an approve /
+    approve_buy_locked outcome is downgraded to the manual-review holding state.
+    Score, gates and buy-enablement are preserved unchanged; the true computed
+    decision is recorded in the audit trail at the call site."""
+    if result.decision in POSITIVE_DECISIONS:
+        return replace(result, decision=Decision.MANUAL_REVIEW_INSUFFICIENT)
+    return result
 
 
 def buy_enablement_for(org_id_passed: bool) -> BuyEnablement:

@@ -1,14 +1,35 @@
-"""Environment-driven configuration. Secrets come from env only — never hardcode."""
+"""Environment-driven configuration. Secrets come from env only — never hardcode.
+
+`validate_for_production()` is the production kill switch: every process that
+boots with `environment="production"` runs it at startup and refuses to start on
+any unsafe or stub configuration (see api/app.py, workers/*).
+"""
 
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Provider identifiers whose implementation is a dev/test stub. Selecting any of
+# these in production is refused at startup — the real providers land with the
+# executable-contract work (remediation item 12).
+STUB_OCR_ENGINE = "json_scan"
+STUB_EMAIL_PROVIDER = "logging"
+STUB_ADAPTERS_PROFILE = "fixture"
+
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", ""}
+_MIN_HMAC_SECRET_LEN = 32
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="KYC_", env_file=".env", extra="ignore")
+
+    # Deployment environment. In "production", validate_for_production() runs at
+    # process start and refuses to boot on any unsafe/stub configuration.
+    environment: Literal["development", "test", "production"] = "development"
 
     database_url: str = "postgresql+psycopg://kyc:kyc@localhost:5432/kyc"
 
@@ -18,6 +39,21 @@ class Settings(BaseSettings):
     auth_disabled: bool = False  # test/dev escape hatch — never set in production
     hmac_max_skew_seconds: int = 300
 
+    # Operator authentication. Both default OFF so local dev/test run open;
+    # validate_for_production() forces them on. read_auth_required gates the
+    # /v1 read GETs behind a signed request; ui_admin_token is the bearer
+    # credential guarding every mutating /ui endpoint.
+    read_auth_required: bool = False
+    ui_admin_token: str = ""
+
+    # SAFETY OVERLAY (temporary — remove once remediation items 3–5 land):
+    # while the approval-grade validators are known-permissive, the tool must
+    # not emit an auto-enforceable positive decision. When False, decide()'s
+    # approve / approve_buy_locked outcomes are held for manual review at
+    # emission; the computed decision is preserved in the audit trail and the
+    # callback carries an `enforcement_held` marker.
+    enforce_positive_decisions: bool = False
+
     # Normative policy files (the spec package is the single source of truth)
     policy_dir: Path = REPO_ROOT / "KYC_Tool_Build_Package" / "machine_readable"
 
@@ -25,6 +61,14 @@ class Settings(BaseSettings):
     object_store: str = "fs"  # fs | s3
     object_store_root: Path = REPO_ROOT / ".substrate" / "state" / "evidence"
     s3_bucket: str = ""
+
+    # Pluggable providers — dev/test stubs by default; production requires real
+    # ones. Wired in workers/pipeline_worker.build_adapters (ocr/adapters) and
+    # workers/outbox_worker.build_publisher (email); a non-stub value that is
+    # not yet implemented fails loudly rather than silently using a stub.
+    ocr_engine: str = STUB_OCR_ENGINE
+    email_provider: str = STUB_EMAIL_PROVIDER
+    adapters_profile: str = STUB_ADAPTERS_PROFILE  # fixture | real
 
     # Queue / workers
     worker_poll_seconds: float = 0.5
@@ -47,10 +91,68 @@ class Settings(BaseSettings):
     # Retention (compliance default: 7 years)
     retention_days: int = 7 * 365
 
-    # Ops console (/ui): debug tooling in the same trust domain as the read
-    # API. The composer/requeue endpoints MUTATE — disable in production or
-    # front the port with network controls (see runbook).
-    ui_enabled: bool = True
+    # Ops console (/ui): debug/ops tooling whose composer + requeue endpoints
+    # MUTATE. Disabled by default; when enabled in production it MUST have an
+    # admin token (validate_for_production enforces this) and the mutations are
+    # gated by that token (api/auth.require_admin).
+    ui_enabled: bool = False
+
+
+class ProductionConfigError(RuntimeError):
+    """Raised at startup when a production process is misconfigured. The message
+    lists every violation so the operator can fix them all at once."""
+
+
+def production_config_violations(settings: Settings) -> list[str]:
+    """Every reason this configuration is unsafe for production. Empty == safe.
+
+    Pure and side-effect-free so /readyz can report the same list a startup
+    boot would reject on.
+    """
+    v: list[str] = []
+
+    if settings.auth_disabled:
+        v.append("auth_disabled is True (inbound HMAC verification is off)")
+
+    secret = settings.platform_hmac_secret or ""
+    if not secret:
+        v.append("platform_hmac_secret is empty")
+    elif len(secret) < _MIN_HMAC_SECRET_LEN:
+        v.append(f"platform_hmac_secret is weak (< {_MIN_HMAC_SECRET_LEN} chars)")
+
+    parsed = urlparse(settings.platform_callback_url or "")
+    if parsed.scheme != "https":
+        v.append(f"platform_callback_url is not HTTPS ({settings.platform_callback_url!r})")
+    if (parsed.hostname or "") in _LOCAL_HOSTS:
+        v.append(f"platform_callback_url points at localhost ({settings.platform_callback_url!r})")
+
+    if settings.object_store != "s3":
+        v.append(f"object_store is {settings.object_store!r}, not s3")
+    elif not settings.s3_bucket:
+        v.append("object_store is s3 but s3_bucket is empty")
+
+    if settings.ocr_engine == STUB_OCR_ENGINE:
+        v.append(f"ocr_engine is the dev stub ({STUB_OCR_ENGINE!r})")
+    if settings.email_provider == STUB_EMAIL_PROVIDER:
+        v.append(f"email_provider is the dev stub ({STUB_EMAIL_PROVIDER!r})")
+    if settings.adapters_profile == STUB_ADAPTERS_PROFILE:
+        v.append(f"adapters_profile is the fixture stub ({STUB_ADAPTERS_PROFILE!r})")
+
+    if not settings.read_auth_required:
+        v.append("read_auth_required is False (the read API would be unauthenticated)")
+    if settings.ui_enabled and not settings.ui_admin_token:
+        v.append("ui_enabled is True but ui_admin_token is empty (unauthenticated ops console)")
+
+    return v
+
+
+def validate_for_production(settings: Settings) -> None:
+    """Refuse to start a production process on any unsafe configuration."""
+    violations = production_config_violations(settings)
+    if violations:
+        raise ProductionConfigError(
+            "refusing to start in production — fix all of: " + "; ".join(violations)
+        )
 
 
 def get_settings() -> Settings:

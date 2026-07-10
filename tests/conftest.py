@@ -102,6 +102,10 @@ def settings(migrated: str, tmp_path) -> Settings:
         auth_disabled=False,
         platform_callback_url="http://platform.test",
         object_store_root=tmp_path / "evidence",
+        # exercise the real decision path (the enforcement kill switch is a
+        # production overlay, tested separately in unit/test_enforcement_killswitch)
+        enforce_positive_decisions=True,
+        ui_enabled=True,  # /ui is off by default now; the ops-console suite needs it on
     )
 
 

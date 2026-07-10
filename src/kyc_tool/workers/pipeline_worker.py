@@ -14,7 +14,13 @@ from kyc_tool.adapters.rir_rdap.arin import ArinStrategy
 from kyc_tool.adapters.rir_rdap.lacnic import LacnicStrategy
 from kyc_tool.adapters.rir_rdap.ripe import RipeStrategy
 from kyc_tool.adapters.website_manual_review import WebsiteManualReviewAdapter
-from kyc_tool.config import Settings, get_settings
+from kyc_tool.config import (
+    STUB_ADAPTERS_PROFILE,
+    STUB_OCR_ENGINE,
+    Settings,
+    get_settings,
+    validate_for_production,
+)
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.pipeline import Pipeline
@@ -23,19 +29,37 @@ from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import ObjectStore, make_object_store
 
 
-def build_adapters(settings: Settings, store: ObjectStore) -> dict:
-    """Production adapter registry.
+def _make_ocr_engine(name: str):
+    """Select the OCR engine. Only the dev stub exists today; a non-stub value
+    fails loudly rather than silently falling back (real engine: item 12)."""
+    if name == STUB_OCR_ENGINE:
+        return JsonScanOcrEngine()
+    raise NotImplementedError(
+        f"OCR engine {name!r} is not implemented yet (remediation item 12)"
+    )
 
-    TODO(integration) (AUDIT_FINDINGS §C4): the Floqer client is
-    fixture-backed until the real API contract lands; the POC directory needs
-    the RDAP POC lookup wired to the strategies; the OCR engine is the
-    JSON-scan dev engine until the platform team picks a production provider.
+
+def build_adapters(settings: Settings, store: ObjectStore) -> dict:
+    """Adapter registry selected by settings.adapters_profile / ocr_engine.
+
+    TODO(integration) (AUDIT_FINDINGS §C4): the only implemented profile is the
+    fixture stub (Floqer fixture client, fixture POC directory, JSON-scan OCR).
+    validate_for_production() refuses to boot a production worker on any stub;
+    the real providers land with the executable-contract work (item 12).
     """
+    if settings.adapters_profile == STUB_ADAPTERS_PROFILE:
+        floqer_client = FixtureFloqerClient({})
+        poc_directory = FixturePocDirectory({})
+    else:
+        raise NotImplementedError(
+            f"adapters_profile {settings.adapters_profile!r} is not implemented yet "
+            "(remediation item 12)"
+        )
     return {
         "email_verification": EmailVerificationAdapter(),
         "companies_house": CompaniesHouseAdapter(),
         "gleif": GleifAdapter(),
-        "floqer_company_enrichment": FloqerAdapter(FixtureFloqerClient({})),
+        "floqer_company_enrichment": FloqerAdapter(floqer_client),
         "rir_rdap": RirRdapAdapter(
             {
                 "arin": ArinStrategy(),
@@ -45,14 +69,16 @@ def build_adapters(settings: Settings, store: ObjectStore) -> dict:
                 "afrinic": AfrinicStrategy(),
             }
         ),
-        "document_ocr": DocumentOcrAdapter(store, JsonScanOcrEngine()),
-        "rir_poc": RirPocAdapter(FixturePocDirectory({})),
+        "document_ocr": DocumentOcrAdapter(store, _make_ocr_engine(settings.ocr_engine)),
+        "rir_poc": RirPocAdapter(poc_directory),
         "website_manual_review": WebsiteManualReviewAdapter(),
     }
 
 
 def build_worker() -> Worker:
     settings = get_settings()
+    if settings.environment == "production":
+        validate_for_production(settings)  # fail-closed on stub/unsafe config
     session_factory = make_session_factory(make_engine(settings.database_url))
     policy = load_policy(settings.policy_dir)
     store = make_object_store(

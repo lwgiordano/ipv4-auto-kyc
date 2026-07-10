@@ -30,3 +30,14 @@ class LoggingEmailSender:
             to_sha=hashlib.sha256(to.encode()).hexdigest()[:12],
             subject=subject,
         )
+
+
+def make_email_sender(provider: str) -> EmailSender:
+    """Select the outbound email provider. Only the dev stub exists today; a
+    non-stub value fails loudly rather than silently logging (real provider,
+    e.g. SES: remediation item 12)."""
+    if provider == "logging":
+        return LoggingEmailSender()
+    raise NotImplementedError(
+        f"email provider {provider!r} is not implemented yet (remediation item 12)"
+    )

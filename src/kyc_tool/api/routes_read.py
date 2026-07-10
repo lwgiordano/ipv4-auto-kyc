@@ -7,7 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 
-from kyc_tool.api.auth import require_valid_signature
+from kyc_tool.api.auth import require_read_access, require_valid_signature
 from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.db.tables import Case, DecisionRow, Event, ReviewTask, Run
 from kyc_tool.events.ingest import ingest_event
@@ -31,6 +31,7 @@ def _check_json(check) -> dict:
 
 @router.get("/v1/cases/{case_id}")
 def get_case(case_id: str, request: Request) -> dict:
+    require_read_access(request.app.state.settings, request.headers)
     with request.app.state.session_factory() as session:
         case = session.get(Case, case_id)
         if case is None:
@@ -58,6 +59,7 @@ def get_case(case_id: str, request: Request) -> dict:
 
 @router.get("/v1/cases/{case_id}/checks")
 def get_checks(case_id: str, request: Request, all: int = Query(default=0)) -> dict:
+    require_read_access(request.app.state.settings, request.headers)
     with request.app.state.session_factory() as session:
         if session.get(Case, case_id) is None:
             raise HTTPException(status_code=404, detail="case not found")
@@ -71,6 +73,7 @@ def get_checks(case_id: str, request: Request, all: int = Query(default=0)) -> d
 
 @router.get("/v1/runs/{run_id}")
 def get_run(run_id: str, request: Request) -> dict:
+    require_read_access(request.app.state.settings, request.headers)
     with request.app.state.session_factory() as session:
         run = session.get(Run, run_id)
         if run is None:
@@ -102,6 +105,7 @@ def get_run(run_id: str, request: Request) -> dict:
 
 @router.get("/v1/review-tasks")
 def list_review_tasks(request: Request, status: str = Query(default="open")) -> dict:
+    require_read_access(request.app.state.settings, request.headers)
     with request.app.state.session_factory() as session:
         tasks = session.execute(
             select(ReviewTask).where(ReviewTask.status == status).order_by(ReviewTask.created_at)
