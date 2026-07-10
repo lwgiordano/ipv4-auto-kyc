@@ -17,6 +17,7 @@ htmlcov
 tests
 docs
 ai-kits
+.agents
 .substrate/state
 .github
 .claude

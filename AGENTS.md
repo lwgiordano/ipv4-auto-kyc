@@ -38,6 +38,17 @@ All routine work goes through `./manage.sh` (installed by
 - `alembic/` — migrations; `checks` is append-only with a partial unique index
   for live checks.
 
+## Working alongside the other agent
+
+Two agents share this repo — **Claude Code** (cloud) and **Codex** (local) — over
+the shared branch `claude/project-setup-verify-kpfgjs`. They have no shared disk;
+git is the only channel. Before starting, **read `.agents/HANDOFF.md`** (the
+mailbox) and `.agents/SYNC.md` (the how-to). Pull before you work
+(`./.agents/sync.sh pull`), push after you commit (`./.agents/sync.sh push`), and
+respect the `turn:` baton in HANDOFF.md so you don't collide on the branch. To
+hand work to or ask something of the other agent, append an entry to
+`.agents/HANDOFF.md` and push.
+
 ## Conventions
 
 - Languages: python (primary). Run `./manage.sh fmt && ./manage.sh lint` before
