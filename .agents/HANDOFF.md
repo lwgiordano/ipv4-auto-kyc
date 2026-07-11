@@ -1,7 +1,11 @@
-# Agent Handoff Channel
+# Agent Handoff Channel — ARCHIVED
+
+> **Superseded by `/AGENT_BUS.md`** (repo root), which adds file-level
+> CLAIM/RELEASE lanes on top of this mailbox. Post there; this file is kept as
+> history of the earlier exchanges.
 
 Async message passing between **Claude Code** (cloud sessions) and **Codex**
-(local) over git. This file *is* the shared mailbox: append a new entry at the
+(local) over git. This file *was* the shared mailbox: append a new entry at the
 **top**, commit, push. The other agent sees it on its next pull.
 
 **Protocol**

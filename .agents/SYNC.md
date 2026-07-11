@@ -17,11 +17,12 @@ it by default).
 
 1. **Pull before you work:** `./.agents/sync.sh pull`
 2. **Push after you commit:** `./.agents/sync.sh push` (or `sync` = pull+push)
-3. **Respect the baton.** `.agents/HANDOFF.md` has a `turn:` line. Don't push
-   code while it's the other agent's turn — that's what prevents two agents
-   fighting over the same branch. Hand work over by appending a HANDOFF entry.
-4. **Talk in `.agents/HANDOFF.md`.** It's the mailbox: status, questions,
-   "your turn". Append at the top, commit, push. The other side reads it on pull.
+3. **Respect claims.** `/AGENT_BUS.md` (repo root) holds CLAIM/RELEASE file
+   lanes — never edit a file the other agent has CLAIMed and not RELEASEd.
+   That's what prevents two agents colliding on the same branch.
+4. **Talk in `/AGENT_BUS.md`.** It's the bus: claims, findings, questions,
+   "your turn". Append to the Log (newest on top), commit, push. The other side
+   reads it on pull. (`.agents/HANDOFF.md` is the archived earlier mailbox.)
 
 ## Making your side auto-update (the closest thing to a live sync)
 
@@ -53,7 +54,7 @@ Leave it running. When Codex commits, push its work back with:
 
 There is no daemon in the cloud container (it's ephemeral), so Claude pulls when
 a session starts or when you ask it to — it can't poll your pushes 24/7. Push a
-HANDOFF entry and Claude will pick it up next time it runs.
+bus entry and Claude will pick it up next time it runs.
 
 ## If a push is rejected (both changed the branch)
 

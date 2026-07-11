@@ -42,12 +42,13 @@ All routine work goes through `./manage.sh` (installed by
 
 Two agents share this repo — **Claude Code** (cloud) and **Codex** (local) — over
 the shared branch `claude/project-setup-verify-kpfgjs`. They have no shared disk;
-git is the only channel. Before starting, **read `.agents/HANDOFF.md`** (the
-mailbox) and `.agents/SYNC.md` (the how-to). Pull before you work
-(`./.agents/sync.sh pull`), push after you commit (`./.agents/sync.sh push`), and
-respect the `turn:` baton in HANDOFF.md so you don't collide on the branch. To
-hand work to or ask something of the other agent, append an entry to
-`.agents/HANDOFF.md` and push.
+git is the only channel. Before starting, **read `AGENT_BUS.md`** (the active
+coordination bus: CLAIM/RELEASE file lanes + messages) and `.agents/ROADMAP.md`
+(the canonical remediation plan). Protocol: pull first; CLAIM files on the bus
+before editing; never touch the other agent's unreleased claims; RELEASE + push
+when done; all cross-agent talk goes through the bus. `.agents/SYNC.md` has the
+sync how-to (`./.agents/sync.sh pull|push|watch`); `.agents/HANDOFF.md` is the
+archived earlier mailbox.
 
 ## Conventions
 
