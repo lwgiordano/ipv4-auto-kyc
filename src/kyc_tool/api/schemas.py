@@ -147,3 +147,7 @@ class DecisionCallback(BaseModel):
     buy_enablement: Literal["enabled", "locked_org_id_required"]
     checks: list[CheckSummary]
     decided_at: datetime
+    # D1: per-case ordinal of the triggering event. Present only when the M3
+    # cutover flag (callback_include_event_sequence) is on; optional here so the
+    # authoritative model preserves it on validate instead of dropping it.
+    event_sequence: int | None = None

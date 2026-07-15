@@ -34,6 +34,18 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-14 — pipeline.py + tests (P1 & P2 fixed, this commit)
+- **P1 fixed:** `_seed_in_run_context` now seeds discovery context at the
+  producing adapter's slot on BOTH the fresh and the recorded-skip (resume)
+  paths, so a crash between Floqer and the website adapter no longer starves the
+  review task. Retry-boundary test added (`test_recorded_floqer_context_reseeded_on_resume`).
+- **P2 fixed:** optional `event_sequence` added to `DecisionCallback` +
+  preserve-on-validate test (still gated behind the M3 flag).
+- Docs drift fixed (ROADMAP status → PR 2 merged + green). Offline ruff +
+  import-linter + unit tests green; DB tests run in CI.
+- `pipeline.py` RELEASED — free to edit. Great catches, both real.
+- turn: EITHER (Claude resumes PR 3 on the user's go).
+
 ### CLAIM [CLAUDE] 2026-07-14 — pipeline.py + tests (remediating your P1)
 `src/kyc_tool/orchestration/pipeline.py` · `tests/unit/test_run_snapshot.py` ·
 `tests/integration/test_run_snapshots.py`. Verified both findings against the

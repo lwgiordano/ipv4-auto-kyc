@@ -2,13 +2,19 @@
 concurrency invariant — same-case ingestion and reviewer.manual_approve race
 without colliding on a sequence."""
 
+import json
 import threading
 import uuid
 
 import pytest
 from sqlalchemy import text
 
+from kyc_tool.adapters.floqer import FixtureFloqerClient, FloqerAdapter
+from kyc_tool.adapters.website_manual_review import WebsiteManualReviewAdapter
 from kyc_tool.events.ingest import ingest_event
+from kyc_tool.orchestration.broker_gate import BrokerGate
+from kyc_tool.orchestration.pipeline import Pipeline
+from kyc_tool.storage.object_store import FsStore
 from tests.integration.shared import ACME_KYB_WITH_CONTACT
 
 pytestmark = pytest.mark.postgres
@@ -135,3 +141,60 @@ def test_concurrent_ingest_and_manual_approve_do_not_collide(engine, session_fac
     assert errors == []
     assert sorted(r.event_sequence for r in _events(engine, case_id)) == [1, 2]
     assert _case_seq(engine, case_id) == 2
+
+
+def test_recorded_floqer_context_reseeded_on_resume(
+    engine, post_event, session_factory, policy, settings
+):
+    """Codex P1: a run resumed after Floqer already committed (crash/lease expiry
+    before the website adapter) must still hand the website task Floqer's
+    discovery context — reseeded from the recorded result, not lost."""
+    resp, _ = post_event("resume-case", "kyb.run_requested", ACME_KYB_WITH_CONTACT)
+    run_id = resp.json()["run_id"]
+
+    floqer = FloqerAdapter(FixtureFloqerClient({}))
+    floqer_hash = floqer.input_hash(ACME_KYB_WITH_CONTACT, {})  # what _run_adapters will compute
+    floqer_normalized = {
+        "discovered": True,
+        "company_domain": "acme.example",
+        "website": "https://acme.example",
+        "linkedin": {},
+        "aliases": [],
+        "registry_candidates": [],
+        "broker_context": {},
+    }
+    # simulate the prior attempt: Floqer recorded, run left mid-RUN_ADAPTERS
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO adapter_results "
+                "(id, run_id, adapter_id, status, input_hash, normalized_json) "
+                "VALUES (:id, :r, 'floqer_company_enrichment', 'ok', :h, CAST(:n AS jsonb))"
+            ),
+            {"id": uuid.uuid4().hex, "r": run_id, "h": floqer_hash, "n": json.dumps(floqer_normalized)},
+        )
+        conn.execute(text("UPDATE runs SET state='RUN_ADAPTERS' WHERE id=:r"), {"r": run_id})
+
+    # resume with Floqer + website built — Floqer is skipped (already recorded)
+    pipeline = Pipeline(
+        session_factory,
+        policy,
+        FsStore(settings.object_store_root),
+        settings,
+        adapters={
+            "floqer_company_enrichment": floqer,
+            "website_manual_review": WebsiteManualReviewAdapter(),
+        },
+        broker_matcher=BrokerGate(),
+    )
+    pipeline._run_adapters(run_id)
+
+    with engine.connect() as conn:
+        context = conn.execute(
+            text(
+                "SELECT context_json FROM review_tasks "
+                "WHERE case_id='resume-case' AND task_type='website'"
+            )
+        ).scalar_one()
+    # the website task carries Floqer's discovery even though Floqer was skipped
+    assert context["discovery"]["company_domain"] == "acme.example"

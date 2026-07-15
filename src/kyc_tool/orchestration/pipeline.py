@@ -159,6 +159,17 @@ class Pipeline:
         snapshot = run.input_snapshot_json
         return snapshot if snapshot is not None else (case.submitted_json or {})
 
+    @staticmethod
+    def _seed_in_run_context(snapshot: dict, adapter_id: str, normalized: dict) -> dict:
+        """Discovery context that LATER adapters in the same run read (the website
+        review task). Applied at the producing adapter's slot whether it ran fresh
+        or was skipped as already-recorded on a resume — otherwise a crash between
+        Floqer and the website adapter drops the context (neither adapter's
+        input_hash depends on it, so seeding here is resume-safe)."""
+        if adapter_id == "floqer_company_enrichment" and normalized.get("discovered"):
+            return {**snapshot, "floqer_context": normalized}
+        return snapshot
+
     def _resolve_inputs(self, run_id: str) -> None:
         with uow(self.session_factory) as session:
             run, case, event = self._load(session, run_id)
@@ -203,13 +214,17 @@ class Pipeline:
             plan: RunPlan = plan_for(event.event_type)
             snapshot = dict(self._run_snapshot(run, case))
             event_dict = {"event_type": event.event_type, "payload": event.payload_json or {}}
-            recorded = {
-                (r.adapter_id, r.input_hash)
-                for r in session.execute(
-                    text("SELECT adapter_id, input_hash FROM adapter_results WHERE run_id=:r"),
-                    {"r": run_id},
-                )
-            }
+            recorded_rows = session.execute(
+                text(
+                    "SELECT adapter_id, input_hash, normalized_json "
+                    "FROM adapter_results WHERE run_id=:r"
+                ),
+                {"r": run_id},
+            ).fetchall()
+            recorded = {(r.adapter_id, r.input_hash) for r in recorded_rows}
+            # in-run context produced on a PRIOR attempt, keyed by adapter, so a
+            # resumed loop can reseed it at the skipped adapter's slot below
+            recorded_normalized = {r.adapter_id: (r.normalized_json or {}) for r in recorded_rows}
             case_id = case.id
 
         # …fetch OUTSIDE any transaction, recording each result in its own txn.
@@ -219,7 +234,12 @@ class Pipeline:
                 continue  # not built yet (phase gating) or intentionally absent
             input_hash = adapter.input_hash(snapshot, event_dict)
             if (adapter_id, input_hash) in recorded:
-                continue  # resumability: already fetched on a prior attempt
+                # already fetched on a prior attempt — still reseed the in-run
+                # context it produced so later adapters aren't starved on resume
+                snapshot = self._seed_in_run_context(
+                    snapshot, adapter_id, recorded_normalized.get(adapter_id, {})
+                )
+                continue
             self.rate_limiter.acquire(adapter_id)  # per-upstream cap, held outside txns
             started = time.monotonic()
             try:
@@ -268,9 +288,7 @@ class Pipeline:
                     raw_ref=raw_ref,
                     error=(output.error or None),
                 )
-            if adapter_id == "floqer_company_enrichment" and output.normalized.get("discovered"):
-                # later adapters in this same run (website review) see discovery context
-                snapshot = {**snapshot, "floqer_context": output.normalized}
+            snapshot = self._seed_in_run_context(snapshot, adapter_id, output.normalized)
 
         with uow(self.session_factory) as session:
             if self._hop(session, run_id, RunState.RUN_ADAPTERS, RunState.VALIDATE):

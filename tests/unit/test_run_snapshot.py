@@ -85,3 +85,41 @@ def test_callback_event_sequence_gated_by_flag():
     assert "event_sequence" not in off  # not shipped until the platform accepts it
     on = pipeline(True)._callback_body(case, run, event, result, [])
     assert on["event_sequence"] == 7
+
+
+def test_seed_in_run_context_only_floqer_discovery():
+    base = {"a": 1}
+    # Floqer with discovery seeds context in a fresh dict (base untouched)
+    out = Pipeline._seed_in_run_context(
+        base, "floqer_company_enrichment", {"discovered": True, "company_domain": "acme.example"}
+    )
+    assert out["floqer_context"]["company_domain"] == "acme.example"
+    assert base == {"a": 1}
+    # Floqer with no discovery, or any other adapter, leaves the snapshot as-is
+    assert Pipeline._seed_in_run_context(base, "floqer_company_enrichment", {"discovered": False}) == base
+    assert Pipeline._seed_in_run_context(base, "email_verification", {"discovered": True}) == base
+
+
+def test_decision_callback_model_preserves_event_sequence():
+    # Codex P2: the authoritative model must keep the gated field, not drop it
+    from kyc_tool.api.schemas import DecisionCallback
+
+    body = {
+        "case_id": "c1",
+        "run_id": "r1",
+        "event_id": "e1",
+        "decision": "approve",
+        "score": 120,
+        "gates": {
+            "score_met": True,
+            "legal_proof": True,
+            "control_proof": True,
+            "broker_ok": True,
+            "no_hard_conflict": True,
+        },
+        "buy_enablement": "enabled",
+        "checks": [],
+        "decided_at": "2026-01-01T00:00:00Z",
+    }
+    assert DecisionCallback.model_validate(body).event_sequence is None  # optional / flag off
+    assert DecisionCallback.model_validate({**body, "event_sequence": 7}).event_sequence == 7

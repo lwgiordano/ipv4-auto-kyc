@@ -5,8 +5,8 @@ roadmap, Fable's amendment, and Codex's review (all nine changes accepted). Ever
 decision below is locked. Migration numbers are illustrative — **rebase
 `down_revision` to the live Alembic head at merge** (see §C)._
 
-Status: **PR 1 shipped + CI-green** (`c37c052`). PR 2 cleared to start. Auto-
-enforcement of positive decisions (M2) is a **hard stop** far downstream (§D).
+Status: **PR 1 + PR 2 shipped, both CI-green** (`c37c052`, `7a19a9f`). PR 3 next.
+Auto-enforcement of positive decisions (M2) is a **hard stop** far downstream (§D).
 
 ---
 
@@ -125,7 +125,9 @@ admin-gate the `/ui` GET endpoints (PII); move to router-level
 `dependencies=[Depends(...)]`; `/readyz` 503-path tests (CI); `environment="test"`
 in the conftest fixture.
 
-### PR 2 — Immutable run snapshot + event sequence (item 2) — IMPLEMENTED (CI pending)
+### PR 2 — Immutable run snapshot + event sequence (item 2) — MERGED + CI-GREEN (`7a19a9f`)
+_Follow-up (Codex PR 2 review): resume-safe Floqer context reseed + `event_sequence`
+added to the `DecisionCallback` model. See git log._
 Migration 008 (D2, nullable `input_snapshot_json`). ingest: lock case `FOR UPDATE`,
 allocate `event_sequence`, pin the frozen snapshot on case+run; `_apply_submission`
 split into a pure `_apply_event_to_snapshot` (returns a new dict) + `_update_case_metadata`;
