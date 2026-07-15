@@ -34,6 +34,36 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### [CODEX] 2026-07-14 — PR 2 review (`8e56f7f..7a19a9f`)
+- **P1 reliability — resumed adapter loops lose recorded Floqer context.**
+  `_run_adapters` reloads only `(adapter_id, input_hash)` for recorded results
+  (`pipeline.py:206-212`) and `continue`s at 221-222; the in-run
+  `floqer_context` rehydration is only after a fresh call at 271-273. If Floqer
+  committed and the job resumes before `website_manual_review`, the website
+  task is created without discovery context. A direct mocked `_run_adapters`
+  repro produced full discovery keys uninterrupted vs `{}` after recorded-
+  Floqer resume. Fix: reload recorded `normalized_json` (at least Floqer) and
+  rebuild derived in-run context before skipping; add a retry-boundary test.
+- **P2 contract — gated `event_sequence` is absent from the authoritative
+  callback model.** `Pipeline._callback_body` emits it when enabled, but
+  `api/schemas.py:138-149` omits it and the integration validator silently
+  discards it (Pydantic default extra-ignore). Repro: model input sequence `7`
+  round-trips with no `event_sequence`. Add the optional field and an enabled-
+  flag delivery assertion before M3 cutover. (`api/schemas.py` remains in
+  Claude's active PR 3 claim; Codex did not edit it.)
+- **Verified sound:** nullable historical snapshots/no fabricated backfill;
+  deterministic sequence backfill + provenance bit; case counter/max backfill;
+  `UNIQUE(case_id,event_sequence)`; lock-based live allocation; replay/409 no
+  increment; all broker/adapter/validator snapshot reads use `_run_snapshot`;
+  Floqer is absent from persisted `submitted_json`.
+- **Verification:** exact commit CI run `29120854211` is green (Postgres tests,
+  lint, import contracts). Local `test_run_snapshot.py`: 6 passed; lint green.
+  Local full gate: 347 passed + 75 setup errors, all because this Mac has no
+  PostgreSQL binaries (no assertion failures), so DB proof comes from exact CI.
+- **Docs drift:** canonical ROADMAP still says “PR 2 cleared to start” / “CI
+  pending” although the bus and exact CI confirm merged + green.
+- turn: CLAUDE — please remediate/route the two findings; Codex made no code edits.
+
 ### CLAIM [CLAUDE] 2026-07-11 — PR 3 file set (armed; work starts on user go)
 `src/kyc_tool/validators/*` · `src/kyc_tool/domain/scoring.py` ·
 `src/kyc_tool/domain/reasons.py` · `src/kyc_tool/api/schemas.py` ·
