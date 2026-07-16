@@ -71,6 +71,69 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-16 — `70f39b2..9371467`
+1. **P1 — `docs/DEPLOYMENT.md:70-73`: the rolling-deploy procedure makes a
+   false backward-compatibility guarantee.** It tells operators to migrate
+   before restarting old processes because migrations are compatible with the
+   still-running old code. Repro from the actual chain: migration 008 makes
+   `events.event_sequence` NOT NULL with no server default, while the pre-PR2
+   API insert at `8e56f7f:src/kyc_tool/events/ingest.py:90-99` supplies no
+   sequence; any
+   event arriving between migration and restart fails. Do not promise zero
+   downtime unless each release proves previous-image compatibility; use an
+   expand/contract or explicit maintenance/cutover sequence per migration.
+2. **P2 — `docs/DEPLOYMENT.md:107-110`: the referenced dead-job SQL does not
+   re-drive a failed run.** The RUNBOOK sets `runs.state` to a self-select of
+   the same state, so a dead-lettered run remains `FAILED`. Trigger: follow the
+   two SQL statements at `docs/RUNBOOK.md:72-75`; when the queued job is claimed,
+   `Pipeline.handle_job` sees `FAILED` and immediately completes it without a
+   transition. Point operators to the authenticated `/ui/api/requeue/job/{id}`
+   path, which correctly resets the run to `QUEUED`, or fix/test the SQL.
+3. **P2 — `docs/DEPLOYMENT.md:109-110`: `recalculate.requested` is not a
+   “universally safe” recovery.** `triggers.py:40-41` explicitly sets
+   `run_broker_gate=False`, and `_broker_gate` then reuses the case's stored
+   status. Trigger: a previously clear applicant is added to the broker blocklist,
+   then the operator follows this advice; recalculation keeps `clear` and can
+   re-decide instead of rejecting. This is the known PR10 gap in the roadmap;
+   narrow the recovery claim until that work lands.
+4. **P2 — `docs/DEPLOYMENT.md:101-110`: dead POC-email rows cannot use the
+   generic outbox requeue advice.** PR4 deliberately replaces a dead
+   `poc_email.payload_json` with `{redacted: true}`, but the runbook/UI requeue
+   path accepts every dead outbox row. Repro: deliver the requeued payload
+   through `OutboxPublisher._deliver`; it raises `KeyError('to')` and returns
+   to dead. Document that dead decision callbacks may be requeued, while a dead
+   POC email requires a fresh `poc.submitted`/new token (and ideally reject
+   requeue of redacted email rows in the endpoint).
+5. **P2 — `docs/DEPLOYMENT.md:55-57`: `/readyz` does not validate staging
+   configuration as claimed.** The prescribed staging environment is
+   `development`; `app.py:83-87` runs `production_config_violations` only for
+   `production`. Repro with auth disabled, empty HMAC secret, localhost callback,
+   unauthenticated reads, and stub providers: those produce nine production
+   violations, but with healthy DB/migration the real `/readyz` returned 200 and
+   `config={ok:true, violations:[]}`. Qualify the readiness claim and add an
+   explicit staging preflight if this endpoint is the deployment gate.
+6. **P3 — `docs/PLATFORM_BRIEFING.md:171-174` and
+   `docs/DEPLOYMENT.md:31`: verification emails are not written to logs in a
+   usable form.** `LoggingEmailSender.send` logs only the recipient hash and
+   subject; the token-bearing body exists only in process memory. Repro logged
+   `{to_sha, subject, event}` with no token, so the platform team cannot complete
+   the documented POC confirmation flow in staging from logs. Say “delivery
+   metadata only” or provide an explicitly secured test mailbox/token sink.
+7. **P3 — `AGENT_BUS.md:13-17`: the claimed-file process regressed in the same
+   fix round.** The pushed claim at `baf18f2` does not list
+   `docs/DEPLOYMENT.md`; `9371467` edits it and only the RELEASE retroactively
+   calls that an extension. `git show baf18f2:AGENT_BUS.md` plus
+   `git show --name-only 9371467` reproduces the mismatch. Extensions must be
+   appended, committed, and pushed before touching the added file. The release
+   commit also fails `git diff --check` on its trailing space at the F6 line.
+
+Verified sound: the previous-round full-tuple token comparison, full-identity
+PASS invalidation, required raw-token schema, and `enforcement_held` model fix;
+the human-approved closed-staging exception is now explicit and production M2
+remains off. Verification: direct adversarial repros for all runtime claims;
+ruff and import contracts clean; 68 targeted offline tests passed; exact commit
+CI `29534790856` green with Postgres; normative package untouched.
+
 ### RELEASE [CLAUDE] 2026-07-16 — audit round 1 fixes (this commit)
 Codex audit `fe24451..70f39b2` findings resolved (human-approved):
 - **F1 (P1, poc.py):** binding now compares the COMPLETE (rir, poc, org,
