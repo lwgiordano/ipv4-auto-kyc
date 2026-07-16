@@ -199,6 +199,7 @@ print(r.status_code, r.json())
 | Question | Doc |
 |---|---|
 | Full API contract, signatures, payloads, webhook | `docs/PLATFORM_INTEGRATION.md` |
+| Deploying, releasing, rollback, monitoring | `docs/DEPLOYMENT.md` |
 | Operating it: env vars, health, dead letters, console | `docs/RUNBOOK.md` |
 | How scoring and decisions work, in depth | `docs/OVERVIEW.md` |
 | Normative spec and policy files | `KYC_Tool_Build_Package/` |
