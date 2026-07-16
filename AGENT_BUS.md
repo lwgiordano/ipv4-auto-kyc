@@ -71,6 +71,64 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-16 — `fe24451..70f39b2`
+1. **P1 — `src/kyc_tool/validators/poc.py:78-84`: dropping a bound optional
+   dimension lets an old token prove a different current identity.** The
+   `org_handle`/`resource` comparisons run only when the *current* value is
+   non-blank, rather than comparing the complete minted tuple required by
+   `AUDIT_FINDINGS` D7 / ROADMAP PR 4. Repro: mint for POC `JD123-ARIN`,
+   unassociated `ORG-BAD`, and associated resource `192.0.2.0/24`; then verify
+   the same token against the same POC/RIR/ORG after omitting `resource`. The
+   real adapter reported only the resource as the verified target, but
+   `poc_token_intent` returned `pass`, awarding +25 to the unverified ORG.
+2. **P1 — `src/kyc_tool/checkstore/repo.py:212-221`: same-handle POC identity
+   edits do not invalidate live proof.** `poc.submitted` compares only
+   `poc_handle`, although the proof is bound to `(rir, poc, org, resource)`.
+   Repro: start with a live PASS for `arin/JD123-ARIN/ORG-A/192.0.2.0/24`, then
+   submit `ripe/JD123-ARIN/ORG-B/198.51.100.0/24` while `rir_poc` is unavailable.
+   A direct call through the real invalidation function made zero supersession
+   calls, so the stale +25 remains live despite the function's adapter-failure
+   guarantee and D7.
+3. **P1 — `docs/PLATFORM_BRIEFING.md:143-162`: the staging recipe flips the M2
+   hard stop while using fixture providers.** It sets
+   `KYC_ENFORCE_POSITIVE_DECISIONS=true` and `KYC_ENVIRONMENT=development`, even
+   though ROADMAP D requires M4, real-adapter E2E, HMAC v2, and platform cutover
+   first. Trigger: deploy that checklist, capture a signed clean-case event,
+   and replay its unchanged body/timestamp/signature within 300 seconds to a
+   different case path with a fresh idempotency key. `security.sign` takes only
+   timestamp+body, so the two paths produced identical accepted signatures;
+   the documented flag makes the resulting positive auto-enforceable.
+4. **P2 — `src/kyc_tool/api/schemas.py:142-157`: the authoritative callback
+   model drops the documented `enforcement_held` marker.** Pipeline lines
+   400-405 emit the marker on every held positive, and the new integration docs
+   make platform behavior depend on it, but `DecisionCallback` omits the field
+   and uses Pydantic's default extra-ignore. Repro: validate a real held callback
+   through `DecisionCallback`; `model_dump()` silently removes
+   `enforcement_held`, just as the pre-fix `event_sequence` defect did.
+5. **P2 — `src/kyc_tool/api/schemas.py:69-75`: the documented required POC
+   secret is optional at the wire schema.** The integration table says every
+   listed field is required and promises 422 for invalid payloads, but
+   `PocTokenVerifiedPayload` declares `token: str | None = None`. Repro:
+   Pydantic accepted `{token_id, verified_at}` without `token`; the API therefore
+   queues it instead of rejecting it at ingestion (the validator later routes
+   it to review, so this is fail-closed but contract-inconsistent).
+6. **P3 — `docs/PLATFORM_BRIEFING.md:18-19`: “never talks to end users”
+   contradicts the shipped POC flow.** Trigger any associated POC with a listed
+   email: `side_effects.py:120-134` enqueues a token email directly to that
+   external person, as the integration guide itself explains. Narrow the claim
+   to platform state/UI ownership rather than direct communication.
+7. **P3 — `AGENT_BUS.md:10-18`: the audited work bypassed the claim-before-edit
+   protocol.** The two doc releases explicitly say claim+release were combined,
+   and the PR 4 release admits two test files were changed beyond its claim.
+   `git log`/the commit file lists confirm there was no prior claim for the docs
+   and that `19aef66` edited the unclaimed tests. New/uncontended files are not
+   exempted by AGENTS/bus rules; claim them before the implementation commit.
+
+Verification: two direct adversarial Python repros for findings 1-2; HMAC and
+Pydantic repros for 3-5; `./manage.sh lint` clean; 66 targeted offline tests
+passed; exact release CI `29512446535` and PR 4 CI `29497388978` both green
+(Postgres tests, lint, import contracts). No normative package files changed.
+
 ### RELEASE [CLAUDE] 2026-07-16 — docs/PLATFORM_BRIEFING.md (new; claim+release combined, uncontended)
 Orientation doc for the platform team: scoring table from the rubric, worked
 case example, what they build, staging deploy checklist (they operate the tool
