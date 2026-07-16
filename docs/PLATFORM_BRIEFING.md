@@ -93,8 +93,10 @@ input formats are whatever you choose to parse. Later the tool can OCR raw
 PDFs/images itself once an engine is picked; your integration doesn't change.
 (§6.)
 
-**Stack and deployment (#3).** Your team deploys and operates the tool in
-IPv4.Global's AWS account.
+**Stack and deployment (#3).** Your team hosts and operates the tool in
+IPv4.Global's AWS account. The code itself stays IPv4.Global-maintained: we
+cut releases in the repo, your team pulls a release and redeploys. No code is
+edited on the server.
 
 - Python 3.11 + FastAPI. **PostgreSQL 14+ is the only hard dependency** — the
   work queue and webhook delivery live in the database. No Redis, no broker.
@@ -108,8 +110,9 @@ IPv4.Global's AWS account.
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` |
 | Retention (daily cron) | `python -m kyc_tool.workers.retention` |
 
-- A `Dockerfile` ships in the repo. Deploys are two steps: `alembic upgrade
-  head`, restart processes. Migrations are versioned and reversible.
+- A `Dockerfile` ships in the repo. An update is: pull the release, build the
+  image, `alembic upgrade head`, restart processes. Migrations are versioned
+  and reversible.
 - `GET /readyz` for the load balancer (checks config, DB, migration version,
   storage), `GET /healthz` for liveness.
 - All config is env vars prefixed `KYC_`; `docs/RUNBOOK.md` documents every
@@ -198,5 +201,4 @@ print(r.status_code, r.json())
 | Full API contract, signatures, payloads, webhook | `docs/PLATFORM_INTEGRATION.md` |
 | Operating it: env vars, health, dead letters, console | `docs/RUNBOOK.md` |
 | How scoring and decisions work, in depth | `docs/OVERVIEW.md` |
-| Salesforce field mapping | `docs/SALESFORCE_MAPPING.md` |
 | Normative spec and policy files | `KYC_Tool_Build_Package/` |

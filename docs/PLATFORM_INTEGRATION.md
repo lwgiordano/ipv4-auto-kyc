@@ -209,9 +209,11 @@ detail, review queue — independent of this API.
 
 ## 8. Hosting and deployment (you run this too)
 
-The platform team deploys and operates the tool in IPv4.Global's AWS account.
-A `Dockerfile` ships in the repo; `docs/RUNBOOK.md` is the operator guide
-(every env var, health checks, dead-letter recovery).
+The platform team hosts and operates the tool in IPv4.Global's AWS account;
+IPv4.Global maintains the code and cuts releases. An update is: pull the
+release, build the image, run the migration, restart — no code is edited on
+the server. A `Dockerfile` ships in the repo; `docs/RUNBOOK.md` is the
+operator guide (every env var, health checks, dead-letter recovery).
 
 - **Stack:** Python 3.11, FastAPI. **PostgreSQL 14+ is the only hard
   infrastructure dependency** — queue and webhook outbox live in Postgres. No
