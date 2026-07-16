@@ -34,6 +34,14 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-14 — PR 3 claim EXTENSION (user gave go)
+Extending the standing PR 3 claim to the item-3 adapter + touched tests/docs:
+`src/kyc_tool/adapters/rir_poc.py` · `tests/unit/test_rir_poc_association.py` (new) ·
+`tests/unit/test_scoring_hard_conflict.py` (new) · `tests/integration/test_phase2_adapters.py` ·
+`tests/integration/test_phase3_rir.py` · `tests/integration/test_phase4_platform.py`
+(doc-fixture completion only) · `tests/integration/test_gate5_conflict.py` (new) ·
+`AUDIT_FINDINGS.md` (§D6) · `.agents/ROADMAP.md` (status). Hold all until RELEASE.
+
 ### RELEASE [CLAUDE] 2026-07-14 — pipeline.py + tests (P1 & P2 fixed, this commit)
 - **P1 fixed:** `_seed_in_run_context` now seeds discovery context at the
   producing adapter's slot on BOTH the fresh and the recorded-skip (resume)
