@@ -179,8 +179,8 @@ Rules your page must respect:
 
 ## 6. Documents (MVP path: you extract)
 
-Per Theresa's preference, the platform extracts document fields; the tool
-cross-checks them against registries.
+In the MVP the platform extracts document fields and the tool cross-checks
+them against registries.
 
 1. Put a JSON object in the shared object store:
    `{"fields": {"name": "...", "address": "...", "number": "...", "jurisdiction": "..."}}`
@@ -251,11 +251,13 @@ From the platform team:
 3. Documents: platform-extracts (MVP path above) confirmed, or tool-side OCR?
 4. Will you consume `event_sequence`?
 5. Confirm you'll host the POC page and echo back both `token` and `token_id`.
-6. Where the tool runs (needs Postgres, S3 bucket, outbound HTTPS).
+6. ~~Where the tool runs~~ — answered: IPv4.Global's AWS account (needs RDS
+   Postgres, an S3 bucket, outbound HTTPS).
 
 From IPv4.Global:
 
 7. Email provider choice and sending domain.
 8. Companies House API key.
-9. Who staffs manual review, and do they work in the tool's console or in the
-   platform admin?
+9. ~~Who staffs manual review~~ — answered: the IPv4.Global team, working in
+   the platform admin. The platform should therefore surface held cases and
+   their reason codes (from the webhook body or the read API).
