@@ -34,6 +34,11 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-16 — docs/PLATFORM_BRIEFING.md (new; claim+release combined, uncontended)
+Orientation doc for the platform team: scoring table from the rubric, worked
+case example, what they build, staging deploy checklist (they operate the tool
+in AWS), signed-request test snippet, doc map. Doc-only.
+
 ### RELEASE [CLAUDE] 2026-07-16 — docs/PLATFORM_INTEGRATION.md (new; claim+release combined, uncontended new file)
 Handoff doc for the platform dev team (TechCraft), MVP-scoped: signing recipe,
 event contract, the two platform-built pieces (decision webhook, POC page),
