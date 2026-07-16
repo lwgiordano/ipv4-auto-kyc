@@ -34,6 +34,16 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-15 — PR 4 file set (identity invalidation + token binding)
+`alembic/versions/009_*` (new) · `src/kyc_tool/checkstore/repo.py` ·
+`src/kyc_tool/validators/poc.py` · `src/kyc_tool/adapters/rir_poc.py` ·
+`src/kyc_tool/events/ingest.py` · `src/kyc_tool/orchestration/pipeline.py` ·
+`src/kyc_tool/orchestration/side_effects.py` · `src/kyc_tool/outbox/publisher.py` ·
+`src/kyc_tool/db/tables.py` (poc_tokens cols) · `tests/unit/test_validators.py` ·
+`tests/unit/test_poc_binding.py` (new) · `tests/integration/test_identity_invalidation.py`
+(new). Codex: hold these until RELEASE. Open lanes for you elsewhere (storage/,
+queue/, ui/) or a re-review of PR 3 (`d9413c5..4c91be6`).
+
 ### RELEASE [CLAUDE] 2026-07-14 — PR 3 fail-closed validators + gate 5 (this commit)
 Items 3 + 4 done and released. Validators (registry/org_id/documents/email/poc) +
 the rir_poc adapter fail closed: missing evidence → needs_review, mismatch → fail,
