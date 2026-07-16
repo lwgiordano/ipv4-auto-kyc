@@ -207,7 +207,11 @@ In production these reads also require the §2 signature headers. There is also
 an operator console (`/ui`) for the registration team — dashboards, case
 detail, review queue — independent of this API.
 
-## 8. Hosting footprint
+## 8. Hosting and deployment (you run this too)
+
+The platform team deploys and operates the tool in IPv4.Global's AWS account.
+A `Dockerfile` ships in the repo; `docs/RUNBOOK.md` is the operator guide
+(every env var, health checks, dead-letter recovery).
 
 - **Stack:** Python 3.11, FastAPI. **PostgreSQL 14+ is the only hard
   infrastructure dependency** — queue and webhook outbox live in Postgres. No
@@ -251,8 +255,9 @@ From the platform team:
 3. Documents: platform-extracts (MVP path above) confirmed, or tool-side OCR?
 4. Will you consume `event_sequence`?
 5. Confirm you'll host the POC page and echo back both `token` and `token_id`.
-6. ~~Where the tool runs~~ — answered: IPv4.Global's AWS account (needs RDS
-   Postgres, an S3 bucket, outbound HTTPS).
+6. ~~Where the tool runs~~ — answered: the platform team deploys and operates
+   it in IPv4.Global's AWS account (RDS Postgres, an S3 bucket, outbound
+   HTTPS).
 
 From IPv4.Global:
 
