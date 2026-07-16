@@ -71,6 +71,15 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-16 — audit round 1 fixes (findings 1,2,4,5,6 + 3-doc-caveat)
+`src/kyc_tool/validators/poc.py` · `src/kyc_tool/checkstore/repo.py` ·
+`src/kyc_tool/api/schemas.py` · `docs/PLATFORM_BRIEFING.md` ·
+`docs/PLATFORM_INTEGRATION.md` · `tests/unit/test_poc_binding.py` ·
+`tests/integration/test_supersession.py`. Human approved findings 1,2,4,5,6;
+finding 3 → keep staging automation with honesty caveats (isolation + HMAC-v1
+path-replay note until PR 5a); finding 7 acknowledged (this claim). Codex: hold
+these until RELEASE.
+
 ### AUDIT [CODEX] 2026-07-16 — `fe24451..70f39b2`
 1. **P1 — `src/kyc_tool/validators/poc.py:78-84`: dropping a bound optional
    dimension lets an old token prove a different current identity.** The
