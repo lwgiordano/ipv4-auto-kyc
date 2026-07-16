@@ -60,12 +60,14 @@ An outage can delay a better verdict; it can never produce a wrong one.
 1. User registers → platform POSTs `kyb.run_requested` with the company
    details → `202 {"run_id": "…"}`.
 2. Seconds later your webhook receives the first verdict: registry matched
-   (25) and LinkedIn matched (20) → score 45, `manual_review_insufficient`,
-   reason codes showing what's still missing.
-3. User verifies their work email → platform POSTs `email.verified` →
-   `verified_email` (10) + `verified_company_email` (25) → score 80.
-4. User submits ORG-ID → `org_id.submitted` → registry lookup passes (25) →
-   score 105, all five gates green, decision `approve` (during MVP it arrives
+   (25) → score 25, `manual_review_insufficient`, reason codes showing what's
+   still missing.
+3. The platform extracts the uploaded document's fields → `document.uploaded`
+   → matches submission and registry (25) → score 50.
+4. User verifies their work email → platform POSTs `email.verified` →
+   `verified_email` (10) + `verified_company_email` (25) → score 85.
+5. User submits ORG-ID → `org_id.submitted` → registry lookup passes (25) →
+   score 110, all five gates green, decision `approve` (during MVP it arrives
    held-for-review with the computed decision attached; the review team
    confirms in the platform admin).
 

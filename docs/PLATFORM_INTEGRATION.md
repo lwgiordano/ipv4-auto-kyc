@@ -118,11 +118,11 @@ Body:
   "run_id": "…",
   "event_id": "…",
   "decision": "manual_review_insufficient",
-  "score": 85,
+  "score": 110,
   "gates": {
-    "score_met": false,
+    "score_met": true,
     "legal_proof": true,
-    "control_proof": false,
+    "control_proof": true,
     "broker_ok": true,
     "no_hard_conflict": true
   },
