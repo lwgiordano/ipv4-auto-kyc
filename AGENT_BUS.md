@@ -34,6 +34,12 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-16 — docs/PLATFORM_INTEGRATION.md (new; claim+release combined, uncontended new file)
+Handoff doc for the platform dev team (TechCraft), MVP-scoped: signing recipe,
+event contract, the two platform-built pieces (decision webhook, POC page),
+extracted-fields document path, hosting footprint, add-later table, answers
+checklist. Doc-only commit — no code touched.
+
 ### RELEASE [CLAUDE] 2026-07-16 — PR 4 identity invalidation + POC token binding (this commit)
 Item 5 done and released. A POC token now proves exactly one identity —
 `(case, token_id, digest, rir, poc_handle, org/resource)` — and exactly once:

@@ -1,0 +1,261 @@
+# Platform Integration Guide — MVP
+
+For the IPv4.Global platform team. Everything needed to integrate the KYC tool:
+the API you call, the two things you build (a webhook receiver and a POC
+confirmation page), the MVP scope, and the open decisions.
+
+## 1. The model
+
+The tool is an async verification service. You POST events (registration data,
+a verified email, an uploaded document, an ORG-ID). Each event is acknowledged
+immediately and processed in the background: the tool gathers evidence from
+public registries, scores it, and POSTs a decision to your webhook.
+
+Decisions: `approve`, `approve_buy_locked` (account OK, purchasing held until
+ORG-ID verifies), `manual_review_insufficient`, `reject`.
+
+**MVP posture:** auto-enforcement is off. A computed `approve` /
+`approve_buy_locked` is delivered as `manual_review_insufficient` with an
+`enforcement_held` marker (§4), and the registration team confirms it. Flipping
+enforcement on later changes no part of this contract.
+
+## 2. Authentication (both directions)
+
+Every request — yours to us, our webhook to you — carries:
+
+```
+X-KYC-Timestamp: <unix seconds, e.g. "1752681600">
+X-KYC-Signature: <hex HMAC-SHA256(secret, timestamp + "." + raw_body)>
+```
+
+- The signed message is the timestamp string, a literal `.`, then the **raw
+  request body bytes**. Sign the exact bytes you send; verify the exact bytes
+  you receive (before any JSON parsing).
+- Requests older/newer than 300 seconds are rejected — keep clocks on NTP.
+- Compare signatures constant-time.
+- One shared secret per environment (staging ≠ production), ≥ 32 chars.
+
+Verify in Python:
+
+```python
+import hashlib, hmac, time
+
+def verify(secret: str, timestamp: str, body: bytes, signature: str) -> bool:
+    if abs(time.time() - float(timestamp)) > 300:
+        return False
+    expected = hmac.new(secret.encode(), f"{timestamp}.".encode() + body,
+                        hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+```
+
+A v2 scheme (signing method + path as well) ships later with a dual-accept
+window — integrate against v1 now; nothing breaks at cutover.
+
+## 3. Sending events
+
+```
+POST /v1/cases/{case_id}/events
+Idempotency-Key: <unique string per event attempt>
+X-KYC-Timestamp / X-KYC-Signature: as above
+```
+
+`case_id` is your identifier for the applicant (stable across all events for
+that applicant). Cases are created on first event.
+
+Envelope (exactly these four keys):
+
+```json
+{
+  "event_type": "kyb.run_requested",
+  "occurred_at": "2026-07-16T12:00:00Z",
+  "actor": {"type": "user", "id": "platform-user-123"},
+  "payload": { ... }
+}
+```
+
+`actor.type` is `user`, `reviewer`, or `system`.
+
+### Responses
+
+| Code | Meaning | Handling |
+|---|---|---|
+| 202 | Accepted; body `{"run_id": ..., "status": "queued"}` | done — result comes by webhook |
+| 200 | Replay of an already-processed key; stored response returned | safe retry, done |
+| 400 | Missing `Idempotency-Key` | fix request |
+| 401 | Bad/missing signature or stale timestamp | fix signing |
+| 409 | Same `Idempotency-Key`, different body | bug on your side — never reuse keys |
+| 422 | Payload failed validation | fix payload |
+
+Retry on network failure with the **same** key and **same bytes**; you'll get
+200 instead of a duplicate run.
+
+### Event types and payloads
+
+| event_type | Payload (required unless noted) | Notes |
+|---|---|---|
+| `kyb.run_requested` | `company_legal_name`; optional `address`, `registration_number`, `jurisdiction`, `website`, `contact`, `platform_account_id` | send at registration; full check run |
+| `email.verified` | `email`, `domain`, `verified_at` | you own email verification; this asserts it happened |
+| `org_id.submitted` | `rir`, `org_handle` | `rir` ∈ `arin, ripe, apnic, lacnic, afrinic` |
+| `poc.submitted` | `rir`, `poc_handle`; optional `org_handle`, `resource` | starts the verification email (§5) |
+| `poc.token_verified` | `token_id`, `token`, `verified_at` | posted by your confirmation page (§5) |
+| `document.uploaded` | `object_ref`, `doc_type` | see §6 |
+| `reviewer.manual_approve` | `reviewer_id`; optional `note` | inline 200 with case state; no run, no callback; buying still locked without a verified ORG-ID |
+| `recalculate.requested` | `{}` | re-decides from current evidence |
+
+Unknown extra payload fields are accepted and preserved. Send events in the
+order they happen; each triggers its own run and its own decision callback.
+
+## 4. The decision webhook (you build this)
+
+Expose HTTPS `POST {your_base_url}/kyc/decision`. We sign it per §2 with the
+same shared secret. Respond 2xx to acknowledge; anything else and we retry.
+
+Body:
+
+```json
+{
+  "case_id": "your-case-id",
+  "run_id": "…",
+  "event_id": "…",
+  "decision": "manual_review_insufficient",
+  "score": 85,
+  "gates": {
+    "score_met": false,
+    "legal_proof": true,
+    "control_proof": false,
+    "broker_ok": true,
+    "no_hard_conflict": true
+  },
+  "buy_enablement": "locked_org_id_required",
+  "checks": [
+    {"type": "official_registry_match", "status": "pass", "points": 25,
+     "source": "companies_house", "reason_codes": []}
+  ],
+  "decided_at": "2026-07-16T12:00:05Z",
+  "enforcement_held": {
+    "computed_decision": "approve_buy_locked",
+    "reason": "positive_enforcement_disabled"
+  }
+}
+```
+
+- `buy_enablement` is `enabled` or `locked_org_id_required`.
+- `checks[].reason_codes` are stable strings explaining any non-pass — show
+  them to your registration team.
+- `enforcement_held` appears only while MVP enforcement is off: it carries the
+  decision the tool computed. Treat the case as pending human review.
+- **Delivery is at-least-once.** Dedupe on `(case_id, run_id)`. Retries back
+  off exponentially (base 10 s, 8 attempts) before dead-lettering on our side.
+- Per-case order is preserved. An optional `event_sequence` integer (per-case
+  ordinal of the triggering event) can be enabled once you confirm you'll use
+  it.
+
+## 5. POC verification page (you build this)
+
+Flow for proving control of IP resources:
+
+1. You post `poc.submitted`.
+2. The tool looks up the POC in the registry directory and emails the
+   **registry-listed** address (never a user-supplied one). The email contains:
+   `Your verification token: <secret>` and `Verification reference: <id>`.
+3. The user enters both on your confirmation page.
+4. You post `poc.token_verified` with `token` (the secret) and `token_id` (the
+   reference). Both are required; a placeholder `token_id` fails.
+5. Result arrives as a normal decision callback.
+
+Rules your page must respect:
+
+- **Single-use.** A verified token is spent (`poc_token_consumed` on reuse).
+- **Expires in 72 hours** (`poc_token_expired`).
+- **Bound to the submitted identity.** If the user changes their ORG-ID, POC
+  handle, or resource after the email went out, the old token fails
+  (`poc_token_binding_mismatch`).
+- Recovery is always the same: re-submit the POC (`poc.submitted` again) — old
+  tokens are cancelled and a fresh email goes out. Don't build a "resend same
+  code" button.
+- Changing identity details also suspends previously earned proof: expect
+  scores to drop after an ORG-ID/POC edit until re-verified
+  (`org_id_revalidation_pending`, `poc_not_associated`). Not a bug.
+
+## 6. Documents (MVP path: you extract)
+
+Per Theresa's preference, the platform extracts document fields; the tool
+cross-checks them against registries.
+
+1. Put a JSON object in the shared object store:
+   `{"fields": {"name": "...", "address": "...", "number": "...", "jurisdiction": "..."}}`
+   (missing keys allowed; missing evidence routes to review rather than passing).
+2. Post `document.uploaded` with `object_ref` (storage key) and `doc_type`
+   (e.g. `registration_certificate`).
+3. Keep the original upload on your side for audit.
+
+Add-later: the tool OCRs raw PDFs/images itself, once an OCR engine is chosen.
+The event contract does not change — only what `object_ref` points at.
+
+## 7. Read API and review tasks
+
+- `GET /v1/cases/{id}` — status, score, latest decision, live checks with
+  reason codes ("what's missing" for follow-up).
+- `GET /v1/cases/{id}/checks?all=1` — full check history.
+- `GET /v1/runs/{id}` — one run's state and adapter results.
+- `GET /v1/review-tasks?status=open` — open human-review tasks (website
+  checks, hidden POC email).
+- `POST /v1/review-tasks/{id}/complete` — body
+  `{"result": "pass"|"fail", "reviewer_id": "...", "reason_codes": []}`, signed.
+
+In production these reads also require the §2 signature headers. There is also
+an operator console (`/ui`) for the registration team — dashboards, case
+detail, review queue — independent of this API.
+
+## 8. Hosting footprint
+
+- **Stack:** Python 3.11, FastAPI. **PostgreSQL 14+ is the only hard
+  infrastructure dependency** — queue and webhook outbox live in Postgres. No
+  Redis/broker.
+- **Also needed in production:** an S3-compatible bucket (evidence), outbound
+  HTTPS (RDAP registries, Companies House, GLEIF), an email provider (only for
+  the §5 flow).
+- **Processes** (stateless, scale horizontally): API (`uvicorn
+  kyc_tool.api.app:create_app --factory`), pipeline worker, outbox worker, and
+  a daily retention cron.
+- **Deploy:** `alembic upgrade head`, start processes. Wire `GET /readyz` to
+  the load balancer (checks config, DB, migration version, storage);
+  `GET /healthz` for liveness.
+- Config is environment variables prefixed `KYC_` (full table:
+  `docs/RUNBOOK.md`). With `KYC_ENVIRONMENT=production` a misconfigured process
+  refuses to boot and lists every violation — intentional fail-closed.
+
+## 9. MVP scope and what comes later
+
+Works now: full event flow, registry + broker + document (extracted-fields) +
+email checks, scoring, webhooks, review queue, audit trail, idempotent replays.
+
+| Added later | Unblocked by |
+|---|---|
+| Tool-side OCR of raw files | extraction decision + engine choice |
+| Live POC verification emails | email provider + sending domain |
+| Live Companies House lookups | API key (free registration) |
+| LinkedIn/company enrichment | Floqer access |
+| `event_sequence` in callbacks | your confirmation |
+| HMAC v2 | agreed cutover date |
+| Auto-enforcement (the flag flip) | staging end-to-end on real providers + platform cutover sign-off |
+
+None of these change the API in §§2–7.
+
+## 10. Answers we need
+
+From the platform team:
+
+1. Callback base URLs (staging, production).
+2. Secret exchange procedure.
+3. Documents: platform-extracts (MVP path above) confirmed, or tool-side OCR?
+4. Will you consume `event_sequence`?
+5. Confirm you'll host the POC page and echo back both `token` and `token_id`.
+6. Where the tool runs (needs Postgres, S3 bucket, outbound HTTPS).
+
+From IPv4.Global:
+
+7. Email provider choice and sending domain.
+8. Companies House API key.
+9. Who staffs manual review, and do they work in the tool's console or in the
+   platform admin?
