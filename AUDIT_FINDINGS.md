@@ -150,3 +150,19 @@ documented choice · 🔵 hygiene/wording.
   event** internally, so both completion paths share one idempotent, audited pipeline.
 - **D5 — One email verification can create two checks** (`verified_email` +10 and
   `verified_company_email` +25), per the coexistence rule in `02 §1`.
+- **D6 — Approval-grade validators fail closed (remediation PR 3).** The pass
+  rules in `03 §3–§7` require full field matching, but the v1 validators skipped
+  absent fields and could PASS on partial evidence — a document showing only a
+  matching name, an ORG-ID whose *returned* handle differed from the submitted
+  one, a company-email trusted from a caller-supplied `domain` instead of the
+  address, or a POC associated-by-default when no ORG-ID/resource was submitted.
+  PR 3 enforces the spec's stated rules: every pass-rule field is required on both
+  sides; **missing** data routes to `needs_review` (distinct submission- vs
+  evidence-incomplete codes), **mismatched** data `fail`s. Specific tightenings:
+  ORG-ID requires returned==submitted handle and drops the shared postal-token
+  address shortcut (two unrelated addresses sharing a digit token no longer
+  match); email derives the domain from the address and rejects a payload whose
+  separate `domain` contradicts it; `rir_poc` requires a verified association
+  target. Gate 5's trigger set is centralized in
+  `scoring.HARD_CONFLICT_REASON_CODES` (explicit allow-list), and a document
+  contradicting the registry stamps `hard_conflict` so it fails the gate.

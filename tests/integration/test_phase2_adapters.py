@@ -188,7 +188,14 @@ def test_document_match_awards_legal_proof(client, post_event, phase2_worker, ev
     doc_ref = evidence_store.put(
         "uploads/acme-cert.json",
         json.dumps(
-            {"fields": {"name": "ACME NETWORKS LTD", "number": "12345678", "jurisdiction": "GB"}}
+            {
+                "fields": {
+                    "name": "ACME NETWORKS LTD",
+                    "address": "1 Main Street, London, EC1A 1AA",
+                    "number": "12345678",
+                    "jurisdiction": "GB",
+                }
+            }
         ).encode(),
     )
     post_event("case-doc", "kyb.run_requested", ACME_KYB)

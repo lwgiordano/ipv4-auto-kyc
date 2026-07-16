@@ -13,6 +13,9 @@ class ReasonCode(StrEnum):
     EMAIL_NOT_VERIFIED = "email_not_verified"
     EMAIL_FREE_OR_DISPOSABLE_DOMAIN = "email_free_or_disposable_domain"
     EMAIL_DOMAIN_MISMATCH = "email_domain_mismatch"
+    EMAIL_PAYLOAD_DOMAIN_CONFLICT = "email_payload_domain_conflict"
+    EMAIL_EVIDENCE_INCOMPLETE = "email_evidence_incomplete"
+    EMAIL_SUBMISSION_INCOMPLETE = "email_submission_incomplete"
 
     # registry
     REGISTRY_COMPANY_INACTIVE = "registry_company_inactive"
@@ -20,6 +23,8 @@ class ReasonCode(StrEnum):
     REGISTRY_ADDRESS_MISMATCH = "registry_address_mismatch"
     REGISTRY_NUMBER_MISMATCH = "registry_number_mismatch"
     REGISTRY_NO_MATCH = "registry_no_match"
+    REGISTRY_SUBMISSION_INCOMPLETE = "registry_submission_incomplete"
+    REGISTRY_EVIDENCE_INCOMPLETE = "registry_evidence_incomplete"
 
     # ORG-ID (rir_rdap) — needs_review routing per adapter_catalog.json
     ORG_ID_HANDLE_NOT_FOUND = "org_id_handle_not_found"
@@ -31,17 +36,23 @@ class ReasonCode(StrEnum):
     ORG_ID_RELATED_ENTITY_ONLY = "org_id_related_entity_only"
     ORG_ID_RESOURCES_HELD_BY_PROVIDER = "org_id_resources_held_by_provider"
     ORG_ID_BROAD_NAME_SEARCH_ONLY = "org_id_broad_name_search_only"
+    ORG_ID_HANDLE_MISMATCH = "org_id_handle_mismatch"
+    ORG_ID_SUBMISSION_INCOMPLETE = "org_id_submission_incomplete"
+    ORG_ID_EVIDENCE_INCOMPLETE = "org_id_evidence_incomplete"
 
     # POC
     POC_NOT_ASSOCIATED = "poc_not_associated"
     POC_EMAIL_HIDDEN = "poc_email_hidden"
     POC_TOKEN_EXPIRED = "poc_token_expired"
     POC_TOKEN_INVALID = "poc_token_invalid"
+    POC_NO_ASSOCIATION_TARGET = "poc_no_association_target"
 
     # document
     DOCUMENT_FIELDS_MISMATCH = "document_fields_mismatch"
     DOCUMENT_REGISTRY_CONFLICT = "document_registry_conflict"
     DOCUMENT_UNREADABLE = "document_unreadable"
+    DOCUMENT_SUBMISSION_INCOMPLETE = "document_submission_incomplete"
+    DOCUMENT_EVIDENCE_INCOMPLETE = "document_evidence_incomplete"
 
     # linkedin
     LINKEDIN_FIELDS_MISMATCH = "linkedin_fields_mismatch"

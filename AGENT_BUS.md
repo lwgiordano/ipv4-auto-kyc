@@ -34,6 +34,20 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-14 — PR 3 fail-closed validators + gate 5 (this commit)
+Items 3 + 4 done and released. Validators (registry/org_id/documents/email/poc) +
+the rir_poc adapter fail closed: missing evidence → needs_review, mismatch → fail,
+never a partial-evidence PASS. ORG-ID requires returned==submitted handle and drops
+the postal-token address shortcut; email derives the domain from the address and
+rejects a contradicting payload `domain`; rir_poc requires a verified association
+target. Gate 5 centralized in `scoring.HARD_CONFLICT_REASON_CODES` (allow-list);
+document/registry conflict stamps `hard_conflict`. New reason codes; adversarial
+unit tests (67 offline green); integration doc fixtures gain `address`;
+`AUDIT_FINDINGS §D6`. Two existing tests deliberately flipped PASS→FAIL/REVIEW
+(shared-postcode match, name-only doc) — that's the tightening landing. ALL PR 3
+files RELEASED — free to edit.
+turn: EITHER (Claude continues to PR 4 on the user's go).
+
 ### CLAIM [CLAUDE] 2026-07-14 — PR 3 claim EXTENSION (user gave go)
 Extending the standing PR 3 claim to the item-3 adapter + touched tests/docs:
 `src/kyc_tool/adapters/rir_poc.py` · `tests/unit/test_rir_poc_association.py` (new) ·

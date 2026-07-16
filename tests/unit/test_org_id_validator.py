@@ -41,14 +41,40 @@ def test_name_mismatch_fails_not_fuzzy():
     assert ReasonCode.ORG_ID_NAME_MISMATCH.value in intent.reason_codes
 
 
-def test_address_material_match_via_postcode():
+def test_shared_postcode_alone_no_longer_matches():
+    # PR 3: the shared-postal-token shortcut is gone — a different street address
+    # that merely shares a postcode does NOT materially match
     intent = org_id_intent({**RDAP_OK, "address": "Acme House, EC1A 1AA, GB"}, SNAPSHOT)
-    assert intent.status is CheckStatus.PASS
+    assert intent.status is CheckStatus.FAIL
+    assert ReasonCode.ORG_ID_ADDRESS_MISMATCH.value in intent.reason_codes
+
+
+def test_unrelated_addresses_sharing_a_number_do_not_match():
+    # PR 3: two unrelated addresses sharing a digit token ("100") must not match
+    snap = {**SNAPSHOT, "address": "100 First Ave, New York, 10001"}
+    intent = org_id_intent({**RDAP_OK, "address": "100 Different Road, Berlin, 10115"}, snap)
+    assert intent.status is CheckStatus.FAIL
+    assert ReasonCode.ORG_ID_ADDRESS_MISMATCH.value in intent.reason_codes
 
 
 def test_address_material_match_via_containment():
     intent = org_id_intent({**RDAP_OK, "address": "1 Main Street, London"}, SNAPSHOT)
     assert intent.status is CheckStatus.PASS
+
+
+def test_returned_handle_mismatch_fails():
+    # PR 3: the RIR answered for a DIFFERENT handle than submitted → never PASS
+    intent = org_id_intent({**RDAP_OK, "org_handle": "ORG-OTHER-9"}, SNAPSHOT)
+    assert intent.status is CheckStatus.FAIL
+    assert ReasonCode.ORG_ID_HANDLE_MISMATCH.value in intent.reason_codes
+
+
+def test_submission_without_address_routes_to_review():
+    # PR 3 fail-closed: no submitted address → cannot prove a match → review
+    snap = {"company_legal_name": "Acme Networks Ltd", "org_id": {"org_handle": "ORG-ACME-1"}}
+    intent = org_id_intent(RDAP_OK, snap)
+    assert intent.status is CheckStatus.NEEDS_REVIEW
+    assert ReasonCode.ORG_ID_SUBMISSION_INCOMPLETE.value in intent.reason_codes
 
 
 def test_address_mismatch_fails():

@@ -161,7 +161,14 @@ def test_buy_lock_upgrade_path_e2e(
     doc_ref = evidence_store.put(
         "uploads/upgrade-cert.json",
         json.dumps(
-            {"fields": {"name": "ACME NETWORKS LTD", "number": "12345678", "jurisdiction": "GB"}}
+            {
+                "fields": {
+                    "name": "ACME NETWORKS LTD",
+                    "address": "1 Main Street, London, EC1A 1AA",
+                    "number": "12345678",
+                    "jurisdiction": "GB",
+                }
+            }
         ).encode(),
     )
     post_event(case_id, "document.uploaded", {"object_ref": doc_ref, "doc_type": "registration_certificate"})

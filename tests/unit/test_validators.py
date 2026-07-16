@@ -136,6 +136,7 @@ def test_document_match_passes():
     normalized = {
         "extracted": {
             "name": "ACME NETWORKS LTD",
+            "address": "1 Main Street, London, EC1A 1AA",
             "number": "12345678",
             "jurisdiction": "GB",
         }
@@ -154,6 +155,42 @@ def test_document_field_mismatch_fails():
 def test_document_unreadable_fails():
     intent = document_intent({"extracted": {}}, ACME, ())
     assert ReasonCode.DOCUMENT_UNREADABLE.value in intent.reason_codes
+
+
+def test_document_name_only_never_passes():
+    # PR 3 fail-closed: a document showing only a matching name (no address/
+    # number/jurisdiction) can never award legal proof — it routes to review
+    intent = document_intent({"extracted": {"name": "ACME NETWORKS LTD"}}, ACME, ())
+    assert intent.status is CheckStatus.NEEDS_REVIEW
+    assert ReasonCode.DOCUMENT_EVIDENCE_INCOMPLETE.value in intent.reason_codes
+
+
+def test_document_conflicting_with_registry_stamps_hard_conflict():
+    # PR 3 item 4: a document number contradicting the live registry record
+    # fails AND stamps HARD_CONFLICT so gate 5 fails
+    from kyc_tool.domain.models import CheckView
+
+    registry = CheckView(
+        check_type="official_registry_match",
+        status=CheckStatus.PASS,
+        points_awarded=25,
+        category="legal_business_proof",
+        source="companies_house",
+        reason_codes=(),
+        source_detail={"company_number": "12345678"},
+    )
+    normalized = {
+        "extracted": {
+            "name": "ACME NETWORKS LTD",
+            "address": "1 Main Street, London, EC1A 1AA",
+            "number": "99999999",  # contradicts the registry's 12345678
+            "jurisdiction": "GB",
+        }
+    }
+    intent = document_intent(normalized, {**ACME, "jurisdiction": "GB"}, (registry,))
+    assert intent.status is CheckStatus.FAIL
+    assert ReasonCode.DOCUMENT_REGISTRY_CONFLICT.value in intent.reason_codes
+    assert ReasonCode.HARD_CONFLICT.value in intent.reason_codes
 
 
 # --- website (human verdict) --------------------------------------------------
@@ -213,3 +250,33 @@ def test_poc_expired_token_fails():
 def test_poc_missing_raw_token_needs_review():
     intent = poc_token_intent({"token_id": "tok-1"}, {"poc_tokens": []}, SNAPSHOT_POC)
     assert intent.status is CheckStatus.NEEDS_REVIEW
+
+
+def test_poc_without_association_target_needs_review():
+    # PR 3 fail-closed: a verified token with no ORG-ID/resource to vouch for
+    # can't award control proof — a human decides
+    snap = {"poc": {"poc_handle": "JD123-ARIN"}}  # no org_handle, no resource
+    intent = poc_token_intent(
+        {"token": "secret-token"}, {"poc_tokens": [_token_row("secret-token")]}, snap
+    )
+    assert intent.status is CheckStatus.NEEDS_REVIEW
+    assert ReasonCode.POC_NO_ASSOCIATION_TARGET.value in intent.reason_codes
+
+
+# --- email domain-forgery (PR 3) ---------------------------------------------
+
+
+def test_email_payload_domain_conflict_fails_both_checks():
+    # attacker@gmail.com + domain=company.example: the declared domain
+    # contradicts the address, so NEITHER check may pass
+    normalized = {"verified": True, "email": "attacker@gmail.com", "domain": "company.example"}
+    intents = {
+        i.check_type: i
+        for i in email_intents(normalized, {**ACME, "website": "https://company.example"})
+    }
+    assert intents["verified_email"].status is CheckStatus.FAIL
+    assert intents["verified_company_email"].status is CheckStatus.FAIL
+    assert (
+        ReasonCode.EMAIL_PAYLOAD_DOMAIN_CONFLICT.value
+        in intents["verified_email"].reason_codes
+    )

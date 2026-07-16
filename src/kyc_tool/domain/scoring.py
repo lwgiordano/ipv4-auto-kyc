@@ -24,11 +24,27 @@ def score(live_checks: list[CheckView]) -> ScoreBreakdown:
     return ScoreBreakdown(score=sum(by_check.values()), by_check=by_check)
 
 
+# Gate 5's single source of truth: every reason code that means "the live
+# evidence set contradicts itself". A deliberate, explicit allow-list — NOT a
+# suffix rule — so adding a conflict type is a reviewed one-line change here and
+# routing codes like org_id_broker_conflict can never trip the gate by accident.
+HARD_CONFLICT_REASON_CODES = frozenset(
+    {
+        ReasonCode.HARD_CONFLICT.value,
+        ReasonCode.DOCUMENT_REGISTRY_CONFLICT.value,
+    }
+)
+
+
 def has_hard_conflict(live_checks: list[CheckView]) -> bool:
     """Gate 5. A conflict is a property of the live evidence set — validators
-    stamp ReasonCode.HARD_CONFLICT onto the conflicting check(s), so the flag
-    survives recalculation from live checks alone."""
-    return any(ReasonCode.HARD_CONFLICT.value in check.reason_codes for check in live_checks)
+    stamp a HARD_CONFLICT_REASON_CODES member onto the conflicting check(s), so
+    the flag survives recalculation from live checks alone."""
+    return any(
+        code in HARD_CONFLICT_REASON_CODES
+        for check in live_checks
+        for code in check.reason_codes
+    )
 
 
 def evaluate_gates(

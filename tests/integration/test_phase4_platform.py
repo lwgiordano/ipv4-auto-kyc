@@ -145,7 +145,14 @@ def test_full_staging_scenario_g3_to_approval(
     doc_ref = evidence_store.put(
         "uploads/staging-cert.json",
         json.dumps(
-            {"fields": {"name": "ACME NETWORKS LTD", "number": "12345678", "jurisdiction": "GB"}}
+            {
+                "fields": {
+                    "name": "ACME NETWORKS LTD",
+                    "address": "1 Main Street, London, EC1A 1AA",
+                    "number": "12345678",
+                    "jurisdiction": "GB",
+                }
+            }
         ).encode(),
     )
     post_event(

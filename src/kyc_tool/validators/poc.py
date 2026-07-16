@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from kyc_tool.domain.models import CheckStatus
 from kyc_tool.domain.reasons import ReasonCode
 from kyc_tool.validators.base import CheckIntent
+from kyc_tool.validators.normalize import canon_id
 
 SOURCE = "rir_poc_record_plus_token"
 
@@ -51,7 +52,20 @@ def poc_token_intent(event_payload: dict, extras: dict, case_snapshot: dict) -> 
             source=SOURCE,
         )
 
+    # fail-closed (remediation item 3): control proof requires an association
+    # TARGET — the ORG-ID or resource this POC is vouching for. A token alone,
+    # with nothing it is bound to, cannot award +25. (Full token↔identity
+    # binding lands with the poc_tokens migration in the next remediation PR.)
     poc = case_snapshot.get("poc") or {}
+    org_target = canon_id(poc.get("org_handle"))
+    resource_target = (poc.get("resource") or "").strip()
+    if not org_target and not resource_target:
+        return CheckIntent(
+            "poc_verified",
+            CheckStatus.NEEDS_REVIEW,
+            reason_codes=(ReasonCode.POC_NO_ASSOCIATION_TARGET.value,),
+            source=SOURCE,
+        )
     return CheckIntent(
         "poc_verified",
         CheckStatus.PASS,
@@ -59,6 +73,7 @@ def poc_token_intent(event_payload: dict, extras: dict, case_snapshot: dict) -> 
         source_detail={
             "org_handle": poc.get("org_handle"),
             "poc_handle": poc.get("poc_handle"),
+            "resource": poc.get("resource"),
             "token_id": match.get("id"),
         },
     )

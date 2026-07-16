@@ -143,7 +143,12 @@ split into a pure `_apply_event_to_snapshot` (returns a new dict) + `_update_cas
   (default off — not shipped until the platform accepts it).
 Offline unit tests green here; DB tests run in CI.
 
-### PR 3 — Fail-closed validators + gate-5 (items 3, 4)
+### PR 3 — Fail-closed validators + gate-5 (items 3, 4) — IMPLEMENTED (CI pending)
+_Registry/org_id/documents/email/rir_poc/poc fail closed; ORG-ID handle equality +
+no postal-token shortcut; email domain from address; POC association target;
+`HARD_CONFLICT_REASON_CODES` allow-list; document/registry conflict stamps gate 5.
+New reason codes; adversarial unit tests; doc fixtures gain `address`;
+`AUDIT_FINDINGS.md §D6`. Offline suite green (67 tests); DB tests in CI._
 Make registry/org_id/documents/email/rir_poc/poc fail-closed; add handle-equality,
 **delete `_POSTAL_TOKEN` shortcut**; email domain from address; real POC association
 target. `HARD_CONFLICT_REASON_CODES = frozenset({HARD_CONFLICT, DOCUMENT_REGISTRY_CONFLICT})`

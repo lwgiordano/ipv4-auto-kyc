@@ -42,7 +42,13 @@ SOURCE = "platform_email_verification"
 
 def email_intents(normalized: dict, case_snapshot: dict) -> list[CheckIntent]:
     """(normalized email evidence, submission) → verified_email and possibly
-    verified_company_email intents."""
+    verified_company_email intents.
+
+    Fail-closed (remediation item 3): the domain is derived from the email
+    ADDRESS, never trusted from the payload's separate `domain` field — that
+    field once let `attacker@gmail.com` + `domain=company.example` pass the
+    company check. A payload whose declared domain contradicts its own address
+    is rejected outright (no check passes)."""
     if not normalized.get("verified"):
         return [
             CheckIntent(
@@ -54,7 +60,38 @@ def email_intents(normalized: dict, case_snapshot: dict) -> list[CheckIntent]:
         ]
 
     email = normalized.get("email", "")
-    email_domain = domain_of(normalized.get("domain") or email)
+    email_domain = domain_of(email)  # authoritative: from the address itself
+    if not email_domain:
+        # a "verified" event without a usable address is incomplete evidence
+        return [
+            CheckIntent(
+                "verified_email",
+                CheckStatus.NEEDS_REVIEW,
+                reason_codes=(ReasonCode.EMAIL_EVIDENCE_INCOMPLETE.value,),
+                source=SOURCE,
+            )
+        ]
+    declared_domain = domain_of(normalized.get("domain"))
+    if declared_domain and declared_domain != email_domain:
+        # self-contradictory event: neither check may pass on it
+        detail = {"email_domain": email_domain, "declared_domain": declared_domain}
+        return [
+            CheckIntent(
+                "verified_email",
+                CheckStatus.FAIL,
+                reason_codes=(ReasonCode.EMAIL_PAYLOAD_DOMAIN_CONFLICT.value,),
+                source=SOURCE,
+                source_detail=detail,
+            ),
+            CheckIntent(
+                "verified_company_email",
+                CheckStatus.FAIL,
+                reason_codes=(ReasonCode.EMAIL_PAYLOAD_DOMAIN_CONFLICT.value,),
+                source=SOURCE,
+                source_detail=detail,
+            ),
+        ]
+
     detail = {"email_domain": email_domain}
     intents = [
         CheckIntent("verified_email", CheckStatus.PASS, source=SOURCE, source_detail=detail)
@@ -73,7 +110,19 @@ def email_intents(normalized: dict, case_snapshot: dict) -> list[CheckIntent]:
                 source_detail=detail,
             )
         )
-    elif not submitted_domain or email_domain != submitted_domain:
+    elif not submitted_domain:
+        # nothing submitted to prove "company email" against — never a silent
+        # mismatch-FAIL, never a pass: a human (or a later submission) resolves
+        intents.append(
+            CheckIntent(
+                "verified_company_email",
+                CheckStatus.NEEDS_REVIEW,
+                reason_codes=(ReasonCode.EMAIL_SUBMISSION_INCOMPLETE.value,),
+                source=SOURCE,
+                source_detail=detail,
+            )
+        )
+    elif email_domain != submitted_domain:
         intents.append(
             CheckIntent(
                 "verified_company_email",

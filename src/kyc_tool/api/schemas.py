@@ -35,6 +35,10 @@ class KybRunPayload(BaseModel):
     model_config = ConfigDict(extra="allow")
     company_legal_name: str
     address: str | None = None
+    # Declared for contract clarity (was accepted via extra="allow"). Optional:
+    # incomplete submissions stay ingestible, but the fail-closed validators
+    # never PASS on absent evidence.
+    registration_number: str | None = None
     jurisdiction: str | None = None
     website: str | None = None
     contact: dict | None = None

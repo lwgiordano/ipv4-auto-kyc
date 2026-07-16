@@ -12,11 +12,13 @@ from typing import Protocol
 
 from kyc_tool.adapters.base import AdapterOutput, hash_inputs
 from kyc_tool.domain.models import AdapterStatus
+from kyc_tool.validators.normalize import canon_id
 
 
 class PocDirectory(Protocol):
     def lookup(self, rir: str, poc_handle: str) -> dict:
-        """→ {found: bool, associated_org_handles: [..], rir_listed_email: str|None}"""
+        """→ {found: bool, associated_org_handles: [..], resources: [..],
+        rir_listed_email: str|None} (resources optional)."""
         ...
 
 
@@ -29,7 +31,12 @@ class FixturePocDirectory:
     def lookup(self, rir: str, poc_handle: str) -> dict:
         return self.records.get(
             f"{rir}:{poc_handle}",
-            {"found": False, "associated_org_handles": [], "rir_listed_email": None},
+            {
+                "found": False,
+                "associated_org_handles": [],
+                "resources": [],
+                "rir_listed_email": None,
+            },
         )
 
 
@@ -49,20 +56,35 @@ class RirPocAdapter:
             return AdapterOutput(self.adapter_id, AdapterStatus.NOT_APPLICABLE)
 
         record = self.directory.lookup(poc.get("rir", ""), poc["poc_handle"])
+
+        # Fail-closed association (remediation item 3): the POC must be tied to
+        # at least one VERIFIED target — the submitted ORG-ID appearing in the
+        # directory's associations, or the submitted resource appearing in its
+        # holdings. A submission with neither target, or a directory record
+        # confirming neither, is NOT associated (the old rule treated a missing
+        # submitted org as associated-by-default).
         submitted_org = poc.get("org_handle")
-        associated = bool(
-            record.get("found")
-            and (
-                submitted_org is None
-                or submitted_org in record.get("associated_org_handles", [])
-            )
+        submitted_resource = (poc.get("resource") or "").strip()
+        directory_orgs = {canon_id(h) for h in record.get("associated_org_handles", [])}
+        directory_resources = {
+            str(r).strip().lower() for r in record.get("resources", []) if str(r).strip()
+        }
+        org_associated = bool(canon_id(submitted_org)) and canon_id(submitted_org) in directory_orgs
+        resource_associated = (
+            bool(submitted_resource) and submitted_resource.lower() in directory_resources
         )
+        associated = bool(record.get("found")) and (org_associated or resource_associated)
+
         normalized = {
             "poc_handle": poc["poc_handle"],
             "rir": poc.get("rir"),
             "org_handle": submitted_org,
             "found": bool(record.get("found")),
             "associated": associated,
+            "association_target": {
+                "org_handle": submitted_org if org_associated else None,
+                "resource": submitted_resource if resource_associated else None,
+            },
             "rir_listed_email": record.get("rir_listed_email"),
             # side-effect requests for orchestration:
             "send_token": associated and bool(record.get("rir_listed_email")),

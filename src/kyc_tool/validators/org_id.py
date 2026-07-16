@@ -1,9 +1,9 @@
 """ORG-ID (rir_rdap) validator — the highest-accuracy control proof.
 
-Pass rule (03 §4): exact handle exists AND RIR org name matches the company
-AND the RIR address materially matches the submission AND no broker/rejected
-entity conflict (the broker gate already rejects blocked handles before this
-runs).
+Pass rule (03 §4): the RETURNED handle equals the SUBMITTED handle AND the RIR
+org name matches the company AND the RIR address materially matches the
+submission AND no broker/rejected entity conflict (the broker gate already
+rejects blocked handles before this runs).
 
 needs_review routing (adapter_catalog.json, five rules): parent/subsidiary
 ambiguity · address missing/stale · related-but-different entity · resources
@@ -12,22 +12,19 @@ Routed cases award nothing and carry the exact reason code.
 
 "Materially matches" (v1, deterministic): full normalized equality, OR one
 normalized address containing the other (same address at different
-granularity), OR shared postal-style tokens (digit-bearing tokens of length
-≥ 3 — covers UK outward/inward codes and numeric zips). Never
-token-similarity scoring.
+granularity). Never token-similarity scoring — the old shared-postal-token
+shortcut is deliberately gone (remediation item 3): two unrelated addresses
+sharing any digit-bearing token (e.g. "100") must not match. Fail-closed:
+both addresses are REQUIRED; a submission or RDAP record without one routes to
+review instead of silently passing on name alone.
 """
-
-import re
 
 from kyc_tool.domain.models import CheckStatus
 from kyc_tool.domain.reasons import ReasonCode
 from kyc_tool.validators.base import CheckIntent
-from kyc_tool.validators.normalize import norm, norm_equal
+from kyc_tool.validators.normalize import canon_id, norm, norm_equal
 
 SOURCE = "direct_rir_rdap"
-
-# tokens that look postal: word-chars with at least one digit, length >= 3
-_POSTAL_TOKEN = re.compile(r"\b(?=\w*\d)\w{3,}\b")
 
 NEEDS_REVIEW_FLAGS: tuple[tuple[str, ReasonCode], ...] = (
     ("parent_subsidiary_ambiguity", ReasonCode.ORG_ID_PARENT_SUBSIDIARY_AMBIGUITY),
@@ -42,10 +39,7 @@ def _address_materially_matches(rir_address: str, submitted: str) -> bool:
     if norm_equal(rir_address, submitted):
         return True
     a, b = norm(rir_address), norm(submitted)
-    if a and b and (a in b or b in a):
-        return True
-    pa, pb = set(_POSTAL_TOKEN.findall(a)), set(_POSTAL_TOKEN.findall(b))
-    return bool(pa and pb and pa & pb)
+    return bool(a and b and (a in b or b in a))
 
 
 def org_id_intent(normalized: dict, case_snapshot: dict) -> CheckIntent:
@@ -79,12 +73,40 @@ def org_id_intent(normalized: dict, case_snapshot: dict) -> CheckIntent:
             source_detail=detail,
         )
 
+    # fail-closed field requirements: every pass-rule input must exist on both
+    # sides before a verdict is possible
+    submitted_handle = canon_id(org.get("org_handle"))
+    if not submitted_handle or not norm(case_snapshot.get("company_legal_name")) or not norm(
+        case_snapshot.get("address")
+    ):
+        return CheckIntent(
+            "org_id_match",
+            CheckStatus.NEEDS_REVIEW,
+            reason_codes=(ReasonCode.ORG_ID_SUBMISSION_INCOMPLETE.value,),
+            source=SOURCE,
+            source_detail=detail,
+        )
+    returned_handle = canon_id(normalized.get("org_handle"))
+    if not returned_handle or not norm(normalized.get("entity_name")) or not norm(
+        normalized.get("address")
+    ):
+        return CheckIntent(
+            "org_id_match",
+            CheckStatus.NEEDS_REVIEW,
+            reason_codes=(ReasonCode.ORG_ID_EVIDENCE_INCOMPLETE.value,),
+            source=SOURCE,
+            source_detail=detail,
+        )
+
     reasons: list[str] = []
+    if returned_handle != submitted_handle:
+        # the RIR answered for a DIFFERENT org than the one submitted — never
+        # award control proof for someone else's handle
+        reasons.append(ReasonCode.ORG_ID_HANDLE_MISMATCH.value)
     if not norm_equal(normalized.get("entity_name"), case_snapshot.get("company_legal_name")):
         reasons.append(ReasonCode.ORG_ID_NAME_MISMATCH.value)
-    submitted_address = case_snapshot.get("address")
-    if submitted_address and not _address_materially_matches(
-        normalized.get("address", ""), submitted_address
+    if not _address_materially_matches(
+        normalized.get("address", ""), case_snapshot.get("address", "")
     ):
         reasons.append(ReasonCode.ORG_ID_ADDRESS_MISMATCH.value)
 
