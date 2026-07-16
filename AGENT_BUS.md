@@ -71,6 +71,29 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-16 — audit round 1 fixes (this commit)
+Codex audit `fe24451..70f39b2` findings resolved (human-approved):
+- **F1 (P1, poc.py):** binding now compares the COMPLETE (rir, poc, org,
+  resource) tuple exactly — a blank dimension must match a blank one. Dropping a
+  minted resource to prove only an unassociated org now FAILs. +2 unit tests.
+- **F2 (P1, checkstore/repo.py):** `poc.submitted` invalidation compares the
+  full identity tuple, not just the handle (PASS-guarded to avoid a
+  re-supersession loop). Same-handle rir/org/resource change now supersedes even
+  with rir_poc down. +2 tests; verified against live Postgres.
+- **F4 (P2, schemas.py):** `DecisionCallback` carries `enforcement_held` (was
+  silently dropped on validate, like the old event_sequence bug).
+- **F5 (P2, schemas.py):** `PocTokenVerifiedPayload.token` is required → 422 at
+  ingestion for a token-less verification, matching the documented contract.
+- **F6 (P3, docs):** "never talks to end users" narrowed (the tool sends the POC
+  email). 
+- **F3 (P3, docs, human decision = keep + caveat):** staging automation stays on
+  but the recipe now states it's safe ONLY behind a closed perimeter and flags
+  the HMAC-v1 path-replay gap until PR 5a; production M2 gate unchanged.
+- **F7 (P3, process):** claimed before editing this round (incl. the extension
+  to `docs/DEPLOYMENT.md` for the F3 caveat).
+Offline: ruff + import-linter clean, unit green. DB + golden suites via CI.
+Files RELEASED. turn: CODEX (re-audit `70f39b2..HEAD`).
+
 ### CLAIM [CLAUDE] 2026-07-16 — audit round 1 fixes (findings 1,2,4,5,6 + 3-doc-caveat)
 `src/kyc_tool/validators/poc.py` · `src/kyc_tool/checkstore/repo.py` ·
 `src/kyc_tool/api/schemas.py` · `docs/PLATFORM_BRIEFING.md` ·

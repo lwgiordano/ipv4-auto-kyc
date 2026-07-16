@@ -35,6 +35,12 @@ Production mode validates config at boot and refuses to start on anything
 unsafe (missing secret, stub providers, non-HTTPS callback URL), listing every
 violation at once. A bad deploy fails loudly instead of running quietly broken.
 
+Staging's automation-on is safe **only** while staging is closed to untrusted
+callers: request signing is v1 (body + timestamp) and does not bind the URL
+path until PR 5, so a captured signed event could be replayed to another case
+within the 5-minute window. Keep staging's perimeter closed until that lands;
+production automation stays off regardless until the M2 gate is met.
+
 ## 3. First-time setup (per environment)
 
 1. Provision: RDS PostgreSQL 14+, an S3 bucket, an ECS/Fargate service (or

@@ -154,6 +154,22 @@ def _live_check(session: Session, case_id: str, check_type: str) -> Check | None
     ).scalar_one_or_none()
 
 
+def _norm_lower(value) -> str:
+    return (value or "").strip().lower()
+
+
+def _poc_identity(detail: dict) -> tuple[str, str, str, str]:
+    """The identity a POC proof is bound to — the same tuple the token binding
+    in validators/poc.py checks: (rir, poc_handle, org_handle, resource),
+    canonicalized so a case/format difference is not treated as a change."""
+    return (
+        _norm_lower(detail.get("rir")),
+        canon_id(detail.get("poc_handle")),
+        canon_id(detail.get("org_handle")),
+        _norm_lower(detail.get("resource")),
+    )
+
+
 def _supersede_on_identity_change(
     session: Session,
     case_id: str,
@@ -210,16 +226,20 @@ def supersede_stale_identity_proof(
             ReasonCode.POC_NOT_ASSOCIATED.value,
         )
     elif event_type == "poc.submitted":
-        submitted_poc = canon_id(payload.get("poc_handle"))
-        _supersede_on_identity_change(
-            session,
-            case_id,
-            "poc_verified",
-            "poc_handle",
-            submitted_poc,
-            run_id,
-            ReasonCode.POC_NOT_ASSOCIATED.value,
-        )
+        # a POC proof is bound to the FULL (rir, poc, org, resource) tuple, so a
+        # change in ANY dimension — not just the handle — invalidates it, even
+        # when rir_poc is unavailable to re-prove the new identity (D7). Guard on
+        # PASS: a needs_review placeholder records no identity, so re-superseding
+        # it would loop on every later event.
+        live = _live_check(session, case_id, "poc_verified")
+        if (
+            live is not None
+            and live.status == CheckStatus.PASS.value
+            and _poc_identity(payload) != _poc_identity(live.source_detail_json or {})
+        ):
+            supersede_without_replacement(
+                session, live, run_id=run_id, reason=ReasonCode.POC_NOT_ASSOCIATED.value
+            )
 
 
 def apply_check_intents(

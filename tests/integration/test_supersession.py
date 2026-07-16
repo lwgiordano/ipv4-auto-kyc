@@ -245,3 +245,57 @@ def test_poc_handle_change_supersedes_prior_poc(session_factory, policy, case_id
     live = _live(session_factory, case_id)
     assert live["poc_verified"][0] == "needs_review"
     assert "poc_not_associated" in live["poc_verified"][1]
+
+
+def test_poc_identity_change_same_handle_supersedes(session_factory, policy, case_id):
+    # audit round 1, finding 2: proof is bound to the FULL (rir, poc, org,
+    # resource) tuple — same handle but a different rir/org/resource must
+    # invalidate the stale PASS even with rir_poc unavailable to re-prove it.
+    _apply(
+        session_factory,
+        policy,
+        case_id,
+        CheckIntent(
+            "poc_verified",
+            CheckStatus.PASS,
+            source="t",
+            source_detail={
+                "rir": "arin",
+                "poc_handle": "JD123-ARIN",
+                "org_handle": "ORG-A",
+                "resource": "192.0.2.0/24",
+            },
+        ),
+    )
+    _invalidate(
+        session_factory,
+        case_id,
+        "poc.submitted",
+        {"rir": "ripe", "poc_handle": "JD123-ARIN", "org_handle": "ORG-B",
+         "resource": "198.51.100.0/24"},
+    )
+    live = _live(session_factory, case_id)
+    assert live["poc_verified"][0] == "needs_review"
+    assert "poc_not_associated" in live["poc_verified"][1]
+
+
+def test_poc_resubmit_identical_identity_keeps_proof(session_factory, policy, case_id):
+    # the same tuple re-submitted is a no-op — a valid proof must not be dropped
+    _apply(
+        session_factory,
+        policy,
+        case_id,
+        CheckIntent(
+            "poc_verified",
+            CheckStatus.PASS,
+            source="t",
+            source_detail={"rir": "arin", "poc_handle": "JD123-ARIN", "org_handle": "ORG-A"},
+        ),
+    )
+    _invalidate(
+        session_factory,
+        case_id,
+        "poc.submitted",
+        {"rir": "arin", "poc_handle": "JD123-ARIN", "org_handle": "ORG-A"},
+    )
+    assert _live(session_factory, case_id)["poc_verified"][0] == "pass"

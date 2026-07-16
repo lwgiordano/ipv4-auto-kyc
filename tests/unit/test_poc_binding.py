@@ -104,3 +104,23 @@ def test_token_id_must_match_the_presented_id():
     intent = _intent(_event(token_id="tok-OTHER"), _token_row(), _snapshot())
     assert intent.status is CheckStatus.FAIL
     assert ReasonCode.POC_TOKEN_INVALID.value in intent.reason_codes
+
+
+def test_dropping_a_bound_resource_dimension_fails():
+    # audit round 1, finding 1: a token minted bound to BOTH an org and a
+    # resource must not pass when the resource is dropped on re-submission —
+    # that leaves it proving only the org, a DIFFERENT identity than minted.
+    row = _token_row(org_handle="ORG-ACME-1", resource="192.0.2.0/24")
+    snap = _snapshot(org_handle="ORG-ACME-1")  # resource omitted from the claim
+    intent = _intent(_event(), row, snap)
+    assert intent.status is CheckStatus.FAIL
+    assert ReasonCode.POC_TOKEN_BINDING_MISMATCH.value in intent.reason_codes
+
+
+def test_adding_a_resource_not_minted_for_fails():
+    # the mirror: a token minted for an org only cannot prove org + a resource
+    row = _token_row(org_handle="ORG-ACME-1", resource=None)
+    snap = _snapshot(org_handle="ORG-ACME-1", resource="192.0.2.0/24")
+    intent = _intent(_event(), row, snap)
+    assert intent.status is CheckStatus.FAIL
+    assert ReasonCode.POC_TOKEN_BINDING_MISMATCH.value in intent.reason_codes

@@ -15,8 +15,10 @@ five regional internet registries (ARIN, RIPE, APNIC, LACNIC, AFRINIC),
 screens the broker blocklist, scores the evidence, and POSTs the verdict to a
 webhook you host.
 
-The tool never talks to end users and never mutates the platform. It answers;
-the platform acts.
+The tool never drives the platform's UI and never changes platform state — it
+scores and answers, the platform acts. Its one piece of direct outbound contact
+is the POC verification email, sent to the registry-listed address (§4, and
+`PLATFORM_INTEGRATION.md` §5).
 
 ## 2. What it does
 
@@ -140,10 +142,20 @@ edited on the server.
 
 ## 6. Staging plan
 
-Staging runs with **automation on** (`KYC_ENFORCE_POSITIVE_DECISIONS=true`) —
-access is limited to our own tests, so we rehearse the real end state.
-Production launches with it off: the tool investigates, the review team
-confirms, and the flag flips per environment once staging has proven out.
+Staging runs with **automation on** (`KYC_ENFORCE_POSITIVE_DECISIONS=true`) to
+rehearse the real end state. This is safe **only** because staging is closed —
+reachable by our own tests, never by untrusted callers. It is a rehearsal, not
+the production go-live: the M2 gate (real-adapter end-to-end + hardened signing
++ platform cutover) still governs turning automation on in **production**, which
+launches with it off — the tool investigates, the review team confirms, and the
+flag flips per environment once staging has proven out.
+
+> **Keep staging closed until PR 5 lands.** Request signing is currently v1
+> (body + timestamp), which does not bind the URL path — a signed event captured
+> within the 5-minute window could be replayed to a different case. Harmless
+> behind a closed staging perimeter; with automation on it must not face
+> untrusted input. PR 5's canonical signing (path-bound) closes this, after
+> which staging can widen safely.
 
 Checklist:
 

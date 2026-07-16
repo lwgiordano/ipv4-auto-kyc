@@ -75,12 +75,15 @@ def poc_token_intent(event_payload: dict, extras: dict, case_snapshot: dict) -> 
     if expired_at is not None and expired_at <= datetime.now(UTC):
         return _fail(ReasonCode.POC_TOKEN_EXPIRED)
 
-    # the token must have been minted for the CURRENT identity
+    # the token must have been minted for the CURRENT identity — the COMPLETE
+    # (rir, poc, org, resource) tuple, compared exactly. A blank dimension must
+    # match a blank one: dropping the resource a token was minted for (leaving
+    # only an unassociated org) is an identity change, not a free pass (D7).
     bound = (
         canon_id(match.get("poc_handle")) == cur_poc
         and _lc(match.get("rir")) == cur_rir
-        and (not cur_org or canon_id(match.get("org_handle")) == cur_org)
-        and (not cur_resource or _lc(match.get("resource")) == cur_resource)
+        and canon_id(match.get("org_handle")) == cur_org
+        and _lc(match.get("resource")) == cur_resource
     )
     if not bound:
         return _fail(ReasonCode.POC_TOKEN_BINDING_MISMATCH)

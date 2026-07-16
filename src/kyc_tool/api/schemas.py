@@ -70,8 +70,10 @@ class PocTokenVerifiedPayload(BaseModel):
     model_config = ConfigDict(extra="allow")
     token_id: str
     verified_at: datetime
-    # TODO(integration) AUDIT:C2 — platform forwards the raw token for hash check
-    token: str | None = None
+    # AUDIT:C2 — the platform echoes the raw token from the verification email.
+    # Required: a token-less verification is rejected at ingestion (422), matching
+    # the documented contract, not queued and later routed to review.
+    token: str
 
 
 class DocumentUploadedPayload(BaseModel):
@@ -155,3 +157,8 @@ class DecisionCallback(BaseModel):
     # cutover flag (callback_include_event_sequence) is on; optional here so the
     # authoritative model preserves it on validate instead of dropping it.
     event_sequence: int | None = None
+    # Present while the temporary enforcement hold is active: a positive decision
+    # downgraded to manual review carries the computed decision here. Modeled so
+    # the authoritative body preserves it on validate instead of silently
+    # dropping it (platform behavior depends on it).
+    enforcement_held: dict | None = None
