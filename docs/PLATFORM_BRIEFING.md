@@ -47,9 +47,13 @@ the policy file both the tool and its tests read):
 
 Verdicts: `approve`, `approve_buy_locked` (account OK, purchasing held until
 ORG-ID verifies — this is how "ORG-ID optional at registration" works),
-`manual_review_insufficient`, `reject` (blocked broker). Every non-passing
-check carries a stable reason code saying what's missing or wrong — that's
-what the review team acts on.
+`manual_review_insufficient`, `reject`. Every non-passing check carries a
+stable reason code saying what's missing or wrong — that's what the review
+team acts on.
+
+Only a broker-blocklist match auto-rejects; everything else that falls short
+goes to manual review, so the review queue carries the volume, not rejections.
+Sanctions screening happens on the platform before the tool is ever called.
 
 **Failure behavior:** if a registry is down, the run completes as *partial* —
 existing evidence stands, nothing is guessed, and the next event re-checks.
@@ -74,6 +78,11 @@ An outage can delay a better verdict; it can never produce a wrong one.
 Every event gets its own run and its own webhook. Deliveries retry until you
 acknowledge with a 2xx, so dedupe on `(case_id, run_id)`.
 
+Evidence is optional at every step — the tool scores what exists. When a user
+later adds or changes something that matters (ORG-ID, a document, company
+details), the platform re-sends the matching event and verification re-runs
+automatically. The full trigger table is `PLATFORM_INTEGRATION.md` §3.
+
 ## 4. What your team builds
 
 1. **The decision webhook** — one HTTPS endpoint. Verify the signature,
@@ -84,7 +93,12 @@ acknowledge with a 2xx, so dedupe on `(case_id, run_id)`.
    recovery is always re-submitting the POC. (§5.)
 3. **Admin views for held cases** — the review team works in the platform
    admin, so surface each case's decision, score, checks, and reason codes
-   (from the webhook body, or `GET /v1/cases/{id}`). (§7.)
+   (from the webhook body, or `GET /v1/cases/{id}`). Keep score and reason
+   codes admin-only; users see their status and the next useful step. (§7.)
+4. **Status notifications and review assignment** — user emails per status,
+   admin alerts, and assigning held cases to reviewers are platform features
+   keyed off the webhook result. Suggested result-to-action mapping:
+   `PLATFORM_INTEGRATION.md` §4.
 
 ## 5. Answers to the open questions
 
@@ -192,8 +206,9 @@ print(r.status_code, r.json())
 1. Staging callback URL (production's later).
 2. A secure channel to exchange the shared secret.
 3. AWS access for whoever on your side deploys.
-4. Confirmation of the document path in §5 (platform extracts) or a request
-   for tool-side OCR instead.
+4. ~~Confirmation of the document path~~ — answered on the kickoff call:
+   platform ingests and extracts; exact field spec in
+   `PLATFORM_INTEGRATION.md` §6.
 5. Will you consume the optional `event_sequence` ordering field?
 
 ## 9. Doc map

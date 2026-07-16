@@ -105,6 +105,28 @@ Retry on network failure with the **same** key and **same bytes**; you'll get
 Unknown extra payload fields are accepted and preserved. Send events in the
 order they happen; each triggers its own run and its own decision callback.
 
+### When to send each event
+
+Evidence is optional at every step — the tool scores whatever exists. The
+platform's whole job is: when verification-relevant information is added **or
+changed**, send the matching event. The tool re-runs and sends a fresh verdict;
+there is no separate "retry" or "re-verify" call.
+
+| Moment on the platform | Send |
+|---|---|
+| Registration submitted | `kyb.run_requested` with everything collected |
+| User verifies their email | `email.verified` |
+| User adds or changes an ORG-ID | `org_id.submitted` |
+| User adds or changes a POC claim | `poc.submitted` |
+| User completes the emailed-code page | `poc.token_verified` |
+| Document uploaded or replaced | `document.uploaded` |
+| Company details edited (name, address, registration number) | `kyb.run_requested` again, with the updated data |
+| Admin approves manually | `reviewer.manual_approve` |
+| Fresh verdict wanted, nothing new | `recalculate.requested` |
+
+Changing identity details (ORG-ID, POC) suspends previously earned proof until
+re-verified, so a score can drop after an edit (§5). Expected, not a bug.
+
 ## 4. The decision webhook (you build this)
 
 Expose HTTPS `POST {your_base_url}/kyc/decision`. We sign it per §2 with the
@@ -150,6 +172,32 @@ Body:
   ordinal of the triggering event) can be enabled once you confirm you'll use
   it.
 
+### What to do with each result
+
+Notifications, reviewer assignment, and user-facing screens are platform
+features; the tool supplies the statuses. Suggested mapping:
+
+| Result | Suggested platform handling |
+|---|---|
+| `approve` | activate the account; notify the user |
+| `approve_buy_locked` | activate; notify the user with the ORG-ID prompt |
+| `manual_review_insufficient` **with** `enforcement_held` | "ready to confirm" queue — the tool computed a positive; an admin confirms (MVP only) |
+| `manual_review_insufficient`, no marker | manual-review queue; assign a reviewer; notify admins |
+| `reject` | admin notification; user handling per ops policy |
+
+Two boundaries that shape this: only a broker-blocklist match ever auto-rejects
+(everything else that falls short goes to review, so expect the review queue,
+not rejections, to carry the volume), and sanctions screening happens on the
+platform **before** the tool is called — a sanctioned registrant never reaches
+it.
+
+**Display guidance.** Per case you have: decision, buy state, score, the five
+gate booleans, and per-check status with reason codes. Show users the status
+and the next useful step (verify your email, add your ORG-ID). Keep score,
+gates, and reason codes in admin views — publishing exactly why checks fail
+makes them easier to game. Wording is yours; the reason codes are stable
+strings safe to key copy on.
+
 ## 5. POC verification page (you build this)
 
 Flow for proving control of IP resources:
@@ -177,16 +225,30 @@ Rules your page must respect:
   scores to drop after an ORG-ID/POC edit until re-verified
   (`org_id_revalidation_pending`, `poc_not_associated`). Not a bug.
 
-## 6. Documents (MVP path: you extract)
+## 6. Documents (decided: you extract)
 
-In the MVP the platform extracts document fields and the tool cross-checks
-them against registries.
+Settled on the kickoff call: uploads stay on the platform (your existing virus
+scanning and quarantine unchanged), the platform extracts the fields, and the
+tool cross-checks them against the registries. Documents are optional at
+registration — a case scores without them, and a later upload just re-runs
+verification (§3).
 
 1. Put a JSON object in the shared object store:
    `{"fields": {"name": "...", "address": "...", "number": "...", "jurisdiction": "..."}}`
-   (missing keys allowed; missing evidence routes to review rather than passing).
+
+   | Key | Meaning |
+   |---|---|
+   | `fields.name` | legal name exactly as printed on the document |
+   | `fields.address` | registered address as printed |
+   | `fields.number` | registration / company number as printed |
+   | `fields.jurisdiction` | issuing jurisdiction, e.g. `GB` |
+
+   Each key is individually optional; anything missing routes toward review,
+   never toward a pass. Extract what the document says, not what the user
+   typed — the tool's job is exactly to compare the two.
 2. Post `document.uploaded` with `object_ref` (storage key) and `doc_type`
-   (e.g. `registration_certificate`).
+   (`registration_certificate` for formation/registration documents; more
+   types can be added as needed).
 3. Keep the original upload on your side for audit.
 
 Add-later: the tool OCRs raw PDFs/images itself, once an OCR engine is chosen.
@@ -254,7 +316,8 @@ From the platform team:
 
 1. Callback base URLs (staging, production).
 2. Secret exchange procedure.
-3. Documents: platform-extracts (MVP path above) confirmed, or tool-side OCR?
+3. ~~Documents~~ — answered on the kickoff call: platform extracts (§6);
+   tool-side OCR stays a later option.
 4. Will you consume `event_sequence`?
 5. Confirm you'll host the POC page and echo back both `token` and `token_id`.
 6. ~~Where the tool runs~~ — answered: the platform team deploys and operates
