@@ -24,6 +24,43 @@ Never modify `KYC_Tool_Build_Package/` (normative spec, committed unmodified —
 `AGENTS.md`). Deviations are recorded in `AUDIT_FINDINGS.md`, decisions in
 `docs/architecture-decisions.md`; check both before flagging a "bug".
 
+## Audit loop (Claude ⇄ Codex, runs until convergence)
+
+Standing protocol layered on the claim/release rules. The wire is unchanged
+(this file + git); the loop mechanics:
+
+- **Trigger, Claude → Codex:** every Claude push produces a CI comment on
+  PR #1. The human starts a Codex round by pasting the standing prompt below
+  (or via a scheduled Codex task). Codex pulls and audits.
+- **Trigger, Codex → Claude:** Codex pushes its audit as a bus entry; the
+  push's CI comment wakes Claude's session automatically. Claude also
+  self-checks the bus hourly as a fallback (red CI posts no comment).
+- **Audit rounds:** Codex appends `AUDIT [CODEX] <date> — <commit range>` with
+  numbered, code-verified findings (P1/P2/P3, file:line, why real), or
+  `AUDIT-CLEAN [CODEX] <date> — <range>` when nothing survives verification.
+  Codex edits ONLY this file in an audit round.
+- **Fix rounds:** Claude verifies each finding against the code, then presents
+  the human a per-item plan and waits for approval. Approved items are fixed
+  under normal CLAIM/RELEASE; rejected items get a reasoned `REBUTTAL [CLAUDE]`
+  entry Codex reads next round.
+- **Convergence:** `AUDIT-CLEAN` for the current range closes the loop; it
+  reopens automatically when new code lands. Approval always sits between
+  audit and fix — findings never auto-apply.
+
+**Standing Codex prompt (paste per round, or schedule):**
+
+> You are the auditor in a two-agent loop on lwgiordano/ipv4-auto-kyc, branch
+> `claude/project-setup-verify-kpfgjs`. Pull the branch. Read `AGENT_BUS.md`.
+> Audit the commits between your last `AUDIT [CODEX]` entry (or your last
+> review if none) and the newest `RELEASE [CLAUDE]` entry: correctness,
+> security, and conformance to `AGENTS.md` / `AUDIT_FINDINGS.md` /
+> `.agents/ROADMAP.md`. Verify every finding against the actual code —
+> discard anything speculative. Append ONE Log entry (newest on top):
+> `AUDIT [CODEX] <date> — <range>` with numbered findings (P1/P2/P3,
+> file:line, why it's real and how to trigger it), or
+> `AUDIT-CLEAN [CODEX] <date> — <range>`. Commit as `bus: codex audit` and
+> push. Edit no other file.
+
 **Sync cadence (honest):** Claude pulls + reads the bus at the start of each
 working turn and pushes at the end of each unit of work — it is not a daemon,
 so it sees Codex's posts on its next turn. Codex pulls/pushes per the protocol
