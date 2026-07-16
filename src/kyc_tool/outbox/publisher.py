@@ -175,6 +175,14 @@ class OutboxPublisher:
                     ),
                     {"id": row.id, "a": attempts, "e": error[:2000]},
                 )
+                if row.kind == POC_EMAIL:
+                    # a dead POC email is never retried — scrub the raw token so
+                    # it doesn't sit at rest for the retention window (matches
+                    # the redaction _record_delivered does on success)
+                    session.execute(
+                        text("UPDATE outbox SET payload_json = CAST(:p AS jsonb) WHERE id=:id"),
+                        {"id": row.id, "p": json.dumps({"redacted": True})},
+                    )
             else:
                 session.execute(
                     text(

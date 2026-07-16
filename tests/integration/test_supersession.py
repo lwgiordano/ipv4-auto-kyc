@@ -148,3 +148,100 @@ def test_supersession_is_atomic_with_insert(engine, session_factory, policy, cas
     assert len(rows) == 1
     assert rows[0].status == "pass"
     assert rows[0].superseded_by_check_id is None
+
+
+# --- item 5: event-driven identity invalidation -------------------------------
+
+
+def _invalidate(session_factory, case_id, event_type, payload):
+    with uow(session_factory) as session:
+        checkstore.supersede_stale_identity_proof(
+            session, case_id=case_id, event_type=event_type, payload=payload, run_id=None
+        )
+
+
+def _live(session_factory, case_id):
+    with uow(session_factory) as session:
+        return {
+            c.check_type: (c.status, tuple(c.reason_codes)) for c in checkstore.live_checks(session, case_id)
+        }
+
+
+def test_org_change_invalidates_proof_independent_of_adapter(session_factory, policy, case_id):
+    # a verified ORG-ID and the POC associated to it
+    _apply(
+        session_factory,
+        policy,
+        case_id,
+        CheckIntent("org_id_match", CheckStatus.PASS, source="t", source_detail={"org_handle": "ORG-A"}),
+        CheckIntent(
+            "poc_verified",
+            CheckStatus.PASS,
+            source="t",
+            source_detail={"poc_handle": "JD-1", "org_handle": "ORG-A"},
+        ),
+    )
+    # a DIFFERENT ORG-ID is submitted; the revalidation adapter never runs (no new
+    # org_id_match intent) — the stale proofs must lose PASS anyway (fail-closed)
+    _invalidate(session_factory, case_id, "org_id.submitted", {"rir": "arin", "org_handle": "ORG-B"})
+    live = _live(session_factory, case_id)
+    assert live["org_id_match"][0] == "needs_review"
+    assert "org_id_revalidation_pending" in live["org_id_match"][1]
+    assert live["poc_verified"][0] == "needs_review"
+    assert "poc_not_associated" in live["poc_verified"][1]
+
+
+def test_same_org_resubmission_is_a_noop(session_factory, policy, case_id):
+    _apply(
+        session_factory,
+        policy,
+        case_id,
+        CheckIntent("org_id_match", CheckStatus.PASS, source="t", source_detail={"org_handle": "ORG-A"}),
+        CheckIntent(
+            "poc_verified",
+            CheckStatus.PASS,
+            source="t",
+            source_detail={"poc_handle": "JD-1", "org_handle": "ORG-A"},
+        ),
+    )
+    # canonical-equal handle ("org-a" vs "ORG-A") is NOT an identity change
+    _invalidate(session_factory, case_id, "org_id.submitted", {"rir": "arin", "org_handle": "org-a"})
+    live = _live(session_factory, case_id)
+    assert live["org_id_match"][0] == "pass"
+    assert live["poc_verified"][0] == "pass"
+
+
+def test_resource_bound_poc_survives_org_change(session_factory, policy, case_id):
+    # a POC that vouched for a RESOURCE (no org recorded) is not tied to the
+    # ORG-ID, so an ORG-ID change must leave it live
+    _apply(
+        session_factory,
+        policy,
+        case_id,
+        CheckIntent(
+            "poc_verified",
+            CheckStatus.PASS,
+            source="t",
+            source_detail={"poc_handle": "JD-1", "resource": "192.0.2.0/24"},
+        ),
+    )
+    _invalidate(session_factory, case_id, "org_id.submitted", {"rir": "arin", "org_handle": "ORG-B"})
+    assert _live(session_factory, case_id)["poc_verified"][0] == "pass"
+
+
+def test_poc_handle_change_supersedes_prior_poc(session_factory, policy, case_id):
+    _apply(
+        session_factory,
+        policy,
+        case_id,
+        CheckIntent(
+            "poc_verified",
+            CheckStatus.PASS,
+            source="t",
+            source_detail={"poc_handle": "JD-1", "org_handle": "ORG-A"},
+        ),
+    )
+    _invalidate(session_factory, case_id, "poc.submitted", {"rir": "arin", "poc_handle": "XX-9"})
+    live = _live(session_factory, case_id)
+    assert live["poc_verified"][0] == "needs_review"
+    assert "poc_not_associated" in live["poc_verified"][1]

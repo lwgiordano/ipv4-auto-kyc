@@ -79,6 +79,9 @@ class RirPocAdapter:
             "poc_handle": poc["poc_handle"],
             "rir": poc.get("rir"),
             "org_handle": submitted_org,
+            # the identity the minted token is bound to (validator re-checks these
+            # against the current snapshot, so a later POC change invalidates it)
+            "resource": submitted_resource or None,
             "found": bool(record.get("found")),
             "associated": associated,
             "association_target": {

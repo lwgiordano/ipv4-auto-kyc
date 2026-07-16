@@ -210,29 +210,50 @@ def test_website_reviewer_verdict_maps_to_check():
 # --- poc token ------------------------------------------------------------------
 
 
-def _token_row(token: str, *, expired: bool = False) -> dict:
+def _token_row(
+    token: str,
+    *,
+    expired: bool = False,
+    consumed: bool = False,
+    poc_handle: str = "JD123-ARIN",
+    rir: str | None = "arin",
+    org_handle: str | None = "ORG-ACME-1",
+    resource: str | None = None,
+) -> dict:
+    # mirrors _validation_extras' poc_tokens query (id + binding + single-use)
     return {
         "id": "tok-1",
         "token_hash": hash_token(token),
         "expired_at": datetime.now(UTC) + timedelta(hours=-1 if expired else 1),
         "verified_at": None,
+        "consumed_at": datetime.now(UTC) if consumed else None,
+        "poc_handle": poc_handle,
+        "rir": rir,
+        "org_handle": org_handle,
+        "resource": resource,
     }
 
 
-SNAPSHOT_POC = {"poc": {"poc_handle": "JD123-ARIN", "org_handle": "ORG-ACME-1"}}
+def _verify_event(token: str, *, token_id: str = "tok-1") -> dict:
+    # ingestion replaces the raw token with its digest before validation
+    return {"token_id": token_id, "token_digest": hash_token(token)}
+
+
+SNAPSHOT_POC = {"poc": {"poc_handle": "JD123-ARIN", "rir": "arin", "org_handle": "ORG-ACME-1"}}
 
 
 def test_poc_valid_token_passes_with_association_detail():
     intent = poc_token_intent(
-        {"token": "secret-token"}, {"poc_tokens": [_token_row("secret-token")]}, SNAPSHOT_POC
+        _verify_event("secret-token"), {"poc_tokens": [_token_row("secret-token")]}, SNAPSHOT_POC
     )
     assert intent.status is CheckStatus.PASS
     assert intent.source_detail["org_handle"] == "ORG-ACME-1"
 
 
 def test_poc_wrong_token_fails():
+    # same token_id, different digest → no row matches → invalid
     intent = poc_token_intent(
-        {"token": "wrong"}, {"poc_tokens": [_token_row("secret-token")]}, SNAPSHOT_POC
+        _verify_event("wrong"), {"poc_tokens": [_token_row("secret-token")]}, SNAPSHOT_POC
     )
     assert intent.status is CheckStatus.FAIL
     assert ReasonCode.POC_TOKEN_INVALID.value in intent.reason_codes
@@ -240,14 +261,15 @@ def test_poc_wrong_token_fails():
 
 def test_poc_expired_token_fails():
     intent = poc_token_intent(
-        {"token": "secret-token"},
+        _verify_event("secret-token"),
         {"poc_tokens": [_token_row("secret-token", expired=True)]},
         SNAPSHOT_POC,
     )
     assert ReasonCode.POC_TOKEN_EXPIRED.value in intent.reason_codes
 
 
-def test_poc_missing_raw_token_needs_review():
+def test_poc_missing_token_digest_needs_review():
+    # ingestion never supplied a digest (platform hasn't forwarded the token)
     intent = poc_token_intent({"token_id": "tok-1"}, {"poc_tokens": []}, SNAPSHOT_POC)
     assert intent.status is CheckStatus.NEEDS_REVIEW
 
@@ -255,9 +277,9 @@ def test_poc_missing_raw_token_needs_review():
 def test_poc_without_association_target_needs_review():
     # PR 3 fail-closed: a verified token with no ORG-ID/resource to vouch for
     # can't award control proof — a human decides
-    snap = {"poc": {"poc_handle": "JD123-ARIN"}}  # no org_handle, no resource
+    snap = {"poc": {"poc_handle": "JD123-ARIN", "rir": "arin"}}  # no org_handle, no resource
     intent = poc_token_intent(
-        {"token": "secret-token"}, {"poc_tokens": [_token_row("secret-token")]}, snap
+        _verify_event("secret-token"), {"poc_tokens": [_token_row("secret-token")]}, snap
     )
     assert intent.status is CheckStatus.NEEDS_REVIEW
     assert ReasonCode.POC_NO_ASSOCIATION_TARGET.value in intent.reason_codes

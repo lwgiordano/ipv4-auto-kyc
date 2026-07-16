@@ -334,6 +334,17 @@ class Pipeline:
                 intents=len(intents),
             )
 
+            # identity invalidation (item 5): stale identity-bound proof is
+            # superseded on an ORG-ID/POC change BEFORE new checks are written,
+            # independent of whether the revalidation adapter succeeded
+            checkstore.supersede_stale_identity_proof(
+                session,
+                case_id=case.id,
+                event_type=event.event_type,
+                payload=event.payload_json or {},
+                run_id=run_id,
+            )
+
             # WRITE_CHECKS (logical stage) — includes the ORG-ID→POC cascade
             checkstore.apply_check_intents(
                 session,
@@ -416,7 +427,8 @@ class Pipeline:
         if event.event_type == "poc.token_verified":
             rows = session.execute(
                 text(
-                    "SELECT id, token_hash, expired_at, verified_at FROM poc_tokens "
+                    "SELECT id, token_hash, expired_at, verified_at, consumed_at, "
+                    "rir, org_handle, resource, poc_handle FROM poc_tokens "
                     "WHERE case_id=:c ORDER BY sent_at DESC"
                 ),
                 {"c": case.id},

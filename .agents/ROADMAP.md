@@ -5,7 +5,8 @@ roadmap, Fable's amendment, and Codex's review (all nine changes accepted). Ever
 decision below is locked. Migration numbers are illustrative — **rebase
 `down_revision` to the live Alembic head at merge** (see §C)._
 
-Status: **PR 1 + PR 2 shipped, both CI-green** (`c37c052`, `7a19a9f`). PR 3 next.
+Status: **PR 1–4 shipped** (`c37c052`, `7a19a9f`, `4c91be6`; PR 4 this commit).
+Items 1–5 complete — but M2 stays a HARD STOP (see §D). PR 5a next.
 Auto-enforcement of positive decisions (M2) is a **hard stop** far downstream (§D).
 
 ---
@@ -158,13 +159,19 @@ Tightening validators creates stale PASSes → sweep in PR 6b. Tests rewrite
 `test_address_material_match_via_postcode` (PASS→FAIL); E2E ≥105-pt conflicting doc
 never approves.
 
-### PR 4 — Identity invalidation + POC token binding (item 5)
-Migration 009: `poc_tokens.{rir,org_handle,resource,consumed_at}`. Bind token to
+### PR 4 — Identity invalidation + POC token binding (item 5) — SHIPPED
+Migration 009: `poc_tokens.{rir,org_handle,resource,consumed_at}`. Token bound to
 **(case, rir, poc, org, resource, token_id, digest)** — handles collide across
-registries. Query by `token_id` (drop the case/hash index unless needed).
-Identity-invalidation in `_decide_txn` **independent of adapter success**. Scrub raw
-token → hash at ingestion; redact dead `poc_email` outbox rows. **Completes items
-1–5** but does NOT trigger M2 (see §D).
+registries; matched by `id + digest` (case-scoped, no extra index). The validator
+re-checks the binding against the **current** snapshot, so a POC/ORG change makes a
+stale token fail (binding mismatch) and `consumed_at` makes it single-use.
+Identity-invalidation (`supersede_stale_identity_proof`) runs in `_decide_txn`
+**before** `apply_check_intents` and **independent of adapter success** — a new
+ORG-ID/POC drops the stale `org_id_match`/`poc_verified` even with RDAP down. Raw
+token scrubbed → digest at ingestion (idempotency hash still from the original
+envelope); dead `poc_email` outbox rows redacted like delivered ones. Token_id is
+carried in the verification email for the platform to echo back (closes AUDIT:C2).
+**Completes items 1–5** but does NOT trigger M2 (see §D).
 
 ### PR 5a — HMAC v2 + per-case idempotency (item 6)
 Migration 010 (D3). Canonical signed value (versioned):

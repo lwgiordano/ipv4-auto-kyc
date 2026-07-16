@@ -113,12 +113,19 @@ documented choice · 🔵 hygiene/wording.
   `case_id`. Whether the platform will send a registration-time event is an open
   question for the platform team.
 
-### 🟡 C2 — POC token round-trip path unspecified
+### 🟡 C2 — POC token round-trip path unspecified — RESOLVED (PR 4)
 - The tool stores `token_hash`; the `poc.token_verified` payload carries "token id".
-  Nothing says who hosts the confirmation link or how the raw token is validated.
+  Nothing said who hosts the confirmation link or how the raw token is validated.
 - **v1 behavior**: token emails link to the **platform**; the platform posts
   `poc.token_verified` including the raw token; the tool validates hash + expiry.
   The email sender and link format sit behind interfaces.
+- **PR 4 hardening**: the verification email now carries the minted token's id as a
+  "Verification reference"; the platform echoes it back as `token_id`, so the tool
+  matches the exact minted row by **`id` + `digest`** (both required). The raw token
+  is scrubbed to its digest at **ingestion** (`events.ingest._scrub_secrets`) — the
+  events table never stores it — and the idempotency `payload_hash` is taken from the
+  original envelope, so replay/409 detection is unaffected. See D7 for the binding +
+  single-use rules the validator then enforces.
 
 ### 🟡 C3 — Manual-approve callback semantics
 - The decision enum has exactly four values; none represents manual approval, and the
@@ -166,3 +173,17 @@ documented choice · 🔵 hygiene/wording.
   target. Gate 5's trigger set is centralized in
   `scoring.HARD_CONFLICT_REASON_CODES` (explicit allow-list), and a document
   contradicting the registry stamps `hard_conflict` so it fails the gate.
+- **D7 — Identity-bound, single-use POC proof (remediation PR 4).** A POC token
+  now proves exactly one identity — `(case, token_id, digest, rir, poc_handle,
+  org/resource)` — and exactly once. The token is minted **bound** to the submitted
+  identity (`poc_tokens.{rir,org_handle,resource}`, migration 009) and the validator
+  re-checks that binding against the **current** run snapshot, so a POC/ORG change
+  makes a previously minted token fail (`poc_token_binding_mismatch`); a `consumed_at`
+  stamp set atomically with verification makes it single-use
+  (`poc_token_consumed`). Crucially, identity invalidation
+  (`checkstore.supersede_stale_identity_proof`) runs in the decide transaction
+  **before** new checks are written and **independent of whether the revalidation
+  adapter succeeded** — submitting a different ORG-ID/POC while RDAP is failing drops
+  the stale `org_id_match`/`poc_verified` (and their points) to `needs_review` rather
+  than leaving stale positives live. This closes the gap where identity-bound points
+  outlived the identity that earned them.

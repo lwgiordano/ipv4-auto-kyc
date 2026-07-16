@@ -187,10 +187,17 @@ class PocToken(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), index=True)
     poc_handle: Mapped[str] = mapped_column(Text)
+    # Identity binding (migration 009): a token proves exactly one
+    # (case, rir, poc_handle, org_handle/resource) — nullable for pre-009 tokens,
+    # which then fail the tightened validator (fail-closed).
+    rir: Mapped[str | None] = mapped_column(Text)
+    org_handle: Mapped[str | None] = mapped_column(Text)
+    resource: Mapped[str | None] = mapped_column(Text)
     rir_listed_email: Mapped[str] = mapped_column(Text)
     token_hash: Mapped[str] = mapped_column(Text)  # sha256; raw token never stored
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # single-use
     expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

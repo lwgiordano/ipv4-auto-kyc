@@ -1,8 +1,15 @@
 """POC token validator.
 
-Pass rule (03 §5): POC associated with the submitted ORG-ID/resource AND the
-token sent to the RIR-listed email is verified. Token records are fetched by
+Pass rule (03 §5): the POC is associated with the submitted ORG-ID/resource AND
+the token sent to the RIR-listed email is verified. Token records are fetched by
 orchestration and passed via extras (validators stay pure).
+
+Binding + single-use (remediation item 5): a token proves exactly one
+(case, token_id, digest, rir, poc_handle, ORG/resource) and exactly once. The
+raw token is replaced by its digest at ingestion, so this validator matches on
+the digest the event carried (`token_digest`) — it never sees or hashes a raw
+token. A token minted for a different POC/RIR/ORG/resource, or already consumed,
+can never pass.
 """
 
 import hashlib
@@ -20,11 +27,19 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _lc(value) -> str:
+    return (value or "").strip().lower()
+
+
+def _fail(reason: ReasonCode) -> CheckIntent:
+    return CheckIntent("poc_verified", CheckStatus.FAIL, reason_codes=(reason.value,), source=SOURCE)
+
+
 def poc_token_intent(event_payload: dict, extras: dict, case_snapshot: dict) -> CheckIntent:
-    raw_token = event_payload.get("token")
-    tokens = extras.get("poc_tokens", [])
-    if not raw_token:
-        # TODO(integration) AUDIT:C2 — the platform must forward the raw token
+    token_id = event_payload.get("token_id")
+    digest = event_payload.get("token_digest")  # ingestion replaced the raw token
+    if not digest:
+        # TODO(integration) AUDIT:C2 — the platform must forward the token
         return CheckIntent(
             "poc_verified",
             CheckStatus.NEEDS_REVIEW,
@@ -32,45 +47,50 @@ def poc_token_intent(event_payload: dict, extras: dict, case_snapshot: dict) -> 
             source=SOURCE,
         )
 
-    digest = hash_token(raw_token)
-    match = next((t for t in tokens if t.get("token_hash") == digest), None)
-    if match is None:
-        return CheckIntent(
-            "poc_verified",
-            CheckStatus.FAIL,
-            reason_codes=(ReasonCode.POC_TOKEN_INVALID.value,),
-            source=SOURCE,
-        )
-
-    expired_at = match.get("expired_at")
-    now = datetime.now(UTC)
-    if expired_at is not None and expired_at <= now:
-        return CheckIntent(
-            "poc_verified",
-            CheckStatus.FAIL,
-            reason_codes=(ReasonCode.POC_TOKEN_EXPIRED.value,),
-            source=SOURCE,
-        )
-
-    # fail-closed (remediation item 3): control proof requires an association
-    # TARGET — the ORG-ID or resource this POC is vouching for. A token alone,
-    # with nothing it is bound to, cannot award +25. (Full token↔identity
-    # binding lands with the poc_tokens migration in the next remediation PR.)
     poc = case_snapshot.get("poc") or {}
-    org_target = canon_id(poc.get("org_handle"))
-    resource_target = (poc.get("resource") or "").strip()
-    if not org_target and not resource_target:
+    cur_poc = canon_id(poc.get("poc_handle"))
+    cur_rir = _lc(poc.get("rir"))
+    cur_org = canon_id(poc.get("org_handle"))
+    cur_resource = _lc(poc.get("resource"))
+    if not cur_org and not cur_resource:
+        # nothing for the POC to vouch for (fail-closed, item 3)
         return CheckIntent(
             "poc_verified",
             CheckStatus.NEEDS_REVIEW,
             reason_codes=(ReasonCode.POC_NO_ASSOCIATION_TARGET.value,),
             source=SOURCE,
         )
+
+    tokens = extras.get("poc_tokens", [])
+    match = next(
+        (t for t in tokens if str(t.get("id")) == str(token_id) and t.get("token_hash") == digest),
+        None,
+    )
+    if match is None:
+        return _fail(ReasonCode.POC_TOKEN_INVALID)
+    if match.get("consumed_at") is not None or match.get("verified_at") is not None:
+        return _fail(ReasonCode.POC_TOKEN_CONSUMED)  # single-use
+
+    expired_at = match.get("expired_at")
+    if expired_at is not None and expired_at <= datetime.now(UTC):
+        return _fail(ReasonCode.POC_TOKEN_EXPIRED)
+
+    # the token must have been minted for the CURRENT identity
+    bound = (
+        canon_id(match.get("poc_handle")) == cur_poc
+        and _lc(match.get("rir")) == cur_rir
+        and (not cur_org or canon_id(match.get("org_handle")) == cur_org)
+        and (not cur_resource or _lc(match.get("resource")) == cur_resource)
+    )
+    if not bound:
+        return _fail(ReasonCode.POC_TOKEN_BINDING_MISMATCH)
+
     return CheckIntent(
         "poc_verified",
         CheckStatus.PASS,
         source=SOURCE,
         source_detail={
+            "rir": poc.get("rir"),
             "org_handle": poc.get("org_handle"),
             "poc_handle": poc.get("poc_handle"),
             "resource": poc.get("resource"),

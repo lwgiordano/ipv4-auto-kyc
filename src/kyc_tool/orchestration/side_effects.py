@@ -103,6 +103,12 @@ class SideEffects:
             token = PocToken(
                 case_id=case.id,
                 poc_handle=normalized["poc_handle"],
+                # bind the token to the identity it proves (item 5) — the
+                # validator re-checks these against the current snapshot, so a POC
+                # re-submission with a different org/resource invalidates it
+                rir=normalized.get("rir"),
+                org_handle=normalized.get("org_handle"),
+                resource=normalized.get("resource"),
                 rir_listed_email=normalized["rir_listed_email"],
                 token_hash=hash_token(raw_token),
                 # expired_at is the validity deadline; the validator treats
@@ -119,7 +125,10 @@ class SideEffects:
                 body=(
                     f"A verification was requested for POC {normalized['poc_handle']} "
                     f"({(normalized.get('rir') or '').upper()}).\n\n"
-                    f"Your verification token: {raw_token}\n\n"
+                    f"Your verification token: {raw_token}\n"
+                    # AUDIT:C2 — the platform echoes this reference back as token_id
+                    # on poc.token_verified so the tool matches the exact minted row
+                    f"Verification reference: {token.id}\n\n"
                     f"This token expires in {self.settings.poc_token_ttl_hours} hours. "
                     "Confirm on the IPv4.Global platform."
                 ),
@@ -192,15 +201,21 @@ class SideEffects:
                 for i in intents
             )
             if verified:
-                raw_token = (event.payload_json or {}).get("token", "")
+                payload = event.payload_json or {}
+                # ingestion replaced the raw token with its digest; consume the
+                # exact token the validator matched (id + digest) and guard on
+                # consumed_at so a replay of the same event can never re-verify it
                 session.execute(
                     text(
                         """
-                        UPDATE poc_tokens SET verified_at = now()
-                        WHERE case_id = :case_id AND token_hash = :digest
-                          AND verified_at IS NULL
+                        UPDATE poc_tokens SET verified_at = now(), consumed_at = now()
+                        WHERE case_id = :case_id AND id = :token_id
+                          AND token_hash = :digest AND consumed_at IS NULL
                         """
                     ),
-                    {"case_id": case.id, "digest": hash_token(raw_token)},
+                    {
+                        "case_id": case.id,
+                        "token_id": payload.get("token_id"),
+                        "digest": payload.get("token_digest", ""),
+                    },
                 )
-

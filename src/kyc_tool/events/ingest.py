@@ -31,6 +31,7 @@ from kyc_tool.domain.decision import buy_enablement_for
 from kyc_tool.domain.models import BuyStatus, CaseStatus
 from kyc_tool.policy.loader import PolicyBundle
 from kyc_tool.queue import jobs
+from kyc_tool.validators.poc import hash_token
 
 MANUAL_APPROVE = "reviewer.manual_approve"
 
@@ -45,6 +46,22 @@ def payload_hash(envelope: dict) -> str:
     return hashlib.sha256(
         json.dumps(envelope, sort_keys=True, default=str).encode()
     ).hexdigest()
+
+
+def _scrub_secrets(event_type: str, payload: dict) -> dict:
+    """Replace at-rest secrets with a digest BEFORE the event is persisted.
+
+    The idempotency digest is taken from the ORIGINAL envelope (see
+    ingest_event), so scrubbing never affects replay/409 detection. A
+    poc.token_verified carries a raw single-use token only in transit; the
+    events table keeps its digest — what the validator matches on — never the
+    token itself (item 5).
+    """
+    if event_type == "poc.token_verified" and payload.get("token"):
+        scrubbed = dict(payload)
+        scrubbed["token_digest"] = hash_token(scrubbed.pop("token"))
+        return scrubbed
+    return payload
 
 
 def _apply_event_to_snapshot(case: Case, event_type: str, payload: dict) -> dict:
@@ -84,9 +101,9 @@ def ingest_event(
     idempotency_key: str,
     envelope: dict,
 ) -> IngestOutcome:
-    digest = payload_hash(envelope)
+    digest = payload_hash(envelope)  # from the ORIGINAL envelope — before scrubbing
     event_type = envelope["event_type"]
-    payload = envelope.get("payload") or {}
+    payload = _scrub_secrets(event_type, envelope.get("payload") or {})
     actor = envelope.get("actor") or {}
 
     with uow(session_factory) as session:

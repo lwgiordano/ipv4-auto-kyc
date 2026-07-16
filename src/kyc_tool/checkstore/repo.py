@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from kyc_tool.db.audit import audit
 from kyc_tool.db.tables import Check
 from kyc_tool.domain.models import CheckStatus, CheckView
+from kyc_tool.domain.reasons import ReasonCode
 from kyc_tool.validators.normalize import canon_id
 
 
@@ -143,6 +144,84 @@ def supersede_without_replacement(
     )
 
 
+def _live_check(session: Session, case_id: str, check_type: str) -> Check | None:
+    return session.execute(
+        select(Check).where(
+            Check.case_id == case_id,
+            Check.check_type == check_type,
+            Check.superseded_by_check_id.is_(None),
+        )
+    ).scalar_one_or_none()
+
+
+def _supersede_on_identity_change(
+    session: Session,
+    case_id: str,
+    check_type: str,
+    detail_key: str,
+    submitted: str,
+    run_id: str | None,
+    reason: str,
+) -> None:
+    live = _live_check(session, case_id, check_type)
+    if live is None:
+        return
+    recorded = canon_id((live.source_detail_json or {}).get(detail_key))
+    # supersede only when the live proof recorded a DIFFERENT non-blank identity
+    # than what was just submitted (a blank `recorded` — e.g. a resource-bound
+    # POC on an ORG-ID change — is left alone)
+    if submitted and recorded and recorded != submitted:
+        supersede_without_replacement(session, live, run_id=run_id, reason=reason)
+
+
+def supersede_stale_identity_proof(
+    session: Session,
+    *,
+    case_id: str,
+    event_type: str,
+    payload: dict,
+    run_id: str | None,
+) -> None:
+    """Item 5: an identity change invalidates identity-bound proof INDEPENDENT of
+    whether the revalidation adapter succeeds. Runs in the decide txn BEFORE the
+    validators write new checks, so submitting a different ORG-ID or POC while the
+    RIR lookup is failing does not leave the previous org_id_match / poc_verified
+    (and their points) live — a needs_review placeholder remains until the new
+    identity is proven."""
+    payload = payload or {}
+    if event_type == "org_id.submitted":
+        submitted_org = canon_id(payload.get("org_handle"))
+        _supersede_on_identity_change(
+            session,
+            case_id,
+            "org_id_match",
+            "org_handle",
+            submitted_org,
+            run_id,
+            ReasonCode.ORG_ID_REVALIDATION_PENDING.value,
+        )
+        _supersede_on_identity_change(
+            session,
+            case_id,
+            "poc_verified",
+            "org_handle",
+            submitted_org,
+            run_id,
+            ReasonCode.POC_NOT_ASSOCIATED.value,
+        )
+    elif event_type == "poc.submitted":
+        submitted_poc = canon_id(payload.get("poc_handle"))
+        _supersede_on_identity_change(
+            session,
+            case_id,
+            "poc_verified",
+            "poc_handle",
+            submitted_poc,
+            run_id,
+            ReasonCode.POC_NOT_ASSOCIATED.value,
+        )
+
+
 def apply_check_intents(
     session: Session,
     *,
@@ -188,7 +267,10 @@ def apply_check_intents(
                 Check.superseded_by_check_id.is_(None),
             )
         ).scalar_one_or_none()
-        if live_poc is not None:
+        # Only cascade a PASSING poc: a needs_review placeholder left by the
+        # event-driven identity invalidation (supersede_stale_identity_proof)
+        # must not be superseded again here (avoids a double supersession row).
+        if live_poc is not None and live_poc.status == CheckStatus.PASS.value:
             # canonicalize both handles: a case/format-only difference
             # ("org-acme-1" vs "ORG-ACME-1") must not supersede a valid POC.
             new_org = canon_id(new_handle)

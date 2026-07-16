@@ -46,6 +46,11 @@ class ReasonCode(StrEnum):
     POC_TOKEN_EXPIRED = "poc_token_expired"
     POC_TOKEN_INVALID = "poc_token_invalid"
     POC_NO_ASSOCIATION_TARGET = "poc_no_association_target"
+    POC_TOKEN_BINDING_MISMATCH = "poc_token_binding_mismatch"
+    POC_TOKEN_CONSUMED = "poc_token_consumed"
+
+    # identity revalidation (supersession placeholders)
+    ORG_ID_REVALIDATION_PENDING = "org_id_revalidation_pending"
 
     # document
     DOCUMENT_FIELDS_MISMATCH = "document_fields_mismatch"

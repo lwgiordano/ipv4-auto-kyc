@@ -34,6 +34,28 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-16 — PR 4 identity invalidation + POC token binding (this commit)
+Item 5 done and released. A POC token now proves exactly one identity —
+`(case, token_id, digest, rir, poc_handle, org/resource)` — and exactly once:
+migration 009 adds `poc_tokens.{rir,org_handle,resource,consumed_at}`; the token
+is minted bound to the submitted identity and the validator re-checks that binding
+against the *current* snapshot, so a POC/ORG change invalidates a stale token
+(binding mismatch) and a spent token can't reverify (`consumed_at`). Identity
+invalidation runs in `_decide_txn` **independent of adapter success**
+(`supersede_stale_identity_proof` before `apply_check_intents`), so submitting a
+different ORG-ID while RDAP is down drops the old `org_id_match`/`poc_verified`
+(and their points) to needs_review instead of leaving them live. The raw token is
+scrubbed to its digest at ingestion (idempotency hash still taken from the original
+envelope) and dead `poc_email` outbox rows are redacted like delivered ones. The
+verification email now carries the `token_id` as a reference the platform echoes
+back (closes AUDIT:C2). New: `tests/unit/test_poc_binding.py`,
+`tests/integration/test_identity_invalidation.py`, four `supersede_stale_identity_proof`
+cases in `test_supersession.py`; `test_phase2_adapters.py` round-trip tests updated
+to echo the real token_id. 122 offline unit green, ruff + import-linter clean;
+DB-backed golden/integration run in CI. ALSO touched beyond the original claim:
+`tests/integration/test_supersession.py`, `tests/integration/test_phase2_adapters.py`.
+ALL PR 4 files RELEASED — free to edit. turn: EITHER.
+
 ### CLAIM [CLAUDE] 2026-07-15 — PR 4 file set (identity invalidation + token binding)
 `alembic/versions/009_*` (new) · `src/kyc_tool/checkstore/repo.py` ·
 `src/kyc_tool/validators/poc.py` · `src/kyc_tool/adapters/rir_poc.py` ·

@@ -275,6 +275,7 @@ def test_poc_token_round_trip(client, engine, post_event, phase2_worker, publish
     email = email_sender.sent[0]
     assert email["to"] == "noc@acme.example"  # the RIR-LISTED address, never user-submitted
     token = re.search(r"token: (\S+)", email["body"]).group(1)
+    token_id = re.search(r"reference: (\S+)", email["body"]).group(1)  # AUDIT:C2 echo
 
     with engine.connect() as conn:
         row = conn.execute(
@@ -286,17 +287,18 @@ def test_poc_token_round_trip(client, engine, post_event, phase2_worker, publish
     post_event(
         "case-poc",
         "poc.token_verified",
-        {"token_id": "ignored", "verified_at": "2026-07-04T11:00:00Z", "token": token},
+        {"token_id": token_id, "verified_at": "2026-07-04T11:00:00Z", "token": token},
     )
     phase2_worker.run_until_idle()
 
     checks = _live_checks(client, "case-poc")
     assert checks["poc_verified"] == "pass"
     with engine.connect() as conn:
-        verified_at = conn.execute(
-            text("SELECT verified_at FROM poc_tokens WHERE case_id='case-poc'")
-        ).scalar_one()
-    assert verified_at is not None
+        verified = conn.execute(
+            text("SELECT verified_at, consumed_at FROM poc_tokens WHERE case_id='case-poc'")
+        ).one()
+    assert verified.verified_at is not None
+    assert verified.consumed_at is not None  # single-use stamp (item 5)
 
 
 def test_poc_resend_supersedes_old_token(
@@ -317,13 +319,15 @@ def test_poc_resend_supersedes_old_token(
 
     assert len(email_sender.sent) == 2
     old_token = re.search(r"token: (\S+)", email_sender.sent[0]["body"]).group(1)
+    old_id = re.search(r"reference: (\S+)", email_sender.sent[0]["body"]).group(1)
     new_token = re.search(r"token: (\S+)", email_sender.sent[1]["body"]).group(1)
+    new_id = re.search(r"reference: (\S+)", email_sender.sent[1]["body"]).group(1)
 
     # the OLD token was expired by the resend
     post_event(
         "case-poc2",
         "poc.token_verified",
-        {"token_id": "x", "verified_at": "2026-07-04T11:00:00Z", "token": old_token},
+        {"token_id": old_id, "verified_at": "2026-07-04T11:00:00Z", "token": old_token},
     )
     phase2_worker.run_until_idle()
     checks = _live_checks(client, "case-poc2")
@@ -332,7 +336,7 @@ def test_poc_resend_supersedes_old_token(
     post_event(
         "case-poc2",
         "poc.token_verified",
-        {"token_id": "y", "verified_at": "2026-07-04T11:05:00Z", "token": new_token},
+        {"token_id": new_id, "verified_at": "2026-07-04T11:05:00Z", "token": new_token},
         force_new_body=True,
     )
     phase2_worker.run_until_idle()
