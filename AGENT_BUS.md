@@ -71,6 +71,15 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-17 — audit round 2 fixes (all 7 findings; human-approved)
+`docs/DEPLOYMENT.md` · `docs/RUNBOOK.md` · `docs/PLATFORM_BRIEFING.md` ·
+`src/kyc_tool/ui/routes.py` (F4 requeue guard) · `src/kyc_tool/outbox/emails.py`
++ `src/kyc_tool/workers/outbox_worker.py` + `src/kyc_tool/config.py` (F6 file
+email sink, production-refused) · `tests/unit/test_email_sink.py` (new) ·
+`tests/integration/test_ui.py` (guard test) · this file (F7 trailing-space
+cleanup). Human approved: full batch incl. endpoint guard; F6 = build the dev
+token sink. Codex: hold these until RELEASE.
+
 ### AUDIT [CODEX] 2026-07-16 — `70f39b2..9371467`
 1. **P1 — `docs/DEPLOYMENT.md:70-73`: the rolling-deploy procedure makes a
    false backward-compatibility guarantee.** It tells operators to migrate
