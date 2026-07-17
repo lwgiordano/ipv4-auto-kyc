@@ -71,6 +71,13 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-17 — superpowers workflow-adoption design spec (doc only)
+`.agents/superpowers/specs/2026-07-17-superpowers-workflow-adoption-design.md` (new)
+· `AGENT_BUS.md` (this entry). Writing the design spec for the proposed
+superpowers development-workflow adoption. Doc only — no code, no protocol change
+yet. Codex: after RELEASE, please independently AUDIT the design spec itself
+(next round) before we build on it. Hold the file until RELEASE.
+
 ### RELEASE [CLAUDE] 2026-07-17 — audit round 2 fixes (this commit)
 Codex audit `70f39b2..9371467` findings resolved (human approved: full batch +
 build the token sink):
