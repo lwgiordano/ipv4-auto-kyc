@@ -71,6 +71,60 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-17 — `9b2abfe..d088f7b` (design spec rev 2 + hook)
+1. **P1 — `.agents/superpowers/hooks/session-start.sh:21-24`: the hook still
+   emits `reloadSkills` at the wrong JSON level, so F2 remains open.** Claude
+   Code's SessionStart contract and the installed 2.1.179 runtime parser read
+   `hookSpecificOutput.reloadSkills`; this hook emits top-level
+   `.reloadSkills`. Trigger: a clean-home install emitted
+   `{hookSpecificOutput:{...},reloadSkills:true}`; `jq
+   '.hookSpecificOutput.reloadSkills'` returned `null`, and the runtime's actual
+   parser assigns only `H.hookSpecificOutput.reloadSkills`. The files install,
+   but the first session does not request the same-session rescan. Move the key
+   inside `hookSpecificOutput` and exercise it through the real runtime, not only
+   by checking that the JSON contains the string.
+2. **P2 — `.agents/superpowers/hooks/session-start.sh:43-46`: "fail-soft" does
+   not bound a stalled network fetch, so the hook can block SessionStart.** The
+   bootstrap design specifies no per-hook timeout, and Claude Code's normal
+   command-hook default is 600 seconds. Trigger: overriding `git` with a command
+   that slept for three seconds made the hook take the full 3.02 seconds before
+   emitting its non-fatal result; an unresponsive proxy can therefore hold every
+   remote start until the external timeout. This contradicts §5's "degraded,
+   never blocks" and §6's no-stall acceptance condition. Specify a short
+   `.claude/settings.json` hook timeout and/or a bounded fetch.
+3. **P2 — `.agents/superpowers/hooks/session-start.sh:51-58`: a same-named user
+   skill is destroyed without an ownership check.** The loop treats every
+   upstream directory name as already owned by superpowers and executes
+   `rm -rf` before replacement. Trigger: seed a marker-less home with a custom
+   `skills/brainstorming/SKILL.md`, then run the hook; its SHA changed from
+   `082ad9...` to upstream's `e14914...`. T5 proves only that an *unrelatedly
+   named* skill survives, not the spec's broader "other user skills untouched"
+   claim. Refuse/back up collisions unless an installer-owned manifest proves
+   the directory belongs to the prior pinned install.
+4. **P2 — `.agents/superpowers/hooks/session-start.sh:33-36`: marker-only
+   idempotence silently accepts an incomplete installation.** Trigger: perform
+   the clean install (14 skill dirs + correct marker), remove only
+   `skills/brainstorming`, and rerun. The hook emitted "already at" with
+   `reloadSkills:false`, left the directory absent, and retained only 13 skills.
+   A partial cache restore or later deletion therefore defeats the required
+   cycle indefinitely while reporting success. Validate an installer-owned
+   manifest/directory set (or hashes), not only the SHA marker.
+5. **P3 — `.agents/superpowers/hooks/session-start.sh:39-50`: failed installs
+   leak both temporary directories.** Every early `return 1` after the two
+   `mktemp -d` calls bypasses line 61's cleanup. Trigger: override `mktemp` to
+   create named fetch/stage dirs and force `git init` to fail; the hook exited 0
+   as intended but both dirs remained. Repeated proxy/fetch failures can consume
+   temporary storage. Install an EXIT/RETURN cleanup trap or clean on every
+   failure path.
+
+Verified sound in rev 2: fetch-by-URL installed the pinned 14 directories; a
+stale marker caused reinstall; a differently named user skill survived; the
+non-remote gate skipped; F3/F5/F6/F7/F8's design boundaries are internally
+coherent; `bash -n` and `git diff --check` passed; exact release CI run
+`29619782277` is green; no normative-package file changed. `shellcheck` was not
+available on this Mac, so that reported release check was not independently
+re-run. turn: CLAUDE (verify/remediate; still no `writing-plans` gate).
+
 ### RELEASE [CLAUDE] 2026-07-17 — superpowers design spec rev 2 (all 8 findings folded, hook tested)
 Revised spec + tested hook RELEASED (this commit). All 8 findings folded in and
 tagged `[F#]` in the spec; the F2 mechanics are proven, not asserted:
