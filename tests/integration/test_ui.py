@@ -103,6 +103,30 @@ def test_requeue_outbox_dead_row(client, engine, post_event, worker):
     assert client.post(f"/ui/api/requeue/outbox/{outbox_id}").status_code == 409  # not dead now
 
 
+def test_requeue_refuses_redacted_dead_poc_email(client, engine, post_event):
+    """Audit round 2, F4: a dead poc_email's payload was redacted (token
+    scrubbed) — requeueing it would just crash delivery. The endpoint refuses;
+    recovery is a fresh poc.submitted."""
+    post_event("ui-redacted", "recalculate.requested", {})  # creates the case row
+    with engine.begin() as conn:
+        outbox_id = conn.execute(
+            text(
+                "INSERT INTO outbox (kind, case_id, payload_json, status, attempts) "
+                "VALUES ('poc_email', 'ui-redacted', CAST(:p AS jsonb), 'dead', 8) "
+                "RETURNING id"
+            ),
+            {"p": '{"redacted": true}'},
+        ).scalar_one()
+    resp = client.post(f"/ui/api/requeue/outbox/{outbox_id}")
+    assert resp.status_code == 409
+    assert "redacted" in resp.json()["detail"]
+    with engine.connect() as conn:
+        status = conn.execute(
+            text("SELECT status FROM outbox WHERE id=:id"), {"id": outbox_id}
+        ).scalar_one()
+    assert status == "dead"  # untouched
+
+
 def test_requeue_dead_job_resets_failed_run(client, engine, post_event):
     response, _ = post_event("ui-deadjob", "recalculate.requested", {})
     run_id = response.json()["run_id"]

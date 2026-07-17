@@ -169,8 +169,13 @@ Checklist:
    staging receiver), `KYC_OBJECT_STORE=s3` + `KYC_S3_BUCKET`,
    `KYC_ENFORCE_POSITIVE_DECISIONS=true`.
 5. Leave `KYC_ENVIRONMENT` at `development` for now: staging uses the built-in
-   stand-ins (documents as extracted JSON, verification emails written to
-   logs, registry lookups from recorded data). Live providers land later
+   stand-ins (documents as extracted JSON, registry lookups from recorded
+   data). For the POC flow, set `KYC_EMAIL_PROVIDER=file`: each verification
+   email is appended as a JSON line to a local sink file
+   (`.substrate/state/poc-emails.log` by default, `KYC_EMAIL_FILE_PATH` to
+   move it), so your tests can read the token and reference and complete the
+   round-trip. The sink writes raw tokens to disk — closed staging only;
+   production refuses this provider at boot. Live providers land later
    without changing your integration; production mode is for then.
 6. `alembic upgrade head`, start the processes, check `/readyz`.
 7. Smoke test: send a signed `kyb.run_requested`, watch the verdict arrive.
@@ -209,6 +214,9 @@ print(r.status_code, r.json())
   the stored response, no duplicate run. That's the retry safety to build on.
 - `GET /v1/cases/case-001` shows the live checks and reason codes after each
   event.
+- POC round-trip in staging: after `poc.submitted`, read the token and
+  "Verification reference" from the email sink file (§6 step 5), then POST
+  `poc.token_verified` with both.
 - The ops console (`/ui`, enable with `KYC_UI_ENABLED=true` in staging) shows
   cases, scores, gates, run states, and can compose signed test events from
   the browser.

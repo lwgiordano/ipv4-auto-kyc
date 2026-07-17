@@ -12,7 +12,11 @@ def build_publisher() -> OutboxPublisher:
         validate_for_production(settings)  # fail-closed on stub/unsafe config
     session_factory = make_session_factory(make_engine(settings.database_url))
     return OutboxPublisher(
-        session_factory, settings, email_sender=make_email_sender(settings.email_provider)
+        session_factory,
+        settings,
+        email_sender=make_email_sender(
+            settings.email_provider, file_path=settings.email_file_path
+        ),
     )
 
 

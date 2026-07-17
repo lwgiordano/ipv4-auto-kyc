@@ -71,8 +71,11 @@ class Settings(BaseSettings):
     # workers/outbox_worker.build_publisher (email); a non-stub value that is
     # not yet implemented fails loudly rather than silently using a stub.
     ocr_engine: str = STUB_OCR_ENGINE
-    email_provider: str = STUB_EMAIL_PROVIDER
+    email_provider: str = STUB_EMAIL_PROVIDER  # logging | file | (real: item 12)
     adapters_profile: str = STUB_ADAPTERS_PROFILE  # fixture | real
+    # Sink path for email_provider="file" (closed staging/dev only): each token
+    # email is appended as a JSON line so the POC round-trip is testable.
+    email_file_path: Path = REPO_ROOT / ".substrate" / "state" / "poc-emails.log"
 
     # Queue / workers
     worker_poll_seconds: float = 0.5
@@ -139,6 +142,8 @@ def production_config_violations(settings: Settings) -> list[str]:
         v.append(f"ocr_engine is the dev stub ({STUB_OCR_ENGINE!r})")
     if settings.email_provider == STUB_EMAIL_PROVIDER:
         v.append(f"email_provider is the dev stub ({STUB_EMAIL_PROVIDER!r})")
+    if settings.email_provider == "file":
+        v.append("email_provider is the staging file sink (writes raw tokens to disk)")
     if settings.adapters_profile == STUB_ADAPTERS_PROFILE:
         v.append(f"adapters_profile is the fixture stub ({STUB_ADAPTERS_PROFILE!r})")
 

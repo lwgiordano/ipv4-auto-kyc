@@ -68,27 +68,40 @@ boots the whole stack and prints the console URL.
 
 ### Dead-lettered job (`jobs.status = 'dead'`)
 The run is FAILED with the error recorded; the case is untouched (no partial
-writes — transitions are transactional). After fixing the cause:
+writes — transitions are transactional). After fixing the cause, **prefer the
+console requeue** (`POST /ui/api/requeue/job/{id}`, admin-authenticated) — it
+resets both the job and its FAILED run. The equivalent by hand:
 ```sql
-UPDATE jobs SET status='queued', attempts=0, run_after=now(), last_error=NULL WHERE id = :id;
-UPDATE runs SET state=(SELECT state FROM runs WHERE id=:run_id), error=NULL WHERE id = :run_id;
+UPDATE jobs SET status='queued', attempts=0, run_after=now(), locked_by=NULL,
+       lease_expires_at=NULL, last_error=NULL, updated_at=now() WHERE id = :id;
+UPDATE runs SET state='QUEUED', error=NULL, finished_at=NULL
+ WHERE id = :run_id AND state='FAILED';
 ```
-or simply have the platform POST `recalculate.requested` — a fresh run from
-current live checks is always safe.
+(The run reset matters: a requeued job whose run is still FAILED completes
+immediately without doing anything.) `recalculate.requested` also produces a
+fresh decision from current live checks, but it does **not** re-run the broker
+screen — after a blocklist update, re-send the original evidence event instead.
 
 ### Dead outbox row (callback undeliverable)
 The run sits in PUBLISH_DECISION (visible, correct). Confirm the platform
-endpoint + HMAC secret, then:
+endpoint + HMAC secret, then requeue via the console
+(`POST /ui/api/requeue/outbox/{id}`) or:
 ```sql
 UPDATE outbox SET status='pending', attempts=0, next_attempt_at=now() WHERE id = :id;
 ```
-Redelivery is safe — the platform dedupes on (case_id, run_id).
+Redelivery of a decision callback is safe — the platform dedupes on
+(case_id, run_id). **A dead `poc_email` row is the exception:** its payload
+was redacted when it died (the raw token is never retained), so there is
+nothing deliverable and the console endpoint refuses it. Recovery is a fresh
+`poc.submitted`, which cancels old tokens and sends a new email.
 
 ### RIR / registry outage
 Runs complete as `partial` (upstream_error recorded, prior checks stay live,
 no failing check is invented — G12 semantics). No action needed; when the
-upstream recovers, re-drive affected cases with `recalculate.requested` or
-the original evidence event (idempotency keys must be fresh).
+upstream recovers, re-drive affected cases by re-sending the original
+evidence event (fresh idempotency keys). `recalculate.requested` re-decides
+without re-fetching and without the broker screen — use it only when no new
+evidence or blocklist change is in play.
 
 ### Review queue growing
 `GET /v1/review-tasks?status=open`. Website tasks award +10 on pass;

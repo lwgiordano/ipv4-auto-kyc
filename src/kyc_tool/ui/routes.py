@@ -437,13 +437,24 @@ def requeue_outbox(outbox_id: int, request: Request) -> dict:
     require_admin(request.app.state.settings, request.headers)
     with uow(request.app.state.session_factory) as session:
         row = session.execute(
-            text(
-                "UPDATE outbox SET status='pending', attempts=0, next_attempt_at=now(), "
-                "last_error=NULL WHERE id=:id AND status='dead' RETURNING case_id, run_id"
-            ),
+            text("SELECT kind, status, case_id, run_id, payload_json FROM outbox WHERE id=:id"),
             {"id": outbox_id},
         ).first()
-        if row is None:
+        if row is None or row.status != "dead":
             raise HTTPException(status_code=409, detail="outbox row not found or not dead")
+        if row.kind == "poc_email" and (row.payload_json or {}).get("redacted"):
+            # the raw token was scrubbed when this row died — there is nothing
+            # deliverable left. Recovery is a fresh poc.submitted (new token).
+            raise HTTPException(
+                status_code=409,
+                detail="dead poc_email is redacted (token scrubbed); re-submit the POC instead",
+            )
+        session.execute(
+            text(
+                "UPDATE outbox SET status='pending', attempts=0, next_attempt_at=now(), "
+                "last_error=NULL WHERE id=:id"
+            ),
+            {"id": outbox_id},
+        )
         audit(session, "outbox.requeued", case_id=row.case_id, run_id=row.run_id, outbox_id=outbox_id)
     return {"requeued": outbox_id}

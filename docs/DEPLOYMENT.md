@@ -28,7 +28,7 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 |---|---|---|
 | `KYC_ENVIRONMENT` | `development` (until real providers land) | `production` |
 | `KYC_ENFORCE_POSITIVE_DECISIONS` | `true` — rehearse full automation | `false` at launch; flipped after staging proves out |
-| Providers | built-in stand-ins (fixture registries, emails to logs) | real OCR/email/registry providers, required |
+| Providers | built-in stand-ins (fixture registries, email file sink) | real OCR/email/registry providers, required |
 | Secret | staging secret | separate production secret |
 
 Production mode validates config at boot and refuses to start on anything
@@ -53,8 +53,10 @@ production automation stays off regardless until the M2 gate is met.
    the two per-environment values from §2.
 4. Run the migration task: `alembic upgrade head`.
 5. Start the processes. Wire `GET /readyz` to the load balancer — it checks
-   config, DB connectivity, migration version, and storage access, and
-   returns 503 until all pass.
+   DB connectivity, migration version, and storage access, and returns 503
+   until all pass. Config safety is validated only in production mode; in
+   staging's development mode `/readyz` does NOT vet the env vars, so verify
+   the §3 values by hand.
 6. Smoke test: send one signed `kyb.run_requested` (script in
    `docs/PLATFORM_BRIEFING.md` §7) and confirm the decision arrives at the
    callback URL.
@@ -68,8 +70,11 @@ three things: does it include a **migration**, any **new env vars**, and any
 1. Pull the release tag; build the image.
 2. If the notes list new env vars, set them first.
 3. Run the migration task (`alembic upgrade head`). Safe to run when there is
-   no migration — it does nothing. Migrations are written to be compatible
-   with the still-running old code, so this is not a downtime step.
+   no migration — it does nothing. **Do not assume a migration is compatible
+   with the still-running previous image**: the release notes state whether it
+   is. When they don't say so (or say it isn't), use a brief cutover — stop
+   the processes, migrate, start the new image. Not every migration is
+   hot-compatible; 008 was not.
 4. Rolling restart: API, then workers.
 5. Verify (§5).
 
@@ -104,10 +109,17 @@ Alert on, from `GET /v1/metrics`:
 - `adapter_latency[].error_rate` per upstream registry
 - `event_to_decision_seconds.p95` over budget
 
-`docs/RUNBOOK.md` has the failure playbooks: requeue SQL for dead jobs and
-dead outbox rows, registry-outage behavior (runs complete as partial; nothing
-wrong is ever emitted), and the growing-review-queue check. The universally
-safe re-drive is POSTing `recalculate.requested` for the affected case.
+`docs/RUNBOOK.md` has the failure playbooks; the ops console's requeue
+buttons (`/ui/api/requeue/...`) are the preferred recovery path — they reset
+both the job and its failed run. Three limits to know:
+
+- A dead `poc_email` row cannot be requeued: its token was scrubbed when it
+  died (the endpoint refuses it). Recovery is a fresh `poc.submitted`.
+- `recalculate.requested` re-decides from existing evidence but does **not**
+  re-run the broker screen — after a blocklist update, re-send the original
+  evidence event (or `kyb.run_requested`) instead.
+- Registry-outage behavior needs no action: runs complete as partial and
+  nothing wrong is ever emitted.
 
 ## 8. Rules
 

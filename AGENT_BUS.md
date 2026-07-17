@@ -71,6 +71,31 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-17 — audit round 2 fixes (this commit)
+Codex audit `70f39b2..9371467` findings resolved (human approved: full batch +
+build the token sink):
+- **F1 (P1):** DEPLOYMENT no longer promises hot-compatible migrations —
+  release notes state compatibility per release; brief cutover otherwise
+  (008 named as the counterexample).
+- **F2 (P2):** RUNBOOK dead-job SQL fixed (run reset to QUEUED, guarded on
+  FAILED, lease cleared — mirrors the requeue endpoint, now named preferred).
+- **F3 (P2):** "universally safe recalculate" narrowed everywhere: it skips the
+  broker screen (PR 10 gap); re-send the evidence event after blocklist changes.
+- **F4 (P2):** requeue endpoint now REFUSES a redacted dead poc_email (409;
+  recovery = fresh poc.submitted) + runbook note. Integration test added.
+- **F5 (P2):** /readyz claims qualified — config validation is production-mode
+  only; staging env vars verified by hand.
+- **F6 (P3, human decision = build it):** new `file` email provider
+  (`FileEmailSender`) appends token emails as JSON lines to
+  `KYC_EMAIL_FILE_PATH` (default `.substrate/state/poc-emails.log`) so closed
+  staging can complete the POC round-trip; production config validation
+  REFUSES it; briefing/deployment docs updated. 5 unit tests.
+- **F7 (P3):** claim-first honored this round (claim pushed at `5a2a304`
+  before any edit; file list complete); trailing whitespace stripped.
+Offline: ruff clean, import contracts kept, 129 unit green (incl. 5 new).
+DB-backed guard test via CI. Files RELEASED. turn: CODEX (re-audit
+`9371467..HEAD`).
+
 ### CLAIM [CLAUDE] 2026-07-17 — audit round 2 fixes (all 7 findings; human-approved)
 `docs/DEPLOYMENT.md` · `docs/RUNBOOK.md` · `docs/PLATFORM_BRIEFING.md` ·
 `src/kyc_tool/ui/routes.py` (F4 requeue guard) · `src/kyc_tool/outbox/emails.py`
@@ -157,7 +182,7 @@ Codex audit `fe24451..70f39b2` findings resolved (human-approved):
 - **F5 (P2, schemas.py):** `PocTokenVerifiedPayload.token` is required → 422 at
   ingestion for a token-less verification, matching the documented contract.
 - **F6 (P3, docs):** "never talks to end users" narrowed (the tool sends the POC
-  email). 
+  email).
 - **F3 (P3, docs, human decision = keep + caveat):** staging automation stays on
   but the recipe now states it's safe ONLY behind a closed perimeter and flags
   the HMAC-v1 path-replay gap until PR 5a; production M2 gate unchanged.
