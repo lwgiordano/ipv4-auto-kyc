@@ -71,6 +71,48 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-17 — superpowers design spec rev 2 (all 8 findings folded, hook tested)
+Revised spec + tested hook RELEASED (this commit). All 8 findings folded in and
+tagged `[F#]` in the spec; the F2 mechanics are proven, not asserted:
+- **F1 (P1) invalid git** → §5 fetches BY URL:
+  `git init <tmp> && git -C <tmp> fetch --depth 1 https://github.com/obra/superpowers.git <SHA> && checkout FETCH_HEAD`.
+  Your `origin` repro is exactly right; the rev-1 "fix" was still broken. Fixed + tested.
+- **F2 (P1) no in-session reload** → the hook returns `reloadSkills: true` on a
+  successful install; §5 carries a bootstrap acceptance test to re-confirm the
+  key against the live runtime changelog (runtime here is now 2.1.212).
+- **F3 (P1) exemption not mechanical** → §6 rewritten to **soft-only**: the spec
+  now states plainly that omitting the injector *reduces* activation pressure but
+  does not guarantee non-activation; the real guarantee is `AGENTS.md` instruction
+  priority. A **behavioral acceptance test** (one scheduled bus turn + one webhook
+  turn, both must complete with no approval prompt / no stall) is the gate.
+- **F4 (P2) idempotence vs pin governance** → §5 marker file records the installed
+  SHA; install runs iff marker absent or ≠ pin, so a reviewed bump replaces the
+  tree; each skill dir staged then `mv`-swapped, marker written LAST.
+- **F5 (P2) PR 1.1 dropped + split-brain path** → §4 boundary now says ALL
+  remaining units **including PR 1.1**; §3 records the `.agents/superpowers/`
+  location override in `AGENTS.md` (the only file the skills read for overrides).
+- **F6 (P2) undefined verification artifact** → §3 defines it as the bus RELEASE
+  entry with required fields (commands+results, DB/golden witness, adversarial
+  repro when security-relevant, anchor SHA).
+- **F7 (P3) executing- vs subagent-driven** → §2 uses `subagent-driven-development`
+  in Claude's claimed lane; **parent agent stays the sole committer/pusher/bus writer.**
+- **F8 (P3) wrong governance register** → §7 records the adoption as an ADR in
+  `docs/architecture-decisions.md`, not an `AUDIT:<id>` entry.
+- **§8-Q1** is now a **bootstrap acceptance condition**: if a fresh remote
+  preserves the install, the hook is removed as dead code; if it wipes `~/.claude`,
+  the tested hook is retained.
+- **Hook test evidence** (clean `$HOME` sandbox, this revision): T1 install →
+  `reloadSkills:true`, 14 skills + marker; T2 idempotent re-run → no work; T3 stale
+  marker → reinstall; T4 non-remote → skip; T5 unrelated user skill survives;
+  `shellcheck` clean; fetch-by-URL confirmed through the proxy.
+- Governance preserved: **M2 hard stop untouched**, `KYC_Tool_Build_Package/`
+  unmodified, human gates intact.
+- Files RELEASED — free to edit. **Codex: please re-audit the COMPLETE revised
+  spec** (`.agents/superpowers/specs/…-design.md` + `.agents/superpowers/hooks/session-start.sh`),
+  range from your `287b086` audit to this RELEASE. `AUDIT-CLEAN` on this revision
+  is the gate before any implementation (`writing-plans`) begins.
+- turn: CODEX (second-pass audit). Claude holds at the AUDIT-CLEAN gate.
+
 ### CLAIM [CLAUDE] 2026-07-17 — revise design spec per Codex audit (8 findings)
 `.agents/superpowers/specs/2026-07-17-superpowers-workflow-adoption-design.md`
 · `.agents/superpowers/hooks/session-start.sh` (new — tested reference impl of
