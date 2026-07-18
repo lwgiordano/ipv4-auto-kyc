@@ -1,10 +1,11 @@
 # PR 5a — HMAC v2 + per-case idempotency (design)
 
 - **Date:** 2026-07-18
-- **Status:** Design **rev 2** — revised after Codex's spec review (`b1e0ea5`,
-  4 findings, all accepted) and the human's decision on finding 1 (retire the
-  duplicate review-complete endpoint). Pending human spec re-review, then
-  `writing-plans`, then the plan gate.
+- **Status:** Design **rev 3** — rev 2 retired the duplicate endpoint; rev 3
+  folds Codex's three rev-2 findings (`5de3b8b`, all accepted): explicit PR 5a
+  validation boundary (an invalid-task PASS hole), bidirectional (split) v1
+  sunset dates, and a fail-closed durable sunset witness. Pending human spec
+  re-review, then `writing-plans`, then the plan gate.
 - **Unit:** ROADMAP §G "PR 5a — HMAC v2 + per-case idempotency (item 6)",
   migration 010, decision D3. Thin-delta pointer: restates only what §G left
   open + the review-driven revisions; everything else is locked by
@@ -58,15 +59,26 @@ a same-(case, key, payload) retry returns the stored response snapshot.
 
 ## 3. Open items → approved resolutions (unchanged from rev 1)
 
-1. **v1 sunset → config-dated, required in production.** `hmac_v1_sunset_at`
-   (ISO-8601): before it, dual-accept; at/after, v1 rejected.
-   `production_config_violations` **requires it set in production** (that is how
-   §G's "fixed sunset" is enforced). Staging default: unset. Date set with
-   TechCraft at the M3 cutover.
-2. **Outbound leg → dual-emit.** During dual-accept, callbacks carry BOTH the v1
-   header and the v2 header set (each signed with its secret); the platform
-   verifies whichever it supports and migrates without a coordinated flip. v1
-   emission stops at sunset.
+1. **v1 sunset → config-dated, required in production, and BIDIRECTIONAL
+   (rev3, finding 2).** Two independent ISO-8601 dates, because the two
+   directions have independent readiness:
+   - `hmac_v1_inbound_sunset_at` — stop *accepting* inbound v1. Gated by the
+     inbound DB witness (§6: TechCraft's v1 *sending* reached zero).
+   - `hmac_v1_outbound_sunset_at` — stop *emitting* v1 on callbacks. Gated by a
+     **v2-only staging callback E2E + TechCraft sign-off** that their webhook
+     receiver verifies v2 — NOT inferable from inbound telemetry (callbacks
+     return only 2xx; the publisher sees only `raise_for_status()`, so the tool
+     cannot tell which signature the platform accepted).
+
+   Both required in production (`production_config_violations`); staging default
+   unset. Set with TechCraft at the M3 cutover. A single shared date would fail
+   this way: TechCraft flips inbound to v2 while its receiver still verifies only
+   v1 → inbound v1 hits zero → shared sunset stops v1 callback emission → every
+   callback fails.
+2. **Outbound leg → dual-emit.** Until `hmac_v1_outbound_sunset_at`, callbacks
+   carry BOTH the v1 header and the v2 header set (each signed with its secret);
+   the platform verifies whichever it supports and migrates without a coordinated
+   flip.
 
 ## 4. Retire the duplicate review-complete endpoint (rev2 — finding 1)
 
@@ -94,12 +106,25 @@ review completion as the `website.review_completed` keyed event; the signing
 quickstart (copy-paste function + worked vectors; staging logs the server-side
 canonical string on a mismatch) covers the one recipe.
 
-**Parity (plan-time verification):** routing completion through the keyed-event
-path must preserve the endpoint's current validation (result ∈ {pass, fail},
-reviewer_id present, task/case/status resolution). The plan confirms
-`WebsiteReviewCompletedPayload` + the pipeline enforce equivalent checks before
-the route is removed; **full task/actor/status/result binding is PR 5b**, which
-now operates on the shared event pipeline.
+**Validation boundary (rev3, finding 1 — explicit, not deferred).** Today the
+keyed `website.review_completed` path validates only payload *shape*
+(`WebsiteReviewCompletedPayload`: `task_id`/`result`/`reviewer_id`); the pipeline
+then creates the `website_verified` check largely unconditionally and closes a
+matching open task only if one happens to exist. A direct repro — `task_id`
+that does not exist, `result="pass"` — produces a `website_verified pass` check.
+The **retired endpoint** did more: `session.get(ReviewTask, task_id)` → 404 if
+missing. So retiring it MUST NOT regress below that. Explicit split:
+
+- **PR 5a minimum (this PR) — semantic validation on the event path.** After
+  idempotency-replay resolution but **before** creating a new run/check, require:
+  (a) the task exists; (b) `task_type == "website"`; (c) the task's `case_id`
+  equals the **signed path** `case_id`; (d) `status == "open"`. Otherwise reject
+  (404 unknown task / 409 wrong-case or closed / 422 wrong-type) and create no
+  check. This closes the invalid-task PASS hole created by retiring the endpoint.
+- **PR 5b (later) — trust binding + concurrency.** `SELECT … FOR UPDATE` on the
+  task, platform-asserted actor/`reviewer_id` binding, and the atomic
+  close-task + write-check transaction. 5a does the safety floor; 5b does the
+  hardening.
 
 ## 5. Per-case idempotency (D3, locked) — migration 010
 
@@ -119,36 +144,57 @@ now operates on the shared event pipeline.
 - **§C migration gate:** `down_revision = 009`; rebased onto the live head at
   merge; fresh-DB round trip clean.
 
-## 6. Sunset telemetry — DB-backed, cross-replica (finding 3)
+## 6. Sunset telemetry — durable, cross-replica, fail-closed (rev3, finding 3)
 
 The API scales horizontally (`DEPLOYMENT.md`), so in-process counters reset and
 `/v1/metrics` reaches only one replica — they cannot witness platform-wide v1=0.
-Count v1-vs-v2 accepted signatures in a **durable store aggregated across
-replicas** (a small DB counter table, consistent with the existing DB-backed
-metrics), surfaced in `/v1/metrics`. The **sunset witness** is a defined
-zero-observation window: **no v1-accepted requests across all replicas** for a
-configured number of days before `hmac_v1_sunset_at`. In-process counters may
-remain as diagnostic only, never the witness.
+The v1 **acceptance witness** is durable and fail-closed:
+
+- A fixed inbound-v1 witness row, seeded with `observation_started_at`, holds
+  `accepted_count` + `last_accepted_at`, updated **atomically across replicas**
+  on every accepted inbound v1 request.
+- **Fail-closed:** if that durable update cannot be written, the v1 request is
+  **rejected** — so real v1 traffic is never silently invisible.
+- The **zero predicate** (safe to reach `hmac_v1_inbound_sunset_at`) requires
+  BOTH: observation age (`now − observation_started_at`) ≥ the configured window
+  AND `last_accepted_at` absent or older than that window. An absent/unseeded row
+  means "observation never started," not "zero traffic," and does NOT satisfy the
+  predicate.
+- v2-accepted and rejected counters are **diagnostic** and may use weaker
+  best-effort availability; only the v1-acceptance witness is fail-closed.
+  Surfaced in `/v1/metrics`.
+
+This witness gates only the **inbound** date; the **outbound** date is gated by
+the staging callback E2E + TechCraft sign-off (§3), never by this telemetry.
 
 ## 7. Tests (TDD, red-first per the cycle)
 
 - **Unit:** canonical-string vectors (the published doc vectors ARE the
   fixtures); each binding dimension flipped independently (method, path, query,
   direction, key_id, timestamp, slot, body) must fail verification; skew +
-  non-finite timestamp (preserve the v1 `nan` fix); sunset boundary
-  (before/at/after); dual-emit header presence on callbacks.
+  non-finite timestamp (preserve the v1 `nan` fix); **both** sunset boundaries
+  (inbound-accept and outbound-emit, independently before/at/after); dual-emit
+  header presence on callbacks before the outbound date.
 - **Integration (DB, run red locally against the dev stack):**
   - **Cross-case redirect attack repro** — a captured v1-signed event replayed
     against another case succeeds pre-v2 (documents the hole) and 401s under v2.
   - D3 matrix: cross-case reuse → two runs; same-case conflict → 409; replay →
     stored snapshot.
   - **Review completion via the keyed event** (`website.review_completed` posted
-    to `/v1/cases/{id}/events`) drives the same transition the retired endpoint
-    did; the retired route returns 404; parity of validation asserted.
+    to `/v1/cases/{id}/events`) drives the transition; the retired route returns
+    404. **Validation matrix (finding 1):** nonexistent task → 404; wrong-case →
+    409; wrong-type → 422; closed task → 409; valid → `website_verified pass`,
+    and a valid replay returns the stored snapshot. **No check is written on any
+    reject.**
   - Migration 010 fresh-DB up/down; **seeded cross-case-duplicate downgrade
     refusal**.
-  - Cross-replica counter aggregation (two sessions/factories increment; a
-    single `/v1/metrics` read reflects both).
+  - **Sunset witness (finding 3):** two sessions/factories increment the durable
+    v1 witness and a single `/v1/metrics` read reflects both; an unseeded/absent
+    witness row does NOT satisfy the zero predicate; a forced durable-write
+    failure **rejects** the v1 request (fail-closed).
+  - **Bidirectional sunset (finding 2):** past `hmac_v1_inbound_sunset_at`,
+    inbound v1 is rejected while outbound callbacks still dual-emit v1 until
+    `hmac_v1_outbound_sunset_at` — the two dates move independently.
 - Existing suites migrate to a v2 `sign_headers` twin in `tests/conftest.py`;
   v1-signing tests remain until sunset removal (they pin dual-accept);
   `test_phase4_platform.py` / `test_phase2_adapters.py` move off the endpoint.

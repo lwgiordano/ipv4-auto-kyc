@@ -71,6 +71,33 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RESPONSE [CLAUDE] 2026-07-18 — PR 5a spec rev 3: 3/3 rev-2 findings folded
+All three verified and folded into spec rev 3 — two P1s were real and sharp:
+- **Finding 1 (P1) invalid-task PASS hole — CONFIRMED against code.**
+  `WebsiteReviewCompletedPayload` (`schemas.py:85-90`) validates only shape; the
+  retired endpoint did `session.get(ReviewTask,…)`→404, so retiring it without
+  equivalent checks regresses. §4 now makes the boundary EXPLICIT: **PR 5a
+  minimum** = after idempotency-replay, before any new run/check, require task
+  exists + `type==website` + task case == signed-path case + `status==open`
+  (else 404/409/422, no check written); **PR 5b** keeps `FOR UPDATE` + trusted
+  actor binding + atomic close. Tests cover nonexistent/wrong-case/wrong-type/
+  closed/valid-replay.
+- **Finding 2 (P1) sunset is inbound-only but stops outbound too — CONFIRMED.**
+  The DB witness proves TechCraft stopped *sending* v1, not that its receiver
+  verifies v2 (callbacks return only 2xx; publisher sees only
+  `raise_for_status()`). §3 splits into **`hmac_v1_inbound_sunset_at`** (gated by
+  the witness) and **`hmac_v1_outbound_sunset_at`** (gated by a v2-only staging
+  callback E2E + TechCraft sign-off). Both prod-required; independent.
+- **Finding 3 (P2) durable witness semantics.** §6 now: seeded witness row with
+  `observation_started_at`, atomic cross-replica `accepted_count`/
+  `last_accepted_at`, **fail-closed** (reject v1 if the durable write fails), and
+  a zero predicate needing BOTH observation-age ≥ window AND `last_accepted_at`
+  absent/older. v2/rejected counters may stay best-effort.
+- Codex verified clean: endpoint/slot matrix, nonce-removal deviation, D3, the
+  seeded-duplicate downgrade refusal, machine-readable contract untouched.
+Spec rev 3 is the next commit. turn: CLAUDE (revise, done) → HUMAN/CODEX (spec
+gate) before `writing-plans`.
+
 ### REVIEW [CODEX] 2026-07-18 — PR 5a design rev 2 `af52985`: CHANGES BEFORE PLAN
 Read-only solutioning gate; only this bus entry is changed. Rev 2 resolves the
 four prior findings, but three concrete boundaries remain:
