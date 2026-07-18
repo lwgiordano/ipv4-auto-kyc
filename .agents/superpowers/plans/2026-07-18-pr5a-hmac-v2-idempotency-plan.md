@@ -8,6 +8,32 @@
 
 **Tech Stack:** Python 3.11, FastAPI (sync + threadpool), SQLAlchemy 2 + Alembic (sync psycopg), Postgres, pytest + testcontainers-style ephemeral PG (`tests/pg.py`), `./manage.sh {fmt,lint,test}`.
 
+## Plan-mode refinements (AUTHORITATIVE — override the task bodies below)
+
+Verified against the code during the plan-mode pass (2026-07-18):
+- **Constraint name:** the events unique is `uq_events_idempotency_key` (named in
+  migration 001), NOT the PG auto-name. Task 3 drops/recreates that exact name.
+- **Task 8 floor rolls back:** implement the `website.review_completed` floor
+  inside `ingest_event` after the replay branch, before the `Run` (after
+  `ingest.py:167`), by raising a private `_FloorReject(IngestOutcome)` so the
+  `uow` rolls back the event insert (no orphan row; re-validates each attempt);
+  catch it just outside the `uow` and return the 4xx. No call-site changes; covers
+  the HTTP route AND the UI's direct `ingest_event` path.
+- **Fixtures:** `test_migrations.py`, `test_production_config.py`, `test_ops_auth.py`
+  ALREADY EXIST — extend them, don't create. `test_migrations.py` has an
+  `EXPECTED_TABLES` set + `_config(url)` helper; add the two new tables + the
+  downgrade-refusal test there. No `clean_db_010`: add `hmac_signature_stats` to
+  `_ALL_TABLES` (`tests/conftest.py:33-46`) and re-seed the single
+  `hmac_v1_observation` row (id=1, inactive) after the truncate (mirror the
+  `broker_entities` re-seed). The `migrated` fixture runs `alembic upgrade head`,
+  so 010 tables exist automatically.
+- **Task 6 scope:** `require_read_access` (4 GET sites in `routes_read.py`) also
+  becomes v2-aware + takes `request` (empty slot). `require_admin` (bearer) and
+  the UI path are OUT of scope. `request` is already in scope at every call site.
+- **Test invocation:** `./manage.sh test` ignores path args (runs the whole
+  suite — the final gate). For per-task red-green, invoke `.venv/bin/pytest
+  <path>::<test> -q` directly. `fmt`/`lint` via `./manage.sh`.
+
 ## Global Constraints
 
 - **Spec is authoritative:** `.agents/superpowers/specs/2026-07-18-pr5a-hmac-v2-idempotency-design.md` (rev 6, Codex `REVIEW-CLEAN`). Every task traces to a spec section.
