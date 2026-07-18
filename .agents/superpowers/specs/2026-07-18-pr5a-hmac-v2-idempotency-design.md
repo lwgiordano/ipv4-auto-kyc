@@ -1,11 +1,12 @@
 # PR 5a — HMAC v2 + per-case idempotency (design)
 
 - **Date:** 2026-07-18
-- **Status:** Design **rev 3** — rev 2 retired the duplicate endpoint; rev 3
-  folds Codex's three rev-2 findings (`5de3b8b`, all accepted): explicit PR 5a
-  validation boundary (an invalid-task PASS hole), bidirectional (split) v1
-  sunset dates, and a fail-closed durable sunset witness. Pending human spec
-  re-review, then `writing-plans`, then the plan gate.
+- **Status:** Design **rev 4** — rev 3 folded the rev-2 review; rev 4 folds
+  Codex's two rev-3 findings (`990f91d`, both accepted): PR 5a is an explicit
+  non-hot **stop/migrate/start cutover** with post-drain witness activation
+  (finding 1, P1), and the claim/plan extend to the operator-contract surfaces
+  the change makes stale (finding 2). Pending human spec re-review, then
+  `writing-plans`, then the plan gate.
 - **Unit:** ROADMAP §G "PR 5a — HMAC v2 + per-case idempotency (item 6)",
   migration 010, decision D3. Thin-delta pointer: restates only what §G left
   open + the review-driven revisions; everything else is locked by
@@ -150,9 +151,10 @@ The API scales horizontally (`DEPLOYMENT.md`), so in-process counters reset and
 `/v1/metrics` reaches only one replica — they cannot witness platform-wide v1=0.
 The v1 **acceptance witness** is durable and fail-closed:
 
-- A fixed inbound-v1 witness row, seeded with `observation_started_at`, holds
-  `accepted_count` + `last_accepted_at`, updated **atomically across replicas**
-  on every accepted inbound v1 request.
+- A fixed inbound-v1 witness row holds `accepted_count`, `last_accepted_at`, and
+  `observation_started_at`, updated **atomically across replicas** on every
+  accepted inbound v1 request. It is seeded **inactive** (`observation_started_at`
+  NULL) — the clock is NOT started at migration time (§6a).
 - **Fail-closed:** if that durable update cannot be written, the v1 request is
   **rejected** — so real v1 traffic is never silently invisible.
 - The **zero predicate** (safe to reach `hmac_v1_inbound_sunset_at`) requires
@@ -166,6 +168,26 @@ The v1 **acceptance witness** is durable and fail-closed:
 
 This witness gates only the **inbound** date; the **outbound** date is gated by
 the staging callback E2E + TechCraft sign-off (§3), never by this telemetry.
+
+## 6a. Deploy — non-hot cutover + witness activation (rev4, finding 1)
+
+Migration 010 is **not hot-compatible**: the old image's ingest does
+`ON CONFLICT (idempotency_key)` (`ingest.py:133`), which needs the global unique
+that 010 drops — an old replica still serving after the migration would fail
+event inserts. So PR 5a ships as an explicit **stop → migrate → start** cutover,
+not a rolling upgrade. Consequences:
+
+- Migration 010 seeds the sunset witness **inactive** (`observation_started_at`
+  NULL) and does **not** start the observation clock.
+- After every old API replica is drained AND every new instance is
+  readiness-verified, an explicit **activation** (a one-shot admin action /
+  management command) sets `observation_started_at = now`. The inbound zero
+  window begins only there — never from migration time — so a straggler old
+  replica accepting un-witnessed v1 cannot turn the predicate green prematurely.
+- An **inactive** witness (NULL `observation_started_at`) never satisfies the
+  zero predicate, regardless of elapsed wall-clock (test in §7).
+- Runbook documents the stop/migrate/start ordering + the activation step, and
+  corrects the blanket "all revisions downgrade cleanly" line for 010 (§9).
 
 ## 7. Tests (TDD, red-first per the cycle)
 
@@ -192,6 +214,9 @@ the staging callback E2E + TechCraft sign-off (§3), never by this telemetry.
     v1 witness and a single `/v1/metrics` read reflects both; an unseeded/absent
     witness row does NOT satisfy the zero predicate; a forced durable-write
     failure **rejects** the v1 request (fail-closed).
+  - **Witness activation (rev4, finding 1):** an **inactive** witness (NULL
+    `observation_started_at`) never satisfies the zero predicate regardless of
+    elapsed wall-clock; only the explicit post-cutover activation starts the clock.
   - **Bidirectional sunset (finding 2):** past `hmac_v1_inbound_sunset_at`,
     inbound v1 is rejected while outbound callbacks still dual-emit v1 until
     `hmac_v1_outbound_sunset_at` — the two dates move independently.
@@ -209,3 +234,21 @@ any platform-side implementation. `KYC_Tool_Build_Package/` untouched; the
 review-complete retirement and the nonce omission are recorded in
 `AUDIT_FINDINGS.md` per governance (04 §5 evolves via documented D-series
 decisions, never silent change).
+
+## 9. Operator-contract surfaces this PR must update (rev4, finding 2)
+
+The contract change makes several operator/doc/test surfaces stale; the plan
+updates each (and the claim is extended to cover them):
+
+- `docs/RUNBOOK.md` — the blanket "all revisions downgrade cleanly" line
+  (`:11`) is corrected: **010 refuses downgrade after cross-case reuse**; add the
+  stop/migrate/start + witness-activation ordering.
+- `.env.example`, `docs/OVERVIEW.md`, `docs/PLATFORM_BRIEFING.md` — the single
+  shared `KYC_PLATFORM_HMAC_SECRET` story is superseded by **split inbound/
+  outbound secrets + key_id, the two sunset dates, and the observation window**;
+  document the new settings.
+- `docs/DEPLOYMENT.md` — the non-hot cutover + activation step (already claimed).
+- Tests already on disk that this PR must touch: `tests/integration/test_migrations.py`
+  (010 up/down + downgrade-refusal), `tests/unit/test_production_config.py`
+  (both sunset dates required in production), `tests/unit/test_ops_auth.py`
+  (v2 verification paths). These are added to the claim before plan/code.
