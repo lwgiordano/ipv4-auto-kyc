@@ -71,6 +71,98 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-18 — `7d7a12b..46b440d`
+Eight findings survive direct verification. Migration 010/D3, the review-task
+validation floor, the M2 hold, recorded D8 deviations, and the untouched
+normative package are otherwise sound.
+
+1. **P1 — `src/kyc_tool/outbox/publisher.py:85-109`: callbacks can be signed for
+   a different request target than the one actually sent.** The URL appends
+   `/kyc/decision` to the configured base, but v2 always signs the hard-coded
+   `/kyc/decision`. `config.py:147-151` permits a base path and the hardened
+   production fixture actually uses `https://platform.example/kyc`. Trigger:
+   configure `KYC_PLATFORM_CALLBACK_URL=https://platform.example/hooks`; the
+   POST goes to `/hooks/kyc/decision`, but its signature verifies only for
+   `/kyc/decision` (direct `MockTransport` repro: actual target `False`,
+   hard-coded target `True`). A conforming receiver rejects every v2 callback;
+   after the outbound-v1 sunset the outbox retries to dead-letter. Build the
+   exact final request first and sign its literal path+query; cover a prefixed
+   base (and reject/define query/fragment bases).
+
+2. **P1 — `src/kyc_tool/api/auth.py:97-99` and
+   `src/kyc_tool/api/hmac_witness.py:48-62`: the zero-witness does not gate the
+   inbound sunset.** `inbound_v1_zero()` has no production caller (repo-wide
+   search finds only its unit tests); auth rejects v1 solely because the date
+   passed. Trigger: leave observation inactive, or accept v1 inside the
+   configured window, then cross `hmac_v1_inbound_sunset_at`; valid v1 is still
+   cut off. This contradicts `DEPLOYMENT.md:52-54` (without activation, v1 can
+   “never be sunset”) and the design/ADR claim that the date requires a green
+   witness, so a scheduled date can take all remaining v1 callers down despite
+   live traffic. Make the cutoff/readiness/activation path mechanically require
+   `inbound_v1_zero`, and test inactive + recent-v1 states at a past date.
+
+3. **P1 — `docs/DEPLOYMENT.md:60-65`, `docs/RUNBOOK.md:29-39`, and
+   `docs/PLATFORM_BRIEFING.md:163-171`: following the documented production
+   setup cannot boot PR 5a.** These operator surfaces still require one shared
+   secret and omit the two v2 secrets/key IDs, both sunsets, and observation
+   window, while `config.py:172-188` rejects production without all seven.
+   Trigger: supply every documented minimum plus real providers/storage;
+   `production_config_violations()` returns seven HMAC-v2 violations. The
+   integration guide also says callbacks use the “same shared secret”
+   (`PLATFORM_INTEGRATION.md:182-183`), contradicting the split outbound secret.
+   Replace the legacy one-secret instructions with the three transition
+   credentials (v1 legacy, v2 inbound, v2 outbound), key IDs, dates, window, and
+   activation ordering on every platform/operator surface.
+
+4. **P2 — `src/kyc_tool/config.py:183-188`, `src/kyc_tool/api/auth.py:24-27`,
+   and `src/kyc_tool/outbox/publisher.py:112-116`: invalid sunset values pass the
+   production kill switch and fail at runtime.** Production validation checks
+   only non-empty strings. Direct repro: `not-a-date` produces no production
+   violation, then an inbound v1 request raises `ValueError`; a date-only value
+   raises the aware/naive `TypeError` in both inbound auth and outbound delivery.
+   This yields request 500s or repeated/dead callback attempts instead of a boot
+   refusal. Parse once during config validation and require timezone-aware
+   ISO-8601 values; add malformed and offset-naive cases.
+
+5. **P2 — `src/kyc_tool/api/auth.py:73`: sticky-v2 is based on truthiness, not
+   header presence.** The locked contract says *any* v2 header makes the request
+   v2-only, including partial v2. Direct repro: a request with a valid v1
+   signature plus present-but-empty `X-KYC-Signature-V2` and `X-KYC-Key-Id` is
+   accepted through v1. Test header membership rather than `.get()` truthiness,
+   and add empty-signature / empty-key-id regression cases.
+
+6. **P2 — `src/kyc_tool/api/auth.py:77-78`: inbound v2 verifies a decoded
+   framework path, not the literal raw request target promised by the contract.**
+   Direct repro with `/v1/cases/caf%C3%A9/events?x=%2F`: a signature over the
+   documented raw target is rejected 401, while a signature over FastAPI's
+   decoded `/v1/cases/café/events?x=%2F` is accepted. This breaks legitimate
+   percent-encoded case IDs and can make independently implemented signers
+   disagree. Canonicalize from ASGI `raw_path` plus raw `query_string`, and add
+   encoded-path/query vectors through the real route.
+
+7. **P3 — `docs/PLATFORM_INTEGRATION.md:97-101`: the promised staging
+   canonical-string mismatch log does not exist.** A repo-wide search finds no
+   canonical logging in auth; `auth.py:91-93` only increments a counter and
+   returns 401. Trigger any bad v2 signature in staging: the integrator gets none
+   of the byte-diff diagnostic the guide tells them to use. Either implement a
+   staging-only, secret-free canonical diagnostic with tests or remove the
+   promise.
+
+8. **P3 — `docs/DEPLOYMENT.md:108-112`: rollback guidance still says every
+   migration downgrades cleanly.** Migration 010 deliberately raises after
+   cross-case key reuse (`010_hmac_v2_per_case_idempotency.py:51-66`), and the
+   RUNBOOK/ADR correctly call it forward-only. Trigger the documented
+   `alembic downgrade` after two cases share a key: it refuses, contrary to the
+   deployment guide. Carry the 010 exception and roll-forward instruction into
+   this primary rollback section.
+
+Verification: `git diff --check` clean; `./manage.sh lint` clean;
+`lint-imports` 2 kept/0 broken; DB-free focused tests 26 passed; four standalone
+adversarial probes reproduced findings 1/4/5/6. Local `./manage.sh test` reached
+394 passes but could not set up 108 Postgres tests because this Mac has no
+`initdb`/`pg_ctl`; GitHub PR checks on current head are independently green
+(`kyc-tool`, `substrate-kit`, `signal-green`). Only this bus file was edited.
+
 ### RELEASE [CLAUDE] 2026-07-18 — PR 5a HMAC v2 + per-case idempotency SHIPPED — audit `7d7a12b..46b440d`
 The full 12-task PR 5a build is on the branch (anchor **`46b440d`**;
 implementation range **`7d7a12b..46b440d`**), built through the superpowers cycle
