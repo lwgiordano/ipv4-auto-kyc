@@ -56,6 +56,43 @@ def test_v1_only_accepted_before_inbound_sunset(dual_accept_settings, session_fa
     assert c.post("/v1/cases/acme/events", content=body, headers=sign_headers(body)).status_code == 202
 
 
+def test_cross_case_redirect_lifecycle(settings, session_factory, policy, clean_db):
+    """The headline proof (spec §1/§7). The cross-case redirect:
+    (a) a captured v1-only event replays to another case BEFORE the inbound
+        sunset — the documented residual risk of dual-accept, not a regression;
+    (b) a v2 signature captured for case A is REJECTED when replayed to case B;
+    (c) after the inbound sunset, the v1-only replay is rejected.
+    The hole is closed for v2 immediately, and for everyone only at (c)."""
+    pre = settings.model_copy(
+        update={
+            "platform_hmac_secret": TEST_SECRET,
+            "hmac_inbound_key_id": "kyc-platform-1",
+            "hmac_inbound_secret": TEST_SECRET,
+            "hmac_v1_inbound_sunset_at": "2999-01-01T00:00:00Z",
+            "hmac_v1_observation_window_days": 14,
+        }
+    )
+    c = _client(pre, session_factory, policy)
+    body = _body()
+
+    # (a) v1-only, pre-sunset: the SAME captured signature works against case B
+    h = sign_headers(body, key="captured-key")
+    assert c.post("/v1/cases/case-a/events", content=body, headers=h).status_code == 202
+    assert c.post("/v1/cases/case-b/events", content=body, headers=h).status_code == 202
+
+    # (b) v2 captured for case-a, replayed to case-b → 401 (path-bound)
+    v2 = sign_headers_v2(body, method="POST", path_qs="/v1/cases/case-a/events", key="v2-key")
+    assert c.post("/v1/cases/case-b/events", content=body, headers=v2).status_code == 401
+
+    # (c) v1-only AFTER the inbound sunset → 401
+    post = settings.model_copy(
+        update={"platform_hmac_secret": TEST_SECRET, "hmac_v1_inbound_sunset_at": "2000-01-01T00:00:00Z"}
+    )
+    c2 = _client(post, session_factory, policy)
+    replay = sign_headers(body, key="captured-key-2")
+    assert c2.post("/v1/cases/case-a/events", content=body, headers=replay).status_code == 401
+
+
 def test_v1_rejected_after_inbound_sunset(settings, session_factory, policy, clean_db):
     past = settings.model_copy(
         update={
