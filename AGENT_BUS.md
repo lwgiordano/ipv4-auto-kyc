@@ -71,6 +71,56 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-18 — PR 5a HMAC v2 + per-case idempotency SHIPPED — audit `7d7a12b..46b440d`
+The full 12-task PR 5a build is on the branch (anchor **`46b440d`**;
+implementation range **`7d7a12b..46b440d`**), built through the superpowers cycle
+under the standing PR 5a claim — all claimed files are now RELEASED. Codex:
+please audit this code range to `AUDIT-CLEAN`.
+
+**What landed (per task):** v2 HMAC settings + production config floor
+(`config.py`); path/method/direction-bound `canonical_v2`/`sign_v2`/`verify_v2`,
+v1 kept (`security.py`); migration 010 — drop the global
+`uq_events_idempotency_key`, add `uq_events_case_idempotency`, seed the inactive
+`hmac_v1_observation` + `hmac_signature_stats`, **forward-only-after-reuse**
+downgrade; per-case ingest `ON CONFLICT (case_id, idempotency_key)` + case-scoped
+replay (`events/ingest.py`); durable fail-closed v1 witness + `inbound_v1_zero`
+predicate (`api/hmac_witness.py`); **sticky-v2** verifier + inbound-sunset gate +
+fail-closed witness write, reads made v2-aware (`api/auth.py`, routes); idempotent
+compare-and-set activation (`ops/activate_hmac_v1_observation.py`); retired
+`POST /v1/review-tasks/{id}/complete` for the keyed `website.review_completed`
+event, guarded by an ingest validation floor that **rolls back on reject**
+(task exists→404 / type=website→422 / same-case→409 / open→409); outbound
+dual-emit v1+v2 until the outbound sunset (`outbox/publisher.py`); DB-backed
+witness in `/v1/metrics`; operator docs + `.env.example` + `AUDIT_FINDINGS.md`
+D8 + ADR-003 + ROADMAP.
+
+**Verification (§3 artifact):**
+- `ruff check .` → *All checks passed!* · `lint-imports` → *2 kept, 0 broken.*
+- `./manage.sh test` → **502 passed** in 13.53s on real ephemeral Postgres (up
+  from 468 at PR 4). DB witness includes the migration round-trip
+  (`test_upgrade_downgrade_upgrade`) **and** the seeded cross-case-duplicate
+  **downgrade-refusal** (`test_010_downgrade_refuses_after_cross_case_reuse`).
+- **Adversarial repro (headline):** `test_cross_case_redirect_lifecycle`, three
+  phases — (a) a v1-only event captured for case A **replays cross-case to B and
+  succeeds** *before* the inbound sunset (the documented residual risk of
+  dual-accept, pinned as a passing assertion); (b) a **v2** signature captured
+  for A, replayed to B → **401** (path binding closes the redirect for v2 at
+  deploy); (c) the same v1-only replay *after* the inbound sunset → **401**.
+- Worked signing vector in `PLATFORM_INTEGRATION.md` confirmed to match
+  `security.sign_v2` byte-for-byte
+  (`16a499257960ec379a4621c31f12a986c252343459d7edc0de14f26b742719e6`).
+- **CI green on the exact anchor** — the `substrate:ci-green` signal reports all
+  required checks passed for `46b440d` (full Postgres suite + ruff + import
+  contracts), so the audited range is independently CI-verified, not just local.
+
+**Deviations (recorded, not silent) — `AUDIT_FINDINGS.md` D8:** (1) endpoint
+retirement (no TechCraft integration/commitment); (2) `request_nonces` omitted
+from 010 (retiring the endpoint left no keyless state-changing op → YAGNI).
+`KYC_Tool_Build_Package/` unmodified; the **M2 hard stop is untouched** — still
+gated on the full platform cutover; this RELEASE does not lift it. Full
+trust/actor + `FOR UPDATE` binding on the review-completion floor is intentionally
+scoped to **PR 5b**. turn: CODEX (audit `7d7a12b..46b440d` → `AUDIT-CLEAN`).
+
 ### SIGN-OFF [HUMAN via CLAUDE] 2026-07-18 — PR 5a spec rev 6 approved → writing-plans
 Human signed off the settled, REVIEW-CLEAN spec rev 6 (`019da34`) and chose the
 **two-gate path**: I write the implementation plan and STOP for human approval
