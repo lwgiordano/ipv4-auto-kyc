@@ -50,14 +50,10 @@ _CLAIM_SQL = text(
 
 
 def enqueue_decision_callback(session: Session, *, case_id: str, run_id: str, body: dict) -> None:
-    session.add(
-        Outbox(kind=DECISION_CALLBACK, case_id=case_id, run_id=run_id, payload_json=body)
-    )
+    session.add(Outbox(kind=DECISION_CALLBACK, case_id=case_id, run_id=run_id, payload_json=body))
 
 
-def enqueue_poc_email(
-    session: Session, *, case_id: str, to: str, subject: str, body: str
-) -> None:
+def enqueue_poc_email(session: Session, *, case_id: str, to: str, subject: str, body: str) -> None:
     session.add(
         Outbox(
             kind=POC_EMAIL,
@@ -86,16 +82,38 @@ class OutboxPublisher:
     def _deliver_decision_callback(self, payload: dict) -> None:
         body = json.dumps(payload).encode()
         timestamp = str(time.time())
+        url = f"{self.settings.platform_callback_url.rstrip('/')}/kyc/decision"
+        path_qs = "/kyc/decision"
+
+        # v2 (path-bound) is always emitted; v1 is dual-emitted until the
+        # OUTBOUND sunset so the platform can migrate its receiver on its own
+        # schedule (PR 5a §3). The two sunset dates are independent.
         headers = {
             "Content-Type": "application/json",
             "X-KYC-Timestamp": timestamp,
-            "X-KYC-Signature": security.sign(
-                self.settings.platform_hmac_secret, timestamp, body
+            "X-KYC-Key-Id": self.settings.hmac_outbound_key_id,
+            "X-KYC-Signature-V2": security.sign_v2(
+                self.settings.hmac_outbound_secret,
+                key_id=self.settings.hmac_outbound_key_id,
+                direction=security.DIRECTION_OUTBOUND,
+                method="POST",
+                path_qs=path_qs,
+                timestamp=timestamp,
+                slot="",
+                body=body,
             ),
         }
-        url = f"{self.settings.platform_callback_url.rstrip('/')}/kyc/decision"
+        if not self._outbound_v1_sunset_passed():
+            headers["X-KYC-Signature"] = security.sign(self.settings.platform_hmac_secret, timestamp, body)
+
         response = self.http.post(url, content=body, headers=headers)
         response.raise_for_status()
+
+    def _outbound_v1_sunset_passed(self) -> bool:
+        iso = self.settings.hmac_v1_outbound_sunset_at
+        if not iso:
+            return False
+        return datetime.now(UTC) >= datetime.fromisoformat(iso.replace("Z", "+00:00"))
 
     def _deliver(self, kind: str, payload: dict) -> None:
         if kind == DECISION_CALLBACK:
@@ -109,13 +127,9 @@ class OutboxPublisher:
 
     def process_once(self) -> bool:
         """Claim and deliver one pending row. Returns False when queue is idle."""
-        lease = self.settings.outbox_backoff_base_seconds * (
-            2 ** (self.settings.outbox_max_attempts - 1)
-        )
+        lease = self.settings.outbox_backoff_base_seconds * (2 ** (self.settings.outbox_max_attempts - 1))
         with uow(self.session_factory) as session:
-            row = session.execute(
-                _CLAIM_SQL, {"lease_seconds": min(lease, 3600)}
-            ).first()
+            row = session.execute(_CLAIM_SQL, {"lease_seconds": min(lease, 3600)}).first()
         if row is None:
             return False
 
@@ -132,9 +146,7 @@ class OutboxPublisher:
         now = datetime.now(UTC)
         with uow(self.session_factory) as session:
             session.execute(
-                text(
-                    "UPDATE outbox SET status='delivered', delivered_at=:now WHERE id=:id"
-                ),
+                text("UPDATE outbox SET status='delivered', delivered_at=:now WHERE id=:id"),
                 {"id": row.id, "now": now},
             )
             if row.kind == POC_EMAIL:
@@ -170,9 +182,7 @@ class OutboxPublisher:
         with uow(self.session_factory) as session:
             if dead:
                 session.execute(
-                    text(
-                        "UPDATE outbox SET status='dead', attempts=:a, last_error=:e WHERE id=:id"
-                    ),
+                    text("UPDATE outbox SET status='dead', attempts=:a, last_error=:e WHERE id=:id"),
                     {"id": row.id, "a": attempts, "e": error[:2000]},
                 )
                 if row.kind == POC_EMAIL:
