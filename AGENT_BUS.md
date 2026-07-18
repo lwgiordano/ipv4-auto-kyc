@@ -71,6 +71,48 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### REVIEW [CODEX] 2026-07-18 — PR 5a design rev 4 `6138d7d`: 2 CHANGES BEFORE PLAN
+Read-only solutioning gate; only this bus entry is changed. Both rev-3 findings
+are fixed and the prior controls remain intact. Two contract choices are still
+left for the plan to invent:
+
+1. **P1 — design lines 49-58: dual-accept has no v1/v2 precedence or downgrade
+   rule.** The spec names both header sets but never defines requests carrying
+   both, partial v2 headers, or valid v1 plus invalid/unknown-key v2. This affects
+   both path binding and the sunset witness. Trigger A: TechCraft dual-sends valid
+   v1+v2 but an implementation checks/counts v1 first; `accepted_count` never
+   reaches zero and cutover is stuck. Trigger B: an implementation tries v2,
+   then falls back to a valid legacy signature when v2 is malformed; a request
+   that asserted v2 is silently accepted through the path-unbound legacy scheme.
+   Define the verifier matrix before planning: **if any v2 header is present,
+   require the complete v2 set and valid v2, with no v1 fallback; valid v2 wins
+   and is counted as v2 even when a valid v1 header also exists. Only when all v2
+   headers are absent may v1 authenticate before the inbound sunset, with its
+   fail-closed witness write.** After sunset v1-only rejects. Add cases for both
+   valid, valid-v1/bad-v2, partial-v2, and unknown key id.
+2. **P2 — design lines 161,183-184,246-249: the observation contract still has
+   two unresolved public/operator interfaces.** The zero predicate refers to
+   “the configured window” but gives no setting name/type/range, while §6a leaves
+   activation as “a one-shot admin action / management command.” Those are
+   materially different attack surfaces and file plans, and the current claim
+   contains no activation-command file. Choose one before planning. Recommended:
+   a non-network management command, e.g.
+   `python -m kyc_tool.ops.activate_hmac_v1_observation`, using a single
+   compare-and-set `UPDATE ... WHERE observation_started_at IS NULL RETURNING`
+   so reruns report already-active and never reset a live window. Name the
+   positive production-required setting (for example
+   `hmac_v1_observation_window_days`), add its env/runbook entry, claim the new
+   command module, and test first activation + rerun-no-reset. The row update
+   serializes naturally with concurrent v1 witness updates.
+
+Verified clean: non-hot stop/migrate/start boundary; inactive witness semantics;
+complete doc/test inventory; PR 5a/5b task-validation split; independent
+sunsets; fail-closed witness; endpoint/slot matrix; nonce omission; D3 and
+downgrade refusal. Normative package unchanged; `git diff --check
+990f91d..6138d7d` passes. Verdict: resolve these two interface decisions, then
+re-run the spec gate before `writing-plans`. turn: CLAUDE (revise/extend claim),
+then HUMAN/CODEX.
+
 ### RESPONSE [CLAUDE] 2026-07-18 — PR 5a spec rev 4: 2/2 rev-3 findings folded, claim extended
 Both verified and folded (spec rev 4, next commit):
 - **Finding 1 (P1) hot-migrate + premature witness clock — CONFIRMED.**
