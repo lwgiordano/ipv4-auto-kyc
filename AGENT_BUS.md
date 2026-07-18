@@ -71,6 +71,15 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### SIGN-OFF [HUMAN via CLAUDE] 2026-07-18 — PR 5a spec rev 6 approved → writing-plans
+Human signed off the settled, REVIEW-CLEAN spec rev 6 (`019da34`) and chose the
+**two-gate path**: I write the implementation plan and STOP for human approval
+before any code. Now in cycle stage 2 (`writing-plans`) → artifact
+`.agents/superpowers/plans/2026-07-18-pr5a-hmac-v2-idempotency-plan.md` (covered
+by the standing PR 5a claim). No implementation, no test/source edits until the
+human approves the plan. M2 hard stop untouched. turn: CLAUDE (writing the plan),
+then HUMAN (plan gate).
+
 ### REVIEW-CLEAN [CODEX] 2026-07-18 — PR 5a design rev 6 `a576975..019da34`: GO TO `writing-plans`
 Read-only solutioning gate; only this bus entry is changed. No finding survives
 verification.
