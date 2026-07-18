@@ -150,12 +150,13 @@ the production go-live: the M2 gate (real-adapter end-to-end + hardened signing
 launches with it off — the tool investigates, the review team confirms, and the
 flag flips per environment once staging has proven out.
 
-> **Keep staging closed until PR 5 lands.** Request signing is currently v1
-> (body + timestamp), which does not bind the URL path — a signed event captured
-> within the 5-minute window could be replayed to a different case. Harmless
-> behind a closed staging perimeter; with automation on it must not face
-> untrusted input. PR 5's canonical signing (path-bound) closes this, after
-> which staging can widen safely.
+> **Keep staging closed until inbound v1 is actually disabled.** PR 5a adds
+> path-bound HMAC v2, but during the dual-accept window a **v1-only** request is
+> still path-unbound — a signed event captured within the skew window could be
+> replayed to a different case. The redirect closes for v2 at deploy, but for
+> everyone only once inbound v1 is disabled (the zero-witness is satisfied and
+> `hmac_v1_inbound_sunset_at` takes effect). Keep staging's perimeter closed
+> until then, not merely until PR 5a ships.
 
 Checklist:
 

@@ -48,8 +48,58 @@ def verify(secret: str, timestamp: str, body: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 ```
 
-A v2 scheme (signing method + path as well) ships later with a dual-accept
-window — integrate against v1 now; nothing breaks at cutover.
+### v2 signing (path-bound) — dual-accept now
+
+v1 does not bind the URL, so a captured signature can be replayed to a different
+case. **v2** signs the method and path too. We accept **both** during a
+dual-accept window and give you fixed sunset dates; integrate v2 at your pace,
+nothing breaks in the meantime. Headers change to:
+
+```
+X-KYC-Timestamp: <unix seconds>
+X-KYC-Key-Id:    kyc-platform-1        # a constant from your config
+X-KYC-Signature-V2: <hex HMAC-SHA256(secret, canonical)>
+```
+
+The `canonical` value is 8 newline-joined lines (no trailing newline):
+
+```
+v2
+<key_id>
+platform->tool
+<HTTP method, e.g. POST>
+<raw path + "?query" if any, e.g. /v1/cases/acme-1/events>
+<timestamp>
+<Idempotency-Key for event POSTs, else empty>
+<hex sha256 of the raw body>
+```
+
+One recipe covers everything you send — the only per-request variables are the
+method, path, timestamp, idempotency key (empty on GETs), and body hash:
+
+```python
+import hashlib, hmac
+
+def sign_v2(secret, *, key_id, method, path_qs, timestamp, slot, body: bytes):
+    canonical = "\n".join([
+        "v2", key_id, "platform->tool", method, path_qs, timestamp, slot,
+        hashlib.sha256(body).hexdigest(),
+    ])
+    return hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+
+# worked vector — sign_v2(secret="s", key_id="kyc-platform-1", method="POST",
+#   path_qs="/v1/cases/acme-1/events", timestamp="1000.0", slot="idem-1",
+#   body=b'{}')
+#   == "16a499257960ec379a4621c31f12a986c252343459d7edc0de14f26b742719e6"
+#   Reproduce this exact hex before going live to confirm byte-for-byte parity.
+```
+
+Rules: **if you send any v2 header, the request must be complete, valid v2** — we
+do not fall back to v1 for a v2-labelled request. `key_id` is a constant from your
+config (it only changes on a secret rotation). On staging, a v2 mismatch logs the
+server-side canonical string so you can diff it in one look. Our webhook callbacks
+dual-emit both signatures until the outbound sunset, so your receiver can migrate
+whenever it's ready.
 
 ## 3. Sending events
 
@@ -262,8 +312,14 @@ The event contract does not change — only what `object_ref` points at.
 - `GET /v1/runs/{id}` — one run's state and adapter results.
 - `GET /v1/review-tasks?status=open` — open human-review tasks (website
   checks, hidden POC email).
-- `POST /v1/review-tasks/{id}/complete` — body
-  `{"result": "pass"|"fail", "reviewer_id": "...", "reason_codes": []}`, signed.
+
+**Completing a website review** is a normal signed event, not a separate
+endpoint: post `website.review_completed` to `POST /v1/cases/{case_id}/events`
+with payload `{"task_id": "...", "result": "pass"|"fail", "reviewer_id": "..."}`.
+The tool validates the task exists, is a website task on that case, and is open
+(else 404/409/422); the transition, check, and audit are identical to any other
+event. (The old `POST /v1/review-tasks/{id}/complete` endpoint is retired — it
+duplicated this event.)
 
 In production these reads also require the §2 signature headers. There is also
 an operator console (`/ui`) for the registration team — dashboards, case

@@ -8,7 +8,17 @@
 | Pipeline worker | `python -m kyc_tool.workers.pipeline_worker` | N processes; per-case FIFO is queue-enforced |
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | delivers decision callbacks + POC emails |
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily); prunes per KYC_RETENTION_DAYS |
-| Migrations | `alembic upgrade head` | before rollout; all revisions downgrade cleanly |
+| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 (see below) |
+| v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, POST-cutover (PR 5a §6a); idempotent |
+
+> **Migration 010 (PR 5a) is a non-hot, forward-only-after-reuse cutover.** It
+> drops the global unique on `events.idempotency_key`, which the *old* image's
+> ingest still references — deploy **stop/migrate/start**, never rolling. Once
+> the tool has admitted the same idempotency key in two different cases, 010's
+> downgrade **refuses** (it will not delete immutable audit events to recreate
+> the old constraint); roll forward instead. After the new replicas are up and
+> readiness-verified, run the activation command above once to start the v1
+> observation clock.
 
 ## Production configuration (startup kill switches)
 

@@ -187,3 +187,26 @@ documented choice · 🔵 hygiene/wording.
   the stale `org_id_match`/`poc_verified` (and their points) to `needs_review` rather
   than leaving stale positives live. This closes the gap where identity-bound points
   outlived the identity that earned them.
+- **D8 — Path-bound HMAC v2, per-case idempotency, and two deviations
+  (remediation PR 5a).** v1 signs only `{timestamp}.{body}`, leaving `case_id`
+  (in the URL path) unsigned — a captured signed event could be redirected to
+  another case within the skew window and auto-approve it (this is the M2 hazard,
+  ROADMAP §D). **HMAC v2** binds `key_id/direction/method/raw_path+query/timestamp/
+  slot/sha256(body)` into the signed value, closing the redirect; the verifier is
+  **sticky** (any v2 header ⇒ v2-only, no fallback to the path-unbound v1 scheme).
+  **D3** re-scopes event idempotency from global to `(case_id, idempotency_key)`
+  (migration 010) so the same key in another case is an independent event, never a
+  replay — recorded in **ADR-003**. Rollout is dual-accept behind two independent
+  sunset dates (inbound gated by a durable, fail-closed cross-replica witness;
+  outbound by a staging callback E2E), shipped as a **non-hot stop/migrate/start
+  cutover** (migration 010 is not hot-compatible; its downgrade is forward-only
+  after cross-case reuse). **Two deliberate deviations from the normative package,
+  recorded here:** (1) `POST /v1/review-tasks/{id}/complete` is **retired** — it
+  duplicated a transition that already exists as the keyed `website.review_completed`
+  event; completion now flows through that event with a validation floor (task
+  exists / type=website / same-case / open), and full trust/concurrency binding is
+  PR 5b. (2) `request_nonces` (anticipated by ROADMAP §G) is **omitted from
+  migration 010** — retiring the endpoint removed the only keyless state-changing
+  op, so a nonce table would be an unused security mechanism (YAGNI); revisit only
+  if a future keyless HMAC op appears. `KYC_Tool_Build_Package/` is unmodified; the
+  M2 hard stop is untouched.

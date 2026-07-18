@@ -4,6 +4,38 @@ A running log of significant decisions and their rationale. Newest first.
 
 ---
 
+## ADR-003 — Per-case idempotency (D3) + path-bound HMAC v2 (PR 5a)
+
+**Context.** Event idempotency was globally unique on `events.idempotency_key`,
+and request signing (v1) covered only `{timestamp}.{body}` — not the `case_id`
+carried in the URL path. Together these let a captured signed clean-company event
+be replayed against a *different* case within the skew window. This is the
+load-bearing reason the M2 enforcement kill switch stays frozen.
+
+**Decision.** (1) **D3:** idempotency is `(case_id, idempotency_key)`; the same
+key in another case is an independent event, never another case's replay
+(cross-case reuse → two runs; same-case same-key different-payload → 409). (2)
+**HMAC v2** binds method + full path + direction + key_id + timestamp + slot +
+`sha256(body)`; the verifier is sticky (any v2 header ⇒ v2-only, no v1 fallback).
+
+**Rollout.** Dual-accept with **independent** inbound/outbound sunset dates: the
+inbound date is gated by a durable, fail-closed, cross-replica v1 **witness**
+(zero v1 accepted across a configured window) activated post-cutover; the
+outbound date by a v2-only staging callback E2E + sign-off (never inferred from
+inbound telemetry). Migration 010 is **not hot-compatible** (the old image's
+`ON CONFLICT (idempotency_key)` needs the global unique 010 drops) — deploy
+**stop/migrate/start**; 010's downgrade is **forward-only after cross-case reuse**
+(it refuses rather than deleting immutable audit events).
+
+**Consequences.** The cross-case redirect closes for v2 traffic immediately and
+for everyone once inbound v1 is disabled (the sunset takes effect); until then a
+v1-only replay remains possible (documented residual risk of dual-accept). The
+duplicate `/v1/review-tasks/{id}/complete` endpoint is retired and `request_nonces`
+omitted (both recorded in `AUDIT_FINDINGS.md` D8). M2 remains gated on the full
+platform cutover.
+
+---
+
 ## ADR-002 — Resolving the post-audit architecture findings
 
 **Context.** A max-effort code review surfaced a cluster of architecture-level

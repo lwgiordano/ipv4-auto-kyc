@@ -313,7 +313,9 @@ the platform's callback URL (and Floqer once wired).
 |---|---|
 | `KYC_DATABASE_URL` | PostgreSQL connection string. |
 | `KYC_PLATFORM_CALLBACK_URL` | Where the tool POSTs decisions. |
-| `KYC_PLATFORM_HMAC_SECRET` | Shared secret signing both directions. |
+| `KYC_PLATFORM_HMAC_SECRET` | v1 legacy shared secret (kept until the inbound sunset). |
+| `KYC_HMAC_INBOUND_SECRET` / `KYC_HMAC_OUTBOUND_SECRET` (+ `_KEY_ID`) | v2 path-bound signing, split per direction (PR 5a). |
+| `KYC_HMAC_V1_INBOUND_SUNSET_AT` / `KYC_HMAC_V1_OUTBOUND_SUNSET_AT` / `KYC_HMAC_V1_OBSERVATION_WINDOW_DAYS` | v1 dual-accept sunset dates + zero-witness window (prod-required). |
 | `KYC_OBJECT_STORE` | `fs` (dev) or `s3` (production). |
 | `KYC_S3_BUCKET` | Evidence bucket when `KYC_OBJECT_STORE=s3`. |
 | `CH_API_KEY` | Companies House key (optional; raises rate limits). |

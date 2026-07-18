@@ -36,10 +36,22 @@ unsafe (missing secret, stub providers, non-HTTPS callback URL), listing every
 violation at once. A bad deploy fails loudly instead of running quietly broken.
 
 Staging's automation-on is safe **only** while staging is closed to untrusted
-callers: request signing is v1 (body + timestamp) and does not bind the URL
-path until PR 5, so a captured signed event could be replayed to another case
-within the 5-minute window. Keep staging's perimeter closed until that lands;
-production automation stays off regardless until the M2 gate is met.
+callers. PR 5a adds path-bound HMAC v2, but during the dual-accept window a
+**v1-only** request is still path-unbound — a captured signed event could be
+replayed to another case within the skew window. The redirect closes for v2
+traffic at deploy, but for everyone only once **inbound v1 is actually disabled**
+(the §6 zero-witness satisfied AND `hmac_v1_inbound_sunset_at` in effect). Keep
+staging's perimeter closed until then — not merely until PR 5a is deployed.
+Production automation stays off regardless until the M2 gate is met.
+
+**PR 5a is a non-hot cutover.** Migration 010 drops the global unique that the
+old image's ingest still uses, so an old replica serving after the migration
+would fail event inserts. Deploy **stop → migrate → start** (not a rolling
+upgrade): drain all old API replicas, run `alembic upgrade head`, start the new
+replicas, readiness-verify them, then run the one-shot
+`python -m kyc_tool.ops.activate_hmac_v1_observation` to start the v1
+observation clock. Do NOT skip the activation step — until it runs, the sunset
+zero-witness never turns green (by design), so v1 can never be sunset.
 
 ## 3. First-time setup (per environment)
 

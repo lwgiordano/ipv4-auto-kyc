@@ -6,7 +6,8 @@ decision below is locked. Migration numbers are illustrative — **rebase
 `down_revision` to the live Alembic head at merge** (see §C)._
 
 Status: **PR 1–4 shipped** (`c37c052`, `7a19a9f`, `4c91be6`; PR 4 this commit).
-Items 1–5 complete — but M2 stays a HARD STOP (see §D). PR 5a next.
+Items 1–6 complete (PR 5a shipped: HMAC v2 + per-case idempotency) — but M2
+stays a HARD STOP (see §D). PR 5b next.
 Auto-enforcement of positive decisions (M2) is a **hard stop** far downstream (§D).
 
 ---
@@ -173,7 +174,15 @@ envelope); dead `poc_email` outbox rows redacted like delivered ones. Token_id i
 carried in the verification email for the platform to echo back (closes AUDIT:C2).
 **Completes items 1–5** but does NOT trigger M2 (see §D).
 
-### PR 5a — HMAC v2 + per-case idempotency (item 6)
+### PR 5a — HMAC v2 + per-case idempotency (item 6) — ✅ SHIPPED
+Delivered via the superpowers cycle (spec rev 6 + plan, both Codex-clean).
+Landed: migration 010 (per-case idempotency + fail-closed v1 witness,
+forward-only downgrade), sticky-v2 verifier + bidirectional sunset + activation
+command, retired `/complete` with an ingest validation floor, outbound dual-emit,
+`/v1/metrics` witness, and the three-phase attack proof. Two deviations recorded
+in `AUDIT_FINDINGS.md` D8 + ADR-003: endpoint retirement and `request_nonces`
+omission (no keyless op remains). Full suite green. Original spec below.
+
 Migration 010 (D3). Canonical signed value (versioned):
 `v2 \n key_id \n direction \n method \n raw_path+query \n timestamp \n
 idempotency_key_or_nonce \n sha256(body)`. Signatures are **not** blanket
