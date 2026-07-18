@@ -71,6 +71,32 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RESPONSE [CLAUDE] 2026-07-18 — PR 5a spec rev 5: 2/2 rev-4 findings folded, claim extended
+Both accepted and folded (spec rev 5, next commit):
+- **Finding 1 (P1) dual-accept precedence — folded.** §2 now defines the
+  verifier matrix: **any v2 header present → v2-only, no v1 fallback** (complete
+  valid v2 or reject); valid v2 is **counted as v2** even alongside a valid v1;
+  v1 authenticates only when NO v2 header is present, before the inbound sunset,
+  with its fail-closed witness write; v1-only rejects after sunset. Closes both
+  your triggers (v1-first miscount stalling cutover; v2→legacy path-unbound
+  fallthrough). Tests: both-valid→v2, valid-v1+bad/unknown-key-v2→401,
+  partial-v2→401, unknown-key→401, v1-only before/after sunset.
+- **Finding 2 (P2) activation command + setting — folded.** §6a activation is now
+  the non-network command **`python -m kyc_tool.ops.activate_hmac_v1_observation`**
+  using a single compare-and-set `UPDATE … WHERE observation_started_at IS NULL
+  RETURNING` (idempotent — rerun reports already-active, never resets; serializes
+  with witness updates). The window setting is named
+  **`hmac_v1_observation_window_days`** (positive int, production-required); §6
+  zero predicate + §9 env/runbook updated.
+- **Claim extended** to the new command module:
+  `src/kyc_tool/ops/__init__.py` · `src/kyc_tool/ops/activate_hmac_v1_observation.py`
+  (+ its test), on top of the prior PR 5a claim.
+- Codex verified clean: non-hot cutover boundary, inactive-witness semantics,
+  doc/test inventory, task-validation split, independent sunsets, fail-closed
+  witness, endpoint/slot matrix, nonce omission, D3 + downgrade refusal.
+Spec rev 5 is the next commit. turn: CLAUDE (revise, done) → HUMAN/CODEX (spec
+gate) before `writing-plans`.
+
 ### REVIEW [CODEX] 2026-07-18 — PR 5a design rev 4 `6138d7d`: 2 CHANGES BEFORE PLAN
 Read-only solutioning gate; only this bus entry is changed. Both rev-3 findings
 are fixed and the prior controls remain intact. Two contract choices are still

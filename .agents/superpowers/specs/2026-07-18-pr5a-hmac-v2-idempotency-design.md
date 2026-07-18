@@ -1,12 +1,12 @@
 # PR 5a — HMAC v2 + per-case idempotency (design)
 
 - **Date:** 2026-07-18
-- **Status:** Design **rev 4** — rev 3 folded the rev-2 review; rev 4 folds
-  Codex's two rev-3 findings (`990f91d`, both accepted): PR 5a is an explicit
-  non-hot **stop/migrate/start cutover** with post-drain witness activation
-  (finding 1, P1), and the claim/plan extend to the operator-contract surfaces
-  the change makes stale (finding 2). Pending human spec re-review, then
-  `writing-plans`, then the plan gate.
+- **Status:** Design **rev 5** — rev 4 made PR 5a a non-hot cutover; rev 5 folds
+  Codex's two rev-4 findings (`6ed76e8`, both accepted): an explicit
+  **v1/v2 dual-accept precedence rule** (v2 is sticky, no downgrade — finding 1,
+  P1), and a concrete witness-activation command + named observation-window
+  setting (finding 2, P2). Pending human spec re-review, then `writing-plans`,
+  then the plan gate.
 - **Unit:** ROADMAP §G "PR 5a — HMAC v2 + per-case idempotency (item 6)",
   migration 010, decision D3. Thin-delta pointer: restates only what §G left
   open + the review-driven revisions; everything else is locked by
@@ -54,6 +54,25 @@ There is no nonce row: the review-complete endpoint is retired (§4).
 config `hmac_inbound_key_id`/`_secret` (+ optional extra-keys map for future
 rotation) and `hmac_outbound_key_id`/`_secret`. Legacy `platform_hmac_secret`
 stays the v1 secret until sunset.
+
+**Dual-accept precedence — v2 is sticky, no downgrade (rev5, finding 1).** The
+verifier matrix, evaluated per inbound request:
+
+- **Any v2 header present** (`X-KYC-Signature-V2` OR `X-KYC-Key-Id`) → the
+  request is evaluated **v2-only**: require the complete v2 set + valid v2
+  (known `key_id`, timestamp in skew, signature matches the canonical value) or
+  **reject**. **No fallback to v1**, even if a valid `X-KYC-Signature` is also
+  attached. A valid v2 request is **counted as v2** for telemetry.
+- **No v2 header at all** → v1 may authenticate, but only before
+  `hmac_v1_inbound_sunset_at`, with its fail-closed witness write (§6); counted
+  as v1-accepted. After the inbound sunset, a v1-only request is rejected.
+
+This closes two failures: (A) a dual-sent valid-v1+valid-v2 request counted as v1
+would keep the witness above zero and stall cutover — v2 wins and is counted v2;
+(B) a request that asserts v2 but is malformed must never fall through to the
+path-unbound legacy scheme. Tests: both-valid → v2; valid-v1 + bad/unknown-key
+v2 → 401; partial v2 (missing `key_id` or signature) → 401; unknown `key_id` →
+401; v1-only → v1 until sunset, 401 after.
 
 **Signature retry semantics (locked):** signatures are NOT blanket single-use;
 a same-(case, key, payload) retry returns the stored response snapshot.
@@ -158,7 +177,8 @@ The v1 **acceptance witness** is durable and fail-closed:
 - **Fail-closed:** if that durable update cannot be written, the v1 request is
   **rejected** — so real v1 traffic is never silently invisible.
 - The **zero predicate** (safe to reach `hmac_v1_inbound_sunset_at`) requires
-  BOTH: observation age (`now − observation_started_at`) ≥ the configured window
+  BOTH: observation age (`now − observation_started_at`) ≥
+  **`hmac_v1_observation_window_days`** (positive integer, production-required)
   AND `last_accepted_at` absent or older than that window. An absent/unseeded row
   means "observation never started," not "zero traffic," and does NOT satisfy the
   predicate.
@@ -180,8 +200,12 @@ not a rolling upgrade. Consequences:
 - Migration 010 seeds the sunset witness **inactive** (`observation_started_at`
   NULL) and does **not** start the observation clock.
 - After every old API replica is drained AND every new instance is
-  readiness-verified, an explicit **activation** (a one-shot admin action /
-  management command) sets `observation_started_at = now`. The inbound zero
+  readiness-verified, an explicit **activation** — the non-network management
+  command **`python -m kyc_tool.ops.activate_hmac_v1_observation`**, a single
+  compare-and-set `UPDATE … SET observation_started_at = now() WHERE
+  observation_started_at IS NULL RETURNING …` (idempotent: a rerun reports
+  "already active" and never resets a live window; it serializes naturally with
+  concurrent witness updates) — sets `observation_started_at`. The inbound zero
   window begins only there — never from migration time — so a straggler old
   replica accepting un-witnessed v1 cannot turn the predicate green prematurely.
 - An **inactive** witness (NULL `observation_started_at`) never satisfies the
@@ -217,6 +241,12 @@ not a rolling upgrade. Consequences:
   - **Witness activation (rev4, finding 1):** an **inactive** witness (NULL
     `observation_started_at`) never satisfies the zero predicate regardless of
     elapsed wall-clock; only the explicit post-cutover activation starts the clock.
+  - **Activation command (rev5, finding 2):** `activate_hmac_v1_observation` on a
+    NULL witness sets `observation_started_at` (compare-and-set RETURNING); a
+    **rerun reports already-active and does NOT reset** the live window.
+  - **v1/v2 precedence (rev5, finding 1):** both-valid → counted v2; valid-v1 +
+    bad/unknown-key v2 → 401 (no v1 fallback); partial v2 → 401; unknown
+    `key_id` → 401; v1-only → accepted before inbound sunset, 401 after.
   - **Bidirectional sunset (finding 2):** past `hmac_v1_inbound_sunset_at`,
     inbound v1 is rejected while outbound callbacks still dual-emit v1 until
     `hmac_v1_outbound_sunset_at` — the two dates move independently.
@@ -248,6 +278,11 @@ updates each (and the claim is extended to cover them):
   outbound secrets + key_id, the two sunset dates, and the observation window**;
   document the new settings.
 - `docs/DEPLOYMENT.md` — the non-hot cutover + activation step (already claimed).
+- **New command module (rev5, finding 2):** `src/kyc_tool/ops/activate_hmac_v1_observation.py`
+  (+ `src/kyc_tool/ops/__init__.py`) — the idempotent compare-and-set activation
+  command; a unit/integration test for first-activation + rerun-no-reset.
+  `.env.example`/`docs/RUNBOOK.md` also gain `hmac_v1_observation_window_days`
+  (production-required) alongside the two sunset dates and split secrets.
 - Tests already on disk that this PR must touch: `tests/integration/test_migrations.py`
   (010 up/down + downgrade-refusal), `tests/unit/test_production_config.py`
   (both sunset dates required in production), `tests/unit/test_ops_auth.py`
