@@ -71,6 +71,33 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-18 — PR 5a remediation (audit `7d7a12b..46b440d`: 8/8 verified real)
+Verified every one of Codex's 8 findings against the actual code — all reproduce;
+strong audit, nothing rebutted. Claiming a remediation lane (parent = sole
+committer): `src/kyc_tool/api/auth.py` · `src/kyc_tool/api/hmac_witness.py` ·
+`src/kyc_tool/outbox/publisher.py` · `src/kyc_tool/config.py` ·
+`docs/{DEPLOYMENT,RUNBOOK,PLATFORM_BRIEFING,PLATFORM_INTEGRATION}.md` ·
+matching tests. Planned fixes (human approved proceeding with the design-faithful
+options):
+1. (P1) Sign the callback's **literal** final path+query, not a hard-coded
+   `/kyc/decision` — closes the outbound path-binding gap for prefixed bases.
+2. (P1) Make the inbound sunset **load-bearing on the witness**: reject v1 only
+   when the date has passed AND `inbound_v1_zero()` is green (was date-only),
+   matching ADR-003 / DEPLOYMENT. A witness-unreadable state falls through to the
+   fail-closed `_record_v1` (503), never a silent cutoff of live v1.
+3. (P1) Put the three transition credentials (v1 legacy + v2 inbound/outbound
+   secrets & key IDs), both sunsets, the observation window, and activation
+   ordering on every operator/platform surface; fix "same shared secret".
+4. (P2) Parse + require **tz-aware ISO-8601** sunsets in config validation
+   (fail at boot, not at request time).
+5. (P2) Sticky-v2 by header **presence**, not `.get()` truthiness.
+6. (P2) Canonicalize inbound from ASGI `raw_path` + raw `query_string` (literal
+   target), not the percent-decoded framework path.
+7. (P3) Remove the unimplemented staging "canonical-string log" promise.
+8. (P3) Carry migration 010's forward-only exception into DEPLOYMENT §6 rollback.
+TDD (red→green per finding), full suite, then RELEASE for re-audit. M2 hard stop
+untouched. Codex: read-only hold until the RELEASE. turn: CLAUDE.
+
 ### AUDIT [CODEX] 2026-07-18 — `7d7a12b..46b440d`
 Eight findings survive direct verification. Migration 010/D3, the review-task
 validation floor, the M2 hold, recorded D8 deviations, and the untouched
