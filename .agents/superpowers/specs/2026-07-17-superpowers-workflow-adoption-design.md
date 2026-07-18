@@ -1,14 +1,14 @@
 # Design — Adopt the superpowers development workflow for this project
 
-- **Date:** 2026-07-17 (rev 3: 2026-07-18; rev 4: 2026-07-18)
-- **Status:** Draft **rev 4** — self-audited (5-lens workflow) + three independent
-  Codex audits. Rev 2 folded 8 findings; rev 3 deleted the SessionStart hook and
-  vendored the skills as an in-repo plugin (Codex validated that layout loads on
-  the real runtime); rev 4 folds Codex's 5 rev-3 refinement findings — mostly
-  correcting two over-claims (mechanical exemption, "moot" trust) to honest
-  statements, plus a repo-root invariant, a live-watch-safe update procedure, and
-  a fully specified lock digest. Pending Codex `AUDIT-CLEAN` on rev 4, then human
-  review.
+- **Date:** 2026-07-17 (rev 3–5: 2026-07-18)
+- **Status:** Draft **rev 5** — self-audited (5-lens workflow) + four independent
+  Codex audits, each fully folded. Rev 2 folded 8 findings; rev 3 deleted the
+  SessionStart hook and vendored the skills as an in-repo plugin (Codex validated
+  the layout loads on the real runtime); rev 4 folded 5 refinements (two of them
+  over-claims of mine, corrected); rev 5 folds 3 more (executable-mode in the
+  integrity digest, a corrected fallback-discovery analysis, and a bus-process
+  fix). Codex verified rev4-F1..F5 all closed. Pending Codex `AUDIT-CLEAN` on rev
+  5, then human review.
 - **Author:** Claude, for lwgiordano/ipv4-auto-kyc
 - **Scope:** process only — no product code, no change to the M2 hard stop, no
   change to the normative `KYC_Tool_Build_Package/`.
@@ -182,7 +182,8 @@ price for deterministic behavior.
 5. Upstream updates **never happen automatically**.
 6. Every update identifies an **exact upstream commit and tree OID**.
 7. The project namespace **cannot collide** with personal or marketplace skills.
-8. Missing, modified, or extra vendored files **fail CI** (per the §5 digest).
+8. Missing, modified, extra, or **mode-changed** vendored files **fail CI** —
+   the §5 digest binds file content AND git mode (rev5-F1).
 9. **[rev4-F1] Autonomous turns are held out of the cycle — soft, with accepted
    residual risk.** They SHOULD launch with `--disable-slash-commands` where the
    launcher permits (mechanical). Where it does not (we do not control the remote
@@ -192,8 +193,10 @@ price for deterministic behavior.
    mechanical guarantee; a behavioral sample is evidence, not a control (§6).
 10. Rollback is a normal `git revert` (taking effect on the next session — see
     the update procedure below).
-11. **[rev4-F3] Sessions launch at the repository root** (project plugins are
-    CWD-relative and do not walk up); a subdir launch does not load the workflow.
+11. **[rev4-F3] Sessions launch at the repository root** — `@skills-dir` plugins
+    are root-CWD-only and do not walk up, so a subdir launch does not load the
+    workflow. **[rev5-F2]** This constraint is specific to the *plugin*; the
+    bare-skill fallback (§5) *does* walk up to the repo root and would be exempt.
 
 **Provenance & integrity — `UPSTREAM.lock.json` (rev4-F5, fully specified):**
 
@@ -216,9 +219,9 @@ price for deterministic behavior.
     "algorithm": "sha256",
     "path_set": "every file under .claude/skills/ipv4-superpowers/ EXCEPT UPSTREAM.lock.json itself",
     "path_normalization": "repo-relative, '/'-separated, sorted lexicographically (bytewise)",
-    "scope": "file CONTENT only; mode/mtime/ownership excluded",
-    "files": { "<sorted repo-relative path>": "<sha256 hex>", "…": "…" },
-    "aggregate": "sha256 over the sorted 'path:hex\\n' lines of `files`"
+    "scope": "file CONTENT + normalized git mode (rev5-F1: 100644 or 100755 ONLY; reject 120000 symlinks / 160000 gitlinks / any other type); mtime/ownership excluded",
+    "files": { "<sorted repo-relative path>": { "sha256": "<hex>", "mode": "100644|100755" } },
+    "aggregate": "sha256 over the sorted '<path>\\0<mode>\\0<sha256>\\n' records of `files`"
   },
   "patch_sha256": "<sha256 of patches/project-namespace.patch>"
 }
@@ -226,10 +229,11 @@ price for deterministic behavior.
 
 Two distinct checks, deliberately separated:
 
-- **Local-integrity (offline, every CI run):** recompute the per-file `sha256`
-  map + `aggregate` over the checkout's `path_set` and compare to the lock. Any
-  missing, modified, or extra file changes the aggregate → fail. Requires no
-  network; does not consult upstream.
+- **Local-integrity (offline, every CI run):** recompute the per-file
+  `{sha256, mode}` map + `aggregate` over the checkout's `path_set` and compare to
+  the lock. Any missing, modified, extra, or **mode-changed** file (e.g. an
+  executable helper script flipped `0755→0644`, content untouched) changes the
+  aggregate → fail. Requires no network; does not consult upstream.
 - **Upstream-provenance (update time only):** fetch the pinned `commit`, confirm
   `upstream_tree_oid` / `upstream_skills_tree_oid` match, then re-derive the
   vendored tree by applying `patches/project-namespace.patch` and confirm the
@@ -280,15 +284,25 @@ deterministic path these invariants require.
   namespaced project skill is available.
 - **[rev4-F3] Subdir launch negative:** a session started in `src/` does **not**
   discover the plugin — documents the repo-root requirement (invariant 11).
-- **Negative integrity:** an intentionally deleted vendored file AND an
-  intentionally stale extra file each fail the local-integrity check.
+- **[rev5-F1] Executables run:** every shipped executable (the upstream `100755`
+  helper scripts — e.g. `subagent-driven-development/scripts/review-package`,
+  `.../task-brief`, `brainstorming/scripts/start-server.sh`) is present with mode
+  `100755` and actually executes.
+- **Negative integrity:** an intentionally deleted vendored file, an intentionally
+  stale extra file, AND a **mode-only flip** (`0755→0644` on a helper script,
+  content unchanged) each fail the local-integrity check.
 
 **Fallback (only if the plugin bundle ever fails an acceptance test):** 14 bare
 skill dirs `.claude/skills/ipv4-superpowers-<skill>/`, each namespaced by a manual
 prefix — the mechanism this repo already uses for `architecture` and `stop-slop`.
-Note this does **not** escape rev4-F2/F3: bare project skills are equally
-trust-gated and CWD-relative. The acceptance test decides; the vendored plugin is
-primary.
+**[rev5-F2, corrected]** Bare project skills are discovered by walking from the
+launch directory **up to the repo root** (Codex runtime-verified on 2.1.179), so
+they **do escape rev4-F3** — a subdir launch still finds them, unlike the
+root-CWD-only plugin; if the fallback were adopted, invariant 11 would not apply.
+They remain **equally trust-gated (rev4-F2 still applies)**. The tradeoff for the
+acceptance-test decision: the plugin gives automatic `plugin:skill` namespacing
+but requires a repo-root launch; the bare fallback is subdir-robust but uses
+manual-prefix namespacing. The vendored plugin is primary.
 
 ## 6. Scope & the autonomous-turn exemption (part e)
 
@@ -380,7 +394,17 @@ job is a **required** gate, not deferred.)
   is not activation → live-watch-safe update off the watched tree, activation = a
   new session on the reviewed commit), rev4-F5 (lock schema → canonical per-file
   digest + aggregate + upstream tree OIDs, local-integrity vs upstream-provenance
-  separated). Two were over-claims of mine, corrected to honest statements. The
-  hook file is removed in the bootstrap implementation commit, after this design
-  passes human + Codex review. Codex is asked to re-audit THIS revision to
-  `AUDIT-CLEAN` before any implementation (`writing-plans`) begins.
+  separated). Two were over-claims of mine, corrected to honest statements.
+- Rev 4 → Rev 5: independent Codex audit `AUDIT [CODEX] 1bee45b..383ab6c`
+  **verified rev4-F1..F5 all closed** and raised 3 smaller findings, all folded:
+  rev5-F1 (P2 — the content-only digest missed executable-mode flips; confirmed
+  `subagent-driven-development/scripts/review-package` is `0755` and a `0755→0644`
+  flip keeps the content sha → the digest now binds a normalized git mode and
+  acceptance exercises every shipped executable), rev5-F2 (P3 — my fallback
+  analysis was wrong; bare project skills walk up to the repo root and DO escape
+  rev4-F3, unlike the root-CWD-only plugin → §5 corrected, invariant 11 scoped to
+  the plugin), rev5-F3 (P3 — rev 4 was a single commit with no pre-edit CLAIM →
+  remedied by a separate CLAIM pushed before this revision). The hook file is
+  removed in the bootstrap implementation commit, after this design passes human +
+  Codex review. Codex is asked to re-audit rev 5 to `AUDIT-CLEAN` before any
+  implementation (`writing-plans`) begins.
