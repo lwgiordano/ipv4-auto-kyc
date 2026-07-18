@@ -24,6 +24,14 @@ def hardened(**overrides) -> Settings:
         adapters_profile="real",
         read_auth_required=True,
         ui_enabled=False,
+        # HMAC v2 (PR 5a): split secrets + key_ids, both sunset dates, window.
+        hmac_inbound_key_id="kyc-platform-1",
+        hmac_inbound_secret="i" * 40,
+        hmac_outbound_key_id="kyc-tool-1",
+        hmac_outbound_secret="o" * 40,
+        hmac_v1_inbound_sunset_at="2026-09-01T00:00:00Z",
+        hmac_v1_outbound_sunset_at="2026-10-01T00:00:00Z",
+        hmac_v1_observation_window_days=14,
     )
     base.update(overrides)
     return Settings(**base)
@@ -49,6 +57,14 @@ def test_hardened_config_has_no_violations():
         ({"adapters_profile": "fixture"}, "adapters_profile"),
         ({"read_auth_required": False}, "read_auth_required"),
         ({"ui_enabled": True, "ui_admin_token": ""}, "ops console"),
+        # HMAC v2 (PR 5a)
+        ({"hmac_inbound_secret": ""}, "inbound secret"),
+        ({"hmac_outbound_secret": "short"}, "outbound secret"),
+        ({"hmac_inbound_key_id": ""}, "hmac_inbound_key_id"),
+        ({"hmac_outbound_key_id": ""}, "hmac_outbound_key_id"),
+        ({"hmac_v1_inbound_sunset_at": ""}, "inbound sunset"),
+        ({"hmac_v1_outbound_sunset_at": ""}, "outbound sunset"),
+        ({"hmac_v1_observation_window_days": 0}, "observation window"),
     ],
 )
 def test_each_unsafe_condition_is_rejected(overrides, needle):

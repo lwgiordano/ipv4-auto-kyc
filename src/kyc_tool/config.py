@@ -39,6 +39,23 @@ class Settings(BaseSettings):
     auth_disabled: bool = False  # test/dev escape hatch — never set in production
     hmac_max_skew_seconds: int = 300
 
+    # HMAC v2 (PR 5a — path-bound canonical signing). Split inbound/outbound
+    # secrets + key_id; v1's shared platform_hmac_secret stays the legacy secret
+    # until the inbound sunset. extra_keys carries accepted-but-not-active keys
+    # (key_id -> secret) so a secret can be rotated without a flag day.
+    hmac_inbound_key_id: str = ""
+    hmac_inbound_secret: str = ""
+    hmac_inbound_extra_keys: dict[str, str] = {}
+    hmac_outbound_key_id: str = ""
+    hmac_outbound_secret: str = ""
+    # Bidirectional dual-accept sunsets (ISO-8601; "" = unset ⇒ dual-accept).
+    # inbound is gated by the zero-witness; outbound by a staging callback E2E +
+    # TechCraft sign-off (never inferred from inbound telemetry).
+    hmac_v1_inbound_sunset_at: str = ""
+    hmac_v1_outbound_sunset_at: str = ""
+    # Days the durable v1 witness must be silent before the inbound sunset.
+    hmac_v1_observation_window_days: int = 0
+
     # M3 compatibility gate: don't emit the new `event_sequence` callback field
     # until the platform has agreed to consume it. Off until the cutover.
     callback_include_event_sequence: bool = False
@@ -152,6 +169,24 @@ def production_config_violations(settings: Settings) -> list[str]:
     if settings.ui_enabled and not settings.ui_admin_token:
         v.append("ui_enabled is True but ui_admin_token is empty (unauthenticated ops console)")
 
+    # HMAC v2 (PR 5a): split secrets/key_ids, both sunset dates, and a positive
+    # observation window are all required in production — this is what enforces
+    # the spec's "fixed sunset" (no dual-accept-forever) and the durable witness.
+    if not settings.hmac_inbound_secret or len(settings.hmac_inbound_secret) < _MIN_HMAC_SECRET_LEN:
+        v.append("hmac_inbound secret is missing/weak (v2 inbound verification)")
+    if not settings.hmac_outbound_secret or len(settings.hmac_outbound_secret) < _MIN_HMAC_SECRET_LEN:
+        v.append("hmac_outbound secret is missing/weak (v2 callback signing)")
+    if not settings.hmac_inbound_key_id:
+        v.append("hmac_inbound_key_id is empty")
+    if not settings.hmac_outbound_key_id:
+        v.append("hmac_outbound_key_id is empty")
+    if not settings.hmac_v1_inbound_sunset_at:
+        v.append("hmac_v1 inbound sunset date is unset (dual-accept-forever is not allowed)")
+    if not settings.hmac_v1_outbound_sunset_at:
+        v.append("hmac_v1 outbound sunset date is unset (dual-accept-forever is not allowed)")
+    if settings.hmac_v1_observation_window_days < 1:
+        v.append("hmac_v1 observation window days must be >= 1")
+
     return v
 
 
@@ -159,9 +194,7 @@ def validate_for_production(settings: Settings) -> None:
     """Refuse to start a production process on any unsafe configuration."""
     violations = production_config_violations(settings)
     if violations:
-        raise ProductionConfigError(
-            "refusing to start in production — fix all of: " + "; ".join(violations)
-        )
+        raise ProductionConfigError("refusing to start in production — fix all of: " + "; ".join(violations))
 
 
 def get_settings() -> Settings:
