@@ -132,6 +132,51 @@ def sign_headers(body: bytes, *, key: str | None = None) -> dict[str, str]:
     }
 
 
+def sign_headers_v2(
+    body: bytes,
+    *,
+    method: str,
+    path_qs: str,
+    key: str | None = None,
+    key_id: str = "kyc-platform-1",
+    secret: str = TEST_SECRET,
+) -> dict[str, str]:
+    """v2 (path-bound) signed headers for the dual-accept tests."""
+    timestamp = str(time.time())
+    idem = key or uuid.uuid4().hex
+    sig = security.sign_v2(
+        secret,
+        key_id=key_id,
+        direction=security.DIRECTION_INBOUND,
+        method=method,
+        path_qs=path_qs,
+        timestamp=timestamp,
+        slot=idem,
+        body=body,
+    )
+    return {
+        "Content-Type": "application/json",
+        "Idempotency-Key": idem,
+        "X-KYC-Timestamp": timestamp,
+        "X-KYC-Key-Id": key_id,
+        "X-KYC-Signature-V2": sig,
+    }
+
+
+@pytest.fixture()
+def dual_accept_settings(settings):
+    """v1 (platform_hmac_secret) AND v2 inbound both = TEST_SECRET; both sunsets
+    far future ⇒ dual-accept accepts either scheme."""
+    return settings.model_copy(
+        update={
+            "hmac_inbound_key_id": "kyc-platform-1",
+            "hmac_inbound_secret": TEST_SECRET,
+            "hmac_v1_inbound_sunset_at": "2999-01-01T00:00:00Z",
+            "hmac_v1_observation_window_days": 14,
+        }
+    )
+
+
 @pytest.fixture()
 def sign():
     """Sign a raw request body for endpoints hit outside the post_event helper

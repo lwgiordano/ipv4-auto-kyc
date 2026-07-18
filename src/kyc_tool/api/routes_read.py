@@ -31,7 +31,7 @@ def _check_json(check) -> dict:
 
 @router.get("/v1/cases/{case_id}")
 def get_case(case_id: str, request: Request) -> dict:
-    require_read_access(request.app.state.settings, request.headers)
+    require_read_access(request.app.state.settings, request)
     with request.app.state.session_factory() as session:
         case = session.get(Case, case_id)
         if case is None:
@@ -59,21 +59,17 @@ def get_case(case_id: str, request: Request) -> dict:
 
 @router.get("/v1/cases/{case_id}/checks")
 def get_checks(case_id: str, request: Request, all: int = Query(default=0)) -> dict:
-    require_read_access(request.app.state.settings, request.headers)
+    require_read_access(request.app.state.settings, request)
     with request.app.state.session_factory() as session:
         if session.get(Case, case_id) is None:
             raise HTTPException(status_code=404, detail="case not found")
-        checks = (
-            checkstore.all_checks(session, case_id)
-            if all
-            else checkstore.live_checks(session, case_id)
-        )
+        checks = checkstore.all_checks(session, case_id) if all else checkstore.live_checks(session, case_id)
         return {"case_id": case_id, "checks": [_check_json(c) for c in checks]}
 
 
 @router.get("/v1/runs/{run_id}")
 def get_run(run_id: str, request: Request) -> dict:
-    require_read_access(request.app.state.settings, request.headers)
+    require_read_access(request.app.state.settings, request)
     with request.app.state.session_factory() as session:
         run = session.get(Run, run_id)
         if run is None:
@@ -105,7 +101,7 @@ def get_run(run_id: str, request: Request) -> dict:
 
 @router.get("/v1/review-tasks")
 def list_review_tasks(request: Request, status: str = Query(default="open")) -> dict:
-    require_read_access(request.app.state.settings, request.headers)
+    require_read_access(request.app.state.settings, request)
     with request.app.state.session_factory() as session:
         tasks = session.execute(
             select(ReviewTask).where(ReviewTask.status == status).order_by(ReviewTask.created_at)
@@ -131,7 +127,7 @@ async def complete_review_task(task_id: str, request: Request) -> JSONResponse:
     completion paths share one idempotent, audited pipeline. Signed like every
     other mutation; the ops console completes via /ui/api/send-event."""
     raw = await request.body()
-    require_valid_signature(request.app.state.settings, request.headers, raw)
+    require_valid_signature(request.app.state.settings, request, raw)
     try:
         body = json.loads(raw)
     except json.JSONDecodeError as exc:

@@ -21,7 +21,7 @@ async def post_event(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> JSONResponse:
     body = await request.body()
-    require_valid_signature(request.app.state.settings, request.headers, body)
+    require_valid_signature(request.app.state.settings, request, body)
 
     if not idempotency_key:
         raise HTTPException(status_code=400, detail="Idempotency-Key header is required")
