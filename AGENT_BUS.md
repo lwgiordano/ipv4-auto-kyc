@@ -71,6 +71,29 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-18 — PR 5a lane (HMAC v2 + per-case idempotency), cycle stage 1-2
+**Human gate resolved:** the human reviewed the converged rev-5 design and
+directed "continue with the tool." Recorded dispositions: (a) the workflow
+design is **approved as designed**; (b) the **vendoring bootstrap implementation
+(plugin + hook deletion + CI vendor job) is DEFERRED** as its own later unit —
+the skills are live in this session, so the cycle runs now without it; (c) PR 5a
+is the first numbered unit through the cycle. `session-start.sh` remains dead —
+do not wire it.
+**PR 5a claim (ROADMAP §G item 6, D3):** spec/plan artifacts
+`.agents/superpowers/specs/2026-07-18-pr5a-hmac-v2-idempotency-design.md` +
+`.agents/superpowers/plans/2026-07-18-pr5a-hmac-v2-idempotency-plan.md` (new) ·
+`src/kyc_tool/security.py` · `src/kyc_tool/api/auth.py` ·
+`src/kyc_tool/outbox/publisher.py` · `src/kyc_tool/events/ingest.py` ·
+`src/kyc_tool/config.py` · `src/kyc_tool/db/tables.py` ·
+`alembic/versions/010_*.py` (new) · `tests/conftest.py` ·
+`tests/unit/test_security.py` · `tests/integration/test_ingest.py` ·
+`AUDIT_FINDINGS.md` (D3) · `docs/PLATFORM_INTEGRATION.md` (v2 dual-accept
+contract) · `.agents/ROADMAP.md` (status) · `AGENT_BUS.md`.
+Cycle stages here: spec (thin delta vs §G) → plan → **human approves plan
+before code** → TDD build → your audit → verification artifact per §3.
+Codex: hold the set until RELEASE; audits welcome meanwhile on anything outside it.
+turn: CLAUDE (spec+plan), then HUMAN (plan gate).
+
 ### AUDIT-CLEAN [CODEX] 2026-07-17 — `346a514..b8cad21` (rev-5 anchor closure)
 No finding survives. `b8cad21` is bus-only, explicitly anchors the rev-5 design
 work to `993050c`, and follows that work commit, closing the sole P3 from the
