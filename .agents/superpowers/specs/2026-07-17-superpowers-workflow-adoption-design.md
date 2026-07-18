@@ -1,11 +1,14 @@
 # Design — Adopt the superpowers development workflow for this project
 
-- **Date:** 2026-07-17 (rev 3: 2026-07-18)
-- **Status:** Draft **rev 3** — self-audited (5-lens workflow) + two independent
-  Codex audits. Rev 2's 8 findings folded; rev 2's SessionStart hook then drew 5
-  more Codex findings, all sharing one root cause. **Rev 3 deletes the hook and
-  vendors the skills as a namespaced in-repo plugin.** Pending Codex
-  `AUDIT-CLEAN` on rev 3, then human review.
+- **Date:** 2026-07-17 (rev 3: 2026-07-18; rev 4: 2026-07-18)
+- **Status:** Draft **rev 4** — self-audited (5-lens workflow) + three independent
+  Codex audits. Rev 2 folded 8 findings; rev 3 deleted the SessionStart hook and
+  vendored the skills as an in-repo plugin (Codex validated that layout loads on
+  the real runtime); rev 4 folds Codex's 5 rev-3 refinement findings — mostly
+  correcting two over-claims (mechanical exemption, "moot" trust) to honest
+  statements, plus a repo-root invariant, a live-watch-safe update procedure, and
+  a fully specified lock digest. Pending Codex `AUDIT-CLEAN` on rev 4, then human
+  review.
 - **Author:** Claude, for lwgiordano/ipv4-auto-kyc
 - **Scope:** process only — no product code, no change to the M2 hard stop, no
   change to the normative `KYC_Tool_Build_Package/`.
@@ -18,8 +21,9 @@ Run the remaining remediation backlog (all pending numbered units — PR 1.1, 5a
 the Claude⇄Codex audit loop, so the discipline survives across sessions and
 agents. Shape (from brainstorming): the **full cycle**, artifacts under
 `.agents/superpowers/`, enforced self-referentially via the audit loop. The
-skills themselves are **vendored into the repo** (§5), so "survives across
-sessions" is a property of the checkout, not of any runtime installer.
+skills themselves are **vendored into the repo** (§5), so the skill *files*
+survive across sessions as a property of the checkout (the workspace *trust*
+grant is a separate, home-scoped concern — §5, §8).
 
 ## 2. The per-PR cycle (part a)
 
@@ -92,13 +96,13 @@ Three artifacts per numbered unit, all under `.agents/superpowers/`:
 
 ## 5. Persistence — vendored, namespaced project plugin (part d)
 
-**rev 3 replaces the SessionStart installer with in-repo vendoring.** Codex's
-round-2 audit raised five findings on `session-start.sh`; they share **one root
-cause** — the hook was a *network package manager that ran at session startup and
-mutated global `~/.claude` state.* Correcting its JSON nesting, timeout,
-ownership check, marker, and cleanup would leave that architecture fragile.
-Delete it. Commit the pinned payload as a project-local plugin, reviewed like
-source code.
+**rev 3 replaced the SessionStart installer with in-repo vendoring; rev 4 fixes
+the runtime-coupling details Codex found.** Codex's round-2 audit raised five
+findings on `session-start.sh`; they shared **one root cause** — the hook was a
+*network package manager that ran at session startup and mutated global
+`~/.claude` state.* Correcting its JSON, timeout, ownership, marker, and cleanup
+would leave that architecture fragile. Delete it. Commit the pinned payload as a
+project-local plugin, reviewed like source code.
 
 **Layout** (`.claude/skills/ipv4-superpowers/`):
 
@@ -107,7 +111,7 @@ source code.
 ├── .claude-plugin/
 │   └── plugin.json
 ├── LICENSE.upstream            # upstream MIT notice, retained per license
-├── UPSTREAM.lock.json          # provenance: repo, commit, expected tree, hashes
+├── UPSTREAM.lock.json          # provenance: repo, commit, tree OIDs, per-file digest
 ├── patches/
 │   └── project-namespace.patch # deterministic superpowers: -> ipv4-superpowers:
 └── skills/
@@ -117,17 +121,34 @@ source code.
     └── … all 14 pinned skills
 ```
 
-**Loading mechanism (doc-confirmed).** A directory under `.claude/skills/`
-containing `.claude-plugin/plugin.json` loads as the plugin
-`ipv4-superpowers@skills-dir` on the next session — *"discovered in place rather
-than copied into the plugin cache,"* with no marketplace and no install step
-([Claude Code plugins reference — skills-directory plugins](https://code.claude.com/docs/en/plugins-reference)).
-There is **no** separate plugins location and **no** `settings.json` entry: the
-runtime scans `.claude/skills/` for both bare `SKILL.md` skills and
-`.claude-plugin/plugin.json` bundles. Project-scope content loads only after the
-**standard workspace trust gate** (the same one that governs `.claude/settings.json`)
-— a one-time consent on first clone, not a per-session install, write, or network
-call. Plugin skills invoke as `ipv4-superpowers:<skill>`
+**Loading mechanism (doc-confirmed + Codex-verified on the runtime).** A directory
+under `.claude/skills/` containing `.claude-plugin/plugin.json` loads as the
+plugin `ipv4-superpowers@skills-dir` on the next session — *"discovered in place
+rather than copied into the plugin cache,"* with no marketplace and no install
+step ([Claude Code plugins reference](https://code.claude.com/docs/en/plugins-reference)).
+Codex confirmed the exact layout loads on the installed runtime and reports its
+namespaced skill. Two runtime couplings the design must honor:
+
+- **[rev4-F2] Workspace trust is home-scoped.** Project-scope content (this
+  plugin, and bare project skills alike) loads only after the workspace **trust
+  gate**, and that decision is recorded under the user's home, not the repo.
+  Codex verified `HOME=<empty> claude plugin list` returns `(suppressed)@skills-dir`
+  / "workspace not trusted." So vendoring makes the *files* persistent but not the
+  *trust grant*. **On this remote platform the practical risk looks low:** the
+  current remote session already loads project skills (`architecture`, `stop-slop`)
+  and the vendored bus at repo root **with no trust prompt** — evidence the
+  launcher pre-provisions/persists workspace trust. This is confirmed at bootstrap
+  (§8-Q1); if a fresh rebuild does not auto-trust, the first session per rebuild
+  needs a **one-time trust acceptance** (a click, not a network install) — an
+  accepted minor degradation.
+- **[rev4-F3] Discovery is CWD-relative — repo-root launch required.** Project
+  `@skills-dir` plugins are discovered from the session's working directory and do
+  **not** walk up to the repo root. Codex repro: at the checkout root the plugin
+  is detected; from `subdir/` it is not. Sessions MUST launch at the repository
+  root (invariant 11); the current remote session does (`CWD = repo root`). A
+  subdir-launch negative test is part of acceptance.
+
+Plugin skills invoke as `ipv4-superpowers:<skill>`
 ([skills — command name](https://code.claude.com/docs/en/skills)).
 
 **Namespace.** Use the unique `ipv4-superpowers`, not the generic `superpowers`,
@@ -149,7 +170,8 @@ the notice is retained → `LICENSE.upstream` (the
 | P2 — marker accepts incomplete install | the git checkout **is** the complete payload |
 | P3 — temp dirs leak on failure | no runtime staging / temp directories |
 
-Cost: ~40 files, < 0.5 MB — a small price for deterministic behavior.
+Cost: ~40 files (Codex measured 48 files, 436 KiB at the pinned SHA) — a small
+price for deterministic behavior.
 
 **Required invariants (non-negotiable):**
 
@@ -158,18 +180,29 @@ Cost: ~40 files, < 0.5 MB — a small price for deterministic behavior.
 3. The exact skill payload is committed and reviewed **like source code**.
 4. There is **no** marker file, bootstrap installer, or `reloadSkills` contract.
 5. Upstream updates **never happen automatically**.
-6. Every update identifies an **exact upstream commit and tree hash**.
+6. Every update identifies an **exact upstream commit and tree OID**.
 7. The project namespace **cannot collide** with personal or marketplace skills.
-8. Missing, modified, or extra vendored files **fail CI**.
-9. Scheduled and webhook turns **mechanically disable skills** (§6).
-10. Rollback is a normal `git revert`.
+8. Missing, modified, or extra vendored files **fail CI** (per the §5 digest).
+9. **[rev4-F1] Autonomous turns are held out of the cycle — soft, with accepted
+   residual risk.** They SHOULD launch with `--disable-slash-commands` where the
+   launcher permits (mechanical). Where it does not (we do not control the remote
+   scheduler/webhook launcher's flags), the exemption is **soft** — it rests on
+   `AGENTS.md` instruction priority — and the residual risk (an autonomous turn
+   could auto-invoke a workflow skill) is **explicitly accepted**. This is not a
+   mechanical guarantee; a behavioral sample is evidence, not a control (§6).
+10. Rollback is a normal `git revert` (taking effect on the next session — see
+    the update procedure below).
+11. **[rev4-F3] Sessions launch at the repository root** (project plugins are
+    CWD-relative and do not walk up); a subdir launch does not load the workflow.
 
-**Provenance — `UPSTREAM.lock.json`:**
+**Provenance & integrity — `UPSTREAM.lock.json` (rev4-F5, fully specified):**
 
 ```json
 {
   "repository": "https://github.com/obra/superpowers.git",
   "commit": "d884ae04edebef577e82ff7c4e143debd0bbec99",
+  "upstream_tree_oid": "795caed14920f27a1d2d152a09b4720194f64472",
+  "upstream_skills_tree_oid": "2f2679ad867d88ec2286a42c5dc0509f15d53e54",
   "plugin_namespace": "ipv4-superpowers",
   "expected_skills": [
     "brainstorming", "dispatching-parallel-agents", "executing-plans",
@@ -179,30 +212,58 @@ Cost: ~40 files, < 0.5 MB — a small price for deterministic behavior.
     "using-superpowers", "verification-before-completion", "writing-plans",
     "writing-skills"
   ],
-  "payload_sha256": "…",
-  "patch_sha256": "…"
+  "digest": {
+    "algorithm": "sha256",
+    "path_set": "every file under .claude/skills/ipv4-superpowers/ EXCEPT UPSTREAM.lock.json itself",
+    "path_normalization": "repo-relative, '/'-separated, sorted lexicographically (bytewise)",
+    "scope": "file CONTENT only; mode/mtime/ownership excluded",
+    "files": { "<sorted repo-relative path>": "<sha256 hex>", "…": "…" },
+    "aggregate": "sha256 over the sorted 'path:hex\\n' lines of `files`"
+  },
+  "patch_sha256": "<sha256 of patches/project-namespace.patch>"
 }
 ```
 
-**Updates are an explicit maintenance operation — never automatic:**
+Two distinct checks, deliberately separated:
+
+- **Local-integrity (offline, every CI run):** recompute the per-file `sha256`
+  map + `aggregate` over the checkout's `path_set` and compare to the lock. Any
+  missing, modified, or extra file changes the aggregate → fail. Requires no
+  network; does not consult upstream.
+- **Upstream-provenance (update time only):** fetch the pinned `commit`, confirm
+  `upstream_tree_oid` / `upstream_skills_tree_oid` match, then re-derive the
+  vendored tree by applying `patches/project-namespace.patch` and confirm the
+  result reproduces the lock's `digest`.
+
+**Updates are an explicit maintenance operation — never automatic — and are
+live-watch-safe [rev4-F4]:**
+
+`git commit` is **NOT** the activation point: Claude Code live-watches project
+skill text and applies edits in the current session, so replacing a vendored
+`SKILL.md` in a trusted live workspace activates it immediately, before review.
+The update therefore runs **off** the watched tree:
 
 1. Human selects a new upstream SHA.
-2. An update tool fetches it **outside session startup**.
-3. It stages the complete replacement, applies the namespace patch, regenerates
-   the lock, and shows the semantic diff.
-4. CI verifies the resulting tree **offline**.
+2. An update tool fetches + stages + applies the namespace patch + regenerates
+   the lock + emits the semantic diff **entirely outside any discovered
+   `.claude/skills/` tree** (a scratch dir), so nothing activates live.
+3. The update runs in a **maintenance session launched with
+   `--disable-slash-commands`**, so even the in-tree swap cannot auto-activate a
+   skill mid-review.
+4. CI runs the offline local-integrity + the upstream-provenance checks.
 5. Human review + Codex audit approve the update.
-6. The git commit is the **atomic activation point**.
+6. **Activation = starting a NEW session on the reviewed commit** — not the
+   `git commit` command, and not the maintenance session.
 
-Marketplace install is **not** an equivalent solution: project settings can
-still require consent, use a user-level cache, and depend on install state — off
-the deterministic path these invariants require.
+Marketplace install is **not** an equivalent solution: project settings can still
+require consent, use a user-level cache, and depend on install state — off the
+deterministic path these invariants require.
 
 **CI vendor-verification (one offline job) fails when:**
 
 - any expected skill is absent;
 - an unexpected skill remains after an upstream removal;
-- any file hash differs from the lock;
+- the local-integrity digest does not match the lock (missing/modified/extra file);
 - the upstream license is missing;
 - an unconverted `superpowers:` reference remains;
 - the plugin manifest is invalid;
@@ -211,43 +272,53 @@ the deterministic path these invariants require.
 
 **Real-runtime acceptance tests (offline):**
 
-- **Empty `$HOME`, network disabled:** all 14 `ipv4-superpowers:*` skills load
-  from the checkout.
+- **Empty `$HOME`, network disabled, workspace pre-trusted:** all 14
+  `ipv4-superpowers:*` skills load from the checkout. (If trust cannot be
+  pre-provisioned in the harness, the test asserts the single expected trust
+  prompt, then load — documenting the rev4-F2 boundary.)
 - **Personal `brainstorming` skill present:** its checksum is unchanged while the
   namespaced project skill is available.
-- **Negative:** an intentionally deleted vendored file AND an intentionally stale
-  extra file each make verification fail.
+- **[rev4-F3] Subdir launch negative:** a session started in `src/` does **not**
+  discover the plugin — documents the repo-root requirement (invariant 11).
+- **Negative integrity:** an intentionally deleted vendored file AND an
+  intentionally stale extra file each fail the local-integrity check.
 
-**Fallback (only if the plugin bundle ever fails the acceptance test):** 14 bare
-skill dirs `.claude/skills/ipv4-superpowers-<skill>/`, each namespaced by a
-manual prefix — the mechanism this repo already uses for `architecture` and
-`stop-slop`, doc-confirmed collision-safe. The acceptance test decides; the
-vendored plugin is primary.
+**Fallback (only if the plugin bundle ever fails an acceptance test):** 14 bare
+skill dirs `.claude/skills/ipv4-superpowers-<skill>/`, each namespaced by a manual
+prefix — the mechanism this repo already uses for `architecture` and `stop-slop`.
+Note this does **not** escape rev4-F2/F3: bare project skills are equally
+trust-gated and CWD-relative. The acceptance test decides; the vendored plugin is
+primary.
 
 ## 6. Scope & the autonomous-turn exemption (part e)
 
-**[F3] Mechanical where the launcher allows flags; honestly soft otherwise.**
-Scheduled bus check-ins and PR-webhook turns are OUT of scope for the superpowers
-cycle; no skill's "before ANY response" / HARD-GATE directive applies there.
+**[F3 / rev4-F1] Mechanical where the launcher allows flags; honestly soft with
+accepted residual risk otherwise.** Scheduled bus check-ins and PR-webhook turns
+are OUT of scope for the superpowers cycle; no skill's "before ANY response" /
+HARD-GATE directive applies there.
 
-- **Strong (preferred) form — mechanical.** Launch those turns with
-  `--disable-slash-commands`, which disables all skill/command invocation while
-  **preserving `AGENTS.md` / `CLAUDE.md`** project instructions
+- **Strong (preferred) form — mechanical.** Where the launcher permits, launch
+  those turns with `--disable-slash-commands`, which disables all skill/command
+  invocation while **preserving `AGENTS.md` / `CLAUDE.md`** project instructions
   ([Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference)).
   (`--bare` is stronger but also drops CLAUDE.md and MCP, so the bus protocol
   would then need to be re-supplied explicitly — not worth it here.)
-- **Honesty clause.** If the scheduler/webhook platform cannot control launch
-  flags, the exemption is **soft**: it rests on `AGENTS.md` instruction priority
-  (which outranks skills per `using-superpowers` itself) and **must not be
-  described as guaranteed** until the entrypoint is tested mechanically.
-  Empirical pre-evidence: every scheduled check-in and CI-webhook turn in this
-  session has completed with no skill activation and no approval stall — evidence,
-  not proof.
+- **Soft form — honest, with accepted residual risk.** We do **not** control the
+  remote scheduler/webhook launcher's flags, so mechanical suppression may be
+  unavailable. In that case the exemption rests on `AGENTS.md` instruction
+  priority (which outranks skills per `using-superpowers` itself). The residual
+  risk — an autonomous turn could auto-invoke a workflow skill — is **explicitly
+  accepted**; it is low-consequence (extra planning ceremony, not a wrong code
+  change, and human gates still sit before any fix). It is **not** described as a
+  mechanical guarantee. Empirical mitigation: every scheduled check-in and
+  CI-webhook turn in this session has completed with no skill activation and no
+  approval stall.
 
-**Behavioral acceptance test:** after bootstrap, one scheduled bus turn AND one
-PR-webhook turn must each complete with no approval prompt and no stall. If
-either stalls under the soft form, the mechanical `--disable-slash-commands`
-launch is required before the cycle is adopted.
+**Behavioral acceptance test (evidence, not a control):** after bootstrap, one
+scheduled bus turn AND one PR-webhook turn each complete with no approval prompt
+and no stall. A passing sample does not upgrade the soft form to mechanical; it
+only corroborates that the accepted residual risk is not manifesting. If either
+stalls, the mechanical `--disable-slash-commands` launch becomes a prerequisite.
 
 Bootstrap sequencing: the workflow change ships as ONE self-describing process
 commit (which also deletes `session-start.sh`). PR 5a is then the first numbered
@@ -256,7 +327,7 @@ unit through the cycle; its spec CONFIRMS its approach against ROADMAP §G
 re-opening it — the only open item is the v1-sunset timing vs TechCraft
 integration, which dual-accept makes safe either way.
 
-## 7. Invariants preserved (verified clean by both audits)
+## 7. Invariants preserved (verified clean by all audits)
 
 - **M2 HARD STOP** untouched; **`KYC_Tool_Build_Package/` unmodified**; **human
   approval gates** intact.
@@ -265,17 +336,20 @@ integration, which dual-accept makes safe either way.
   workflow neither changes nor deviates from that package. Record the adoption as
   an **ADR in `docs/architecture-decisions.md`**, not an `AUDIT:<id>` entry.
 
-## 8. Open questions → resolved by vendoring
+## 8. Open questions → bootstrap acceptance conditions
 
-1. **~~Does the ephemeral rebuild wipe `~/.claude`?~~ RESOLVED — moot by design.**
-   The plugin lives in the repo and is present after every checkout, independent
-   of `~/.claude`. Vendoring removes the persistence question entirely: no
-   marker, installer, or home-dir state to preserve, so there is nothing for a
-   rebuild to wipe. This is why rev 3 supersedes rev 2's hook.
-2. **Autonomous-turn flag control (the one remaining open item).** Whether the
-   scheduler/webhook launcher can set `--disable-slash-commands` decides whether
-   §6's exemption is mechanical or soft. Decided at bootstrap by §6's behavioral
-   test; until then the exemption is documented as soft, not guaranteed.
+1. **[rev4-F2] Workspace-trust durability across a rebuild.** The plugin *files*
+   are in-repo (persistent); the *trust grant* that lets them load is home-scoped.
+   **Bootstrap gate:** on a fresh remote session, confirm project skills load with
+   no trust prompt (as they do in the current session — strong pre-evidence the
+   platform pre-provisions trust). If a rebuild does not auto-trust, accept a
+   one-time trust acceptance on the first session per rebuild (a click, not a
+   network install). Vendoring resolved the payload-persistence half of the old
+   §8-Q1; this is the remaining half, correctly scoped.
+2. **Autonomous-turn flag control.** Whether the scheduler/webhook launcher can
+   set `--disable-slash-commands` decides whether §6's exemption is mechanical or
+   soft-with-accepted-risk. Tested at bootstrap by §6's behavioral test; until
+   then the exemption is documented as soft, not guaranteed.
 
 (The earlier "optional CI floor" question is closed: the §5 vendor-verification
 job is a **required** gate, not deferred.)
@@ -290,15 +364,23 @@ job is a **required** gate, not deferred.)
   findings (F1/F2/F3 P1, F4/F5/F6 P2, F7/F8 P3), all accepted and folded. F1
   caught that rev 1's own git fix was still invalid.
 - Rev 2 → Rev 3: independent Codex audit `AUDIT [CODEX] 9b2abfe..d088f7b` raised
-  5 findings, **all on the SessionStart hook** (`reloadSkills` nesting — since
-  confirmed against the official Claude Code docs; no fetch timeout; user-skill
-  overwrite; marker accepts a partial install; temp-dir leak). Root cause: the
-  hook was a network package manager mutating global `~/.claude` at startup.
-  **Rev 3 deletes the hook** and vendors the pinned payload as the namespaced
-  project plugin `ipv4-superpowers` (§5); the loading mechanism,
-  `.claude/skills/` plugin discovery, namespacing, and `--disable-slash-commands`
-  behavior are all doc-confirmed. The hook file is removed in the bootstrap
-  implementation commit, after this design passes human + Codex review. F5/F6/F7/F8
-  (workflow boundaries) are unchanged and were verified internally coherent in
-  round 2. Codex is asked to re-audit THIS revision to `AUDIT-CLEAN` before any
-  implementation (`writing-plans`) begins.
+  5 findings, **all on the SessionStart hook** (`reloadSkills` nesting confirmed
+  against the docs; no fetch timeout; user-skill overwrite; partial-install
+  marker; temp-dir leak). Root cause: the hook was a network package manager
+  mutating global `~/.claude`. Rev 3 deleted the hook and vendored the pinned
+  payload as the namespaced plugin `ipv4-superpowers`.
+- Rev 3 → Rev 4: independent Codex audit `AUDIT [CODEX] a25b486..b34ca72` raised
+  5 findings and **validated the vendored layout on the runtime**
+  (`ipv4-superpowers@skills-dir` loads; 14 skill dirs / 48 files / 436 KiB + MIT;
+  `--disable-slash-commands` works). Folded here: rev4-F1 (invariant-9 vs §6
+  contradiction → soft exemption with explicitly accepted residual risk),
+  rev4-F2 (§8-Q1 not moot → trust grant is home-scoped, reframed as a bootstrap
+  gate with pre-evidence the platform auto-trusts), rev4-F3 (CWD-relative
+  discovery → repo-root invariant 11 + subdir negative test), rev4-F4 (git commit
+  is not activation → live-watch-safe update off the watched tree, activation = a
+  new session on the reviewed commit), rev4-F5 (lock schema → canonical per-file
+  digest + aggregate + upstream tree OIDs, local-integrity vs upstream-provenance
+  separated). Two were over-claims of mine, corrected to honest statements. The
+  hook file is removed in the bootstrap implementation commit, after this design
+  passes human + Codex review. Codex is asked to re-audit THIS revision to
+  `AUDIT-CLEAN` before any implementation (`writing-plans`) begins.
