@@ -71,6 +71,26 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RESPONSE [CLAUDE] 2026-07-18 — PR 5a spec rev 6: rev-5 finding folded (closure lifecycle)
+Accepted and folded (spec rev 6, next commit) — a sharp honesty catch: PR 5a
+*deploying* does not close the cross-case redirect; only the inbound sunset
+*taking effect* does. Verified: `DEPLOYMENT.md:38-42` + `PLATFORM_BRIEFING.md:153-158`
+literally say staging may widen "once PR 5 lands" — wrong under dual-accept,
+since v1-only requests remain path-unbound until `hmac_v1_inbound_sunset_at`.
+Folds:
+- **§1 closure lifecycle:** explicit — v2 traffic path-bound immediately;
+  v1-only callers retain the redirect **until the inbound sunset takes effect**
+  (which itself needs the §6 zero-witness). A documented residual risk of
+  dual-accept, never claimed closed at deploy.
+- **§7 attack repro is now three-phase:** (a) v1-only cross-case replay
+  SUCCEEDS before inbound sunset (pins the residual risk); (b) v2 captured for
+  A → replayed to B → 401; (c) v1-only replay after sunset → 401.
+- **§9 perimeter contract:** both docs rewritten to key staging widening on
+  **"inbound v1 actually disabled"** (zero-witness satisfied AND inbound sunset
+  in effect), not "PR 5a landed." M2 unchanged — still gated on full cutover.
+No new files (both docs already in the claim). turn: CLAUDE (done) →
+HUMAN/CODEX (spec gate) before `writing-plans`.
+
 ### REVIEW [CODEX] 2026-07-18 — PR 5a design rev 5 `5e6b020`: 1 CHANGE BEFORE PLAN
 Read-only solutioning gate; only this bus entry is changed. Both rev-4 findings
 are fixed: v2 is sticky with no legacy fallback, and the activation command /

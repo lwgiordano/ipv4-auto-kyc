@@ -1,12 +1,13 @@
 # PR 5a — HMAC v2 + per-case idempotency (design)
 
 - **Date:** 2026-07-18
-- **Status:** Design **rev 5** — rev 4 made PR 5a a non-hot cutover; rev 5 folds
-  Codex's two rev-4 findings (`6ed76e8`, both accepted): an explicit
-  **v1/v2 dual-accept precedence rule** (v2 is sticky, no downgrade — finding 1,
-  P1), and a concrete witness-activation command + named observation-window
-  setting (finding 2, P2). Pending human spec re-review, then `writing-plans`,
-  then the plan gate.
+- **Status:** Design **rev 6** — rev 5 pinned dual-accept precedence; rev 6
+  folds Codex's rev-5 finding (`a576975`, P1, accepted): the **closure
+  lifecycle** is now explicit — cross-case replay stays possible for v1-only
+  callers until the inbound sunset takes effect (a documented residual risk of
+  dual-accept), the attack test asserts all three phases, and the operator docs
+  key staging's perimeter on "inbound v1 actually disabled," not "PR 5a landed."
+  Pending human spec re-review, then `writing-plans`, then the plan gate.
 - **Unit:** ROADMAP §G "PR 5a — HMAC v2 + per-case idempotency (item 6)",
   migration 010, decision D3. Thin-delta pointer: restates only what §G left
   open + the review-driven revisions; everything else is locked by
@@ -19,6 +20,15 @@ v1 signs `{timestamp}.{body}` with one shared secret. `case_id` is in the
 another case within the 300s skew and auto-approve it. D3's per-case idempotency
 widens that hole (keys become reusable across cases) — so the canonical-path
 binding and D3 land in the same PR.
+
+**Closure lifecycle (rev6 — be precise about WHEN the hole closes):** PR 5a
+*introduces the mechanism*; it does not close the hole at deploy. During
+dual-accept, a v1-only request still authenticates path-unbound, so **cross-case
+replay remains possible for v1-only callers until `hmac_v1_inbound_sunset_at`
+takes effect** (which itself requires the §6 zero-witness). The redirect is
+closed for v2 traffic immediately, and for everyone only when inbound v1 is
+actually disabled. Tests (§7) and operator docs (§9) state this residual risk
+explicitly rather than claiming "PR 5a landed = closed."
 
 ## 2. The v2 contract (locked by §G; concretized)
 
@@ -222,8 +232,13 @@ not a rolling upgrade. Consequences:
   (inbound-accept and outbound-emit, independently before/at/after); dual-emit
   header presence on callbacks before the outbound date.
 - **Integration (DB, run red locally against the dev stack):**
-  - **Cross-case redirect attack repro** — a captured v1-signed event replayed
-    against another case succeeds pre-v2 (documents the hole) and 401s under v2.
+  - **Cross-case redirect attack repro — three-phase lifecycle (rev6):**
+    (a) a captured **v1-only** signed event replayed against another case
+    **succeeds before the inbound sunset** — pinning the documented residual
+    risk of dual-accept, not a regression; (b) a **v2** signature captured for
+    case A and replayed to case B → **401** (path-bound); (c) the same v1-only
+    replay **after** `hmac_v1_inbound_sunset_at` → **401**. The hole is closed
+    for everyone only at (c).
   - D3 matrix: cross-case reuse → two runs; same-case conflict → 409; replay →
     stored snapshot.
   - **Review completion via the keyed event** (`website.review_completed` posted
@@ -277,6 +292,13 @@ updates each (and the claim is extended to cover them):
   shared `KYC_PLATFORM_HMAC_SECRET` story is superseded by **split inbound/
   outbound secrets + key_id, the two sunset dates, and the observation window**;
   document the new settings.
+- **Perimeter lifecycle (rev6):** `docs/DEPLOYMENT.md:38-42` and
+  `docs/PLATFORM_BRIEFING.md:153-158` currently say staging may widen "once
+  PR 5 lands." Wrong under dual-accept: v1-only traffic stays path-unbound
+  until the inbound sunset. Both are rewritten to key on **"inbound v1 actually
+  disabled"** — the §6 zero-witness satisfied AND `hmac_v1_inbound_sunset_at` in
+  effect — not on PR 5a being deployed. **M2 remains gated on the full platform
+  cutover** (unchanged).
 - `docs/DEPLOYMENT.md` — the non-hot cutover + activation step (already claimed).
 - **New command module (rev5, finding 2):** `src/kyc_tool/ops/activate_hmac_v1_observation.py`
   (+ `src/kyc_tool/ops/__init__.py`) — the idempotent compare-and-set activation
