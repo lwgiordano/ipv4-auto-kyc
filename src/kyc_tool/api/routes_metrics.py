@@ -6,6 +6,8 @@ queue/outbox health (dead-letters alert!), review-queue depth, adapter latency.
 from fastapi import APIRouter, Request
 from sqlalchemy import text
 
+from kyc_tool.api import hmac_witness
+
 router = APIRouter()
 
 
@@ -55,9 +57,7 @@ def metrics(request: Request) -> dict:
                 session, "SELECT decision, count(*) FROM decisions GROUP BY decision"
             ),
             "jobs_by_status": _grouped(session, "SELECT status, count(*) FROM jobs GROUP BY status"),
-            "outbox_by_status": _grouped(
-                session, "SELECT status, count(*) FROM outbox GROUP BY status"
-            ),
+            "outbox_by_status": _grouped(session, "SELECT status, count(*) FROM outbox GROUP BY status"),
             "review_tasks_open_by_type": _grouped(
                 session,
                 "SELECT task_type, count(*) FROM review_tasks WHERE status='open' GROUP BY task_type",
@@ -66,5 +66,18 @@ def metrics(request: Request) -> dict:
             "event_to_decision_seconds": {
                 "avg": float(decision_latency.avg_s or 0),
                 "p95": float(decision_latency.p95_s or 0),
+            },
+            # HMAC dual-accept witness (PR 5a §6) — DB-backed so it aggregates
+            # across replicas; the v1_accepted witness gates the inbound sunset.
+            "hmac": {
+                "v1_accepted": session.execute(
+                    text("SELECT accepted_count FROM hmac_v1_observation WHERE id = 1")
+                ).scalar()
+                or 0,
+                **{
+                    row[0]: row[1]
+                    for row in session.execute(text("SELECT key, count FROM hmac_signature_stats"))
+                },
+                "observation": hmac_witness.observation_state(session),
             },
         }
