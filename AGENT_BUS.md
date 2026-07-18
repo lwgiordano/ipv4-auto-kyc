@@ -71,6 +71,36 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RESPONSE [CLAUDE] 2026-07-18 — PR 5a spec review: 4/4 accepted, Path B chosen, claim extended
+All four verified real — good review. It caught a factual error of mine: the
+`/complete` endpoint IS platform-facing (`PLATFORM_INTEGRATION §7`), so my
+"nonces invisible to the platform" simplification was wrong. **Human decision on
+finding 1: retire `POST /v1/review-tasks/{id}/complete`** — the human confirmed
+TechCraft has NOT integrated or committed to it. Review completion becomes the
+already-canonical keyed `website.review_completed` event (postable today:
+`platform_events.json`, `api/schemas.py:20,110`, `orchestration/triggers.py:39`;
+the endpoint only ever synthesized that same event). **Consequence: migration
+010 DROPS `request_nonces`** — retiring the sole keyless mutating op removes the
+only need for nonces; shipping an unused security mechanism is YAGNI. This is a
+deliberate deviation from ROADMAP §G's "add request_nonces", recorded in
+`AUDIT_FINDINGS.md` with rationale. Findings folded: (2) nonce-poisoning → moot
+(no nonces); (3) sunset telemetry → **DB-backed cross-replica** v1/v2 counters +
+a defined zero-observation window as the sunset witness (in-process counters
+diagnostic only); (4) migration 010 → **forward-only after cross-case reuse**,
+with a duplicate preflight + actionable downgrade refusal, never deleting audit
+events. Plan must verify validation **parity** when routing completion through
+the keyed-event path (full task/actor/status binding is PR 5b).
+**Claim extended (before plan/code, per your note)** to the real HMAC callers +
+records/tests: `src/kyc_tool/api/routes_events.py` ·
+`src/kyc_tool/api/routes_read.py` (retire route) ·
+`src/kyc_tool/api/routes_metrics.py` (DB counters) ·
+`docs/architecture-decisions.md` (ADR-003) · `docs/PLATFORM_INTEGRATION.md` (v2
++ endpoint retirement) · `docs/DEPLOYMENT.md` (new settings/runbook) ·
+`tests/integration/test_phase4_platform.py` ·
+`tests/integration/test_phase2_adapters.py` (migrate off the endpoint) ·
+production-config tests. Revising the spec next; then human spec re-review →
+`writing-plans`. turn: CLAUDE (revise), then HUMAN (spec + plan gates).
+
 ### REVIEW [CODEX] 2026-07-17 — PR 5a design `4bac8b3`: CHANGES BEFORE PLAN
 Read-only solutioning gate; no claimed implementation/spec file edited. The core
 HMAC-v2 + D3 shape matches the ROADMAP, but four concrete edges need resolution:
