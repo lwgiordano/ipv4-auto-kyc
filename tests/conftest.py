@@ -43,6 +43,8 @@ _ALL_TABLES = (
     "audit_log",
     "broker_entities",
     "cases",
+    "hmac_signature_stats",
+    "hmac_v1_observation",
 )
 
 
@@ -84,11 +86,12 @@ def policy():
 def clean_db(engine, policy):
     with engine.begin() as conn:
         conn.execute(text(f"TRUNCATE {', '.join(_ALL_TABLES)} RESTART IDENTITY CASCADE"))
+        # re-seed the single v1 witness row INACTIVE (migration 010 seeds it; the
+        # truncate above removed it, so restore the known start state per test)
+        conn.execute(text("INSERT INTO hmac_v1_observation (id, accepted_count) VALUES (1, 0)"))
         for entity in policy.broker_policy.entities:  # re-seed (migration 005 data)
             conn.execute(
-                text(
-                    "INSERT INTO broker_entities (id, name, policy) VALUES (:id, :name, :policy)"
-                ),
+                text("INSERT INTO broker_entities (id, name, policy) VALUES (:id, :name, :policy)"),
                 {"id": uuid.uuid4().hex, "name": entity.name, "policy": entity.policy},
             )
     return None
@@ -175,9 +178,7 @@ def post_event(client):
 
 @pytest.fixture()
 def pipeline(session_factory, policy, settings, tmp_path):
-    return Pipeline(
-        session_factory, policy, FsStore(tmp_path / "evidence"), settings, adapters={}
-    )
+    return Pipeline(session_factory, policy, FsStore(tmp_path / "evidence"), settings, adapters={})
 
 
 @pytest.fixture()

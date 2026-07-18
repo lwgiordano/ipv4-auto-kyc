@@ -59,15 +59,15 @@ class Event(Base):
 
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), index=True)
-    idempotency_key: Mapped[str] = mapped_column(Text, unique=True)
+    # D3 (PR 5a): idempotency is per-case, not global — the same key in another
+    # case is an independent event, never a replay of the first.
+    idempotency_key: Mapped[str] = mapped_column(Text)
     payload_hash: Mapped[str] = mapped_column(Text)
     # Gap-free per-case ordinal (D1: this is the wire's `event_sequence`).
     # sequence_backfilled marks rows whose sequence was RECONSTRUCTED by the 008
     # migration (arrival order) rather than assigned live at ingest.
     event_sequence: Mapped[int | None] = mapped_column(BigInteger)
-    sequence_backfilled: Mapped[bool] = mapped_column(
-        Boolean, server_default=text("false"), default=False
-    )
+    sequence_backfilled: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), default=False)
     event_type: Mapped[str] = mapped_column(Text)
     actor_json: Mapped[dict] = mapped_column(JSONB, default=dict)
     payload_json: Mapped[dict] = mapped_column(JSONB, default=dict)
@@ -75,6 +75,8 @@ class Event(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     run_id: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (UniqueConstraint("case_id", "idempotency_key", name="uq_events_case_idempotency"),)
 
 
 class Run(Base):
@@ -268,3 +270,29 @@ class Outbox(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     __table_args__ = (Index("ix_outbox_claim", "status", "next_attempt_at"),)
+
+
+class HmacV1Observation(Base):
+    """Durable, cross-replica v1 acceptance witness (PR 5a §6). Single row
+    (id=1), seeded INACTIVE by migration 010; the observation clock starts only
+    at the post-cutover activation command. Updated fail-closed on every
+    accepted inbound v1 request, so real v1 traffic is never silently invisible.
+    """
+
+    __tablename__ = "hmac_v1_observation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    observation_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    accepted_count: Mapped[int] = mapped_column(BigInteger, server_default=text("0"), default=0)
+    last_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class HmacSignatureStat(Base):
+    """Diagnostic v2/rejected signature counters (best-effort availability; the
+    v1 witness above is the fail-closed one that gates the sunset)."""
+
+    __tablename__ = "hmac_signature_stats"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)  # v2_accepted | rejected
+    count: Mapped[int] = mapped_column(BigInteger, server_default=text("0"), default=0)
+    last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
