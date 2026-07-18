@@ -37,9 +37,7 @@ def phase2_pipeline(session_factory, policy, settings, evidence_store):
         "companies_house": CompaniesHouseAdapter(
             client=httpx.Client(transport=transport, base_url="https://ch.test")
         ),
-        "gleif": GleifAdapter(
-            client=httpx.Client(transport=transport, base_url="https://gleif.test")
-        ),
+        "gleif": GleifAdapter(client=httpx.Client(transport=transport, base_url="https://gleif.test")),
         "document_ocr": DocumentOcrAdapter(evidence_store, JsonScanOcrEngine()),
         "rir_poc": RirPocAdapter(FixturePocDirectory(POC_DIRECTORY)),
         "website_manual_review": WebsiteManualReviewAdapter(),
@@ -65,9 +63,7 @@ def phase2_worker(session_factory, phase2_pipeline):
 
 
 def _live_checks(client, case_id: str) -> dict[str, str]:
-    return {
-        c["type"]: c["status"] for c in client.get(f"/v1/cases/{case_id}").json()["live_checks"]
-    }
+    return {c["type"]: c["status"] for c in client.get(f"/v1/cases/{case_id}").json()["live_checks"]}
 
 
 def test_clean_uk_company_full_run(client, engine, post_event, phase2_worker, publisher, settings):
@@ -118,9 +114,7 @@ def test_email_verified_event_creates_both_checks(client, post_event, phase2_wor
 def test_blocked_broker_short_circuits(
     client, engine, post_event, phase2_worker, publisher, callback_capture
 ):
-    response, _ = post_event(
-        "case-larus", "kyb.run_requested", {**ACME_KYB, "company_legal_name": "Larus"}
-    )
+    response, _ = post_event("case-larus", "kyb.run_requested", {**ACME_KYB, "company_legal_name": "Larus"})
     run_id = response.json()["run_id"]
     phase2_worker.run_until_idle()
     publisher.process_pending()
@@ -133,9 +127,7 @@ def test_blocked_broker_short_circuits(
         adapter_rows = conn.execute(
             text("SELECT count(*) FROM adapter_results WHERE run_id=:r"), {"r": run_id}
         ).scalar_one()
-        checks = conn.execute(
-            text("SELECT count(*) FROM checks WHERE case_id='case-larus'")
-        ).scalar_one()
+        checks = conn.execute(text("SELECT count(*) FROM checks WHERE case_id='case-larus'")).scalar_one()
     assert adapter_rows == 0  # short-circuit: no enrichment spend
     assert checks == 0
     assert callback_capture.requests[-1]["body"]["decision"] == "reject"
@@ -153,9 +145,7 @@ def test_broker_near_miss_does_not_match(client, post_event, phase2_worker):
 
 
 def test_allowed_broker_tagged_and_continues(client, engine, post_event, phase2_worker):
-    response, _ = post_event(
-        "case-ipxo", "kyb.run_requested", {**ACME_KYB, "company_legal_name": "IPXO"}
-    )
+    response, _ = post_event("case-ipxo", "kyb.run_requested", {**ACME_KYB, "company_legal_name": "IPXO"})
     run_id = response.json()["run_id"]
     phase2_worker.run_until_idle()
     case = client.get("/v1/cases/case-ipxo").json()
@@ -170,9 +160,7 @@ def test_allowed_broker_tagged_and_continues(client, engine, post_event, phase2_
 def test_broker_gate_on_org_id_event_d1(client, engine, post_event, phase2_worker):
     """AUDIT:D1 — a blocked broker's ORG-ID submitted later must reject."""
     with engine.begin() as conn:
-        conn.execute(
-            text("UPDATE broker_entities SET org_ids = ARRAY['ORG-LARUS-1'] WHERE name='Larus'")
-        )
+        conn.execute(text("UPDATE broker_entities SET org_ids = ARRAY['ORG-LARUS-1'] WHERE name='Larus'"))
     post_event("case-d1", "kyb.run_requested", ACME_KYB)
     phase2_worker.run_until_idle()
     assert client.get("/v1/cases/case-d1").json()["broker_status"] == "clear"
@@ -211,27 +199,29 @@ def test_document_match_awards_legal_proof(client, post_event, phase2_worker, ev
 
 
 def test_review_complete_rejects_unsigned_request(client):
-    # The completion endpoint mutates state and emits a signed callback — it must
-    # require HMAC like every other write, not just the read API's trust domain.
-    resp = client.post(
-        "/v1/review-tasks/any-task/complete",
-        json={"result": "pass", "reviewer_id": "attacker"},
-    )
+    # Review completion (the keyed website.review_completed event, PR 5a §4) must
+    # require HMAC like every other write — an unsigned post is rejected.
+    from tests.conftest import envelope
+
+    body = json.dumps(
+        envelope(
+            "website.review_completed",
+            {"task_id": "any-task", "result": "pass", "reviewer_id": "attacker"},
+        )
+    ).encode()
+    resp = client.post("/v1/cases/case-unsigned/events", content=body)
     assert resp.status_code == 401
 
 
-def test_website_review_completion_writes_check_and_rescore(
-    client, post_event, phase2_worker, sign
-):
+def test_website_review_completion_writes_check_and_rescore(client, post_event, phase2_worker):
     post_event("case-web", "kyb.run_requested", ACME_KYB)
     phase2_worker.run_until_idle()
     tasks = client.get("/v1/review-tasks?status=open").json()["tasks"]
     task = next(t for t in tasks if t["case_id"] == "case-web" and t["task_type"] == "website")
 
-    body = json.dumps({"result": "pass", "reviewer_id": "rev-7"}).encode()
-    complete = client.post(
-        f"/v1/review-tasks/{task['id']}/complete", content=body, headers=sign(body)
-    )
+    # review completion is the keyed website.review_completed event (PR 5a §4)
+    wrc = {"task_id": task["id"], "result": "pass", "reviewer_id": "rev-7"}
+    complete, rc_key = post_event("case-web", "website.review_completed", wrc)
     assert complete.status_code == 202
     phase2_worker.run_until_idle()
 
@@ -243,10 +233,8 @@ def test_website_review_completion_writes_check_and_rescore(
     tasks_after = client.get("/v1/review-tasks?status=open").json()["tasks"]
     assert not [t for t in tasks_after if t["case_id"] == "case-web"]
 
-    # AUDIT:D4 — the endpoint is idempotent via the synthesized event
-    replay = client.post(
-        f"/v1/review-tasks/{task['id']}/complete", content=body, headers=sign(body)
-    )
+    # idempotent via the per-case idempotency key (same key ⇒ stored replay)
+    replay, _ = post_event("case-web", "website.review_completed", wrc, key=rc_key)
     assert replay.status_code == 200
 
 
@@ -301,9 +289,7 @@ def test_poc_token_round_trip(client, engine, post_event, phase2_worker, publish
     assert verified.consumed_at is not None  # single-use stamp (item 5)
 
 
-def test_poc_resend_supersedes_old_token(
-    client, engine, post_event, phase2_worker, publisher, email_sender
-):
+def test_poc_resend_supersedes_old_token(client, engine, post_event, phase2_worker, publisher, email_sender):
     post_event("case-poc2", "kyb.run_requested", ACME_KYB)
     phase2_worker.run_until_idle()
     for key_hint in ("first", "second"):

@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import text
 
 from kyc_tool.outbox.publisher import OutboxPublisher
+from tests.conftest import envelope
 from tests.integration.shared import ACME_KYB_WITH_CONTACT
 
 pytestmark = pytest.mark.postgres
@@ -29,9 +30,7 @@ class FlakyPlatform:
         return httpx.Response(200)
 
 
-def test_callback_retries_on_5xx_then_delivers(
-    client, engine, post_event, worker, session_factory, settings
-):
+def test_callback_retries_on_5xx_then_delivers(client, engine, post_event, worker, session_factory, settings):
     platform = FlakyPlatform(failures=2)
     retry_settings = settings.model_copy(update={"outbox_backoff_base_seconds": 0})
     publisher = OutboxPublisher(
@@ -76,9 +75,7 @@ def test_callback_dead_letters_after_max_attempts(
         publisher.process_pending()
 
     with engine.connect() as conn:
-        status = conn.execute(
-            text("SELECT status FROM outbox WHERE run_id=:r"), {"r": run_id}
-        ).scalar_one()
+        status = conn.execute(text("SELECT status FROM outbox WHERE run_id=:r"), {"r": run_id}).scalar_one()
     assert status == "dead"
     # the run stays observable in PUBLISH_DECISION — ops can see the stuck callback
     assert client.get(f"/v1/runs/{run_id}").json()["state"] == "PUBLISH_DECISION"
@@ -130,15 +127,15 @@ def test_full_staging_scenario_g3_to_approval(
 
     # human completes the website task through the review queue
     tasks = client.get("/v1/review-tasks?status=open").json()["tasks"]
-    website_task = next(
-        t for t in tasks if t["case_id"] == case_id and t["task_type"] == "website"
-    )
-    review_body = json.dumps({"result": "pass", "reviewer_id": "rev-9"}).encode()
-    client.post(
-        f"/v1/review-tasks/{website_task['id']}/complete",
-        content=review_body,
-        headers=sign(review_body),
-    )
+    website_task = next(t for t in tasks if t["case_id"] == case_id and t["task_type"] == "website")
+    # review completion is the keyed website.review_completed event (PR 5a §4)
+    review_body = json.dumps(
+        envelope(
+            "website.review_completed",
+            {"task_id": website_task["id"], "result": "pass", "reviewer_id": "rev-9"},
+        )
+    ).encode()
+    client.post(f"/v1/cases/{case_id}/events", content=review_body, headers=sign(review_body))
     phase3_worker.run_until_idle()
     publisher.process_pending()
 
@@ -155,9 +152,7 @@ def test_full_staging_scenario_g3_to_approval(
             }
         ).encode(),
     )
-    post_event(
-        case_id, "document.uploaded", {"object_ref": doc_ref, "doc_type": "registration_certificate"}
-    )
+    post_event(case_id, "document.uploaded", {"object_ref": doc_ref, "doc_type": "registration_certificate"})
     phase3_worker.run_until_idle()
     publisher.process_pending()
 
@@ -174,11 +169,7 @@ def test_full_staging_scenario_g3_to_approval(
     assert case["latest_decision"] == "approve"
     assert case["buy_status"] == "buy_enabled"
 
-    decisions = [
-        r["body"]["decision"]
-        for r in callback_capture.requests
-        if r["body"]["case_id"] == case_id
-    ]
+    decisions = [r["body"]["decision"] for r in callback_capture.requests if r["body"]["case_id"] == case_id]
     assert decisions[0] == "manual_review_insufficient"
     assert decisions[-2:] == ["approve_buy_locked", "approve"]
 
@@ -203,9 +194,7 @@ def test_full_staging_scenario_g3_to_approval(
         assert expected in actions, f"audit trail missing {expected}"
 
 
-def test_manual_approve_then_org_id_enables_buying(
-    client, post_event, phase3_worker, publisher
-):
+def test_manual_approve_then_org_id_enables_buying(client, post_event, phase3_worker, publisher):
     """Manual approve sticks while buy enablement still tracks ORG-ID: the
     later ORG-ID pass upgrades buying without touching approved_manual."""
     case_id = "case-manual-upgrade"

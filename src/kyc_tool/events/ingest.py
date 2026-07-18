@@ -25,7 +25,7 @@ from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.config import get_settings
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
-from kyc_tool.db.tables import Case, DecisionRow, Event, Run
+from kyc_tool.db.tables import Case, DecisionRow, Event, ReviewTask, Run
 from kyc_tool.domain import scoring
 from kyc_tool.domain.decision import buy_enablement_for
 from kyc_tool.domain.models import BuyStatus, CaseStatus
@@ -40,6 +40,31 @@ MANUAL_APPROVE = "reviewer.manual_approve"
 class IngestOutcome:
     status_code: int
     body: dict
+
+
+class _FloorReject(Exception):  # noqa: N818 — internal control-flow signal, not an *Error
+    """Raised inside the ingest txn to reject an event and roll the txn back, so
+    a rejected completion leaves no orphan event row (PR 5a §4)."""
+
+    def __init__(self, outcome: IngestOutcome) -> None:
+        self.outcome = outcome
+
+
+def _validate_website_review_completed(session: Session, case_id: str, payload: dict) -> IngestOutcome | None:
+    """PR 5a §4 floor: a keyed `website.review_completed` must reference a real,
+    open, same-case website task. Runs AFTER replay resolution and BEFORE the
+    run/check. Full FOR UPDATE + trusted actor binding is PR 5b."""
+    task_id = payload.get("task_id")
+    task = session.get(ReviewTask, task_id) if task_id else None
+    if task is None:
+        return IngestOutcome(404, {"error": "review task not found", "task_id": task_id})
+    if task.task_type != "website":
+        return IngestOutcome(422, {"error": "not a website review task", "task_id": task_id})
+    if task.case_id != case_id:
+        return IngestOutcome(409, {"error": "task belongs to a different case", "task_id": task_id})
+    if task.status != "open":
+        return IngestOutcome(409, {"error": "review task not open", "task_id": task_id})
+    return None
 
 
 def payload_hash(envelope: dict) -> str:
@@ -104,95 +129,105 @@ def ingest_event(
     payload = _scrub_secrets(event_type, envelope.get("payload") or {})
     actor = envelope.get("actor") or {}
 
-    with uow(session_factory) as session:
-        # lazy case creation (AUDIT:C1)
-        session.execute(pg_insert(Case).values(id=case_id).on_conflict_do_nothing(index_elements=["id"]))
-        # Lock the case BEFORE allocating a sequence — this serializes concurrent
-        # same-case ingestion (incl. reviewer.manual_approve), so the per-case
-        # event_sequence is race-free.
-        case = session.get(Case, case_id, with_for_update=True)
-        next_sequence = case.event_sequence + 1
+    try:
+        with uow(session_factory) as session:
+            # lazy case creation (AUDIT:C1)
+            session.execute(pg_insert(Case).values(id=case_id).on_conflict_do_nothing(index_elements=["id"]))
+            # Lock the case BEFORE allocating a sequence — this serializes concurrent
+            # same-case ingestion (incl. reviewer.manual_approve), so the per-case
+            # event_sequence is race-free.
+            case = session.get(Case, case_id, with_for_update=True)
+            next_sequence = case.event_sequence + 1
 
-        inserted = session.execute(
-            pg_insert(Event)
-            .values(
-                id=uuid.uuid4().hex,
+            inserted = session.execute(
+                pg_insert(Event)
+                .values(
+                    id=uuid.uuid4().hex,
+                    case_id=case_id,
+                    idempotency_key=idempotency_key,
+                    payload_hash=digest,
+                    event_type=event_type,
+                    actor_json=actor,
+                    payload_json=payload,
+                    event_sequence=next_sequence,
+                    sequence_backfilled=False,  # assigned live
+                )
+                .on_conflict_do_nothing(index_elements=["case_id", "idempotency_key"])
+                .returning(Event.id)
+            ).scalar_one_or_none()
+
+            if inserted is None:
+                # replay (or key misuse) WITHIN this case — the sequence was NOT
+                # consumed. D3: the same key in another case never lands here.
+                existing = session.execute(
+                    select(Event).where(
+                        Event.case_id == case_id,
+                        Event.idempotency_key == idempotency_key,
+                    )
+                ).scalar_one()
+                if existing.payload_hash != digest:
+                    return IngestOutcome(
+                        409,
+                        {
+                            "error": "idempotency key reuse with different payload",
+                            "event_id": existing.id,
+                        },
+                    )
+                return IngestOutcome(200, dict(existing.response_snapshot or {}))
+
+            # genuine new event — commit the sequence and pin the frozen snapshot
+            case.event_sequence = next_sequence
+            event = session.get(Event, inserted)
+            new_snapshot = _apply_event_to_snapshot(case, event_type, payload)
+            case.submitted_json = new_snapshot
+            _update_case_metadata(case, event_type, payload)
+            audit(
+                session,
+                "event.received",
                 case_id=case_id,
-                idempotency_key=idempotency_key,
-                payload_hash=digest,
+                actor=str(actor.get("id", "platform")),
+                event_id=event.id,
                 event_type=event_type,
-                actor_json=actor,
-                payload_json=payload,
                 event_sequence=next_sequence,
-                sequence_backfilled=False,  # assigned live
+                idempotency_key=idempotency_key,
             )
-            .on_conflict_do_nothing(index_elements=["case_id", "idempotency_key"])
-            .returning(Event.id)
-        ).scalar_one_or_none()
 
-        if inserted is None:
-            # replay (or key misuse) WITHIN this case — the sequence was NOT
-            # consumed. D3: the same key in another case never lands here.
-            existing = session.execute(
-                select(Event).where(
-                    Event.case_id == case_id,
-                    Event.idempotency_key == idempotency_key,
-                )
-            ).scalar_one()
-            if existing.payload_hash != digest:
-                return IngestOutcome(
-                    409,
-                    {
-                        "error": "idempotency key reuse with different payload",
-                        "event_id": existing.id,
-                    },
-                )
-            return IngestOutcome(200, dict(existing.response_snapshot or {}))
+            if event_type == MANUAL_APPROVE:
+                body = _handle_manual_approve(session, policy, case, event, actor)
+                event.response_snapshot = body
+                event.processed_at = datetime.now(UTC)
+                return IngestOutcome(200, body)
 
-        # genuine new event — commit the sequence and pin the frozen snapshot
-        case.event_sequence = next_sequence
-        event = session.get(Event, inserted)
-        new_snapshot = _apply_event_to_snapshot(case, event_type, payload)
-        case.submitted_json = new_snapshot
-        _update_case_metadata(case, event_type, payload)
-        audit(
-            session,
-            "event.received",
-            case_id=case_id,
-            actor=str(actor.get("id", "platform")),
-            event_id=event.id,
-            event_type=event_type,
-            event_sequence=next_sequence,
-            idempotency_key=idempotency_key,
-        )
+            # PR 5a §4 floor: reject an invalid review completion BEFORE the
+            # run/check; _FloorReject rolls the whole txn back (no orphan row).
+            if event_type == "website.review_completed":
+                reject = _validate_website_review_completed(session, case_id, payload)
+                if reject is not None:
+                    raise _FloorReject(reject)
 
-        if event_type == MANUAL_APPROVE:
-            body = _handle_manual_approve(session, policy, case, event, actor)
+            run = Run(
+                case_id=case_id,
+                triggering_event_id=event.id,
+                policy_bundle_hash=policy.bundle_hash,
+                input_snapshot_json=dict(new_snapshot),  # freeze the run's inputs
+            )
+            session.add(run)
+            session.flush()
+            event.run_id = run.id
+            jobs.enqueue(
+                session,
+                "run_transition",
+                {"run_id": run.id},
+                case_id=case_id,
+                max_attempts=get_settings().job_max_attempts,
+            )
+            audit(session, "run.created", case_id=case_id, run_id=run.id, event_id=event.id)
+
+            body = {"run_id": run.id, "status": "queued"}
             event.response_snapshot = body
-            event.processed_at = datetime.now(UTC)
-            return IngestOutcome(200, body)
-
-        run = Run(
-            case_id=case_id,
-            triggering_event_id=event.id,
-            policy_bundle_hash=policy.bundle_hash,
-            input_snapshot_json=dict(new_snapshot),  # freeze the run's inputs
-        )
-        session.add(run)
-        session.flush()
-        event.run_id = run.id
-        jobs.enqueue(
-            session,
-            "run_transition",
-            {"run_id": run.id},
-            case_id=case_id,
-            max_attempts=get_settings().job_max_attempts,
-        )
-        audit(session, "run.created", case_id=case_id, run_id=run.id, event_id=event.id)
-
-        body = {"run_id": run.id, "status": "queued"}
-        event.response_snapshot = body
-        return IngestOutcome(202, body)
+            return IngestOutcome(202, body)
+    except _FloorReject as fr:
+        return fr.outcome
 
 
 def _handle_manual_approve(

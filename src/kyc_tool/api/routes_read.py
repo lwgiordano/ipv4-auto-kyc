@@ -1,16 +1,12 @@
-"""Read endpoints + review-task completion (04 §2)."""
-
-import json
+"""Read endpoints (04 §2). Review completion is the keyed website.review_completed
+event (PR 5a §4), no longer a dedicated endpoint."""
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 
-from kyc_tool.api.auth import require_read_access, require_valid_signature
+from kyc_tool.api.auth import require_read_access
 from kyc_tool.checkstore import repo as checkstore
-from kyc_tool.db.tables import Case, DecisionRow, Event, ReviewTask, Run
-from kyc_tool.events.ingest import ingest_event
+from kyc_tool.db.tables import Case, DecisionRow, ReviewTask, Run
 
 router = APIRouter()
 
@@ -119,62 +115,3 @@ def list_review_tasks(request: Request, status: str = Query(default="open")) -> 
                 for t in tasks
             ]
         }
-
-
-@router.post("/v1/review-tasks/{task_id}/complete")
-async def complete_review_task(task_id: str, request: Request) -> JSONResponse:
-    """AUDIT:D4 — synthesizes the website.review_completed event so both
-    completion paths share one idempotent, audited pipeline. Signed like every
-    other mutation; the ops console completes via /ui/api/send-event."""
-    raw = await request.body()
-    require_valid_signature(request.app.state.settings, request, raw)
-    try:
-        body = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=422, detail=f"invalid JSON: {exc}") from exc
-    result = body.get("result")
-    reviewer_id = body.get("reviewer_id")
-    reason_codes = body.get("reason_codes", [])
-    if result not in ("pass", "fail") or not reviewer_id:
-        raise HTTPException(status_code=422, detail="result (pass|fail) and reviewer_id required")
-
-    idempotency_key = f"review-task-complete-{task_id}"
-    with request.app.state.session_factory() as session:
-        task = session.get(ReviewTask, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail="review task not found")
-        case_id = task.case_id
-        task_type = task.task_type
-        # replay: the completion event already exists — return its stored outcome
-        existing = session.execute(
-            select(Event.response_snapshot).where(Event.idempotency_key == idempotency_key)
-        ).scalar_one_or_none()
-        if existing is not None:
-            return JSONResponse(status_code=200, content=dict(existing))
-
-    if task_type != "website":
-        # poc_email_unavailable tasks close with audit only (AUDIT_FINDINGS §C2)
-        raise HTTPException(status_code=422, detail="only website tasks complete via this endpoint")
-
-    from datetime import UTC, datetime
-
-    envelope = {
-        "event_type": "website.review_completed",
-        "occurred_at": datetime.now(UTC).isoformat(),
-        "actor": {"type": "reviewer", "id": reviewer_id},
-        "payload": {
-            "task_id": task_id,
-            "result": result,
-            "reviewer_id": reviewer_id,
-            "reason_codes": reason_codes,
-        },
-    }
-    outcome = await run_in_threadpool(
-        ingest_event,
-        request.app.state.session_factory,
-        request.app.state.policy,
-        case_id=case_id,
-        idempotency_key=idempotency_key,
-        envelope=envelope,
-    )
-    return JSONResponse(status_code=outcome.status_code, content=outcome.body)
