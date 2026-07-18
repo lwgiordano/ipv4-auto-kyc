@@ -43,9 +43,7 @@ class IngestOutcome:
 
 
 def payload_hash(envelope: dict) -> str:
-    return hashlib.sha256(
-        json.dumps(envelope, sort_keys=True, default=str).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(envelope, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _scrub_secrets(event_type: str, payload: dict) -> dict:
@@ -108,9 +106,7 @@ def ingest_event(
 
     with uow(session_factory) as session:
         # lazy case creation (AUDIT:C1)
-        session.execute(
-            pg_insert(Case).values(id=case_id).on_conflict_do_nothing(index_elements=["id"])
-        )
+        session.execute(pg_insert(Case).values(id=case_id).on_conflict_do_nothing(index_elements=["id"]))
         # Lock the case BEFORE allocating a sequence — this serializes concurrent
         # same-case ingestion (incl. reviewer.manual_approve), so the per-case
         # event_sequence is race-free.
@@ -130,14 +126,18 @@ def ingest_event(
                 event_sequence=next_sequence,
                 sequence_backfilled=False,  # assigned live
             )
-            .on_conflict_do_nothing(index_elements=["idempotency_key"])
+            .on_conflict_do_nothing(index_elements=["case_id", "idempotency_key"])
             .returning(Event.id)
         ).scalar_one_or_none()
 
         if inserted is None:
-            # replay (or key misuse) — the sequence was NOT consumed
+            # replay (or key misuse) WITHIN this case — the sequence was NOT
+            # consumed. D3: the same key in another case never lands here.
             existing = session.execute(
-                select(Event).where(Event.idempotency_key == idempotency_key)
+                select(Event).where(
+                    Event.case_id == case_id,
+                    Event.idempotency_key == idempotency_key,
+                )
             ).scalar_one()
             if existing.payload_hash != digest:
                 return IngestOutcome(

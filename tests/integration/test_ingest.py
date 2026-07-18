@@ -33,6 +33,17 @@ def test_double_post_same_key_yields_one_run_and_identical_responses(client, eng
     assert runs == 1
 
 
+def test_d3_cross_case_reuse_yields_two_independent_runs(client, post_event):
+    """D3 (PR 5a): the SAME idempotency key in a DIFFERENT case is an independent
+    event — never a replay of the first case's run. (Same signed bytes, as a
+    redirect attacker would send.)"""
+    a, key = post_event("case-d3-a", "kyb.run_requested", KYB_PAYLOAD)
+    b, _ = post_event("case-d3-b", "kyb.run_requested", KYB_PAYLOAD, key=key)
+    assert a.status_code == 202
+    assert b.status_code == 202
+    assert a.json()["run_id"] != b.json()["run_id"]
+
+
 def test_same_key_different_payload_is_409(client, post_event):
     _, key = post_event("case-idem-2", "kyb.run_requested", KYB_PAYLOAD)
     conflict, _ = post_event(
@@ -65,20 +76,14 @@ def test_concurrent_duplicate_posts_race(client, engine, clean_db):
 
 
 def test_schema_violation_is_422(client, clean_db):
-    body = json.dumps(
-        envelope("org_id.submitted", {"rir": "not-a-rir", "org_handle": "X"})
-    ).encode()
-    response = client.post(
-        "/v1/cases/case-422/events", content=body, headers=sign_headers(body)
-    )
+    body = json.dumps(envelope("org_id.submitted", {"rir": "not-a-rir", "org_handle": "X"})).encode()
+    response = client.post("/v1/cases/case-422/events", content=body, headers=sign_headers(body))
     assert response.status_code == 422
 
 
 def test_unknown_event_type_is_422(client, clean_db):
     body = json.dumps(envelope("nonsense.event", {})).encode()
-    response = client.post(
-        "/v1/cases/case-422b/events", content=body, headers=sign_headers(body)
-    )
+    response = client.post("/v1/cases/case-422b/events", content=body, headers=sign_headers(body))
     assert response.status_code == 422
 
 
