@@ -71,6 +71,50 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### REVIEW [CODEX] 2026-07-17 — PR 5a design `4bac8b3`: CHANGES BEFORE PLAN
+Read-only solutioning gate; no claimed implementation/spec file edited. The core
+HMAC-v2 + D3 shape matches the ROADMAP, but four concrete edges need resolution:
+
+1. **Route/slot contract (`design:31-33,68-72`).** `Idempotency-Key` is a request
+   header, not part of the event body (`routes_events.py:21`, platform guide
+   §3), so the parenthetical at line 33 is false. The larger mismatch:
+   `/v1/review-tasks/{id}/complete` is a public HMAC API documented for the
+   platform (`routes_read.py:128`, platform guide lines 257-270); the console
+   actually uses `/ui/api/send-event` (`console.html:604`). Calling nonces
+   platform-invisible is therefore incompatible with the live surface. The
+   generic "key if present, else nonce" rule also lets a caller attach an
+   irrelevant `Idempotency-Key` and avoid the promised nonce path (the current
+   shared test signer already adds that header to review completion). Define an
+   endpoint matrix: event POST = required key/nonce forbidden; review completion
+   = required nonce/key must not substitute; reads + callback = empty slot.
+   Either publish the nonce requirement to TechCraft (recommended while the
+   endpoint remains public), or retire that endpoint and use keyed events only.
+   Document retry after a lost response: fresh nonce, same body, stored outcome.
+2. **Nonce poisoning (`design:88-90`).** Verify timestamp + HMAC before inserting
+   the nonce; an invalid signature must never reserve a legitimate nonce. Add the
+   adversarial test: bad signature with nonce N -> 401, then valid signature with
+   N succeeds once, then replay -> 401.
+3. **Sunset telemetry (`design:94-98`).** This repo explicitly supports multiple
+   API replicas, but in-process counters reset and `/v1/metrics` can hit only one
+   replica. They cannot establish that platform-wide v1 traffic reached zero.
+   Specify aggregation (durable DB counters or structured logs/metrics aggregated
+   across every replica) and the zero-observation window used for cutover; local
+   counters may remain diagnostic but cannot be the sunset witness by themselves.
+4. **Migration rollback (`design:83-92`).** After 010 admits `(case-A,key-X)` and
+   `(case-B,key-X)`, downgrade cannot recreate the old global unique constraint.
+   The fresh-empty-DB round trip still passes, so it misses the real production
+   case. Define 010 as forward-only after cross-case reuse, with a duplicate
+   preflight/actionable refusal and release-note warning; do not delete or rename
+   immutable audit events merely to make downgrade pass.
+
+Before plan/code, extend the claim for the actual HMAC callers and required
+records/tests: `api/routes_events.py`, `api/routes_read.py`, `api/routes_metrics.py`,
+`docs/architecture-decisions.md` (ADR-003), production-config tests, the existing
+review-completion integration tests, and env/deployment/runbook docs needed for
+the new settings. Verdict: revise the thin spec on these points, then proceed to
+`writing-plans`; no implementation yet. turn: CLAUDE (revise/claim), then HUMAN
+(plan gate).
+
 ### CLAIM [CLAUDE] 2026-07-18 — PR 5a lane (HMAC v2 + per-case idempotency), cycle stage 1-2
 **Human gate resolved:** the human reviewed the converged rev-5 design and
 directed "continue with the tool." Recorded dispositions: (a) the workflow
