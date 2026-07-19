@@ -132,9 +132,15 @@ intentionally redundant, so no single source is a hard dependency.
 `POST /v1/cases/{case_id}/events`. Every event uses the same envelope and is
 authenticated:
 
-- **Auth:** headers `X-KYC-Timestamp` + `X-KYC-Signature` =
-  `HMAC-SHA256(shared_secret, "{timestamp}.{raw_body}")`. Requests older than
-  300 s are rejected (replay protection).
+- **Auth (path-bound v2, dual-accept):** the primary scheme is **v2** — headers
+  `X-KYC-Timestamp` + `X-KYC-Key-Id` + `X-KYC-Signature-V2`, an HMAC-SHA256 over a
+  canonical value binding the method, full request path, direction, key id,
+  timestamp, and body, so a captured signature can't be redirected to another
+  case. The legacy **v1** header `X-KYC-Signature =
+  HMAC-SHA256(secret, "{timestamp}.{raw_body}")` is still accepted during the
+  dual-accept window, until the inbound sunset. Full spec + a worked vector:
+  `docs/PLATFORM_INTEGRATION.md` §2. Requests older than 300 s are rejected
+  (replay protection).
 - **Idempotency:** an `Idempotency-Key` header per event, so retries are safe; a
   repeat returns the original response, never a duplicate run.
 - **Envelope:** `event_type`, `occurred_at`, `actor {type, id}`, `payload`.
@@ -159,7 +165,9 @@ authenticated:
 ### Outbound: the decision callback (webhook)
 
 After every scoring run, the tool POSTs to **`{callback_url}/kyc/decision`**,
-signed with the same HMAC scheme:
+signed with **v2** (path-bound, using the dedicated outbound secret + key id) and
+dual-emitting **v1** until the independent outbound sunset — the signature binds
+the literal callback path, so a base with a path prefix signs that full path:
 
 ```
 case_id, run_id, event_id,
@@ -304,7 +312,7 @@ plus a migration step:
 | Retention (cron) | `python -m kyc_tool.workers.retention` | Nightly; prunes per retention policy. |
 
 **AWS mapping:** ECS/Fargate (containers) · RDS PostgreSQL · S3 · Secrets Manager
-(shared secret + upstream keys) · an internal ALB in front of the API (only the
+(HMAC secrets + upstream keys) · an internal ALB in front of the API (only the
 platform needs to reach it).
 
 **Outbound egress needed to:** Companies House, GLEIF, the RIR RDAP endpoints,
@@ -330,10 +338,13 @@ in production or keep the port on the internal network.
 
 ### How updates work
 
-- **Code changes** ship as standard rolling container deploys. Each version is
-  tested automatically in CI before it goes live, rolled out with zero downtime,
-  and reversible by redeploying the prior image. RDS/S3 data is untouched across
-  deploys.
+- **Code changes** ship as standard rolling container deploys — tested in CI,
+  rolled out with zero downtime, and reversible by redeploying the prior image;
+  RDS/S3 data is untouched. **Exception:** a release carrying a non-hot migration
+  uses a brief stop/migrate/start instead of a rolling deploy — notably PR 5a's
+  migration 010, which drops a unique the old image still needs and becomes
+  forward-only once two cases have reused an idempotency key
+  (`docs/DEPLOYMENT.md` §2/§6).
 - **Settings** (URLs, secrets, toggles) are environment variables, changed in
   the hosting config with no code change.
 - **Scoring rules** (points, threshold, blocklist) are data-driven and
