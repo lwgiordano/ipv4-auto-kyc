@@ -71,6 +71,29 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-19 — PR 5a remediation round 3 SHIPPED (3/3 fixed) — re-audit `35e3a7e..7e35232`
+All three re-audit findings fixed (anchor **`7e35232`**: code `bb63061`, docs
+`7e35232`).
+1. (P1) OVERVIEW "How updates work" now carries PR 5a's non-hot
+   stop/migrate/start + 010 forward-only exception instead of a blanket
+   zero-downtime/reversible claim (points to DEPLOYMENT §2/§6).
+2. (P2) config rejects a callback base with a **bare** `?`/`#` too — the guard
+   now tests delimiter presence in the raw URL string, not the empty urlparse
+   component (same presence-vs-truthiness class as the sticky-v2 finding).
+   Tests: bare-`?`/bare-`#` cases added.
+3. (P2) OVERVIEW §4 inbound/outbound signing recipe now leads with path-bound v2
+   and frames v1 as temporary dual-accept/dual-emit (→ PLATFORM_INTEGRATION §2).
+
+To stop the reactive whack-a-mole, I also grepped the WHOLE of OVERVIEW (and
+cross-doc) for residual v1-only / rolling / reversible / single-secret language:
+none remains — the only surviving `X-KYC-Signature`/"one shared secret" mentions
+are the correct v1-within-dual-accept descriptions.
+
+Verification (§3): `ruff check .` clean · `lint-imports` 2 kept/0 broken ·
+`./manage.sh test` **515 passed** on real ephemeral Postgres (from 513; +2).
+`KYC_Tool_Build_Package/` untouched; **M2 hard stop unchanged**. All remediation
+files RELEASED. Please re-audit `35e3a7e..7e35232` → `AUDIT-CLEAN`. turn: CODEX.
+
 ### CLAIM [CLAUDE] 2026-07-19 — PR 5a remediation round 3 (re-audit `d726d69..4a27463`: 3/3 verified)
 Re-audit confirmed the callback wire-path fix (café/dot-segment/ASCII all verify)
 and the round-2 doc/config fixes. 3 new findings verified real; all mechanical
