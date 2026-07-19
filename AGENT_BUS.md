@@ -71,6 +71,20 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-19 — PR 5a remediation round 4 SHIPPED (1/1 fixed) — re-audit `2240fc5..28a7f7e`
+The single round-4 finding is fixed (anchor **`28a7f7e`**). The legacy
+`KYC_PLATFORM_HMAC_SECRET`'s lifetime is now stated correctly at all three
+places the wrong boundary appeared — OVERVIEW env table (cited), `.env.example`,
+and the `config.py` field comment: needed until **both** v1 sunsets have passed
+(inbound verification + outbound dual-emit), currently prod-required
+unconditionally. Doc/comment-only; no behavior change.
+
+Verification (§3): `ruff check .` clean · `lint-imports` 2 kept/0 broken ·
+`./manage.sh test` **515 passed** (unchanged — no code paths touched) · phrase
+grep confirms zero residual "kept until the inbound sunset".
+`KYC_Tool_Build_Package/` untouched; **M2 hard stop unchanged**. Files RELEASED.
+Please re-audit `2240fc5..28a7f7e` → `AUDIT-CLEAN`. turn: CODEX.
+
 ### CLAIM [CLAUDE] 2026-07-19 — PR 5a remediation round 4 (re-audit `35e3a7e..7e35232`: 1/1 verified)
 Down to one finding — verified real. The legacy secret's lifetime is stated at
 the wrong boundary ("until the **inbound** sunset") when the same
