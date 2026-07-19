@@ -18,13 +18,45 @@ from fastapi import HTTPException
 
 from kyc_tool import security
 from kyc_tool.api import hmac_witness
-from kyc_tool.config import Settings
+from kyc_tool.config import Settings, parse_sunset
 
 
 def _sunset_passed(iso: str, now: datetime) -> bool:
-    if not iso:
+    try:
+        dt = parse_sunset(iso)
+    except ValueError:
+        # A malformed date fails the production kill switch at boot; in dev we
+        # must not 500 mid-request — treat an unparseable date as "not passed".
         return False
-    return now >= datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return dt is not None and now >= dt
+
+
+def _raw_path_qs(request) -> str:
+    """The LITERAL request target the client signed: ASGI ``raw_path`` (percent-
+    encoding preserved) + raw ``query_string`` — NOT ``request.url.path``, which
+    the framework percent-decodes, so a signature over the raw target (what an
+    independent signer puts on the wire, per PLATFORM_INTEGRATION §2) would be
+    rejected for any encoded case id."""
+    scope = request.scope
+    raw = scope.get("raw_path")
+    path = raw.decode("latin-1") if raw else request.url.path
+    query = scope.get("query_string", b"").decode("latin-1")
+    return path + (f"?{query}" if query else "")
+
+
+def _inbound_v1_zero(session_factory, window_days: int, now: datetime) -> bool:
+    """True only when the durable witness CONFIRMS zero v1 across the window. A
+    missing factory or an unreadable witness returns False (never a false
+    "zero"), so a scheduled sunset date can never cut off v1 on an unproven
+    signal — the request then falls through to the fail-closed ``_record_v1``
+    write, which 503s if the DB is genuinely down."""
+    if session_factory is None:
+        return False
+    try:
+        with session_factory() as s:
+            return hmac_witness.inbound_v1_zero(s, window_days, now)
+    except Exception:  # noqa: BLE001 — an unreadable witness must not force a cutoff
+        return False
 
 
 def _inbound_secret(settings: Settings, key_id: str) -> str:
@@ -70,12 +102,13 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
     # slot: idempotency key for event POSTs, else empty (reads/callbacks).
     slot = headers.get("Idempotency-Key", "")
 
-    if headers.get("X-KYC-Signature-V2") or headers.get("X-KYC-Key-Id"):
-        # v2 asserted ⇒ v2-only, no fallback to the path-unbound v1 scheme.
+    if "X-KYC-Signature-V2" in headers or "X-KYC-Key-Id" in headers:
+        # v2 asserted by PRESENCE of any v2 header ⇒ v2-only, no fallback to the
+        # path-unbound v1 scheme — a present-but-empty v2 header still locks v2
+        # (the contract is header presence, not a truthy value).
         key_id = headers.get("X-KYC-Key-Id", "")
         secret = _inbound_secret(settings, key_id)
-        query = request.url.query
-        path_qs = request.url.path + (f"?{query}" if query else "")
+        path_qs = _raw_path_qs(request)
         ok = bool(secret) and security.verify_v2(
             secret,
             headers.get("X-KYC-Signature-V2", ""),
@@ -94,8 +127,15 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
         _bump(session_factory, "v2_accepted")
         return
 
-    # v1 path — only before the inbound sunset.
-    if _sunset_passed(settings.hmac_v1_inbound_sunset_at, datetime.now(UTC)):
+    # v1 path — retired only when the sunset date has passed AND the durable
+    # witness confirms zero v1 across the observation window. The date alone must
+    # never cut off live v1 traffic (ADR-003 / DEPLOYMENT §2): a scheduled date
+    # takes effect only once the witness is green, so the operator's activation +
+    # zero-window is load-bearing, not decorative.
+    now = datetime.now(UTC)
+    if _sunset_passed(settings.hmac_v1_inbound_sunset_at, now) and _inbound_v1_zero(
+        session_factory, settings.hmac_v1_observation_window_days, now
+    ):
         raise HTTPException(status_code=401, detail="v1 signatures retired (inbound sunset)")
     if not settings.platform_hmac_secret:
         raise HTTPException(status_code=401, detail="authentication not configured")

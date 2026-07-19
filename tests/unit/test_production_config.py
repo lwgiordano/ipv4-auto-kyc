@@ -65,6 +65,10 @@ def test_hardened_config_has_no_violations():
         ({"hmac_v1_inbound_sunset_at": ""}, "inbound sunset"),
         ({"hmac_v1_outbound_sunset_at": ""}, "outbound sunset"),
         ({"hmac_v1_observation_window_days": 0}, "observation window"),
+        # malformed sunset dates must fail the kill switch at boot, not 500 at
+        # request/delivery time (audit finding 4): non-date and tz-naive.
+        ({"hmac_v1_inbound_sunset_at": "not-a-date"}, "timezone-aware ISO-8601"),
+        ({"hmac_v1_outbound_sunset_at": "2026-10-01"}, "timezone-aware ISO-8601"),
     ],
 )
 def test_each_unsafe_condition_is_rejected(overrides, needle):

@@ -5,6 +5,7 @@ boots with `environment="production"` runs it at startup and refuses to start on
 any unsafe or stub configuration (see api/app.py, workers/*).
 """
 
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
@@ -12,6 +13,22 @@ from urllib.parse import urlparse
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def parse_sunset(iso: str) -> datetime | None:
+    """Parse an ISO-8601 dual-accept sunset timestamp as timezone-aware UTC.
+
+    Returns None for the empty string (unset ⇒ dual-accept stays open). Raises
+    ValueError for a malformed or timezone-naive value so a bad date fails the
+    production kill switch at boot (validate_for_production) instead of raising
+    deep inside request auth or callback delivery at runtime.
+    """
+    if not iso:
+        return None
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        raise ValueError(f"sunset timestamp is timezone-naive: {iso!r}")
+    return dt
 
 # Provider identifiers whose implementation is a dev/test stub. Selecting any of
 # these in production is refused at startup — the real providers land with the
@@ -180,10 +197,17 @@ def production_config_violations(settings: Settings) -> list[str]:
         v.append("hmac_inbound_key_id is empty")
     if not settings.hmac_outbound_key_id:
         v.append("hmac_outbound_key_id is empty")
-    if not settings.hmac_v1_inbound_sunset_at:
-        v.append("hmac_v1 inbound sunset date is unset (dual-accept-forever is not allowed)")
-    if not settings.hmac_v1_outbound_sunset_at:
-        v.append("hmac_v1 outbound sunset date is unset (dual-accept-forever is not allowed)")
+    for label, iso in (
+        ("inbound", settings.hmac_v1_inbound_sunset_at),
+        ("outbound", settings.hmac_v1_outbound_sunset_at),
+    ):
+        if not iso:
+            v.append(f"hmac_v1 {label} sunset date is unset (dual-accept-forever is not allowed)")
+            continue
+        try:
+            parse_sunset(iso)
+        except ValueError:
+            v.append(f"hmac_v1 {label} sunset date is not timezone-aware ISO-8601 ({iso!r})")
     if settings.hmac_v1_observation_window_days < 1:
         v.append("hmac_v1 observation window days must be >= 1")
 

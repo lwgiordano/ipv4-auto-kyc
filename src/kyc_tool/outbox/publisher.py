@@ -9,6 +9,7 @@ next_attempt_at forward as a lease, so a crash mid-delivery just retries.
 import json
 import time
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 import httpx
 import structlog
@@ -16,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from kyc_tool import security
-from kyc_tool.config import Settings
+from kyc_tool.config import Settings, parse_sunset
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Outbox
 from kyc_tool.outbox.emails import EmailSender, LoggingEmailSender
@@ -83,7 +84,13 @@ class OutboxPublisher:
         body = json.dumps(payload).encode()
         timestamp = str(time.time())
         url = f"{self.settings.platform_callback_url.rstrip('/')}/kyc/decision"
-        path_qs = "/kyc/decision"
+        # Sign the LITERAL final target (path + query), not a hard-coded
+        # "/kyc/decision". A configured base with a path prefix (e.g. .../hooks)
+        # makes the real path /hooks/kyc/decision, and a conforming receiver
+        # verifies the signature against THAT — a hard-coded path fails every
+        # v2 callback once the receiver enforces v2.
+        _split = urlsplit(url)
+        path_qs = _split.path + (f"?{_split.query}" if _split.query else "")
 
         # v2 (path-bound) is always emitted; v1 is dual-emitted until the
         # OUTBOUND sunset so the platform can migrate its receiver on its own
@@ -110,10 +117,13 @@ class OutboxPublisher:
         response.raise_for_status()
 
     def _outbound_v1_sunset_passed(self) -> bool:
-        iso = self.settings.hmac_v1_outbound_sunset_at
-        if not iso:
+        try:
+            dt = parse_sunset(self.settings.hmac_v1_outbound_sunset_at)
+        except ValueError:
+            # Malformed dates fail the production kill switch at boot; never
+            # crash delivery — treat an unparseable date as "not passed".
             return False
-        return datetime.now(UTC) >= datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt is not None and datetime.now(UTC) >= dt
 
     def _deliver(self, kind: str, payload: dict) -> None:
         if kind == DECISION_CALLBACK:

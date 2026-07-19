@@ -20,6 +20,7 @@ def _deliver(session_factory, settings):
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
         captured["headers"] = dict(request.headers)
         captured["body"] = request.content
         return httpx.Response(200)
@@ -64,6 +65,39 @@ def test_callback_dual_emits_and_v2_binds_direction_and_path(session_factory, se
         body=body,
     )
     assert body == json.dumps(PAYLOAD).encode()
+
+
+def test_callback_signs_literal_prefixed_path(session_factory, settings):
+    """Audit finding 1: a callback base with a path prefix POSTs to
+    /hooks/kyc/decision; the v2 signature must bind THAT literal target, not a
+    hard-coded /kyc/decision (else a conforming receiver rejects every v2
+    callback)."""
+    s = _outbound_settings(
+        settings,
+        platform_callback_url="https://platform.test/hooks",
+        hmac_v1_outbound_sunset_at="2999-01-01T00:00:00Z",
+    )
+    h = _deliver(session_factory, s)
+    headers, body = h["headers"], h["body"]
+
+    assert h["url"] == "https://platform.test/hooks/kyc/decision"
+
+    def _verifies(path_qs: str) -> bool:
+        return security.verify_v2(
+            s.hmac_outbound_secret,
+            headers["x-kyc-signature-v2"],
+            max_skew_seconds=300,
+            key_id="kyc-tool-1",
+            direction=security.DIRECTION_OUTBOUND,
+            method="POST",
+            path_qs=path_qs,
+            timestamp=headers["x-kyc-timestamp"],
+            slot="",
+            body=body,
+        )
+
+    assert _verifies("/hooks/kyc/decision")  # the ACTUAL request target
+    assert not _verifies("/kyc/decision")  # the old hard-coded path no longer matches
 
 
 def test_callback_v1_dropped_after_outbound_sunset(session_factory, settings):
