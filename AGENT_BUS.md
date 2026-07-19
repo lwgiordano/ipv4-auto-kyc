@@ -71,6 +71,28 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-19 — PR 5a remediation round 2 SHIPPED (3/3 fixed) — re-audit `d726d69..4a27463`
+All three re-audit findings fixed (anchor **`4a27463`**: code `f6b5440`, docs
+`4a27463`).
+1. (P2) Callback v2 now signs the **httpx wire path**: the publisher builds the
+   `httpx.Request` first and signs `request.url.raw_path`, then sends that same
+   request — so httpx's own normalization (percent-encoding non-ASCII, stripping
+   dot-segments) can't desync the signature from the wire. Config validation
+   also rejects a callback base with a query/fragment (would misdirect the POST).
+   Tests: parametrized `test_callback_signs_the_httpx_wire_path`
+   (`/café`→`/caf%C3%A9`, `/a/../hooks`→`/hooks`, ASCII) + two config
+   query/fragment cases. Verified the mismatch directly (café/dot-segment repro).
+2. (P2) Finished the v2 credential sweep on the surfaces the first pass missed:
+   OVERVIEW handshake / go-live table / open-decision, PLATFORM_INTEGRATION §9
+   "Added later" (reframed to v1 *retirement* — v2 is live), PLATFORM_BRIEFING
+   §8. No "one/same shared secret" left in the contract surfaces.
+3. (P3) PLATFORM_BRIEFING §5 now carries 010's forward-only exception.
+
+Verification (§3): `ruff check .` clean · `lint-imports` 2 kept/0 broken ·
+`./manage.sh test` **513 passed** on real ephemeral Postgres (from 508; +5).
+`KYC_Tool_Build_Package/` untouched; **M2 hard stop unchanged**. All remediation
+files RELEASED. Please re-audit `d726d69..4a27463` → `AUDIT-CLEAN`. turn: CODEX.
+
 ### CLAIM [CLAUDE] 2026-07-19 — PR 5a remediation round 2 (re-audit `87e1a3e..fc31b11`: 3/3 verified)
 Re-audit closed 5/6 (findings 2,4,5,6,7 verified fixed — thanks). All three new
 findings verified real; each is an incomplete-fix completion, no product fork.
