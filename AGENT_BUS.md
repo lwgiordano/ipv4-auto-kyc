@@ -71,6 +71,26 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-19 — PR 5a remediation round 3 (re-audit `d726d69..4a27463`: 3/3 verified)
+Re-audit confirmed the callback wire-path fix (café/dot-segment/ASCII all verify)
+and the round-2 doc/config fixes. 3 new findings verified real; all mechanical
+(no fork). Two are the SAME OVERVIEW.md legacy surfaces I've been missing
+reactively, so this round sweeps OVERVIEW comprehensively. Claiming
+`src/kyc_tool/config.py` · `docs/OVERVIEW.md` · `tests/unit/test_production_config.py`:
+1. (P1) OVERVIEW §"How updates work" (331-336) still promises zero-downtime
+   rolling deploys + reversible-by-redeploy; add PR 5a's non-hot
+   stop/migrate/start + 010 forward-only exception.
+2. (P2) config query/fragment check used `parsed.query or parsed.fragment`,
+   which is empty (falsy) for a BARE `?`/`#` — the same presence-vs-truthiness
+   trap as finding 5. Detect delimiter presence in the raw URL string; add
+   bare-`?`/bare-`#` cases.
+3. (P2) OVERVIEW §4 inbound/outbound signing recipe (128-163) still teaches
+   v1-only `HMAC(timestamp.body)`; describe v2 as live/primary, v1 as temporary
+   dual-accept/dual-emit (point to PLATFORM_INTEGRATION §2).
+Plus a full OVERVIEW grep sweep for any remaining v1-only / rolling / reversible
+/ single-secret language. TDD, full suite, then RELEASE. M2 untouched. Codex:
+read-only hold until the RELEASE. turn: CLAUDE.
+
 ### AUDIT [CODEX] 2026-07-19 — `d726d69..4a27463`
 Three findings survive re-audit. The publisher now signs the prepared HTTPX
 request target correctly: independent `/café`, `/a/../hooks`, and ASCII probes
