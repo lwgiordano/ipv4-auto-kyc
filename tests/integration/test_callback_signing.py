@@ -100,6 +100,41 @@ def test_callback_signs_literal_prefixed_path(session_factory, settings):
     assert not _verifies("/kyc/decision")  # the old hard-coded path no longer matches
 
 
+@pytest.mark.parametrize(
+    ("base", "expected_wire_path"),
+    [
+        ("https://platform.test/café", "/caf%C3%A9/kyc/decision"),  # non-ASCII → %-encoded
+        ("https://platform.test/a/../hooks", "/hooks/kyc/decision"),  # dot-segments stripped
+        ("https://platform.test/hooks", "/hooks/kyc/decision"),  # plain ASCII prefix
+    ],
+)
+def test_callback_signs_the_httpx_wire_path(session_factory, settings, base, expected_wire_path):
+    """Audit re-finding 1: httpx normalizes the URL (percent-encoding non-ASCII,
+    stripping dot-segments) before it sends, so the v2 signature must bind the
+    literal wire path — a pre-normalized string disagrees with what's received."""
+    s = _outbound_settings(
+        settings, platform_callback_url=base, hmac_v1_outbound_sunset_at="2999-01-01T00:00:00Z"
+    )
+    h = _deliver(session_factory, s)
+    headers, body = h["headers"], h["body"]
+
+    wire_path = httpx.URL(h["url"]).raw_path.decode("ascii")
+    assert wire_path == expected_wire_path  # what httpx actually put on the wire
+
+    assert security.verify_v2(
+        s.hmac_outbound_secret,
+        headers["x-kyc-signature-v2"],
+        max_skew_seconds=300,
+        key_id="kyc-tool-1",
+        direction=security.DIRECTION_OUTBOUND,
+        method="POST",
+        path_qs=wire_path,
+        timestamp=headers["x-kyc-timestamp"],
+        slot="",
+        body=body,
+    )
+
+
 def test_callback_v1_dropped_after_outbound_sunset(session_factory, settings):
     s = _outbound_settings(settings, hmac_v1_outbound_sunset_at="2000-01-01T00:00:00Z")
     headers = _deliver(session_factory, s)["headers"]

@@ -9,7 +9,6 @@ next_attempt_at forward as a lease, so a crash mid-delivery just retries.
 import json
 import time
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
 
 import httpx
 import structlog
@@ -84,36 +83,42 @@ class OutboxPublisher:
         body = json.dumps(payload).encode()
         timestamp = str(time.time())
         url = f"{self.settings.platform_callback_url.rstrip('/')}/kyc/decision"
-        # Sign the LITERAL final target (path + query), not a hard-coded
-        # "/kyc/decision". A configured base with a path prefix (e.g. .../hooks)
-        # makes the real path /hooks/kyc/decision, and a conforming receiver
-        # verifies the signature against THAT — a hard-coded path fails every
-        # v2 callback once the receiver enforces v2.
-        _split = urlsplit(url)
-        path_qs = _split.path + (f"?{_split.query}" if _split.query else "")
 
-        # v2 (path-bound) is always emitted; v1 is dual-emitted until the
-        # OUTBOUND sunset so the platform can migrate its receiver on its own
-        # schedule (PR 5a §3). The two sunset dates are independent.
-        headers = {
-            "Content-Type": "application/json",
-            "X-KYC-Timestamp": timestamp,
-            "X-KYC-Key-Id": self.settings.hmac_outbound_key_id,
-            "X-KYC-Signature-V2": security.sign_v2(
-                self.settings.hmac_outbound_secret,
-                key_id=self.settings.hmac_outbound_key_id,
-                direction=security.DIRECTION_OUTBOUND,
-                method="POST",
-                path_qs=path_qs,
-                timestamp=timestamp,
-                slot="",
-                body=body,
-            ),
-        }
+        # Build the request FIRST, then sign the literal target httpx will put on
+        # the wire. httpx percent-encodes non-ASCII and strips dot-segments when
+        # it constructs the URL, so a base like ".../café" or ".../a/../hooks" is
+        # normalized before it is sent. Signing request.url.raw_path binds the v2
+        # signature to exactly what a conforming receiver verifies (finding 1) —
+        # a pre-normalized string would disagree with the wire. (config validation
+        # rejects query/fragment callback bases, which would misdirect the POST.)
+        request = self.http.build_request(
+            "POST",
+            url,
+            content=body,
+            headers={"Content-Type": "application/json", "X-KYC-Timestamp": timestamp},
+        )
+        path_qs = request.url.raw_path.decode("ascii")
+
+        # v2 (path-bound) is always emitted; v1 is dual-emitted until the OUTBOUND
+        # sunset so the platform can migrate its receiver on its own schedule
+        # (PR 5a §3). The two sunset dates are independent.
+        request.headers["X-KYC-Key-Id"] = self.settings.hmac_outbound_key_id
+        request.headers["X-KYC-Signature-V2"] = security.sign_v2(
+            self.settings.hmac_outbound_secret,
+            key_id=self.settings.hmac_outbound_key_id,
+            direction=security.DIRECTION_OUTBOUND,
+            method="POST",
+            path_qs=path_qs,
+            timestamp=timestamp,
+            slot="",
+            body=body,
+        )
         if not self._outbound_v1_sunset_passed():
-            headers["X-KYC-Signature"] = security.sign(self.settings.platform_hmac_secret, timestamp, body)
+            request.headers["X-KYC-Signature"] = security.sign(
+                self.settings.platform_hmac_secret, timestamp, body
+            )
 
-        response = self.http.post(url, content=body, headers=headers)
+        response = self.http.send(request)
         response.raise_for_status()
 
     def _outbound_v1_sunset_passed(self) -> bool:

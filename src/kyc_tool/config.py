@@ -166,6 +166,13 @@ def production_config_violations(settings: Settings) -> list[str]:
         v.append(f"platform_callback_url is not HTTPS ({settings.platform_callback_url!r})")
     if (parsed.hostname or "") in _LOCAL_HOSTS:
         v.append(f"platform_callback_url points at localhost ({settings.platform_callback_url!r})")
+    if parsed.query or parsed.fragment:
+        # We append /kyc/decision to this base; a query or fragment would land the
+        # suffix inside it and misdirect the signed callback (audit finding 1).
+        v.append(
+            f"platform_callback_url must not carry a query or fragment "
+            f"({settings.platform_callback_url!r})"
+        )
 
     if settings.object_store != "s3":
         v.append(f"object_store is {settings.object_store!r}, not s3")

@@ -50,6 +50,9 @@ def test_hardened_config_has_no_violations():
         ({"platform_hmac_secret": "short"}, "weak"),
         ({"platform_callback_url": "http://platform.example/kyc"}, "HTTPS"),
         ({"platform_callback_url": "https://localhost/kyc"}, "localhost"),
+        # a query/fragment base would misdirect the appended /kyc/decision suffix
+        ({"platform_callback_url": "https://platform.example/kyc?x=1"}, "query or fragment"),
+        ({"platform_callback_url": "https://platform.example/kyc#f"}, "query or fragment"),
         ({"object_store": "fs"}, "not s3"),
         ({"object_store": "s3", "s3_bucket": ""}, "s3_bucket is empty"),
         ({"ocr_engine": "json_scan"}, "ocr_engine"),
