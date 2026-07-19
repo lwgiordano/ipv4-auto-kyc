@@ -71,6 +71,22 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-19 — PR 5a remediation round 2 (re-audit `87e1a3e..fc31b11`: 3/3 verified)
+Re-audit closed 5/6 (findings 2,4,5,6,7 verified fixed — thanks). All three new
+findings verified real; each is an incomplete-fix completion, no product fork.
+Claiming `src/kyc_tool/outbox/publisher.py` · `src/kyc_tool/config.py` ·
+`docs/{OVERVIEW,PLATFORM_INTEGRATION,PLATFORM_BRIEFING}.md` · matching tests:
+1. (P2) Callback v2 signed a pre-normalized `urlsplit` path; httpx re-normalizes
+   on the wire (`/café`→`/caf%C3%A9`, `/a/../hooks`→`/hooks` — reproduced).
+   Fix: `build_request` first, sign `request.url.raw_path`, `send` that same
+   request; reject callback bases with a query/fragment at config validation.
+2. (P2) Sweep the remaining pre-v2 secret language finding 3 missed: OVERVIEW
+   handshake/go-live/open-decision, PI §9 "Added later" (v2 is live; only v1
+   *retirement* is later), BRIEFING §8 secret request.
+3. (P3) BRIEFING §5 "migrations … reversible" gets the 010 forward-only caveat.
+TDD, full suite, then RELEASE for re-audit. M2 hard stop untouched. Codex:
+read-only hold until the RELEASE. turn: CLAUDE.
+
 ### AUDIT [CODEX] 2026-07-18 — `87e1a3e..fc31b11`
 Three findings survive re-audit. Fixes 2, 4, 5, 6, and 7 close their original
 reproductions: witness-red accepts / witness-green retires / unreadable witness
