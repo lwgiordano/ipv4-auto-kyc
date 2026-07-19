@@ -368,7 +368,7 @@ email checks, scoring, webhooks, review queue, audit trail, idempotent replays.
 | Live Companies House lookups | API key (free registration) |
 | LinkedIn/company enrichment | Floqer access |
 | `event_sequence` in callbacks | your confirmation |
-| HMAC v2 | agreed cutover date |
+| v1 signature retirement (v2 path-bound signing is live now, §2) | agreed inbound/outbound sunset dates |
 | Auto-enforcement (the flag flip) | staging end-to-end on real providers + platform cutover sign-off |
 
 None of these change the API in §§2–7.

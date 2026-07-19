@@ -181,9 +181,12 @@ path; these are for querying state directly.
 
 ### The handshake — what must be exchanged to connect
 
-1. **Platform → tool:** the tool's base URL + the shared HMAC secret.
+1. **Platform → tool:** the tool's base URL + the HMAC credentials — the legacy
+   v1 shared secret plus the v2 **inbound** secret + key id (path-bound signing,
+   dual-accept; `docs/PLATFORM_INTEGRATION.md` §2).
 2. **Tool → platform:** a callback endpoint the tool POSTs decisions to, signed
-   with the same secret; the platform dedupes on `(case_id, run_id)`.
+   with the v2 **outbound** secret + key id (and v1 until the outbound sunset);
+   the platform dedupes on `(case_id, run_id)`.
 3. **Upstream credentials** for the evidence sources (see §6).
 
 ---
@@ -236,7 +239,7 @@ determine how rich the automated verification is at launch.
 
 | Item | What's needed | Owner | Required for v1? |
 |---|---|---|---|
-| **Platform callback URL + shared secret** | The endpoint the tool POSTs decisions to, and a shared HMAC secret. | Platform team | **Yes** — the integration handshake. |
+| **Platform callback URL + HMAC credentials** | The endpoint the tool POSTs decisions to, plus the v1 legacy secret and the split v2 inbound/outbound secrets + key ids (`docs/PLATFORM_INTEGRATION.md` §2). | Platform team | **Yes** — the integration handshake. |
 | **Companies House key** | `CH_API_KEY` (optional; works without, key raises rate limits). | Hilco | Recommended |
 | **Document extraction** | Decide who reads uploaded documents (see §9). If the tool does it: pick an OCR engine (AWS Textract recommended). If the platform does it: it sends the four extracted fields as data. | Platform / Hilco | Decision needed |
 | **POC token email** | Resolved: the **platform's existing transactional email** delivers the POC token; nothing to procure. | Platform | Wire-up only |
@@ -349,7 +352,8 @@ in production or keep the port on the internal network.
    tool does it, it OCRs the file (PDF/JPEG/PNG/TIFF). This decides the
    `document.uploaded` event payload.
 2. **Callback URL + secret exchange** — the platform provides the endpoint and
-   both sides agree on the shared HMAC secret (and a rotation plan).
+   both sides agree on the HMAC credentials: the v1 legacy secret plus the split
+   v2 inbound/outbound secrets + key ids (and a rotation plan).
 3. **Registration-flow alignment** — the platform's registration is a
    lightweight "get through the door" step (ORG-ID not required up front, with a
    tooltip that providing it improves approval odds); heavier verification is

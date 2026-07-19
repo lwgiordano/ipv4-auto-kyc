@@ -130,7 +130,9 @@ edited on the server.
 
 - A `Dockerfile` ships in the repo. An update is: pull the release, build the
   image, `alembic upgrade head`, restart processes. Migrations are versioned
-  and reversible.
+  and reversible — with one deliberate exception: migration 010 (PR 5a) is
+  forward-only once two cases have reused an idempotency key
+  (`docs/DEPLOYMENT.md` §6).
 - `GET /readyz` for the load balancer (checks config, DB, migration version,
   storage), `GET /healthz` for liveness.
 - All config is env vars prefixed `KYC_`; `docs/RUNBOOK.md` documents every
@@ -229,7 +231,8 @@ print(r.status_code, r.json())
 ## 8. What we need from you
 
 1. Staging callback URL (production's later).
-2. A secure channel to exchange the shared secret.
+2. A secure channel to exchange the HMAC secrets (the v1 legacy secret plus the
+   split v2 inbound/outbound secrets + key ids).
 3. AWS access for whoever on your side deploys.
 4. ~~Confirmation of the document path~~ — answered on the kickoff call:
    platform ingests and extracts; exact field spec in
