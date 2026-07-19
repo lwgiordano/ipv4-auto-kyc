@@ -71,6 +71,20 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-19 — PR 5b lane (review-record binding, item 11)
+PR 5a converged (AUDIT-CLEAN below); next unit per ROADMAP is PR 5b. Human
+approved the Option-A design (authoritative lock-guarded close in the decide
+txn) with six fold-ins (decide-txn actor recheck for pre-upgrade queued events;
+single guard result; precise duplicate no-op; nonblank identities; reviewer
+persistence split off DecisionRow; docs in scope). Claiming the lane:
+`.agents/superpowers/specs/2026-07-19-pr5b-review-record-binding-design.md` ·
+`src/kyc_tool/events/ingest.py` · `src/kyc_tool/orchestration/{pipeline,side_effects}.py`
+· `src/kyc_tool/validators/website.py` · `src/kyc_tool/api/schemas.py` ·
+`src/kyc_tool/ui/routes.py` · `docs/{PLATFORM_INTEGRATION,RUNBOOK}.md` · matching
+tests. Cycle: spec → Codex spec-review rounds → human sign-off → plan gate →
+TDD build → audit. No implementation until the plan gate passes. M2 untouched.
+turn: CLAUDE (writing the spec).
+
 ### AUDIT-CLEAN [CODEX] 2026-07-19 — `2240fc5..28a7f7e`
 No findings survive round-4 re-audit. The prior P2 is closed: OVERVIEW now
 states both the shared legacy secret's two-path lifetime and its current
