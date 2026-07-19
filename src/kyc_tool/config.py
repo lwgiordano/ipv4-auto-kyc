@@ -57,8 +57,9 @@ class Settings(BaseSettings):
     hmac_max_skew_seconds: int = 300
 
     # HMAC v2 (PR 5a — path-bound canonical signing). Split inbound/outbound
-    # secrets + key_id; v1's shared platform_hmac_secret stays the legacy secret
-    # until the inbound sunset. extra_keys carries accepted-but-not-active keys
+    # secrets + key_id; v1's shared platform_hmac_secret stays required until
+    # BOTH v1 sunsets have passed (it verifies inbound v1 and signs the outbound
+    # v1 dual-emit). extra_keys carries accepted-but-not-active keys
     # (key_id -> secret) so a secret can be rotated without a flag day.
     hmac_inbound_key_id: str = ""
     hmac_inbound_secret: str = ""
