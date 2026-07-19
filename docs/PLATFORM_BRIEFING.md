@@ -163,9 +163,13 @@ Checklist:
 1. RDS Postgres 14+, S3 bucket, ECS/Fargate service (or one EC2 box) for the
    four processes.
 2. Build the image from the repo `Dockerfile`.
-3. Generate one shared secret into AWS Secrets Manager; set it on both sides
-   (`KYC_PLATFORM_HMAC_SECRET` here, the same value in the platform's staging
-   config).
+3. Generate the HMAC secrets into AWS Secrets Manager and set them on both
+   sides: the v1 legacy `KYC_PLATFORM_HMAC_SECRET`, plus the v2 pairs
+   `KYC_HMAC_INBOUND_KEY_ID`/`KYC_HMAC_INBOUND_SECRET` and
+   `KYC_HMAC_OUTBOUND_KEY_ID`/`KYC_HMAC_OUTBOUND_SECRET`
+   (`PLATFORM_INTEGRATION.md` §2/§7). Staging boots in development mode without
+   the v2 set, but v2 dual-accept — the thing staging exists to rehearse — needs
+   it configured on both sides.
 4. Core env vars: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL` (your
    staging receiver), `KYC_OBJECT_STORE=s3` + `KYC_S3_BUCKET`,
    `KYC_ENFORCE_POSITIVE_DECISIONS=true`.

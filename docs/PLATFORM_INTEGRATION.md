@@ -33,7 +33,10 @@ X-KYC-Signature: <hex HMAC-SHA256(secret, timestamp + "." + raw_body)>
   you receive (before any JSON parsing).
 - Requests older/newer than 300 seconds are rejected — keep clocks on NTP.
 - Compare signatures constant-time.
-- One shared secret per environment (staging ≠ production), ≥ 32 chars.
+- v1 uses one shared secret per environment (staging ≠ production), ≥ 32 chars.
+  v2 (below) splits this into **separate inbound (platform→tool) and outbound
+  (tool→platform) secrets**, each with a `key_id`, so the two directions rotate
+  independently.
 
 Verify in Python:
 
@@ -95,11 +98,11 @@ def sign_v2(secret, *, key_id, method, path_qs, timestamp, slot, body: bytes):
 ```
 
 Rules: **if you send any v2 header, the request must be complete, valid v2** — we
-do not fall back to v1 for a v2-labelled request. `key_id` is a constant from your
-config (it only changes on a secret rotation). On staging, a v2 mismatch logs the
-server-side canonical string so you can diff it in one look. Our webhook callbacks
-dual-emit both signatures until the outbound sunset, so your receiver can migrate
-whenever it's ready.
+do not fall back to v1 for a v2-labelled request, and sending *any* v2 header
+(even present-but-empty) locks the request to v2. `key_id` is a constant from your
+config (it only changes on a secret rotation). Our webhook callbacks dual-emit
+both signatures until the outbound sunset, so your receiver can migrate whenever
+it's ready.
 
 ## 3. Sending events
 
@@ -179,8 +182,12 @@ re-verified, so a score can drop after an edit (§5). Expected, not a bug.
 
 ## 4. The decision webhook (you build this)
 
-Expose HTTPS `POST {your_base_url}/kyc/decision`. We sign it per §2 with the
-same shared secret. Respond 2xx to acknowledge; anything else and we retry.
+Expose HTTPS `POST {your_base_url}/kyc/decision`. We sign it per §2 — dual-emitting
+v1 (the legacy shared secret) and v2 (the dedicated **outbound** secret + key id)
+until the outbound sunset, then v2 only. The v2 signature binds the **literal**
+request path, so if `{your_base_url}` has a path prefix (e.g. `…/hooks`), we sign
+`/hooks/kyc/decision`, not `/kyc/decision` — verify against the full path you
+received. Respond 2xx to acknowledge; anything else and we retry.
 
 Body:
 

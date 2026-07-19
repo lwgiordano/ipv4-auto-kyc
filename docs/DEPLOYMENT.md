@@ -60,9 +60,23 @@ zero-witness never turns green (by design), so v1 can never be sunset.
 2. Generate the shared HMAC secret into AWS Secrets Manager; set the same
    value in the platform's config for that environment.
 3. Set env vars (`KYC_` prefix; full table in `docs/RUNBOOK.md`; sample in
-   `.env.example`). Minimum: `KYC_DATABASE_URL`, `KYC_PLATFORM_HMAC_SECRET`,
-   `KYC_PLATFORM_CALLBACK_URL`, `KYC_OBJECT_STORE=s3`, `KYC_S3_BUCKET`, and
-   the two per-environment values from §2.
+   `.env.example`). Minimum: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL`,
+   `KYC_OBJECT_STORE=s3`, `KYC_S3_BUCKET`, the two per-environment values from
+   §2, and the full **HMAC credential set** — production boot refuses without
+   all of it (PR 5a):
+   - v1 legacy secret: `KYC_PLATFORM_HMAC_SECRET`
+   - v2 **inbound** (platform→tool): `KYC_HMAC_INBOUND_KEY_ID` +
+     `KYC_HMAC_INBOUND_SECRET`
+   - v2 **outbound** (tool→platform callbacks): `KYC_HMAC_OUTBOUND_KEY_ID` +
+     `KYC_HMAC_OUTBOUND_SECRET`
+   - both sunsets `KYC_HMAC_V1_INBOUND_SUNSET_AT` /
+     `KYC_HMAC_V1_OUTBOUND_SUNSET_AT` (tz-aware ISO-8601 — a naive or malformed
+     value is refused at boot, not at request time)
+   - `KYC_HMAC_V1_OBSERVATION_WINDOW_DAYS` (≥ 1)
+
+   Set both sunset dates in the future at launch (dual-accept). The inbound one
+   only *takes effect* once the zero-witness is green (activate per §2), so a
+   date alone never cuts off live v1.
 4. Run the migration task: `alembic upgrade head`.
 5. Start the processes. Wire `GET /readyz` to the load balancer — it checks
    DB connectivity, migration version, and storage access, and returns 503
@@ -105,11 +119,15 @@ three things: does it include a **migration**, any **new env vars**, and any
 
 - Code: redeploy the previous image tag. That is the whole rollback when the
   release had no migration (most releases).
-- With a migration: every revision downgrades cleanly
+- With a migration: revisions downgrade cleanly
   (`alembic downgrade <previous revision>` — the release notes name it), but
   once real traffic has written data under the new schema, prefer rolling
   forward with a fix. Downgrade without hesitation in staging; in production,
-  check with IPv4.Global first.
+  check with IPv4.Global first. **Exception — migration 010 (PR 5a) is
+  forward-only after cross-case idempotency-key reuse:** its downgrade
+  deliberately refuses (it will not delete immutable audit events to recreate
+  the old global unique — see `docs/RUNBOOK.md` and ADR-003). If two cases have
+  shared an idempotency key, roll forward with a fix; do not downgrade 010.
 
 ## 7. Monitoring and incidents
 

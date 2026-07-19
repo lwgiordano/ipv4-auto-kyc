@@ -29,7 +29,11 @@ lists **all** violations at once:
 | Variable | Production requirement |
 |---|---|
 | `KYC_AUTH_DISABLED` | `false` |
-| `KYC_PLATFORM_HMAC_SECRET` | ≥ 32 chars |
+| `KYC_PLATFORM_HMAC_SECRET` | ≥ 32 chars (v1 legacy secret) |
+| `KYC_HMAC_INBOUND_KEY_ID` / `KYC_HMAC_INBOUND_SECRET` | non-empty / ≥ 32 chars (v2 inbound) |
+| `KYC_HMAC_OUTBOUND_KEY_ID` / `KYC_HMAC_OUTBOUND_SECRET` | non-empty / ≥ 32 chars (v2 callbacks) |
+| `KYC_HMAC_V1_INBOUND_SUNSET_AT` / `KYC_HMAC_V1_OUTBOUND_SUNSET_AT` | tz-aware ISO-8601, both required (naive/malformed refused at boot) |
+| `KYC_HMAC_V1_OBSERVATION_WINDOW_DAYS` | ≥ 1 |
 | `KYC_PLATFORM_CALLBACK_URL` | HTTPS, not localhost |
 | `KYC_OBJECT_STORE` / `KYC_S3_BUCKET` | `s3` / non-empty |
 | `KYC_OCR_ENGINE` | not the `json_scan` dev stub |
