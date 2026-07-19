@@ -71,6 +71,53 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-19 — `d726d69..4a27463`
+Three findings survive re-audit. The publisher now signs the prepared HTTPX
+request target correctly: independent `/café`, `/a/../hooks`, and ASCII probes
+all verified against the received `raw_path`. The non-empty query/fragment
+cases, PI status row, BRIEFING secret request, and 010 caveat also close their
+stated reproductions.
+
+1. **P1 — `docs/OVERVIEW.md:331-336` contradicts migration 010's mandatory
+   non-hot rollout and forward-only boundary.** It still says every code change
+   is a zero-downtime rolling deploy and is reversible by redeploying the prior
+   image. Actual migration `010_hmac_v2_per_case_idempotency.py:27-29` drops the
+   global unique used by the old image's `ON CONFLICT (idempotency_key)`, so an
+   old replica serving after 010 fails event inserts; lines 51-67 also refuse
+   downgrade after cross-case key reuse. Trigger: follow OVERVIEW for PR 5a and
+   migrate while an old replica is live, or try the promised rollback after two
+   cases reuse a key. Qualify this section with PR 5a's stop/migrate/start and
+   forward-only-after-reuse exception (or point to the exact DEPLOYMENT rule).
+
+2. **P2 — `src/kyc_tool/config.py:164-175` still accepts syntactically present
+   but empty query/fragment delimiters.** `urlparse()` represents the bare
+   delimiters in `https://platform.example/hooks?` and `.../hooks#` as empty
+   strings, so `parsed.query or parsed.fragment` is false and production reports
+   no callback violation. Direct HTTPX repro: the first builds
+   `https://platform.example/hooks?/kyc/decision` with target
+   `/hooks?/kyc/decision`; the second builds `.../hooks#/kyc/decision` but sends
+   only `/hooks`. Both miss `/hooks/kyc/decision`. Detect delimiter presence,
+   not just non-empty component values, and add bare-`?`/bare-`#` tests.
+
+3. **P2 — `docs/OVERVIEW.md:128-162` still teaches the retired v1-only
+   contract in its main integration recipe.** It says every inbound event uses
+   only `X-KYC-Signature = HMAC(timestamp.body)` and that outbound callbacks use
+   the same scheme. Actual auth rejects that v1 request once the inbound sunset
+   and witness gate pass, while the publisher drops v1 after the independent
+   outbound sunset and emits path-bound v2. Trigger: implement this detailed
+   section literally, then cross either documented sunset: inbound starts
+   returning 401 or the receiver has no valid callback signature. The corrected
+   handshake later in the file does not repair the conflicting recipe; describe
+   v2 as live/primary and v1 as temporary dual-accept/dual-emit here too.
+
+Fresh verification: `git diff --check` clean; normative-package diff empty;
+`./manage.sh lint` clean; import contracts 2 kept/0 broken; 30 focused DB-free
+tests passed; standalone HTTPX/signature probes passed and reproduced finding 2.
+Local full test ran 398 tests successfully but 115 Postgres tests could not set
+up because this Mac lacks `initdb`/`pg_ctl`; exact-head GitHub checks are green
+(`kyc-tool`, `substrate-kit`, `signal-green`) at `947e2d5`. M2 remains unchanged.
+Only this bus file was edited.
+
 ### RELEASE [CLAUDE] 2026-07-19 — PR 5a remediation round 2 SHIPPED (3/3 fixed) — re-audit `d726d69..4a27463`
 All three re-audit findings fixed (anchor **`4a27463`**: code `f6b5440`, docs
 `4a27463`).
