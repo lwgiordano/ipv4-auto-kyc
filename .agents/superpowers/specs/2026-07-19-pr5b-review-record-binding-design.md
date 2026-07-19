@@ -1,6 +1,7 @@
-# PR 5b — Review-record binding (design, rev 1)
+# PR 5b — Review-record binding (design, rev 2)
 
-Status: awaiting Codex spec review → human sign-off → `writing-plans`.
+Status: rev 1 Codex-reviewed (7 findings, all folded below) → awaiting Codex
+re-review → human sign-off → `writing-plans`.
 Unit: ROADMAP item 11 ("Review-record binding"). Predecessor: PR 5a
 (AUDIT-CLEAN at `2240fc5..28a7f7e`), which built the ingest validation floor and
 explicitly deferred actor trust + task locking to this PR.
@@ -14,10 +15,12 @@ Two holes remain on the human-review path (`website.review_completed`,
    copied verbatim from the event *payload* (`side_effects.py:186`) — the
    signed envelope's `actor` is never checked against it. On manual approve
    the reviewer IS actor-derived (`ingest.py:245`) but the actor itself is
-   unvalidated: any `actor.type`, blank or missing id (defaults to
-   `"unknown"`), and no cross-check against the payload's required
-   `reviewer_id`. `Actor.id` accepts blank strings (`api/schemas.py:28` — no
-   nonblank constraint). Today a validly signed completion with the default
+   unvalidated: any `actor.type`, and no cross-check against the payload's
+   required `reviewer_id`. `Actor.id` is *required* by the public schema
+   (`api/schemas.py:28-31`; `routes_events.py` validates the envelope before
+   ingest), so a **missing** id can't arrive over signed HTTP — but the schema
+   permits **blank/whitespace** ids, which is the live hole. Today a validly
+   signed completion with the default
    `{"type": "system", "id": "test"}` fixture actor is accepted 202
    (`tests/integration/test_review_completed_event.py:33`) — a signed caller
    can attribute a review to anyone, or to `""`.
@@ -71,21 +74,48 @@ One guard, two call sites, one authority:
   events admitted under the PR 5a floor (queued before this deploy) never
   passed the actor rules. Ingest-only validation would let those drain through
   unchecked.
-- **Single source of eligibility.** The guard result (an immutable snapshot:
-  `eligible: bool`, `skip_reason: str | None`, the locked task where eligible)
-  is threaded to the validator via `_validation_extras` and to the closing
-  side-effect. `website_intent` emits a check **only if** the guard says
-  eligible; `on_event` closes **only** the same locked task the guard
-  evaluated. Neither layer re-decides eligibility independently — the current
-  duplicated payload-reads are removed.
+- **Single source of eligibility, two derived views.** The guard decision is
+  computed once. It yields **two** views, both derived from that one decision:
+  - a **pipeline-internal guard** holding the live locked `ReviewTask` ORM
+    object — consumed only by orchestration/`side_effects` (which legitimately
+    mutate the task to close it); it never crosses the validator boundary.
+  - a separate **immutable scalar view** — `eligible: bool`, `reviewer_id: str
+    | None`, `task_id: str | None`, `skip_reason: str | None` (plain strings/
+    bools, no ORM entity) — passed to the pure validator via
+    `_validation_extras`. This respects the `AGENTS.md` pure-validator boundary
+    (`ValidationContext` is read-only data): a frozen wrapper does NOT freeze a
+    contained SQLAlchemy entity, so the ORM task must never be handed to a
+    validator.
+  `website_intent` emits a check **only if** the scalar view says eligible;
+  `on_event` closes **only** the locked task in the internal guard. Neither
+  re-decides eligibility — the current duplicated payload-reads are removed.
+
+**Broker-blocked short-circuit (live path).** `website.review_completed` runs
+the broker gate (`triggers.py:39`); a broker-blocked case hops straight to
+DECIDE (`pipeline.py:195-196`), and `_decide_txn` builds validator intents only
+when `from_state is VALIDATE`. Left as-is, a blocked case would close the
+eligible task with no `website_verified` check (or, if the close were gated on
+the intent, strand an accepted completion open). Fix: for
+`website.review_completed`, the authoritative guard **and** the `website_intent`
+emission run on the DECIDE short-circuit too (all *other* validators stay
+skipped) — so task-close + the +10 check still commit together even when the
+decision remains `reject` (blocked). §8 adds a blocked-broker test proving
+task+check commit atomically while the decision stays reject.
 
 An ineligible-at-decide event (task no longer open, or a pre-upgrade event with
 a bad actor) follows §4.
 
 ## 4. Duplicate / ineligible semantics (precise no-op)
 
-The queue is per-case FIFO (`queue/jobs.py:6` — oldest queued job per case),
-so of several admitted completions the **lowest `event_sequence` wins**. A
+The queue is per-case FIFO (`queue/jobs.py:6` — oldest `queued`/`running` job
+per case), so of several admitted completions the **lowest-sequence completion
+whose decide transaction commits wins**. Normally that is the lowest
+`event_sequence`; but the FIFO predicate only blocks later jobs while the
+earlier one is `queued`/`running` (`jobs.py:37-41`). If the earlier job
+exhausts `max_attempts` and dead-letters (`jobs.py:101-108`), its decide txn
+rolled back (task still open — §4 atomicity), the later job becomes claimable,
+and that higher sequence then legitimately closes the task. So the invariant is
+"first *committed* completion wins", not "lowest sequence always wins". A
 later (or otherwise ineligible) completion's run:
 
 - writes **no** `website_verified` check intent;
@@ -146,9 +176,14 @@ authoritative for it; the pre-upgrade-queue concern in §3 does not apply.
 - `docs/RUNBOOK.md`: the production composer prohibition (403) and why.
 - UI/console docs (`docs/OVERVIEW.md` console note or `RUNBOOK` §console):
   server-side 403 is the boundary; hiding controls is optional UX.
-- `docs/architecture-decisions.md`: ADR entry for the trust model (signed
+- `docs/architecture-decisions.md`: **ADR-004** for the trust model (signed
   platform-asserted actor; consistency-check equality; decide-txn authority).
-- `.agents/ROADMAP.md`: PR 5b status on ship.
+  The latest ADR is 003, but ROADMAP `:245-252,274-276` already **reserves
+  ADR-004** for the PR 10 recalculate broker-gate deviation — so this PR pins
+  PR 5b = **ADR-004** and, in the same ROADMAP edit, moves that future
+  reservation to **ADR-005** (avoiding two ADR-004s under the next-number
+  convention).
+- `.agents/ROADMAP.md`: PR 5b status on ship + the ADR-004→005 reservation move.
 
 ## 8. Testing
 
@@ -170,6 +205,15 @@ taught to infer reviewer actors (defaulting would hide contract mistakes):
    recorded the skip audit and produced a normal callback.
 4. Conflicting duplicate: winner `result=pass`, loser `result=fail` — the
    live check stays PASS (no flip, no supersession).
+4b. **Winner dead-letters:** admit seq-1 PASS and seq-2 FAIL; force seq-1
+   through `max_attempts` to dead-letter (its decide txn rolls back, task stays
+   open); run the worker again — seq-2 becomes claimable and legitimately
+   closes the task FAIL. Proves the invariant is "first *committed* completion
+   wins", not "lowest sequence always wins".
+4c. **Blocked-broker completion:** complete an open website task with a valid
+   reviewer actor while the case is broker-blocked (DECIDE short-circuit) — the
+   guard + `website_intent` still run: the task closes and the +10 check is
+   written atomically, while the decision stays `reject`.
 5. Rollback: force a decide-txn failure after guard/close staging; task still
    `open`; retry completes cleanly (+10 exactly once).
 6. Persistence: `ReviewTask.reviewer_id`/check `source`/audit actor ==
@@ -189,11 +233,34 @@ taught to infer reviewer actors (defaulting would hide contract mistakes):
 - Any change to `KYC_Tool_Build_Package/` (normative, untouched).
 - M2 — the enforcement hard stop is untouched; PR 5b does not gate or lift it.
 
-## 10. Rollout
+## 10. Rollout — coordinated cutover (NOT a plain rolling deploy)
 
-Code + tests + docs only. **No migration** (no schema change, no new task
-states), so a standard rolling deploy — no stop/migrate/start. Behavior
+No migration, but a **naive rolling deploy is unsafe**. The platform rolls API
+then workers (`docs/DEPLOYMENT.md:21-22,90-105`); during old/new overlap an
+**old** replica still honors exactly the forgery PR 5b closes:
+
+- an old **API** accepts `actor.type=system`, and `reviewer.manual_approve` is
+  applied **inline in the ingest txn with no worker** (`ingest.py:195-199,
+  233-257`) — so a forged manual-approve can set `approved_manual` and bypass
+  gates before any request reaches a new replica; and
+- an old **worker** processes the pre-upgrade website completions §3/§4 say the
+  new worker would skip.
+
+Cutover contract (added to `docs/DEPLOYMENT.md`, in scope):
+
+1. Before rollout, **pause or route away** the two sensitive event types
+   (`website.review_completed`, `reviewer.manual_approve`) so no old replica
+   serves them during overlap (platform-side gate, or a brief maintenance
+   window for these two types only — normal scoring events keep flowing).
+2. Replace and readiness-verify **all** API and pipeline-worker replicas (no
+   old replica left serving these types).
+3. **Negative-probe** the actor floor on a new replica (a signed `system`-actor
+   completion must 422; a signed manual-approve with a mismatched actor must
+   422) before resuming.
+4. Resume the two event types.
+
+Rollback is the reverse: pause the two types, redeploy the prior image, resume.
+Everything else (scoring events) is unaffected and can roll normally. Behavior
 change at the contract surface: completions/manual-approvals must now carry a
 consistent reviewer actor; pre-upgrade queued events with invalid actors are
-skipped (audited) rather than honored, which is the intended fail-closed
-outcome.
+skipped (audited) rather than honored — the intended fail-closed outcome.
