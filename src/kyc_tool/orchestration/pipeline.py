@@ -50,6 +50,7 @@ from kyc_tool.queue.jobs import ClaimedJob
 from kyc_tool.storage.object_store import ObjectStore
 from kyc_tool.validators.base import CheckIntent, ValidationContext
 from kyc_tool.validators.build import build_intents
+from kyc_tool.validators.website import website_intent
 
 log = structlog.get_logger(__name__)
 
@@ -344,6 +345,16 @@ class Pipeline:
                     extras=self._validation_extras(session, case, event, website_guard=website_guard),
                 )
                 intents = list(self.intent_builder(self.policy, ctx))
+            # website.review_completed carries the reviewer verdict in its payload (no
+            # adapters), so its check must be produced even on the broker-blocked DECIDE
+            # short-circuit — otherwise an eligible completion closes the task with no +10.
+            if (
+                event.event_type == "website.review_completed"
+                and from_state is RunState.DECIDE
+                and website_guard is not None
+                and website_guard.eligible
+            ):
+                intents.append(website_intent(event.payload_json or {}, website_guard.reviewer_id))
             audit(
                 session, "run.stage", case_id=case.id, run_id=run_id, stage="VALIDATE",
                 intents=len(intents),

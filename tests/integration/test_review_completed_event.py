@@ -16,10 +16,12 @@ import uuid
 
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
 from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.db.tables import AuditLog, DecisionRow, ReviewTask
 from kyc_tool.orchestration.pipeline import Pipeline
+from kyc_tool.queue import jobs
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
 
@@ -39,6 +41,21 @@ def _seed_task(engine, case_id: str, *, task_type: str = "website", status: str 
 
 def _wrc(task_id: str, *, result: str = "pass", reviewer: str = "rev-1") -> dict:
     return {"task_id": task_id, "result": result, "reviewer_id": reviewer}
+
+
+def _seed_blocked_broker(engine, case_id: str) -> None:
+    """Seed (or update) a case directly as broker-BLOCKED, bypassing the fuzzy
+    BrokerGate matcher entirely. `_worker_for` below builds a Pipeline with no
+    `broker_matcher`, so `_broker_gate` re-uses this stored status rather than
+    re-matching it — the run then short-circuits straight to DECIDE."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO cases (id, broker_status) VALUES (:c, 'blocked') "
+                "ON CONFLICT (id) DO UPDATE SET broker_status='blocked'"
+            ),
+            {"c": case_id},
+        )
 
 
 def test_retired_route_is_gone(client, clean_db):
@@ -128,10 +145,14 @@ def _seed_completion_run(engine, case_id: str, task_id: str, *, actor: dict, pay
     """Insert a website.review_completed event + run + queued run_transition
     job DIRECTLY — bypassing ingest_event's reviewer-actor floor entirely —
     reproducing an event admitted under PR 5a (before the floor existed) that
-    only now reaches the decide-txn guard added in PR 5b."""
+    only now reaches the decide-txn guard added in PR 5b. Lazily creates the
+    case row (AUDIT:C1 semantics) so `case_id` need not equal `task_id`'s
+    owning case — the wrong_case skip_reason test drives a run whose case
+    never had a task of its own."""
     event_id = uuid.uuid4().hex
     run_id = uuid.uuid4().hex
     with engine.begin() as conn:
+        conn.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case_id})
         seq = conn.execute(
             text(
                 "UPDATE cases SET event_sequence = event_sequence + 1 "
@@ -192,6 +213,35 @@ def _drive_run(session_factory, policy, settings, tmp_path, run_id: str) -> None
     _worker_for(session_factory, policy, settings, tmp_path).run_until_idle()
 
 
+def _force_deadletter_first_job(engine, case_id: str) -> None:
+    """Simulate a worker crash that burned through every attempt on the
+    earliest queued run_transition job for this case: mark it 'running' with
+    an already-expired lease and attempts at the cap, then let the real
+    `jobs.reap_expired` — the exact function the live worker's idle path
+    calls — dead-letter it. The job never reaches the handler, so it never
+    touches the task; the FIFO claim predicate only blocks a case's later job
+    while the earlier one is queued/running (queue/jobs.py), so once this one
+    is 'dead' the next job is immediately claimable."""
+    with Session(engine) as session:
+        job_id = session.execute(
+            text(
+                "SELECT id FROM jobs WHERE case_id=:c AND kind='run_transition' "
+                "AND status='queued' ORDER BY id ASC LIMIT 1"
+            ),
+            {"c": case_id},
+        ).scalar_one()
+        session.execute(
+            text(
+                "UPDATE jobs SET status='running', attempts=max_attempts, "
+                "lease_expires_at = now() - interval '1 second' WHERE id=:id"
+            ),
+            {"id": job_id},
+        )
+        session.commit()
+        jobs.reap_expired(session)
+        session.commit()
+
+
 def _drain(session_factory, policy, settings, tmp_path, case_id: str) -> None:
     """Run the pipeline worker to completion for a run created through the
     real post_event/ingest path."""
@@ -241,16 +291,60 @@ def test_pre_upgrade_bad_actor_skipped_at_decide(
         assert _audit_reason(s, "case-x", "review_task.completion_skipped") == "actor_invalid"
 
 
+def test_pre_upgrade_wrong_type_skipped_at_decide(
+    engine, clean_db, session_factory, policy, settings, tmp_path
+):
+    """A pre-upgrade completion whose task_id resolves to a non-website task
+    must be SKIPPED by the decide-txn guard with wrong_type: no check, the
+    (non-website) task is left exactly as seeded, completion_skipped audited."""
+    task_id = _seed_task(engine, "case-y", task_type="poc_email_unavailable")
+    run_id = _seed_completion_run(engine, "case-y", task_id,
+                                  actor={"type": "reviewer", "id": "rev-1"},
+                                  payload={"task_id": task_id, "result": "pass", "reviewer_id": "rev-1"})
+    _drive_run(session_factory, policy, settings, tmp_path, run_id)
+    with session_factory() as s:
+        task = s.get(ReviewTask, task_id)
+        assert task.status == "open" and task.task_type == "poc_email_unavailable"
+        assert _live_check(s, "case-y", "website_verified") is None   # no +10
+        assert _audit_reason(s, "case-y", "review_task.completion_skipped") == "wrong_type"
+
+
+def test_pre_upgrade_wrong_case_skipped_at_decide(
+    engine, clean_db, session_factory, policy, settings, tmp_path
+):
+    """A pre-upgrade completion whose task belongs to a DIFFERENT case must be
+    SKIPPED by the decide-txn guard with wrong_case: no check, the task (still
+    owned by its real case) is left open, completion_skipped audited against
+    the run's (wrong) case."""
+    task_id = _seed_task(engine, "case-owner")
+    run_id = _seed_completion_run(engine, "case-other", task_id,
+                                  actor={"type": "reviewer", "id": "rev-1"},
+                                  payload={"task_id": task_id, "result": "pass", "reviewer_id": "rev-1"})
+    _drive_run(session_factory, policy, settings, tmp_path, run_id)
+    with session_factory() as s:
+        task = s.get(ReviewTask, task_id)
+        assert task.status == "open" and task.case_id == "case-owner"
+        assert _live_check(s, "case-other", "website_verified") is None   # no +10
+        assert _audit_reason(s, "case-other", "review_task.completion_skipped") == "wrong_case"
+
+
 def test_persists_actor_derived_reviewer_not_payload(
     engine, clean_db, session_factory, policy, settings, tmp_path, post_event
 ):
     task_id = _seed_task(engine, "case-p")
-    # payload reviewer_id must equal actor.id to pass the floor; prove the STORED
-    # source is the actor path by asserting task.reviewer_id == actor id and the
-    # event payload is unchanged.
+    # actor.id and payload.reviewer_id are the SAME raw string, WITH trailing
+    # whitespace — both pass the floor's stripped-equality check
+    # (reviewer_actor_reason strips both sides before comparing). The guard's
+    # actor-derived value is ALSO `.strip()`ped (review_guard.py:
+    # `str(actor.get("id")).strip()`), so the stored value must be "rev-9"
+    # with no trailing space. A regression that persisted the raw payload
+    # field (`event_payload["reviewer_id"]`, never stripped) instead of the
+    # guard's reviewer_id would store "rev-9 " and fail this assertion — a
+    # bare `== "rev-9"` on an unpadded id would pass either way and prove
+    # nothing about which source was actually used.
     post_event("case-p", "website.review_completed",
-               {"task_id": task_id, "result": "pass", "reviewer_id": "rev-9"},
-               actor={"type": "reviewer", "id": "rev-9"})
+               {"task_id": task_id, "result": "pass", "reviewer_id": "rev-9 "},
+               actor={"type": "reviewer", "id": "rev-9 "})
     _drain(session_factory, policy, settings, tmp_path, "case-p")
     with session_factory() as s:
         task = s.get(ReviewTask, task_id)
@@ -260,3 +354,69 @@ def test_persists_actor_derived_reviewer_not_payload(
         # automatic decision row is NOT a manual row
         dec = _latest_decision(s, "case-p")
         assert dec.manual is False and dec.reviewer_id is None
+
+
+# --- PR 5b Task 3: broker-blocked short-circuit + concurrency/dead-letter ---
+
+
+def test_blocked_broker_completion_closes_task_and_writes_check(
+    engine, clean_db, session_factory, policy, settings, tmp_path, post_event
+):
+    """A website.review_completed on a broker-BLOCKED case short-circuits
+    BROKER_GATE straight to DECIDE (no VALIDATE stage). The eligible
+    completion must still close the task AND write the +10 check atomically
+    with the decide txn, even though the decision stays reject."""
+    _seed_blocked_broker(engine, "case-b")  # put case on the blocklist first
+    task_id = _seed_task(engine, "case-b")
+    post_event("case-b", "website.review_completed",
+               {"task_id": task_id, "result": "pass", "reviewer_id": "rev-1"},
+               actor={"type": "reviewer", "id": "rev-1"})
+    _drain(session_factory, policy, settings, tmp_path, "case-b")
+    with session_factory() as s:
+        assert s.get(ReviewTask, task_id).status == "done"  # closed
+        assert _live_check(s, "case-b", "website_verified") is not None  # +10 written
+        assert _latest_decision(s, "case-b").decision == "reject"  # still blocked
+
+
+def test_two_completions_one_close_one_skip(
+    engine, clean_db, session_factory, policy, settings, tmp_path, post_event
+):
+    """Two completions admitted (distinct idempotency keys) BEFORE either
+    drains: FIFO claims the lower job id first. The first ELIGIBLE decide txn
+    that commits wins; the second's guard re-check sees the now-closed task
+    and skips without flipping the already-live check."""
+    task_id = _seed_task(engine, "case-c")
+    post_event("case-c", "website.review_completed",
+               {"task_id": task_id, "result": "pass", "reviewer_id": "rev-1"},
+               actor={"type": "reviewer", "id": "rev-1"}, key="k1")
+    post_event("case-c", "website.review_completed",
+               {"task_id": task_id, "result": "fail", "reviewer_id": "rev-2"},
+               actor={"type": "reviewer", "id": "rev-2"}, key="k2")
+    _drain(session_factory, policy, settings, tmp_path, "case-c")  # FIFO: k1 then k2
+    with session_factory() as s:
+        task = s.get(ReviewTask, task_id)
+        assert task.status == "done" and task.reviewer_id == "rev-1"  # first eligible wins
+        chk = _live_check(s, "case-c", "website_verified")
+        assert chk.status == "pass"  # not flipped by k2
+        assert _audit_reason(s, "case-c", "review_task.completion_skipped") == "task_not_open"
+
+
+def test_winner_deadletters_then_second_wins(
+    engine, clean_db, session_factory, policy, settings, tmp_path, post_event
+):
+    """FIFO only blocks a case's later job while the earlier one is
+    queued/running (queue/jobs.py claim predicate): once the earlier job
+    dead-letters, that stops. seq-1 never reaches the handler (so it never
+    touches the task); seq-2 legitimately claims and closes it."""
+    task_id = _seed_task(engine, "case-d")
+    post_event("case-d", "website.review_completed",
+               {"task_id": task_id, "result": "pass", "reviewer_id": "rev-1"},
+               actor={"type": "reviewer", "id": "rev-1"}, key="k1")
+    post_event("case-d", "website.review_completed",
+               {"task_id": task_id, "result": "fail", "reviewer_id": "rev-2"},
+               actor={"type": "reviewer", "id": "rev-2"}, key="k2")
+    _force_deadletter_first_job(engine, "case-d")  # set attempts>=max on seq-1's job
+    _drain(session_factory, policy, settings, tmp_path, "case-d")
+    with session_factory() as s:
+        task = s.get(ReviewTask, task_id)
+        assert task.status == "done" and task.result == "fail"  # seq-2 legitimately closed it
