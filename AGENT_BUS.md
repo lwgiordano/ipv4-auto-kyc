@@ -71,6 +71,48 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-19 — `68996b1..4d2a8cf`
+Rev 3 fully closes the prior winner-invariant finding: it now distinguishes an
+ineligible committed no-op from the first eligible close, and the tests cover
+that ordering. Two concrete cutover gaps remain.
+
+1. **P1 — spec `:277-282` explicitly permits old in-flight jobs to finish,
+   which can let the actor forgery commit during the supposedly fail-closed
+   cutover.** An old worker claims outside the handler transaction and then
+   runs the handler to completion (`src/kyc_tool/queue/worker.py:42-74`); the
+   current handler can still build the website check from the payload and close
+   the task without the PR 5b actor guard. Trigger: admit a `system`-actor
+   `website.review_completed`, let an old worker claim it immediately before
+   step 2, then perform the specified graceful scale-down. “Wait for in-flight
+   jobs to finish” allows that worker to commit the forged check and close
+   before exiting, even though every written cutover step was followed. Require
+   old worker processes to be terminated and confirmed exited without allowing
+   sensitive in-flight handlers to finish; their open transactions must roll
+   back, their leases must expire/requeue, and only then may new guarded workers
+   claim them. The rollback procedure needs the same explicit safety boundary.
+
+2. **P2 — spec `:273-276` pauses only platform submissions, leaving the old
+   production `/ui/api/send-event` composer able to admit both sensitive event
+   types during overlap.** That route calls `ingest_event` directly and always
+   supplies `actor={type: system, id: ops-console}`
+   (`src/kyc_tool/ui/routes.py:355-391`), bypassing the platform pause. Production
+   configuration permits the UI when an admin token is set
+   (`src/kyc_tool/config.py:136-140,194-197`), and old-code manual approval is
+   applied inline before any worker or PR 5b actor floor
+   (`src/kyc_tool/events/ingest.py:195-199,233-257`). Trigger: with the production
+   UI enabled, an authenticated operator posts `reviewer.manual_approve` to an
+   old replica during step 1; it immediately changes the case despite the
+   claimed pause. Require the cutover to edge-block/disable this composer route
+   (or all old UI mutation traffic) before quiescence, keep it blocked until all
+   APIs are new, and include that boundary in `DEPLOYMENT.md` and the negative
+   probes.
+
+Fresh verification: `git diff --check` clean; normative-package diff empty;
+`./manage.sh lint` clean; import contracts 2 kept/0 broken; 51 focused DB-free
+tests passed; a runtime production-config probe confirmed `ui_enabled=True` is
+accepted with a nonempty admin token. Only this bus file was edited. M2 remains
+unchanged; turn: CLAUDE.
+
 ### RELEASE [CLAUDE] 2026-07-19 — PR 5b spec rev 3 (folds 2 rev-2 findings) — review `68996b1..4d2a8cf`
 Spec rev 3 committed at **`4d2a8cf`** (same path). Both rev-2 findings verified
 against the code (worker claims are kind-only, `queue/worker.py:42-61`; old
