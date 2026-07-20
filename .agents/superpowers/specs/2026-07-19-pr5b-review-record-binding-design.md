@@ -1,10 +1,14 @@
-# PR 5b — Review-record binding (design, rev 5)
+# PR 5b — Review-record binding (design, rev 6)
 
-Status: rev 4 Codex-reviewed (actor/locking design sound; 3 residual cutover
-findings folded below: no-drain boundary extended to old API replicas, a
-deterministic interrupted-job recovery step/command, direct-replica probes
-that bypass the edge rule) → awaiting Codex re-review → human sign-off →
-`writing-plans`.
+Status: rev 5 Codex-reviewed (actor/locking design sound; 4 residual cutover
+findings). The cutover section had oscillated across 5 rounds trying to specify
+a zero-downtime *partial* swap for a change that can't tolerate old/new overlap;
+rev 6 replaces it with a **brief full maintenance window** (the non-hot
+stop→deploy→start pattern PR 5a already uses), which removes overlap entirely
+and resolves all four findings (coordinated simultaneous stop; workers held at
+zero until API probes pass + digest attestation; every running row treated as
+interrupted regardless of lease; the interruption stated honestly, not "traffic
+unaffected"). → awaiting Codex re-review → human sign-off → `writing-plans`.
 Unit: ROADMAP item 11 ("Review-record binding"). Predecessor: PR 5a
 (AUDIT-CLEAN at `2240fc5..28a7f7e`), which built the ingest validation floor and
 explicitly deferred actor trust + task locking to this PR.
@@ -241,13 +245,18 @@ taught to infer reviewer actors (defaulting would hide contract mistakes):
 8. Composer: production settings → 403 for both types (and only these types);
    dev settings → works, sends the reviewer actor, floor accepts it.
 8b. **Interrupted-job recovery command** (`ops.requeue_interrupted_jobs`):
-   (i) a job left `running` on its **final attempt** with an expired lease is
-   requeued without consuming the forced-stop attempt — NOT dead-lettered —
-   and subsequently reaches the §3 guard normally; (ii) with a
-   **continuously busy queue** (other-case jobs always claimable, so
-   `reap_expired` never fires on its own), the command still finds and
-   requeues the stale `running` job; (iii) idempotent — a second invocation
-   is a no-op; (iv) asserts/reports zero `running` jobs on completion.
+   (i) a job left `running` on its **final attempt** is requeued without
+   consuming the forced-stop attempt — NOT dead-lettered — and later reaches
+   the §3 guard normally; (ii) a job `running` under a **still-unexpired
+   lease** is ALSO requeued (the command treats every `running` row as
+   interrupted regardless of lease time — the caller guarantees all workers are
+   stopped); (iii) idempotent — a second invocation is a no-op; (iv)
+   asserts/reports zero `running` jobs on completion.
+8c. **Worker-side guard canary** (proves finding-2's decide-guard, not just the
+   ingest floor): seed a pre-upgrade `system`-actor `website.review_completed`
+   event+run directly, run the worker, assert `completion_skipped` audit +
+   task still `open` + no `website_verified` check (mirrors test 2, framed as
+   the cutover verification probe).
 9. Full suite green.
 
 ## 9. Non-goals
@@ -257,86 +266,86 @@ taught to infer reviewer actors (defaulting would hide contract mistakes):
 - Any change to `KYC_Tool_Build_Package/` (normative, untouched).
 - M2 — the enforcement hard stop is untouched; PR 5b does not gate or lift it.
 
-## 10. Rollout — coordinated cutover (NOT a plain rolling deploy)
+## 10. Rollout — brief full maintenance window (NOT a rolling deploy)
 
-No migration, but a **naive rolling deploy is unsafe**. The platform rolls API
-then workers (`docs/DEPLOYMENT.md:21-22,90-105`); during old/new overlap an
-**old** replica still honors exactly the forgery PR 5b closes:
+No migration, but a rolling deploy is **unsafe** for this change: during old/new
+overlap an **old** replica still honors the exact forgery PR 5b closes — an old
+API applies `reviewer.manual_approve` inline with no actor floor
+(`ingest.py:195-199,233-257`), and an old worker (which claims purely by job
+**kind**, `queue/worker.py:42-61`, no event-type filter) closes a queued
+`system`-actor website completion with the old actorless semantics
+(`validators/build.py:47-48`, `side_effects.py:181-197`). There is no way to
+keep old replicas serving *any* traffic while guaranteeing none of them touches
+a sensitive event. So PR 5b ships as a **brief full maintenance window** — the
+same non-hot **stop → deploy → start** pattern PR 5a used and
+`docs/DEPLOYMENT.md` §4 already documents — which removes old/new overlap
+**entirely**, collapsing the whole class of cutover-ordering hazards.
 
-- an old **API** accepts `actor.type=system`, and `reviewer.manual_approve` is
-  applied **inline in the ingest txn with no worker** (`ingest.py:195-199,
-  233-257`) — so a forged manual-approve can set `approved_manual` and bypass
-  gates before any request reaches a new replica; and
-- an old **worker** processes the pre-upgrade website completions §3/§4 say the
-  new worker would skip.
-
-Pausing inbound submissions alone is NOT enough: pipeline workers claim purely
-by job **kind** (`queue/worker.py:42-61`, claim SQL `queue/jobs.py:21-47`) with
-no event-type filter, so an **old worker running during the cutover** would
-still process a pre-upgrade queued `system`-actor completion with the old
-semantics — payload-built website intent (`validators/build.py:47-48`) and
-actorless close (`side_effects.py:181-197`) — defeating the fail-closed
-promise for exactly the queued events §3 exists to catch.
+**Interruption is explicit, not hidden.** For the window, `POST
+/v1/cases/{case_id}/events` (`routes_events.py:17-50`) — the entry for *every*
+event type — is unavailable, and the pipeline is stopped. This is a real
+interruption, not a seamless roll: submissions during the window fail at the
+network layer, and the platform's same-idempotency-key retry
+(`PLATFORM_INTEGRATION.md:142-143`) re-drives them afterward with no loss or
+duplication for a conforming caller. Work queued before the window resumes when
+the new workers start. Keep the window short; schedule it like any brief
+maintenance.
 
 Cutover contract (added to `docs/DEPLOYMENT.md`, in scope):
 
-1. **Block ALL sensitive admission paths** before anything else — and keep
-   them blocked until every API replica is new AND step 5's direct probes
-   pass:
-   - **platform:** pause or route away `website.review_completed` and
-     `reviewer.manual_approve` (normal scoring events keep flowing);
-   - **ops console:** edge-block the composer mutation route
-     (`POST /ui/api/send-event`) at the load balancer, or set
-     `KYC_UI_ENABLED=false` on the old replicas — an authenticated operator on
-     an **old** replica can otherwise post `reviewer.manual_approve` (applied
-     inline, `system` actor) right through the platform-side pause
-     (`ui/routes.py:355-391`; production permits the UI with an admin token).
-2. **Hard-stop ALL old API replicas — the edge rule alone is not enough.** An
-   edge block stops new routing but cannot revoke a request already executing:
-   a signed manual-approve sitting in an old replica's threadpool
-   (`routes_events.py:17-50` via `run_in_threadpool`) commits inline under the
-   old semantics if that replica is allowed to drain gracefully. So after
-   step 1, **terminate the old API processes and confirm every old handler/
-   connection is gone** (no graceful rolling drain for this release). Ingest
-   is a single transaction — interrupted handlers roll back cleanly.
-3. **Hard-stop ALL old pipeline workers the same way** (no graceful drain):
-   an old worker that claimed a sensitive job just before the stop would
-   otherwise complete it with the old actorless semantics
-   (`queue/worker.py:42-74` — claim outside the handler txn, handler runs to
-   completion). Termination is crash-equivalent and safe by design
-   (single-txn transitions roll back; adapter results resume).
-4. **Deterministic interrupted-job recovery — run the one-shot
-   `python -m kyc_tool.ops.requeue_interrupted_jobs` after all old processes
-   have exited, BEFORE new workers start.** Passive lease recovery cannot be
-   relied on here: `reap_expired` runs only when a claim comes back empty
-   (`queue/worker.py:42-57`), so a busy queue can leave an expired job
-   `running` indefinitely — and because `claim` already incremented
-   `attempts` (`queue/jobs.py:21-47`), the reaper **dead-letters** an expired
-   final-attempt job (`queue/jobs.py:128-150`) instead of requeuing it; a
-   sensitive job killed on its last attempt would then never reach the §3
-   guard, record no `completion_skipped`, and emit no callback. The command:
-   identifies jobs still `running` under expired/stale leases from the
-   stopped processes, requeues them **without consuming the forced-stop
-   attempt** (the termination was operator-initiated, not a handler failure),
-   and asserts zero `running` jobs remain before new workers may start.
-5. Deploy and readiness-verify the new API replicas **and** new workers; only
-   new workers resume queue claims. **Negative-probe each new replica
-   DIRECTLY, through a trusted path that bypasses the temporary edge rule**
-   (internal target-group address / port-forward) — probing through the edge
-   would let the LB's own 403 falsely certify a broken application. Assert
-   application-identifying response bodies, not just status codes: a signed
-   `system`-actor completion → the app's 422 (using a **valid open task**, so
-   a 404/409 cannot mask the actor floor); a signed manual-approve with
-   mismatched actor → the app's 422; the composer → the app's 403 for both
-   sensitive types. The public edge block stays up until these direct probes
-   pass.
-6. Resume the two event types and unblock the console route.
+1. **Block sensitive admission at the edge** (belt-and-suspenders before the
+   stop): platform pauses `website.review_completed` + `reviewer.manual_approve`,
+   and the ops composer route (`POST /ui/api/send-event`) is edge-blocked or the
+   old replicas get `KYC_UI_ENABLED=false` — an authenticated operator on an old
+   replica can otherwise post an inline `system`-actor manual-approve
+   (`ui/routes.py:355-391`; production permits the UI with an admin token).
+2. **Stop ALL old processes together — APIs and pipeline workers as ONE
+   coordinated action, no graceful drain, do not await either pool before
+   signaling the other.** Confirm both pools are at **zero** (no old API
+   handler/connection, no old worker) before continuing. Stopping the two pools
+   in sequence would leave the un-stopped pool live and able to commit a forgery
+   during the gap; the edge block can't revoke a request already in an old API
+   threadpool, so old APIs must be *stopped*, not drained. Crash-equivalent
+   termination is safe by design for every job kind: each transition (and
+   ingest) commits in one transaction, so interrupted work rolls back.
+3. **Recover interrupted jobs — run `python -m
+   kyc_tool.ops.requeue_interrupted_jobs` once, after both pools are confirmed
+   at zero and before any new worker starts.** With all workers stopped and none
+   restarted, **every `status='running'` row is by definition interrupted**
+   (there is no worker registry to prove liveness from `locked_by`, and none is
+   needed — the procedure guarantees no worker is alive), **regardless of lease
+   expiry**. The command requeues that whole set transactionally **without
+   consuming the forced-stop attempt** (operator-initiated termination, not a
+   handler failure — otherwise an expired *final*-attempt job would be
+   dead-lettered by the passive reaper, `queue/jobs.py:128-150`, and never reach
+   the §3 guard), and asserts zero `running` on completion. It MUST NOT run
+   while any worker is live (it would requeue in-flight jobs) — the "both pools
+   at zero" gate is its precondition.
+4. **Deploy new API and worker task definitions, both pinned to the SAME
+   reviewed image digest** (attest it). Bring up the new **API** first and keep
+   **workers at zero** until step 5 passes — workers serve no HTTP
+   (`DEPLOYMENT.md:15-23`), so the API probes below cannot vouch for a stale/
+   mismatched worker image; starting workers before verification would let one
+   honor a recovered pre-upgrade completion.
+5. **Direct-probe each new API replica** via a trusted path that bypasses the
+   edge rule (internal target-group address / port-forward) — probing through
+   the edge would let the LB's own 403 falsely certify a broken app. Assert
+   application-identifying response **bodies**, not just status: a signed
+   `system`-actor completion on a **valid open task** → the app's 422 (a
+   404/409 must not be able to mask the actor floor); a mismatched-actor
+   manual-approve → the app's 422; the composer → the app's 403 for both
+   sensitive types. To prove the decide-guard specifically (not just the ingest
+   floor), include a worker-side canary: process a seeded pre-upgrade
+   `system`-actor completion and assert `completion_skipped` + task-still-open.
+6. **Start the new workers** (they now claim the recovered queue under the §3
+   guard), then **resume** event submission — unblock the sensitive types and
+   the console route.
 
-Rollback mirrors the same safety boundary: block both admission paths, hard-
-stop the NEW APIs and workers (same crash-safe termination + the same
-recovery command), redeploy the prior image for API+workers, then resume —
-accepting that the prior image restores the pre-PR 5b semantics.
-Everything else (scoring events) is unaffected and can roll normally. Behavior
-change at the contract surface: completions/manual-approvals must now carry a
-consistent reviewer actor; pre-upgrade queued events with invalid actors are
-skipped (audited) rather than honored — the intended fail-closed outcome.
+Rollback mirrors the same window: block sensitive admission, stop ALL new
+processes together (same coordinated hard stop + the same recovery command),
+redeploy the prior image for API **and** workers, direct-probe (prior
+semantics), start workers, resume — accepting that the prior image restores the
+pre-PR 5b behavior. Behavior change at the contract surface: completions and
+manual-approvals must now carry a consistent reviewer actor, and pre-upgrade
+queued events with invalid actors are skipped (audited) rather than honored —
+the intended fail-closed outcome.
