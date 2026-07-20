@@ -221,7 +221,9 @@ def test_website_review_completion_writes_check_and_rescore(client, post_event, 
 
     # review completion is the keyed website.review_completed event (PR 5a §4)
     wrc = {"task_id": task["id"], "result": "pass", "reviewer_id": "rev-7"}
-    complete, rc_key = post_event("case-web", "website.review_completed", wrc)
+    complete, rc_key = post_event(
+        "case-web", "website.review_completed", wrc, actor={"type": "reviewer", "id": "rev-7"}
+    )
     assert complete.status_code == 202
     phase2_worker.run_until_idle()
 

@@ -29,6 +29,7 @@ from kyc_tool.db.tables import Case, DecisionRow, Event, ReviewTask, Run
 from kyc_tool.domain import scoring
 from kyc_tool.domain.decision import buy_enablement_for
 from kyc_tool.domain.models import BuyStatus, CaseStatus
+from kyc_tool.events.review_guard import reviewer_actor_reason
 from kyc_tool.policy.loader import PolicyBundle
 from kyc_tool.queue import jobs
 from kyc_tool.validators.poc import hash_token
@@ -50,10 +51,15 @@ class _FloorReject(Exception):  # noqa: N818 — internal control-flow signal, n
         self.outcome = outcome
 
 
-def _validate_website_review_completed(session: Session, case_id: str, payload: dict) -> IngestOutcome | None:
+def _validate_website_review_completed(
+    session: Session, case_id: str, actor: dict, payload: dict
+) -> IngestOutcome | None:
     """PR 5a §4 floor: a keyed `website.review_completed` must reference a real,
     open, same-case website task. Runs AFTER replay resolution and BEFORE the
-    run/check. Full FOR UPDATE + trusted actor binding is PR 5b."""
+    run/check. PR 5b adds the reviewer-actor trust floor: the signed envelope's
+    actor must be a consistent, nonblank reviewer matching payload.reviewer_id."""
+    if reviewer_actor_reason(actor, payload) is not None:
+        return IngestOutcome(422, {"error": "invalid reviewer actor", "task_id": payload.get("task_id")})
     task_id = payload.get("task_id")
     task = session.get(ReviewTask, task_id) if task_id else None
     if task is None:
@@ -193,6 +199,8 @@ def ingest_event(
             )
 
             if event_type == MANUAL_APPROVE:
+                if reviewer_actor_reason(actor, payload) is not None:
+                    raise _FloorReject(IngestOutcome(422, {"error": "invalid reviewer actor"}))
                 body = _handle_manual_approve(session, policy, case, event, actor)
                 event.response_snapshot = body
                 event.processed_at = datetime.now(UTC)
@@ -201,7 +209,7 @@ def ingest_event(
             # PR 5a §4 floor: reject an invalid review completion BEFORE the
             # run/check; _FloorReject rolls the whole txn back (no orphan row).
             if event_type == "website.review_completed":
-                reject = _validate_website_review_completed(session, case_id, payload)
+                reject = _validate_website_review_completed(session, case_id, actor, payload)
                 if reject is not None:
                     raise _FloorReject(reject)
 

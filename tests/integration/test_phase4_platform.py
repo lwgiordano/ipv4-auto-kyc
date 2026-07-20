@@ -133,6 +133,7 @@ def test_full_staging_scenario_g3_to_approval(
         envelope(
             "website.review_completed",
             {"task_id": website_task["id"], "result": "pass", "reviewer_id": "rev-9"},
+            {"type": "reviewer", "id": "rev-9"},
         )
     ).encode()
     client.post(f"/v1/cases/{case_id}/events", content=review_body, headers=sign(review_body))
