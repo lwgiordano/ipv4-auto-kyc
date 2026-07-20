@@ -1,14 +1,11 @@
-# PR 5b — Review-record binding (design, rev 6)
+# PR 5b — Review-record binding (design, rev 7)
 
-Status: rev 5 Codex-reviewed (actor/locking design sound; 4 residual cutover
-findings). The cutover section had oscillated across 5 rounds trying to specify
-a zero-downtime *partial* swap for a change that can't tolerate old/new overlap;
-rev 6 replaces it with a **brief full maintenance window** (the non-hot
-stop→deploy→start pattern PR 5a already uses), which removes overlap entirely
-and resolves all four findings (coordinated simultaneous stop; workers held at
-zero until API probes pass + digest attestation; every running row treated as
-interrupted regardless of lease; the interruption stated honestly, not "traffic
-unaffected"). → awaiting Codex re-review → human sign-off → `writing-plans`.
+Status: rev 6 Codex-reviewed — the maintenance-window shape and the
+actor/locking design are confirmed sound; 3 executable-contract gaps on the
+window folded below (pause ALL events for the window + re-sign on retry; pin the
+recovery one-shot to the pre-built reviewed image; move the guard-behavior
+canary to pre-window staging so it never persists/callbacks in production). →
+awaiting Codex re-review → human sign-off → `writing-plans`.
 Unit: ROADMAP item 11 ("Review-record binding"). Predecessor: PR 5a
 (AUDIT-CLEAN at `2240fc5..28a7f7e`), which built the ingest validation floor and
 explicitly deferred actor trust + task locking to this PR.
@@ -252,11 +249,14 @@ taught to infer reviewer actors (defaulting would hide contract mistakes):
    interrupted regardless of lease time — the caller guarantees all workers are
    stopped); (iii) idempotent — a second invocation is a no-op; (iv)
    asserts/reports zero `running` jobs on completion.
-8c. **Worker-side guard canary** (proves finding-2's decide-guard, not just the
-   ingest floor): seed a pre-upgrade `system`-actor `website.review_completed`
-   event+run directly, run the worker, assert `completion_skipped` audit +
-   task still `open` + no `website_verified` check (mirrors test 2, framed as
-   the cutover verification probe).
+8c. **Guard-behavior canary — a test / staging gate, NEVER a production probe.**
+   Seed a pre-upgrade `system`-actor `website.review_completed` event+run
+   directly, run the decide path, assert `completion_skipped` audit + task still
+   `open` + no `website_verified` check (this is test 2, re-used as the
+   pre-window verification the cutover runs against the exact image digest in
+   staging / an isolated DB). It must NOT be run against production data: a real
+   run writes a decision + enqueues a callback unconditionally and the outbox
+   publisher would deliver it.
 9. Full suite green.
 
 ## 9. Non-goals
@@ -284,68 +284,84 @@ same non-hot **stop → deploy → start** pattern PR 5a used and
 **Interruption is explicit, not hidden.** For the window, `POST
 /v1/cases/{case_id}/events` (`routes_events.py:17-50`) — the entry for *every*
 event type — is unavailable, and the pipeline is stopped. This is a real
-interruption, not a seamless roll: submissions during the window fail at the
-network layer, and the platform's same-idempotency-key retry
-(`PLATFORM_INTEGRATION.md:142-143`) re-drives them afterward with no loss or
-duplication for a conforming caller. Work queued before the window resumes when
-the new workers start. Keep the window short; schedule it like any brief
-maintenance.
+interruption, not a seamless roll. The "no loss" guarantee is a **platform
+prerequisite**, not a property of the current contract: today the contract only
+directs retry on a *network failure* (`PLATFORM_INTEGRATION.md:131-143`), but a
+load balancer with every API target down returns **502/503/504**, which is not
+covered — and a delayed retry that reuses the original signature blows the
+300-second HMAC skew (`security.py:79-91`). So the window requires the platform
+to **pause/buffer ALL event submission** for its duration and drain afterward
+(re-signing each retried body with a **fresh timestamp/signature**, same
+idempotency key). Equivalently, if the platform prefers to keep sending, it must
+treat 502/503/504 **and** transport failure as retryable with the same body/key
+and a fresh signature — stated and tested as a platform prerequisite. Either
+way, work queued before the window resumes when the new workers start.
 
 Cutover contract (added to `docs/DEPLOYMENT.md`, in scope):
 
-1. **Block sensitive admission at the edge** (belt-and-suspenders before the
-   stop): platform pauses `website.review_completed` + `reviewer.manual_approve`,
-   and the ops composer route (`POST /ui/api/send-event`) is edge-blocked or the
-   old replicas get `KYC_UI_ENABLED=false` — an authenticated operator on an old
-   replica can otherwise post an inline `system`-actor manual-approve
-   (`ui/routes.py:355-391`; production permits the UI with an admin token).
+0. **Before the window:** build and publish the reviewed image and record its
+   **digest**. Every task run below (the recovery one-shot, the new API, the new
+   workers) is pinned to that one digest — the recovery module
+   (`kyc_tool.ops.requeue_interrupted_jobs`) exists only in the new image, so a
+   step that runs on the still-current old task definition would exit
+   `No module named …`.
+1. **Pause ALL platform event submission** (not only the two sensitive types)
+   and the ops composer — the whole window is a maintenance pause, and per the
+   interruption note a partial pause can't guarantee no-loss. Concretely:
+   platform stops sending events (buffers them) and the composer route
+   (`POST /ui/api/send-event`) is edge-blocked / old replicas get
+   `KYC_UI_ENABLED=false` (an operator on an old replica could otherwise post an
+   inline `system`-actor manual-approve, `ui/routes.py:355-391`).
 2. **Stop ALL old processes together — APIs and pipeline workers as ONE
    coordinated action, no graceful drain, do not await either pool before
-   signaling the other.** Confirm both pools are at **zero** (no old API
-   handler/connection, no old worker) before continuing. Stopping the two pools
-   in sequence would leave the un-stopped pool live and able to commit a forgery
-   during the gap; the edge block can't revoke a request already in an old API
-   threadpool, so old APIs must be *stopped*, not drained. Crash-equivalent
-   termination is safe by design for every job kind: each transition (and
-   ingest) commits in one transaction, so interrupted work rolls back.
-3. **Recover interrupted jobs — run `python -m
-   kyc_tool.ops.requeue_interrupted_jobs` once, after both pools are confirmed
-   at zero and before any new worker starts.** With all workers stopped and none
+   signaling the other.** Confirm both pools are at **zero** before continuing.
+   Stopping them in sequence would leave the un-stopped pool live and able to
+   commit a forgery during the gap; the edge block can't revoke a request
+   already in an old API threadpool, so old APIs must be *stopped*, not drained.
+   Crash-equivalent termination is safe by design: each transition (and ingest)
+   commits in one transaction, so interrupted work rolls back.
+3. **Recover interrupted jobs — run `kyc_tool.ops.requeue_interrupted_jobs` as a
+   one-shot task PINNED TO THE §0 DIGEST**, after both pools are confirmed at
+   zero and before any new worker starts. With all workers stopped and none
    restarted, **every `status='running'` row is by definition interrupted**
-   (there is no worker registry to prove liveness from `locked_by`, and none is
-   needed — the procedure guarantees no worker is alive), **regardless of lease
-   expiry**. The command requeues that whole set transactionally **without
-   consuming the forced-stop attempt** (operator-initiated termination, not a
-   handler failure — otherwise an expired *final*-attempt job would be
-   dead-lettered by the passive reaper, `queue/jobs.py:128-150`, and never reach
-   the §3 guard), and asserts zero `running` on completion. It MUST NOT run
-   while any worker is live (it would requeue in-flight jobs) — the "both pools
-   at zero" gate is its precondition.
-4. **Deploy new API and worker task definitions, both pinned to the SAME
-   reviewed image digest** (attest it). Bring up the new **API** first and keep
-   **workers at zero** until step 5 passes — workers serve no HTTP
-   (`DEPLOYMENT.md:15-23`), so the API probes below cannot vouch for a stale/
-   mismatched worker image; starting workers before verification would let one
-   honor a recovered pre-upgrade completion.
+   (no worker registry is needed — the procedure guarantees no worker is alive),
+   **regardless of lease expiry**. It requeues that whole set transactionally
+   **without consuming the forced-stop attempt** (operator-initiated
+   termination, not a handler failure — otherwise an expired *final*-attempt job
+   would be dead-lettered by the passive reaper, `queue/jobs.py:128-150`, and
+   never reach the §3 guard), and asserts zero `running` on completion. It MUST
+   NOT run while any worker is live — the "both pools at zero" gate is its
+   precondition.
+4. **Deploy new API and worker services, both pinned to the §0 digest** (attest
+   it). Bring up the new **API** first and keep **workers at zero** until step 5
+   passes — workers serve no HTTP (`DEPLOYMENT.md:15-23`), so the API probes
+   below cannot vouch for a stale/mismatched worker image, and starting workers
+   before verification would let one honor a recovered pre-upgrade completion.
 5. **Direct-probe each new API replica** via a trusted path that bypasses the
    edge rule (internal target-group address / port-forward) — probing through
-   the edge would let the LB's own 403 falsely certify a broken app. Assert
-   application-identifying response **bodies**, not just status: a signed
-   `system`-actor completion on a **valid open task** → the app's 422 (a
-   404/409 must not be able to mask the actor floor); a mismatched-actor
-   manual-approve → the app's 422; the composer → the app's 403 for both
-   sensitive types. To prove the decide-guard specifically (not just the ingest
-   floor), include a worker-side canary: process a seeded pre-upgrade
-   `system`-actor completion and assert `completion_skipped` + task-still-open.
+   the edge would let the LB's own 403 falsely certify a broken app. These
+   probes are **side-effect-free** (each is rejected at the ingest floor →
+   `_FloorReject` rollback, no rows). Assert application-identifying response
+   **bodies**, not just status: a signed `system`-actor completion on a **valid
+   open task** → the app's 422 (a 404/409 must not mask the actor floor); a
+   mismatched-actor manual-approve → the app's 422; the composer → the app's 403
+   for both sensitive types. The decide-guard *behavior* is proven **before the
+   window in staging** (§8·8c), not by a live production canary — a real
+   pipeline run in production would write a decision + enqueue a callback
+   unconditionally (`pipeline.py:386-408`) and the still-running outbox
+   publisher (a separate process, NOT stopped in step 2, `DEPLOYMENT.md:15-19`)
+   would deliver it to the real platform. So: run §8·8c against the exact §0
+   digest in staging/an isolated DB pre-window, and attest that same digest here.
 6. **Start the new workers** (they now claim the recovered queue under the §3
-   guard), then **resume** event submission — unblock the sensitive types and
+   guard), then **resume** event submission — unpause the platform and unblock
    the console route.
 
-Rollback mirrors the same window: block sensitive admission, stop ALL new
-processes together (same coordinated hard stop + the same recovery command),
-redeploy the prior image for API **and** workers, direct-probe (prior
-semantics), start workers, resume — accepting that the prior image restores the
-pre-PR 5b behavior. Behavior change at the contract surface: completions and
-manual-approvals must now carry a consistent reviewer actor, and pre-upgrade
-queued events with invalid actors are skipped (audited) rather than honored —
-the intended fail-closed outcome.
+Rollback mirrors the same window and MUST pin the recovery one-shot to the last
+image that still contains it: pause all submission, stop ALL new processes
+together (same coordinated hard stop + the same recovery command on a
+digest-that-has-the-module), redeploy the prior image for API **and** workers,
+direct-probe (prior semantics), start workers, resume — accepting that the prior
+image restores the pre-PR 5b behavior. Behavior change at the contract surface:
+completions and manual-approvals must now carry a consistent reviewer actor, and
+pre-upgrade queued events with invalid actors are skipped (audited) rather than
+honored — the intended fail-closed outcome.
