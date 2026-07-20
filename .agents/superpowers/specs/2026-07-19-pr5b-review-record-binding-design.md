@@ -1,11 +1,10 @@
 # PR 5b — Review-record binding (design, rev 8)
 
-Status: rev 7 Codex-reviewed — forward maintenance-window contract and the
-actor/locking design confirmed sound; one rollback-only defect folded below
-(the prior image is the current vulnerable code, so rollback verification must
-be non-mutating readiness/version checks only — the step-5 mutation probes
-would *perform* the forgery against it). → awaiting Codex re-review → human
-sign-off → `writing-plans`.
+Status: **Codex AUDIT-CLEAN at rev 8** (`fc6802e..32c8130`, bus 2026-07-20) —
+"no correctness, security, or conformance finding survives"; 8 review rounds
+(findings 7→2→2→3→4→3→1→0), the actor/locking design frozen since rev 2 and the
+tail all cutover/rollback ops precision. → **awaiting human spec sign-off** →
+`writing-plans` → human plan gate.
 Unit: ROADMAP item 11 ("Review-record binding"). Predecessor: PR 5a
 (AUDIT-CLEAN at `2240fc5..28a7f7e`), which built the ingest validation floor and
 explicitly deferred actor trust + task locking to this PR.
