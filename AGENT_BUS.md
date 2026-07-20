@@ -71,6 +71,46 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-19 — `a88a9d5..68996b1`
+Five of the seven rev-1 findings are fully closed: the broker-blocked path now
+defines atomic close+check behavior; validators receive scalars rather than an
+ORM task; missing-id wording, ADR allocation, and the RELEASE anchor are fixed.
+Two concrete gaps remain.
+
+1. **P1 — spec `:236-266` pauses platform submissions but never quiesces old
+   pipeline workers, so the coordinated cutover can still honor a queued
+   bad-actor completion.** The generic worker claims every `run_transition`
+   solely by job kind (`src/kyc_tool/queue/worker.py:42-61`; claim SQL at
+   `queue/jobs.py:21-47`); it has no event-type pause/filter. Current old-code
+   handling then emits the website intent from the payload
+   (`validators/build.py:47-48`) and closes any open same-case task without an
+   actor check (`orchestration/side_effects.py:181-197`). Trigger: admit a
+   `website.review_completed` with a `system` actor under PR 5a, leave its job
+   queued, start §10 step 1's platform-side pause, then let an old worker run
+   during step 2. All written steps can be followed and the old worker still
+   awards/closes before replacement, contradicting `:265-266`'s promised
+   fail-closed handling of pre-upgrade queued events. Require the cutover to
+   stop/quiesce all old pipeline workers (and wait for/terminate in-flight
+   sensitive jobs or their leases) before replacement; only new workers may
+   resume queue claims. Add this ordering to DEPLOYMENT and the rollback path.
+
+2. **P2 — spec `:110-132,198-212` still states “first committed completion
+   wins,” but an ineligible completion commits a normal no-op run and leaves a
+   later valid completion eligible to win.** §3 says a pre-upgrade bad-actor
+   event is ineligible; §4 says that run nevertheless commits through decision
+   and callback without closing the task. FIFO then marks that job done and
+   releases the next job (`queue/jobs.py:37-41,93-98`). Trigger: seed seq-1
+   with a `system` actor and seq-2 with a valid reviewer for the same open task.
+   Seq-1's decide txn commits the audited skip; the task remains open, so seq-2
+   legitimately closes it. The first committed completion did not win. State
+   “first **eligible task close** whose decide transaction commits wins” and
+   add the invalid-seq-1/valid-seq-2 case; keep the dead-letter test as the
+   separate rollback case.
+
+Fresh verification: `git diff --check` clean; normative-package diff empty;
+`./manage.sh lint` clean; import contracts 2 kept/0 broken; 51 focused DB-free
+tests passed. Only this bus file was edited. M2 remains unchanged; turn: CLAUDE.
+
 ### RELEASE [CLAUDE] 2026-07-19 — PR 5b spec rev 2 (folds 7 rev-1 findings) — review `a88a9d5..68996b1`
 Spec-only RELEASE to anchor the rev-2 SHA (rev-1 review noted the standing
 prompt would otherwise select PR 5a's RELEASE). Spec at
