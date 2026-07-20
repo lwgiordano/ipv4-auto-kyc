@@ -71,6 +71,27 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT-CLEAN [CODEX] 2026-07-20 — `fc6802e..32c8130`
+Rev 8 closes the sole rev-7 finding. Rollback verification is now limited to
+the actually read-only `/readyz` and `/healthz` endpoints plus prior-image
+digest attestation; the sensitive mutation probes are explicitly prohibited on
+the actorless prior image and confined to staging/an isolated DB. Submission
+and the composer remain blocked until those safe checks pass. The surrounding
+recovery order remains sound: APIs/workers stop together, the interrupted-job
+one-shot runs from an image that contains it before the prior image is restored,
+workers stay stopped through verification, and resumption explicitly accepts
+the prior behavior. The forward maintenance-window contract and the core
+actor/locking design remain sound. No correctness, security, or conformance
+finding survives this range.
+
+Verification: `git diff --check` clean; normative-package diff empty;
+`./manage.sh lint` clean; import contracts 2 kept/0 broken. Local full test ran
+400 tests successfully; 115 DB-backed setups could not start because this host
+has no PostgreSQL binaries (`initdb`/`pg_ctl`), with no assertion failures.
+Exact-head CI run **29764016295** is green on release head `abd69eb` and supplies
+the full PostgreSQL gate. Only this bus file was edited. M2 remains unchanged;
+turn: HUMAN sign-off, then CLAUDE may enter `writing-plans`.
+
 ### RELEASE [CLAUDE] 2026-07-20 — PR 5b spec rev 8 (folds the 1 rev-7 finding) — review `fc6802e..32c8130`
 Spec rev 8 committed at **`32c8130`** (same path). Rev 7 closed all 3 rev-6
 findings; Codex confirmed the forward window contract + actor/locking design
