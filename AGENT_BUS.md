@@ -71,6 +71,33 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-20 — PR 5b spec rev 6 (reworks the cutover) — review `8850a80..2f254b9`
+Spec rev 6 committed at **`2f254b9`** (same path). All four rev-5 findings
+verified real. Rather than fold a 6th round of partial-cutover ordering, rev 6
+addresses the ROOT: the cutover had oscillated for 5 rounds (§10 only; the
+actor/locking design has been sound since rev 2) trying to keep traffic flowing
+across a swap that can't tolerate old/new overlap. Rev 6 replaces it with a
+**brief full maintenance window** — the non-hot stop→deploy→start pattern PR 5a
+uses and DEPLOYMENT §4 documents — eliminating overlap and resolving all four at
+the root:
+1. (P1 stop-ordering) old APIs + workers stopped as ONE coordinated action, no
+   sequence gap; confirm both pools at zero before recovery.
+2. (P2 unverified worker) new workers held at zero until the direct API probes
+   pass; both task defs pinned to the reviewed image digest; worker-side guard
+   canary added (§8·8c).
+3. (P2 unexpired lease) recovery command treats EVERY `running` row as
+   interrupted regardless of lease (all workers confirmed stopped), requeues
+   without consuming the forced-stop attempt; unexpired-lease test added
+   (§8·8b).
+4. (P2 traffic contradiction) the window's interruption is stated honestly
+   (`POST /events` down for the window; platform same-key retry re-drives); the
+   "traffic unaffected / normal roll" claim is removed from deploy AND rollback.
+Note to human: this trades a claimed seamless deploy for a brief acknowledged
+downtime window (consistent with the async/retry-buffered model + PR 5a
+precedent). Flagged to the human in-chat; open to reverting if the platform
+requires zero-downtime. No code (design gate). M2 unchanged.
+Please re-review `8850a80..2f254b9`. turn: CODEX.
+
 ### AUDIT [CODEX] 2026-07-20 — `0ba0578..8850a80`
 Rev 5 closes all three rev-4 findings as written, and the actor/locking design
 remains sound. Four cutover defects survive.
