@@ -6,8 +6,9 @@ decision below is locked. Migration numbers are illustrative — **rebase
 `down_revision` to the live Alembic head at merge** (see §C)._
 
 Status: **PR 1–4 shipped** (`c37c052`, `7a19a9f`, `4c91be6`; PR 4 this commit).
-Items 1–6 complete (PR 5a shipped: HMAC v2 + per-case idempotency) — but M2
-stays a HARD STOP (see §D). PR 5b next.
+Items 1–6 complete (PR 5a shipped: HMAC v2 + per-case idempotency). Item 11
+complete (PR 5b shipped: review-record binding) — but M2 stays a HARD STOP
+(see §D). PR 6 next.
 Auto-enforcement of positive decisions (M2) is a **hard stop** far downstream (§D).
 
 ---
@@ -191,7 +192,23 @@ are single-use and only for keyless state-changing ops. Split inbound/outbound
 secrets + `key_id`; dual-accept window with **fixed v1 sunset + telemetry**.
 Record D3 in `AUDIT_FINDINGS.md`.
 
-### PR 5b — Review-record binding (item 11)
+### PR 5b — Review-record binding (item 11) — ✅ SHIPPED
+Delivered via the superpowers cycle (spec rev 8, Codex AUDIT-CLEAN, + plan).
+Landed: the actor-trust floor at ingest (advisory, fast-fail) plus the
+authoritative decide-txn guard (`ReviewTask` locked `FOR UPDATE` after the
+case lock, one immutable guard decision feeding a pipeline-internal ORM view
+and a separate immutable scalar view across the validator boundary); the
+broker-blocked DECIDE short-circuit proven to still close the task and write
+the check atomically; actor-derived persistence (`ReviewTask.reviewer_id` /
+check `source` / audit actor from `event.actor_json`, `DecisionRow.reviewer_id`
+untouched for automatic runs); the production composer 403 on both sensitive
+event types (dev/staging composer now sends a real reviewer actor); and the
+`kyc_tool.ops.requeue_interrupted_jobs` cutover-recovery one-shot. Recorded in
+the architecture decision log — this PR takes the next ADR number, and the PR
+10 reservation below moves one slot out accordingly. Shipped as a **brief
+full maintenance window**, not a rolling deploy (`docs/DEPLOYMENT.md` §9).
+Full suite green. Original spec below.
+
 Reviewer identity trusted only as **platform-asserted** in the signed payload (or
 tool-side OIDC) — `actor.id == payload.reviewer_id` is a consistency check, **not**
 the security boundary. Production `/ui` composer **barred** from
@@ -248,7 +265,7 @@ json_bytes, author, timestamp)` — NOT per-entity versioning (6 entities; snaps
 reproduce matches AND non-matches, simpler); run records matched entity + snapshot
 revision. `adapters/retry.py` (transient classification + Retry-After — job-layer
 backoff already exists); `recalculate.requested` runs the broker gate (record
-`AUDIT:<id>` + ADR-004 — spec limits recalc to "no adapter calls", but the gate is a
+`AUDIT:<id>` + ADR-005 — spec limits recalc to "no adapter calls", but the gate is a
 local lookup); new `evidence.refresh_requested` in a **local extension contract**;
 RUNBOOK: delete the broken self-select SQL → point to the existing authenticated
 requeue endpoint; metrics windowing (index exists) + Prometheus + alerts; pin deps +
@@ -272,6 +289,6 @@ base image `@sha256`; `ruff format --check` in CI; wire `core.hooksPath` durably
    switch is permanent.
 
 ## I. ADRs / AUDIT_FINDINGS to write
-ADR-003 + `AUDIT:` (per-case idempotency), ADR-004 + `AUDIT:` (broker gate on
+ADR-003 + `AUDIT:` (per-case idempotency), ADR-005 + `AUDIT:` (broker gate on
 recalculate), `AUDIT:` (local `evidence.refresh_requested` extension), `AUDIT:`
 (OpenAPI as derived contract).

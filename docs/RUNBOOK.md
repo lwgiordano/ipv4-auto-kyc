@@ -65,6 +65,20 @@ sends signed events server-side. **Security**: **off by default**
 demands `Authorization: Bearer <token>`. Local dev: `bash scripts/dev.sh`
 boots the whole stack and prints the console URL.
 
+**Composer production prohibition (PR 5b).** In production
+(`KYC_ENVIRONMENT=production`) the composer endpoint (`POST
+/ui/api/send-event`) refuses `website.review_completed` and
+`reviewer.manual_approve` with **403** — real reviewer actions must arrive as
+signed platform events carrying a genuine reviewer actor (see
+`docs/PLATFORM_INTEGRATION.md` §3, "Reviewer actor requirement"), not be
+typed into the console by an operator. This server-side 403 is the actual
+security boundary; hiding the composer's controls for these two event types
+in the console UI is optional polish on top of it, not a substitute for it. In
+dev/staging the composer still sends both event types, but with a real
+`{"type": "reviewer", "id": <reviewer_id>}` actor instead of the generic
+`system`/`ops-console` actor it uses for everything else, so console testing
+exercises the same binding production enforces rather than bypassing it.
+
 ## Health & dashboards
 
 - `GET /healthz` — liveness + the policy bundle hash. **A hash change without a

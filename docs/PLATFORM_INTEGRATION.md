@@ -152,11 +152,27 @@ Retry on network failure with the **same** key and **same bytes**; you'll get
 | `poc.submitted` | `rir`, `poc_handle`; optional `org_handle`, `resource` | starts the verification email (§5) |
 | `poc.token_verified` | `token_id`, `token`, `verified_at` | posted by your confirmation page (§5) |
 | `document.uploaded` | `object_ref`, `doc_type` | see §6 |
-| `reviewer.manual_approve` | `reviewer_id`; optional `note` | inline 200 with case state; no run, no callback; buying still locked without a verified ORG-ID |
+| `reviewer.manual_approve` | `reviewer_id`; optional `note` | inline 200 with case state; no run, no callback; buying still locked without a verified ORG-ID; requires a matching reviewer actor (below) |
 | `recalculate.requested` | `{}` | re-decides from current evidence |
 
 Unknown extra payload fields are accepted and preserved. Send events in the
 order they happen; each triggers its own run and its own decision callback.
+
+### Reviewer actor requirement (`website.review_completed`, `reviewer.manual_approve`)
+
+These two events are reviewer-sensitive: the signed envelope's `actor` must
+identify the reviewer who acted, not just any authenticated caller.
+
+- `actor.type` MUST be `"reviewer"`.
+- `actor.id` MUST equal the payload's `reviewer_id` — both **nonblank** after
+  trimming whitespace, compared **exact, case-sensitive**. A matching pair of
+  blank strings authorizes nothing.
+- A mismatch, a blank id on either side, or the wrong `actor.type` is rejected
+  **422** — the request is authenticated (it carried a valid signature) but
+  internally inconsistent, so it is not a 401/403.
+- The tool records the **actor-derived** reviewer identity (`actor.id`) as the
+  reviewer of record on the task, check, and audit trail — never the payload's
+  `reviewer_id` field. Send both, and make them match.
 
 ### When to send each event
 
@@ -323,10 +339,13 @@ The event contract does not change — only what `object_ref` points at.
 **Completing a website review** is a normal signed event, not a separate
 endpoint: post `website.review_completed` to `POST /v1/cases/{case_id}/events`
 with payload `{"task_id": "...", "result": "pass"|"fail", "reviewer_id": "..."}`.
-The tool validates the task exists, is a website task on that case, and is open
-(else 404/409/422); the transition, check, and audit are identical to any other
-event. (The old `POST /v1/review-tasks/{id}/complete` endpoint is retired — it
-duplicated this event.)
+The envelope's `actor` must identify the same reviewer — `actor.type:
+"reviewer"` and `actor.id` equal to `reviewer_id` (§3) — or the event is
+rejected 422; the tool records the actor-derived reviewer, never the payload
+field. The tool validates the task exists, is a website task on that case, and
+is open (else 404/409/422); the transition, check, and audit are identical to
+any other event. (The old `POST /v1/review-tasks/{id}/complete` endpoint is
+retired — it duplicated this event.)
 
 In production these reads also require the §2 signature headers. There is also
 an operator console (`/ui`) for the registration team — dashboards, case

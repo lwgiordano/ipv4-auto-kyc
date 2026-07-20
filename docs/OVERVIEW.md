@@ -334,7 +334,10 @@ the platform's callback URL (and Floqer once wired).
 | `KYC_UI_ENABLED` | Set `false` in production. |
 
 **Security:** the ops console (`/ui`) is debug tooling; set `KYC_UI_ENABLED=false`
-in production or keep the port on the internal network.
+in production or keep the port on the internal network. Its composer also
+refuses `website.review_completed` and `reviewer.manual_approve` in
+production with a server-side 403 (`docs/RUNBOOK.md`) — that check, not
+hiding the controls, is the actual boundary for reviewer events.
 
 ### How updates work
 

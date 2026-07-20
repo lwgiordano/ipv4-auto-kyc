@@ -4,6 +4,94 @@ A running log of significant decisions and their rationale. Newest first.
 
 ---
 
+## ADR-004 — Review-record binding (PR 5b)
+
+**Context.** Two holes remained on the human-review path. On website
+completion, the persisted `reviewer_id` was copied verbatim from the event
+*payload*; the signed envelope's `actor` was never checked against it, so a
+validly signed completion carrying the default `system`/`test` fixture actor
+was accepted and could attribute a review to anyone, or to `""`. On manual
+approve the reviewer *was* actor-derived, but the actor itself was
+unvalidated: any `actor.type` was accepted, with no cross-check against the
+payload's required `reviewer_id`. Separately, the PR 5a floor checked
+`status == "open"` unlocked in the ingest transaction while the close
+happened later, also unlocked, in the worker's decide transaction — two
+completions admitted under different idempotency keys could both pass the
+floor before either ran, so the check-write was decoupled from the close that
+a second completion could still flip.
+
+**Decision.** (1) **Trust model:** the signed request stays the trust
+boundary (HMAC v2, PR 5a); tool-side reviewer authentication (OIDC) is a
+future alternative, out of scope here. On top of that assertion, both
+`website.review_completed` and `reviewer.manual_approve` now require
+`actor.type == "reviewer"` and `actor.id == payload.reviewer_id`, both
+nonblank after trimming whitespace and compared exact/case-sensitive; a
+mismatch, a blank id on either side, or the wrong `actor.type` is rejected
+**422** (authenticated but internally inconsistent — not a signature/permission
+failure). This equality is a **consistency check**, not the security boundary
+— the signature is. No global schema change follows: the nonblank-actor rule
+is scoped to these two review events, not imposed on `Actor.id` generally.
+(2) **Authoritative guard:** the ingest-time floor stays advisory and
+unlocked (fast-fail UX, so a bad request gets an immediate rejection with no
+orphan rows); the sole authority is the decide transaction, which locks the
+**ReviewTask** `FOR UPDATE` — after the existing case-row lock, preserving a
+fixed case-then-task lock order — and computes one immutable guard decision
+(task exists · right type · right case · open · valid, matching actor),
+re-validated against the **persisted** `event.actor_json` so a pre-upgrade
+event queued under the old floor can't drain through unchecked after this
+deploy. That one decision yields two views: a pipeline-internal guard holding
+the live locked ORM task (consumed only by orchestration/side-effects, which
+legitimately mutate it to close it) and a separate immutable scalar view
+(`eligible`, `reviewer_id`, `task_id`, `skip_reason`) handed to the pure
+validator — the locked ORM entity never crosses the validator boundary. An
+ineligible completion (task no longer open, or a bad actor) still completes
+as a normal run — never an early return — but writes no check, does not touch
+the task, and records a `review_task.completion_skipped` audit entry; the
+first *eligible* close whose decide transaction commits wins. (3)
+**Persistence:** for an eligible website completion, `ReviewTask.reviewer_id`,
+the check's `source`, and the audit `actor` all derive from
+`event.actor_json["id"]` — the platform-asserted identity — never the payload
+field; the signed payload itself is preserved unchanged on the event row as
+evidence. `DecisionRow.reviewer_id` stays untouched (NULL, `manual=false`)
+for automatic runs — that column is coupled to the Salesforce "Manual
+Approved By" projection and belongs only to `reviewer.manual_approve`, which
+continues to populate it, as today, from the same actor-derived identity. (4)
+The ops-console composer refuses both event types with **403** in production,
+so real reviewer actions can only arrive as signed platform events; in
+dev/staging it now sends a genuine `{"type": "reviewer", "id": ...}` actor
+instead of a generic `system` actor, so console testing exercises the same
+binding production enforces.
+
+**Rollout.** No migration, but a rolling deploy is unsafe: during any old/new
+overlap an old replica still honors the exact forgery this decision closes
+(an old API applies manual-approve inline with no actor floor; an old worker
+claims jobs purely by kind, with no event-type filter, and can close a queued
+`system`-actor completion under the old actorless semantics). There is no way
+to keep an old replica serving traffic while guaranteeing it never touches a
+sensitive event, so this ships as a **brief full maintenance window** — the
+same non-hot stop → deploy → start pattern PR 5a used, extended to workers as
+well as the API, rather than a rolling upgrade. `docs/DEPLOYMENT.md` §9 has
+the operator cutover contract: build+digest the image first; pause all event
+submission and edge-block the composer; stop the old API and worker pools
+together with no graceful drain; run the digest-pinned interrupted-job
+recovery one-shot; deploy the new API first with workers held at zero;
+direct-probe bypassing the edge rule with side-effect-free requests; start
+workers; resume. Its rollback verifies with non-mutating checks only
+(`/readyz`, `/healthz`, prior-image digest) — the sensitive mutation probes
+are prohibited against the prior (still-vulnerable) image, and the recovery
+one-shot is re-run pinned to the last image that contains it.
+
+**Consequences.** Pre-upgrade queued events with invalid actors are skipped
+(audited) rather than honored once they reach the new guard — the intended
+fail-closed outcome, not a regression. The maintenance window is a real
+interruption: event submission is unavailable for its duration, which the
+API contract does not itself guarantee lossless today (retry is directed only
+for network failure, not for a load balancer returning 502/503/504 with every
+target down) — treated as a platform prerequisite for the window, not a
+contract change.
+
+---
+
 ## ADR-003 — Per-case idempotency (D3) + path-bound HMAC v2 (PR 5a)
 
 **Context.** Event idempotency was globally unique on `events.idempotency_key`,
