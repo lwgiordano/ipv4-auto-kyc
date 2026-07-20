@@ -250,7 +250,7 @@ def _handle_manual_approve(
     case.buy_status = (
         BuyStatus.BUY_ENABLED.value if org_passed else BuyStatus.BUY_LOCKED_ORG_ID_REQUIRED.value
     )
-    reviewer_id = str(actor.get("id", "unknown"))
+    reviewer_id = str(actor.get("id", "unknown")).strip()
     session.add(
         DecisionRow(
             case_id=case.id,

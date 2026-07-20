@@ -54,6 +54,59 @@ def test_composer_drives_pipeline_and_case_full_projects(client, phase3_worker, 
     assert full["field_sources"]["KYC_Status__c"].startswith("case status")
 
 
+def test_composer_website_review_completed_binds_reviewer_actor(client, engine, phase3_worker):
+    """PR 5b final-review fix (spec §8.8): in DEV settings, the composer builds
+    a genuine {"type":"reviewer","id":<reviewer_id>} actor for
+    website.review_completed (routes.py send_event _SENSITIVE branch) — NOT a
+    system/ops-console actor — so it passes the SAME reviewer-actor floor
+    production enforces (events/ingest.py reviewer_actor_reason), rather than
+    bypassing it. Proven end-to-end: an open website task closes with the
+    actor-derived reviewer id after draining the worker."""
+    sent = client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-website-review", "event_type": "kyb.run_requested",
+              "payload": ACME_KYB_WITH_CONTACT},
+    )
+    assert sent.status_code == 202
+    phase3_worker.run_until_idle()
+
+    with engine.connect() as conn:
+        task_id = conn.execute(
+            text(
+                "SELECT id FROM review_tasks WHERE case_id=:c AND task_type='website' "
+                "AND status='open'"
+            ),
+            {"c": "ui-website-review"},
+        ).scalar_one()
+
+    resp = client.post(
+        "/ui/api/send-event",
+        json={
+            "case_id": "ui-website-review",
+            "event_type": "website.review_completed",
+            "payload": {"task_id": task_id, "result": "pass", "reviewer_id": "rev-1"},
+        },
+    )
+    assert resp.status_code == 202  # accepted — the dev composer's actor passes the floor
+
+    phase3_worker.run_until_idle()
+
+    with engine.connect() as conn:
+        status, reviewer_id = conn.execute(
+            text("SELECT status, reviewer_id FROM review_tasks WHERE id=:id"), {"id": task_id}
+        ).one()
+        check_source = conn.execute(
+            text(
+                "SELECT source FROM checks WHERE case_id=:c AND check_type='website_verified' "
+                "AND superseded_by_check_id IS NULL"
+            ),
+            {"c": "ui-website-review"},
+        ).scalar_one()
+    assert status == "done"
+    assert reviewer_id == "rev-1"
+    assert check_source == "reviewer:rev-1"  # actor-derived, same binding production enforces
+
+
 def test_composer_validates_payloads(client):
     bad = client.post(
         "/ui/api/send-event",

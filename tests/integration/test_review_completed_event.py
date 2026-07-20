@@ -19,7 +19,9 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from kyc_tool.checkstore import repo as checkstore
+from kyc_tool.config import get_settings
 from kyc_tool.db.tables import AuditLog, DecisionRow, ReviewTask
+from kyc_tool.orchestration import pipeline as pipeline_module
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue import jobs
 from kyc_tool.queue.worker import Worker
@@ -328,6 +330,46 @@ def test_pre_upgrade_wrong_case_skipped_at_decide(
         assert _audit_reason(s, "case-other", "review_task.completion_skipped") == "wrong_case"
 
 
+def test_pre_upgrade_task_missing_skipped_at_decide(
+    engine, clean_db, session_factory, policy, settings, tmp_path
+):
+    """A pre-upgrade completion whose task_id resolves to NO ReviewTask row AT
+    ALL (not merely the wrong type/case — no task is seeded for this case, or
+    any case) must be SKIPPED by the decide-txn guard with task_missing
+    (review_guard.py:53-55): no check, completion_skipped audited with reason
+    task_missing, run still completes. Mirrors
+    test_pre_upgrade_wrong_type_skipped_at_decide but with a bogus task_id and
+    no seeded task."""
+    bogus_task_id = uuid.uuid4().hex
+    run_id = _seed_completion_run(
+        engine, "case-missing", bogus_task_id,
+        actor={"type": "reviewer", "id": "rev-1"},
+        payload={"task_id": bogus_task_id, "result": "pass", "reviewer_id": "rev-1"},
+    )
+    _drive_run(session_factory, policy, settings, tmp_path, run_id)
+    with session_factory() as s:
+        assert _live_check(s, "case-missing", "website_verified") is None   # no +10
+        assert _audit_reason(s, "case-missing", "review_task.completion_skipped") == "task_missing"
+
+
+def test_pre_upgrade_blank_task_id_skipped_at_decide(
+    engine, clean_db, session_factory, policy, settings, tmp_path
+):
+    """payload.task_id omitted entirely (falsy) is ALSO task_missing — the
+    guard's OTHER early-return branch (review_guard.py:51-52, `if not
+    task_id`), distinct from a task_id that fails to resolve to any row
+    (lines 53-55, covered above) even though both report the same reason."""
+    run_id = _seed_completion_run(
+        engine, "case-blank-task", "unused",
+        actor={"type": "reviewer", "id": "rev-1"},
+        payload={"result": "pass", "reviewer_id": "rev-1"},  # no task_id key at all
+    )
+    _drive_run(session_factory, policy, settings, tmp_path, run_id)
+    with session_factory() as s:
+        assert _live_check(s, "case-blank-task", "website_verified") is None   # no +10
+        assert _audit_reason(s, "case-blank-task", "review_task.completion_skipped") == "task_missing"
+
+
 def test_persists_actor_derived_reviewer_not_payload(
     engine, clean_db, session_factory, policy, settings, tmp_path, post_event
 ):
@@ -420,3 +462,79 @@ def test_winner_deadletters_then_second_wins(
     with session_factory() as s:
         task = s.get(ReviewTask, task_id)
         assert task.status == "done" and task.result == "fail"  # seq-2 legitimately closed it
+
+
+# --- PR 5b final-review fix (spec §8.5): decide-txn rollback-then-retry -----
+
+
+def test_decide_txn_rollback_then_retry_completes_exactly_once(
+    engine, clean_db, session_factory, policy, settings, tmp_path, post_event, monkeypatch
+):
+    """If the decide txn fails AFTER the guard has staged the task-close and
+    the +10 check but BEFORE it commits, the whole txn (including the hop to
+    PUBLISH_DECISION) rolls back — task stays open, no live check, no
+    decision — and the automatic job retry (same job, requeued by
+    queue/jobs.fail since job_max_attempts >= 2) then completes cleanly: task
+    done, exactly ONE live website_verified check (+10 applied once),
+    decision emitted.
+
+    Seam: kyc_tool.orchestration.pipeline.enqueue_decision_callback is called
+    inside _decide_txn AFTER checkstore.apply_check_intents (writes the +10)
+    and self.side_effects.on_event (stages the task-close) but BEFORE
+    jobs.complete/commit — exactly the "staged-then-rolled-back" property
+    §8.5 asserts, not merely "task stays open". A closure counter raises
+    RuntimeError only on the FIRST call and calls through to the real
+    function afterward, so only the first decide-txn attempt is faulted."""
+    task_id = _seed_task(engine, "case-retry")
+    post_event(
+        "case-retry", "website.review_completed",
+        _wrc(task_id, reviewer="rev-1"),
+        actor={"type": "reviewer", "id": "rev-1"},
+    )
+    # else the failed attempt would dead-letter instead of requeuing, and the
+    # premise of this test (an automatic retry) wouldn't hold
+    assert get_settings().job_max_attempts >= 2
+
+    real_enqueue = pipeline_module.enqueue_decision_callback
+    calls = {"n": 0}
+
+    def flaky_enqueue(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("simulated decide-txn fault (PR 5b fix brief FIX 2)")
+        return real_enqueue(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_module, "enqueue_decision_callback", flaky_enqueue)
+
+    worker = _worker_for(session_factory, policy, settings, tmp_path)
+
+    # Attempt 1: reaches the decide txn, stages the close + the +10 check,
+    # faults before commit -> the whole txn (task-close, check, decision row,
+    # PUBLISH_DECISION hop) rolls back; queue/jobs.fail requeues it for
+    # immediate retry (backoff_base_seconds=0 in _worker_for).
+    assert worker.run_once() is True
+    assert calls["n"] == 1
+    with session_factory() as s:
+        task = s.get(ReviewTask, task_id)
+        assert task.status == "open"                                    # NOT closed
+        assert _live_check(s, "case-retry", "website_verified") is None  # no +10
+        assert _latest_decision(s, "case-retry") is None                 # no decision
+
+    # Attempt 2 (the automatic retry): same job; the decide txn re-enters
+    # from VALIDATE (the hop never committed on attempt 1) and completes
+    # cleanly this time.
+    assert worker.run_once() is True
+    assert calls["n"] == 2
+    with session_factory() as s:
+        task = s.get(ReviewTask, task_id)
+        assert task.status == "done" and task.reviewer_id == "rev-1"
+        chk = _live_check(s, "case-retry", "website_verified")
+        assert chk is not None and chk.status == "pass"                  # +10 applied, once
+        assert _latest_decision(s, "case-retry") is not None
+
+        # exactly one live/ever check of this type — no supersession chain
+        # left behind by the rolled-back first attempt
+        website_checks = [
+            c for c in checkstore.all_checks(s, "case-retry") if c.check_type == "website_verified"
+        ]
+    assert len(website_checks) == 1

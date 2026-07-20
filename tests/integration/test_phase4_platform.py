@@ -218,3 +218,109 @@ def test_manual_approve_then_org_id_enables_buying(client, post_event, phase3_wo
     case = client.get(f"/v1/cases/{case_id}").json()
     assert case["status"] == "approved_manual"  # sticky — platform enforced it
     assert case["buy_status"] == "buy_enabled"  # ORG-ID unlocked buying
+
+
+# --- PR 5b final-review fix (spec §8.7): manual-approve actor-floor matrix --
+#
+# reviewer.manual_approve is enforced by the SAME reviewer_actor_reason floor
+# as website.review_completed (events/ingest.py:201-203), but until now only
+# the happy path above was tested. These mirror the website matrix in
+# test_review_completed_event.py (test_wrong_actor_type_rejected_422 /
+# test_actor_id_mismatch_rejected_422). A fresh case_id per case keeps the
+# no-rows assertion in test_manual_approve_rejected_leaves_no_rows clean; no
+# prior events are needed since manual-approve doesn't require a run.
+
+
+@pytest.mark.parametrize(
+    "case_id, actor, reviewer_id",
+    [
+        pytest.param(
+            "case-manual-bad-type", {"type": "system", "id": "rev-1"}, "rev-1", id="wrong_actor_type"
+        ),
+        pytest.param(
+            "case-manual-bad-mismatch", {"type": "reviewer", "id": "rev-1"}, "rev-2", id="actor_id_mismatch"
+        ),
+        pytest.param(
+            "case-manual-bad-blank", {"type": "reviewer", "id": ""}, "", id="both_blank_equal"
+        ),
+        pytest.param(
+            "case-manual-bad-whitespace", {"type": "reviewer", "id": "  "}, "  ", id="both_whitespace_equal"
+        ),
+    ],
+)
+def test_manual_approve_bad_actor_rejected_422(client, post_event, case_id, actor, reviewer_id):
+    """actor.type != reviewer, actor.id != payload.reviewer_id, and
+    blank/whitespace ids that are EQUAL to each other (still invalid post-strip
+    — the blank guard fires independently of the equality check) are all
+    rejected 422 by reviewer_actor_reason before any decision is recorded."""
+    response, _ = post_event(
+        case_id,
+        "reviewer.manual_approve",
+        {"reviewer_id": reviewer_id, "note": "vip"},
+        actor=actor,
+    )
+    assert response.status_code == 422
+
+
+def test_manual_approve_rejected_leaves_no_rows(client, engine, post_event):
+    """The _FloorReject rolls the WHOLE ingest txn back on a rejected
+    manual-approve — no orphan event row, no decision row, no
+    reviewer.manual_approve audit entry — mirroring
+    test_nonexistent_task_rejected_and_no_row_persists for the website path."""
+    case_id = "case-manual-rollback"
+    response, _ = post_event(
+        case_id,
+        "reviewer.manual_approve",
+        {"reviewer_id": "rev-2", "note": "vip"},
+        actor={"type": "reviewer", "id": "rev-1"},  # id mismatch -> 422
+    )
+    assert response.status_code == 422
+    with engine.connect() as conn:
+        events = conn.execute(
+            text("SELECT count(*) FROM events WHERE case_id=:c"), {"c": case_id}
+        ).scalar_one()
+        decisions = conn.execute(
+            text("SELECT count(*) FROM decisions WHERE case_id=:c"), {"c": case_id}
+        ).scalar_one()
+        manual_audits = conn.execute(
+            text(
+                "SELECT count(*) FROM audit_log WHERE case_id=:c "
+                "AND action='reviewer.manual_approve'"
+            ),
+            {"c": case_id},
+        ).scalar_one()
+    assert events == 0  # rolled back — no orphan event row
+    assert decisions == 0
+    assert manual_audits == 0
+
+
+def test_manual_approve_valid_reviewer_actor_persists_stripped_reviewer_id(client, engine, post_event):
+    """Happy path (keep/confirm): a valid reviewer actor still 200s and writes
+    the manual decision row with the actor-derived reviewer id.
+
+    FIX 5: actor.id and payload.reviewer_id are the SAME raw string WITH a
+    trailing space — both pass the floor (reviewer_actor_reason strips both
+    sides before comparing) — so the PERSISTED DecisionRow.reviewer_id must
+    ALSO be stripped ("rev-9", not "rev-9 "), matching the website path's
+    actor-derived-stripped persistence (review_guard.py:64 vs
+    ingest.py:_handle_manual_approve). A bare `== "rev-9"` on an unpadded id
+    would prove nothing; the trailing space is the point — mirrors the
+    technique in test_persists_actor_derived_reviewer_not_payload."""
+    case_id = "case-manual-strip"
+    response, _ = post_event(
+        case_id,
+        "reviewer.manual_approve",
+        {"reviewer_id": "rev-9 ", "note": "vip"},
+        actor={"type": "reviewer", "id": "rev-9 "},
+    )
+    assert response.status_code == 200
+    assert response.json()["case_status"] == "approved_manual"
+    with engine.connect() as conn:
+        reviewer_id = conn.execute(
+            text(
+                "SELECT reviewer_id FROM decisions WHERE case_id=:c "
+                "ORDER BY decided_at DESC LIMIT 1"
+            ),
+            {"c": case_id},
+        ).scalar_one()
+    assert reviewer_id == "rev-9"  # stripped, not "rev-9 "
