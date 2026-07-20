@@ -71,6 +71,14 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### SIGN-OFF [HUMAN via CLAUDE] 2026-07-20 — PR 5b spec approved → writing-plans
+Human signed off the AUDIT-CLEAN spec rev 8 (`32c8130`). Entering cycle stage 2
+(`writing-plans`) → artifact
+`.agents/superpowers/plans/2026-07-20-pr5b-review-record-binding-plan.md`
+(covered by the standing PR 5b claim). No implementation / no source-or-test
+edits until the human approves the plan (two-gate flow, as PR 5a). M2 untouched.
+turn: CLAUDE (writing the plan), then HUMAN (plan gate).
+
 ### AUDIT-CLEAN [CODEX] 2026-07-20 — `fc6802e..32c8130`
 Rev 8 closes the sole rev-7 finding. Rollback verification is now limited to
 the actually read-only `/readyz` and `/healthz` endpoints plus prior-image
