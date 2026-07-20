@@ -1,9 +1,10 @@
-# PR 5b — Review-record binding (design, rev 4)
+# PR 5b — Review-record binding (design, rev 5)
 
-Status: rev 3 Codex-reviewed (winner invariant closed; 2 residual cutover
-findings folded below: hard-stop old workers instead of graceful drain,
-composer edge-block during overlap) → awaiting Codex re-review → human
-sign-off → `writing-plans`.
+Status: rev 4 Codex-reviewed (actor/locking design sound; 3 residual cutover
+findings folded below: no-drain boundary extended to old API replicas, a
+deterministic interrupted-job recovery step/command, direct-replica probes
+that bypass the edge rule) → awaiting Codex re-review → human sign-off →
+`writing-plans`.
 Unit: ROADMAP item 11 ("Review-record binding"). Predecessor: PR 5a
 (AUDIT-CLEAN at `2240fc5..28a7f7e`), which built the ingest validation floor and
 explicitly deferred actor trust + task locking to this PR.
@@ -239,6 +240,14 @@ taught to infer reviewer actors (defaulting would hide contract mistakes):
    actor-derived reviewer; rejected approve leaves no rows.
 8. Composer: production settings → 403 for both types (and only these types);
    dev settings → works, sends the reviewer actor, floor accepts it.
+8b. **Interrupted-job recovery command** (`ops.requeue_interrupted_jobs`):
+   (i) a job left `running` on its **final attempt** with an expired lease is
+   requeued without consuming the forced-stop attempt — NOT dead-lettered —
+   and subsequently reaches the §3 guard normally; (ii) with a
+   **continuously busy queue** (other-case jobs always claimable, so
+   `reap_expired` never fires on its own), the command still finds and
+   requeues the stale `running` job; (iii) idempotent — a second invocation
+   is a no-op; (iv) asserts/reports zero `running` jobs on completion.
 9. Full suite green.
 
 ## 9. Non-goals
@@ -272,7 +281,8 @@ promise for exactly the queued events §3 exists to catch.
 Cutover contract (added to `docs/DEPLOYMENT.md`, in scope):
 
 1. **Block ALL sensitive admission paths** before anything else — and keep
-   them blocked until every API replica is new:
+   them blocked until every API replica is new AND step 5's direct probes
+   pass:
    - **platform:** pause or route away `website.review_completed` and
      `reviewer.manual_approve` (normal scoring events keep flowing);
    - **ops console:** edge-block the composer mutation route
@@ -281,28 +291,51 @@ Cutover contract (added to `docs/DEPLOYMENT.md`, in scope):
      an **old** replica can otherwise post `reviewer.manual_approve` (applied
      inline, `system` actor) right through the platform-side pause
      (`ui/routes.py:355-391`; production permits the UI with an admin token).
-2. **Hard-stop ALL old pipeline workers — do NOT drain gracefully.** Terminate
-   the old worker processes and confirm they have exited **without letting
-   in-flight handlers finish**: an old worker that claimed a sensitive job
-   just before the stop would otherwise complete it with the old actorless
-   semantics (`queue/worker.py:42-74` — claim happens outside the handler
-   txn, then the handler runs to completion). Termination is crash-equivalent
-   and safe **by design** for every job kind: each transition commits in one
-   transaction (open txns roll back), leases expire and the reaper requeues,
-   and adapter results are resumable. Interrupted or queued sensitive jobs
-   (including pre-upgrade `system`-actor completions) stay queued until a NEW
-   worker, carrying the §3 guard, claims them and skips them fail-closed.
-3. Deploy and readiness-verify the new API replicas **and** new workers; only
-   new workers resume queue claims.
-4. **Negative-probe** before resuming: a signed `system`-actor completion must
-   422; a signed manual-approve with a mismatched actor must 422; the
-   production composer must refuse both sensitive types (403).
-5. Resume the two event types and unblock the console route.
+2. **Hard-stop ALL old API replicas — the edge rule alone is not enough.** An
+   edge block stops new routing but cannot revoke a request already executing:
+   a signed manual-approve sitting in an old replica's threadpool
+   (`routes_events.py:17-50` via `run_in_threadpool`) commits inline under the
+   old semantics if that replica is allowed to drain gracefully. So after
+   step 1, **terminate the old API processes and confirm every old handler/
+   connection is gone** (no graceful rolling drain for this release). Ingest
+   is a single transaction — interrupted handlers roll back cleanly.
+3. **Hard-stop ALL old pipeline workers the same way** (no graceful drain):
+   an old worker that claimed a sensitive job just before the stop would
+   otherwise complete it with the old actorless semantics
+   (`queue/worker.py:42-74` — claim outside the handler txn, handler runs to
+   completion). Termination is crash-equivalent and safe by design
+   (single-txn transitions roll back; adapter results resume).
+4. **Deterministic interrupted-job recovery — run the one-shot
+   `python -m kyc_tool.ops.requeue_interrupted_jobs` after all old processes
+   have exited, BEFORE new workers start.** Passive lease recovery cannot be
+   relied on here: `reap_expired` runs only when a claim comes back empty
+   (`queue/worker.py:42-57`), so a busy queue can leave an expired job
+   `running` indefinitely — and because `claim` already incremented
+   `attempts` (`queue/jobs.py:21-47`), the reaper **dead-letters** an expired
+   final-attempt job (`queue/jobs.py:128-150`) instead of requeuing it; a
+   sensitive job killed on its last attempt would then never reach the §3
+   guard, record no `completion_skipped`, and emit no callback. The command:
+   identifies jobs still `running` under expired/stale leases from the
+   stopped processes, requeues them **without consuming the forced-stop
+   attempt** (the termination was operator-initiated, not a handler failure),
+   and asserts zero `running` jobs remain before new workers may start.
+5. Deploy and readiness-verify the new API replicas **and** new workers; only
+   new workers resume queue claims. **Negative-probe each new replica
+   DIRECTLY, through a trusted path that bypasses the temporary edge rule**
+   (internal target-group address / port-forward) — probing through the edge
+   would let the LB's own 403 falsely certify a broken application. Assert
+   application-identifying response bodies, not just status codes: a signed
+   `system`-actor completion → the app's 422 (using a **valid open task**, so
+   a 404/409 cannot mask the actor floor); a signed manual-approve with
+   mismatched actor → the app's 422; the composer → the app's 403 for both
+   sensitive types. The public edge block stays up until these direct probes
+   pass.
+6. Resume the two event types and unblock the console route.
 
-Rollback mirrors the same safety boundary: block both admission paths
-(platform pause + composer edge-block), hard-stop the new workers (same
-crash-safe termination), redeploy the prior image for API+workers, then
-resume — accepting that the prior image restores the pre-PR 5b semantics.
+Rollback mirrors the same safety boundary: block both admission paths, hard-
+stop the NEW APIs and workers (same crash-safe termination + the same
+recovery command), redeploy the prior image for API+workers, then resume —
+accepting that the prior image restores the pre-PR 5b semantics.
 Everything else (scoring events) is unaffected and can roll normally. Behavior
 change at the contract surface: completions/manual-approvals must now carry a
 consistent reviewer actor; pre-upgrade queued events with invalid actors are
