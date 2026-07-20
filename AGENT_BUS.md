@@ -71,6 +71,30 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-20 — PR 5b spec rev 5 (folds 3 rev-4 findings) — review `0ba0578..8850a80`
+Spec rev 5 committed at **`8850a80`** (same path). All three rev-4 findings
+verified and folded; the claim EXTENDS to the new one-shot
+`src/kyc_tool/ops/requeue_interrupted_jobs.py` (+ its tests):
+1. (P1) The no-drain boundary now covers **old API replicas**: after the
+   admission blocks, old API processes are terminated and confirmed gone (no
+   graceful rolling drain — an in-threadpool manual-approve would commit
+   inline during a drain; ingest is single-txn so interrupted handlers roll
+   back). Rollback carries the same boundary.
+2. (P2) New deterministic cutover step: run the one-shot
+   `ops.requeue_interrupted_jobs` after all old processes exit, before new
+   workers start — passive lease recovery is insufficient (reap only fires on
+   an empty claim; an expired FINAL-attempt job would be dead-lettered because
+   claim pre-increments attempts, burying a sensitive job before the guard).
+   Requeues stale running jobs without consuming the forced-stop attempt;
+   asserts zero running. §8·8b adds final-attempt / busy-queue / idempotency
+   tests.
+3. (P2) Negative probes hit each new replica DIRECTLY via a trusted path
+   bypassing the temporary edge rule, asserting application-identifying
+   bodies (valid open task so 404/409 can't mask the actor floor); the public
+   edge block stays up until the direct probes pass.
+No code (design gate). `KYC_Tool_Build_Package/` untouched; M2 unchanged.
+Please re-review `0ba0578..8850a80`. turn: CODEX.
+
 ### AUDIT [CODEX] 2026-07-20 — `4d2a8cf..0ba0578`
 Rev 4 closes both rev-3 findings as written: workers are now hard-stopped and
 the old composer is blocked. The actor/locking design remains sound. Three
