@@ -1,7 +1,8 @@
-# PR 5b — Review-record binding (design, rev 2)
+# PR 5b — Review-record binding (design, rev 3)
 
-Status: rev 1 Codex-reviewed (7 findings, all folded below) → awaiting Codex
-re-review → human sign-off → `writing-plans`.
+Status: rev 2 Codex-reviewed (5/7 rev-1 findings closed; 2 residual findings
+folded below: cutover worker quiescence, winner-invariant wording) → awaiting
+Codex re-review → human sign-off → `writing-plans`.
 Unit: ROADMAP item 11 ("Review-record binding"). Predecessor: PR 5a
 (AUDIT-CLEAN at `2240fc5..28a7f7e`), which built the ingest validation floor and
 explicitly deferred actor trust + task locking to this PR.
@@ -108,15 +109,23 @@ a bad actor) follows §4.
 ## 4. Duplicate / ineligible semantics (precise no-op)
 
 The queue is per-case FIFO (`queue/jobs.py:6` — oldest `queued`/`running` job
-per case), so of several admitted completions the **lowest-sequence completion
-whose decide transaction commits wins**. Normally that is the lowest
-`event_sequence`; but the FIFO predicate only blocks later jobs while the
-earlier one is `queued`/`running` (`jobs.py:37-41`). If the earlier job
-exhausts `max_attempts` and dead-letters (`jobs.py:101-108`), its decide txn
-rolled back (task still open — §4 atomicity), the later job becomes claimable,
-and that higher sequence then legitimately closes the task. So the invariant is
-"first *committed* completion wins", not "lowest sequence always wins". A
-later (or otherwise ineligible) completion's run:
+per case). The winner invariant, stated precisely: **the first ELIGIBLE task
+close whose decide transaction commits wins.** Neither "lowest sequence" nor
+"first committed run" is exact, because two kinds of earlier runs can commit
+*without* winning:
+
+- an **ineligible** earlier completion (e.g. a pre-upgrade `system`-actor
+  event, seq-1) commits its audited-skip run and callback while leaving the
+  task **open** — a later valid completion (seq-2) then legitimately closes
+  it (FIFO releases seq-2 once seq-1's job is done, `jobs.py:37-41,93-98`);
+- an earlier **dead-lettered** completion never commits its close at all: it
+  exhausts `max_attempts` (`jobs.py:101-108`), its decide txn rolled back
+  (task still open — §4 atomicity), and the later completion becomes claimable
+  and closes.
+
+In the common path (all admitted completions eligible, none dead-lettered) this
+reduces to "lowest `event_sequence` wins". A later-or-otherwise-ineligible
+completion's run:
 
 - writes **no** `website_verified` check intent;
 - does **not** supersede the winning check (no churn, no result flip);
@@ -203,13 +212,18 @@ taught to infer reviewer actors (defaulting would hide contract mistakes):
    runs); after both decide: exactly one close, one live `website_verified`,
    task fields from the winning (lowest-sequence) event's actor; the loser
    recorded the skip audit and produced a normal callback.
+3b. **Ineligible-then-valid:** seed seq-1 with a `system` actor (invalid) and
+   seq-2 with a valid reviewer for the same open task. Seq-1's run commits the
+   audited skip (task stays open, no check); FIFO then releases seq-2, which
+   legitimately closes the task. Proves "first ELIGIBLE close that commits
+   wins" — the earlier committed-but-ineligible run does not.
 4. Conflicting duplicate: winner `result=pass`, loser `result=fail` — the
    live check stays PASS (no flip, no supersession).
 4b. **Winner dead-letters:** admit seq-1 PASS and seq-2 FAIL; force seq-1
    through `max_attempts` to dead-letter (its decide txn rolls back, task stays
    open); run the worker again — seq-2 becomes claimable and legitimately
-   closes the task FAIL. Proves the invariant is "first *committed* completion
-   wins", not "lowest sequence always wins".
+   closes the task FAIL. The dead-lettered earlier completion never committed a
+   close, so the invariant holds: first eligible close that commits wins.
 4c. **Blocked-broker completion:** complete an open website task with a valid
    reviewer actor while the case is broker-blocked (DECIDE short-circuit) — the
    guard + `website_intent` still run: the task closes and the +10 check is
@@ -246,20 +260,36 @@ then workers (`docs/DEPLOYMENT.md:21-22,90-105`); during old/new overlap an
 - an old **worker** processes the pre-upgrade website completions §3/§4 say the
   new worker would skip.
 
+Pausing inbound submissions alone is NOT enough: pipeline workers claim purely
+by job **kind** (`queue/worker.py:42-61`, claim SQL `queue/jobs.py:21-47`) with
+no event-type filter, so an **old worker running during the cutover** would
+still process a pre-upgrade queued `system`-actor completion with the old
+semantics — payload-built website intent (`validators/build.py:47-48`) and
+actorless close (`side_effects.py:181-197`) — defeating the fail-closed
+promise for exactly the queued events §3 exists to catch.
+
 Cutover contract (added to `docs/DEPLOYMENT.md`, in scope):
 
-1. Before rollout, **pause or route away** the two sensitive event types
-   (`website.review_completed`, `reviewer.manual_approve`) so no old replica
-   serves them during overlap (platform-side gate, or a brief maintenance
-   window for these two types only — normal scoring events keep flowing).
-2. Replace and readiness-verify **all** API and pipeline-worker replicas (no
-   old replica left serving these types).
-3. **Negative-probe** the actor floor on a new replica (a signed `system`-actor
+1. **Pause or route away** the two sensitive event types
+   (`website.review_completed`, `reviewer.manual_approve`) at the platform so
+   no old API admits new ones during overlap (normal scoring events keep
+   flowing).
+2. **Quiesce ALL old pipeline workers before any replacement serves:** scale
+   the old workers to zero and wait for in-flight jobs to finish or their
+   leases to expire (the reaper requeues expired leases). After this point no
+   old worker may claim — queued sensitive jobs (including pre-upgrade
+   `system`-actor completions) remain queued until a NEW worker, carrying the
+   §3 guard, claims them and skips them fail-closed.
+3. Deploy and readiness-verify the new API replicas **and** new workers; only
+   new workers resume queue claims.
+4. **Negative-probe** the actor floor on a new replica (a signed `system`-actor
    completion must 422; a signed manual-approve with a mismatched actor must
    422) before resuming.
-4. Resume the two event types.
+5. Resume the two event types.
 
-Rollback is the reverse: pause the two types, redeploy the prior image, resume.
+Rollback mirrors it: pause the two types, quiesce the new workers (wait for
+in-flight jobs/leases), redeploy the prior image for API+workers, resume —
+accepting that the prior image restores the pre-PR 5b semantics.
 Everything else (scoring events) is unaffected and can roll normally. Behavior
 change at the contract surface: completions/manual-approvals must now carry a
 consistent reviewer actor; pre-upgrade queued events with invalid actors are
