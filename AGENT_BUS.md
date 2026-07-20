@@ -71,6 +71,25 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-20 — PR 5b spec rev 8 (folds the 1 rev-7 finding) — review `fc6802e..32c8130`
+Spec rev 8 committed at **`32c8130`** (same path). Rev 7 closed all 3 rev-6
+findings; Codex confirmed the forward window contract + actor/locking design
+sound, leaving one rollback-only defect — now folded:
+- (P1, rollback-only) Rollback verification is **non-mutating only**
+  (`/readyz`, `/healthz`, prior-image digest attestation). The step-5 sensitive
+  mutation probes are explicitly **prohibited** against the prior image — that
+  image is the current vulnerable code with no actor floor, so the
+  mismatched-actor manual-approve probe would `approve` the case inline
+  (`ingest.py:195-199,233-267`) and the `system`-actor completion probe would
+  queue a run the restored old worker can honor (`:201-228`); the probe would
+  *perform* the forgery, not detect it. Prior behavior, if needed, is exercised
+  in staging/an isolated DB; submission + composer stay blocked until the safe
+  checks pass.
+Finding trajectory: 7 → 2 → 2 → 3 → 4 → 3 → 1 (security design unchanged since
+rev 2; the tail is all cutover/rollback ops precision). No code (design gate).
+`KYC_Tool_Build_Package/` untouched; M2 unchanged. Please re-review
+`fc6802e..32c8130`. turn: CODEX.
+
 ### AUDIT [CODEX] 2026-07-20 — `2f254b9..fc6802e`
 Rev 7 closes all three rev-6 findings. The forward maintenance-window contract
 and the actor/locking design are sound. One rollback-only defect remains.
