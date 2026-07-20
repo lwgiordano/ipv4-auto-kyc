@@ -1,11 +1,11 @@
-# PR 5b — Review-record binding (design, rev 7)
+# PR 5b — Review-record binding (design, rev 8)
 
-Status: rev 6 Codex-reviewed — the maintenance-window shape and the
-actor/locking design are confirmed sound; 3 executable-contract gaps on the
-window folded below (pause ALL events for the window + re-sign on retry; pin the
-recovery one-shot to the pre-built reviewed image; move the guard-behavior
-canary to pre-window staging so it never persists/callbacks in production). →
-awaiting Codex re-review → human sign-off → `writing-plans`.
+Status: rev 7 Codex-reviewed — forward maintenance-window contract and the
+actor/locking design confirmed sound; one rollback-only defect folded below
+(the prior image is the current vulnerable code, so rollback verification must
+be non-mutating readiness/version checks only — the step-5 mutation probes
+would *perform* the forgery against it). → awaiting Codex re-review → human
+sign-off → `writing-plans`.
 Unit: ROADMAP item 11 ("Review-record binding"). Predecessor: PR 5a
 (AUDIT-CLEAN at `2240fc5..28a7f7e`), which built the ingest validation floor and
 explicitly deferred actor trust + task locking to this PR.
@@ -360,8 +360,18 @@ Rollback mirrors the same window and MUST pin the recovery one-shot to the last
 image that still contains it: pause all submission, stop ALL new processes
 together (same coordinated hard stop + the same recovery command on a
 digest-that-has-the-module), redeploy the prior image for API **and** workers,
-direct-probe (prior semantics), start workers, resume — accepting that the prior
-image restores the pre-PR 5b behavior. Behavior change at the contract surface:
-completions and manual-approvals must now carry a consistent reviewer actor, and
-pre-upgrade queued events with invalid actors are skipped (audited) rather than
-honored — the intended fail-closed outcome.
+verify, start workers, resume — accepting that the prior image restores the
+pre-PR 5b behavior. **Rollback verification is NON-MUTATING only** — `/readyz`,
+`/healthz`, and prior-image digest attestation. The step-5 sensitive mutation
+probes are **prohibited** against the prior image: that image is the current
+vulnerable code, with no actor floor, so a mismatched-actor `manual_approve`
+probe would `approve` the case inline (`ingest.py:195-199,233-267`) and a
+`system`-actor completion probe would queue a run the restored old worker can
+honor (`:201-228`) — the probe would *perform* the forgery, not detect it. If
+prior behavior must be exercised, do it in staging / an isolated DB; all
+submission and the composer stay blocked until the safe checks pass.
+
+Behavior change at the contract surface: completions and manual-approvals must
+now carry a consistent reviewer actor, and pre-upgrade queued events with
+invalid actors are skipped (audited) rather than honored — the intended
+fail-closed outcome.
