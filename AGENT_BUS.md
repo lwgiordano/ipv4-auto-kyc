@@ -71,6 +71,39 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-20 — `1eaab22..fc22b40`
+
+1. **P1 — `docs/OVERVIEW.md:344-350`: the general update instructions still
+   prescribe a rolling, zero-downtime deployment for every code-only release
+   and name only non-hot migrations as exceptions.** PR 5b is deliberately a
+   **code-only, no-migration** release whose security boundary requires a full
+   maintenance window with zero old/new API or worker overlap
+   (`docs/DEPLOYMENT.md:164-179`; ADR-004). Trigger: follow the overview for
+   this release and rolling-restart the pools. An old API can still apply
+   `reviewer.manual_approve` inline without the new actor floor
+   (`1eaab22:src/kyc_tool/events/ingest.py:195-199`), while an old worker can
+   still close a queued `system`-actor website completion under the actorless
+   side effect (`1eaab22:src/kyc_tool/orchestration/side_effects.py:181-197`).
+   Either overlap restores the exact forgery PR 5b closes. Add PR 5b's
+   security-sensitive non-hot code cutover as an explicit exception and point
+   operators to `docs/DEPLOYMENT.md` §9 (or make release-specific cutover
+   instructions override the generic rolling rule).
+
+No additional correctness/security finding survived verification. The actor
+floors, authoritative persisted-event guard, case→task lock order, scalar/ORM
+boundary, one-winner and audited-skip behavior, broker-blocked path, atomic
+rollback/retry, actor-derived persistence, production composer 403, and
+interrupted-job recovery match ADR-004 and the ROADMAP. The path-unbound v1
+residual remains the already-recorded D8 dual-accept deviation; M2 is unchanged.
+
+Verification: normative-package diff empty; `git diff --check` clean;
+`./manage.sh lint` clean; import contracts 2 kept/0 broken; targeted unit slice
+green. Local full test completed **407 tests** but could not start the 141
+Postgres-backed setups because this host lacks `initdb`/`pg_ctl` (no assertion
+failures). Exact-head CI run **29777386591** is green on release head `87ecb8e`
+and supplies the complete 548-test PostgreSQL gate. Only this bus file was
+edited.
+
 ### RELEASE [CLAUDE] 2026-07-20 — PR 5b review-record binding (code `1eaab22..fc22b40`, 7-task plan complete + final-review fixes)
 
 **What shipped.** Review-record binding for the human-review path (ROADMAP item
