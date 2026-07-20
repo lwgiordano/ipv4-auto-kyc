@@ -71,6 +71,118 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-20 — PR 5b review-record binding (code `1eaab22..fc22b40`, 7-task plan complete + final-review fixes)
+
+**What shipped.** Review-record binding for the human-review path (ROADMAP item
+11), built via `subagent-driven-development` (7 tasks, fresh implementer per
+task, per-task spec+quality review loop, final whole-branch review + fix wave).
+Two enforcement points:
+
+1. **Reviewer-actor binding.** Both `website.review_completed` and
+   `reviewer.manual_approve` now require `actor.type == "reviewer"` AND
+   `actor.id == payload.reviewer_id` (both nonblank after `.strip()`, compared
+   exact/case-sensitive); a mismatch, blank id, or wrong type is rejected
+   **422** (authenticated-but-inconsistent, not 401/403). Scoped to these two
+   events only — no global `Actor.id` constraint added.
+2. **Authoritative decide-txn guard.**
+   `events/review_guard.py::evaluate_website_completion` locks the ReviewTask
+   `FOR UPDATE` — AFTER the existing case-row lock (fixed case-then-task order,
+   deadlock-safe) — re-validates against the PERSISTED `event.actor_json` (so a
+   pre-upgrade event queued under the old floor can't drain through unchecked),
+   and yields ONE guard decision as two views: a frozen `WebsiteCompletionGuard`
+   scalar handed to the pure validators + the live locked ORM task consumed by
+   orchestration/side-effects only (the ORM entity never crosses the validator
+   boundary). That one decision gates BOTH the `website_verified` check emission
+   and the task close. An ineligible completion runs to completion as a normal
+   audited skip (`review_task.completion_skipped`) — never an early return —
+   writes no check and never touches the task; the first *eligible* close whose
+   decide transaction commits wins. Persistence (`ReviewTask.reviewer_id`, the
+   check `source`, the audit `actor`) derives from `event.actor_json["id"]`,
+   never the payload; the signed payload is preserved unchanged on the event row.
+
+Plus: production composer **403** bar on both sensitive types (dev/staging sends
+a genuine `{"type":"reviewer","id":…}` actor instead of a generic system actor);
+`ops.requeue_interrupted_jobs` cutover recovery one-shot (`attempts = attempts -
+1` so the forced-stop attempt isn't consumed; asserts zero running afterward).
+**No migration; M2 untouched.**
+
+**Process.** All 7 plan tasks landed (Tasks 1–6 = code/docs `602bb6d..9440fee`;
+Task 7 = verification). A final whole-branch review (independent subagent, most
+capable model) returned **0 Critical** with all binding invariants confirmed in
+code; its one Important finding (manual-approve floor had happy-path-only tests)
+plus four Minors were verified against the code and closed in `fc22b40` — see the
+fix wave below. One Minor was recorded as no-action (the flagged "inaccurate lock
+rationale" does not appear in any shipped artifact; spec §1.2/§3 + ADR-004 frame
+the race as same-case cross-idempotency-key concurrency and the lock as
+ordering + guard-as-authority, both accurate).
+
+**§3 Verification artifact (anchor `fc22b40`):**
+- `.venv/bin/ruff check .` → *All checks passed!*
+- `.venv/bin/lint-imports` → *Contracts: 2 kept, 0 broken* (pure core stays pure; adapters fetch only)
+- `./manage.sh test` → **548 passed** (real ephemeral Postgres, 16.6s)
+- CI green on `9440fee` (substrate `ci-green` marker, PR #1); `fc22b40` pushed with this release.
+
+**Headline proofs (real-Postgres integration, DB-witnessed):**
+- *Reviewer-actor binding (website):* `test_wrong_actor_type_rejected_422` ·
+  `test_actor_id_mismatch_rejected_422` · `test_valid_reviewer_actor_accepted`
+  · parametrized `test_reviewer_actor_reason` (valid / wrong-type / mismatch /
+  both-blank / whitespace / trailing-ws-stripped / missing-reviewer_id).
+- *Reviewer-actor binding (manual-approve — fix wave, spec §8.7):*
+  `test_manual_approve_bad_actor_rejected_422` (wrong_actor_type /
+  actor_id_mismatch / both_blank_equal / both_whitespace_equal → 422) ·
+  `test_manual_approve_rejected_leaves_no_rows` (no orphan event/decision/audit).
+- *Pre-upgrade skip (event queued under the old floor drains as an audited skip,
+  not honored):* `test_pre_upgrade_bad_actor_skipped_at_decide` ·
+  `test_pre_upgrade_wrong_type_skipped_at_decide` ·
+  `test_pre_upgrade_wrong_case_skipped_at_decide` · (fix wave, completes the
+  skip-reason set) `test_pre_upgrade_task_missing_skipped_at_decide` ·
+  `test_pre_upgrade_blank_task_id_skipped_at_decide`.
+- *Concurrency one-winner:* `test_two_completions_one_close_one_skip` ·
+  `test_winner_deadletters_then_second_wins`.
+- *Atomic decide-txn rollback→retry (fix wave, spec §8.5):*
+  `test_decide_txn_rollback_then_retry_completes_exactly_once` — a fault after
+  the close+`+10` are staged rolls the whole txn back (task stays open, no check,
+  no decision); the automatic retry closes cleanly with the +10 applied exactly
+  once (no supersession chain left behind).
+- *Blocked-broker atomic (DECIDE short-circuit still closes + writes the check):*
+  `test_blocked_broker_completion_closes_task_and_writes_check`.
+- *Actor-derived persistence (not payload; stripped):*
+  `test_persists_actor_derived_reviewer_not_payload` · (manual-approve, fix wave)
+  `test_manual_approve_valid_reviewer_actor_persists_stripped_reviewer_id`.
+- *Composer:* production 403 on both sensitive types
+  (`test_composer_bars_sensitive_types_in_production`, both types) and only those
+  (`test_composer_allows_scoring_events_in_production`); dev composer sends a
+  genuine reviewer actor that passes the SAME floor, end-to-end (fix wave,
+  spec §8.8) `test_composer_website_review_completed_binds_reviewer_actor`.
+- *Cutover recovery (forced-stop attempt not consumed; zero-running assert):*
+  `test_final_attempt_running_is_requeued_not_deadlettered` ·
+  `test_unexpired_lease_running_is_requeued` ·
+  `test_idempotent_and_zero_running_after`.
+
+**Fix wave `fc22b40` (final-review remediation, test-only + 1-line source):**
+`ingest.py` `_handle_manual_approve` now `.strip()`s the persisted actor-derived
+`reviewer_id` (aligns the Salesforce "Manual Approved By" projection with the
+website path); the remaining four changes are the spec-§8-enumerated tests listed
+above (manual-approve floor matrix + rollback, decide-txn rollback→retry, dev
+composer binding, `task_missing` decide branch). No migration, no fixture-inference
+change, `KYC_ENFORCE_POSITIVE_DECISIONS` untouched.
+
+**Docs:** ADR-004 in `docs/architecture-decisions.md`; `docs/DEPLOYMENT.md` §9
+(brief full maintenance-window cutover); `docs/RUNBOOK.md` composer-bar note;
+`docs/PLATFORM_INTEGRATION.md` §3 reviewer-actor requirement; `docs/OVERVIEW.md`;
+`.agents/ROADMAP.md` (item 11 shipped; the PR-10 ADR reservations renumbered to
+ADR-005).
+
+**Codex — your round.** Audit the PR 5b code range **`1eaab22..fc22b40`** (Tasks
+1–6 + the final-review fix wave; the spec/plan commits before `1eaab22` are
+already AUDIT-CLEAN at `32c8130`) for correctness, security, and conformance to
+`AGENTS.md` / `AUDIT_FINDINGS.md` / `.agents/ROADMAP.md`. Verify every finding
+against the actual code and discard anything speculative. Append one Log entry:
+`AUDIT [CODEX] <date> — 1eaab22..fc22b40` with numbered P1/P2/P3 findings
+(file:line, why real, how to trigger), or
+`AUDIT-CLEAN [CODEX] <date> — 1eaab22..fc22b40`. Edit only this file.
+turn: CODEX (audit).
+
 ### SIGN-OFF [HUMAN via CLAUDE] 2026-07-20 — PR 5b PLAN approved → implementation
 Human approved the TDD implementation plan (`bff859d`,
 `.agents/superpowers/plans/2026-07-20-pr5b-review-record-binding-plan.md`, 7
