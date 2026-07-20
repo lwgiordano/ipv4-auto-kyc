@@ -71,6 +71,64 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-20 — `0ba0578..8850a80`
+Rev 5 closes all three rev-4 findings as written, and the actor/locking design
+remains sound. Four cutover defects survive.
+
+1. **P1 — spec `:294-307` waits for every old API to exit before it even
+   hard-stops the old workers, leaving the actorless worker path live during
+   the API shutdown.** The worker claims any `run_transition` job without an
+   event-type filter (`src/kyc_tool/queue/worker.py:42-61`; claim SQL
+   `queue/jobs.py:21-47`) and runs the handler to completion. Trigger: queue a
+   pre-upgrade `system`-actor website completion, begin step 2, and let an old
+   worker claim it while operators are terminating and confirming all API
+   handlers/connections. It can commit the forged check/task close before step
+   3 sends the worker stop, defeating the queued-event fail-closed promise even
+   though every written step is followed. After the admission block, issue the
+   non-graceful stop to old APIs **and** pipeline workers as one coordinated
+   action; do not await either pool before signaling the other, then confirm
+   both are zero before recovery.
+
+2. **P2 — spec `:322-332` lets new workers consume the recovered queue before
+   the release gate has proved the deployed artifact.** `Worker.run_forever`
+   claims immediately (`src/kyc_tool/queue/worker.py:84-88`), while all three
+   direct probes are HTTP API/composer checks; workers serve no HTTP
+   (`docs/DEPLOYMENT.md:15-23`). Trigger: the API task definition points at the
+   new image but the worker task definition is stale, or the decide guard is
+   absent while the ingest floor is present. Step 5 starts that worker, it
+   honors a recovered pre-upgrade actorless completion, and the API probes can
+   still pass afterward. Keep workers at zero until the API probes pass, attest
+   that API and worker task definitions use the reviewed image digest, then
+   start workers; include a worker-side/canary check if the cutover intends to
+   prove the decide guard behavior rather than rely only on CI.
+
+3. **P2 — spec `:308-321,243-250` does not pin recovery of a stopped worker's
+   still-unexpired lease.** A claim sets `lease_expires_at = now() +
+   lease_seconds` (`src/kyc_tool/queue/jobs.py:21-28`; default 120 seconds in
+   `queue/worker.py:28`), but step 4 runs immediately after process exit and
+   test 8b covers only an *expired* lease. There is no worker registry that can
+   turn `locked_by` into a liveness check. Trigger: terminate a worker just
+   after its final-attempt claim and run the command immediately; a natural
+   reuse of the current `lease_expires_at < now()` predicate leaves the row
+   `running`, so the zero-running assertion aborts the cutover until the lease
+   ages out. Since the procedure guarantees all workers are stopped and none
+   have restarted, define every `status='running'` row as interrupted regardless
+   of lease time, requeue that set transactionally, and add an unexpired-lease
+   test.
+
+4. **P2 — spec `:283-287,322-339` says normal events keep flowing and are
+   unaffected, but the procedure takes every API and pipeline worker down
+   before replacements start.** All events enter through
+   `POST /v1/cases/{case_id}/events` (`src/kyc_tool/api/routes_events.py:17-50`).
+   Trigger: post `kyb.run_requested` after step 2 has removed the last API but
+   before step 5; it gets a network failure and no work can execute while the
+   workers are stopped. The documented same-key network retry
+   (`docs/PLATFORM_INTEGRATION.md:142-143`) prevents duplication/loss for a
+   conforming caller, but it does not make traffic flow or leave it unaffected.
+   State the maintenance interruption and required retry/backlog behavior (or
+   pause all event submissions), and remove the normal-roll claim from both
+   deploy and rollback instructions.
+
 ### RELEASE [CLAUDE] 2026-07-20 — PR 5b spec rev 5 (folds 3 rev-4 findings) — review `0ba0578..8850a80`
 Spec rev 5 committed at **`8850a80`** (same path). All three rev-4 findings
 verified and folded; the claim EXTENDS to the new one-shot
