@@ -146,3 +146,65 @@ def test_requeue_dead_job_resets_failed_run(client, engine, post_event):
         ).one()
     assert job_status == "queued"
     assert run_state == "QUEUED"
+
+
+def _admin_headers() -> dict[str, str]:
+    return {"Authorization": "Bearer t"}
+
+
+@pytest.fixture()
+def prod_ui_client(settings, session_factory, policy, clean_db) -> TestClient:
+    """Production-hardened settings (shape of `hardened()` in
+    tests/unit/test_production_config.py) with the ops console enabled and an
+    admin token set, so the composer's production bar (PR 5b Task 4) can be
+    exercised end-to-end against the real ephemeral Postgres."""
+    prod_settings = settings.model_copy(
+        update={
+            "environment": "production",
+            "auth_disabled": False,
+            "platform_hmac_secret": "s" * 40,
+            "platform_callback_url": "https://platform.example/kyc",
+            "object_store": "s3",
+            "s3_bucket": "kyc-evidence",
+            "ocr_engine": "tesseract",
+            "email_provider": "ses",
+            "adapters_profile": "real",
+            "read_auth_required": True,
+            "ui_enabled": True,
+            "ui_admin_token": "t",
+            "hmac_inbound_key_id": "kyc-platform-1",
+            "hmac_inbound_secret": "i" * 40,
+            "hmac_outbound_key_id": "kyc-tool-1",
+            "hmac_outbound_secret": "o" * 40,
+            "hmac_v1_inbound_sunset_at": "2026-09-01T00:00:00Z",
+            "hmac_v1_outbound_sunset_at": "2026-10-01T00:00:00Z",
+            "hmac_v1_observation_window_days": 14,
+        }
+    )
+    return TestClient(create_app(prod_settings, session_factory=session_factory, policy=policy))
+
+
+SENSITIVE = ["website.review_completed", "reviewer.manual_approve"]
+
+
+@pytest.mark.parametrize("event_type", SENSITIVE)
+def test_composer_bars_sensitive_types_in_production(prod_ui_client, event_type):
+    r = prod_ui_client.post(
+        "/ui/api/send-event",
+        json={"case_id": "c1", "event_type": event_type, "payload": {}},
+        headers=_admin_headers(),
+    )
+    assert r.status_code == 403
+
+
+def test_composer_allows_scoring_events_in_production(prod_ui_client):
+    r = prod_ui_client.post(
+        "/ui/api/send-event",
+        json={
+            "case_id": "c1",
+            "event_type": "kyb.run_requested",
+            "payload": {"company_legal_name": "Acme"},
+        },
+        headers=_admin_headers(),
+    )
+    assert r.status_code != 403

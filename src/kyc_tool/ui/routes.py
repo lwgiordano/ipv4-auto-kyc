@@ -363,13 +363,29 @@ async def send_event(request: Request) -> JSONResponse:
         raise HTTPException(status_code=422, detail="case_id required")
     idempotency_key = body.get("idempotency_key") or f"console-{uuid.uuid4().hex}"
 
+    event_type = body.get("event_type")
+    raw_payload = body.get("payload") or {}
+
+    _SENSITIVE = {"website.review_completed", "reviewer.manual_approve"}
+    settings = request.app.state.settings
+    if settings.environment == "production" and event_type in _SENSITIVE:
+        raise HTTPException(
+            status_code=403, detail="composer cannot submit reviewer events in production"
+        )
+
+    if event_type in _SENSITIVE:
+        rid = raw_payload.get("reviewer_id") or "ops-console"
+        actor = {"type": "reviewer", "id": rid}
+    else:
+        actor = {"type": "system", "id": "ops-console"}
+
     try:
         envelope = EventEnvelope.model_validate(
             {
-                "event_type": body.get("event_type"),
+                "event_type": event_type,
                 "occurred_at": datetime.now(UTC).isoformat(),
-                "actor": {"type": "system", "id": "ops-console"},
-                "payload": body.get("payload") or {},
+                "actor": actor,
+                "payload": raw_payload,
             }
         )
         payload = envelope.validated_payload()
