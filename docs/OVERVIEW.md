@@ -343,11 +343,19 @@ hiding the controls, is the actual boundary for reviewer events.
 
 - **Code changes** ship as standard rolling container deploys — tested in CI,
   rolled out with zero downtime, and reversible by redeploying the prior image;
-  RDS/S3 data is untouched. **Exception:** a release carrying a non-hot migration
-  uses a brief stop/migrate/start instead of a rolling deploy — notably PR 5a's
-  migration 010, which drops a unique the old image still needs and becomes
-  forward-only once two cases have reused an idempotency key
-  (`docs/DEPLOYMENT.md` §2/§6).
+  RDS/S3 data is untouched. **Exceptions — some releases are NOT rolling:**
+  (1) a release carrying a **non-hot migration** uses a brief stop/migrate/start
+  instead of a rolling deploy — notably PR 5a's migration 010, which drops a
+  unique the old image still needs and becomes forward-only once two cases have
+  reused an idempotency key (`docs/DEPLOYMENT.md` §2/§6); (2) a
+  **security-sensitive non-hot code cutover** — a release with **no migration**
+  whose fix only holds if no old replica serves traffic during rollout — uses a
+  brief full maintenance window (all API + workers stopped together, no old/new
+  overlap), notably PR 5b's reviewer-actor binding, where an old API would still
+  apply `reviewer.manual_approve` with no actor floor and an old worker would
+  still close a queued `system`-actor completion, reopening the exact forgery the
+  release closes (`docs/DEPLOYMENT.md` §9; ADR-004). A release that ships its own
+  cutover instructions overrides this generic rolling default.
 - **Settings** (URLs, secrets, toggles) are environment variables, changed in
   the hosting config with no code change.
 - **Scoring rules** (points, threshold, blocklist) are data-driven and
