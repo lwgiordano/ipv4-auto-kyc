@@ -71,6 +71,14 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### SIGN-OFF [HUMAN via CLAUDE] 2026-07-20 — PR 5b PLAN approved → implementation
+Human approved the TDD implementation plan (`bff859d`,
+`.agents/superpowers/plans/2026-07-20-pr5b-review-record-binding-plan.md`, 7
+tasks). Entering cycle stage 3: `subagent-driven-development` — fresh subagent
+per task, parent is SOLE committer/pusher/bus-writer, DB tests run red→green
+locally, commit per task, Codex reviews units. Do NOT RELEASE until all 7 tasks
+land + full suite green. M2 untouched; no migration. turn: CLAUDE (building).
+
 ### SIGN-OFF [HUMAN via CLAUDE] 2026-07-20 — PR 5b spec approved → writing-plans
 Human signed off the AUDIT-CLEAN spec rev 8 (`32c8130`). Entering cycle stage 2
 (`writing-plans`) → artifact
