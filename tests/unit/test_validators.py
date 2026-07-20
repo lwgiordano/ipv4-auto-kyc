@@ -197,11 +197,14 @@ def test_document_conflicting_with_registry_stamps_hard_conflict():
 
 
 def test_website_reviewer_verdict_maps_to_check():
-    passed = website_intent({"result": "pass", "reviewer_id": "rev-1", "task_id": "t1"})
+    # reviewer_id is now the actor-derived trusted id (PR 5b), passed explicitly
+    # by the caller rather than read from the payload.
+    passed = website_intent({"result": "pass", "reviewer_id": "rev-1", "task_id": "t1"}, "rev-1")
     assert passed.status is CheckStatus.PASS
     assert passed.source == "reviewer:rev-1"
     failed = website_intent(
-        {"result": "fail", "reviewer_id": "rev-1", "task_id": "t1", "reason_codes": ["website_parked"]}
+        {"result": "fail", "reviewer_id": "rev-1", "task_id": "t1", "reason_codes": ["website_parked"]},
+        "rev-1",
     )
     assert failed.status is CheckStatus.FAIL
     assert failed.reason_codes == ("website_parked",)

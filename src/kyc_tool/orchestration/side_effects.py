@@ -176,24 +176,39 @@ class SideEffects:
     # ---- event effects (decide txn, after intents are built) ---------------
 
     def on_event(
-        self, session: Session, case: Case, event, intents: list[CheckIntent]
+        self,
+        session: Session,
+        case: Case,
+        event,
+        intents: list[CheckIntent],
+        *,
+        website_guard=None,
+        website_task: ReviewTask | None = None,
     ) -> None:
         if event.event_type == "website.review_completed":
             payload = event.payload_json or {}
-            task = session.get(ReviewTask, payload.get("task_id", ""))
-            if task is not None and task.case_id == case.id and task.status == "open":
-                task.status = "done"
-                task.result = payload.get("result")
-                task.reviewer_id = payload.get("reviewer_id")
-                task.reason_codes = list(payload.get("reason_codes", []))
-                task.completed_at = datetime.now(UTC)
+            if website_guard is not None and website_guard.eligible and website_task is not None:
+                website_task.status = "done"
+                website_task.result = payload.get("result")
+                website_task.reviewer_id = website_guard.reviewer_id  # actor-derived, trusted
+                website_task.reason_codes = list(payload.get("reason_codes", []))
+                website_task.completed_at = datetime.now(UTC)
                 audit(
                     session,
                     "review_task.completed",
                     case_id=case.id,
-                    task_id=task.id,
-                    result=task.result,
-                    actor=task.reviewer_id or "unknown",
+                    task_id=website_task.id,
+                    result=website_task.result,
+                    actor=website_guard.reviewer_id,
+                )
+            elif website_guard is not None and not website_guard.eligible:
+                audit(
+                    session,
+                    "review_task.completion_skipped",
+                    case_id=case.id,
+                    task_id=website_guard.task_id,
+                    reason=website_guard.skip_reason,
+                    event_id=event.id,
                 )
         elif event.event_type == "poc.token_verified":
             verified = any(

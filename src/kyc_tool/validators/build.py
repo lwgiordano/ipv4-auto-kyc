@@ -45,7 +45,9 @@ def build_intents(policy: PolicyBundle, ctx: ValidationContext) -> list[CheckInt
         )
 
     if ctx.event_type == "website.review_completed":
-        intents.append(website_intent(ctx.event_payload))
+        guard = ctx.extras.get("website_guard")
+        if guard is not None and guard.eligible:
+            intents.append(website_intent(ctx.event_payload, guard.reviewer_id))
 
     if ctx.event_type == "poc.token_verified":
         intents.append(poc_token_intent(ctx.event_payload, ctx.extras, ctx.case_snapshot))

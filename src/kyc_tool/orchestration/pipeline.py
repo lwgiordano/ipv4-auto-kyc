@@ -39,6 +39,7 @@ from kyc_tool.domain.models import (
     DecisionResult,
     RunState,
 )
+from kyc_tool.events import review_guard
 from kyc_tool.orchestration.rate_limit import RateLimiter
 from kyc_tool.orchestration.side_effects import SideEffects
 from kyc_tool.orchestration.triggers import RunPlan, plan_for
@@ -304,6 +305,20 @@ class Pipeline:
             if not self._hop(session, run_id, from_state, RunState.PUBLISH_DECISION):
                 return  # another attempt already decided
 
+            # Authoritative website-completion guard (PR 5b): the case is
+            # already FOR UPDATE from _load above, so locking the referenced
+            # ReviewTask here preserves a consistent case→task lock order.
+            # Evaluated once, unconditionally on from_state (VALIDATE or the
+            # broker-blocked short-circuit DECIDE), from the PERSISTED event —
+            # re-validated even though ingest already checked it, because an
+            # event queued before this deploy never saw that floor.
+            website_guard = None
+            website_task = None
+            if event.event_type == "website.review_completed":
+                website_guard, website_task = review_guard.evaluate_website_completion(
+                    session, case.id, event
+                )
+
             # VALIDATE (logical stage)
             intents: list[CheckIntent] = []
             if from_state is RunState.VALIDATE:  # short-circuit path skips validators
@@ -326,7 +341,7 @@ class Pipeline:
                     event_payload=dict(event.payload_json or {}),
                     adapter_outputs=adapter_outputs,
                     live_checks=live_views,
-                    extras=self._validation_extras(session, case, event),
+                    extras=self._validation_extras(session, case, event, website_guard=website_guard),
                 )
                 intents = list(self.intent_builder(self.policy, ctx))
             audit(
@@ -354,7 +369,10 @@ class Pipeline:
                 run_id=run_id,
             )
             if self.side_effects is not None:
-                self.side_effects.on_event(session, case, event, intents)
+                self.side_effects.on_event(
+                    session, case, event, intents,
+                    website_guard=website_guard, website_task=website_task,
+                )
             audit(session, "run.stage", case_id=case.id, run_id=run_id, stage="WRITE_CHECKS",
                   written=len(intents))
 
@@ -421,9 +439,13 @@ class Pipeline:
                 partial=run.partial,
             )
 
-    def _validation_extras(self, session: Session, case: Case, event: Event) -> dict:
+    def _validation_extras(
+        self, session: Session, case: Case, event: Event, *, website_guard=None
+    ) -> dict:
         """DB reads the pure validators need, gathered here (they can't fetch)."""
         extras: dict = {}
+        if website_guard is not None:
+            extras["website_guard"] = website_guard
         if event.event_type == "poc.token_verified":
             rows = session.execute(
                 text(
