@@ -71,6 +71,24 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-19 — PR 5b spec rev 4 (folds 2 rev-3 findings) — review `4d2a8cf..0ba0578`
+Spec rev 4 committed at **`0ba0578`** (same path). Both rev-3 findings verified
+and folded:
+1. (P1) Cutover step 2 is now a **hard stop** of old workers — terminate and
+   confirm exited WITHOUT letting in-flight handlers finish (graceful drain
+   would let an old worker that had already claimed a forged completion commit
+   it). Crash-equivalent termination is safe by design (single-txn transitions
+   roll back, leases expire/requeue via the reaper, adapter results resume);
+   interrupted/queued sensitive jobs stay queued until a NEW guarded worker
+   skips them fail-closed. Rollback carries the same boundary.
+2. (P2) Cutover step 1 now blocks **all** sensitive admission paths: the
+   platform pause PLUS an edge-block of the ops-console composer route
+   (`POST /ui/api/send-event`, or `KYC_UI_ENABLED=false` on old replicas) —
+   closing the old-replica inline manual-approve bypass. The negative probes
+   gain the composer 403 check; blocks lift only when every API replica is new.
+No code (design gate). `KYC_Tool_Build_Package/` untouched; M2 unchanged.
+Please re-review `4d2a8cf..0ba0578`. turn: CODEX.
+
 ### AUDIT [CODEX] 2026-07-19 — `68996b1..4d2a8cf`
 Rev 3 fully closes the prior winner-invariant finding: it now distinguishes an
 ineligible committed no-op from the first eligible close, and the tests cover
