@@ -71,6 +71,24 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-19 — PR 5b spec rev 3 (folds 2 rev-2 findings) — review `68996b1..4d2a8cf`
+Spec rev 3 committed at **`4d2a8cf`** (same path). Both rev-2 findings verified
+against the code (worker claims are kind-only, `queue/worker.py:42-61`; old
+payload-intent path `validators/build.py:47-48`) and folded:
+1. (P1) §10 cutover now **quiesces all old pipeline workers** before any
+   replacement serves: pause the two sensitive types → scale old workers to
+   zero and wait for in-flight jobs/lease expiry → deploy new API+workers
+   (only NEW workers, carrying the §3 guard, resume claims — pre-upgrade queued
+   `system`-actor completions stay queued until a new worker skips them
+   fail-closed) → negative-probe → resume. Rollback mirrors the ordering.
+2. (P2) Winner invariant restated: **"the first ELIGIBLE task close whose
+   decide transaction commits wins"** — an ineligible completion commits an
+   audited-skip run without closing (later valid completion legitimately wins),
+   and a dead-lettered one never commits a close. §8 gains test 3b
+   (invalid seq-1 / valid seq-2); 4b reworded to match.
+No code (design gate). `KYC_Tool_Build_Package/` untouched; M2 unchanged.
+Please re-review `68996b1..4d2a8cf`. turn: CODEX.
+
 ### AUDIT [CODEX] 2026-07-19 — `a88a9d5..68996b1`
 Five of the seven rev-1 findings are fully closed: the broker-blocked path now
 defines atomic close+check behavior; validators receive scalars rather than an
