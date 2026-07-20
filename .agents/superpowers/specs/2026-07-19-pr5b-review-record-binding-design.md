@@ -1,8 +1,9 @@
-# PR 5b — Review-record binding (design, rev 3)
+# PR 5b — Review-record binding (design, rev 4)
 
-Status: rev 2 Codex-reviewed (5/7 rev-1 findings closed; 2 residual findings
-folded below: cutover worker quiescence, winner-invariant wording) → awaiting
-Codex re-review → human sign-off → `writing-plans`.
+Status: rev 3 Codex-reviewed (winner invariant closed; 2 residual cutover
+findings folded below: hard-stop old workers instead of graceful drain,
+composer edge-block during overlap) → awaiting Codex re-review → human
+sign-off → `writing-plans`.
 Unit: ROADMAP item 11 ("Review-record binding"). Predecessor: PR 5a
 (AUDIT-CLEAN at `2240fc5..28a7f7e`), which built the ingest validation floor and
 explicitly deferred actor trust + task locking to this PR.
@@ -270,26 +271,38 @@ promise for exactly the queued events §3 exists to catch.
 
 Cutover contract (added to `docs/DEPLOYMENT.md`, in scope):
 
-1. **Pause or route away** the two sensitive event types
-   (`website.review_completed`, `reviewer.manual_approve`) at the platform so
-   no old API admits new ones during overlap (normal scoring events keep
-   flowing).
-2. **Quiesce ALL old pipeline workers before any replacement serves:** scale
-   the old workers to zero and wait for in-flight jobs to finish or their
-   leases to expire (the reaper requeues expired leases). After this point no
-   old worker may claim — queued sensitive jobs (including pre-upgrade
-   `system`-actor completions) remain queued until a NEW worker, carrying the
-   §3 guard, claims them and skips them fail-closed.
+1. **Block ALL sensitive admission paths** before anything else — and keep
+   them blocked until every API replica is new:
+   - **platform:** pause or route away `website.review_completed` and
+     `reviewer.manual_approve` (normal scoring events keep flowing);
+   - **ops console:** edge-block the composer mutation route
+     (`POST /ui/api/send-event`) at the load balancer, or set
+     `KYC_UI_ENABLED=false` on the old replicas — an authenticated operator on
+     an **old** replica can otherwise post `reviewer.manual_approve` (applied
+     inline, `system` actor) right through the platform-side pause
+     (`ui/routes.py:355-391`; production permits the UI with an admin token).
+2. **Hard-stop ALL old pipeline workers — do NOT drain gracefully.** Terminate
+   the old worker processes and confirm they have exited **without letting
+   in-flight handlers finish**: an old worker that claimed a sensitive job
+   just before the stop would otherwise complete it with the old actorless
+   semantics (`queue/worker.py:42-74` — claim happens outside the handler
+   txn, then the handler runs to completion). Termination is crash-equivalent
+   and safe **by design** for every job kind: each transition commits in one
+   transaction (open txns roll back), leases expire and the reaper requeues,
+   and adapter results are resumable. Interrupted or queued sensitive jobs
+   (including pre-upgrade `system`-actor completions) stay queued until a NEW
+   worker, carrying the §3 guard, claims them and skips them fail-closed.
 3. Deploy and readiness-verify the new API replicas **and** new workers; only
    new workers resume queue claims.
-4. **Negative-probe** the actor floor on a new replica (a signed `system`-actor
-   completion must 422; a signed manual-approve with a mismatched actor must
-   422) before resuming.
-5. Resume the two event types.
+4. **Negative-probe** before resuming: a signed `system`-actor completion must
+   422; a signed manual-approve with a mismatched actor must 422; the
+   production composer must refuse both sensitive types (403).
+5. Resume the two event types and unblock the console route.
 
-Rollback mirrors it: pause the two types, quiesce the new workers (wait for
-in-flight jobs/leases), redeploy the prior image for API+workers, resume —
-accepting that the prior image restores the pre-PR 5b semantics.
+Rollback mirrors the same safety boundary: block both admission paths
+(platform pause + composer edge-block), hard-stop the new workers (same
+crash-safe termination), redeploy the prior image for API+workers, then
+resume — accepting that the prior image restores the pre-PR 5b semantics.
 Everything else (scoring events) is unaffected and can roll normally. Behavior
 change at the contract surface: completions/manual-approvals must now carry a
 consistent reviewer actor; pre-upgrade queued events with invalid actors are
