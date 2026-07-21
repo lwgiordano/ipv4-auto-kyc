@@ -1,4 +1,4 @@
-# PR 6 — Per-run policy bundle pinning Implementation Plan (rev 5)
+# PR 6 — Per-run policy bundle pinning Implementation Plan (rev 6)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. Parent session is the SOLE committer/pusher/bus-writer (Claude⇄Codex bus discipline); subagents implement + hand diffs back.
 
@@ -10,7 +10,7 @@
 
 **Spec:** `.agents/superpowers/specs/2026-07-21-pr6-policy-bundle-pinning-design.md` (Codex AUDIT-CLEAN at rev 7, `41a3b3b`). Read the cited §sections for rationale.
 
-**Rev 5 (Codex plan-review round 4, `70451d8`):** the tests now resist implementation mutations — every guard §8 names is pinned by a test that would fail if the guard were deleted. Task 6 attestation drives the **real `pipeline_worker.build_worker()`** seam (both flag states) and, on a corrupt process-bundle row, asserts it raises *before* returning a Worker + the queued job stays **wholly unclaimed** (`queued`/`attempts=0`/`locked_by IS NULL`), §8.2/§8.18. Task 10 adds runnable §8.15 rejections — the activation **CLI** with a mismatched `--expect-bundle-hash`, `activate_epoch` with a mismatched engine, and the unknown-bundle **FK** — replacing the prose instruction. Task 4 adds the parameterized §8.16 **nonblank-CHECK** negative tests (blank + whitespace on epoch/runs/decisions engine-id and checks bundle-hash). Task 6 topology **constructs `build_publisher()` / runs `retention.main()`** in isolated interpreters with the policy tree absent (catching a lazy import an import-only probe would miss), §8.17. Task 5 adds an insert-path read-back test that forces a fresh insert's read-back to fail (monkeypatched `_encode_files`), §8.2. **Rev 4 (Codex plan-review round 3, `b64b126`):** the §8 proofs now actually exercise the behaviors — Tasks 7 & 9 inject real adapters (a counting `rir_poc` witness for §8.7 *zero adapter calls*; `_OkEmailAdapter` so the cross-bundle check is really written/stamped) instead of the vacuous `adapters={}`; Task 8's mixed-era test asserts the `control_proof` **gate flip** + score 10-vs-83 (§8.8b's exact `verified_email` example) and Task 8's decide threads the **resolved** `threshold`/`allowed_broker_statuses` uniformly; Task 9 adds the `approve`-under-X / `manual_review_insufficient`-under-Y **decision** divergence (via a threshold-Y bundle) and turns the flag-off/broker/cascade prose into runnable tests; Task 6 uses `structlog.testing.capture_logs()` (not `caplog`, blind to `PrintLoggerFactory`) + a "claims zero jobs" witness; Task 10's recovery/rollback tests requeue **then** score-under-pinning / decide-exactly-once; and the Task-4 deferral prose, the `_bundle_helpers.py` creation (now Task 5), the missing `pytest`/`text` imports, and all three ops `main()`s are resolved. **Rev 3 (Codex plan-review round 2, `6e45a63`):** every remaining test snippet is now runnable against the live schemas — event payloads use the real required fields (`email.verified`=email+domain+verified_at, `poc.submitted`=rir+poc_handle); migration/preflight fixtures insert valid FK chains (`events`+`runs.triggering_event_id`) and the real `jobs.payload_json`; `make_bundle_y` edits `scoring_rubric.json["items"]`; the callback assertion uses the real keys `type`/`points`; `PolicyBundle` imports from `policy.loader`; `_decode_files` is byte-level (key-set check moved to `load_bundle`) so the non-ASCII round-trip works; the framed-hash move test does a real equal-byte transfer + a non-`domain/` `broker_gate.py` case; and the attestation, activation-recovery, rollback, epoch-alert tests and the three ops CLIs are complete code (no `Add:`/"mirror" prose). **Rev 2 (`9d8b82e`):** removed `...`/`RAW=None`/`pytest.raises(Exception)`/"mirror"/"or inline"; preflight rejects NULL/absent/corrupt; strict base64; all downgrade surfaces; real `review-package` path.
+**Rev 6 (Codex plan-review round 5, `77a36b5`):** four narrowly-scoped mutation gaps closed. §8.15 activation now drives the CLI through its two *dangerous operator paths* — a **valid, seeded** Y refused by the CLI's local-bundle comparison (X running), and an engine mismatch **through the CLI** (not `activate_epoch` directly) — each asserting **no epoch is written** (a bare unknown-hash only proved store-absence). The topology helper parses a **unique sentinel line** (retention's `retention_pruned` log made `stdout.strip()=="True"` a false-negative that masked a lazy import). The `build_worker` attestation test re-adds `rec["bundle_hash"] == bundle_x().bundle_hash` (§8.18's deployment witness). And the seed/attest seam is pinned to **`dev_worker.main()` immediately after `load_policy`, before the demo `store.put`/Worker/thread** (dev_worker has only `main()`, no builder — verify-before-claim, spec:165-173). **Rev 5 (Codex plan-review round 4, `70451d8`):** the tests now resist implementation mutations — every guard §8 names is pinned by a test that would fail if the guard were deleted. Task 6 attestation drives the **real `pipeline_worker.build_worker()`** seam (both flag states) and, on a corrupt process-bundle row, asserts it raises *before* returning a Worker + the queued job stays **wholly unclaimed** (`queued`/`attempts=0`/`locked_by IS NULL`), §8.2/§8.18. Task 10 adds runnable §8.15 rejections — the activation **CLI** with a mismatched `--expect-bundle-hash`, `activate_epoch` with a mismatched engine, and the unknown-bundle **FK** — replacing the prose instruction. Task 4 adds the parameterized §8.16 **nonblank-CHECK** negative tests (blank + whitespace on epoch/runs/decisions engine-id and checks bundle-hash). Task 6 topology **constructs `build_publisher()` / runs `retention.main()`** in isolated interpreters with the policy tree absent (catching a lazy import an import-only probe would miss), §8.17. Task 5 adds an insert-path read-back test that forces a fresh insert's read-back to fail (monkeypatched `_encode_files`), §8.2. **Rev 4 (Codex plan-review round 3, `b64b126`):** the §8 proofs now actually exercise the behaviors — Tasks 7 & 9 inject real adapters (a counting `rir_poc` witness for §8.7 *zero adapter calls*; `_OkEmailAdapter` so the cross-bundle check is really written/stamped) instead of the vacuous `adapters={}`; Task 8's mixed-era test asserts the `control_proof` **gate flip** + score 10-vs-83 (§8.8b's exact `verified_email` example) and Task 8's decide threads the **resolved** `threshold`/`allowed_broker_statuses` uniformly; Task 9 adds the `approve`-under-X / `manual_review_insufficient`-under-Y **decision** divergence (via a threshold-Y bundle) and turns the flag-off/broker/cascade prose into runnable tests; Task 6 uses `structlog.testing.capture_logs()` (not `caplog`, blind to `PrintLoggerFactory`) + a "claims zero jobs" witness; Task 10's recovery/rollback tests requeue **then** score-under-pinning / decide-exactly-once; and the Task-4 deferral prose, the `_bundle_helpers.py` creation (now Task 5), the missing `pytest`/`text` imports, and all three ops `main()`s are resolved. **Rev 3 (Codex plan-review round 2, `6e45a63`):** every remaining test snippet is now runnable against the live schemas — event payloads use the real required fields (`email.verified`=email+domain+verified_at, `poc.submitted`=rir+poc_handle); migration/preflight fixtures insert valid FK chains (`events`+`runs.triggering_event_id`) and the real `jobs.payload_json`; `make_bundle_y` edits `scoring_rubric.json["items"]`; the callback assertion uses the real keys `type`/`points`; `PolicyBundle` imports from `policy.loader`; `_decode_files` is byte-level (key-set check moved to `load_bundle`) so the non-ASCII round-trip works; the framed-hash move test does a real equal-byte transfer + a non-`domain/` `broker_gate.py` case; and the attestation, activation-recovery, rollback, epoch-alert tests and the three ops CLIs are complete code (no `Add:`/"mirror" prose). **Rev 2 (`9d8b82e`):** removed `...`/`RAW=None`/`pytest.raises(Exception)`/"mirror"/"or inline"; preflight rejects NULL/absent/corrupt; strict base64; all downgrade surfaces; real `review-package` path.
 
 ## Global Constraints
 
@@ -498,12 +498,17 @@ Spec §5, §7 (P1.1/P2.4). One `seed_and_verify` interface; attest only after ve
 import os, subprocess, sys
 
 def _seam_imports_policy_store(seam_code: str, database_url: str) -> bool:
-    code = f"import sys\n{seam_code}\nprint('kyc_tool.policy_store' in sys.modules)\n"
+    # retention.main() logs `retention_pruned` to stdout BEFORE our marker, so a bare
+    # `stdout.strip() == "True"` false-negatives on "log-line\nTrue" (reads as False,
+    # masking a real lazy import). Parse a UNIQUE sentinel line instead.
+    code = (f"import sys\n{seam_code}\n"
+            "print('POLICY_STORE_IMPORTED=' + str('kyc_tool.policy_store' in sys.modules))\n")
     env = {**os.environ, "KYC_POLICY_DIR": "/nonexistent-policy-dir",  # policy files ABSENT
            "KYC_DATABASE_URL": database_url}
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
-    return out.stdout.strip() == "True"
+    marker = next(l for l in out.stdout.splitlines() if l.startswith("POLICY_STORE_IMPORTED="))
+    return marker.split("=", 1)[1] == "True"
 
 def test_outbox_publisher_constructs_without_policy_store(migrated):
     assert _seam_imports_policy_store(
@@ -523,6 +528,7 @@ import pytest
 import structlog
 from sqlalchemy import text
 from kyc_tool.policy_store import repo as store
+from tests.integration._bundle_helpers import bundle_x
 
 def test_pipeline_worker_startup_attests_and_refuses_corrupt(
         session_factory, settings, engine, clean_db, post_event, monkeypatch):
@@ -535,7 +541,8 @@ def test_pipeline_worker_startup_attests_and_refuses_corrupt(
             worker = pipeline_worker.build_worker()
         assert worker is not None
         rec = next(r for r in logs if r.get("event") == "bundle_pinning_ready")
-        assert rec["flag"] is flag and rec["engine_build_id"] == "eng-1"
+        assert (rec["flag"] is flag and rec["engine_build_id"] == "eng-1"
+                and rec["bundle_hash"] == bundle_x().bundle_hash)   # §8.18 deployment witness
     # CORRUPT process-bundle row (the single seeded row) → build_worker RAISES before
     # returning a Worker; nothing attested AND the queued job stays WHOLLY unclaimed (§8.2).
     with engine.begin() as c:
@@ -554,7 +561,11 @@ def test_pipeline_worker_startup_attests_and_refuses_corrupt(
         assert job.status == "queued" and job.attempts == 0 and job.locked_by is None  # unclaimed
 ```
 - [ ] **Step 2 — run red** → FAIL.
-- [ ] **Step 3 — implement.** In `policy_store/repo.py`: `seed_and_verify(session_factory, policy_dir)` = `with uow(session_factory) as s: h = store_bundle(s, read_policy_files(policy_dir)); return h` (raises `BundleCorrupt` on a corrupt existing row → caller fails startup); `attest(*, flag, bundle_hash)` = `log.info("bundle_pinning_ready", flag=flag, bundle_hash=bundle_hash, engine_build_id=ENGINE_BUILD_ID)` (module `log = structlog.get_logger(__name__)`). Fold the seam into **`pipeline_worker.build_worker()`, `dev_worker`'s builder, and the `api/app.py` factory**: after `load_policy`, call `h = seed_and_verify(session_factory, settings.policy_dir)` then `attest(flag=settings.enforce_bundle_pinning, bundle_hash=h)` **before** returning the Worker / serving — so a corrupt row raises before any job can be claimed. Do **not** import `policy`/`policy_store` in `outbox_worker.py`/`retention.py`.
+- [ ] **Step 3 — implement.** In `policy_store/repo.py`: `seed_and_verify(session_factory, policy_dir)` = `with uow(session_factory) as s: h = store_bundle(s, read_policy_files(policy_dir)); return h` (raises `BundleCorrupt` on a corrupt existing row → caller fails startup); `attest(*, flag, bundle_hash)` = `log.info("bundle_pinning_ready", flag=flag, bundle_hash=bundle_hash, engine_build_id=ENGINE_BUILD_ID)` (module `log = structlog.get_logger(__name__)`). Fold the seam into the three real startup paths — after `load_policy(settings.policy_dir)` and **before** any evidence seeding / Worker construction / thread start, so a corrupt row raises before any job can be claimed:
+- `pipeline_worker.build_worker()` — after `policy = load_policy(...)`, before `Worker(...)` is returned.
+- `dev_worker.main()` — after `policy = load_policy(...)`, **before** the demo `store.put("uploads/doc.json", …)`, the `Pipeline`/`Worker`, and `threading.Thread(...).start()` (dev_worker has only `main()`, no builder — placement is exact, not "a builder").
+- `api/app.py` `create_app(...)` — after `policy = policy or load_policy(...)`, before the app serves.
+In each: `h = seed_and_verify(session_factory, settings.policy_dir)` then `attest(flag=settings.enforce_bundle_pinning, bundle_hash=h)`. Do **not** import `policy`/`policy_store` in `outbox_worker.py`/`retention.py`.
 - [ ] **Step 4 — run green** → PASS.
 - [ ] **Step 5 — commit** `feat(pr6): startup seed_and_verify + attestation (api/pipeline only)`.
 
@@ -1048,22 +1059,40 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
 
 # §8.15 activation identity gate — three runnable rejections (each pins a guard whose
 # removal would otherwise leave the suite green):
-def test_activate_cli_rejects_bundle_hash_mismatch(session_factory, settings, clean_db, monkeypatch):
-    # CLI main() compares the LOCALLY loaded bundle (settings.policy_dir = normative X)
-    # to --expect-bundle-hash; a stale/other hash must refuse activation.
+def test_activate_cli_refuses_valid_but_wrong_bundle(
+        session_factory, settings, tmp_path, clean_db, monkeypatch):
+    # Both X and Y are SEEDED (both loadable). The running process is X
+    # (settings.policy_dir = normative). Activating a valid, seeded Y must be refused
+    # by the CLI's LOCAL-bundle comparison — NOT by store-absence. Deleting that
+    # comparison would let activate_epoch accept the historical Y, so this pins §8.15.
+    from tests.integration._bundle_helpers import make_bundle_y
+    from kyc_tool.policy.loader import read_policy_files
+    ydir, by = make_bundle_y(tmp_path, threshold=101)
+    with session_factory() as s:
+        store.store_bundle(s, raw_x())
+        store.store_bundle(s, read_policy_files(ydir)); s.commit()
+    monkeypatch.setattr(epoch_cli, "get_settings", lambda: settings)      # local bundle = X
+    monkeypatch.setattr(sys, "argv",
+                        ["prog", "--expect-bundle-hash", by.bundle_hash, "--expect-engine", "eng-1"])
+    with pytest.raises((SystemExit, store.BundleCorrupt)):
+        epoch_cli.main()
+    with session_factory() as s:
+        assert store.read_epoch(s) is None                                # activation refused
+
+def test_activate_cli_refuses_engine_mismatch(
+        session_factory, settings, clean_db, monkeypatch):
+    # Local X matches --expect-bundle-hash, but --expect-engine != running ENGINE_BUILD_ID.
+    # Driving the CLI (not activate_epoch directly) catches a main() that ignores
+    # --expect-engine and always passes ENGINE_BUILD_ID (which would write the epoch).
     with session_factory() as s:
         store.store_bundle(s, raw_x()); s.commit()
     monkeypatch.setattr(epoch_cli, "get_settings", lambda: settings)
-    monkeypatch.setattr(sys, "argv", ["prog", "--expect-bundle-hash", "0"*64, "--expect-engine", "eng-1"])
-    with pytest.raises(SystemExit):
-        epoch_cli.main()                                     # local X.bundle_hash != 0*64 → refuse
-
-def test_activate_epoch_rejects_engine_mismatch(session_factory, clean_db):
-    # activate_epoch refuses when --expect-engine != the running ENGINE_BUILD_ID.
+    monkeypatch.setattr(sys, "argv",
+                        ["prog", "--expect-bundle-hash", bundle_x().bundle_hash, "--expect-engine", "eng-999"])
+    with pytest.raises((SystemExit, store.BundleCorrupt)):
+        epoch_cli.main()
     with session_factory() as s:
-        h = store.store_bundle(s, raw_x())
-        with pytest.raises(store.BundleCorrupt):
-            store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-999")
+        assert store.read_epoch(s) is None                                # activation refused
 
 def test_epoch_fk_rejects_unknown_bundle(engine, clean_db):
     # the FK forbids an epoch row that points at a bundle_hash not in policy_bundles.
