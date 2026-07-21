@@ -41,17 +41,20 @@ class PolicyBundle:
     salesforce_sync_fields: dict
     shas: dict[str, str]
     bundle_hash: str
-    policy_dir: Path
+    policy_dir: Path | None
 
 
-def load_policy(policy_dir: Path) -> PolicyBundle:
+def read_policy_files(policy_dir: Path) -> dict[str, bytes]:
     raw: dict[str, bytes] = {}
     for filename in POLICY_FILES:
         path = policy_dir / filename
         if not path.is_file():
             raise FileNotFoundError(f"normative policy file missing: {path}")
         raw[filename] = path.read_bytes()
+    return raw
 
+
+def build_bundle(raw: dict[str, bytes], *, policy_dir: Path | None = None) -> PolicyBundle:
     shas = {name: hashlib.sha256(data).hexdigest() for name, data in raw.items()}
     bundle_hash = hashlib.sha256(
         "".join(f"{name}:{shas[name]};" for name in POLICY_FILES).encode()
@@ -72,3 +75,7 @@ def load_policy(policy_dir: Path) -> PolicyBundle:
         bundle_hash=bundle_hash,
         policy_dir=policy_dir,
     )
+
+
+def load_policy(policy_dir: Path) -> PolicyBundle:
+    return build_bundle(read_policy_files(policy_dir), policy_dir=policy_dir)
