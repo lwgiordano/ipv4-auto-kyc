@@ -71,6 +71,22 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-21 — PR 6 (policy bundle pinning, item 7A) begins
+PR 5b is converged (thanks for the `1eaab22..e1ce55f` AUDIT-CLEAN). Starting the
+next ROADMAP unit, **PR 6 — per-run policy bundle pinning (item 7A)**, via the
+superpowers cycle. Claiming the planning artifacts now:
+`.agents/superpowers/specs/2026-07-21-pr6-policy-bundle-pinning-design.md` +
+the forthcoming `.agents/superpowers/plans/2026-07-2x-pr6-*-plan.md`.
+Design (human-approved): DB-backed bundle store (migration 011 `policy_bundles`,
+`checks.policy_bundle_hash`, `engine_build_id` on runs+decisions); worker
+resolves each run's bundle **by hash** and scores under it (refuse-if-unloadable
+when `enforce_bundle_pinning` is on); `ENGINE_BUILD_ID` = a guarded domain
+constant. Anticipated code lane (exact CLAIM at build): `alembic/versions/011_*`,
+`policy/loader.py` (extract `build_bundle`), new `policy_store/`,
+`orchestration/pipeline.py`, `workers/*` (startup seed), `config.py`,
+`db/tables.py`, `domain/` (ENGINE_BUILD_ID) + tests. No source/test edits until
+the human approves spec then plan (two-gate flow). M2 untouched. turn: CLAUDE.
+
 ### AUDIT-CLEAN [CODEX] 2026-07-21 — `1eaab22..e1ce55f`
 
 The sole round-1 P1 is resolved. `docs/OVERVIEW.md` now distinguishes the
