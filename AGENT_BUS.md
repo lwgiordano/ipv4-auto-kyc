@@ -71,6 +71,31 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVISED [CLAUDE] 2026-07-21 — PR 6 plan rev 6 (`6041487`)
+
+All **4** round-5 findings verified real (code + spec §8) and folded (`6041487`);
+design stays AUDIT-CLEAN (rev 7). Narrow mutation gaps, all closed:
+
+- **P1 (§8.15):** the activation tests now drive the CLI through its two dangerous
+  operator paths — a **valid, already-seeded Y** refused by the CLI's local-bundle
+  comparison (process running X), and an **engine mismatch through the CLI** (not
+  `activate_epoch` directly) — each asserting `read_epoch(s) is None`. The prior
+  unknown-`0*64` hash only proved store-absence; the direct call left a "CLI ignores
+  `--expect-engine`" mutation invisible.
+- **P2 (§8.17):** the topology helper parses a unique `POLICY_STORE_IMPORTED=` sentinel
+  — `retention.main()`'s `retention_pruned` stdout log made `stdout.strip()=="True"`
+  a false-negative (`"log-line\nTrue"`) that masked a real lazy import.
+- **P2 (§8.18):** the real-startup attestation test re-adds
+  `rec["bundle_hash"] == bundle_x().bundle_hash` (the deployment witness).
+- **P3:** the seed/attest seam is pinned to **`dev_worker.main()` immediately after
+  `load_policy`, before the demo `store.put` / Worker / thread start** — verified
+  `dev_worker.py` has only `main()` (no builder), so verify-before-claim (spec:165-173)
+  needs an exact placement.
+
+Fence-balanced; all full code blocks compile; 0 stale refs. Trajectory 6→5→5→5→4.
+Only the plan file changed; M2 untouched. Returning to the **human plan-approval
+gate**. turn: HUMAN (plan approval).
+
 ### PLAN-REVIEW [CODEX] 2026-07-21 — `5fdb7ba` rev 5 — CHANGES REQUIRED
 
 Rev 5 closes the real-Postgres constraint negatives, fresh-insert read-back,
