@@ -1,10 +1,20 @@
 # PR 6 — Per-run policy bundle pinning (ROADMAP item 7A)
 
-**Status:** DESIGN rev 5 — Codex rounds 1–4 folded; awaiting re-audit.
+**Status:** DESIGN rev 6 — Codex rounds 1–5 folded; awaiting re-audit.
 **ROADMAP:** item 7A (PR 6). PR 6b (revalidation), PR 8 (immutable evidence),
 PR 10 (broker snapshots) are separate later units.
 **Locked (human-approved):** Approach A (DB-backed bundle store, load-by-hash);
 `ENGINE_BUILD_ID` = a deliberate domain constant guarded by a framed whole-tree test.
+
+**Rev 6 changes (Codex `c3b7544..2887942` review):** `store_bundle` **reads the
+persisted row back and verifies** it on insert *and* conflict, so a corrupt row
+fails startup instead of a flag-off worker stamping an unreconstructable hash
+(P1.1); the epoch command **validates expected bundle/engine args, uses DB
+`now()`, and reads-back-fails on a different-value concurrent activation**, and
+`bundle_pinning_epoch.bundle_hash` FK-references `policy_bundles` (P2.2);
+`ENGINE_BUILD_ID` has a **nonblank versioned invariant** + DB `CHECK`s on the
+provenance/epoch columns (P2.3); seeding + attestation are narrowed to the API and
+**pipeline** worker — `outbox`/`retention` stay policy-independent (P2.4).
 
 **Rev 5 changes (Codex `0dc514d..c3b7544` review):** migration 011 gains the
 singleton **`bundle_pinning_epoch`** table (P1.1); the authoritative decide txn
@@ -57,16 +67,17 @@ policy_bundles(
   files_json   JSONB NOT NULL,   -- {filename: base64(raw_bytes)} for all 7 POLICY_FILES
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 )
-bundle_pinning_epoch(            -- singleton; the activation record (P1.1)
+bundle_pinning_epoch(            -- singleton; the activation record
   id               INT  PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   activated_at     TIMESTAMPTZ NOT NULL,
-  bundle_hash      TEXT NOT NULL,
-  engine_build_id  TEXT NOT NULL
+  bundle_hash      TEXT NOT NULL REFERENCES policy_bundles(bundle_hash),   -- FK (P2.2)
+  engine_build_id  TEXT NOT NULL CHECK (btrim(engine_build_id) <> '')      -- nonblank (P2.3)
 )
 ```
-- New nullable columns: `checks.policy_bundle_hash`, `runs.engine_build_id`,
-  `decisions.engine_build_id`. `runs.policy_bundle_hash` unchanged = immutable
-  creation pin.
+- New nullable columns: `checks.policy_bundle_hash`; `runs.engine_build_id` and
+  `decisions.engine_build_id`, each with `CHECK (engine_build_id IS NULL OR
+  btrim(engine_build_id) <> '')` (P2.3). `runs.policy_bundle_hash` unchanged =
+  immutable creation pin.
 - **`files_json` base64** (JSONB can't hold `bytes`; decoded to identical bytes
   before `build_bundle`; non-ASCII round-trip tested). No `shas_json`.
 - **`bundle_pinning_epoch`** is written once by `ops.activate_bundle_pinning_epoch`
@@ -83,13 +94,18 @@ bundle_pinning_epoch(            -- singleton; the activation record (P1.1)
   `build_bundle(raw, *, policy_dir: Path | None = None)`; `load_policy(dir) =
   build_bundle(read_policy_files(dir), policy_dir=dir)`. `PolicyBundle.policy_dir`
   deliberately widened `Path` → `Path | None` (disk=dir, DB=None; provenance-only).
-- **New `policy_store/repo.py` (non-pure):** `store_bundle(session, raw)` (base64
-  → idempotent `ON CONFLICT DO NOTHING`); `load_bundle(session, hash) ->
+- **New `policy_store/repo.py` (non-pure):** `store_bundle(session, raw)` — base64
+  → `ON CONFLICT DO NOTHING`, then on **both insert and conflict read the
+  persisted row back and `load_bundle`-verify it** (recomputed hash matches),
+  raising `BundleCorrupt` if the stored bytes don't reconstruct — never silently
+  repair/overwrite audit evidence (P1.1). `load_bundle(session, hash) ->
   PolicyBundle | None` (base64-decode → `build_bundle(…, policy_dir=None)` →
   assert recomputed hash == hash else `BundleCorrupt`). `policy_store` imports
   `policy`, never the reverse.
 - **New `policy_store` epoch helpers** (or `ops`): `activate_epoch`,
-  `read_epoch`. **`domain/engine.py` (pure):** `ENGINE_BUILD_ID: str`.
+  `read_epoch`. **`domain/engine.py` (pure):** `ENGINE_BUILD_ID: str` — a
+  **nonblank, trimmed, versioned** identifier (`eng-<positive int>`), validated
+  nonblank at startup and at epoch activation (P2.3).
 
 ## 5. Worker: resolve at job entry; stamp bundle AND engine; keep the run pin
 
@@ -127,8 +143,16 @@ before deciding keeps `NULL` (no decision was made under any engine).
 **Manual-approve decisions:** the API path (`events/ingest.py:241-266`) stamps
 `ENGINE_BUILD_ID` on its `DecisionRow(run_id=None)`.
 
-**Seeding:** API app factory + every worker `store_bundle(session,
-read_policy_files(settings.policy_dir))` at startup before serving/claiming.
+**Seeding + startup verification (P1.1/P2.4).** The API app factory and the
+**pipeline** worker (and the combined dev worker) — **not** the `outbox` or
+`retention` workers, which never score (`workers/outbox_worker.py`,
+`workers/retention.py`) — call `store_bundle(session,
+read_policy_files(settings.policy_dir))` at startup, before serving/claiming. Its
+read-back verification means a corrupt persisted process-bundle row makes startup
+**fail closed**; the worker emits its attestation and begins claiming **only after**
+verification passes (so a flag-off worker can never stamp an unreconstructable
+hash). `outbox`/`retention` construct without importing `policy_store` or reading
+policy files.
 
 ## 6. `engine_build_id` + framed whole-tree guard
 
@@ -152,9 +176,16 @@ non-`domain/` semantic edit (`broker_gate.py` → CLEAR) each trip it.
   a rollover old replica can write NULL provenance — including an old API applying
   an inline manual approval with no `engine_build_id`, which is enforced
   independently of the M2 flag. The boundary is made trustworthy by the durable
-  idempotent **`ops.activate_bundle_pinning_epoch`** — run **only after every old
-  API and worker is confirmed gone**, it compare-and-sets the singleton
-  `bundle_pinning_epoch` (active `bundle_hash` + `ENGINE_BUILD_ID` + timestamp).
+  **`ops.activate_bundle_pinning_epoch --expect-bundle-hash <h> --expect-engine
+  <id>`** — run **from the pinned release image, only after every old API and
+  worker is confirmed gone**. It (a) verifies the local `ENGINE_BUILD_ID` and
+  process bundle equal the expected args and that the bundle **loads** from the
+  store; (b) inserts the singleton with database `now()` (`ON CONFLICT (id) DO
+  NOTHING`; `bundle_hash` FK-references `policy_bundles`); (c) **reads the row back
+  and FAILS if the persisted `(bundle_hash, engine_build_id)` differs from
+  expected** — so a concurrent activation from a different environment (different
+  bundle/engine) cannot silently anchor wrong metadata as an "idempotent no-op",
+  and a skewed operator clock cannot move the boundary (DB time is authoritative).
 - **Post-epoch-NULL alert — per-surface predicate (P2.5).** A queued run
   legitimately has `engine_build_id=NULL`, so the alert is pinned per surface:
   **`checks`** with `created_at` > epoch and NULL `policy_bundle_hash`;
@@ -196,8 +227,11 @@ non-`domain/` semantic edit (`broker_gate.py` → CLEAR) each trip it.
    bundle row, provenance column, **or the epoch row** is populated. Epoch table
    schema present.
 2. **`policy_store` round-trip incl. non-ASCII bytes:** base64 store→load
-   byte-identical, per-file SHA + `bundle_hash` equal; unknown → `None`; tampered
-   → `BundleCorrupt`; idempotent.
+   byte-identical, per-file SHA + `bundle_hash` equal; unknown → `None`; idempotent.
+   **Read-back (P1.1):** `store_bundle` raises `BundleCorrupt` when the persisted
+   row's `files_json` is tampered (insert *and* conflict paths); a flag-off
+   pipeline worker whose process-bundle DB row is corrupt **fails startup and
+   claims zero jobs** (no checks/decisions written).
 3. **Reconstruction equivalence (unit):** DB vs disk equal on hash + models.
 4. **Framed engine guard:** content edit / cross-file move / rename / empty-file
    add / non-`domain/` semantic edit each trip it.
@@ -231,14 +265,22 @@ non-`domain/` semantic edit (`broker_gate.py` → CLEAR) each trip it.
     both engine IDs populated (no post-epoch NULL).
 14. **`verify_pinnable_backlog`** flags an absent hash; **`seed_policy_bundle`**
     stores on match, **adds no row on mismatch**.
-15. **Epoch:** `activate_bundle_pinning_epoch` compare-and-set is idempotent
-    (rerun/concurrent no-op); the per-surface alert flags a post-epoch-decided
+15. **Epoch (P2.2):** same-value rerun is an idempotent no-op; an activation whose
+    `--expect` args mismatch the local engine/process bundle is rejected; a
+    **different-value** concurrent activation (bundle/engine ≠ the stored row)
+    **fails the loser on read-back** (not a silent no-op); the FK rejects an
+    unknown `bundle_hash`; the per-surface alert flags a post-epoch-decided
     missing stamp but not a legitimately-queued run.
-16. **Worker attestation:** captured-log test asserts structured
+16. **Nonblank engine id (P2.3):** a blank/whitespace `ENGINE_BUILD_ID` is rejected
+    at startup/activation; the DB `CHECK`s reject a blank `engine_build_id` on the
+    epoch and provenance columns.
+17. **Process topology (P2.4):** `outbox_worker` and `retention` construct/import
+    with **no** `policy_store` import and no policy files present.
+18. **Worker attestation:** captured-log test asserts structured
     `flag`/`bundle_hash`/`engine_build_id` at pipeline-worker startup (both flag
-    states).
-17. **`/readyz`** 503 when the API process bundle is absent, 200 when present.
-18. SSOT/policy drift guard green; import-linter 2 kept / 0 broken.
+    states), emitted only after verification.
+19. **`/readyz`** 503 when the API process bundle is absent, 200 when present.
+20. SSOT/policy drift guard green; import-linter 2 kept / 0 broken.
 
 ## 9. Observability & docs
 
