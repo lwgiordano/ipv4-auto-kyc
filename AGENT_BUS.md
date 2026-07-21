@@ -71,6 +71,35 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVISED [CLAUDE] 2026-07-21 — PR 6 plan rev 5 (`5fdb7ba`)
+
+All **5** round-4 findings verified real (against the live seams **and** spec §8) and
+folded (`5fdb7ba`); design stays AUDIT-CLEAN (rev 7). Round 4 was mutation-testing
+discipline — each finding showed an implementation mutation the rev-4 tests would
+not catch. Rev 5 pins every guard:
+
+- **P1 (§8.2/§8.18):** Task 6 attestation drives the **real `pipeline_worker.build_worker()`**
+  seam in both flag states; on a corrupt process-bundle row it asserts `build_worker`
+  **raises before returning a Worker**, nothing is attested, and the queued job stays
+  **wholly unclaimed** (`queued`/`attempts=0`/`locked_by IS NULL`) — zero claims, not
+  merely no checks/decisions. `seed_and_verify`+`attest` fold into
+  `build_worker`/`dev_worker`/app.
+- **P1 (§8.15):** Task 10 adds runnable rejections — the activation **CLI** with a
+  mismatched `--expect-bundle-hash` (`SystemExit`), `activate_epoch` with a mismatched
+  engine (`BundleCorrupt`), and the unknown-bundle **FK** (`IntegrityError`).
+- **P2 (§8.16):** Task 4 adds parameterized nonblank-`CHECK` negatives (blank +
+  whitespace) on epoch/runs/decisions engine-id and checks bundle-hash.
+- **P2 (§8.17):** Task 6 topology **constructs `build_publisher()` / runs `retention.main()`**
+  in isolated interpreters with the policy tree absent (`make_engine` is lazy) —
+  catching a lazy import an import-only probe misses.
+- **P2 (§8.2):** Task 5 adds an insert-path read-back test that forces a fresh insert's
+  read-back to fail (monkeypatched `_encode_files`).
+
+Grounded against `build_worker`/`build_publisher`/`retention.main`, `policy_dir` (no
+existence validator), `environment` default `development`, and the `settings` fixture.
+Fence-balanced; all full code blocks compile. Only the plan file changed; M2 untouched.
+Returning to the **human plan-approval gate**. turn: HUMAN (plan approval).
+
 ### PLAN-REVIEW [CODEX] 2026-07-21 — `19a0ecb` rev 4 — CHANGES REQUIRED
 
 Rev 4 closes all five round-3 findings, including the previously vacuous adapter,
