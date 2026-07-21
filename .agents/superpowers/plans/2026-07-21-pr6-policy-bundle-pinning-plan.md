@@ -1,4 +1,4 @@
-# PR 6 — Per-run policy bundle pinning Implementation Plan (rev 4)
+# PR 6 — Per-run policy bundle pinning Implementation Plan (rev 5)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. Parent session is the SOLE committer/pusher/bus-writer (Claude⇄Codex bus discipline); subagents implement + hand diffs back.
 
@@ -10,7 +10,7 @@
 
 **Spec:** `.agents/superpowers/specs/2026-07-21-pr6-policy-bundle-pinning-design.md` (Codex AUDIT-CLEAN at rev 7, `41a3b3b`). Read the cited §sections for rationale.
 
-**Rev 4 (Codex plan-review round 3, `b64b126`):** the §8 proofs now actually exercise the behaviors — Tasks 7 & 9 inject real adapters (a counting `rir_poc` witness for §8.7 *zero adapter calls*; `_OkEmailAdapter` so the cross-bundle check is really written/stamped) instead of the vacuous `adapters={}`; Task 8's mixed-era test asserts the `control_proof` **gate flip** + score 10-vs-83 (§8.8b's exact `verified_email` example) and Task 8's decide threads the **resolved** `threshold`/`allowed_broker_statuses` uniformly; Task 9 adds the `approve`-under-X / `manual_review_insufficient`-under-Y **decision** divergence (via a threshold-Y bundle) and turns the flag-off/broker/cascade prose into runnable tests; Task 6 uses `structlog.testing.capture_logs()` (not `caplog`, blind to `PrintLoggerFactory`) + a "claims zero jobs" witness; Task 10's recovery/rollback tests requeue **then** score-under-pinning / decide-exactly-once; and the Task-4 deferral prose, the `_bundle_helpers.py` creation (now Task 5), the missing `pytest`/`text` imports, and all three ops `main()`s are resolved. **Rev 3 (Codex plan-review round 2, `6e45a63`):** every remaining test snippet is now runnable against the live schemas — event payloads use the real required fields (`email.verified`=email+domain+verified_at, `poc.submitted`=rir+poc_handle); migration/preflight fixtures insert valid FK chains (`events`+`runs.triggering_event_id`) and the real `jobs.payload_json`; `make_bundle_y` edits `scoring_rubric.json["items"]`; the callback assertion uses the real keys `type`/`points`; `PolicyBundle` imports from `policy.loader`; `_decode_files` is byte-level (key-set check moved to `load_bundle`) so the non-ASCII round-trip works; the framed-hash move test does a real equal-byte transfer + a non-`domain/` `broker_gate.py` case; and the attestation, activation-recovery, rollback, epoch-alert tests and the three ops CLIs are complete code (no `Add:`/"mirror" prose). **Rev 2 (`9d8b82e`):** removed `...`/`RAW=None`/`pytest.raises(Exception)`/"mirror"/"or inline"; preflight rejects NULL/absent/corrupt; strict base64; all downgrade surfaces; real `review-package` path.
+**Rev 5 (Codex plan-review round 4, `70451d8`):** the tests now resist implementation mutations — every guard §8 names is pinned by a test that would fail if the guard were deleted. Task 6 attestation drives the **real `pipeline_worker.build_worker()`** seam (both flag states) and, on a corrupt process-bundle row, asserts it raises *before* returning a Worker + the queued job stays **wholly unclaimed** (`queued`/`attempts=0`/`locked_by IS NULL`), §8.2/§8.18. Task 10 adds runnable §8.15 rejections — the activation **CLI** with a mismatched `--expect-bundle-hash`, `activate_epoch` with a mismatched engine, and the unknown-bundle **FK** — replacing the prose instruction. Task 4 adds the parameterized §8.16 **nonblank-CHECK** negative tests (blank + whitespace on epoch/runs/decisions engine-id and checks bundle-hash). Task 6 topology **constructs `build_publisher()` / runs `retention.main()`** in isolated interpreters with the policy tree absent (catching a lazy import an import-only probe would miss), §8.17. Task 5 adds an insert-path read-back test that forces a fresh insert's read-back to fail (monkeypatched `_encode_files`), §8.2. **Rev 4 (Codex plan-review round 3, `b64b126`):** the §8 proofs now actually exercise the behaviors — Tasks 7 & 9 inject real adapters (a counting `rir_poc` witness for §8.7 *zero adapter calls*; `_OkEmailAdapter` so the cross-bundle check is really written/stamped) instead of the vacuous `adapters={}`; Task 8's mixed-era test asserts the `control_proof` **gate flip** + score 10-vs-83 (§8.8b's exact `verified_email` example) and Task 8's decide threads the **resolved** `threshold`/`allowed_broker_statuses` uniformly; Task 9 adds the `approve`-under-X / `manual_review_insufficient`-under-Y **decision** divergence (via a threshold-Y bundle) and turns the flag-off/broker/cascade prose into runnable tests; Task 6 uses `structlog.testing.capture_logs()` (not `caplog`, blind to `PrintLoggerFactory`) + a "claims zero jobs" witness; Task 10's recovery/rollback tests requeue **then** score-under-pinning / decide-exactly-once; and the Task-4 deferral prose, the `_bundle_helpers.py` creation (now Task 5), the missing `pytest`/`text` imports, and all three ops `main()`s are resolved. **Rev 3 (Codex plan-review round 2, `6e45a63`):** every remaining test snippet is now runnable against the live schemas — event payloads use the real required fields (`email.verified`=email+domain+verified_at, `poc.submitted`=rir+poc_handle); migration/preflight fixtures insert valid FK chains (`events`+`runs.triggering_event_id`) and the real `jobs.payload_json`; `make_bundle_y` edits `scoring_rubric.json["items"]`; the callback assertion uses the real keys `type`/`points`; `PolicyBundle` imports from `policy.loader`; `_decode_files` is byte-level (key-set check moved to `load_bundle`) so the non-ASCII round-trip works; the framed-hash move test does a real equal-byte transfer + a non-`domain/` `broker_gate.py` case; and the attestation, activation-recovery, rollback, epoch-alert tests and the three ops CLIs are complete code (no `Add:`/"mirror" prose). **Rev 2 (`9d8b82e`):** removed `...`/`RAW=None`/`pytest.raises(Exception)`/"mirror"/"or inline"; preflight rejects NULL/absent/corrupt; strict base64; all downgrade surfaces; real `review-package` path.
 
 ## Global Constraints
 
@@ -241,8 +241,41 @@ def test_011_downgrade_clean_when_unused(pg):
     alembic_command.upgrade(cfg, "head")
     alembic_command.downgrade(cfg, "010")      # empty schema → clean
     alembic_command.upgrade(cfg, "head")
+
+# §8.16: the `CHECK (btrim(col) <> '')` guards must REJECT blank/whitespace on every
+# constrained surface. Without these negative tests, dropping any CHECK leaves the
+# suite green. Each row is otherwise valid; only the constrained column is `:blank`.
+_VALID_BUNDLE = "INSERT INTO policy_bundles (bundle_hash, files_json) VALUES ('h','{}'::jsonb)"
+_VALID_CASE = "INSERT INTO cases (id) VALUES ('c')"
+_VALID_EVENT = ("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                "actor_json, payload_json) VALUES ('ev','c','k','ph','email.verified',"
+                "'{}'::jsonb,'{}'::jsonb)")
+_NONBLANK_SURFACES = {
+    "epoch_engine": _VALID_BUNDLE + "; INSERT INTO bundle_pinning_epoch "
+        "(id, activated_at, bundle_hash, engine_build_id) VALUES (1, now(), 'h', :blank)",
+    "run_engine": _VALID_CASE + "; " + _VALID_EVENT + "; INSERT INTO runs "
+        "(id, case_id, triggering_event_id, state, engine_build_id) VALUES ('r','c','ev','QUEUED',:blank)",
+    "decision_engine": _VALID_CASE + "; INSERT INTO decisions (id, case_id, decision, score, "
+        "gates_json, buy_enablement, policy_shas, manual, engine_build_id) VALUES ('d','c','x',0,"
+        "'{}'::jsonb,'buy_locked_org_id_required','{}'::jsonb,false,:blank)",
+    "check_bundle": _VALID_CASE + "; INSERT INTO checks (id, case_id, check_type, status, "
+        "points_awarded, category, source, policy_bundle_hash) "
+        "VALUES ('k','c','verified_email','pass',10,'x','seed',:blank)",
+}
+@pytest.mark.parametrize("surface", list(_NONBLANK_SURFACES))
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "ws"])
+def test_011_nonblank_checks_reject_blank(pg, surface, blank):
+    from sqlalchemy.exc import IntegrityError
+    url = _fresh_db(pg, f"kyc_mig_011_nb_{surface}_{len(blank)}")
+    cfg = _config(url); alembic_command.upgrade(cfg, "head")
+    engine = create_engine(url)
+    with pytest.raises(IntegrityError):                 # CHECK (btrim(col) <> '') violation
+        with engine.begin() as conn:
+            for stmt in _NONBLANK_SURFACES[surface].split("; "):
+                conn.execute(text(stmt), {"blank": blank})   # extra param ignored where unused
+    engine.dispose()
 ```
-The parametrize list above already contains all **5** blockers (bundle_row, epoch_row, run_engine_id, check_bundle_hash, decision_engine_id) as complete valid INSERTs — nothing to add.
+The parametrize list above already contains all **5** downgrade blockers (bundle_row, epoch_row, run_engine_id, check_bundle_hash, decision_engine_id) as complete valid INSERTs — nothing to add.
 - [ ] **Step 2 — run red:** `.venv/bin/pytest tests/integration/test_migrations.py -k 011 -v` → FAIL (migration + `EXPECTED_TABLES` mismatch on the existing `test_upgrade_downgrade_upgrade`).
 - [ ] **Step 3 — implement the migration.** `upgrade()`: `op.create_table` the two tables (named `ck_epoch_id`, `ck_epoch_engine_nonblank`, `fk_epoch_bundle_hash`); `op.add_column` the 3 nullable columns each with a named `CHECK`. `downgrade()`:
 ```python
@@ -308,6 +341,15 @@ def test_store_then_load_roundtrip(session_factory, clean_db):
 def test_store_insert_path_verifies_and_returns_hash(session_factory, clean_db):
     with session_factory() as s:
         assert store.store_bundle(s, raw_x()) == bundle_x().bundle_hash   # read-back ran
+
+def test_store_insert_path_readback_catches_corrupt_row(session_factory, clean_db, monkeypatch):
+    # Adversarial: force the INSERT-path read-back to fail on a FRESH insert (empty
+    # table → INSERT, not conflict). Encode every file as corrupt base64 so the
+    # persisted row cannot reconstruct; store_bundle must raise — proving the
+    # read-back runs on the INSERT path too (§8.2), not only the conflict path.
+    monkeypatch.setattr(store, "_encode_files", lambda raw: {n: "%%%" for n in raw})
+    with session_factory() as s, pytest.raises(store.BundleCorrupt):
+        store.store_bundle(s, raw_x())
 
 def test_load_unknown_returns_none(session_factory, clean_db):
     with session_factory() as s:
@@ -447,63 +489,72 @@ Spec §5, §7 (P1.1/P2.4). One `seed_and_verify` interface; attest only after ve
 
 - [ ] **Step 1 — failing tests:**
 ```python
-# test_process_topology.py — ISOLATED interpreters (not shared sys.modules)
-import subprocess, sys
-def _imports_policy_store(module: str) -> bool:
-    code = (f"import importlib,sys; importlib.import_module('{module}'); "
-            "print('kyc_tool.policy_store' in sys.modules)")
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+# test_process_topology.py — ISOLATED interpreters (not shared sys.modules). §8.17
+# needs more than an import probe: a LAZY `policy_store`/policy-file access inside
+# build_publisher() / retention.main() is invisible to an import-only check. So
+# CONSTRUCT/RUN each seam with the policy tree ABSENT and assert policy_store was
+# never imported. `make_engine` is lazy (no eager connect), so build_publisher()
+# constructs fine; retention.main() prunes (empty of recent rows) against a real DB.
+import os, subprocess, sys
+
+def _seam_imports_policy_store(seam_code: str, database_url: str) -> bool:
+    code = f"import sys\n{seam_code}\nprint('kyc_tool.policy_store' in sys.modules)\n"
+    env = {**os.environ, "KYC_POLICY_DIR": "/nonexistent-policy-dir",  # policy files ABSENT
+           "KYC_DATABASE_URL": database_url}
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr
     return out.stdout.strip() == "True"
 
-def test_outbox_worker_does_not_import_policy_store():
-    assert _imports_policy_store("kyc_tool.workers.outbox_worker") is False
+def test_outbox_publisher_constructs_without_policy_store(migrated):
+    assert _seam_imports_policy_store(
+        "from kyc_tool.workers.outbox_worker import build_publisher\nbuild_publisher()", migrated) is False
 
-def test_retention_does_not_import_policy_store():
-    assert _imports_policy_store("kyc_tool.workers.retention") is False
+def test_retention_runs_without_policy_store(migrated):
+    assert _seam_imports_policy_store(
+        "from kyc_tool.workers.retention import main\nmain()", migrated) is False
 
-# test_bundle_pinning.py — attestation both flag states + corrupt-startup.
-# structlog is configured with the default PrintLoggerFactory (api/app.py:46 sets
-# NO logger_factory), so events go to stdout, NOT through stdlib `logging` —
-# pytest's `caplog` captures ZERO records. `structlog.testing.capture_logs()` is the
-# correct sink: it yields each event as a dict keyed by `event` + the bound kwargs.
+# test_bundle_pinning.py — attestation + corrupt-startup at the REAL worker seam.
+# structlog uses the default PrintLoggerFactory (api/app.py:46 sets NO logger_factory),
+# so events bypass stdlib `logging` and `caplog` sees ZERO records —
+# `structlog.testing.capture_logs()` is the sink (event dict keyed by `event` + kwargs).
+# Both proofs drive `pipeline_worker.build_worker()` (the actual startup path), not a
+# test-authored seed_and_verify/attest ordering.
 import pytest
 import structlog
 from sqlalchemy import text
 from kyc_tool.policy_store import repo as store
-from kyc_tool.policy.loader import read_policy_files
-from kyc_tool.config import REPO_ROOT
 
-_MR = REPO_ROOT / "KYC_Tool_Build_Package" / "machine_readable"
-
-def test_attest_logs_flag_bundle_engine(session_factory, clean_db):
+def test_pipeline_worker_startup_attests_and_refuses_corrupt(
+        session_factory, settings, engine, clean_db, post_event, monkeypatch):
+    from kyc_tool.workers import pipeline_worker
+    # SUCCESS (both flag states): build_worker() seeds → verifies → attests, returns a Worker
     for flag in (False, True):
+        cfg = settings.model_copy(update={"enforce_bundle_pinning": flag})
+        monkeypatch.setattr(pipeline_worker, "get_settings", lambda cfg=cfg: cfg)
         with structlog.testing.capture_logs() as logs:
-            h = store.seed_and_verify(session_factory, _MR)        # seeds + read-back verifies
-            store.attest(flag=flag, bundle_hash=h)                 # emits ONLY after verify
+            worker = pipeline_worker.build_worker()
+        assert worker is not None
         rec = next(r for r in logs if r.get("event") == "bundle_pinning_ready")
-        assert rec["flag"] is flag and rec["engine_build_id"] == "eng-1" and rec["bundle_hash"] == h
-
-def test_corrupt_seed_row_fails_startup_no_attestation_and_zero_jobs(
-        session_factory, engine, clean_db, post_event):
-    # §8.2: a pipeline worker whose process-bundle row is corrupt fails startup —
-    # `seed_and_verify` (which main() runs BEFORE building/looping the Worker) raises,
-    # so nothing is attested AND the queued job is never claimed (no checks/decisions).
-    with session_factory() as s:
-        h = store.store_bundle(s, read_policy_files(_MR)); s.commit()
-    with engine.begin() as c:                                      # tamper the persisted row
+        assert rec["flag"] is flag and rec["engine_build_id"] == "eng-1"
+    # CORRUPT process-bundle row (the single seeded row) → build_worker RAISES before
+    # returning a Worker; nothing attested AND the queued job stays WHOLLY unclaimed (§8.2).
+    with engine.begin() as c:
         c.execute(text("UPDATE policy_bundles SET files_json = jsonb_set("
-                       "files_json,'{scoring_rubric.json}','\"%%%\"') WHERE bundle_hash=:h"), {"h": h})
-    post_event("c-corrupt", "email.verified",                      # a job now waits in the queue
+                       "files_json,'{scoring_rubric.json}','\"%%%\"')"))
+    post_event("c-corrupt", "email.verified",
                {"email": "o@acme.test", "domain": "acme.test", "verified_at": "2026-07-21T00:00:00Z"})
+    cfg = settings.model_copy(update={"enforce_bundle_pinning": False})
+    monkeypatch.setattr(pipeline_worker, "get_settings", lambda cfg=cfg: cfg)
     with structlog.testing.capture_logs() as logs, pytest.raises(store.BundleCorrupt):
-        store.seed_and_verify(session_factory, _MR)                # startup aborts before the worker loop
+        pipeline_worker.build_worker()                             # aborts before returning a Worker
     assert not [r for r in logs if r.get("event") == "bundle_pinning_ready"]
-    with session_factory() as s:                                   # zero jobs claimed
-        assert s.execute(text("SELECT count(*) FROM checks WHERE case_id='c-corrupt'")).scalar_one() == 0
-        assert s.execute(text("SELECT count(*) FROM decisions WHERE case_id='c-corrupt'")).scalar_one() == 0
+    with session_factory() as s:
+        job = s.execute(text("SELECT status, attempts, locked_by FROM jobs "
+                             "WHERE case_id='c-corrupt'")).one()
+        assert job.status == "queued" and job.attempts == 0 and job.locked_by is None  # unclaimed
 ```
 - [ ] **Step 2 — run red** → FAIL.
-- [ ] **Step 3 — implement.** In `policy_store/repo.py`: `seed_and_verify(session_factory, policy_dir)` = `with uow(session_factory) as s: h = store_bundle(s, read_policy_files(policy_dir)); return h` (raises `BundleCorrupt` on a corrupt existing row → caller fails startup); `attest(*, flag, bundle_hash)` = `log.info("bundle_pinning_ready", flag=flag, bundle_hash=bundle_hash, engine_build_id=ENGINE_BUILD_ID)` (module `log = structlog.get_logger(__name__)`). In `pipeline_worker.py`/`dev_worker.py` `main()` and `api/app.py` factory: after `load_policy`, call `h = seed_and_verify(...)` then `attest(flag=settings.enforce_bundle_pinning, bundle_hash=h)`. Do **not** import `policy`/`policy_store` in `outbox_worker.py`/`retention.py`.
+- [ ] **Step 3 — implement.** In `policy_store/repo.py`: `seed_and_verify(session_factory, policy_dir)` = `with uow(session_factory) as s: h = store_bundle(s, read_policy_files(policy_dir)); return h` (raises `BundleCorrupt` on a corrupt existing row → caller fails startup); `attest(*, flag, bundle_hash)` = `log.info("bundle_pinning_ready", flag=flag, bundle_hash=bundle_hash, engine_build_id=ENGINE_BUILD_ID)` (module `log = structlog.get_logger(__name__)`). Fold the seam into **`pipeline_worker.build_worker()`, `dev_worker`'s builder, and the `api/app.py` factory**: after `load_policy`, call `h = seed_and_verify(session_factory, settings.policy_dir)` then `attest(flag=settings.enforce_bundle_pinning, bundle_hash=h)` **before** returning the Worker / serving — so a corrupt row raises before any job can be claimed. Do **not** import `policy`/`policy_store` in `outbox_worker.py`/`retention.py`.
 - [ ] **Step 4 — run green** → PASS.
 - [ ] **Step 5 — commit** `feat(pr6): startup seed_and_verify + attestation (api/pipeline only)`.
 
@@ -851,13 +902,16 @@ Spec §7, §8.11–15. Preflight rejects NULL/absent/corrupt; epoch CLI compares
 
 - [ ] **Step 1 — failing tests:**
 ```python
+import sys
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from kyc_tool.domain.models import CheckStatus
 from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
+from kyc_tool.ops import activate_bundle_pinning_epoch as epoch_cli
 from kyc_tool.ops.verify_pinnable_backlog import verify_pinnable_backlog
 from kyc_tool.ops.seed_policy_bundle import seed_policy_bundle
 from kyc_tool.ops.requeue_interrupted_jobs import requeue_interrupted
@@ -991,6 +1045,31 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
     with session_factory() as s:
         alert = post_epoch_null_provenance(s)
     assert "d-al" in alert["decisions"] and "r-q" not in alert.get("runs", [])
+
+# §8.15 activation identity gate — three runnable rejections (each pins a guard whose
+# removal would otherwise leave the suite green):
+def test_activate_cli_rejects_bundle_hash_mismatch(session_factory, settings, clean_db, monkeypatch):
+    # CLI main() compares the LOCALLY loaded bundle (settings.policy_dir = normative X)
+    # to --expect-bundle-hash; a stale/other hash must refuse activation.
+    with session_factory() as s:
+        store.store_bundle(s, raw_x()); s.commit()
+    monkeypatch.setattr(epoch_cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(sys, "argv", ["prog", "--expect-bundle-hash", "0"*64, "--expect-engine", "eng-1"])
+    with pytest.raises(SystemExit):
+        epoch_cli.main()                                     # local X.bundle_hash != 0*64 → refuse
+
+def test_activate_epoch_rejects_engine_mismatch(session_factory, clean_db):
+    # activate_epoch refuses when --expect-engine != the running ENGINE_BUILD_ID.
+    with session_factory() as s:
+        h = store.store_bundle(s, raw_x())
+        with pytest.raises(store.BundleCorrupt):
+            store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-999")
+
+def test_epoch_fk_rejects_unknown_bundle(engine, clean_db):
+    # the FK forbids an epoch row that points at a bundle_hash not in policy_bundles.
+    with engine.begin() as c, pytest.raises(IntegrityError):
+        c.execute(text("INSERT INTO bundle_pinning_epoch (id, activated_at, bundle_hash, "
+                       "engine_build_id) VALUES (1, now(), :h, 'eng-1')"), {"h": "0"*64})
 ```
 - [ ] **Step 2 — run red** → FAIL.
 - [ ] **Step 3 — implement.** All **three** ops modules mirror `ops/requeue_interrupted_jobs.py`: the same import head (`import argparse, sys`; `from sqlalchemy import text`; `from kyc_tool.config import get_settings`; `from kyc_tool.db.session import make_engine, make_session_factory, uow`; `from kyc_tool.policy.loader import read_policy_files, build_bundle, load_policy`; `from kyc_tool.policy_store import repo as store`), a `main() -> int`, and a `if __name__ == "__main__": sys.exit(main())` `python -m` entry. Each `main()` builds its factory via `make_session_factory(make_engine(get_settings().database_url))`. All three are shown:
@@ -1066,7 +1145,7 @@ def main() -> int:                       # activate_bundle_pinning_epoch CLI
                              expect_engine=args.expect_engine)     # + read-back CAS
     print("epoch activated"); return 0
 ```
-And the `/readyz` addition — after 011, **unconditionally** (grep the readyz handler, `api/routes_metrics.py` or `app.py`): compute the process bundle's `bundle_hash` (from the app's loaded policy) and return **503** if `store.load_bundle(session, that_hash) is None`, else keep the existing 200 path. Add a direct `store.activate_epoch(..., expect_engine="eng-999")` → `BundleCorrupt` test proving the local-engine mismatch rejection.
+And the `/readyz` addition — after 011, **unconditionally** (grep the readyz handler, `api/routes_metrics.py` or `app.py`): compute the process bundle's `bundle_hash` (from the app's loaded policy) and return **503** if `store.load_bundle(session, that_hash) is None`, else keep the existing 200 path. (§8.15's identity-gate rejections — CLI bundle-hash mismatch, engine mismatch, and the unknown-bundle FK — are the three runnable tests above.)
 - [ ] **Step 4 — run green** → PASS.
 - [ ] **Step 5 — commit** `feat(pr6): /readyz bundle check + verify/seed/activate ops + epoch alert`.
 
