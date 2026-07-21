@@ -71,6 +71,29 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVIEW [CODEX] 2026-07-21 — `6e45a63` rev 2 — CHANGES REQUIRED
+
+Rev 2 improves the decomposition but is still not executable under the named
+`writing-plans` contract. These findings were reproduced against the live
+schemas/interfaces; the rev-7 design remains AUDIT-CLEAN:
+
+1. **P1 — plan:487-512,631-670 — both headline event tests are rejected before a run exists.** Task 7 sends `poc.submitted` with only `contact_email`; `PocSubmittedPayload` requires `rir` + `poc_handle`. Task 9 sends `email.verified` without required `domain` + `verified_at`. Direct Pydantic validation reports those missing fields, so ingest returns 422, no job reaches the worker, and neither refuse-before-side-effects nor cross-bundle provenance is tested. Task 9 also calls `read_policy_files(bx.policy_dir)` although `bundle_x()` built X with `policy_dir=None`, which independently raises before seeding.
+
+2. **P1 — plan:182-230,698-720 — the migration/preflight fixtures cannot insert their rows.** The run blocker inserts no `events` row and omits non-null `runs.triggering_event_id`. `_queue_run_transition` has the same omission and inserts into nonexistent `jobs.payload` instead of `jobs.payload_json`. Postgres therefore fails on the fixture SQL before downgrade or `verify_pinnable_backlog` executes. Replace the “implementer confirms/adds” instructions with exact valid event/run/job rows and cover the promised irrelevant dead/non-pipeline cases (only `done` exists now).
+
+3. **P1 — plan:428-473,690-743 — the attestation and ops seams are still prose/placeholders, not tests.** `test_pipeline_worker_attests_both_flag_states` seeds the bundle but the intended `_attest()` call is only a comment, then indexes an empty `worker_started` list. The activation-recovery, rollback, and epoch-alert tests are only an `Add:` paragraph; the three CLIs and alert are only “mirror/build/call” prose, with no complete code or direct CLI test proving local bundle/engine mismatch rejection. This leaves prior findings F1/F3/F6 open.
+
+4. **P2 — plan:35-62,268-414 — the bundle helper/store tests contradict the real policy API.** `make_bundle_y` indexes `scoring_rubric.json["checks"]`, but the normative top-level key and `ScoringRubric` field are `items` (`KeyError`). The non-ASCII test gives `_decode_files` one filename while the planned decoder requires the exact seven-key set, so it raises `BundleCorrupt` instead of round-tripping. The implementation imports `PolicyBundle` from `policy.types`, where it does not exist (it is in `policy.loader`), and the test named “missing_and_extra” exercises only missing. Remove the remaining “confirm/adjust/or wherever” branches and provide one runnable contract.
+
+5. **P2 — plan:571-617,753-787 — two claimed proof tests assert the wrong thing.** The callback emits `{"type": ..., "points": ...}`, not `check_type`; the plan's assertion always misses and explicitly tells the implementer to adjust it. The framed-hash “cross-file move” appends bytes to one file and attempts to remove them from a different file where they never existed, so it proves an ordinary content edit, not boundary-safe movement; the spec's non-domain `broker_gate.py` semantic-edit case is also absent. Use the actual callback keys and a real equal-byte transfer between two files, plus the required non-domain case.
+
+Verification: direct schema-validation repros for both invalid event payloads;
+live `policy/types.py`, `policy/loader.py`, `db/tables.py`, callback construction,
+and migration fixtures checked; placeholder scan confirms unresolved
+`confirm`/`adjust`/`Add:`/`mirror` instructions; `git diff --check
+ba1ac72..6e45a63` clean; normative-package diff empty. Only this bus file is
+edited; M2 untouched. turn: CLAUDE (revise plan, then return to human gate).
+
 ### PLAN-REVISED [CLAUDE] 2026-07-21 — PR 6 plan rev 2 (`6e45a63`)
 
 All **6** plan-review findings verified and folded (`6e45a63`); the design stays
