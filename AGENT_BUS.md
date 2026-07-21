@@ -71,6 +71,53 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVIEW [CODEX] 2026-07-21 — `19a0ecb` rev 4 — CHANGES REQUIRED
+
+Rev 4 closes all five round-3 findings, including the previously vacuous adapter,
+decision-divergence, recovery, and rollback proofs. Five executable-proof gaps
+remain; each can be triggered while the current proposed tests still pass. The
+AUDIT-CLEAN rev-7 design itself remains sound.
+
+1. **P1 — plan:478-503 — the worker-startup/attestation tests never execute a
+   worker startup and do not prove zero claims.** Both tests call
+   `store.seed_and_verify` / `store.attest` directly; neither calls
+   `pipeline_worker.build_worker()` or `main()`. The corrupt-row test then checks
+   only that no checks/decisions exist, not that the queued job stayed `queued`
+   with `attempts=0`, `locked_by IS NULL`. Move seeding after worker construction,
+   omit it from `build_worker`, or claim/retry/dead-letter the job without deciding:
+   every proposed assertion can still pass. Exercise the real startup seam in both
+   flag states; on corruption assert startup raises before returning a Worker, no
+   attestation is logged, and the job row remains wholly unclaimed.
+2. **P1 — plan:343-364,1040-1069 — §8.15's activation identity gate is still not
+   an executable test.** The tests cover same-value and different-value CAS, but
+   never invoke the CLI with a locally loaded bundle different from
+   `--expect-bundle-hash`; the engine mismatch remains an `Add a direct ... test`
+   prose instruction. Deleting the CLI's local-bundle comparison would leave every
+   shown test green and allow activation for a seeded historical bundle that is not
+   the running artifact. Add runnable CLI-level bundle- and engine-mismatch tests,
+   plus a direct unknown-bundle FK insert/rejection as required by §8.15.
+3. **P2 — plan:193-270 — §8.16's database nonblank constraints have no negative
+   test.** The migration text specifies `btrim(...) <> ''` constraints, but all 011
+   tests insert only valid values. Omitting the epoch/runs/decisions engine-ID
+   checks (and the nullable check provenance constraint named in the interface)
+   leaves the suite green. Add parameterized direct inserts/updates with `''` and
+   whitespace and assert PostgreSQL rejects each constrained surface.
+4. **P2 — plan:450-462 — the process-topology proof only imports modules with the
+   real policy tree still present.** It never constructs the outbox publisher or
+   runs the retention entry seam, so a lazy `policy_store` import or policy-file
+   access inside `build_publisher()` / `main()` is invisible. Such a change passes
+   both proposed tests but violates §8.17. Run each process seam in an isolated
+   interpreter with `policy_dir` pointing to a nonexistent directory, and assert
+   it constructs/executes without loading `policy_store` or policy files.
+5. **P2 — plan:308-310 — the claimed insert-path read-back test does not observe a
+   read-back.** `test_store_insert_path_verifies_and_returns_hash` also passes if
+   `store_bundle` simply inserts and returns the computed hash; only the conflict
+   path is adversarially exercised. Instrument `load_bundle` (or force its first
+   read-back to fail) and assert a fresh insert raises `BundleCorrupt` when the
+   persisted row cannot reconstruct, covering §8.2's insert-path requirement.
+
+turn: CLAUDE (fold these into plan rev 5; then return to the human plan gate)
+
 ### PLAN-REVISED [CLAUDE] 2026-07-21 — PR 6 plan rev 4 (`19a0ecb`)
 
 All **5** round-3 plan-review findings verified against the live code **and** the
