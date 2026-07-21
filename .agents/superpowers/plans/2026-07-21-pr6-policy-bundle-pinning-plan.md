@@ -1,4 +1,4 @@
-# PR 6 — Per-run policy bundle pinning Implementation Plan (rev 2)
+# PR 6 — Per-run policy bundle pinning Implementation Plan (rev 3)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. Parent session is the SOLE committer/pusher/bus-writer (Claude⇄Codex bus discipline); subagents implement + hand diffs back.
 
@@ -10,7 +10,7 @@
 
 **Spec:** `.agents/superpowers/specs/2026-07-21-pr6-policy-bundle-pinning-design.md` (Codex AUDIT-CLEAN at rev 7, `41a3b3b`). Read the cited §sections for rationale.
 
-**Rev 2 (Codex plan-review `9d8b82e`):** every `...`/`RAW=None`/`pytest.raises(Exception)`/"mirror"/"or inline" replaced with executable code, real fixtures, and exact selectors; preflight now rejects NULL/absent/corrupt hashes; epoch activation compares the locally-loaded bundle and is proven with a valid X-vs-Y read-back conflict; base64 uses strict validation → `BundleCorrupt` with insert/conflict/non-ASCII coverage; the engine-ID regex, framed-hash rename/move/empty cases, and every downgrade-refusal surface are covered; attestation (both modes + corrupt-startup), isolated process topology, and callback repricing are tested; the final review uses the real tool path (no `scripts/review-package` repo path).
+**Rev 3 (Codex plan-review round 2, `6e45a63`):** every remaining test snippet is now runnable against the live schemas — event payloads use the real required fields (`email.verified`=email+domain+verified_at, `poc.submitted`=rir+poc_handle); migration/preflight fixtures insert valid FK chains (`events`+`runs.triggering_event_id`) and the real `jobs.payload_json`; `make_bundle_y` edits `scoring_rubric.json["items"]`; the callback assertion uses the real keys `type`/`points`; `PolicyBundle` imports from `policy.loader`; `_decode_files` is byte-level (key-set check moved to `load_bundle`) so the non-ASCII round-trip works; the framed-hash move test does a real equal-byte transfer + a non-`domain/` `broker_gate.py` case; and the attestation, activation-recovery, rollback, epoch-alert tests and the three ops CLIs are complete code (no `Add:`/"mirror" prose). **Rev 2 (`9d8b82e`):** removed `...`/`RAW=None`/`pytest.raises(Exception)`/"mirror"/"or inline"; preflight rejects NULL/absent/corrupt; strict base64; all downgrade surfaces; real `review-package` path.
 
 ## Global Constraints
 
@@ -53,13 +53,15 @@ def make_bundle_y(tmp_path: Path, *, check_type: str, points: int, category: str
     dst = tmp_path / "policy_y"
     shutil.copytree(NORMATIVE, dst)
     rubric = json.loads((dst / "scoring_rubric.json").read_bytes())
-    for item in rubric["checks"]:          # rubric schema: list of {check_type,points,category}
+    # scoring_rubric.json top-level keys: version, threshold, hard_gates, items,
+    # dynamic_rules (ScoringRubric.items: tuple[RubricItem]; RubricItem has
+    # check_type/points/category — policy/types.py:14-16,23-40).
+    for item in rubric["items"]:
         if item["check_type"] == check_type:
             item["points"], item["category"] = points, category
     (dst / "scoring_rubric.json").write_text(json.dumps(rubric, indent=2))
     return dst, load_policy(dst)
 ```
-(Implementers: confirm the `scoring_rubric.json` key holding the item list — grep `ScoringRubric` in `policy/types.py`; adjust `rubric["checks"]` to the real key. `RubricItem` has `.check_type/.points/.category` per `policy/types.py:14-16`.)
 
 ---
 
@@ -197,11 +199,14 @@ _BUNDLE = "INSERT INTO policy_bundles (bundle_hash, files_json) VALUES ('h', '{}
     (_BUNDLE, "bundle_row"),
     (_BUNDLE + "; INSERT INTO bundle_pinning_epoch (id, activated_at, bundle_hash, "
      "engine_build_id) VALUES (1, now(), 'h', 'eng-1')", "epoch_row"),
-    ("INSERT INTO cases (id) VALUES ('c'); INSERT INTO runs (id, case_id, state, "
-     "engine_build_id) VALUES ('r','c','QUEUED','eng-1')", "run_engine_id"),
+    ("INSERT INTO cases (id) VALUES ('c'); "
+     "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, actor_json, "
+     "payload_json) VALUES ('ev','c','k','ph','email.verified','{}'::jsonb,'{}'::jsonb); "
+     "INSERT INTO runs (id, case_id, triggering_event_id, state, engine_build_id) "
+     "VALUES ('r','c','ev','QUEUED','eng-1')", "run_engine_id"),   # runs.triggering_event_id NN FK
     ("INSERT INTO cases (id) VALUES ('c'); INSERT INTO checks (id, case_id, check_type, "
      "status, points_awarded, category, source, policy_bundle_hash) "
-     "VALUES ('k','c','verified_email','PASS',10,'x','seed','h')", "check_bundle_hash"),
+     "VALUES ('k','c','verified_email','pass',10,'x','seed','h')", "check_bundle_hash"),
     ("INSERT INTO cases (id) VALUES ('c'); INSERT INTO decisions (id, case_id, decision, "
      "score, gates_json, buy_enablement, policy_shas, manual, engine_build_id) "
      "VALUES ('d','c','manual_review_insufficient',0,'{}'::jsonb,'buy_locked_org_id_required',"
@@ -307,12 +312,15 @@ def test_store_conflict_path_raises_on_tampered_row(session_factory, engine, cle
     with session_factory() as s, pytest.raises(store.BundleCorrupt):
         store.store_bundle(s, raw_x())                    # conflict → read-back verifies
 
-def test_load_raises_on_missing_and_extra_file(session_factory, engine, clean_db):
+@pytest.mark.parametrize("mutate", [
+    "files_json = files_json - 'scoring_rubric.json'",                    # missing key
+    "files_json = jsonb_set(files_json, '{extra_file.json}', '\"eA==\"')",  # extra key
+], ids=["missing", "extra"])
+def test_load_raises_on_wrong_key_set(session_factory, engine, clean_db, mutate):
     with session_factory() as s:
         h = store.store_bundle(s, raw_x()); s.commit()
     with engine.begin() as c:
-        c.execute(text("UPDATE policy_bundles SET files_json = files_json - "
-                       "'scoring_rubric.json' WHERE bundle_hash=:h"), {"h": h})
+        c.execute(text(f"UPDATE policy_bundles SET {mutate} WHERE bundle_hash=:h"), {"h": h})
     with session_factory() as s, pytest.raises(store.BundleCorrupt):
         store.load_bundle(s, h)
 
@@ -331,12 +339,13 @@ def test_activate_epoch_idempotent(session_factory, clean_db):
         assert store.read_epoch(s) == (h, "eng-1")
 
 def test_activate_epoch_valid_y_after_x_fails_on_readback(session_factory, engine, clean_db, tmp_path):
-    from tests.integration._bundle_helpers import make_bundle_y
+    from tests.integration._bundle_helpers import make_bundle_y, bundle_x
     from kyc_tool.policy.loader import read_policy_files
+    T = bundle_x().rubric.check_types[0]                    # a real rubric type
     with session_factory() as s:
         hx = store.store_bundle(s, raw_x())
-        _, by = make_bundle_y(tmp_path, check_type="verified_company_email", points=999, category="x")
-        hy = store.store_bundle(s, read_policy_files(by.policy_dir)); s.commit()
+        ydir, by = make_bundle_y(tmp_path, check_type=T, points=999, category="x")
+        hy = store.store_bundle(s, read_policy_files(ydir)); s.commit()
     with session_factory() as s:                          # X activated first
         store.activate_epoch(s, expect_bundle_hash=hx, expect_engine="eng-1"); s.commit()
     with session_factory() as s, pytest.raises(store.BundleCorrupt):  # valid Y loses on read-back
@@ -346,23 +355,20 @@ def test_activate_epoch_valid_y_after_x_fails_on_readback(session_factory, engin
 - [ ] **Step 3 — implement `repo.py`:**
 ```python
 import base64, binascii, json
-from datetime import UTC, datetime
 from sqlalchemy import text
 from kyc_tool.domain.engine import ENGINE_BUILD_ID
-from kyc_tool.policy.loader import POLICY_FILES, build_bundle
-from kyc_tool.policy.types import PolicyBundle  # or wherever PolicyBundle lives
+from kyc_tool.policy.loader import POLICY_FILES, build_bundle   # PolicyBundle also lives here
 
 class BundleCorrupt(Exception): ...
 
-def _encode_files(raw): return {n: base64.b64encode(b).decode() for n, b in raw.items()}
+def _encode_files(raw):                                   # raw: dict[str, bytes]
+    return {n: base64.b64encode(b).decode() for n, b in raw.items()}
 
-def _decode_files(files_json):
-    if set(files_json) != set(POLICY_FILES):
-        raise BundleCorrupt(f"stored files_json keys {set(files_json)} != {set(POLICY_FILES)}")
+def _decode_files(files_json):                            # byte-level only; no key-set check
     out = {}
     for name, b64 in files_json.items():
         try:
-            out[name] = base64.b64decode(b64, validate=True)  # strict: raises on non-b64
+            out[name] = base64.b64decode(b64, validate=True)   # strict: raises on non-b64
         except (binascii.Error, ValueError, TypeError) as e:
             raise BundleCorrupt(f"{name}: bad base64") from e
     return out
@@ -383,6 +389,9 @@ def load_bundle(session, bundle_hash):
                           {"h": bundle_hash}).first()
     if row is None:
         return None
+    if set(row.files_json) != set(POLICY_FILES):          # exact 7-key set (missing OR extra)
+        raise BundleCorrupt(f"{bundle_hash}: files_json keys {set(row.files_json)} "
+                            f"!= {set(POLICY_FILES)}")
     try:
         bundle = build_bundle(_decode_files(row.files_json), policy_dir=None)
     except BundleCorrupt:
@@ -423,7 +432,7 @@ Spec §5, §7 (P1.1/P2.4). One `seed_and_verify` interface; attest only after ve
 
 **Files:** Modify `src/kyc_tool/policy_store/repo.py` (add `seed_and_verify`), `src/kyc_tool/api/app.py`, `src/kyc_tool/workers/{pipeline_worker,dev_worker}.py`; Test `tests/integration/test_process_topology.py`, extend `tests/integration/test_bundle_pinning.py`.
 
-**Interfaces — Produces:** `policy_store.seed_and_verify(session_factory, policy_dir) -> str` (stores + read-back-verifies; returns hash); a structured `worker_started` log carrying `flag`/`bundle_hash`/`engine_build_id`, emitted only after a successful seed.
+**Interfaces — Produces:** `policy_store.seed_and_verify(session_factory, policy_dir) -> str` (stores + read-back-verifies; returns hash); `policy_store.attest(*, flag: bool, bundle_hash: str) -> None` (emits a structlog `bundle_pinning_ready` event with `flag`/`bundle_hash`/`engine_build_id=ENGINE_BUILD_ID`), called by the API + pipeline/dev startup **only after** a successful `seed_and_verify`.
 
 - [ ] **Step 1 — failing tests:**
 ```python
@@ -442,35 +451,37 @@ def test_retention_does_not_import_policy_store():
     assert _imports_policy_store("kyc_tool.workers.retention") is False
 
 # test_bundle_pinning.py — attestation both flag states + corrupt-startup
-def test_pipeline_worker_attests_both_flag_states(caplog, session_factory, policy, settings, tmp_path):
-    import structlog, logging
+def test_attest_logs_flag_bundle_engine(caplog, session_factory, clean_db):
+    import logging
     from kyc_tool.policy_store import repo as store
     from kyc_tool.config import REPO_ROOT
+    d = REPO_ROOT / "KYC_Tool_Build_Package" / "machine_readable"
     for flag in (False, True):
-        with caplog.at_level(logging.INFO):
-            store.seed_and_verify(session_factory, REPO_ROOT/"KYC_Tool_Build_Package"/"machine_readable")
-            # call the pipeline worker's startup-attest helper with settings.model_copy(
-            #   update={"enforce_bundle_pinning": flag})  (implementer extracts _attest())
-        rec = [r for r in caplog.records if r.msg == "worker_started"][-1]
-        assert rec.flag is flag and rec.engine_build_id == "eng-1" and rec.bundle_hash
         caplog.clear()
+        with caplog.at_level(logging.INFO):
+            h = store.seed_and_verify(session_factory, d)          # seeds + read-back verifies
+            store.attest(flag=flag, bundle_hash=h)                 # emits ONLY after verify
+        rec = next(r for r in caplog.records if getattr(r, "msg", None) == "bundle_pinning_ready")
+        assert rec.flag is flag and rec.engine_build_id == "eng-1" and rec.bundle_hash == h
 
 def test_corrupt_seed_row_fails_startup_no_attestation(caplog, session_factory, engine, clean_db):
+    import logging
+    from sqlalchemy import text
     from kyc_tool.policy_store import repo as store
+    from kyc_tool.policy.loader import read_policy_files
     from kyc_tool.config import REPO_ROOT
-    d = REPO_ROOT/"KYC_Tool_Build_Package"/"machine_readable"
-    h = None
+    d = REPO_ROOT / "KYC_Tool_Build_Package" / "machine_readable"
     with session_factory() as s:
-        h = store.store_bundle(s, __import__("kyc_tool.policy.loader", fromlist=["read_policy_files"]).read_policy_files(d)); s.commit()
-    with engine.begin() as c:
+        h = store.store_bundle(s, read_policy_files(d)); s.commit()
+    with engine.begin() as c:                                      # tamper the persisted row
         c.execute(text("UPDATE policy_bundles SET files_json = jsonb_set("
                        "files_json,'{scoring_rubric.json}','\"%%%\"') WHERE bundle_hash=:h"), {"h": h})
-    with pytest.raises(store.BundleCorrupt):
-        store.seed_and_verify(session_factory, d)
-    assert not [r for r in caplog.records if getattr(r, "msg", None) == "worker_started"]
+    with caplog.at_level(logging.INFO), pytest.raises(store.BundleCorrupt):
+        store.seed_and_verify(session_factory, d)                  # read-back → BundleCorrupt at startup
+    assert not [r for r in caplog.records if getattr(r, "msg", None) == "bundle_pinning_ready"]
 ```
 - [ ] **Step 2 — run red** → FAIL.
-- [ ] **Step 3 — implement.** `seed_and_verify(session_factory, policy_dir)`: `with uow(session_factory) as s: h = store_bundle(s, read_policy_files(policy_dir))`; return `h` (raises `BundleCorrupt` on a corrupt existing row → caller fails startup). In `pipeline_worker.py`/`dev_worker.py` `main()` and `api/app.py` factory: after `load_policy`, call `seed_and_verify`, then log `worker_started`/startup with `flag=settings.enforce_bundle_pinning, bundle_hash=h, engine_build_id=ENGINE_BUILD_ID` (extract an `_attest(...)` helper the test can call). Do **not** import `policy`/`policy_store` in `outbox_worker.py`/`retention.py`.
+- [ ] **Step 3 — implement.** In `policy_store/repo.py`: `seed_and_verify(session_factory, policy_dir)` = `with uow(session_factory) as s: h = store_bundle(s, read_policy_files(policy_dir)); return h` (raises `BundleCorrupt` on a corrupt existing row → caller fails startup); `attest(*, flag, bundle_hash)` = `log.info("bundle_pinning_ready", flag=flag, bundle_hash=bundle_hash, engine_build_id=ENGINE_BUILD_ID)` (module `log = structlog.get_logger(__name__)`). In `pipeline_worker.py`/`dev_worker.py` `main()` and `api/app.py` factory: after `load_policy`, call `h = seed_and_verify(...)` then `attest(flag=settings.enforce_bundle_pinning, bundle_hash=h)`. Do **not** import `policy`/`policy_store` in `outbox_worker.py`/`retention.py`.
 - [ ] **Step 4 — run green** → PASS.
 - [ ] **Step 5 — commit** `feat(pr6): startup seed_and_verify + attestation (api/pipeline only)`.
 
@@ -493,7 +504,7 @@ def test_flag_on_absent_bundle_dead_letters_zero_side_effects(
     from kyc_tool.storage.object_store import FsStore
     from sqlalchemy import text
     # ingest a run under the real policy (records its bundle_hash on the run)...
-    post_event("case-absent", "poc.submitted", {"contact_email": "p@acme.test"})
+    post_event("case-absent", "poc.submitted", {"rir": "arin", "poc_handle": "POC-ACME"})
     # ...then point the run at a NOT-seeded hash + flag on
     with engine.begin() as c:
         c.execute(text("UPDATE runs SET policy_bundle_hash='deadbeef' WHERE case_id='case-absent'"))
@@ -611,10 +622,13 @@ def test_mixed_era_reprices_score_and_callback(
     Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
            on_dead_letter=pl.on_dead_letter).run_until_idle()
     publisher.process_pending()
-    checks = callback_capture.requests[-1]["body"]["checks"]  # confirm key name in pipeline._callback_body
-    assert any(c.get("check_type") == T and c.get("points") == x_points for c in checks)
+    # pipeline._callback_body (pipeline.py:510-519) emits body["checks"] = list of
+    # {"type": check_type, "points": points_awarded if PASS else 0, ...} from the
+    # SAME `views` list decide passes it — so flag-on repriced views show X's points.
+    checks = callback_capture.requests[-1]["body"]["checks"]
+    assert any(c["type"] == T and c["points"] == x_points for c in checks)
 ```
-> The only value the implementer confirms from live code is the callback checks-summary field names (`checks`/`points`/`check_type`) in `pipeline._callback_body` — adjust the last assertion to the real keys. Every other line is executable as written. All four properties (flag-on score, flag-off score, callback points, and the surviving-check setup) are asserted.
+Every line is executable as written; the callback keys are the real ones. All four properties (flag-on score, flag-off score, callback points, and the surviving-check setup) are asserted.
 - [ ] **Step 5 — run green** (unit + integration) → PASS; golden cases unchanged (flag off).
 - [ ] **Step 6 — commit** `feat(pr6): rubric-pinned decision-time scoring views + callback (flag-on)`.
 
@@ -632,20 +646,23 @@ Spec §5 (P1.1/P1.2, P3.8), §8.8/8.9/8.10/8.11.
 ```python
 def test_cross_bundle_pin_scores_x_and_records_x(
         session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
-    from tests.integration._bundle_helpers import make_bundle_y, bundle_x
+    from tests.integration._bundle_helpers import make_bundle_y, bundle_x, raw_x
     from kyc_tool.policy.loader import read_policy_files
     from kyc_tool.policy_store import repo as store
     from kyc_tool.orchestration.pipeline import Pipeline
     from kyc_tool.queue.worker import Worker
     from kyc_tool.storage.object_store import FsStore
     from sqlalchemy import text
-    bx = bundle_x()
-    ydir, by = make_bundle_y(tmp_path, check_type="verified_company_email", points=1, category="x")
+    bx = bundle_x()                                        # policy_dir=None (DB origin)
+    T = bx.rubric.check_types[0]                           # a real rubric type so Y != X
+    ydir, by = make_bundle_y(tmp_path, check_type=T, points=1, category="x")
     with session_factory() as s:
-        store.store_bundle(s, read_policy_files(bx.policy_dir))
+        store.store_bundle(s, raw_x())                    # X from the normative dir
         store.store_bundle(s, read_policy_files(ydir)); s.commit()
     # app ingests under X (records bx.bundle_hash on the run); worker process bundle = Y, flag on
-    post_event("case-xy", "email.verified", {"email": "ops@acme.test", "company_domain": "acme.test"})
+    post_event("case-xy", "email.verified",
+               {"email": "ops@acme.test", "domain": "acme.test",
+                "verified_at": "2026-07-21T00:00:00Z"})
     pinned = settings.model_copy(update={"enforce_bundle_pinning": True})
     pl = Pipeline(session_factory, by, FsStore(tmp_path/"e"), pinned, adapters={})
     Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
@@ -662,12 +679,28 @@ def test_cross_bundle_pin_scores_x_and_records_x(
                              "WHERE case_id='case-xy' ORDER BY decided_at DESC LIMIT 1")).first()
         assert dec.policy_shas == bx.shas and dec.engine_build_id == "eng-1"
         # reconstruct the bundle hash from the recorded shas → equals X
+        # (loader.py:56-58 formula: sha256 of "".join(f"{name}:{sha};") over POLICY_FILES)
         import hashlib
+        from kyc_tool.policy.loader import POLICY_FILES
         rebuilt = hashlib.sha256("".join(f"{n}:{dec.policy_shas[n]};"
-                  for n in read_policy_files(bx.policy_dir)).encode()).hexdigest()
+                  for n in POLICY_FILES).encode()).hexdigest()
         assert rebuilt == bx.bundle_hash
 ```
-Add: a broker-blocked short-circuit case (seed the case broker-BLOCKED, assert both engine-ID columns + resolved hash written while decision stays `reject`); a cascade case (an ORG-ID→POC or identity-invalidation successor check carries the resolved hash); a manual-approve case (`post_event(..., "reviewer.manual_approve", {"reviewer_id":"rev-1"}, actor={"type":"reviewer","id":"rev-1"})` → `decisions.engine_build_id == "eng-1"`); and the FLAG-OFF counterpart of the headline (run pin X, provenance = Y).
+Also add these sibling tests in the same file:
+```python
+def test_manual_approve_stamps_engine_build_id(session_factory, clean_db, post_event):
+    # manual-approve writes DecisionRow(run_id=None) synchronously in the API
+    # (events/ingest.py:_handle_manual_approve) — Task 9 stamps ENGINE_BUILD_ID there.
+    post_event("c-ma", "reviewer.manual_approve", {"reviewer_id": "rev-1"},
+               actor={"type": "reviewer", "id": "rev-1"})
+    with session_factory() as s:
+        eid = s.execute(text("SELECT engine_build_id FROM decisions WHERE case_id='c-ma' "
+                             "AND manual=true ORDER BY decided_at DESC LIMIT 1")).scalar_one()
+    assert eid == "eng-1"
+```
+- **Flag-off counterpart of the headline:** identical to `test_cross_bundle_pin_scores_x_and_records_x` but `enforce_bundle_pinning=False`; assert `runs.policy_bundle_hash == X.bundle_hash` (creation pin unchanged) while `checks.policy_bundle_hash` and `DecisionRow.policy_shas` record the **process** bundle **Y** (drift visible), and both engine-ID columns == `"eng-1"`.
+- **Broker-blocked short-circuit:** seed the case's identifier onto a blocked `broker_entities` row (reuse PR 5b's `_seed_blocked_broker` in `tests/integration/test_review_completed_event.py`), drive an `email.verified` run flag-on, and assert `runs.engine_build_id == decisions.engine_build_id == "eng-1"`, `checks.policy_bundle_hash == X.bundle_hash`, and `decisions.decision == 'reject'` (the DECIDE short-circuit still stamps provenance).
+- **Cascade provenance:** drive an `org_id.submitted` then `poc.token_verified` sequence so `checkstore.supersede_stale_identity_proof` writes a successor check; assert that successor's `checks.policy_bundle_hash == X.bundle_hash` under flag-on.
 - [ ] **Step 2 — run red** → FAIL.
 - [ ] **Step 3 — implement.** Add `policy_bundle_hash: str | None = None` to the four checkstore write fns; stamp it on the row (`checks.policy_bundle_hash`). In `pipeline.py` decide (incl. the broker-blocked DECIDE short-circuit): pass the resolved hash to every run-created check write; set `DecisionRow.policy_shas`/`.engine_build_id`, `runs.engine_build_id`, and the DECIDE-audit `resolved_policy_bundle_hash` from the resolved bundle + `ENGINE_BUILD_ID`, all inside the existing decide commit; **never** write `runs.policy_bundle_hash`. In `ingest._handle_manual_approve` (`:254`), add `engine_build_id=ENGINE_BUILD_ID` to `DecisionRow(...)`.
 - [ ] **Step 4 — run green** → PASS; golden cases unchanged (flag off).
@@ -695,29 +728,34 @@ from kyc_tool.ops.seed_policy_bundle import seed_policy_bundle
 from kyc_tool.policy_store import repo as store
 from tests.integration._bundle_helpers import raw_x, bundle_x
 
-def _queue_run_transition(engine, case, run_id, bundle_hash, status="queued"):
+def _queue_run_transition(engine, case, run_id, bundle_hash, status="queued", kind="run_transition"):
     with engine.begin() as c:
         c.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case})
-        c.execute(text("INSERT INTO runs (id, case_id, state, policy_bundle_hash) "
-                       "VALUES (:r,:c,'QUEUED',:h)"), {"r": run_id, "c": case, "h": bundle_hash})
-        c.execute(text("INSERT INTO jobs (kind, payload, status, case_id, attempts) "
-                       "VALUES ('run_transition', CAST(:p AS jsonb), :s, :c, 0)"),
-                  {"p": f'{{"run_id":"{run_id}"}}', "s": status, "c": case})
+        ev = f"{run_id}-ev"
+        c.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, "
+                       "event_type, actor_json, payload_json) VALUES (:e,:c,:e,'ph',"
+                       "'recalculate.requested','{}'::jsonb,'{}'::jsonb)"), {"e": ev, "c": case})
+        c.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state, "
+                       "policy_bundle_hash) VALUES (:r,:c,:e,'QUEUED',:h)"),
+                  {"r": run_id, "c": case, "e": ev, "h": bundle_hash})
+        c.execute(text("INSERT INTO jobs (kind, payload_json, status, case_id, attempts) "
+                       "VALUES (:k, CAST(:p AS jsonb), :s, :c, 0)"),
+                  {"k": kind, "p": f'{{"run_id":"{run_id}"}}', "s": status, "c": case})
 
 def test_verify_pinnable_backlog_flags_null_absent_corrupt(session_factory, engine, clean_db):
     with session_factory() as s:
         good = store.store_bundle(s, raw_x()); s.commit()
-    _queue_run_transition(engine, "c-ok", "r-ok", good)               # loads → OK
-    _queue_run_transition(engine, "c-null", "r-null", None)           # NULL → flagged
-    _queue_run_transition(engine, "c-abs", "r-abs", "0"*64)           # absent → flagged
-    with engine.begin() as c:                                        # corrupt an existing row
+    with engine.begin() as c:                                        # a corrupt bundle row
         c.execute(text("INSERT INTO policy_bundles (bundle_hash, files_json) "
                        "VALUES ('corrupt', '{\"scoring_rubric.json\":\"%%%\"}'::jsonb)"))
-    _queue_run_transition(engine, "c-cor", "r-cor", "corrupt")        # corrupt → flagged
-    # irrelevant jobs must NOT be flagged:
-    _queue_run_transition(engine, "c-done", "r-done", None, status="done")
-    flagged = set(verify_pinnable_backlog(session_factory))
-    assert flagged == {"r-null", "r-abs", "r-cor"}
+    _queue_run_transition(engine, "c-ok",   "r-ok",   good)              # loads → OK
+    _queue_run_transition(engine, "c-null", "r-null", None)              # NULL → flagged
+    _queue_run_transition(engine, "c-abs",  "r-abs",  "0"*64)            # absent → flagged
+    _queue_run_transition(engine, "c-cor",  "r-cor",  "corrupt")        # corrupt → flagged
+    _queue_run_transition(engine, "c-dead", "r-dead", "0"*64, status="dead")  # dead-requeueable → flagged
+    _queue_run_transition(engine, "c-done", "r-done", None, status="done")    # terminal → NOT flagged
+    _queue_run_transition(engine, "c-oth",  "r-oth",  None, kind="outbox_delivery")  # non-pipeline → NOT flagged
+    assert set(verify_pinnable_backlog(session_factory)) == {"r-null", "r-abs", "r-cor", "r-dead"}
 
 def test_seed_policy_bundle_stores_on_match_no_row_on_mismatch(session_factory, engine, clean_db):
     from kyc_tool.config import REPO_ROOT
@@ -736,9 +774,125 @@ def test_readyz_503_when_process_bundle_absent(client, engine, clean_db):
         c.execute(text("TRUNCATE policy_bundles CASCADE"))
     assert client.get("/readyz").status_code == 503
 ```
-Add: an **activation recovery** test (§8.11 — a `run_transition` job left `status='running'` on its final attempt is requeued by `requeue_interrupted(session_factory)` (import from `ops.requeue_interrupted_jobs`) with `attempts` decremented and 0 running afterward, then handled under a flag-on worker); a **rollback acceptance** test (§8.13 — same setup, restart with the flag OFF on the same `Pipeline` code → one decision, `runs.policy_bundle_hash` unchanged, provenance == process bundle, `engine_build_id`=="eng-1"); and an **epoch alert** test (a decision with `decided_at` after the epoch and NULL `engine_build_id` is flagged; a fresh `QUEUED` run with NULL is not).
+```python
+def test_activation_recovery_requeues_final_attempt(session_factory, engine, clean_db):
+    from kyc_tool.ops.requeue_interrupted_jobs import requeue_interrupted
+    _queue_run_transition(engine, "c-rec", "r-rec", None)          # a queued run_transition job
+    with engine.begin() as c:                                      # simulate crash mid-final-attempt
+        c.execute(text("UPDATE jobs SET status='running', attempts=max_attempts, "
+                       "locked_by='dead-worker' WHERE case_id='c-rec'"))
+    assert requeue_interrupted(session_factory) == 1               # run AFTER all workers stopped
+    with session_factory() as s:
+        row = s.execute(text("SELECT status, attempts, max_attempts FROM jobs "
+                             "WHERE case_id='c-rec'")).one()
+        assert row.status == "queued" and row.attempts == row.max_attempts - 1  # forced-stop attempt returned
+        assert s.execute(text("SELECT count(*) FROM jobs WHERE status='running'")).scalar_one() == 0
+
+def test_rollback_flag_off_still_decides_with_provenance(
+        session_factory, policy, settings, tmp_path, clean_db, post_event):
+    # Flag-OFF rollback on the PR6 image: a normal run still decides, the creation
+    # pin is intact, and bundle+engine provenance is written (no post-epoch NULL).
+    from kyc_tool.orchestration.pipeline import Pipeline
+    from kyc_tool.queue.worker import Worker
+    from kyc_tool.storage.object_store import FsStore
+    from kyc_tool.policy_store import repo as store
+    from tests.integration._bundle_helpers import raw_x, bundle_x
+    with session_factory() as s:
+        store.store_bundle(s, raw_x()); s.commit()
+    post_event("c-rb", "email.verified",
+               {"email": "o@acme.test", "domain": "acme.test", "verified_at": "2026-07-21T00:00:00Z"})
+    off = settings.model_copy(update={"enforce_bundle_pinning": False})
+    pl = Pipeline(session_factory, policy, FsStore(tmp_path / "e"), off, adapters={})
+    Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+           on_dead_letter=pl.on_dead_letter).run_until_idle()
+    with session_factory() as s:
+        run = s.execute(text("SELECT policy_bundle_hash, engine_build_id FROM runs "
+                             "WHERE case_id='c-rb'")).first()
+        assert run.policy_bundle_hash == bundle_x().bundle_hash and run.engine_build_id == "eng-1"
+        dec = s.execute(text("SELECT engine_build_id FROM decisions WHERE case_id='c-rb'")).first()
+        assert dec.engine_build_id == "eng-1"
+
+def test_post_epoch_null_alert(session_factory, engine, clean_db):
+    from kyc_tool.ops.activate_bundle_pinning_epoch import post_epoch_null_provenance
+    from kyc_tool.policy_store import repo as store
+    from tests.integration._bundle_helpers import raw_x
+    with session_factory() as s:
+        h = store.store_bundle(s, raw_x())
+        store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-1"); s.commit()
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO cases (id) VALUES ('c-al')"))
+        c.execute(text("INSERT INTO decisions (id, case_id, decision, score, gates_json, "
+                       "buy_enablement, policy_shas, manual) VALUES ('d-al','c-al','x',0,"
+                       "'{}'::jsonb,'buy_locked_org_id_required','{}'::jsonb,false)"))  # decided_at=now()>epoch, engine NULL
+        c.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                       "actor_json, payload_json) VALUES ('e-q','c-al','kq','ph','email.verified',"
+                       "'{}'::jsonb,'{}'::jsonb)"))
+        c.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                       "VALUES ('r-q','c-al','e-q','QUEUED')"))   # queued, NULL engine — legitimate
+    with session_factory() as s:
+        alert = post_epoch_null_provenance(s)
+    assert "d-al" in alert["decisions"] and "r-q" not in alert.get("runs", [])
+```
 - [ ] **Step 2 — run red** → FAIL.
-- [ ] **Step 3 — implement** the `/readyz` addition (after 011, unconditionally: resolve the process `bundle_hash`, `503` if `load_bundle(session, that_hash) is None`), the three ops modules (mirror `ops/requeue_interrupted_jobs.py`: a function + `main()` + `python -m` entry; `verify_pinnable_backlog` builds the jobs→runs query above and calls `load_bundle` wrapped so `BundleCorrupt`/`None`/NULL all flag; `seed_policy_bundle` compute→compare→store; `activate_bundle_pinning_epoch` loads local policy + argparse `--expect-bundle-hash`/`--expect-engine` + `activate_epoch`), and `post_epoch_null_provenance`.
+- [ ] **Step 3 — implement.** Each ops module mirrors `ops/requeue_interrupted_jobs.py` (function + `main()` + `python -m` entry via `make_session_factory(make_engine(get_settings().database_url))`):
+```python
+# ops/verify_pinnable_backlog.py
+def verify_pinnable_backlog(session_factory) -> list[str]:
+    bad = []
+    with session_factory() as s:
+        rows = s.execute(text(
+            "SELECT DISTINCT r.id AS run_id, r.policy_bundle_hash AS h FROM jobs j "
+            "JOIN runs r ON r.id = (j.payload_json->>'run_id') "
+            "WHERE j.kind='run_transition' AND j.status IN ('queued','running','dead')")).all()
+        for run_id, h in rows:
+            if h is None:
+                bad.append(run_id); continue
+            try:
+                if store.load_bundle(s, h) is None:
+                    bad.append(run_id)
+            except store.BundleCorrupt:
+                bad.append(run_id)
+    return bad
+
+# ops/seed_policy_bundle.py  (compute → compare → store; NEVER store on mismatch)
+def seed_policy_bundle(session_factory, policy_dir, expect_hash: str) -> None:
+    raw = read_policy_files(policy_dir)
+    computed = build_bundle(raw).bundle_hash
+    if computed != expect_hash:
+        raise store.BundleCorrupt(f"{policy_dir} hashes {computed} != expected {expect_hash}")
+    with uow(session_factory) as s:
+        store.store_bundle(s, raw)
+
+# ops/activate_bundle_pinning_epoch.py
+def post_epoch_null_provenance(session) -> dict:
+    ep = session.execute(text("SELECT activated_at FROM bundle_pinning_epoch WHERE id=1")).first()
+    if ep is None:
+        return {"decisions": [], "checks": [], "runs": []}
+    at = ep.activated_at
+    dec = [r.id for r in session.execute(text("SELECT id FROM decisions WHERE decided_at > :at "
+           "AND engine_build_id IS NULL"), {"at": at})]
+    chk = [r.id for r in session.execute(text("SELECT id FROM checks WHERE created_at > :at "
+           "AND policy_bundle_hash IS NULL"), {"at": at})]
+    runs = [r.run_id for r in session.execute(text("SELECT DISTINCT run_id FROM decisions "
+            "WHERE decided_at > :at AND engine_build_id IS NULL AND run_id IS NOT NULL"), {"at": at})]
+    return {"decisions": dec, "checks": chk, "runs": runs}
+
+def main() -> int:                       # activate_bundle_pinning_epoch CLI
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--expect-bundle-hash", required=True)
+    ap.add_argument("--expect-engine", required=True)
+    args = ap.parse_args()
+    settings = get_settings()
+    local = load_policy(settings.policy_dir)                       # compare LOCAL loaded bundle
+    if local.bundle_hash != args.expect_bundle_hash:
+        raise SystemExit(f"local bundle {local.bundle_hash} != --expect-bundle-hash")
+    sf = make_session_factory(make_engine(settings.database_url))
+    with uow(sf) as s:                                            # activate_epoch also checks
+        store.activate_epoch(s, expect_bundle_hash=args.expect_bundle_hash,   # expect_engine==ENGINE_BUILD_ID
+                             expect_engine=args.expect_engine)     # + read-back CAS
+    print("epoch activated"); return 0
+```
+And the `/readyz` addition — after 011, **unconditionally** (grep the readyz handler, `api/routes_metrics.py` or `app.py`): compute the process bundle's `bundle_hash` (from the app's loaded policy) and return **503** if `store.load_bundle(session, that_hash) is None`, else keep the existing 200 path. Add a direct `store.activate_epoch(..., expect_engine="eng-999")` → `BundleCorrupt` test proving the local-engine mismatch rejection.
 - [ ] **Step 4 — run green** → PASS.
 - [ ] **Step 5 — commit** `feat(pr6): /readyz bundle check + verify/seed/activate ops + epoch alert`.
 
@@ -770,20 +924,31 @@ def test_engine_source_hash_pinned():
         "src/kyc_tool changed — if scoring/decision semantics changed bump "
         "ENGINE_BUILD_ID; re-pin EXPECTED_ENGINE_SOURCE_HASH in the SAME commit.")
 
-def test_framing_detects_move_rename_and_empty(tmp_path):
-    base = tmp_path/"a"; shutil.copytree(SRC, base)
+def test_framing_catches_cross_file_move_rename_empty(tmp_path):
+    # A real equal-byte transfer: move "MOVE\n" from a.py to b.py. The UNFRAMED
+    # concat of sorted-path bytes is byte-IDENTICAL both ways; framing
+    # (path\0len\0bytes) makes the two trees differ — proving boundary safety.
+    d1 = tmp_path/"d1"; d1.mkdir()
+    (d1/"a.py").write_bytes(b"AAAA\nMOVE\n"); (d1/"b.py").write_bytes(b"BBBB\n")
+    d2 = tmp_path/"d2"; d2.mkdir()
+    (d2/"a.py").write_bytes(b"AAAA\n"); (d2/"b.py").write_bytes(b"MOVE\nBBBB\n")
+    assert b"AAAA\nMOVE\n"+b"BBBB\n" == b"AAAA\n"+b"MOVE\nBBBB\n"   # unframed concat identical
+    assert _framed_hash(d1) != _framed_hash(d2)                     # framed differs
+    d3 = tmp_path/"d3"; d3.mkdir(); (d3/"a.py").write_bytes(b"AAAA\n")
+    d4 = tmp_path/"d4"; d4.mkdir(); (d4/"a.py").write_bytes(b"AAAA\n"); (d4/"z.py").write_bytes(b"")
+    assert _framed_hash(d3) != _framed_hash(d4)                     # empty-file add
+    d5 = tmp_path/"d5"; d5.mkdir(); (d5/"a.py").write_bytes(b"AAAA\n")
+    d6 = tmp_path/"d6"; d6.mkdir(); (d6/"renamed.py").write_bytes(b"AAAA\n")
+    assert _framed_hash(d5) != _framed_hash(d6)                     # rename (path change)
+
+def test_non_domain_edit_trips_guard(tmp_path):
+    # The whole src tree is in the closure, so a semantic edit OUTSIDE domain/
+    # (broker_gate.py) changes the hash — no curated list can omit it.
+    base = tmp_path/"src"; shutil.copytree(SRC, base)
     h0 = _framed_hash(base)
-    # cross-file move: append a line to one file, remove it from another sorted file
-    files = sorted(base.rglob("*.py"))
-    files[0].write_bytes(files[0].read_bytes() + b"\nMOVED=1\n")
-    files[1].write_bytes(files[1].read_bytes().replace(b"\nMOVED=1\n", b""))  # no-op if absent
-    assert _framed_hash(base) != h0                       # content/length changed
-    base2 = tmp_path/"b"; shutil.copytree(SRC, base2)
-    (base2/"zz_new_empty.py").write_bytes(b"")            # empty-file add
-    assert _framed_hash(base2) != _framed_hash(SRC)
-    base3 = tmp_path/"c"; shutil.copytree(SRC, base3)
-    first = sorted(base3.rglob("*.py"))[0]; first.rename(first.with_name("renamed_"+first.name))
-    assert _framed_hash(base3) != _framed_hash(SRC)       # path changed
+    bg = base/"orchestration"/"broker_gate.py"
+    bg.write_bytes(bg.read_bytes() + b"\n# semantic change\n")
+    assert _framed_hash(base) != h0
 ```
 - [ ] **Step 2 — pin.** Run `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v`; copy the actual digest from the failure into `EXPECTED_ENGINE_SOURCE_HASH`; re-run → PASS.
 - [ ] **Step 3 — docs.** ADR-005 (context = §1's 3 problems; decision = rubric-pinned scoring + bundle+engine provenance + durable store + framed guard + epoch; rollout = §7; consequences = flag-off no-op + forward-only downgrade), prepended above ADR-004. `DEPLOYMENT.md`: Phase 1 + `activate_bundle_pinning_epoch`; the drained activation (preflight `verify_pinnable_backlog` → confirm zero old workers → `requeue_interrupted_jobs` → flag-on workers + attestation → resume); the flag-only rollback. `RUNBOOK.md`: the flag, `verify_pinnable_backlog`, `seed_policy_bundle`, `/readyz`, epoch alert, reprocess-needs-seed. `OVERVIEW.md`: correct `:218-219` + `:411-413` → PR 6 boundary + **PR 8 immutable evidence / PR 6b revalidation / PR 10 broker-state**. `.agents/ROADMAP.md`: item 7A shipped; bump PR 10's reserved ADR-005 → **ADR-006**; 7B pending for M4.
