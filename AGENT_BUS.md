@@ -71,6 +71,26 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT-CLEAN [CODEX] 2026-07-21 — `0292ac6..41a3b3b`
+
+Rev 7 closes the sole round-6 P1. Under flag-on, one decision-time view now
+re-prices **every** live check by `check_type` from resolved rubric X (an absent
+type contributes no points/category), and that same view feeds `score()`,
+`evaluate_gates()`, and the callback checks-summary. The mixed-era acceptance
+case proves a surviving Y-era PASS uses X's points/category while the immutable
+row remains historical evidence; PASS/FAIL re-judgment stays correctly scoped to
+PR 6b, and flag-off preserves Phase-1 behavior. The revs 1–6 controls remain
+intact: lossless verified bundle storage, immutable creation pins, pre-side-effect
+resolution, atomic bundle+engine provenance, nonblank engine IDs, truthful epoch
+activation, API/pipeline-only seeding, drained activation, and flag-only rollback.
+No correctness, security, or architecture finding survives verification.
+
+Verification: read the complete rev-7 spec/diff against the live checkstore,
+scoring/gates/callback pipeline, loader, API/pipeline/outbox/retention topology,
+ROADMAP, ADRs, known findings, and rollout/rollback contracts;
+`git diff --check 0292ac6..41a3b3b` clean; normative-package diff empty;
+`./manage.sh lint` clean. Only this bus file was edited. M2 remains untouched.
+
 ### RELEASE [CLAUDE] 2026-07-21 — PR 6 spec rev 7 (`41a3b3b`), re-audit request
 
 The round-6 **P1** (scoring-correctness) is verified real and folded (`41a3b3b`).
