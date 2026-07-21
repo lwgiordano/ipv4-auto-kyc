@@ -1,10 +1,17 @@
 # PR 6 — Per-run policy bundle pinning (ROADMAP item 7A)
 
-**Status:** DESIGN rev 6 — Codex rounds 1–5 folded; awaiting re-audit.
+**Status:** DESIGN rev 7 — Codex rounds 1–6 folded; awaiting re-audit.
 **ROADMAP:** item 7A (PR 6). PR 6b (revalidation), PR 8 (immutable evidence),
 PR 10 (broker snapshots) are separate later units.
 **Locked (human-approved):** Approach A (DB-backed bundle store, load-by-hash);
 `ENGINE_BUILD_ID` = a deliberate domain constant guarded by a framed whole-tree test.
+
+**Rev 7 changes (Codex `2887942..0292ac6` review):** flag-on scoring re-derives
+**every live check's** points+category from the resolved rubric X at decision time
+(not just newly-stamped checks) — closing the gap where a surviving Y-era check
+was scored with Y's stamped points while the decision claimed X; the ROADMAP
+"`score()`/`evaluate_gates()` pinned to rubric args" contract. Immutable rows +
+validator PASS/FAIL re-eval untouched (→ PR 6b); flag-off unchanged (P1).
 
 **Rev 6 changes (Codex `c3b7544..2887942` review):** `store_bundle` **reads the
 persisted row back and verifies** it on insert *and* conflict, so a corrupt row
@@ -120,11 +127,23 @@ The resolved bundle is threaded through every subsequent transition of that run
 (cached by hash). `runs.policy_bundle_hash` is the resolve *input* and is never
 rewritten (immutable creation pin).
 
-**What the resolved bundle drives:** the check-type allow-list →
-`validators/build.py::build_intents` (`:17-60`); per-check points+category →
-`checkstore.apply_check_intents` (`checkstore/repo.py:250-279`); the score
-threshold + allowed broker statuses → `score()`/`evaluate_gates()`
-(`pipeline.py:392-393`). Validator pass/fail + reason codes are code
+**What the resolved bundle drives (P1 — decision-time, all live checks).** Beyond
+stamping *new* checks (`build_intents` allow-list, `apply_check_intents`
+points/category), the resolved rubric X is applied at **decision time to derive
+the points and gate-category of EVERY live check by its `check_type`**: a check
+that survived from an earlier bundle is scored with **X's** points/category, and a
+`check_type` absent from X contributes no points and no gate category. `score()`,
+`evaluate_gates()`, **and the callback checks-summary** consume these X-derived
+views — *not* each row's historically-stamped `points_awarded`/`category`, which
+`checkstore.as_view` (`:43-51`) + `scoring.py` (`:16-24,50-67`) read directly
+today (the gap this closes; the ROADMAP "score()/evaluate_gates() pinned to rubric
+args" contract, `.agents/ROADMAP.md:218-223`). The score threshold + allowed
+broker statuses also come from X. **Immutable check rows are untouched** (status,
+reason_codes, source, and their historical points/category as evidence of what was
+stamped when), and **validator PASS/FAIL re-evaluation under X stays deferred to PR
+6b** — PR 6 re-prices the existing pass/fail evidence under X, it does not re-judge
+it. **Flag-off keeps today's behavior** (scoring reads the stamped row values), so
+Phase 1 is a strict no-op. Validator pass/fail + reason codes are code
 (`engine_build_id`).
 
 **Automatic decision provenance — bundle AND engine, atomic (P1.2).** In the
@@ -252,6 +271,12 @@ non-`domain/` semantic edit (`broker_gate.py` → CLEAR) each trip it.
    provenance == the Y values (drift visible); engine IDs still `ENGINE_BUILD_ID`.
    Cross-decision: `approve` under X but `manual_review_insufficient` under Y →
    decides `approve` (flag on).
+8b. **Mixed-era rubric pinning (P1, decision-time).** A live PASS stamped under Y
+   (e.g. 83 pts, `control_proof`) **survives without replacement** into an X-pinned
+   run where that `check_type` is 10 pts / `account_access`. **Flag on:** `score()`
+   counts **10** (not 83) and `evaluate_gates()` loses `control_proof` — X's rubric
+   change flips the score/gate — while the check row's status + historical values
+   are unchanged (no PR-6b revalidation). **Flag off:** scores 83 (today's behavior).
 9. **Broker-blocked short-circuit (P1.2):** stamps both engine-ID columns +
    resolved bundle atomically while the decision stays `reject`.
 10. **Cascade provenance:** identity-invalidation + ORG-ID→POC successors carry the
