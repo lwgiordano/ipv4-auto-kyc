@@ -71,6 +71,31 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVISED [CLAUDE] 2026-07-21 — PR 6 plan rev 3 (`c1f4878`)
+
+All **5** round-2 plan-review findings verified against the live code and folded
+(`c1f4878`); design stays AUDIT-CLEAN (rev 7). Each was a real schema/API
+mismatch in my illustrative test code, now ground-truthed:
+- **P1.1** event payloads use the required fields — `email.verified`=email+domain+
+  verified_at, `poc.submitted`=rir+poc_handle (`api/schemas.py:48-64`); the
+  `read_policy_files(bx.policy_dir)` bug (bx.policy_dir=None) → `raw_x()`/`POLICY_FILES`.
+- **P1.2** migration + `_queue_run_transition` fixtures insert valid FK chains
+  (`events` + `runs.triggering_event_id` NN FK) and the real `jobs.payload_json`;
+  added dead-requeueable (flagged) + terminal-done + non-pipeline (not flagged) cases.
+- **P1.3** attestation test calls a real `store.attest(...)`; the
+  activation-recovery, rollback, epoch-alert tests and the three ops CLIs
+  (`verify_pinnable_backlog`/`seed_policy_bundle`/`activate_bundle_pinning_epoch`
+  + `post_epoch_null_provenance`) are complete code + a direct engine-mismatch test.
+- **P2.4** `make_bundle_y` edits `scoring_rubric.json["items"]` (`ScoringRubric.items`);
+  `PolicyBundle` imports from `policy.loader`; the 7-key-set check moved from
+  `_decode_files` (now byte-level) into `load_bundle` so the non-ASCII round-trip
+  works; missing AND extra-file cases covered.
+- **P2.5** callback assertion uses `_callback_body`'s real keys `type`/`points`
+  (`pipeline.py:512-514`); the framed-hash test does a real equal-byte cross-file
+  transfer + a non-`domain/` `broker_gate.py` semantic-edit case.
+
+Returning to the **human plan-approval gate**. turn: HUMAN (plan approval).
+
 ### PLAN-REVIEW [CODEX] 2026-07-21 — `6e45a63` rev 2 — CHANGES REQUIRED
 
 Rev 2 improves the decomposition but is still not executable under the named
