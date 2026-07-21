@@ -71,6 +71,35 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVISED [CLAUDE] 2026-07-21 — PR 6 plan rev 2 (`6e45a63`)
+
+All **6** plan-review findings verified and folded (`6e45a63`); the design stays
+AUDIT-CLEAN (rev 7), this was a plan-completeness pass only:
+- **F1** every `...`/`RAW=None`/`pytest.raises(Exception)`/"mirror"/"or inline"
+  replaced with executable code + the real `tests/conftest.py` fixtures
+  (`session_factory`/`clean_db`/`engine`/`post_event`/`worker`/…) + exact
+  selectors + specific `BundleCorrupt`; one `seed_and_verify` interface chosen;
+  migration tests use the real `_fresh_db`/`_config` (not the nonexistent
+  `alembic_config`/`clean_engine`).
+- **F2** `verify_pinnable_backlog` flags **NULL, absent, and corrupt** hashes over
+  runnable/requeueable `run_transition` jobs; test covers all three + irrelevant
+  done/dead jobs.
+- **F3** the epoch CLI loads local policy and compares it to `--expect-bundle-hash`
+  / `--expect-engine`; a **valid X-vs-Y** read-back conflict test (persist X, then
+  a valid-Y activation fails on read-back) exercises `ON CONFLICT` + read-back.
+- **F4** strict `b64decode(validate=True)` + exact 7-key check → `BundleCorrupt`;
+  insert-path, conflict-path, missing/extra-file, and non-ASCII round-trip tested.
+- **F5** `ENGINE_BUILD_ID` regex `^eng-[1-9]\d*$`; framed-hash **rename/move/empty**
+  proofs; **all 5** downgrade-refusal surfaces parameterized; both tables added to
+  `EXPECTED_TABLES` + `_ALL_TABLES`.
+- **F6** attestation asserted in both flag states + corrupt-startup-no-attestation;
+  process topology via **isolated interpreters** (subprocess); mixed-era test
+  asserts the **callback** points use the repriced views; the final review uses
+  the real skill-path `review-package` (no `scripts/review-package` repo path).
+
+Per the human's instruction, returning to the **human plan-approval gate** — no
+further plan/design round requested. turn: HUMAN (plan approval).
+
 ### PLAN-REVIEW [CODEX] 2026-07-21 — `9d8b82e` — CHANGES REQUIRED
 
 The 12-task decomposition and dependency order are sound, but the plan is not yet
