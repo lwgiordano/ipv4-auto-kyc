@@ -1,4 +1,4 @@
-# PR 6 — Per-run policy bundle pinning Implementation Plan (rev 3)
+# PR 6 — Per-run policy bundle pinning Implementation Plan (rev 4)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax. Parent session is the SOLE committer/pusher/bus-writer (Claude⇄Codex bus discipline); subagents implement + hand diffs back.
 
@@ -10,7 +10,7 @@
 
 **Spec:** `.agents/superpowers/specs/2026-07-21-pr6-policy-bundle-pinning-design.md` (Codex AUDIT-CLEAN at rev 7, `41a3b3b`). Read the cited §sections for rationale.
 
-**Rev 3 (Codex plan-review round 2, `6e45a63`):** every remaining test snippet is now runnable against the live schemas — event payloads use the real required fields (`email.verified`=email+domain+verified_at, `poc.submitted`=rir+poc_handle); migration/preflight fixtures insert valid FK chains (`events`+`runs.triggering_event_id`) and the real `jobs.payload_json`; `make_bundle_y` edits `scoring_rubric.json["items"]`; the callback assertion uses the real keys `type`/`points`; `PolicyBundle` imports from `policy.loader`; `_decode_files` is byte-level (key-set check moved to `load_bundle`) so the non-ASCII round-trip works; the framed-hash move test does a real equal-byte transfer + a non-`domain/` `broker_gate.py` case; and the attestation, activation-recovery, rollback, epoch-alert tests and the three ops CLIs are complete code (no `Add:`/"mirror" prose). **Rev 2 (`9d8b82e`):** removed `...`/`RAW=None`/`pytest.raises(Exception)`/"mirror"/"or inline"; preflight rejects NULL/absent/corrupt; strict base64; all downgrade surfaces; real `review-package` path.
+**Rev 4 (Codex plan-review round 3, `b64b126`):** the §8 proofs now actually exercise the behaviors — Tasks 7 & 9 inject real adapters (a counting `rir_poc` witness for §8.7 *zero adapter calls*; `_OkEmailAdapter` so the cross-bundle check is really written/stamped) instead of the vacuous `adapters={}`; Task 8's mixed-era test asserts the `control_proof` **gate flip** + score 10-vs-83 (§8.8b's exact `verified_email` example) and Task 8's decide threads the **resolved** `threshold`/`allowed_broker_statuses` uniformly; Task 9 adds the `approve`-under-X / `manual_review_insufficient`-under-Y **decision** divergence (via a threshold-Y bundle) and turns the flag-off/broker/cascade prose into runnable tests; Task 6 uses `structlog.testing.capture_logs()` (not `caplog`, blind to `PrintLoggerFactory`) + a "claims zero jobs" witness; Task 10's recovery/rollback tests requeue **then** score-under-pinning / decide-exactly-once; and the Task-4 deferral prose, the `_bundle_helpers.py` creation (now Task 5), the missing `pytest`/`text` imports, and all three ops `main()`s are resolved. **Rev 3 (Codex plan-review round 2, `6e45a63`):** every remaining test snippet is now runnable against the live schemas — event payloads use the real required fields (`email.verified`=email+domain+verified_at, `poc.submitted`=rir+poc_handle); migration/preflight fixtures insert valid FK chains (`events`+`runs.triggering_event_id`) and the real `jobs.payload_json`; `make_bundle_y` edits `scoring_rubric.json["items"]`; the callback assertion uses the real keys `type`/`points`; `PolicyBundle` imports from `policy.loader`; `_decode_files` is byte-level (key-set check moved to `load_bundle`) so the non-ASCII round-trip works; the framed-hash move test does a real equal-byte transfer + a non-`domain/` `broker_gate.py` case; and the attestation, activation-recovery, rollback, epoch-alert tests and the three ops CLIs are complete code (no `Add:`/"mirror" prose). **Rev 2 (`9d8b82e`):** removed `...`/`RAW=None`/`pytest.raises(Exception)`/"mirror"/"or inline"; preflight rejects NULL/absent/corrupt; strict base64; all downgrade surfaces; real `review-package` path.
 
 ## Global Constraints
 
@@ -47,21 +47,32 @@ def raw_x() -> dict[str, bytes]:
 def bundle_x():
     return build_bundle(raw_x())
 
-def make_bundle_y(tmp_path: Path, *, check_type: str, points: int, category: str):
-    """Copy the 7 normative files to tmp_path and rewrite one rubric item, yielding
-    a DIFFERENT valid bundle Y (different bundle_hash). Returns (policy_dir, bundle)."""
-    dst = tmp_path / "policy_y"
+def make_bundle_y(tmp_path: Path, *, name: str = "policy_y", check_type: str | None = None,
+                  points: int | None = None, category: str | None = None,
+                  threshold: int | None = None):
+    """Copy the 7 normative files to tmp_path/<name> and optionally rewrite one rubric
+    item's points+category and/or the top-level threshold, yielding a DIFFERENT valid
+    bundle Y (different bundle_hash). Returns (policy_dir, bundle). NOTE: flag-off
+    scoring reads each check's STAMPED points, so a Y that changes only an item's
+    points does NOT change a flag-off decision — the `threshold` lever is what makes a
+    flag-off process-bundle-Y run diverge from a flag-on pinned-X run (§8.8)."""
+    dst = tmp_path / name
     shutil.copytree(NORMATIVE, dst)
     rubric = json.loads((dst / "scoring_rubric.json").read_bytes())
     # scoring_rubric.json top-level keys: version, threshold, hard_gates, items,
     # dynamic_rules (ScoringRubric.items: tuple[RubricItem]; RubricItem has
     # check_type/points/category — policy/types.py:14-16,23-40).
-    for item in rubric["items"]:
-        if item["check_type"] == check_type:
-            item["points"], item["category"] = points, category
+    if check_type is not None:
+        for item in rubric["items"]:
+            if item["check_type"] == check_type:
+                item["points"], item["category"] = points, category
+    if threshold is not None:
+        rubric["threshold"] = threshold
     (dst / "scoring_rubric.json").write_text(json.dumps(rubric, indent=2))
     return dst, load_policy(dst)
 ```
+
+This helper module is **created and committed by Task 5** (its first consumer); Tasks 6–10 import it.
 
 ---
 
@@ -189,11 +200,10 @@ from sqlalchemy import create_engine, text
 
 _EPOCH_HASH = "a" * 64
 
-# Each entry populates exactly ONE downgrade blocker; all 5 must independently
-# refuse. Insert a bundle row first where an FK/hash is needed. Implementer
-# confirms each table's NOT NULL columns from db/tables.py and adjusts the
-# minimal INSERTs (the run/check/decision rows below list the columns those
-# models require today; add any that are NOT NULL without a default).
+# Each entry populates exactly ONE downgrade blocker; all 5 are listed below and
+# are complete valid INSERTs against today's schema (every NOT NULL column without
+# a default is supplied — cases/events/runs/checks/decisions per db/tables.py). A
+# bundle row is inserted first where an FK/hash is needed. No further cases to add.
 _BUNDLE = "INSERT INTO policy_bundles (bundle_hash, files_json) VALUES ('h', '{}'::jsonb)"
 @pytest.mark.parametrize("populate_sql, ids", [
     (_BUNDLE, "bundle_row"),
@@ -232,7 +242,7 @@ def test_011_downgrade_clean_when_unused(pg):
     alembic_command.downgrade(cfg, "010")      # empty schema → clean
     alembic_command.upgrade(cfg, "head")
 ```
-Add cases for `checks.policy_bundle_hash`, `decisions.engine_build_id`, and the epoch row to the parametrize list (5 blockers total) — the implementer writes the minimal valid INSERT for each from `db/tables.py` NOT NULL columns.
+The parametrize list above already contains all **5** blockers (bundle_row, epoch_row, run_engine_id, check_bundle_hash, decision_engine_id) as complete valid INSERTs — nothing to add.
 - [ ] **Step 2 — run red:** `.venv/bin/pytest tests/integration/test_migrations.py -k 011 -v` → FAIL (migration + `EXPECTED_TABLES` mismatch on the existing `test_upgrade_downgrade_upgrade`).
 - [ ] **Step 3 — implement the migration.** `upgrade()`: `op.create_table` the two tables (named `ck_epoch_id`, `ck_epoch_engine_nonblank`, `fk_epoch_bundle_hash`); `op.add_column` the 3 nullable columns each with a named `CHECK`. `downgrade()`:
 ```python
@@ -266,10 +276,11 @@ def downgrade():
 
 Spec §3 (base64/P1.1), §4, §7 (epoch/P2.2). All corruption normalizes to `BundleCorrupt`.
 
-**Files:** Create `src/kyc_tool/policy_store/{__init__.py,repo.py}`; Test `tests/unit/test_policy_store.py` (real PG: uses `session_factory`, `clean_db`, `engine`).
+**Files:** Create `src/kyc_tool/policy_store/{__init__.py,repo.py}`, `tests/integration/_bundle_helpers.py`; Test `tests/unit/test_policy_store.py` (real PG: uses `session_factory`, `clean_db`, `engine`).
 
 **Interfaces — Produces:** `class BundleCorrupt(Exception)`; `store_bundle(session, raw: dict[str, bytes]) -> str`; `load_bundle(session, bundle_hash: str) -> PolicyBundle | None`; `activate_epoch(session, *, expect_bundle_hash: str, expect_engine: str) -> None`; `read_epoch(session) -> tuple[str, str] | None`; internal `_encode_files(raw)->dict[str,str]` / `_decode_files(files_json)->dict[str,bytes]`.
 
+- [ ] **Step 0 — create the shared test helper.** Write `tests/integration/_bundle_helpers.py` with the exact `raw_x`/`bundle_x`/`make_bundle_y` module from the *Shared PR-6 test helper* block above (imports `read_policy_files`/`build_bundle`/`load_policy` — all delivered by Task 3). This file is committed with Task 5 and imported by Tasks 5–10.
 - [ ] **Step 1 — failing tests:**
 ```python
 import base64, binascii, pytest
@@ -450,35 +461,46 @@ def test_outbox_worker_does_not_import_policy_store():
 def test_retention_does_not_import_policy_store():
     assert _imports_policy_store("kyc_tool.workers.retention") is False
 
-# test_bundle_pinning.py — attestation both flag states + corrupt-startup
-def test_attest_logs_flag_bundle_engine(caplog, session_factory, clean_db):
-    import logging
-    from kyc_tool.policy_store import repo as store
-    from kyc_tool.config import REPO_ROOT
-    d = REPO_ROOT / "KYC_Tool_Build_Package" / "machine_readable"
-    for flag in (False, True):
-        caplog.clear()
-        with caplog.at_level(logging.INFO):
-            h = store.seed_and_verify(session_factory, d)          # seeds + read-back verifies
-            store.attest(flag=flag, bundle_hash=h)                 # emits ONLY after verify
-        rec = next(r for r in caplog.records if getattr(r, "msg", None) == "bundle_pinning_ready")
-        assert rec.flag is flag and rec.engine_build_id == "eng-1" and rec.bundle_hash == h
+# test_bundle_pinning.py — attestation both flag states + corrupt-startup.
+# structlog is configured with the default PrintLoggerFactory (api/app.py:46 sets
+# NO logger_factory), so events go to stdout, NOT through stdlib `logging` —
+# pytest's `caplog` captures ZERO records. `structlog.testing.capture_logs()` is the
+# correct sink: it yields each event as a dict keyed by `event` + the bound kwargs.
+import pytest
+import structlog
+from sqlalchemy import text
+from kyc_tool.policy_store import repo as store
+from kyc_tool.policy.loader import read_policy_files
+from kyc_tool.config import REPO_ROOT
 
-def test_corrupt_seed_row_fails_startup_no_attestation(caplog, session_factory, engine, clean_db):
-    import logging
-    from sqlalchemy import text
-    from kyc_tool.policy_store import repo as store
-    from kyc_tool.policy.loader import read_policy_files
-    from kyc_tool.config import REPO_ROOT
-    d = REPO_ROOT / "KYC_Tool_Build_Package" / "machine_readable"
+_MR = REPO_ROOT / "KYC_Tool_Build_Package" / "machine_readable"
+
+def test_attest_logs_flag_bundle_engine(session_factory, clean_db):
+    for flag in (False, True):
+        with structlog.testing.capture_logs() as logs:
+            h = store.seed_and_verify(session_factory, _MR)        # seeds + read-back verifies
+            store.attest(flag=flag, bundle_hash=h)                 # emits ONLY after verify
+        rec = next(r for r in logs if r.get("event") == "bundle_pinning_ready")
+        assert rec["flag"] is flag and rec["engine_build_id"] == "eng-1" and rec["bundle_hash"] == h
+
+def test_corrupt_seed_row_fails_startup_no_attestation_and_zero_jobs(
+        session_factory, engine, clean_db, post_event):
+    # §8.2: a pipeline worker whose process-bundle row is corrupt fails startup —
+    # `seed_and_verify` (which main() runs BEFORE building/looping the Worker) raises,
+    # so nothing is attested AND the queued job is never claimed (no checks/decisions).
     with session_factory() as s:
-        h = store.store_bundle(s, read_policy_files(d)); s.commit()
+        h = store.store_bundle(s, read_policy_files(_MR)); s.commit()
     with engine.begin() as c:                                      # tamper the persisted row
         c.execute(text("UPDATE policy_bundles SET files_json = jsonb_set("
                        "files_json,'{scoring_rubric.json}','\"%%%\"') WHERE bundle_hash=:h"), {"h": h})
-    with caplog.at_level(logging.INFO), pytest.raises(store.BundleCorrupt):
-        store.seed_and_verify(session_factory, d)                  # read-back → BundleCorrupt at startup
-    assert not [r for r in caplog.records if getattr(r, "msg", None) == "bundle_pinning_ready"]
+    post_event("c-corrupt", "email.verified",                      # a job now waits in the queue
+               {"email": "o@acme.test", "domain": "acme.test", "verified_at": "2026-07-21T00:00:00Z"})
+    with structlog.testing.capture_logs() as logs, pytest.raises(store.BundleCorrupt):
+        store.seed_and_verify(session_factory, _MR)                # startup aborts before the worker loop
+    assert not [r for r in logs if r.get("event") == "bundle_pinning_ready"]
+    with session_factory() as s:                                   # zero jobs claimed
+        assert s.execute(text("SELECT count(*) FROM checks WHERE case_id='c-corrupt'")).scalar_one() == 0
+        assert s.execute(text("SELECT count(*) FROM decisions WHERE case_id='c-corrupt'")).scalar_one() == 0
 ```
 - [ ] **Step 2 — run red** → FAIL.
 - [ ] **Step 3 — implement.** In `policy_store/repo.py`: `seed_and_verify(session_factory, policy_dir)` = `with uow(session_factory) as s: h = store_bundle(s, read_policy_files(policy_dir)); return h` (raises `BundleCorrupt` on a corrupt existing row → caller fails startup); `attest(*, flag, bundle_hash)` = `log.info("bundle_pinning_ready", flag=flag, bundle_hash=bundle_hash, engine_build_id=ENGINE_BUILD_ID)` (module `log = structlog.get_logger(__name__)`). In `pipeline_worker.py`/`dev_worker.py` `main()` and `api/app.py` factory: after `load_policy`, call `h = seed_and_verify(...)` then `attest(flag=settings.enforce_bundle_pinning, bundle_hash=h)`. Do **not** import `policy`/`policy_store` in `outbox_worker.py`/`retention.py`.
@@ -495,14 +517,26 @@ Spec §5 (P1.3). Resolve FIRST; flag-on + absent → dead-letter, zero side effe
 
 **Interfaces — Produces:** `Pipeline.resolve_bundle(session, run) -> PolicyBundle`; `class BundleUnavailable(Exception)`; an in-process `dict[str, PolicyBundle]` cache on the Pipeline.
 
-- [ ] **Step 1 — failing test** (uses the real `worker`/`post_event` fixtures; a `poc.submitted` run would mint a token+email, so "zero side effects" is meaningful):
+- [ ] **Step 1 — failing test.** `poc.submitted` routes ONLY to `rir_poc` (`triggers.py:34`), and `_run_adapters` skips any adapter absent from the dict (`pipeline.py:234-236`) — so with `adapters={}` there is nothing to call and "zero side effects" would be **vacuous** (§8.7 requires proving zero **adapter calls**, not merely no check/decision). Inject a **counting** `rir_poc` adapter as the witness: if the refuse-at-entry gate is broken, the run reaches RUN_ADAPTERS, this adapter runs (mints the token+email), and `calls` is non-empty.
 ```python
 def test_flag_on_absent_bundle_dead_letters_zero_side_effects(
         session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
     from kyc_tool.orchestration.pipeline import Pipeline
     from kyc_tool.queue.worker import Worker
     from kyc_tool.storage.object_store import FsStore
+    from kyc_tool.adapters.base import AdapterOutput, hash_inputs
+    from kyc_tool.domain.models import AdapterStatus
     from sqlalchemy import text
+
+    calls: list[str] = []
+    class _CountingPoc:                                   # adapter protocol (adapters/base.py)
+        adapter_id = "rir_poc"
+        def input_hash(self, snapshot, event):
+            return hash_inputs(self.adapter_id, event)
+        def run(self, snapshot, event) -> AdapterOutput:
+            calls.append(self.adapter_id)                 # a real call would mint token+email
+            return AdapterOutput(self.adapter_id, AdapterStatus.NOT_APPLICABLE)
+
     # ingest a run under the real policy (records its bundle_hash on the run)...
     post_event("case-absent", "poc.submitted", {"rir": "arin", "poc_handle": "POC-ACME"})
     # ...then point the run at a NOT-seeded hash + flag on
@@ -510,15 +544,19 @@ def test_flag_on_absent_bundle_dead_letters_zero_side_effects(
         c.execute(text("UPDATE runs SET policy_bundle_hash='deadbeef' WHERE case_id='case-absent'"))
         c.execute(text("TRUNCATE policy_bundles CASCADE"))
     pinned = settings.model_copy(update={"enforce_bundle_pinning": True})
-    pl = Pipeline(session_factory, policy, FsStore(tmp_path/"e"), pinned, adapters={})
-    w = Worker(session_factory, {"run_transition": pl.handle_job},
-               backoff_base_seconds=0, on_dead_letter=pl.on_dead_letter)
-    w.run_until_idle()
+    pl = Pipeline(session_factory, policy, FsStore(tmp_path/"e"), pinned,
+                  adapters={"rir_poc": _CountingPoc()})
+    Worker(session_factory, {"run_transition": pl.handle_job},
+           backoff_base_seconds=0, on_dead_letter=pl.on_dead_letter).run_until_idle()
     with session_factory() as s:
-        for tbl in ("adapter_results","review_tasks","poc_tokens","outbox","checks","decisions"):
+        for tbl in ("review_tasks","poc_tokens","outbox","checks","decisions"):   # case_id-keyed tables
             n = s.execute(text(f"SELECT count(*) FROM {tbl} WHERE case_id='case-absent'")).scalar_one()
             assert n == 0, f"{tbl} had side effects on an absent-bundle run"
+        ar = s.execute(text("SELECT count(*) FROM adapter_results ar JOIN runs r ON r.id=ar.run_id "
+                            "WHERE r.case_id='case-absent'")).scalar_one()   # adapter_results is run_id-keyed
+        assert ar == 0, "adapter_results had side effects on an absent-bundle run"
         dead = s.execute(text("SELECT count(*) FROM jobs WHERE status='dead'")).scalar_one()
+    assert calls == [], "rir_poc was called before the absent-bundle refusal"  # §8.7 zero adapter calls
     assert dead >= 1
 ```
 - [ ] **Step 2 — run red** → FAIL (side effects happen / no refusal today).
@@ -578,10 +616,10 @@ def rubric_scoring_views(views, rubric):
         out.append(replace(v, points_awarded=pts, category=cat))
     return out
 ```
-In `pipeline.py` decide (`:392-393`), build `views = [checkstore.as_view(c) for c in live_checks]`, then **if `self.settings.enforce_bundle_pinning`**: `views = scoring.rubric_scoring_views(views, resolved_bundle.rubric)`. Pass `views` to `score()`, `evaluate_gates()`, **and** the callback checks-summary builder (grep the `_callback_body`/checks-summary construction in `pipeline.py`). Flag-off passes the stamped `views` unchanged.
-- [ ] **Step 4 — failing integration test (mixed-era, score + callback).** The "era" is simulated by a live check whose **stamped** points (83) differ from the current rubric's points for that type — flag-on re-prices to the rubric value; flag-off keeps 83. `recalculate.requested` re-decides from live checks without re-fetching (RUNBOOK), so the seeded check survives into the decide:
+In `pipeline.py` decide (`_decide_txn`, `:391-399`), let `resolved` be the bundle resolved at job entry (Task 7 — `self.policy` when flag-off, the pinned `load_bundle(...)` when flag-on). Use `resolved.rubric` **uniformly** so the pinned bundle governs the whole decision, not only check re-pricing: build `views = [checkstore.as_view(c) for c in live_checks]`; **if `self.settings.enforce_bundle_pinning`**: `views = scoring.rubric_scoring_views(views, resolved.rubric)`; then `score(views)`, `evaluate_gates(views, breakdown.score, resolved.rubric.threshold, BrokerStatus(...), resolved.rubric.allowed_broker_statuses)`, the callback checks-summary (grep `_callback_body`), and the provenance (`DecisionRow.policy_shas = resolved.shas`, audit `policy_bundle_hash = resolved.bundle_hash`). Flag-off ⇒ `resolved is self.policy`, so `threshold`/`allowed_broker_statuses`/`shas`/`bundle_hash` are the **process** bundle's and stamped `views` pass unchanged — the §8.8 flag-off drift. (Threading the resolved `threshold`/`allowed_broker_statuses` is what makes the §8.8 flag-on=`approve` / flag-off=`manual_review_insufficient` divergence real.)
+- [ ] **Step 4 — failing integration test (mixed-era: score + GATE flip + callback, §8.8b).** The "era" is a live check whose **stamped** points/category differ from the current rubric's for its type. §8.8b's exact example: `verified_email` is **10 pts / `account_access`** under X (`scoring_rubric.json`), but a surviving check was stamped **83 / `control_proof`** in a prior era. Flag-on re-prices to 10/`account_access` → `score()` counts 10 (not 83) **and `evaluate_gates().control_proof` loses its only member (flips False)**; flag-off keeps 83/`control_proof` (gate holds). `recalculate.requested` re-decides from live checks without re-fetching (RUNBOOK), so the seeded check survives into the decide unchanged:
 ```python
-def test_mixed_era_reprices_score_and_callback(
+def test_mixed_era_reprices_score_gate_and_callback(
         session_factory, policy, settings, tmp_path, engine, clean_db,
         post_event, publisher, callback_capture):
     from kyc_tool.checkstore import repo as checkstore
@@ -592,43 +630,42 @@ def test_mixed_era_reprices_score_and_callback(
     from kyc_tool.policy_store import repo as store
     from tests.integration._bundle_helpers import raw_x
     from sqlalchemy import text
-    T = policy.rubric.check_types[0]
-    x_points = policy.rubric.item(T).points
-    assert x_points != 83                                   # stamped 83 is a stale-era value
+    T = "verified_email"                                     # §8.8b example type
+    assert policy.rubric.item(T).points == 10 and policy.rubric.item(T).category == "account_access"
     with session_factory() as s:
         store.store_bundle(s, raw_x())
         s.execute(text("INSERT INTO cases (id) VALUES ('case-mix')"))
         checkstore.write_check(s, case_id="case-mix", check_type=T, status=CheckStatus.PASS,
-                               points_awarded=83, category="control_proof", source="seed")
+                               points_awarded=83, category="control_proof", source="seed")  # stale era
         s.commit()
 
-    def _recalc_score(flag: bool) -> int:
+    def _recalc(flag: bool):
         post_event("case-mix", "recalculate.requested", {})  # run pinned to app bundle X
         cfg = settings.model_copy(update={"enforce_bundle_pinning": flag})
         pl = Pipeline(session_factory, policy, FsStore(tmp_path / f"e{flag}"), cfg, adapters={})
         Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
                on_dead_letter=pl.on_dead_letter).run_until_idle()
         with session_factory() as s:
-            return s.execute(text("SELECT score FROM decisions WHERE case_id='case-mix' "
-                                  "ORDER BY decided_at DESC LIMIT 1")).scalar_one()
+            r = s.execute(text("SELECT score, gates_json FROM decisions WHERE case_id='case-mix' "
+                               "ORDER BY decided_at DESC LIMIT 1")).one()
+        return r.score, r.gates_json
 
-    assert _recalc_score(flag=True) == x_points             # re-priced to rubric X
-    assert _recalc_score(flag=False) == 83                  # stamped value kept
-    # callback checks-summary uses the same repriced views (last run above was flag-off;
-    # do one more flag-on run and inspect the captured callback body).
+    on_score, on_gates = _recalc(flag=True)
+    assert on_score == 10 and on_gates["control_proof"] is False    # re-priced; gate flips off
+    off_score, off_gates = _recalc(flag=False)
+    assert off_score == 83 and off_gates["control_proof"] is True    # stamped; gate holds
+    # callback checks-summary uses the SAME repriced views: a final flag-on run's body
+    # (pipeline._callback_body, pipeline.py:510-519 → {"type","points": pts if PASS else 0}).
     post_event("case-mix", "recalculate.requested", {})
     cfg = settings.model_copy(update={"enforce_bundle_pinning": True})
     pl = Pipeline(session_factory, policy, FsStore(tmp_path / "ecb"), cfg, adapters={})
     Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
            on_dead_letter=pl.on_dead_letter).run_until_idle()
     publisher.process_pending()
-    # pipeline._callback_body (pipeline.py:510-519) emits body["checks"] = list of
-    # {"type": check_type, "points": points_awarded if PASS else 0, ...} from the
-    # SAME `views` list decide passes it — so flag-on repriced views show X's points.
     checks = callback_capture.requests[-1]["body"]["checks"]
-    assert any(c["type"] == T and c["points"] == x_points for c in checks)
+    assert any(c["type"] == T and c["points"] == 10 for c in checks)  # re-priced points in callback
 ```
-Every line is executable as written; the callback keys are the real ones. All four properties (flag-on score, flag-off score, callback points, and the surviving-check setup) are asserted.
+Asserts all four §8.8b properties: flag-on score **10** + `control_proof` **False**, flag-off score **83** + `control_proof` **True**, and the re-priced callback points. `gates_json` is `Gates.as_dict()` (`domain/models.py:117-124`, keys `score_met`/`legal_proof`/`control_proof`/`broker_ok`/`no_hard_conflict`).
 - [ ] **Step 5 — run green** (unit + integration) → PASS; golden cases unchanged (flag off).
 - [ ] **Step 6 — commit** `feat(pr6): rubric-pinned decision-time scoring views + callback (flag-on)`.
 
@@ -642,51 +679,101 @@ Spec §5 (P1.1/P1.2, P3.8), §8.8/8.9/8.10/8.11.
 
 **Interfaces — Produces:** the checkstore write functions gain `policy_bundle_hash: str | None = None`, stamped onto the row. Decide writes `checks.policy_bundle_hash` (all run-created checks), `DecisionRow.policy_shas` = resolved `shas`, `DecisionRow.engine_build_id` = `runs.engine_build_id` = `ENGINE_BUILD_ID`, and a DECIDE-audit-detail `resolved_policy_bundle_hash` = resolved `bundle_hash`.
 
-- [ ] **Step 1 — failing headline test** (cross-bundle; run pin immutable; typed provenance):
+- [ ] **Step 1 — failing tests.** All in `test_bundle_pinning.py`; this shared header + email adapter are added **once**:
 ```python
-def test_cross_bundle_pin_scores_x_and_records_x(
-        session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
-    from tests.integration._bundle_helpers import make_bundle_y, bundle_x, raw_x
-    from kyc_tool.policy.loader import read_policy_files
-    from kyc_tool.policy_store import repo as store
-    from kyc_tool.orchestration.pipeline import Pipeline
-    from kyc_tool.queue.worker import Worker
-    from kyc_tool.storage.object_store import FsStore
-    from sqlalchemy import text
-    bx = bundle_x()                                        # policy_dir=None (DB origin)
-    T = bx.rubric.check_types[0]                           # a real rubric type so Y != X
-    ydir, by = make_bundle_y(tmp_path, check_type=T, points=1, category="x")
+import hashlib
+import pytest
+from sqlalchemy import text
+from kyc_tool.adapters.base import AdapterOutput, hash_inputs
+from kyc_tool.domain.models import AdapterStatus, CheckStatus
+from kyc_tool.orchestration.pipeline import Pipeline
+from kyc_tool.queue.worker import Worker
+from kyc_tool.storage.object_store import FsStore
+from kyc_tool.policy.loader import POLICY_FILES, read_policy_files
+from kyc_tool.policy_store import repo as store
+from kyc_tool.checkstore import repo as checkstore
+from tests.integration.shared import ACME_KYB
+from tests.integration._bundle_helpers import bundle_x, raw_x, make_bundle_y
+
+_EMAIL_KYB = {**ACME_KYB, "email": {"email": "ops@acme.example", "domain": "acme.example"}}
+
+class _OkEmailAdapter:                                   # writes a real verified_email check
+    adapter_id = "email_verification"
+    def input_hash(self, snapshot, event):
+        return hash_inputs(self.adapter_id, snapshot.get("email"))
+    def run(self, snapshot, event) -> AdapterOutput:
+        e = snapshot.get("email")
+        return AdapterOutput(self.adapter_id, AdapterStatus.OK, raw=b"{}",
+                             normalized={"verified": True, "email": e["email"], "domain": e["domain"]})
+```
+Headline provenance (parametrized over the flag) — a real `verified_email` check is produced and **stamped under the RESOLVED bundle** (pinned X when flag-on; process Y when flag-off), while the creation pin stays X either way (`adapters={}` was the rev-3 bug: `email.verified`→`email_verification` only, so an empty dict produced **zero** checks and `chk.policy_bundle_hash` had nothing to read):
+```python
+@pytest.mark.parametrize("flag, resolved_is_x", [(True, True), (False, False)],
+                         ids=["flag_on_pins_X", "flag_off_drifts_to_Y"])
+def test_cross_bundle_provenance(session_factory, policy, settings, tmp_path, engine,
+                                 clean_db, post_event, flag, resolved_is_x):
+    bx = bundle_x()
+    ydir, by = make_bundle_y(tmp_path, check_type="verified_email", points=1, category="supporting")
     with session_factory() as s:
         store.store_bundle(s, raw_x())                    # X from the normative dir
         store.store_bundle(s, read_policy_files(ydir)); s.commit()
-    # app ingests under X (records bx.bundle_hash on the run); worker process bundle = Y, flag on
-    post_event("case-xy", "email.verified",
-               {"email": "ops@acme.test", "domain": "acme.test",
-                "verified_at": "2026-07-21T00:00:00Z"})
-    pinned = settings.model_copy(update={"enforce_bundle_pinning": True})
-    pl = Pipeline(session_factory, by, FsStore(tmp_path/"e"), pinned, adapters={})
+    # app ingests under X (records bx.bundle_hash on the run); worker process bundle = Y
+    post_event("case-xy", "kyb.run_requested", _EMAIL_KYB)
+    cfg = settings.model_copy(update={"enforce_bundle_pinning": flag})
+    pl = Pipeline(session_factory, by, FsStore(tmp_path/"e"), cfg,
+                  adapters={"email_verification": _OkEmailAdapter()})
     Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
            on_dead_letter=pl.on_dead_letter).run_until_idle()
+    expected = bx if resolved_is_x else by
     with session_factory() as s:
         run = s.execute(text("SELECT policy_bundle_hash, engine_build_id FROM runs "
                              "WHERE case_id='case-xy'")).first()
-        assert run.policy_bundle_hash == bx.bundle_hash      # creation pin UNCHANGED
+        assert run.policy_bundle_hash == bx.bundle_hash      # creation pin ALWAYS X (immutable)
         assert run.engine_build_id == "eng-1"
         chk = s.execute(text("SELECT policy_bundle_hash FROM checks WHERE case_id='case-xy' "
-                             "AND superseded_by_check_id IS NULL LIMIT 1")).first()
-        assert chk.policy_bundle_hash == bx.bundle_hash      # scored/stamped under X, not Y
+                             "AND check_type='verified_email' AND superseded_by_check_id IS NULL")).scalar_one()
+        assert chk == expected.bundle_hash                   # stamped under the resolved bundle
         dec = s.execute(text("SELECT policy_shas, engine_build_id FROM decisions "
                              "WHERE case_id='case-xy' ORDER BY decided_at DESC LIMIT 1")).first()
-        assert dec.policy_shas == bx.shas and dec.engine_build_id == "eng-1"
-        # reconstruct the bundle hash from the recorded shas → equals X
-        # (loader.py:56-58 formula: sha256 of "".join(f"{name}:{sha};") over POLICY_FILES)
-        import hashlib
-        from kyc_tool.policy.loader import POLICY_FILES
+        assert dec.policy_shas == expected.shas and dec.engine_build_id == "eng-1"
+        # reconstruct the bundle hash from the recorded shas (loader.py:56-58 formula:
+        # sha256 of "".join(f"{name}:{sha};") over POLICY_FILES) → equals the resolved bundle
         rebuilt = hashlib.sha256("".join(f"{n}:{dec.policy_shas[n]};"
                   for n in POLICY_FILES).encode()).hexdigest()
-        assert rebuilt == bx.bundle_hash
+        assert rebuilt == expected.bundle_hash
 ```
-Also add these sibling tests in the same file:
+Cross-**decision** divergence (§8.8 last line: `approve` under X, `manual_review_insufficient` under Y). Flag-off scoring reads STAMPED points, so Y must differ in **threshold** (101): a stamped-100 check set is `score_met` under pinned X (100) but not under process Y (101):
+```python
+def test_cross_bundle_decision_diverges_approve_x_manual_y(
+        session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
+    bx = bundle_x()
+    ydir, by = make_bundle_y(tmp_path, threshold=101)     # Y differs ONLY in threshold
+    with session_factory() as s:
+        store.store_bundle(s, raw_x())
+        store.store_bundle(s, read_policy_files(ydir))
+        s.execute(text("INSERT INTO cases (id) VALUES ('case-div')"))   # broker_status defaults 'clear'
+        for ct, cat in [("verified_company_email", "control_proof"),
+                        ("official_registry_match", "legal_business_proof"),
+                        ("org_id_match", "control_proof"),
+                        ("business_document_verified", "legal_business_proof")]:
+            checkstore.write_check(s, case_id="case-div", check_type=ct, status=CheckStatus.PASS,
+                                   points_awarded=25, category=cat, source="seed")   # stamped sum = 100
+        s.commit()
+
+    def _decide(flag: bool) -> str:
+        post_event("case-div", "recalculate.requested", {})   # run pinned to app bundle X
+        cfg = settings.model_copy(update={"enforce_bundle_pinning": flag})
+        pl = Pipeline(session_factory, by, FsStore(tmp_path / f"e{flag}"), cfg, adapters={})
+        Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+               on_dead_letter=pl.on_dead_letter).run_until_idle()
+        with session_factory() as s:
+            return s.execute(text("SELECT decision FROM decisions WHERE case_id='case-div' "
+                                  "ORDER BY decided_at DESC LIMIT 1")).scalar_one()
+
+    assert _decide(flag=True) == "approve"                      # pinned X: 100>=100, all gates, org_id
+    assert _decide(flag=False) == "manual_review_insufficient"  # process Y: 100<101 → score_met False
+```
+Manual-approve stamps the engine id (§8.11):
 ```python
 def test_manual_approve_stamps_engine_build_id(session_factory, clean_db, post_event):
     # manual-approve writes DecisionRow(run_id=None) synchronously in the API
@@ -698,9 +785,51 @@ def test_manual_approve_stamps_engine_build_id(session_factory, clean_db, post_e
                              "AND manual=true ORDER BY decided_at DESC LIMIT 1")).scalar_one()
     assert eid == "eng-1"
 ```
-- **Flag-off counterpart of the headline:** identical to `test_cross_bundle_pin_scores_x_and_records_x` but `enforce_bundle_pinning=False`; assert `runs.policy_bundle_hash == X.bundle_hash` (creation pin unchanged) while `checks.policy_bundle_hash` and `DecisionRow.policy_shas` record the **process** bundle **Y** (drift visible), and both engine-ID columns == `"eng-1"`.
-- **Broker-blocked short-circuit:** seed the case's identifier onto a blocked `broker_entities` row (reuse PR 5b's `_seed_blocked_broker` in `tests/integration/test_review_completed_event.py`), drive an `email.verified` run flag-on, and assert `runs.engine_build_id == decisions.engine_build_id == "eng-1"`, `checks.policy_bundle_hash == X.bundle_hash`, and `decisions.decision == 'reject'` (the DECIDE short-circuit still stamps provenance).
-- **Cascade provenance:** drive an `org_id.submitted` then `poc.token_verified` sequence so `checkstore.supersede_stale_identity_proof` writes a successor check; assert that successor's `checks.policy_bundle_hash == X.bundle_hash` under flag-on.
+Broker-blocked short-circuit stamps provenance while the decision stays `reject` (§8.9). A `broker_status='blocked'` case + a Pipeline with **no** `broker_matcher` reuses the stored status → straight to DECIDE (`_seed_blocked_broker`, `test_review_completed_event.py:48`); the short-circuit writes no checks, so assert the **decision/run** provenance only:
+```python
+def test_broker_blocked_short_circuit_stamps_provenance(
+        session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
+    bx = bundle_x()
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO cases (id, broker_status) VALUES ('case-blk','blocked')"))
+    with session_factory() as s:
+        store.store_bundle(s, raw_x()); s.commit()
+    post_event("case-blk", "email.verified",
+               {"email": "o@acme.test", "domain": "acme.test", "verified_at": "2026-07-21T00:00:00Z"})
+    cfg = settings.model_copy(update={"enforce_bundle_pinning": True})
+    pl = Pipeline(session_factory, policy, FsStore(tmp_path/"e"), cfg, adapters={})  # no broker_matcher
+    Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+           on_dead_letter=pl.on_dead_letter).run_until_idle()
+    with session_factory() as s:
+        dec = s.execute(text("SELECT decision, policy_shas, engine_build_id FROM decisions "
+                             "WHERE case_id='case-blk' ORDER BY decided_at DESC LIMIT 1")).first()
+        assert dec.decision == "reject" and dec.engine_build_id == "eng-1" and dec.policy_shas == bx.shas
+        reid = s.execute(text("SELECT engine_build_id FROM runs WHERE case_id='case-blk'")).scalar_one()
+        assert reid == "eng-1"
+```
+Cascade successor carries the resolved hash (§8.10). A pre-pinning live `org_id_match` bound to `ORG-A`; an `org_id.submitted` for `ORG-B` (no rdap adapter → no revalidation) makes `supersede_stale_identity_proof` write a `needs_review` successor, which Task 9 stamps:
+```python
+def test_cascade_successor_carries_resolved_hash(
+        session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
+    bx = bundle_x()
+    with session_factory() as s:
+        store.store_bundle(s, raw_x())
+        s.execute(text("INSERT INTO cases (id) VALUES ('case-cas')"))
+        checkstore.write_check(s, case_id="case-cas", check_type="org_id_match",
+                               status=CheckStatus.PASS, points_awarded=25, category="control_proof",
+                               source="direct_rir_rdap", source_detail={"org_handle": "ORG-A"})
+        s.commit()                                          # pre-pinning: policy_bundle_hash NULL
+    post_event("case-cas", "org_id.submitted", {"rir": "arin", "org_handle": "ORG-B"})
+    cfg = settings.model_copy(update={"enforce_bundle_pinning": True})
+    pl = Pipeline(session_factory, policy, FsStore(tmp_path/"e"), cfg, adapters={})  # no rdap
+    Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+           on_dead_letter=pl.on_dead_letter).run_until_idle()
+    with session_factory() as s:
+        succ = s.execute(text("SELECT status, policy_bundle_hash FROM checks WHERE case_id='case-cas' "
+                              "AND check_type='org_id_match' AND superseded_by_check_id IS NULL")).one()
+        assert succ.status == "needs_review"                # cascade successor (points removed)
+        assert succ.policy_bundle_hash == bx.bundle_hash    # stamped under the resolved (pinned X) bundle
+```
 - [ ] **Step 2 — run red** → FAIL.
 - [ ] **Step 3 — implement.** Add `policy_bundle_hash: str | None = None` to the four checkstore write fns; stamp it on the row (`checks.policy_bundle_hash`). In `pipeline.py` decide (incl. the broker-blocked DECIDE short-circuit): pass the resolved hash to every run-created check write; set `DecisionRow.policy_shas`/`.engine_build_id`, `runs.engine_build_id`, and the DECIDE-audit `resolved_policy_bundle_hash` from the resolved bundle + `ENGINE_BUILD_ID`, all inside the existing decide commit; **never** write `runs.policy_bundle_hash`. In `ingest._handle_manual_approve` (`:254`), add `engine_build_id=ENGINE_BUILD_ID` to `DecisionRow(...)`.
 - [ ] **Step 4 — run green** → PASS; golden cases unchanged (flag off).
@@ -722,9 +851,16 @@ Spec §7, §8.11–15. Preflight rejects NULL/absent/corrupt; epoch CLI compares
 
 - [ ] **Step 1 — failing tests:**
 ```python
+import pytest
 from sqlalchemy import text
+from kyc_tool.domain.models import CheckStatus
+from kyc_tool.checkstore import repo as checkstore
+from kyc_tool.orchestration.pipeline import Pipeline
+from kyc_tool.queue.worker import Worker
+from kyc_tool.storage.object_store import FsStore
 from kyc_tool.ops.verify_pinnable_backlog import verify_pinnable_backlog
 from kyc_tool.ops.seed_policy_bundle import seed_policy_bundle
+from kyc_tool.ops.requeue_interrupted_jobs import requeue_interrupted
 from kyc_tool.policy_store import repo as store
 from tests.integration._bundle_helpers import raw_x, bundle_x
 
@@ -775,11 +911,20 @@ def test_readyz_503_when_process_bundle_absent(client, engine, clean_db):
     assert client.get("/readyz").status_code == 503
 ```
 ```python
-def test_activation_recovery_requeues_final_attempt(session_factory, engine, clean_db):
-    from kyc_tool.ops.requeue_interrupted_jobs import requeue_interrupted
-    _queue_run_transition(engine, "c-rec", "r-rec", None)          # a queued run_transition job
-    with engine.begin() as c:                                      # simulate crash mid-final-attempt
-        c.execute(text("UPDATE jobs SET status='running', attempts=max_attempts, "
+def test_activation_recovery_requeues_then_scores_under_pinning(
+        session_factory, policy, settings, tmp_path, engine, clean_db):
+    # §8.12: a final-attempt running job (crash during flag-on) is requeued after all
+    # workers are confirmed stopped, THEN a flag-ON worker scores it under the pin —
+    # not merely requeued. The run is pinned to a REAL seeded bundle so resolve succeeds.
+    h = bundle_x().bundle_hash
+    with session_factory() as s:
+        store.store_bundle(s, raw_x()); s.commit()
+    _queue_run_transition(engine, "c-rec", "r-rec", h)             # QUEUED run pinned to the seeded bundle
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO checks (id, case_id, check_type, status, points_awarded, "
+                       "category, source) VALUES ('k-rec','c-rec','verified_email','pass',10,"
+                       "'account_access','seed')"))                 # a live check to score
+        c.execute(text("UPDATE jobs SET status='running', attempts=max_attempts, "  # crash mid-final-attempt
                        "locked_by='dead-worker' WHERE case_id='c-rec'"))
     assert requeue_interrupted(session_factory) == 1               # run AFTER all workers stopped
     with session_factory() as s:
@@ -787,30 +932,44 @@ def test_activation_recovery_requeues_final_attempt(session_factory, engine, cle
                              "WHERE case_id='c-rec'")).one()
         assert row.status == "queued" and row.attempts == row.max_attempts - 1  # forced-stop attempt returned
         assert s.execute(text("SELECT count(*) FROM jobs WHERE status='running'")).scalar_one() == 0
+    cfg = settings.model_copy(update={"enforce_bundle_pinning": True})   # flag-ON restart resumes it
+    pl = Pipeline(session_factory, policy, FsStore(tmp_path/"e"), cfg, adapters={})
+    Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+           on_dead_letter=pl.on_dead_letter).run_until_idle()
+    with session_factory() as s:
+        assert s.execute(text("SELECT engine_build_id FROM decisions "
+                              "WHERE case_id='c-rec'")).scalar_one() == "eng-1"   # scored under pinning
+        assert s.execute(text("SELECT count(*) FROM jobs WHERE case_id='c-rec' "
+                              "AND status='dead'")).scalar_one() == 0             # not dead-lettered
 
-def test_rollback_flag_off_still_decides_with_provenance(
-        session_factory, policy, settings, tmp_path, clean_db, post_event):
-    # Flag-OFF rollback on the PR6 image: a normal run still decides, the creation
-    # pin is intact, and bundle+engine provenance is written (no post-epoch NULL).
-    from kyc_tool.orchestration.pipeline import Pipeline
-    from kyc_tool.queue.worker import Worker
-    from kyc_tool.storage.object_store import FsStore
-    from kyc_tool.policy_store import repo as store
-    from tests.integration._bundle_helpers import raw_x, bundle_x
+def test_rollback_inflight_job_requeued_then_flag_off_decides_once(
+        session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
+    # §8.13: a final-attempt in-flight job during a flag-on→flag-off rollback is
+    # requeued (confirmed-zero workers), and the flag-OFF restart on the PR6 image
+    # decides it EXACTLY once — creation pin intact, resolved process-bundle + engine
+    # provenance written (no post-epoch NULL).
+    bx = bundle_x()
     with session_factory() as s:
         store.store_bundle(s, raw_x()); s.commit()
     post_event("c-rb", "email.verified",
                {"email": "o@acme.test", "domain": "acme.test", "verified_at": "2026-07-21T00:00:00Z"})
+    with engine.begin() as c:                                      # in-flight on its final attempt
+        c.execute(text("UPDATE jobs SET status='running', attempts=max_attempts, "
+                       "locked_by='dead-worker' WHERE case_id='c-rb'"))
+    assert requeue_interrupted(session_factory) == 1              # after all flag-on workers stopped
     off = settings.model_copy(update={"enforce_bundle_pinning": False})
-    pl = Pipeline(session_factory, policy, FsStore(tmp_path / "e"), off, adapters={})
+    pl = Pipeline(session_factory, policy, FsStore(tmp_path / "e"), off, adapters={})   # flag-OFF restart
     Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
            on_dead_letter=pl.on_dead_letter).run_until_idle()
     with session_factory() as s:
+        assert s.execute(text("SELECT count(*) FROM decisions "
+                              "WHERE case_id='c-rb'")).scalar_one() == 1   # decided EXACTLY once
         run = s.execute(text("SELECT policy_bundle_hash, engine_build_id FROM runs "
                              "WHERE case_id='c-rb'")).first()
-        assert run.policy_bundle_hash == bundle_x().bundle_hash and run.engine_build_id == "eng-1"
-        dec = s.execute(text("SELECT engine_build_id FROM decisions WHERE case_id='c-rb'")).first()
-        assert dec.engine_build_id == "eng-1"
+        assert run.policy_bundle_hash == bx.bundle_hash and run.engine_build_id == "eng-1"  # pin intact
+        dec = s.execute(text("SELECT policy_shas, engine_build_id FROM decisions "
+                             "WHERE case_id='c-rb'")).first()
+        assert dec.policy_shas == bx.shas and dec.engine_build_id == "eng-1"  # process-bundle provenance, not NULL
 
 def test_post_epoch_null_alert(session_factory, engine, clean_db):
     from kyc_tool.ops.activate_bundle_pinning_epoch import post_epoch_null_provenance
@@ -834,7 +993,7 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
     assert "d-al" in alert["decisions"] and "r-q" not in alert.get("runs", [])
 ```
 - [ ] **Step 2 — run red** → FAIL.
-- [ ] **Step 3 — implement.** Each ops module mirrors `ops/requeue_interrupted_jobs.py` (function + `main()` + `python -m` entry via `make_session_factory(make_engine(get_settings().database_url))`):
+- [ ] **Step 3 — implement.** All **three** ops modules mirror `ops/requeue_interrupted_jobs.py`: the same import head (`import argparse, sys`; `from sqlalchemy import text`; `from kyc_tool.config import get_settings`; `from kyc_tool.db.session import make_engine, make_session_factory, uow`; `from kyc_tool.policy.loader import read_policy_files, build_bundle, load_policy`; `from kyc_tool.policy_store import repo as store`), a `main() -> int`, and a `if __name__ == "__main__": sys.exit(main())` `python -m` entry. Each `main()` builds its factory via `make_session_factory(make_engine(get_settings().database_url))`. All three are shown:
 ```python
 # ops/verify_pinnable_backlog.py
 def verify_pinnable_backlog(session_factory) -> list[str]:
@@ -854,6 +1013,12 @@ def verify_pinnable_backlog(session_factory) -> list[str]:
                 bad.append(run_id)
     return bad
 
+def main() -> int:                       # deploy preflight: nonzero exit blocks the cutover
+    sf = make_session_factory(make_engine(get_settings().database_url))
+    bad = verify_pinnable_backlog(sf)
+    print(f"un-pinnable run_transition jobs: {bad}")
+    return 1 if bad else 0
+
 # ops/seed_policy_bundle.py  (compute → compare → store; NEVER store on mismatch)
 def seed_policy_bundle(session_factory, policy_dir, expect_hash: str) -> None:
     raw = read_policy_files(policy_dir)
@@ -862,6 +1027,15 @@ def seed_policy_bundle(session_factory, policy_dir, expect_hash: str) -> None:
         raise store.BundleCorrupt(f"{policy_dir} hashes {computed} != expected {expect_hash}")
     with uow(session_factory) as s:
         store.store_bundle(s, raw)
+
+def main() -> int:                       # seed_policy_bundle CLI
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--expect-hash", required=True)
+    args = ap.parse_args()
+    settings = get_settings()
+    sf = make_session_factory(make_engine(settings.database_url))
+    seed_policy_bundle(sf, settings.policy_dir, args.expect_hash)
+    print("bundle seeded"); return 0
 
 # ops/activate_bundle_pinning_epoch.py
 def post_epoch_null_provenance(session) -> dict:
@@ -969,7 +1143,7 @@ def test_non_domain_edit_trips_guard(tmp_path):
 ## Verification (whole PR)
 
 - Per task: the task's own `.venv/bin/pytest <selector>` red → green against ephemeral Postgres, then commit.
-- **Headline proofs:** `test_cross_bundle_pin_scores_x_and_records_x` (§8.8), `test_mixed_era_reprices_score_gate_and_callback` (§8.8b), `test_flag_on_absent_bundle_dead_letters_zero_side_effects` (§8.7), and the parameterized `test_011_downgrade_refuses_after_use` (§8.1) are load-bearing.
+- **Headline proofs:** `test_cross_bundle_provenance` + `test_cross_bundle_decision_diverges_approve_x_manual_y` (§8.8), `test_mixed_era_reprices_score_gate_and_callback` (§8.8b), `test_flag_on_absent_bundle_dead_letters_zero_side_effects` (§8.7), and the parameterized `test_011_downgrade_refuses_after_use` (§8.1) are load-bearing.
 - Whole PR: `ruff check` clean, `lint-imports` 2 kept/0 broken, `./manage.sh test` green.
 - `KYC_Tool_Build_Package/` untouched; M2 untouched; deviations (if any) in `AUDIT_FINDINGS.md`.
 - Final: bus RELEASE → Codex audits the code range to `AUDIT-CLEAN`.
