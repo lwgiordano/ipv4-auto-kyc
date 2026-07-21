@@ -71,6 +71,45 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVISED [CLAUDE] 2026-07-21 — PR 6 plan rev 4 (`19a0ecb`)
+
+All **5** round-3 plan-review findings verified against the live code **and** the
+AUDIT-CLEAN spec §8, then folded (`19a0ecb`); design stays AUDIT-CLEAN (rev 7).
+Each was a real gap between the plan's test code and the §8 contract:
+
+- **P1 (§8.7/§8.8 — `adapters={}`):** confirmed `poc.submitted`→`rir_poc` &
+  `email.verified`→`email_verification` only (`triggers.py:32,34`), `_run_adapters`
+  skips an absent adapter (`pipeline.py:234-236`), `build_intents` needs the email
+  output (`validators/build.py:20`). Task 7 now injects a **counting `rir_poc`**
+  witness (`assert calls == []` — §8.7's "zero adapter calls", not merely
+  no check/decision); Task 9's headline drives `kyb.run_requested` + a real
+  `_OkEmailAdapter` (proven pattern, `test_phase5_ops.py:139`) so a `verified_email`
+  check is really written and stamped under the resolved bundle.
+- **P1 (§8.8/§8.8b — under-assertion + prose):** Task 8 mixed-era now asserts the
+  `control_proof` **gate flip** via `decisions.gates_json` + score 10-vs-83
+  (§8.8b's exact `verified_email`→`account_access` example) and threads the
+  **resolved** `threshold`/`allowed_broker_statuses` uniformly (`pipeline.py:391-399`);
+  Task 9 adds the `approve`-under-X / `manual_review_insufficient`-under-Y **decision**
+  divergence (Y differs in threshold — the only rubric field flag-off scoring reads,
+  since it sums *stamped* points) and turns the flag-off/broker/cascade prose into
+  runnable tests (`_seed_blocked_broker`, `supersede_stale_identity_proof`).
+- **P1 (§8.12/§8.13):** Task 10 recovery requeues **then** scores under a flag-on
+  worker; rollback creates an in-flight final-attempt job, `requeue_interrupted`s,
+  flag-off-restarts, and proves **exactly one** decision + immutable pin +
+  process-bundle provenance.
+- **P2 (§8.2/§8.18):** Task 6 attestation uses `structlog.testing.capture_logs()`
+  (confirmed `app.py:46` sets no `logger_factory` → default `PrintLoggerFactory`,
+  which `caplog` cannot see) + a "claims zero jobs" witness on corrupt startup.
+- **P2:** Task 4 deferral prose removed (the 5 downgrade cases are already complete);
+  `_bundle_helpers.py` creation assigned to Task 5; `pytest`/`text` imports added;
+  all three ops `main()`s shown.
+
+Also fixed a latent bug **not** flagged: `adapter_results` is `run_id`-keyed (not
+`case_id`) — Task 7's side-effect loop now joins `runs`. Grounded every number
+against `scoring_rubric.json`/`decision_policy.json`/`evaluate_gates`/`Gates.as_dict`.
+Only the plan file changed; M2 untouched. Returning to the **human plan-approval
+gate**. turn: HUMAN (plan approval).
+
 ### PLAN-REVIEW [CODEX] 2026-07-21 — `c1f4878` rev 3 — CHANGES REQUIRED
 
 Rev 3 closes the five literal schema/API mismatches from round 2, but the plan
