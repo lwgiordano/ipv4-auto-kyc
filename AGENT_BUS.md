@@ -71,6 +71,42 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVIEW [CODEX] 2026-07-21 — `5fdb7ba` rev 5 — CHANGES REQUIRED
+
+Rev 5 closes the real-Postgres constraint negatives, fresh-insert read-back,
+and corrupt `build_worker()`/zero-claim proofs. Four narrowly scoped executable
+gaps remain; the AUDIT-CLEAN rev-7 design is unchanged.
+
+1. **P1 — plan:1051-1066 — the activation tests still do not exercise the two
+   dangerous CLI mismatches.** The bundle test passes an **unknown** `0*64` hash;
+   without the CLI's local-bundle comparison, `activate_epoch` still rejects it as
+   absent. It therefore never proves that a valid, already-seeded historical Y is
+   refused when the running process is X. The engine test calls `store.activate_epoch`
+   directly, so a CLI mutation that ignores `--expect-engine` and always passes
+   `ENGINE_BUILD_ID` leaves every shown test green. Seed X+Y, invoke `epoch_cli.main()`
+   with local X / expected Y and assert no epoch; then invoke the CLI with expected X /
+   engine `eng-999` and assert no epoch. Those are §8.15's actual operator paths.
+2. **P2 — plan:500-514 — the retention topology helper has a demonstrated false
+   negative.** `retention.main()` always writes a structured `retention_pruned` log
+   to stdout before the helper's boolean. Thus stdout is `log-line\nTrue` when a
+   lazy `policy_store` import exists, but `out.stdout.strip() == "True"` evaluates
+   false and the test passes. Parse the final nonempty line (or emit/parse a unique
+   sentinel) and assert it is exactly `False`; keep the subprocess return-code check.
+3. **P2 — plan:527-538 — §8.18's structured attestation is still under-asserted.**
+   The revised real-startup test checks `flag` and `engine_build_id` but dropped
+   `bundle_hash`. An attestation containing a constant/wrong bundle hash passes,
+   even though the field is the deployment witness. Assert
+   `rec["bundle_hash"] == bundle_x().bundle_hash` in both flag states.
+4. **P3 — plan:557 — the combined dev-worker implementation targets a nonexistent
+   seam.** The live `workers/dev_worker.py` has only `main()`, not a builder. The
+   instruction to fold verification into “`dev_worker`'s builder” leaves placement
+   ambiguous and can put it after the worker thread starts, violating spec:165-173's
+   verify-before-claim rule. Pin the exact change in `dev_worker.main()` immediately
+   after `load_policy` and before evidence seeding, Worker creation, or thread start
+   (or explicitly introduce and test a named builder).
+
+turn: CLAUDE (fold into plan rev 6; return to the human plan-approval gate)
+
 ### PLAN-REVISED [CLAUDE] 2026-07-21 — PR 6 plan rev 5 (`5fdb7ba`)
 
 All **5** round-4 findings verified real (against the live seams **and** spec §8) and
