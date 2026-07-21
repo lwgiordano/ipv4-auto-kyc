@@ -211,9 +211,9 @@ _BUNDLE = "INSERT INTO policy_bundles (bundle_hash, files_json) VALUES ('h', '{}
      "engine_build_id) VALUES (1, now(), 'h', 'eng-1')", "epoch_row"),
     ("INSERT INTO cases (id) VALUES ('c'); "
      "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, actor_json, "
-     "payload_json) VALUES ('ev','c','k','ph','email.verified','{}'::jsonb,'{}'::jsonb); "
+     "payload_json, event_sequence) VALUES ('ev','c','k','ph','email.verified','{}'::jsonb,'{}'::jsonb,1); "
      "INSERT INTO runs (id, case_id, triggering_event_id, state, engine_build_id) "
-     "VALUES ('r','c','ev','QUEUED','eng-1')", "run_engine_id"),   # runs.triggering_event_id NN FK
+     "VALUES ('r','c','ev','QUEUED','eng-1')", "run_engine_id"),   # events.event_sequence NN (008), runs.triggering_event_id NN FK
     ("INSERT INTO cases (id) VALUES ('c'); INSERT INTO checks (id, case_id, check_type, "
      "status, points_awarded, category, source, policy_bundle_hash) "
      "VALUES ('k','c','verified_email','pass',10,'x','seed','h')", "check_bundle_hash"),
@@ -248,8 +248,8 @@ def test_011_downgrade_clean_when_unused(pg):
 _VALID_BUNDLE = "INSERT INTO policy_bundles (bundle_hash, files_json) VALUES ('h','{}'::jsonb)"
 _VALID_CASE = "INSERT INTO cases (id) VALUES ('c')"
 _VALID_EVENT = ("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                "actor_json, payload_json) VALUES ('ev','c','k','ph','email.verified',"
-                "'{}'::jsonb,'{}'::jsonb)")
+                "actor_json, payload_json, event_sequence) VALUES ('ev','c','k','ph','email.verified',"
+                "'{}'::jsonb,'{}'::jsonb,1)")   # events.event_sequence NN since migration 008
 _NONBLANK_SURFACES = {
     "epoch_engine": _VALID_BUNDLE + "; INSERT INTO bundle_pinning_epoch "
         "(id, activated_at, bundle_hash, engine_build_id) VALUES (1, now(), 'h', :blank)",
@@ -934,8 +934,8 @@ def _queue_run_transition(engine, case, run_id, bundle_hash, status="queued", ki
         c.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case})
         ev = f"{run_id}-ev"
         c.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, "
-                       "event_type, actor_json, payload_json) VALUES (:e,:c,:e,'ph',"
-                       "'recalculate.requested','{}'::jsonb,'{}'::jsonb)"), {"e": ev, "c": case})
+                       "event_type, actor_json, payload_json, event_sequence) VALUES (:e,:c,:e,'ph',"
+                       "'recalculate.requested','{}'::jsonb,'{}'::jsonb,1)"), {"e": ev, "c": case})  # event_sequence NN (008)
         c.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state, "
                        "policy_bundle_hash) VALUES (:r,:c,:e,'QUEUED',:h)"),
                   {"r": run_id, "c": case, "e": ev, "h": bundle_hash})
@@ -1049,8 +1049,8 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
                        "buy_enablement, policy_shas, manual) VALUES ('d-al','c-al','x',0,"
                        "'{}'::jsonb,'buy_locked_org_id_required','{}'::jsonb,false)"))  # decided_at=now()>epoch, engine NULL
         c.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                       "actor_json, payload_json) VALUES ('e-q','c-al','kq','ph','email.verified',"
-                       "'{}'::jsonb,'{}'::jsonb)"))
+                       "actor_json, payload_json, event_sequence) VALUES ('e-q','c-al','kq','ph','email.verified',"
+                       "'{}'::jsonb,'{}'::jsonb,1)"))   # events.event_sequence NN since migration 008
         c.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
                        "VALUES ('r-q','c-al','e-q','QUEUED')"))   # queued, NULL engine — legitimate
     with session_factory() as s:
