@@ -90,3 +90,15 @@ def test_non_production_environments_are_not_gated():
     validate_for_production  # noqa: B018 — sanity that import resolves
     # the app factory only calls validate for production, so dev stays permissive
     assert production_config_violations(dev)  # dev config would fail *if* checked
+
+
+def test_bundle_pinning_flag_defaults_off_and_toggles():
+    from kyc_tool.config import Settings
+    assert Settings().enforce_bundle_pinning is False
+    assert Settings(enforce_bundle_pinning=True).enforce_bundle_pinning is True
+
+
+def test_production_allows_pinning_off():
+    # PR 6 is NOT boot-required in production; hardened() must still validate off.
+    s = hardened(enforce_bundle_pinning=False)
+    validate_for_production(s)   # must not raise

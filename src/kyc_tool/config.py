@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     # callback carries an `enforcement_held` marker.
     enforce_positive_decisions: bool = False
 
+    # PR 6 (item 7A): when True, the pipeline worker loads each run's recorded
+    # policy bundle by hash and scores under it, refusing if unloadable. Off by
+    # default; activated via a drained worker-pool cutover (docs/DEPLOYMENT.md §…).
+    enforce_bundle_pinning: bool = False
+
     # Normative policy files (the spec package is the single source of truth)
     policy_dir: Path = REPO_ROOT / "KYC_Tool_Build_Package" / "machine_readable"
 
