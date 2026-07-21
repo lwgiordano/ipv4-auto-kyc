@@ -24,6 +24,8 @@ EXPECTED_TABLES = {
     "outbox",
     "hmac_v1_observation",
     "hmac_signature_stats",
+    "policy_bundles",
+    "bundle_pinning_epoch",
 }
 
 
@@ -97,3 +99,89 @@ def test_010_downgrade_refuses_after_cross_case_reuse(pg: str):
     with pytest.raises(Exception) as exc:  # noqa: PT011 — alembic wraps the RuntimeError
         alembic_command.downgrade(cfg, "009")
     assert "cross-case" in str(exc.value).lower()
+
+
+_EPOCH_HASH = "a" * 64
+
+# Each entry populates exactly ONE downgrade blocker; all 5 are listed below and
+# are complete valid INSERTs against today's schema (every NOT NULL column without
+# a default is supplied — cases/events/runs/checks/decisions per db/tables.py). A
+# bundle row is inserted first where an FK/hash is needed. No further cases to add.
+_BUNDLE = "INSERT INTO policy_bundles (bundle_hash, files_json) VALUES ('h', '{}'::jsonb)"
+
+
+@pytest.mark.parametrize("populate_sql, ids", [
+    (_BUNDLE, "bundle_row"),
+    (_BUNDLE + "; INSERT INTO bundle_pinning_epoch (id, activated_at, bundle_hash, "
+     "engine_build_id) VALUES (1, now(), 'h', 'eng-1')", "epoch_row"),
+    ("INSERT INTO cases (id) VALUES ('c'); "
+     "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, actor_json, "
+     "payload_json, event_sequence) VALUES ('ev','c','k','ph','email.verified','{}'::jsonb,"
+     "'{}'::jsonb,1); "  # events.event_sequence is NN with no DB default since migration 008
+     "INSERT INTO runs (id, case_id, triggering_event_id, state, engine_build_id) "
+     "VALUES ('r','c','ev','QUEUED','eng-1')", "run_engine_id"),   # runs.triggering_event_id NN FK
+    ("INSERT INTO cases (id) VALUES ('c'); INSERT INTO checks (id, case_id, check_type, "
+     "status, points_awarded, category, source, policy_bundle_hash) "
+     "VALUES ('k','c','verified_email','pass',10,'x','seed','h')", "check_bundle_hash"),
+    ("INSERT INTO cases (id) VALUES ('c'); INSERT INTO decisions (id, case_id, decision, "
+     "score, gates_json, buy_enablement, policy_shas, manual, engine_build_id) "
+     "VALUES ('d','c','manual_review_insufficient',0,'{}'::jsonb,'buy_locked_org_id_required',"
+     "'{}'::jsonb,false,'eng-1')", "decision_engine_id"),
+])
+def test_011_downgrade_refuses_after_use(pg, populate_sql, ids):
+    url = _fresh_db(pg, f"kyc_mig_011_{ids}")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "head")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        for stmt in populate_sql.split("; "):
+            conn.execute(text(stmt))
+    engine.dispose()
+    with pytest.raises(Exception) as exc:      # alembic wraps the RuntimeError
+        alembic_command.downgrade(cfg, "010")
+    assert "forward-only" in str(exc.value).lower()
+
+
+def test_011_downgrade_clean_when_unused(pg):
+    url = _fresh_db(pg, "kyc_mig_011_clean")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "head")
+    alembic_command.downgrade(cfg, "010")      # empty schema → clean
+    alembic_command.upgrade(cfg, "head")
+
+
+# §8.16: the `CHECK (btrim(col) <> '')` guards must REJECT blank/whitespace on every
+# constrained surface. Without these negative tests, dropping any CHECK leaves the
+# suite green. Each row is otherwise valid; only the constrained column is `:blank`.
+_VALID_BUNDLE = "INSERT INTO policy_bundles (bundle_hash, files_json) VALUES ('h','{}'::jsonb)"
+_VALID_CASE = "INSERT INTO cases (id) VALUES ('c')"
+_VALID_EVENT = ("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                "actor_json, payload_json, event_sequence) VALUES ('ev','c','k','ph','email.verified',"
+                "'{}'::jsonb,'{}'::jsonb,1)")  # event_sequence is NN with no DB default (migration 008)
+_NONBLANK_SURFACES = {
+    "epoch_engine": _VALID_BUNDLE + "; INSERT INTO bundle_pinning_epoch "
+        "(id, activated_at, bundle_hash, engine_build_id) VALUES (1, now(), 'h', :blank)",
+    "run_engine": _VALID_CASE + "; " + _VALID_EVENT + "; INSERT INTO runs "
+        "(id, case_id, triggering_event_id, state, engine_build_id) VALUES ('r','c','ev','QUEUED',:blank)",
+    "decision_engine": _VALID_CASE + "; INSERT INTO decisions (id, case_id, decision, score, "
+        "gates_json, buy_enablement, policy_shas, manual, engine_build_id) VALUES ('d','c','x',0,"
+        "'{}'::jsonb,'buy_locked_org_id_required','{}'::jsonb,false,:blank)",
+    "check_bundle": _VALID_CASE + "; INSERT INTO checks (id, case_id, check_type, status, "
+        "points_awarded, category, source, policy_bundle_hash) "
+        "VALUES ('k','c','verified_email','pass',10,'x','seed',:blank)",
+}
+
+
+@pytest.mark.parametrize("surface", list(_NONBLANK_SURFACES))
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "ws"])
+def test_011_nonblank_checks_reject_blank(pg, surface, blank):
+    from sqlalchemy.exc import IntegrityError
+
+    url = _fresh_db(pg, f"kyc_mig_011_nb_{surface}_{len(blank)}")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "head")
+    engine = create_engine(url)
+    with pytest.raises(IntegrityError), engine.begin() as conn:  # CHECK (btrim(col) <> '') violation
+        for stmt in _NONBLANK_SURFACES[surface].split("; "):
+            conn.execute(text(stmt), {"blank": blank})  # extra param ignored where unused
+    engine.dispose()

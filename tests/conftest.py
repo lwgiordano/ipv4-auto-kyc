@@ -45,6 +45,8 @@ _ALL_TABLES = (
     "cases",
     "hmac_signature_stats",
     "hmac_v1_observation",
+    "policy_bundles",
+    "bundle_pinning_epoch",
 )
 
 

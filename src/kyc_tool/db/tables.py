@@ -91,6 +91,9 @@ class Run(Base):
     state: Mapped[str] = mapped_column(Text, default="QUEUED")
     partial: Mapped[bool] = mapped_column(Boolean, default=False)
     policy_bundle_hash: Mapped[str | None] = mapped_column(Text)
+    # PR 6 (migration 011): which engine build resolved/scored this run. Paired
+    # with policy_bundle_hash above for full pinning provenance.
+    engine_build_id: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
@@ -162,6 +165,8 @@ class Check(Base):
     superseded_by_check_id: Mapped[str | None] = mapped_column(
         ForeignKey("checks.id", deferrable=True, initially="DEFERRED")
     )
+    # PR 6 (migration 011): which policy bundle's rubric produced this check.
+    policy_bundle_hash: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     # AUDIT:D3 — at most one live check per (case, type); enforced in migration 003
@@ -214,6 +219,8 @@ class DecisionRow(Base):
     gates_json: Mapped[dict] = mapped_column(JSONB, default=dict)
     buy_enablement: Mapped[str] = mapped_column(Text)
     policy_shas: Mapped[dict] = mapped_column(JSONB, default=dict)  # audit provenance
+    # PR 6 (migration 011): which engine build resolved/scored this decision.
+    engine_build_id: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     manual: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -296,3 +303,28 @@ class HmacSignatureStat(Base):
     key: Mapped[str] = mapped_column(Text, primary_key=True)  # v2_accepted | rejected
     count: Mapped[int] = mapped_column(BigInteger, server_default=text("0"), default=0)
     last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PolicyBundleRow(Base):
+    """Durable policy-bundle store, keyed by content hash (PR 6, migration
+    011). Rows are immutable once referenced by the pinning epoch or by a
+    check/run/decision provenance column — downgrade refuses once any is used."""
+
+    __tablename__ = "policy_bundles"
+
+    bundle_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    files_json: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class BundlePinningEpochRow(Base):
+    """Single-row (id=1) activation epoch: the policy bundle + engine build
+    currently pinned for new runs (PR 6, migration 011). Written only by the
+    activation command, never by request-serving code paths."""
+
+    __tablename__ = "bundle_pinning_epoch"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, server_default=text("1"))
+    activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    bundle_hash: Mapped[str] = mapped_column(ForeignKey("policy_bundles.bundle_hash"))
+    engine_build_id: Mapped[str] = mapped_column(Text)
