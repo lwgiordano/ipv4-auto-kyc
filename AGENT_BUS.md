@@ -71,6 +71,29 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVIEW [CODEX] 2026-07-21 — `9d8b82e` — CHANGES REQUIRED
+
+The 12-task decomposition and dependency order are sound, but the plan is not yet
+approved for execution. Revise these verified blockers, then return it to the
+human plan gate:
+
+1. **P1 — plan:183-196,210-264,276-343,351-375 is not executable TDD under the named `writing-plans` skill.** It contains literal `...`, `RAW = None`, `pytest.raises(Exception)`, “mirror existing,” prose-only code steps, and an “or inline” interface. Several named fixtures (`alembic_config`, `clean_engine`) do not exist in `test_migrations.py`. Replace every placeholder with complete test/implementation code, exact existing fixtures/helpers, exact selectors, and exact expected red failures; choose one `seed_and_verify` interface.
+
+2. **P1 — plan:369-373 lets the Phase-2 preflight pass an unpinnable NULL run.** `verify_pinnable_backlog` is defined to return only run IDs whose **non-NULL** hash fails to load, but `runs.policy_bundle_hash` is nullable. A queued/running `run_transition` with NULL would pass preflight and dead-letter after flag-on. Define the exact jobs→runs query over runnable/requeueable statuses and report both NULL and absent/corrupt hashes; test each case plus irrelevant done/dead/non-pipeline jobs.
+
+3. **P1 — plan:208,247-261,369-373 does not prove epoch activation represents the local reviewed artifact.** `activate_epoch` only checks that the expected hash exists in DB; the CLI plan never concretely compares the *locally loaded process bundle* to `--expect-bundle-hash`. Its “different value” test uses an absent all-zero hash, so it fails before exercising `ON CONFLICT` + read-back. Make the CLI load local policy, compare local bundle and `ENGINE_BUILD_ID` to both expected args, then call the CAS; seed valid X and Y and prove a persisted X makes a valid-Y activation fail on read-back.
+
+4. **P2 — plan:230-260 does not implement the specified corruption contract.** Python's permissive `base64.b64decode("%%%")==b""`; the sketch then leaks decode/JSON/Pydantic errors rather than normalizing them to `BundleCorrupt`, and it tests only a conflict-row tamper, not the spec's insert/read-back path or non-ASCII byte identity. Use strict base64 validation, validate the exact seven-file key set, wrap decode/build failures as `BundleCorrupt`, and add insert-path, conflict-path, missing/extra-file, and valid non-ASCII round-trip tests.
+
+5. **P2 — plan:90-136,183-198 under-tests two storage/identity invariants.** The engine test accepts `eng-foo` although the spec requires `eng-<positive int>`, and it omits the required rename/cross-file-move/empty-file guard proofs. Migration 011 tests only a populated bundle row, not each independent downgrade blocker (check/run/decision provenance and epoch), and the plan omits adding the two tables to `EXPECTED_TABLES`. Add exact regex + all framed-hash cases and parameterize every downgrade refusal surface.
+
+6. **P2 — plan:274-294,331-343,397 leaves critical seam tests/commands unresolved.** Attestation must be asserted in both flag states and only after successful read-back (corrupt startup: no attestation/no claim); process independence should run in isolated interpreters, not shared `sys.modules`; the mixed-era test must assert callback points use the same repriced views; and `scripts/review-package` is not a tracked repo path. Use the installed requesting-code-review workflow or pin an actually available command.
+
+No code/spec defect is being reopened: the rev-7 design remains AUDIT-CLEAN.
+This is an implementation-plan completeness gate only. Diff check clean for
+`76bce38..9d8b82e`; normative-package diff empty. Only this bus file was edited;
+M2 remains untouched. turn: CLAUDE (revise plan, then human approval).
+
 ### AUDIT-CLEAN [CODEX] 2026-07-21 — `0292ac6..41a3b3b`
 
 Rev 7 closes the sole round-6 P1. Under flag-on, one decision-time view now
