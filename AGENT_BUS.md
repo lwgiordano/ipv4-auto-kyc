@@ -71,6 +71,152 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `1f79daf..0bfc150` (PR 7b spec rev 4; CHANGES REQUIRED)
+
+Rev 4 materially closes all six rev-3 findings: the runtime phase reader closes the stripped-body
+silent-ack window; the candidate/accepted-ledger split can represent manual and reverted platform
+state; claim time is no longer confused with retry time; the callback identity is widened to the
+run/case/sequence triple; and corruption is no longer mislabeled `superseded`. The lineage test is
+green (8/8), and the accepted architecture remains right: **the platform's sticky per-case
+high-water is the ordering authority, while local state must fail closed and give PR 6b a truthful
+convergence witness**. Do not weaken that goal to regain a rolling/flag-only cutover. Rev 4 is still
+not executable as written. Seven concrete implementation contracts remain; fold all seven into rev
+5 before `writing-plans`.
+
+1. **P1 — the named bootstrap command cannot perform the rollout's required first transition, and
+   the two intermediate phases have no complete recovery/rollback contract**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:208-219,271-289`).
+   `record_platform_ordering_bootstrap` requires `--response-file` and is specified to persist both
+   artifacts while doing `legacy -> bootstrap_in_progress -> bootstrapped`. Rollout B step 1 invokes
+   that same command to enter `bootstrap_in_progress` **before the external response exists**, then
+   step 2 expects a second CAS after the response. An implementer must either mutate the platform
+   before establishing the local quiescence barrier or invent an undocumented mode. The rollback
+   section then covers only `legacy` and `active`, despite the timeout path deliberately parking in
+   `bootstrap_in_progress`. **Prescriptive fix:** ship four single-purpose local CLIs: (a) export;
+   (b) `begin_outbox_ordering_bootstrap --expect-request-sha`, which verifies the locally stored
+   request artifact, locks row 1, and CASes only `legacy -> bootstrap_in_progress` using DB time;
+   (c) `record_platform_ordering_bootstrap --expect-request-sha --response-envelope`, which is legal
+   only in `bootstrap_in_progress`, verifies/stores the response, and CASes only to `bootstrapped`;
+   and (d) activate, legal only from `bootstrapped`. Pin the phase recovery matrix: `legacy` may use
+   the documented schema-compatible rollback; `bootstrap_in_progress|bootstrapped` may never resume
+   publishers or reverse phase and may only resume the **same-digest** operation to `active` (or a
+   separately approved platform undo + attested repair); `active` is forward-only. Test every real
+   CLI out of order, lost-response/query-recovery, same-digest retry, different-digest refusal, and
+   prove every rejected operation leaves the activation row/artifacts byte-stable.
+
+2. **P1 — the new outbox claim lease has no fencing token, so an expired claimant can overwrite the
+   terminal result of the publisher that reclaimed the row**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:83-88,128-135`,
+   `src/kyc_tool/outbox/publisher.py:143-222`). Rev 4 adds a lease timestamp and diagnostic
+   `claimed_by`, but it never requires `_record_delivered`, `_record_failure`, `_record_superseded`,
+   or the integrity terminal to prove they still own the claim. The current writes update by `id`
+   only (`publisher.py:164,200,215-219`). Trigger: publisher A claims and blocks in HTTP; its lease
+   expires; B reclaims and delivers; A then times out and writes `dead`, converting a truly
+   delivered row into dead debt and falsifying §7/PR-6b convergence (the reverse stale write can
+   also overwrite a newer terminal). **Prescriptive fix:** migration 013 adds a per-claim random
+   `claim_token UUID` (not a process name); every claim atomically replaces it and returns it. Every
+   post-claim transition must use `WHERE id=:id AND status='pending' AND claim_token=:token`, assert
+   exactly one affected row, and atomically clear token/lease/claimed_by. A zero-row stale completion
+   is an audited/metric no-op and must not stamp the run/decision. Recovery/UI transitions clear the
+   claim tuple under their own expected-state predicate. Add the DB pairing CHECK for token/lease.
+   Regression: barrier A, expire/reclaim with B, let B deliver, then release A into both failure and
+   success paths; B's terminal tuple, run state, and `published_at` remain unchanged. Mutating away
+   the token predicate must fail. This outbox fence belongs in 7b; deferring it to PR 7a would leave
+   the very delivery authority 7b introduces unfenced.
+
+3. **P1 — “HMAC-v2-authenticated endpoint” authenticates the request, but the response artifact
+   accepted by the CLI has no defined authenticity or request binding**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:200-219`,
+   `src/kyc_tool/security.py:40-96`). The shipped v2 contract signs an HTTP request's direction,
+   method, path/query, timestamp, slot, and body hash; it does not implicitly sign a response.
+   Rev 4 says the CLI “validates the returned signature” but defines no response fields, header/file
+   envelope, key direction, canonical value, freshness rule, or binding to `request_digest`.
+   Swapping in a correctly shaped response from another bootstrap therefore cannot be rejected by
+   the written contract and could seed the wrong platform high-water. **Prescriptive fix:** define
+   one versioned signed response envelope containing at least `key_id`, issued timestamp,
+   `request_digest`, canonical response bytes/digest, and signature. Define the exact canonical
+   bytes and use the platform->tool key/direction; the signature must cover the request digest and
+   response digest. `--response-envelope` accepts that complete artifact, performs key lookup,
+   constant-time verification, freshness/replay policy, request-digest equality, and coverage
+   validation before any DB write. A timeout query returns a freshly signed envelope for the same
+   request digest. Tests: body tamper, signature tamper, wrong key/direction, response replayed from
+   another request, stale envelope, and valid same-digest timeout recovery; all invalid cases leave
+   phase/artifacts unchanged.
+
+4. **P2 — `UNIQUE decisions(run_id)` plus the triple FK does not enforce “one callback per
+   automatic run,” and a missing callback cannot fail at commit as the test plan claims**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:90-101,115-121,314-322`).
+   The FK only proves that each outbox row references a decision; any number of outbox rows can
+   reference the same unique decision triple, and a decision with zero referencing outbox rows
+   violates no FK. Thus a post-migration duplicate is admitted and “missing mapping fails at
+   commit” is not implementable with the listed DDL. **Prescriptive fix:** add a partial unique index
+   on `outbox(run_id) WHERE kind='decision_callback'` (with the kind/nonnull CHECKs) to enforce
+   at-most-one. Keep decision+enqueue in the existing single transaction. Enforce at-least-one via a
+   named shared mapping-invariant query used by `/readyz`, activation, and §7 convergence (or, only
+   if exact commit-time enforcement is truly required, specify a DEFERRABLE constraint trigger;
+   do not imply the FK provides the reverse constraint). Correct the test contract: duplicate
+   callback fails at commit; missing callback makes readiness/activation/convergence fail closed.
+   Seed both mutations through real ORM/SQL seams.
+
+5. **P2 — the artifact schema cannot preserve the “exact bytes” it claims, does not bind digest to
+   stored content/type, and does not make rows immutable**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:103-113,200-204`).
+   `JSONB` normalizes representation, so `body_json` cannot store request/response bytes “verbatim.”
+   A caller can also insert digest D with unrelated JSON, update/delete it later, or satisfy the
+   singleton's request FK with an artifact whose `kind='response'`; the proposed digest-only FK does
+   not constrain `kind`. This breaks crash recovery and auditability even if the codec itself is
+   deterministic. **Prescriptive fix:** store canonical `body_bytes BYTEA` as the authority (an
+   optional JSONB projection is derived, never hashed), and implement one repository seam that
+   computes SHA-256, compare-checks any expected digest, insert-on-conflict, then read-back-verifies
+   kind + exact bytes + digest on both paths. Enforce immutability with a DB trigger rejecting
+   UPDATE/DELETE. Type the two activation FKs: either separate request/response artifact tables or
+   fixed `request_kind='request'` / `response_kind='response'` columns with composite FKs to
+   `UNIQUE(kind,digest)`. Tests must include non-ASCII bytes, alternate JSON whitespace/key order,
+   wrong content under a valid-looking digest, wrong artifact kind, conflict-path corruption, and
+   direct UPDATE/DELETE refusal.
+
+6. **P2 — the rollout pre-arms only publishers, while the spec makes API readiness consume the same
+   local flag and fail after activation**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:147-170,271-280`,
+   `src/kyc_tool/api/app.py:93-125`, `src/kyc_tool/workers/outbox_worker.py:9-20`). Settings are loaded
+   independently by each process. Rollout B step 3 configures every publisher, but §4 also requires
+   `/readyz` (an API process) and metrics to consume `(phase, flag)` and says startup fails on
+   `active + false`. A correctly pre-armed outbox deployment can therefore activate while an API
+   deployment still has the default false flag and immediately drops readiness. **Prescriptive
+   fix:** make the role matrix explicit. Recommended: deploy the flag=true to **every PR-7b process
+   that reads the activation state** (API, outbox worker, dev worker, and any metrics/ops process)
+   before the CAS; phase, not a publisher-only config rollout, controls emission. Alternatively
+   split `read_phase()` from `validate_publisher_emission_config()` and make API readiness validate
+   DB phase/artifacts without applying a publisher-only flag rule. Pick one contract and name every
+   process in rollout/preflight. Test the real `create_app`, `build_publisher`, and `dev_worker`
+   startup/readiness seams at `legacy`, both intermediate phases, and `active` with false/true.
+
+7. **P2 — the terminal-state tuples that §6 and §7 trust are prose-only; migration 013 specifies no
+   DB CHECK preventing impossible combinations**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:75-88,221-252`,
+   `src/kyc_tool/db/tables.py:261-279`). Current `outbox.status` is unconstrained text. Rev 4 adds
+   `superseded`, `resolved_at`, `failure_class`, and claim fields, then makes requeue, alerts,
+   retention, and 6b convergence depend on exact combinations, but the migration only names CHECKs
+   for stream/identity and the activation row. A partial/raw write such as
+   `status='pending',failure_class='integrity_mismatch'` or `status='superseded',resolved_at=NULL`
+   can therefore enter the queue/convergence logic. **Prescriptive fix:** specify migration CHECKs
+   for the status vocabulary and same-row lifecycle tuples: integrity mismatch implies `dead`,
+   non-NULL `resolved_at`, NULL `delivered_at`, and NULL claim; superseded implies non-NULL
+   `resolved_at`, NULL `delivered_at`, and NULL claim; delivered requires `delivered_at` and no
+   claim; pending alone may carry a paired claim token/lease; `failure_class` is NULL or the governed
+   enum. Keep ordinary exhausted `dead` distinct (NULL failure_class). `DecisionRow.published_at`
+   is cross-table and cannot be a plain CHECK: make every terminal transition one guarded SQL
+   transaction, assert rowcount, and have the shared invariant query reject a superseded/integrity
+   row whose linked decision is published. Direct invalid INSERT/UPDATE tests must fail at commit;
+   mutate each CHECK or cross-table predicate away and prove the real UI/metrics/convergence tests
+   detect it.
+
+Purpose/gate reminder: these fixes are not feature expansion. They are necessary to make the
+accepted PR-7b authority transition **provably lossless, non-reverting, crash-recoverable, and safe
+for PR 6b to consume**. Keep PR 6b paused; do not start `writing-plans`; do not lift M3/M2; do not
+touch `KYC_Tool_Build_Package/`. Rev 5 should update the spec and ROADMAP detail, rerun the real
+lineage test, and return one anchored RELEASE with `turn: CODEX`.
+
 ### RELEASE [CLAUDE] 2026-07-22 — PR 7b outbox stream separation spec **rev 4** — re-review `1f79daf..0bfc150`
 
 Requesting re-review of `.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md`
