@@ -6,8 +6,11 @@ check store (partial unique index), but the fold is defensive anyway: a type
 counts once (AUDIT: rubric caps 'ORG-ID at most 25; POC at most 25').
 """
 
+from dataclasses import replace
+
 from kyc_tool.domain.models import BrokerStatus, CheckStatus, CheckView, Gates, ScoreBreakdown
 from kyc_tool.domain.reasons import ReasonCode
+from kyc_tool.policy.types import ScoringRubric
 
 LEGAL_PROOF_CATEGORY = "legal_business_proof"
 CONTROL_PROOF_CATEGORY = "control_proof"
@@ -22,6 +25,21 @@ def score(live_checks: list[CheckView]) -> ScoreBreakdown:
         existing = by_check.get(check.check_type, 0)
         by_check[check.check_type] = max(existing, check.points_awarded)
     return ScoreBreakdown(score=sum(by_check.values()), by_check=by_check)
+
+
+def rubric_scoring_views(views: list[CheckView], rubric: ScoringRubric) -> list[CheckView]:
+    """Re-price each live check from `rubric` by check_type (PR 6 flag-on). A type
+    absent from the rubric contributes no points/category. Evidence (status,
+    reason_codes, source) is untouched — PASS/FAIL re-judgment is PR 6b."""
+    out = []
+    for v in views:
+        try:
+            item = rubric.item(v.check_type)
+            pts, cat = item.points, item.category
+        except KeyError:
+            pts, cat = 0, ""
+        out.append(replace(v, points_awarded=pts, category=cat))
+    return out
 
 
 # Gate 5's single source of truth: every reason code that means "the live

@@ -86,3 +86,54 @@ def test_flag_on_absent_bundle_dead_letters_zero_side_effects(
         dead = s.execute(text("SELECT count(*) FROM jobs WHERE status='dead'")).scalar_one()
     assert calls == [], "rir_poc was called before the absent-bundle refusal"  # §8.7 zero adapter calls
     assert dead >= 1
+
+
+# --- Task 8: rubric-pinned decision-time scoring (every live check) --------
+
+
+def test_mixed_era_reprices_score_gate_and_callback(
+        session_factory, policy, settings, tmp_path, engine, clean_db,
+        post_event, publisher, callback_capture):
+    from sqlalchemy import text
+
+    from kyc_tool.checkstore import repo as checkstore
+    from kyc_tool.domain.models import CheckStatus
+    from kyc_tool.orchestration.pipeline import Pipeline
+    from kyc_tool.policy_store import repo as store
+    from kyc_tool.queue.worker import Worker
+    from kyc_tool.storage.object_store import FsStore
+    from tests.integration._bundle_helpers import raw_x
+    T = "verified_email"                                     # §8.8b example type
+    assert policy.rubric.item(T).points == 10 and policy.rubric.item(T).category == "account_access"
+    with session_factory() as s:
+        store.store_bundle(s, raw_x())
+        s.execute(text("INSERT INTO cases (id) VALUES ('case-mix')"))
+        checkstore.write_check(s, case_id="case-mix", check_type=T, status=CheckStatus.PASS,
+                               points_awarded=83, category="control_proof", source="seed")  # stale era
+        s.commit()
+
+    def _recalc(flag: bool):
+        post_event("case-mix", "recalculate.requested", {})  # run pinned to app bundle X
+        cfg = settings.model_copy(update={"enforce_bundle_pinning": flag})
+        pl = Pipeline(session_factory, policy, FsStore(tmp_path / f"e{flag}"), cfg, adapters={})
+        Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+               on_dead_letter=pl.on_dead_letter).run_until_idle()
+        with session_factory() as s:
+            r = s.execute(text("SELECT score, gates_json FROM decisions WHERE case_id='case-mix' "
+                               "ORDER BY decided_at DESC LIMIT 1")).one()
+        return r.score, r.gates_json
+
+    on_score, on_gates = _recalc(flag=True)
+    assert on_score == 10 and on_gates["control_proof"] is False    # re-priced; gate flips off
+    off_score, off_gates = _recalc(flag=False)
+    assert off_score == 83 and off_gates["control_proof"] is True    # stamped; gate holds
+    # callback checks-summary uses the SAME repriced views: a final flag-on run's body
+    # (pipeline._callback_body, pipeline.py:510-519 → {"type","points": pts if PASS else 0}).
+    post_event("case-mix", "recalculate.requested", {})
+    cfg = settings.model_copy(update={"enforce_bundle_pinning": True})
+    pl = Pipeline(session_factory, policy, FsStore(tmp_path / "ecb"), cfg, adapters={})
+    Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+           on_dead_letter=pl.on_dead_letter).run_until_idle()
+    publisher.process_pending()
+    checks = callback_capture.requests[-1]["body"]["checks"]
+    assert any(c["type"] == T and c["points"] == 10 for c in checks)  # re-priced points in callback

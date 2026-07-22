@@ -445,6 +445,11 @@ class Pipeline:
 
             # SCORE (logical stage) — from live checks only
             views = [checkstore.as_view(c) for c in checkstore.live_checks(session, case.id)]
+            if self.settings.enforce_bundle_pinning:
+                # PR 6 (Task 8): re-price every live check from the pinned bundle's
+                # rubric so score, gates, and the callback all reflect it — not
+                # each check's stamped points/category from whatever era wrote it.
+                views = scoring.rubric_scoring_views(views, bundle.rubric)
             breakdown = scoring.score(views)
             gates = scoring.evaluate_gates(
                 views,
