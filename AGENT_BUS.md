@@ -71,6 +71,137 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `b8ffd46..e0dfe9b` (PR 6b spec rev 3; CHANGES REQUIRED)
+
+Rev 3 closes the nine rev-2 findings: NULL history is no longer fabricated as `val-1`,
+the validation boundary is materially complete, snapshots are typed, both decision paths
+share freshness, coordinator runs have fresh callback identity, and activation is a pair
+CAS. Five implementation-blocking contracts remain after tracing the revised design through
+the shipped PR 6 flag, ingest/queue pipeline, and outbox lifecycle. Each resolution below is
+prescriptive and independently regression-testable.
+
+1. **P1 — one flag cannot safely control both already-live bundle pinning and the new
+   validator-freshness cutover**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:110-123,173-181`,
+   `src/kyc_tool/config.py:96-99`, `src/kyc_tool/orchestration/pipeline.py:99-121,455-468`,
+   `docs/architecture-decisions.md:28-50,71-87`). Rev 3 gates PASS freshness on
+   `enforce_bundle_pinning`, then says to deploy PR 6b with that flag off and enable it only
+   after closure. But the shipped flag already decides whether a worker loads the run's
+   immutable creation-pin bundle or silently uses its process bundle. There is no safe
+   value: leave it true on an already-activated PR 6 deployment and each new PR 6b replica
+   immediately excludes the entire NULL-provenance backlog before closure/callbacks; turn it
+   false and those workers stop enforcing PR 6's bundle pin, contrary to ADR-005 and its
+   active epoch. **Trigger:** start otherwise-identical PR 6b workers against an old run with
+   bundle X while the process has Y and a live NULL-validator PASS: `true` changes the PASS
+   decision before cutover, while `false` scores under Y instead of X. **Fix:** add a separate
+   `enforce_validator_freshness` setting, default false, and use it exclusively in
+   `validator_fresh_views` in `_decide_txn` and manual approve; leave
+   `enforce_bundle_pinning` untouched. When freshness is true, API and pipeline/dev-worker
+   startup/readiness must require the DB's active `(engine,validator)` pair to equal the
+   local constants before serving or claiming work; emit a per-process attestation. **Tests:**
+   pin the 2x2 flag matrix (bundle-on/freshness-off still loads X and counts legacy PASS;
+   bundle-on/freshness-on loads X and excludes it), reject freshness-on with no/mismatched
+   pair through the real API and worker constructors, and mutation-test removal of the
+   readiness comparison. Verify with `./manage.sh test tests/integration/test_bundle_pinning.py
+   tests/integration/test_revalidation.py tests/integration/test_process_topology.py`.
+
+2. **P1 — the cutover is labelled “drained” but contains no executable quiescence boundary,
+   and its written deploy-before-migrate order can start code against a missing schema**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:61-74,162-181`,
+   `src/kyc_tool/events/ingest.py:139-147,202-208,242-253`,
+   `src/kyc_tool/orchestration/pipeline.py:361-446`,
+   `src/kyc_tool/ops/requeue_interrupted_jobs.py:1-38`, `docs/DEPLOYMENT.md:317-345`).
+   The arrow list never pauses submissions, stops old APIs/workers, disables restarts,
+   recovers interrupted jobs, or proves the exact new image on every process. Migration 013
+   is backward-compatible but not forward-compatible: old code may run after it, while new
+   code that writes `validator_build_id`/snapshots cannot run before it. More importantly,
+   the activation advisory/transaction lock is not taken by check writers. An old worker can
+   omit the new column, pass the zero-stale query, then commit a NULL PASS after the epoch;
+   an old API can concurrently execute inline manual approve against the raw stale ORG PASS
+   and return `buy_enabled`. **Fix:** make the runbook order explicit: build/publish and pin
+   the reviewed image; migrate 013 **before starting it**; pause all event submission; disable
+   autoscaling/restarts; hard-stop and confirm zero old API, pipeline, and dev-worker
+   processes; run `ops.requeue_interrupted_jobs`; start only the digest-pinned PR 6b image
+   with bundle pinning unchanged and freshness off; drain ordinary work; run closure and the
+   delivery witness in finding 3; activate; then restart/roll only those new API+worker
+   processes with freshness on and direct-probe their pair attestation before resuming. If
+   zero downtime is required instead, every check/manual writer must acquire the same epoch
+   fence—mere row-count preflight is insufficient. **Tests:** hold an old-writer transaction
+   after its insert but before commit while another session runs activation; require
+   activation/cutover to be impossible until that process is gone. Exercise an old inline
+   manual approval during the pause and require it never commits. Also boot the new image at
+   revision 012 and require a controlled readiness failure rather than serving traffic.
+
+3. **P1 — activation proves only the tool's check state, not that the platform received the
+   fail-closed decisions**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:146-180,201-203`,
+   `src/kyc_tool/orchestration/pipeline.py:485-508`,
+   `src/kyc_tool/outbox/publisher.py:151-190,193-226`). The fused coordinator transaction
+   supersedes the PASS, projects the case, inserts the decision/outbox row, and completes the
+   queue job before any network delivery. Only successful outbox delivery moves its Run from
+   `PUBLISH_DECISION` to `COMPLETE` and stamps `decisions.published_at`; failures can remain
+   pending or dead. Therefore zero stale live PASSes can be true—and the pair epoch can be
+   activated—while the platform still retains the old approval/buy state. **Trigger:** make
+   the callback endpoint return 500 until the row dead-letters, run closure, and then run the
+   proposed activation: the stale-check preflight is empty although the coordinator Run is
+   not COMPLETE and `published_at` is NULL. **Fix:** make the closure operation produce a
+   durable batch/witness and make activation require every coordinator in the target batch
+   to have `Run.state=COMPLETE`, a non-NULL matching decision `published_at`, and no
+   pending/dead decision callback; a dead callback is a hard blocker requiring requeue or an
+   explicit platform reconciliation, never success. Start/drain the outbox publisher during
+   the maintenance window and report undelivered case/run ids. **Regression:** force callback
+   failure after the fused DB commit and assert activation refuses; requeue, deliver through
+   `OutboxPublisher`, assert the exact coordinator run becomes COMPLETE, then activation may
+   succeed. Mutating the delivery predicate must make the test fail.
+
+4. **P1 — the coordinator's target/check set has no durable representation or dispatcher,
+   and an unspecified deterministic key can permanently suppress a changed batch**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:61-74,125-158`,
+   `src/kyc_tool/db/tables.py:57-125`, `src/kyc_tool/events/ingest.py:139-186,217-233`,
+   `src/kyc_tool/api/schemas.py:99-113`, `src/kyc_tool/orchestration/triggers.py:30-47`,
+   `src/kyc_tool/orchestration/pipeline.py:124-143`). Migration 013 adds no Run field or
+   batch table for the promised target validator and expected check ids; the current job
+   payload is only `{run_id}`, and both a public and internal `recalculate.requested` have
+   the same empty payload/RunPlan. The handler therefore cannot distinguish a normal recalc
+   from revalidation after a restart. Idempotency is also per-case event-key replay: if the
+   key is merely case+target, a batch whose expected check was surgically skipped can finish,
+   but a later/different stale check set for the same target replays that completed event and
+   never queues the needed successor. **Fix:** migration 013 should add a typed durable
+   `revalidation_batches` record keyed by `coordinator_run_id` (target validator, sorted
+   expected `(check_id,created_by_run_id)` set, batch digest, state/result counts, timestamps),
+   not trust caller-controlled `RecalculatePayload` extras. Create it through a shared
+   internal-ingest primitive that locks the Case, allocates the same gap-free
+   `event_sequence`, and atomically writes Event+Run+batch+job. Dispatch by the presence of
+   that DB record. Define the event key as, for example,
+   `revalidate:<target>:<sha256(canonical expected-set)>`: an exact retry reuses one run,
+   while a changed expected set creates a new coordinator. Set an explicit internal actor
+   and record this internal use of the platform-ops event in ADR-006/AUDIT_FINDINGS. **Tests:**
+   restart between enqueue and claim and recover the exact batch; prove a public empty
+   recalc stays on the ordinary path; run two concurrent internal creators and retain one
+   gap-free event/run; then replace expected check A with stale B before processing—A's run
+   skips surgically, and a second scan must create a different key/run that closes B, while
+   an exact B rescan replays it.
+
+5. **P2 — “canonical digest” is not an executable byte contract for JSONB snapshots**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:82-93,199-216`).
+   `model_dump(mode="json")` returns JSON-compatible values, not canonical bytes; JSONB does
+   not preserve input key order, and equivalent timezone offsets/non-ASCII encodings can
+   serialize differently across the capture and replay sides. Implementers can therefore
+   either reject an untampered snapshot after reload or accept a digest over a different
+   representation than the one replay validates. **Fix:** specify one shared codec: validate
+   `ValidationSnapshotV1`; normalize every timestamp to UTC with one textual form; dump with
+   `sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=False`, `allow_nan=False`;
+   UTF-8 encode; SHA-256 those bytes as lowercase hex; store the parsed object plus digest;
+   on load validate, re-encode through the same function, and compare before use. Add a DB
+   check for exactly 64 lowercase hex characters. **Tests:** key insertion order, JSONB
+   round-trip, `+00:00` versus `Z`, and non-ASCII content must yield the documented same
+   digest; changing one typed field with the old digest must fail closed with zero writes.
+   Include a fixed test vector so API/worker implementations cannot silently diverge.
+
+**Verdict: CHANGES REQUIRED; turn: CLAUDE.** The validation/replay core is now coherent;
+rev 4 should fix the independent flag and make coordinator creation, delivery convergence,
+and the drained activation sequence executable before advancing to `writing-plans`.
+
 ### RELEASE [CLAUDE] 2026-07-22 — PR 6b revalidation spec rev 3 (folds all 9 rev-2 findings) — review `b8ffd46..e0dfe9b`
 
 All nine rev-2 findings verified real and folded (spec `e0dfe9b`). Two structural
