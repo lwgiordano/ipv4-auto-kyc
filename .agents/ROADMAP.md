@@ -267,26 +267,31 @@ on runs + decisions**. Worker loads the run's bundle by hash, refuses if unloada
 
 ### PR 7b — Outbox stream separation + platform-authoritative decision ordering (item 8) — reordered FIRST
 Migration **013** (`down_revision='012'`): `outbox.{ordering_stream (NOT NULL, decision|email),
-decision_sequence, resolved_at, claim_lease_expires_at, claimed_by, failure_class}`,
+decision_sequence, resolved_at, claim_lease_expires_at, claim_token, claimed_by, failure_class}`,
 `decisions.decision_sequence` (D1), `cases.last_decision_sequence`; **triple-identity integrity** —
 `UNIQUE decisions(run_id)` + `UNIQUE decisions(run_id, case_id, decision_sequence)` + a triple FK
-`outbox(run_id, case_id, decision_sequence) → decisions`, plus manual/automatic and kind/stream
-CHECKs; and the **activation authority** — an `outbox_ordering_activation` phase singleton
-(`legacy→bootstrap_in_progress→bootstrapped→active`, ordered timestamps, 64-hex digests, no reverse
-transition) FK-bound to an immutable `outbox_ordering_bootstrap_artifacts` table. **Allocate
+`outbox(run_id, case_id, decision_sequence) → decisions` + a partial `UNIQUE outbox(run_id) WHERE
+kind='decision_callback'` (one callback per run), plus manual/automatic, kind/stream, **status
+vocabulary + lifecycle-tuple**, and token/lease-pairing CHECKs; and the **activation authority** — an
+`outbox_ordering_activation` phase singleton (`legacy→bootstrap_in_progress→bootstrapped→active`,
+ordered timestamps, 64-hex digests, no reverse transition) with kind-typed FKs to an **immutable
+`BYTEA` `outbox_ordering_bootstrap_artifacts`** table (UPDATE/DELETE-refusing trigger). **Allocate
 `decision_sequence` via the locked case counter** (not `max()+1`), callback-emitting decisions only;
-claim FIFO scoped per `(case_id, ordering_stream)` with the claim lease (`claim_lease_expires_at`)
-separate from the retry schedule (`next_attempt_at`), so a stuck POC email never blocks the decision
-callback and recovery resets only claimed rows. **Platform per-case high-water is the ordering
-authority** — `decision_sequence` on the wire, emission decided at the publisher via a shared
-runtime phase reader (checked before claim and before HTTP, fail-closed), seeded by an
-**authenticated bootstrap** from the platform's accepted-run ledger (reconciling manual/reverted
+claim FIFO scoped per `(case_id, ordering_stream)` with a **fenced claim** (`claim_token` +
+`claim_lease_expires_at`) separate from the retry schedule (`next_attempt_at`), so a stuck POC email
+never blocks the decision callback, recovery resets only claimed rows, and a stale claimant cannot
+overwrite the reclaiming publisher's terminal. **Platform per-case high-water is the ordering
+authority** — `decision_sequence` on the wire, emission decided at the publisher via a shared runtime
+phase reader (checked before claim and before HTTP, fail-closed; flag uniform across all
+activation-reading processes before CAS), seeded by an **authenticated bootstrap** (signed request +
+**signed response envelope**) from the platform's accepted-run ledger (reconciling manual/reverted
 state) and sticky thereafter; the local `superseded` guard is an optimization, and a tuple mismatch
 is a distinct non-retryable `integrity_mismatch` terminal (never `superseded`). **Two drained
 windows** (migration cutover reusing the shipped `requeue_interrupted_jobs` + a claim-lease-reset
 one-shot; then an activation cutover with publishers drained to zero and pre-armed at flag=true;
-digest-pinned; no mutating prod smoke); three CAS CLIs (`export_outbox_ordering_manifest`,
-`record_platform_ordering_bootstrap`, `activate_outbox_ordering`) modeled on
+digest-pinned; no mutating prod smoke); **four** single-purpose CAS CLIs
+(`export_outbox_ordering_manifest`, `begin_outbox_ordering_bootstrap`,
+`record_platform_ordering_bootstrap`, `activate_outbox_ordering`) + a phase recovery matrix, modeled on
 `activate_bundle_pinning_epoch`; **forward-only-after-use** downgrade; **two-phase irreversible**
 rollback (startup refuses `phase=active` with flag off). Reordered ahead of 6b to supply the ordering
 guarantee 6b's coordinator callbacks consume (ADR-008).
