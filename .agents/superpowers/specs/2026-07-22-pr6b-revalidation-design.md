@@ -1,223 +1,248 @@
-# PR 6b — Revalidation under the pinned engine (item 7B) — design (rev 2)
+# PR 6b — Revalidation under the pinned engine (item 7B) — design (rev 3)
 
-Rev 2 folds the six findings of Codex spec-review `AUDIT [CODEX] eb5af90..3354aab`
-(rev 1). The rev-1 premise "same validators ⇒ same outcome, so replay the live context"
-was **wrong**: the validators read *mutable current state* (POC token `consumed_at`/
-expiry via `datetime.now`; the website review task's `open` status; the *live*
-`official_registry_match` cross-check), so replaying a once-valid PASS through live
-context yields FAIL/no-intent. Rev 2 replaces live-context replay with an **immutable
-per-run validation snapshot**, runs revalidation as a **fused per-case re-decide**, and
-splits provenance into a **validator axis** (checks) and an **engine axis** (decisions).
+Rev 3 folds the nine findings of Codex spec-review `AUDIT [CODEX] 0a44056..4209ffc`
+(rev 2). The two biggest corrections: (a) existing checks carry **NULL** validator
+provenance, which is **unknown, not `val-1`** — the pre-6b PASS backlog (some judged by
+pre-PR3 *permissive* validators) must be **closed**, never grandfathered (F1); and (b)
+verdict-shaping code spans more than `validators/` — dispatch, extras normalization, the
+review-guard, and the new snapshot/replay code all change a PASS/FAIL — so rev 3 draws a
+single cohesive **validation boundary** and hashes its whole closure (F6). Rev 3 also
+gives revalidation a **first-class coordinator run** identity (F4), a **versioned snapshot
+codec** (F2), a shared **freshness projection** used by manual-approve too (F5), a
+**pair compare-and-swap** activation (F8), a **PASS-only** stale blocker (F7), a
+one-seam snapshot capture covering the DECIDE short-circuit (F3), and the ADR fix (F9).
 
 ## Context
 
-PR 6 (item 7A, converged) resolves each run's creation-pin bundle and, flag-on, re-prices
-every live check's points/category. It left validator PASS/FAIL untouched. The KYC
-validators (`validators/*.py`, dispatched by `build_intents`) are pure over
-`(normalized adapter output, case_snapshot, live_checks, extras)` — no bundle/rubric arg
-— so a check's PASS/FAIL is a **validator-code** property, versioned separately here.
-But those inputs include mutable state, so re-judging requires the state **as of the
-original validation**, not the live world.
+PR 6 (item 7A, converged) re-prices every live check under a run's pinned bundle but
+leaves PASS/FAIL as originally judged. A check's PASS/FAIL is a **validator-code**
+property; but the code that shapes a verdict is not only `validators/*.py` — it includes
+the dispatch (`build_intents`), the DB→`extras` normalization, the website review-guard
+eligibility, and (new here) the snapshot codec + replay binding. Rev 3 treats all of it
+as **one pure validation boundary** identified by `VALIDATOR_BUILD_ID`.
 
-Two axes:
-- **Bundle drift → pricing** — already re-priced live by PR 6. No PR 6b work.
-- **Validator drift → PASS/FAIL trust** — PR 6b: fail-closed on validator-stale PASSes +
-  a deterministic replay revalidator.
+Two axes: **bundle → pricing** (PR 6, already live) and **validator → PASS/FAIL trust**
+(PR 6b: fail-closed on validator-stale PASSes + a deterministic replay revalidator + a
+one-time closure of the untrusted legacy backlog).
 
-## Decisions (brainstorming + rev-1 review)
+## Decisions
 
-1. **Fail-closed** — an un-revalidated (validator-stale) live PASS is excluded from
-   score/gates until a pinned successor exists (ephemeral projection, no row mutation).
-2. **Two identifiers (finding 1).** `ENGINE_BUILD_ID` bumps **`eng-1` → `eng-2`** because
-   PR 6b changes *scoring/decision* semantics (the flag-on fail-closed projection);
-   runs/decisions stamp `eng-2`, and the decision-provenance collision rev 1 would have
-   caused is fixed. A **new** `VALIDATOR_BUILD_ID = "val-1"` (validators unchanged in
-   6b) is what **checks** stamp, and **staleness keys on the validator axis**. Because no
-   validator changed, **today's live backlog is not stale** — no mass revalidation at the
-   6b cutover; the writer is proven forward-safe via a synthetic validator bump in tests.
-3. **Deterministic replay from an immutable snapshot (finding 2)** — not live context.
-4. **Fused per-case re-decide (finding 3)** — revalidation runs through the pipeline's
-   decide transaction under the Case row lock; it never writes bare superseding checks.
-5. **Build the full writer now** (snapshot capture + revalidator + ops + activation gate).
+1. **Fail-closed** — a live PASS whose `validator_build_id` `IS DISTINCT FROM` the target
+   validator is excluded from score/gates (ephemeral projection, no row mutation).
+2. **Two identifiers.** `ENGINE_BUILD_ID` **`eng-1`→`eng-2`** (scoring semantics changed;
+   runs/decisions). New `VALIDATOR_BUILD_ID = "val-1"` on **checks**; staleness keys on it.
+3. **NULL provenance is unknown ⇒ stale**, never relabeled `val-1` and never backfilled
+   (F1). The pre-6b PASS backlog is **closed** at cutover.
+4. **Deterministic replay from a versioned, digest-verified immutable snapshot** (F2), not
+   live state.
+5. **Revalidation is a per-case first-class coordinator run** through a fused
+   score→decide→project→outbox primitive (F4).
+6. **One hashed validation boundary** for the validator drift guard (F6).
+7. **Build the full writer now** (closure lane + replay lane).
 
 ## Architecture
 
-### 1. Data model — migration 013 (`down_revision='012'`)
+### 1. The validation boundary + guard (F6)
 
-- **`checks.validator_build_id TEXT NULL`** + nonblank `CHECK … NOT VALID` (hot-compat;
-  enforces new rows; existing rows all-NULL). This is the staleness key. (Checks keep
-  PR 6's `policy_bundle_hash`; they get **no** `engine_build_id` — the engine lives on
-  runs/decisions.) `CheckView` gains `validator_build_id`; `as_view` reads it.
+Consolidate every verdict-shaping unit under a cohesive **pure** surface. Preferred: move
+`validators/*`, the intent dispatch, the pure DB→`extras` normalization, the website
+eligibility rule (the *pure scalar* part of `review_guard`), the snapshot codec, and the
+replay-binding helpers into a `src/kyc_tool/validation_engine/` package that imports no
+impure infrastructure (enforced by an import-linter contract). `VALIDATOR_BUILD_ID` is
+pinned by a **framed hash over the transitive closure** of that package's `*.py`
+(computed mechanically from the validation entrypoint's imports within `src/kyc_tool`, so
+a newly-introduced dependency automatically extends the hash and forces a conscious `val`
+bump). If a full move proves too invasive in one PR, the fallback is an **explicit
+manifest** of the closure files with a test that fails when the validation entrypoint
+imports a module not in the manifest — the guard message alone is not coverage.
+**Mutation-tested**: editing a website-eligibility branch, the POC extras decoder, the
+replay binding, or an ordinary validator must each change the closure digest.
+
+### 2. Data model — migration 013 (`down_revision='012'`)
+
+- **`checks.validator_build_id TEXT NULL`** + nonblank `CHECK … NOT VALID`. Existing rows
+  stay NULL — **unknown provenance** (decision 3). `CheckView` gains `validator_build_id`.
 - **`run_validation_snapshots`** (append-only): `run_id TEXT PK → runs.id`,
-  `snapshot_json JSONB NOT NULL`, `captured_at timestamptz NOT NULL DEFAULT now()`. The
-  frozen **mutable** inputs of that run's VALIDATE stage — the resolved `extras`, the
-  `live_checks` views used, and the `evaluated_at` clock — enough to re-run `build_intents`
-  deterministically. (The *immutable* inputs — `adapter_results.normalized_json`,
-  `runs.input_snapshot_json`, the triggering event — are already durable and are not
-  copied.) One row per run that produced checks.
-- **`engine_activation_epoch`** (append-only engine history, distinct from PR 6's
-  singleton `bundle_pinning_epoch`, finding 4): `id` DB-sequenced PK,
-  `engine_build_id TEXT NOT NULL UNIQUE`, `validator_build_id TEXT NOT NULL`,
-  `activated_at timestamptz NOT NULL`. The current active engine is the max-id row.
-- Downgrade: forward-only-after-use (refuse once any `validator_build_id` / snapshot /
-  engine-epoch row exists), mirroring 011.
-- The lineage guard already requires PR 6b = `013`, State `shipped`.
+  `snapshot_json JSONB NOT NULL`, `snapshot_digest TEXT NOT NULL`,
+  `captured_at timestamptz NOT NULL DEFAULT now()`. The **versioned** frozen mutable
+  inputs of that run's validation (§4).
+- **`engine_activation_epoch`** (append-only *pair* history, distinct from PR 6's
+  immutable singleton `bundle_pinning_epoch`): `id` DB-sequenced PK,
+  `engine_build_id TEXT NOT NULL`, `validator_build_id TEXT NOT NULL`,
+  `activated_at timestamptz NOT NULL`. Current active pair = max-id row.
+- Forward-only-after-use downgrade (refuse once any validator_build_id / snapshot /
+  engine-epoch row exists). Lineage guard: PR 6b = `013`, State `shipped`.
 
-### 2. Identifiers + guards
+### 3. Identifiers
 
-- `domain/engine.py`: `ENGINE_BUILD_ID = "eng-2"` (bumped); **new**
-  `VALIDATOR_BUILD_ID = "val-1"` (format `^val-[1-9]\d*$`).
-- The framed whole-tree drift guard is re-pinned **with** the `eng-2` bump (scoring
-  changed — this is exactly the conscious bump the guard exists to force).
-- **New validator-closure guard**: a second framed sha256 over `src/kyc_tool/validators/
-  **/*.py` pinned to `EXPECTED_VALIDATOR_SOURCE_HASH`, whose failure message is "if
-  validator *judgment* changed, bump `VALIDATOR_BUILD_ID`; re-pin either way." This makes
-  a future validator edit force a conscious `val-N` bump — the trigger the whole staleness
-  mechanism depends on. (Shared pure deps that alter judgment, e.g. `domain/reasons.py`,
-  are called out in the doc; the whole-tree guard still forces a decision on any src edit.)
+`domain/engine.py`: `ENGINE_BUILD_ID = "eng-2"` (bumped; runs/decisions; whole-tree drift
+guard re-pinned **with** the bump). `VALIDATOR_BUILD_ID = "val-1"` (format `^val-[1-9]\d*$`;
+checks; guarded by the §1 validation-closure hash).
 
-### 3. Provenance stamping
+### 4. Versioned snapshot codec (F2)
+
+`ValidationSnapshotV1` — a Pydantic model of **JSON primitives** (no raw `dict`/dataclass/
+enum/`datetime`): `schema_version`, `evaluated_at` (ISO-8601 **UTC**, strict tz-aware
+decode), scalar website-guard fields, an explicit `CheckView` list (typed fields, status
+as strings), the POC token record fields, and the `extras`/normalized inputs each affected
+validator needs. Serialize with `model_dump(mode="json")`; **decode with `extra="forbid"`
+and fail closed** on an unknown `schema_version` or a type/format error. Persist a
+**canonical digest** (`snapshot_digest`) and **verify it before replay** — "immutable
+snapshot" is an enforced integrity claim. `ValidationContext` gains `evaluated_at`; the
+POC validator (and any clock reader) uses `ctx.evaluated_at` (live: real now; replay: the
+snapshot's) so expiry is judged as of the original validation.
+
+### 5. One snapshot-capture seam (F3)
+
+Extract a single snapshot **builder + persister** used by **every** path that writes a
+validator-produced check — the VALIDATE branch **and** the broker-blocked DECIDE
+short-circuit (`website.review_completed` appends `website_intent` directly, `pipeline.py`
+~413). Compute the guard/`evaluated_at` **once** and feed the same immutable scalar
+snapshot to both intent creation and persistence, inside the fused transaction.
+Flag-independent; the live path stays byte-identical (guard-tested).
+
+### 6. Provenance stamping
 
 Thread `validator_build_id` through the checkstore writers (as PR 6 threaded
-`policy_bundle_hash`): `write_check`, `apply_check_intents`, the supersede/cascade paths.
-The pipeline passes `VALIDATOR_BUILD_ID` at each check write; runs/decisions now stamp
-`ENGINE_BUILD_ID = eng-2` (PR 6's columns, new value). Flag-independent — every new check
-is born `val-1`.
+`policy_bundle_hash`); runs/decisions stamp `ENGINE_BUILD_ID = eng-2`. Every new check is
+born `val-1`.
 
-### 4. Snapshot capture (flag-independent)
+### 7. Fail-closed freshness projection (F5, F7) — shared, used in TWO places
 
-In the pipeline VALIDATE stage, after assembling the `ValidationContext`, persist the
-`run_validation_snapshots` row: the `extras`, the `live_checks` views, and an
-`evaluated_at` timestamp. `ValidationContext` gains `evaluated_at: datetime`; the POC
-validator (and any other clock reader) uses `ctx.evaluated_at` instead of
-`datetime.now(UTC)` (live path passes real now; replay passes the snapshot's value) — so
-expiry is judged **as of the original validation**. No behaviour change on the live path
-(guarded by test).
+A pure `validator_fresh_views(views, target_validator_id)`: for each view whose
+`validator_build_id IS DISTINCT FROM target`, **downgrade PASS→NEEDS_REVIEW** in the
+ephemeral view (0 points; reason_codes retained → a stale hard-conflict still fires gate 5;
+non-PASS rows untouched). Invoked, **only when `enforce_bundle_pinning` is on**, in **both**:
+- `_decide_txn` (the automatic decision path), and
+- `_handle_manual_approve` (`events/ingest.py`) — which today calls `org_id_check_passed`
+  on **raw** views, so a stale ORG-ID PASS could still unlock buying (F5). Settings is
+  passed **explicitly** into ingest (no hidden second global lookup). A manual case may
+  remain `approved_manual`, but its buy state + manual `DecisionRow` are **locked**
+  (`buy_locked_org_id_required`) until a current-validator ORG-ID PASS exists.
 
-### 5. Fail-closed scoring (flag-on only)
+Only stale **PASS** rows change a decision or block activation (F7).
 
-Extend the decision-time view transform: in addition to re-pricing, any live check whose
-`validator_build_id != VALIDATOR_BUILD_ID` (the deciding validator version) is
-**downgraded `PASS → NEEDS_REVIEW` in the ephemeral view** (0 points; `reason_codes`
-retained, so a stale hard-conflict still fires gate 5 — fail-*safe*). The stored row is
-never mutated. Flag-off: not applied → strict scoring no-op (golden cases unchanged),
-guard-tested.
+### 8. Revalidation writer — per-case coordinator run (F4, F1)
 
-### 6. Revalidation writer — fused per-case re-decide (findings 2 + 3)
+`ops.revalidate_backlog` finds every case with a validator-stale live **PASS**
+(`validator_build_id IS DISTINCT FROM VALIDATOR_BUILD_ID`, **all statuses of case**,
+F1/F7) and, per case, **atomically creates a coordinator run**: an internally-synthesised
+**deterministic-idempotency** `recalculate.requested` event (no new public route), a
+`Run` with its **own** creation-pin bundle, an explicit **target validator id** and the
+**expected stale-check-id set**, plus its job — one transaction. The pipeline handles the
+job under **`Case FOR UPDATE`** (existing lock order) and, in **one fused commit**:
 
-Revalidation is **not** a bare check-writer. `ops.revalidate_backlog` enqueues, per case
-with a validator-stale live check, an internal **revalidation job** the pipeline runs
-through its existing fused decide transaction:
+1. For each expected stale live PASS, **reselect it by id + `created_by_run_id` under the
+   lock**; skip if a newer run replaced it (surgical — never clobber a newer check).
+2. **Replay lane** — if the *source* run has a valid, digest-verified snapshot: rebuild its
+   `ValidationContext` from immutable evidence + the snapshot, run the validation-boundary
+   `build_intents` under the **target validator**, **re-verify the immutable binding**
+   (POC: persisted event `token_id`/`token_digest` + `(rir,poc,org,resource)`, treating the
+   token's own successful consumption as proof — not reuse — expiry at the snapshot's
+   `evaluated_at`; website: terminal task `case`/`type`/`reviewer` vs the persisted event,
+   **without** requiring `open`). Stamp the successor `created_by` the **coordinator run**,
+   `policy_bundle_hash` = the **source** run's creation pin, `validator_build_id` = target.
+   A tampered binding ⇒ FAIL/stale, never a free PASS.
+3. **Closure lane (F1)** — if no snapshot / evidence cannot prove the original context
+   (every pre-6b check): supersede the PASS with
+   `NEEDS_REVIEW`/`historical_validation_context_unavailable`, `validator_build_id` = target.
+4. **Score the fused case decision under the *coordinator* run's creation pin** → decide →
+   project (`cases.current_score`/`latest_decision`) → **enqueue the outbox callback** →
+   complete the job → write a **revalidation audit record** (coordinator run id, per source
+   run/check ids, old/new check ids, `validator_build_id`, `engine_build_id`).
 
-1. Acquire the **Case row `FOR UPDATE`** in the pipeline's lock order (`_load`), never an
-   advisory lock.
-2. Under the lock, for each validator-stale live check: load its `created_by_run_id`
-   run, rebuild that run's `ValidationContext` from immutable evidence + the run's
-   **snapshot** (frozen `extras`/`live_checks`/`evaluated_at`), run `build_intents` under
-   the pinned validator/engine, and take the intent for the check's type.
-3. **Re-verify the immutable binding** against persisted records (defence in depth beyond
-   the snapshot): POC — the persisted event's `token_id`/`token_digest` and the
-   `(rir,poc,org,resource)` binding, treating the token's own successful consumption as
-   proof (not reuse), expiry judged at the snapshot's `evaluated_at`; website — the
-   terminal task's `case`/`type`/`reviewer` against the persisted event, **without**
-   requiring `open`. A tampered digest/binding/attribution ⇒ the successor is FAIL/stale,
-   never a free PASS.
-4. **Reselect the exact expected live-check id + `created_by_run_id` under the lock**
-   before writing; stage a successor **only** if it still matches (surgical — never
-   clobber a newer run's check that a concurrent normal run installed).
-5. In the **one commit**: stage the matching successors, **score → decide → project the
-   case (`cases.current_score`/`latest_decision`) → enqueue the outbox callback →
-   complete the job**, plus an explicit **revalidation audit record** (old/new check ids,
-   `validator_build_id`, `engine_build_id`) — not a fake re-run of the original run.
-6. Idempotent (a check already `val-1`/current is skipped); fail-closed + reported if a
-   run's evidence/snapshot can't reproduce the check.
+Extract a reusable fused **`score→decide→project→outbox` primitive**; do **not** call
+`_decide_txn` on an already-complete source run. The coordinator run is a real run, so the
+callback carries a **fresh `run_id`** the platform won't dedupe against an old one, and
+delivery marks *that* run/decision complete. Idempotent: the deterministic event key +
+"already-target checks are skipped" make a re-run a no-op.
 
-Because a re-decide can flip a case's decision (a validator-stale PASS that re-judges to
-FAIL), emitting the callback keeps checks, decision, case projection, and platform view
-fused — the normative rule (`AGENTS.md`, `state_machine.json`).
+### 9. Activation — pair compare-and-swap (F8, F7)
 
-### 7. Ops + cutover
+`ops.activate_revalidation_epoch --expect-current-engine <eng|none>
+--expect-current-validator <val|none> --expect-engine eng-N --expect-validator val-N`.
+Under a **transaction-scoped lock**: verify (a) the current max `(engine,validator)` pair
+== expected-current, (b) the **zero-stale-PASS** target set is empty, (c) the local
+`ENGINE_BUILD_ID`/`VALIDATOR_BUILD_ID` == the requested target, then **insert** the next
+pair row and **read back**. Same target ⇒ idempotent; expected-predecessor→new-target ⇒
+allowed (so a future `eng-3/val-2` rollout is **not** blocked by `eng-2` being active); any
+other predecessor / race ⇒ **refuse without a write**. The PR 6 `bundle_pinning_epoch` is
+left **immutable**. Alert: post-epoch live **PASS** checks whose `validator_build_id`
+`IS DISTINCT FROM` the active validator (not NULL-only).
 
-- **`ops.revalidate_backlog`**: enqueue the revalidation job for every case with a
-  validator-stale live check (**all cases, any status** — finding 5); drain; return the
-  case/check ids that could not be revalidated (nonzero exit blocks cutover).
-- **`ops.activate_revalidation_epoch --expect-engine eng-2`** (finding 4): verify the
-  local `ENGINE_BUILD_ID`/`VALIDATOR_BUILD_ID` **and** a zero-validator-stale preflight
-  **atomically**, then append + read-back the `engine_activation_epoch` row; refuse if a
-  different engine is already the active max-id row or any stale check remains. The PR 6
-  `bundle_pinning_epoch` is left **immutable**.
-- **Alert**: the post-epoch check surface flags any live check whose `validator_build_id`
-  `IS DISTINCT FROM` the active validator version (not NULL-only — catches a post-cutover
-  old writer stamping a wrong non-NULL value).
-- **Cutover** (drained): deploy PR6b image (flag off) → migrate 013 → snapshots now
-  captured for new runs → (backlog is non-stale under the split, so `revalidate_backlog`
-  is a **no-op** today; run it anyway to prove zero) → `verify` zero stale →
-  `activate_revalidation_epoch --expect-engine eng-2` → enable flag → resume. Rollback:
-  flag-off on the PR6b image; never delete epoch/snapshot history.
+### 10. Cutover (drained; F1 makes this a real closure, not a no-op)
 
-### 8. Docs / governance
+deploy PR6b image (flag off) → `alembic upgrade head` (013) → new runs now capture
+snapshots → **`ops.revalidate_backlog` closes the untrusted legacy backlog** (replay lane
+where a snapshot/evidence exists; closure lane superseding the rest to `needs_review` +
+re-decide + callback) → verify **zero stale live PASSes** → `activate_revalidation_epoch`
+pair-CAS (`--expect-current-* none --expect-engine eng-2 --expect-validator val-1`) →
+enable flag → resume. Rollback: flag-off on the PR6b image; never delete epoch/snapshot
+history.
 
-- **ADR-006** — revalidation (validator vs engine axis, fail-closed, snapshot replay,
-  fused re-decide, engine activation epoch). ROADMAP §I already updated: PR 6b = ADR-006,
-  **PR 10 shifted to ADR-007** (finding 6). The docs task asserts exactly one ADR-006
-  heading and PR 10 named ADR-007.
-- `DEPLOYMENT.md` §10 cutover; `RUNBOOK.md` (revalidate + activate commands, alert);
-  `.agents/ROADMAP.md` PR 6b → `shipped`/`013`; ADR-005/OVERVIEW cross-ref.
+### 11. Docs / governance (F9)
 
-## Known boundary (documented, not a defect)
-
-The snapshot is captured from PR 6b onward. A **pre-6b** live check has no snapshot; under
-the split it is `val-1` and never validator-stale *through* 6b. If a *future* validator
-bump (`val-2`) makes such a surviving pre-6b check stale, it cannot be deterministically
-replayed (no snapshot) → it stays **fail-closed excluded** and is **reported** for
-operator re-drive. This is safe (never a silent stale PASS) and bounded (pre-6b live
-checks age out). Backfilling pre-6b snapshots is explicitly out of scope.
+**ADR-006** — revalidation. **PR 10 → ADR-007** everywhere: ROADMAP §I **and** the PR 10
+detailed section (both fixed in this revision) — and **extend the ROADMAP guard** to assert
+the detailed-unit ADR ref and the §I assignment name the **same** number (mutating either
+back to 006 must fail the test). `DEPLOYMENT.md` §10; `RUNBOOK.md`; ROADMAP PR 6b →
+`shipped`/`013`; ADR-005/OVERVIEW cross-ref.
 
 ## Invariants (Global Constraints + review rubric)
 
-- Flag-off is a **strict scoring no-op**; golden cases byte-identical.
-- The fail-closed rule **never mutates** a stored row (ephemeral view); revalidation only
+- NULL validator provenance is **stale/unknown**; never relabeled or backfilled.
+- The fail-closed projection **never mutates** a stored row; revalidation only
   **supersedes** (append-only) + writes an audit record.
-- Revalidation runs under **`Case FOR UPDATE`** (pipeline lock order), reselects the
-  expected live-check id under the lock, and **never clobbers a newer run's check**.
-- Replay uses **only** immutable evidence + the immutable snapshot — zero live mutable
-  reads, zero adapter/network calls; a tampered binding stays stale.
-- A re-decide is a **single fused commit** (checks + decision + case projection + outbox);
-  a fault after staging rolls all of it back; a retry yields exactly one decision/outbox.
-- A check that can't be revalidated is **left stale + reported**, never silently passed.
-- `ENGINE_BUILD_ID = eng-2` (bumped, runs/decisions); `VALIDATOR_BUILD_ID = val-1`
-  (checks); both guards re-pinned in-commit. `KYC_Tool_Build_Package/` + M2 untouched;
-  `policy/` pure (import-linter 2/0).
+- Only stale live **PASS** rows change a decision or block activation.
+- Revalidation runs under **`Case FOR UPDATE`**, reselects the expected check id under the
+  lock, and never clobbers a newer run's check.
+- Replay uses **only** immutable evidence + the digest-verified snapshot; a tampered
+  binding stays stale; zero adapter/network calls.
+- Each per-case revalidation is a **fresh coordinator run** (real `run_id`/event); the
+  fused commit covers checks + decision + case projection + outbox; a fault rolls all back;
+  a retry yields exactly one decision/outbox.
+- Flag-off is a **strict scoring no-op**; golden cases byte-identical.
+- `ENGINE_BUILD_ID = eng-2`, `VALIDATOR_BUILD_ID = val-1`; both guards re-pinned in-commit.
+  `KYC_Tool_Build_Package/` + M2 untouched; validation boundary is import-pure (2/0).
 
-## Testing strategy
+## Testing strategy (incl. Codex's named regressions)
 
-- **Migration 013**: up/down clean; forward-only-after-use downgrade refusal
-  (validator_build_id / snapshot / engine-epoch populated); nonblank CHECK rejects blank;
-  `NOT VALID` (`convalidated=false`); lineage guard green (`013`, `shipped`).
-- **Identifiers/guards**: whole-tree guard pins `eng-2`; validator-closure guard trips on
-  a validator edit without a `val` bump.
-- **Provenance/snapshot**: every write stamps `val-1`; a snapshot row is written per
-  producing run; the live path is byte-identical with `evaluated_at` threaded.
-- **Fail-closed scoring**: a live PASS with `validator_build_id` NULL / `val-0` is
-  excluded from score + legal/control gates + org-id-unlock flag-on, but its hard-conflict
-  code still trips gate 5; flag-off counts it. Mutation-resistant.
-- **Revalidation (Codex's rev-1 regressions):** real successful **POC** and **website**
-  flows → confirm token `consumed`/task `done`, **age past expiry**, then revalidate and
-  require **identical PASS** successors; **tampered digest/binding/task attribution** stays
-  stale + CLI nonzero. Revalidate the same **document/registry** history in **both run
-  orders** → identical result. **Concurrency**: two real PG sessions with a barrier between
-  select and write → a newer normal-run check is never superseded. **Fault**: fault after
-  staging successors → checks/decision/case/outbox all roll back; retry ⇒ exactly one
-  decision/outbox; the emitted callback matches the new live-check set.
-- **Ops**: `revalidate_backlog` clears stale + reports failures on `account_approved` /
-  `approved_manual` / `rejected` cases (finding 5); `activate_revalidation_epoch` refuses
-  while any stale check exists on the real seeded PR6 `(bundle,eng-1)` epoch, succeeds
-  after the sweep without touching the bundle epoch, is idempotent, and flags a later
-  wrong-validator writer via `IS DISTINCT FROM`.
+- **Migration 013**: up/down clean; forward-only downgrade refusal; nonblank `NOT VALID`
+  (`convalidated=false`); lineage guard green.
+- **Validation-closure guard**: mutating a validator, the review-guard eligibility, the
+  extras decoder, or the replay binding each changes the digest and forces a `val` decision.
+- **Snapshot codec**: real POC/website/document runs → flush → reload in a fresh session →
+  decode → **byte-stable intent replay**; malformed version/date/enum/**digest** ⇒ reported
+  stale with **no** decision/check write. Real Postgres, not helper `json.dumps`.
+- **Capture seam**: a **broker-blocked** website completion has a snapshot for its producing
+  run; synthetic-`val-2` revalidate after the task is `done` ⇒ same PASS.
+- **Fail-closed + manual (F5)**: manual-approve with NULL/`val-0` ORG PASS ⇒
+  `approved_manual` + `buy_locked_org_id_required`; `val-1` ⇒ enabled; flag-off unchanged;
+  event/decision/audit atomic (real signed-event path).
+- **Backlog closure (F1)**: seed a pre-PR3 permissive PASS (NULL id, no snapshot) ⇒
+  activation refuses; run closure ⇒ old row superseded, score/gates/case/callback all
+  fail-closed, **no row retro-stamped `val-1`**.
+- **Coordinator run (F4)**: mixed-source-bundle stale checks ⇒ **one** coordinator run +
+  **one** callback with a **new** `run_id` (not deduped as an old run); publisher marks that
+  run/decision complete; re-run idempotent. Via `Pipeline.handle_job` + `OutboxPublisher`.
+- **Replay determinism**: POC + website flows → token `consumed`/task `done`, **aged past
+  expiry** ⇒ revalidate to **identical PASS**; tampered digest/binding/attribution ⇒ stays
+  stale + CLI nonzero. Document/registry history revalidated in **both run orders** ⇒
+  identical.
+- **Cascade placeholder (F7)**: real ORG→POC `needs_review` cascade, synthetic-bump ⇒
+  activation blocked **only** by stale PASSes; the placeholder is reported but contributes 0.
+- **Activation CAS (F8)**: none→eng2/val1, idempotent repeat, eng2/val1→eng3/val2, wrong
+  local validator, unexpected predecessor, stale target, two concurrent different targets —
+  through the real CLI.
+- **Concurrency/fault**: two PG sessions with a barrier between select and write ⇒ a newer
+  normal-run check is never superseded; fault after staging ⇒ checks/decision/case/outbox
+  all roll back, retry ⇒ exactly one effect.
+- **ADR (F9)**: docs test fails if either the §I or PR 10 detailed ADR ref is mutated to 006.
 - Full suite green on real Postgres; ruff clean; import-linter 2/0.
 
 ## Out of scope (YAGNI)
 
-- No adapter re-fetching. No backfill of pre-6b snapshots. No multi-engine runtime beyond
-  the two-identifier provenance + fail-closed hook. No re-judging of manual-approve (a
-  decision, engine-stamped, not a check). No UI/event surface for revalidation (ops-only).
+- No adapter re-fetching. No backfill/retro-stamp of pre-6b provenance (they're closed, not
+  relabeled). No multi-engine runtime beyond the two-identifier + fail-closed hook. No
+  re-judging of the manual *decision* itself (only its buy-enablement freshness). No public
+  revalidation route/UI (ops-only).

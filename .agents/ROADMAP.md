@@ -252,7 +252,8 @@ NULL-provenance check. Preserves PR 3's `HARD_CONFLICT_REASON_CODES`
 (engine code, covered by `engine_build_id`, not the rubric). Behind
 `enforce_bundle_pinning` (default off); rollout is the drained cutover in
 `docs/DEPLOYMENT.md` §10. Recorded in **ADR-005** (prepended above ADR-004 —
-the PR 10 ADR-005 reservation below moves to **ADR-006**). Full suite green.
+the PR 10 ADR-005 reservation below moves to **ADR-007**, since PR 6b owns
+ADR-006). Full suite green.
 Original spec below.
 
 Migration 011: `policy_bundles`, `checks.policy_bundle_hash`, **`engine_build_id`
@@ -304,7 +305,7 @@ json_bytes, author, timestamp)` — NOT per-entity versioning (6 entities; snaps
 reproduce matches AND non-matches, simpler); run records matched entity + snapshot
 revision. `adapters/retry.py` (transient classification + Retry-After — job-layer
 backoff already exists); `recalculate.requested` runs the broker gate (record
-`AUDIT:<id>` + ADR-006 — spec limits recalc to "no adapter calls", but the gate is a
+`AUDIT:<id>` + ADR-007 — spec limits recalc to "no adapter calls", but the gate is a
 local lookup); new `evidence.refresh_requested` in a **local extension contract**;
 RUNBOOK: delete the broken self-select SQL → point to the existing authenticated
 requeue endpoint; metrics windowing (index exists) + Prometheus + alerts; pin deps +
