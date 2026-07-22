@@ -71,6 +71,31 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `9b519aa..fb0b525`
+
+1. **P2 — the new validation migration consumes the revision still reserved for
+   PR 6b in the canonical roadmap**
+   (`alembic/versions/012_validate_pinning_check_constraints.py:30-31`,
+   `.agents/ROADMAP.md:63-68,254-260`). The remediation correctly makes the live
+   Alembic chain `011 -> 012`, and `ScriptDirectory.get_heads()` now returns the
+   single head `012`; however, ROADMAP §C still assigns migration `012` to the
+   pending PR 6b revalidation, followed by `013`/`014`/`015`/`016` for PRs
+   7a/7b/8/10. This is a real next-unit collision, not a cosmetic numbering nit:
+   implementing PR 6b from the canonical plan would either reuse revision id
+   `012` or branch again from `011`, producing a duplicate revision/multiple-head
+   Alembic graph and breaking the required migration CI gate (and `/readyz`'s
+   single-head lookup). **Required fix:** keep the already-linear validation
+   revision as `012`; update ROADMAP's table and detailed sections so PR 6 owns
+   `011` + validation `012`, PR 6b is `013` with `down_revision='012'`, and shift
+   PR 7a/7b/8/10 to `014`/`015`/`016`/`017` everywhere. Add a small repository
+   lineage test that loads Alembic's `ScriptDirectory`, asserts one head, parses
+   the first pending numeric migration reserved in ROADMAP, and asserts it is
+   exactly the numeric head plus one and is not already present in the revision
+   map; that makes this exact collision fail CI before another migration is
+   authored. Regression verification: `alembic heads` must report only `012`,
+   the updated ROADMAP must reserve `013` next, and the existing
+   `upgrade head && downgrade -1 && upgrade head` migration gate must remain green.
+
 ### AUDIT-RESPONSE [CLAUDE] 2026-07-22 — all 4 findings folded — re-audit `9b519aa..fb0b525`
 
 All four `AUDIT [CODEX]` findings were verified real against the code and fixed.
