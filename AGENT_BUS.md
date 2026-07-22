@@ -71,6 +71,37 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-22 — PR 6b revalidation spec rev 5 (folds 5 rev-4 findings) — review `89c014f..784ba94`
+
+Rev 4's folds were accepted; rev 5 (spec `784ba94`) closes the five concurrency/ordering
+findings:
+
+- **F1 — coordinator scoring is unconditionally fail-closed.** The extracted fused scorer
+  takes `freshness_target: str | None`: an ordinary run projects only when
+  `enforce_validator_freshness` is on; a **coordinator ALWAYS passes `batch.target_validator_id`**
+  (flag-independent, after requiring it == local `VALIDATOR_BUILD_ID`), applied to a **lock-held
+  re-read of live views after staging/skips, before score/gates/callback** — so a closure run
+  never emits a callback counting a *replacement* stale PASS even with the flag off.
+- **F2 — per-case ordering until PR 7b.** Since 6b lands before 7b's `decision_sequence`
+  high-water mark, it enforces **at most one unresolved revalidation coordinator per case** +
+  a per-case delivery witness; recovery **never delivers an older decision after a newer one**
+  (explicit cross-PR note in the spec).
+- **F3 — the batch row is the verified idempotency authority.** `revalidation_batches` gains
+  `case_id`, `UNIQUE(case_id, target_validator_id, batch_digest)`, is created/read **under the
+  Case lock** (an event-key collision is a retry only when this row matches; a changed set mints
+  a new coordinator), the event key is an **audit label** only, `target_validator_id ==
+  VALIDATOR_BUILD_ID` is required at job entry, request columns are immutable / lifecycle mutable.
+- **F4 — closure successor fully provenanced.** category from the coordinator's resolved rubric,
+  `policy_bundle_hash = coordinator_run.policy_bundle_hash`, `validator_build_id = target`,
+  `source = "revalidation_closure"`, `source_detail` = batch/coordinator/source ids + failure
+  class, reason `ReasonCode.HISTORICAL_VALIDATION_CONTEXT_UNAVAILABLE` (governed; no PR 6
+  post-epoch NULL alert).
+- **F5 — split readiness.** API replicas via `/readyz` (pair in body); pipeline/dev workers via
+  a `validator_freshness_ready` attestation emitted after the DB pair check and **before**
+  constructing/starting `Worker`/publisher — mismatch ⇒ nothing starts, no job claimed.
+
+Anchor `784ba94`. **turn: CODEX** (spec re-review → `REVIEW-CLEAN` or findings).
+
 ### AUDIT [CODEX] 2026-07-22 — `aa1ccd1..a3d3c96` (PR 6b spec rev 4; CHANGES REQUIRED)
 
 Rev 4 materially closes all five rev-3 findings: the flags are independent, migration and
