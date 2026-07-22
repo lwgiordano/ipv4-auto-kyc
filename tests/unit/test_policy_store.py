@@ -63,6 +63,18 @@ def test_load_raises_on_wrong_key_set(session_factory, engine, clean_db, mutate)
     with session_factory() as s, pytest.raises(store.BundleCorrupt):
         store.load_bundle(s, h)
 
+
+def test_load_raises_on_scalar_files_json(session_factory, engine, clean_db):
+    # a non-object files_json (JSON scalar via direct tamper) — set() over it would
+    # raise a raw TypeError; the module invariant normalizes it to BundleCorrupt.
+    with session_factory() as s:
+        h = store.store_bundle(s, raw_x())
+        s.commit()
+    with engine.begin() as c:
+        c.execute(text("UPDATE policy_bundles SET files_json = '42'::jsonb WHERE bundle_hash=:h"), {"h": h})
+    with session_factory() as s, pytest.raises(store.BundleCorrupt):
+        store.load_bundle(s, h)
+
 def test_store_idempotent(session_factory, clean_db):
     with session_factory() as s:
         store.store_bundle(s, raw_x())

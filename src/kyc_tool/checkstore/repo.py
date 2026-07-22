@@ -186,6 +186,7 @@ def _supersede_on_identity_change(
     submitted: str,
     run_id: str | None,
     reason: str,
+    *,
     policy_bundle_hash: str | None = None,
 ) -> None:
     live = _live_check(session, case_id, check_type)

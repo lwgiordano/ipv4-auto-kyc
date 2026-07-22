@@ -101,8 +101,6 @@ def test_010_downgrade_refuses_after_cross_case_reuse(pg: str):
     assert "cross-case" in str(exc.value).lower()
 
 
-_EPOCH_HASH = "a" * 64
-
 # Each entry populates exactly ONE downgrade blocker; all 5 are listed below and
 # are complete valid INSERTs against today's schema (every NOT NULL column without
 # a default is supplied — cases/events/runs/checks/decisions per db/tables.py). A

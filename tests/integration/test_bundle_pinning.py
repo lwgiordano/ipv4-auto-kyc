@@ -1,5 +1,5 @@
 # test_bundle_pinning.py — attestation + corrupt-startup at the REAL worker seam.
-# structlog uses the default PrintLoggerFactory (api/app.py:46 sets NO logger_factory),
+# structlog uses the default PrintLoggerFactory (api/app.py:47 sets NO logger_factory),
 # so events bypass stdlib `logging` and `caplog` sees ZERO records —
 # `structlog.testing.capture_logs()` is the sink (event dict keyed by `event` + kwargs).
 # Both proofs drive `pipeline_worker.build_worker()` (the actual startup path), not a
@@ -152,7 +152,7 @@ def test_mixed_era_reprices_score_gate_and_callback(
     off_score, off_gates = _recalc(flag=False)
     assert off_score == 83 and off_gates["control_proof"] is True    # stamped; gate holds
     # callback checks-summary uses the SAME repriced views: a final flag-on run's body
-    # (pipeline._callback_body, pipeline.py:510-519 → {"type","points": pts if PASS else 0}).
+    # (pipeline._callback_body, pipeline.py:570-597 → {"type","points": pts if PASS else 0}).
     post_event("case-mix", "recalculate.requested", {})
     cfg = settings.model_copy(update={"enforce_bundle_pinning": True})
     pl = Pipeline(session_factory, policy, FsStore(tmp_path / "ecb"), cfg, adapters={})

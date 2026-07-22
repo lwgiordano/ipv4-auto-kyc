@@ -1,3 +1,11 @@
+"""DB-backed policy-bundle store (PR 6). Bundles are stored as base64-encoded raw
+files keyed by content hash; ``store_bundle`` read-back-verifies on both the
+insert and ON CONFLICT paths, and ``load_bundle`` reconstructs + validates. The
+module's invariant: EVERY form of persisted-row corruption — bad base64, wrong
+key set, a non-object ``files_json``, or non-reconstructable content — raises
+``BundleCorrupt`` so callers fail closed. ``activate_epoch`` is the single-row
+epoch compare-and-set; ``seed_and_verify``/``attest`` are the startup seam."""
+
 import base64
 import binascii
 import json
@@ -46,14 +54,17 @@ def load_bundle(session, bundle_hash):
                           {"h": bundle_hash}).first()
     if row is None:
         return None
-    if set(row.files_json) != set(POLICY_FILES):          # exact 7-key set (missing OR extra)
-        raise BundleCorrupt(f"{bundle_hash}: files_json keys {set(row.files_json)} "
-                            f"!= {set(POLICY_FILES)}")
     try:
+        # exact 7-key set (missing OR extra) — inside the try so a non-object
+        # files_json (a JSON scalar/null via direct tamper) whose set() raises
+        # TypeError also normalizes to BundleCorrupt, per the module invariant.
+        if set(row.files_json) != set(POLICY_FILES):
+            raise BundleCorrupt(f"{bundle_hash}: files_json keys {set(row.files_json)} "
+                                f"!= {set(POLICY_FILES)}")
         bundle = build_bundle(_decode_files(row.files_json), policy_dir=None)
     except BundleCorrupt:
         raise
-    except Exception as e:                                 # json/Pydantic → BundleCorrupt
+    except Exception as e:                                 # json/Pydantic/scalar → BundleCorrupt
         raise BundleCorrupt(f"{bundle_hash}: does not reconstruct") from e
     if bundle.bundle_hash != bundle_hash:
         raise BundleCorrupt(f"{bundle_hash}: reconstructed hash mismatch")
