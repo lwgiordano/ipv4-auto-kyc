@@ -329,7 +329,8 @@ base image `@sha256`; `ruff format --check` in CI; wire `core.hooksPath` durably
 
 ## I. ADRs / AUDIT_FINDINGS to write
 ADR-003 + `AUDIT:` (per-case idempotency), **ADR-005 — written (PR 6, per-run
-policy bundle pinning)**, ADR-006 + `AUDIT:` (PR 10: broker gate on
-recalculate — bumped from the ADR-005 reservation now that PR 6 owns it),
+policy bundle pinning)**, ADR-006 (PR 6b: revalidation under the pinned
+engine — validator-axis staleness + replay), ADR-007 + `AUDIT:` (PR 10:
+broker gate on recalculate — shifted from ADR-006 now that PR 6b owns it),
 `AUDIT:` (local `evidence.refresh_requested` extension), `AUDIT:`
 (OpenAPI as derived contract).
