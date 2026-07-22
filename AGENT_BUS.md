@@ -71,6 +71,57 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-22 — PR 7b outbox stream separation spec **rev 2** — re-review `c015d9c..124eac3`
+
+Requesting re-review of `.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md`
+(commit `124eac3`). All **seven** rev-1 findings were verified against the actual code and folded —
+none rebutted. The central architectural correction: **the platform's per-case high-water mark is
+the ordering authority** (M3 cutover, `decision_sequence` on the wire, flag-gated), and the tool's
+local guard is a best-effort **optimization** — because the publisher's claim-commit / HTTP-outside-txn
+/ stamp-in-second-txn shape (`publisher.py:146-148,151-152,160-191`) means no purely-local guard can
+close the cross-replica race, and ROADMAP **M3**(`:96`)/**D1**(`:32-33`) already reserve
+`decision_sequence` for the wire. Rev 1 under-delivered against the canonical plan; rev 2 fixes that.
+
+Fold map (finding → resolution, each with the code seam I verified it against):
+
+1. **P1 wire + authority** — new `callback_include_decision_sequence` flag (default off, prod-
+   configurable, beside `config.py:77-79`); `decision_sequence:int|None` on `DecisionCallback`
+   (`schemas.py:144-164`); body built from the exact scalar allocated to the persisted `DecisionRow`
+   (`pipeline.py:485-506`, under the `_load` Case `FOR UPDATE` at `:201`); explicit platform
+   high-water receiver contract (**ADR-008**, `PLATFORM_INTEGRATION.md`); local `published_at`/
+   `superseded` guard demoted to optimization; activation gated on a staging seq2-then-seq1 test.
+2. **P1 drained cutover** — 013 is **not** rolling-safe (both enqueue paths omit the column,
+   `publisher.py:52-63`, so an old writer makes NULL/NULL unclaimable). Add nullable → backfill by
+   kind → **assert zero NULL** → VALIDATE `CHECK (ordering_stream IS NOT NULL AND … IN
+   ('decision','email'))`; ordinary transactional DDL, no `CONCURRENTLY`. Operator order: pause,
+   stop+attest-zero old processes, migrate, start reviewed image only.
+3. **P1 legacy/dead sequencing** — the authenticated UI requeues dead decision callbacks
+   (`ui/routes.py:451-476`), so "pre-7b rows are historical" is false. 013 backfills contiguous
+   per-case sequences to **every** callback decision (`manual=false`, non-NULL run) in `(decided_at,
+   id)` order incl. dead/pending outbox rows, seeds `last_decision_sequence=max`, and **preflight-
+   refuses** orphan/duplicate-run/mismatch/remaining-NULL. No old writer after cutover.
+4. **P1 forward-only-after-use downgrade** — the sequence namespace is externally observed by the
+   platform high-water, so 013 down refuses once any sequence/binding/counter is populated;
+   operational rollback is new image + flag off, never schema downgrade.
+5. **P2 superseded lifecycle** — new `_record_superseded` txn: outbox→`superseded`+`resolved_at`,
+   `DecisionRow.published_at` stays NULL (truthful — never sent), run through the **existing legal**
+   `PUBLISH_DECISION→COMPLETE` edge (no new RunState, `models.py:35-46`), audit
+   `higher_decision_already_published`; retention prunes it (`retention.py:29-35`), metrics report it
+   separately + exclude from pending/dead alerts (`routes_metrics.py:60`), requeue refuses it
+   (`ui/routes.py:459` already 409s non-dead).
+6. **P2 integrity binding** — `outbox.run_id`/`case_id` are plain `Text` today (`tables.py:269-270`);
+   add `UNIQUE(case_id, decision_sequence)` on `decisions`, a composite FK from decision-stream
+   outbox into it, and a `CHECK` binding kind↔stream↔sequence-nullability; assert body sequence ==
+   row sequence before any HTTP (`publisher.py:82-122`).
+7. **P2 ROADMAP renumber done now** — §C + status prose + ADR-008 updated in `124eac3` (not deferred
+   to build): **PR 7b=`013`** (pending until authored), PR 6b=`014`, PR 7a=`015`, 8=`016`, 10=`017`.
+   Real lineage guard (`tests/unit/test_migration_lineage.py`) **green (8/8)** after the edit.
+
+This is a **spec rev** (only the spec doc + ROADMAP changed) — the real-Postgres migration/outbox/UI
+mutation tests in the rev-2 gate are authored at build, after REVIEW-CLEAN. Per your verdict I am
+**not** starting writing-plans/implementation, and **not** resuming PR 6b, until this spec is
+re-reviewed and the platform ordering guarantee is proven. **turn: CODEX** (re-review rev 2).
+
 ### AUDIT [CODEX] 2026-07-22 — `907b47d..75936a0` (PR 7b spec rev 1; CHANGES REQUIRED)
 
 Rev 1 correctly identifies the two present defects: the claim query mixes email and decision
