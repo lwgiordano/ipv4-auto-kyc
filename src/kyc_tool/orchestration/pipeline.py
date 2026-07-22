@@ -45,6 +45,7 @@ from kyc_tool.orchestration.side_effects import SideEffects
 from kyc_tool.orchestration.triggers import RunPlan, plan_for
 from kyc_tool.outbox.publisher import enqueue_decision_callback
 from kyc_tool.policy.loader import PolicyBundle
+from kyc_tool.policy_store import repo as policy_store
 from kyc_tool.queue import jobs
 from kyc_tool.queue.jobs import ClaimedJob
 from kyc_tool.storage.object_store import ObjectStore
@@ -53,6 +54,16 @@ from kyc_tool.validators.build import build_intents
 from kyc_tool.validators.website import website_intent
 
 log = structlog.get_logger(__name__)
+
+
+class BundleUnavailable(Exception):
+    """Raised by Pipeline.resolve_bundle when bundle pinning is enforced and
+    the run's creation-pin policy_bundle_hash has no matching row in
+    policy_bundles. MUST propagate out of handle_job untouched (no
+    try/except) — the caller resolves before dispatching any transition, so
+    nothing has been written yet; the worker's except-path (queue/worker.py)
+    rolls that no-op read transaction back and retries/dead-letters the job
+    with zero side effects for the attempt."""
 
 
 class Pipeline:
@@ -77,11 +88,49 @@ class Pipeline:
         self.intent_builder = intent_builder or build_intents
         self.side_effects = side_effects if side_effects is not None else SideEffects(settings)
         self.rate_limiter = RateLimiter(settings.adapter_rate_limits)
+        # PR 6 (Task 7): in-process cache of flag-on resolved bundles, keyed by
+        # bundle_hash — avoids re-loading/re-parsing the same bundle on every
+        # job (see resolve_bundle below). Never populated flag-off.
+        self._bundle_cache: dict[str, PolicyBundle] = {}
 
     # ------------------------------------------------------------------ job
 
+    def resolve_bundle(self, session: Session, run: Run) -> PolicyBundle:
+        """Resolve the policy bundle this run's transitions must use.
+
+        Flag-off: always the process-loaded bundle — self.policy — so
+        behavior stays byte-identical to pre-PR6. Flag-on: the run's
+        creation-pin (run.policy_bundle_hash), loaded from policy_bundles; a
+        miss raises BundleUnavailable rather than silently falling back to
+        self.policy, so an unresolvable pin refuses instead of scoring under
+        the wrong rubric. Flag-on results are cached on self by bundle_hash.
+        """
+        if not self.settings.enforce_bundle_pinning:
+            return self.policy
+        bundle_hash = run.policy_bundle_hash
+        cached = self._bundle_cache.get(bundle_hash)
+        if cached is not None:
+            return cached
+        bundle = policy_store.load_bundle(session, bundle_hash)
+        if bundle is None:
+            raise BundleUnavailable(
+                f"run {run.id}: policy bundle {bundle_hash!r} is unavailable "
+                "(enforce_bundle_pinning=True)"
+            )
+        self._bundle_cache[bundle_hash] = bundle
+        return bundle
+
     def handle_job(self, job: ClaimedJob) -> None:
         run_id = job.payload["run_id"]
+        # Resolve FIRST, before dispatching any transition or side effect:
+        # flag-on + an absent bundle raises BundleUnavailable here and it
+        # PROPAGATES unmodified (no try/except) — the worker's except-path
+        # then rolls this no-op read transaction back and retries/dead-letters
+        # the job with zero side effects (no adapter call, check, decision,
+        # token, email, or outbox row) for this attempt.
+        with uow(self.session_factory) as session:
+            run = session.get(Run, run_id)
+            bundle = self.resolve_bundle(session, run)
         for _ in range(32):  # hard bound; a run has ≤ ~8 transitions
             state = self._current_state(run_id)
             if state in (RunState.PUBLISH_DECISION, RunState.COMPLETE, RunState.FAILED):
@@ -89,7 +138,7 @@ class Pipeline:
                 with uow(self.session_factory) as session:
                     jobs.complete(session, job.id)
                 return
-            self._advance(run_id, state, job_id=job.id)
+            self._advance(run_id, state, job_id=job.id, bundle=bundle)
         raise RuntimeError(f"run {run_id} did not reach a publishable state (loop bound)")
 
     def on_dead_letter(self, job: ClaimedJob, error: str) -> None:
@@ -118,7 +167,7 @@ class Pipeline:
             ).scalar_one()
         return RunState(state)
 
-    def _advance(self, run_id: str, state: RunState, *, job_id: int) -> None:
+    def _advance(self, run_id: str, state: RunState, *, job_id: int, bundle: PolicyBundle) -> None:
         if state is RunState.QUEUED:
             self._simple_hop(run_id, RunState.QUEUED, RunState.RESOLVE_INPUTS)
         elif state is RunState.RESOLVE_INPUTS:
@@ -128,7 +177,7 @@ class Pipeline:
         elif state is RunState.RUN_ADAPTERS:
             self._run_adapters(run_id)
         elif state in (RunState.VALIDATE, RunState.DECIDE):
-            self._decide_txn(run_id, from_state=state, job_id=job_id)
+            self._decide_txn(run_id, from_state=state, job_id=job_id, bundle=bundle)
         else:  # WRITE_CHECKS / SCORE can never be persisted; see module docstring
             raise RuntimeError(f"run {run_id} in unexpected persisted state {state}")
 
@@ -298,9 +347,16 @@ class Pipeline:
 
     # ------------------------------------------------- the fused decide txn
 
-    def _decide_txn(self, run_id: str, from_state: RunState, *, job_id: int) -> None:
+    def _decide_txn(
+        self, run_id: str, from_state: RunState, *, job_id: int, bundle: PolicyBundle
+    ) -> None:
         """VALIDATE → WRITE_CHECKS → SCORE → DECIDE → PUBLISH_DECISION in ONE
-        commit — a decision always corresponds to an exact set of live checks."""
+        commit — a decision always corresponds to an exact set of live checks.
+
+        `bundle` is this run's resolved policy bundle (Pipeline.resolve_bundle,
+        called once at job entry — see handle_job). Flag-off it IS self.policy
+        (same object), so scoring and provenance below stay byte-identical to
+        pre-PR6."""
         with uow(self.session_factory) as session:
             run, case, event = self._load(session, run_id)
             if not self._hop(session, run_id, from_state, RunState.PUBLISH_DECISION):
@@ -344,7 +400,7 @@ class Pipeline:
                     live_checks=live_views,
                     extras=self._validation_extras(session, case, event, website_guard=website_guard),
                 )
-                intents = list(self.intent_builder(self.policy, ctx))
+                intents = list(self.intent_builder(bundle, ctx))
             # website.review_completed carries the reviewer verdict in its payload (no
             # adapters), so its check must be produced even on the broker-blocked DECIDE
             # short-circuit — otherwise an eligible completion closes the task with no +10.
@@ -376,7 +432,7 @@ class Pipeline:
                 session,
                 case_id=case.id,
                 intents=intents,
-                rubric=self.policy.rubric,
+                rubric=bundle.rubric,
                 run_id=run_id,
             )
             if self.side_effects is not None:
@@ -393,9 +449,9 @@ class Pipeline:
             gates = scoring.evaluate_gates(
                 views,
                 breakdown.score,
-                self.policy.rubric.threshold,
+                bundle.rubric.threshold,
                 BrokerStatus(case.broker_status),
-                self.policy.rubric.allowed_broker_statuses,
+                bundle.rubric.allowed_broker_statuses,
             )
             org_passed = scoring.org_id_check_passed(views)
             audit(session, "run.stage", case_id=case.id, run_id=run_id, stage="SCORE",
@@ -419,7 +475,7 @@ class Pipeline:
                 score=result.score,
                 gates_json=result.gates.as_dict(),
                 buy_enablement=result.buy_enablement.value,
-                policy_shas=self.policy.shas,
+                policy_shas=bundle.shas,
             )
             session.add(decision_row)
 
@@ -446,7 +502,7 @@ class Pipeline:
                 score=result.score,
                 gates=result.gates.as_dict(),
                 buy_enablement=result.buy_enablement.value,
-                policy_bundle_hash=self.policy.bundle_hash,
+                policy_bundle_hash=bundle.bundle_hash,
                 partial=run.partial,
             )
 
