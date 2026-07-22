@@ -59,13 +59,13 @@ DB. `/readyz` resolves the head **dynamically** (shipped in PR 1 — do not regr
 | PR 4 | 5 | 009 | `poc_tokens.{rir,org_handle,resource,consumed_at}` |
 | PR 5a | 6 | 010 | drop global idem unique, add per-case unique, `request_nonces` |
 | PR 5b | 11 | — | review-record binding |
-| PR 6 | 7A | 011 | `policy_bundles`, `checks.policy_bundle_hash`, `runs/decisions.engine_build_id` |
-| PR 6b | 7B | 012 | revalidation / rollout staging |
-| PR 7a | 9 | 013 | `jobs.lease_token` |
-| PR 7b | 8 | 014 | `outbox.ordering_stream`, `decisions.decision_sequence`, `cases.last_decision_sequence`, `UNIQUE(case_id, decision_sequence)` |
-| PR 8 | 10 | 015 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
+| PR 6 | 7A | 011, 012 | `policy_bundles`, `checks.policy_bundle_hash`, `runs/decisions.engine_build_id` (011); `VALIDATE` those provenance CHECKs (012, audit round 1) |
+| PR 6b | 7B | 013 | revalidation / rollout staging |
+| PR 7a | 9 | 014 | `jobs.lease_token` |
+| PR 7b | 8 | 015 | `outbox.ordering_stream`, `decisions.decision_sequence`, `cases.last_decision_sequence`, `UNIQUE(case_id, decision_sequence)` |
+| PR 8 | 10 | 016 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
 | PR 9a/b/c | 12 | — | contract + adapter-output validation + real providers |
-| PR 10 | 13 | 016 | broker full-list snapshots, `runs.{matched_broker_entity_id,matched_identifier_class,broker_snapshot_revision}` |
+| PR 10 | 13 | 017 | broker full-list snapshots, `runs.{matched_broker_entity_id,matched_identifier_class,broker_snapshot_revision}` |
 
 ---
 
@@ -223,7 +223,10 @@ rounds — + plan rev 6 — Codex PLAN-REVIEW rounds 1–5 folded). Landed:
 migration 011 (`policy_bundles` content-hashed store with insert/conflict
 read-back verification, singleton `bundle_pinning_epoch`,
 `checks.policy_bundle_hash` + `runs/decisions.engine_build_id` provenance
-columns with nonblank `CHECK`s, forward-only-after-use downgrade);
+columns with nonblank `CHECK`s, forward-only-after-use downgrade; migration
+**012** then `VALIDATE`s those provenance CHECKs — 011 adds them `NOT VALID`
+so the rolling deploy takes only a brief metadata lock, not a table scan
+under an exclusive lock, audit round 1);
 `domain/engine.py::ENGINE_BUILD_ID` plus the framed whole-source-tree drift
 guard (this task); `Pipeline.resolve_bundle` resolving the run's creation-pin
 bundle (or refusing via `BundleUnavailable`) **at job entry, before any
@@ -252,18 +255,18 @@ on runs + decisions**. Worker loads the run's bundle by hash, refuses if unloada
 `engine_build_id`). Behind `enforce_bundle_pinning`.
 
 ### PR 6b — Revalidation (item 7B) — PENDING, required for M4
-Migration 012. Revalidate immutable evidence under the run's pinned bundle+engine,
+Migration 013 (`down_revision='012'`). Revalidate immutable evidence under the run's pinned bundle+engine,
 write **superseding** checks; a tightened pass rule marks prior PASSes stale until
 revalidated; block rollout activation until successors exist.
 
 ### PR 7a — Queue lease fencing (item 9)
-Migration 013: `jobs.lease_token`. Every transition gated on
+Migration 014: `jobs.lease_token`. Every transition gated on
 `(id, locked_by, lease_token, status='running')`; heartbeat ≤ lease/3; cadence
 reaper fails the run in the **same txn**; fenced complete inside the decide txn
 (stale worker rolls back the decision).
 
 ### PR 7b — Outbox stream separation (item 8)
-Migration 014: `outbox.ordering_stream` (decision|email), `decisions.decision_sequence`
+Migration 015: `outbox.ordering_stream` (decision|email), `decisions.decision_sequence`
 (D1), `cases.last_decision_sequence`, `UNIQUE(case_id, decision_sequence)`.
 **Allocate `decision_sequence` via the locked case counter** (not `max()+1`), only
 for callback-emitting decisions. Claim predicate scopes FIFO per
@@ -271,7 +274,7 @@ for callback-emitting decisions. Claim predicate scopes FIFO per
 Requeue marks `superseded`, never reverts a newer decision.
 
 ### PR 8 — Object-store containment + immutable evidence (item 10)
-Migration 015. Structured `ObjectRef{key, sha256, size?, content_type?, version_id?}`
+Migration 016. Structured `ObjectRef{key, sha256, size?, content_type?, version_id?}`
 (**no bucket field**); separate input vs evidence buckets; `_safe_path` containment
 (reject traversal/absolute/symlink/foreign-bucket); streamed byte cap; verify digest;
 copy source doc to a content-addressed immutable evidence key **before** OCR is
@@ -289,7 +292,7 @@ close the OCR ownership decision (recommend `TextractOcrEngine`, keep
 `document.uploaded`).
 
 ### PR 10 — Production ops hardening (item 13)
-Migration 016: broker **full-list immutable snapshots** `(revision, sha256,
+Migration 017: broker **full-list immutable snapshots** `(revision, sha256,
 json_bytes, author, timestamp)` — NOT per-entity versioning (6 entities; snapshots
 reproduce matches AND non-matches, simpler); run records matched entity + snapshot
 revision. `adapters/retry.py` (transient classification + Retry-After — job-layer
