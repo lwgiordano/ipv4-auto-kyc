@@ -7,8 +7,9 @@ decision below is locked. Migration numbers are illustrative — **rebase
 
 Status: **PR 1–4 shipped** (`c37c052`, `7a19a9f`, `4c91be6`; PR 4 this commit).
 Items 1–6 complete (PR 5a shipped: HMAC v2 + per-case idempotency). Item 11
-complete (PR 5b shipped: review-record binding) — but M2 stays a HARD STOP
-(see §D). PR 6 next.
+complete (PR 5b shipped: review-record binding). Item 7A complete (PR 6
+shipped: per-run policy bundle pinning + `engine_build_id`) — but M2 stays a
+HARD STOP (see §D). PR 6b (item 7B, revalidation) next; still pending.
 Auto-enforcement of positive decisions (M2) is a **hard stop** far downstream (§D).
 
 ---
@@ -87,8 +88,9 @@ DB. `/readyz` resolves the head **dynamically** (shipped in PR 1 — do not regr
   (`event_sequence`), PR 5a/5b-HMAC (canonical v2 dual-accept + split secrets),
   PR 7b (`decision_sequence` + platform high-water-mark dedupe), PR 8 (`ObjectRef`),
   PR 9 (`evidence.refresh_requested` local extension + discriminated contract).
-- **M4 — Backlog closed** requires: Phase B revalidation shipped (PR 6b),
-  `engine_build_id` stamped, RDAP #6 resolved. Until then §E items are OPEN.
+- **M4 — Backlog closed** requires: Phase B revalidation shipped (PR 6b) and
+  RDAP #6 resolved. (`engine_build_id` stamping shipped in PR 6.) Until then
+  §E items are OPEN.
 
 ---
 
@@ -215,14 +217,41 @@ the security boundary. Production `/ui` composer **barred** from
 `website.review_completed` and `reviewer.manual_approve`. Lock the task `FOR UPDATE`,
 enforce type/status/case/actor, close + write check atomically.
 
-### PR 6 — Policy bundle pinning (item 7A)
+### PR 6 — Policy bundle pinning (item 7A) — ✅ SHIPPED
+Delivered via the superpowers cycle (spec rev 7 — Codex AUDIT-CLEAN after 7
+rounds — + plan rev 6 — Codex PLAN-REVIEW rounds 1–5 folded). Landed:
+migration 011 (`policy_bundles` content-hashed store with insert/conflict
+read-back verification, singleton `bundle_pinning_epoch`,
+`checks.policy_bundle_hash` + `runs/decisions.engine_build_id` provenance
+columns with nonblank `CHECK`s, forward-only-after-use downgrade);
+`domain/engine.py::ENGINE_BUILD_ID` plus the framed whole-source-tree drift
+guard (this task); `Pipeline.resolve_bundle` resolving the run's creation-pin
+bundle (or refusing via `BundleUnavailable`) **at job entry, before any
+adapter call or side effect**; flag-on decision-time re-pricing of every
+live check's points/category from the resolved rubric across
+`score()`/`evaluate_gates()`/the callback checks-summary (immutable check
+rows and validator PASS/FAIL untouched — re-judging evidence stays PR 6b);
+atomic bundle **and** engine provenance on every automatic and manual
+decision, with `runs.policy_bundle_hash` (the creation pin) never rewritten;
+startup seed-and-verify + `bundle_pinning_ready` attestation, scoped to the
+API and pipeline/dev workers only (`outbox`/`retention` stay
+policy-independent); an unconditional `/readyz` bundle-store check;
+`ops.verify_pinnable_backlog` / `ops.seed_policy_bundle` /
+`ops.activate_bundle_pinning_epoch` plus the per-surface post-epoch
+NULL-provenance check. Preserves PR 3's `HARD_CONFLICT_REASON_CODES`
+(engine code, covered by `engine_build_id`, not the rubric). Behind
+`enforce_bundle_pinning` (default off); rollout is the drained cutover in
+`docs/DEPLOYMENT.md` §10. Recorded in **ADR-005** (prepended above ADR-004 —
+the PR 10 ADR-005 reservation below moves to **ADR-006**). Full suite green.
+Original spec below.
+
 Migration 011: `policy_bundles`, `checks.policy_bundle_hash`, **`engine_build_id`
 on runs + decisions**. Worker loads the run's bundle by hash, refuses if unloadable;
 `score()`/`evaluate_gates()` pinned to rubric args (**preserve PR 3's
 `HARD_CONFLICT_REASON_CODES`** — must live in the bundle or be covered by
 `engine_build_id`). Behind `enforce_bundle_pinning`.
 
-### PR 6b — Revalidation (item 7B) — required for M4
+### PR 6b — Revalidation (item 7B) — PENDING, required for M4
 Migration 012. Revalidate immutable evidence under the run's pinned bundle+engine,
 write **superseding** checks; a tightened pass rule marks prior PASSes stale until
 revalidated; block rollout activation until successors exist.
@@ -265,7 +294,7 @@ json_bytes, author, timestamp)` — NOT per-entity versioning (6 entities; snaps
 reproduce matches AND non-matches, simpler); run records matched entity + snapshot
 revision. `adapters/retry.py` (transient classification + Retry-After — job-layer
 backoff already exists); `recalculate.requested` runs the broker gate (record
-`AUDIT:<id>` + ADR-005 — spec limits recalc to "no adapter calls", but the gate is a
+`AUDIT:<id>` + ADR-006 — spec limits recalc to "no adapter calls", but the gate is a
 local lookup); new `evidence.refresh_requested` in a **local extension contract**;
 RUNBOOK: delete the broken self-select SQL → point to the existing authenticated
 requeue endpoint; metrics windowing (index exists) + Prometheus + alerts; pin deps +
@@ -289,6 +318,8 @@ base image `@sha256`; `ruff format --check` in CI; wire `core.hooksPath` durably
    switch is permanent.
 
 ## I. ADRs / AUDIT_FINDINGS to write
-ADR-003 + `AUDIT:` (per-case idempotency), ADR-005 + `AUDIT:` (broker gate on
-recalculate), `AUDIT:` (local `evidence.refresh_requested` extension), `AUDIT:`
+ADR-003 + `AUDIT:` (per-case idempotency), **ADR-005 — written (PR 6, per-run
+policy bundle pinning)**, ADR-006 + `AUDIT:` (PR 10: broker gate on
+recalculate — bumped from the ADR-005 reservation now that PR 6 owns it),
+`AUDIT:` (local `evidence.refresh_requested` extension), `AUDIT:`
 (OpenAPI as derived contract).

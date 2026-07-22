@@ -4,6 +4,100 @@ A running log of significant decisions and their rationale. Newest first.
 
 ---
 
+## ADR-005 — Per-run policy bundle pinning (PR 6)
+
+**Context.** Three problems compounded around the policy bundle a run is
+scored and decided under. (1) A run recorded the bundle it was **created**
+under (`runs.policy_bundle_hash`, written once at ingest) but nothing
+guaranteed the run was later **scored**, or its **decision recorded**, under
+that same bundle: the worker used its own process-loaded bundle — whatever
+was on disk when it last started — for both scoring and for the provenance it
+stamped, so a run could silently be scored and decided under a bundle
+different from the one it was created under, with no way to tell after the
+fact. (2) No record existed of which **engine build** — the scoring, gate,
+validator, and decision *code*, as distinct from the policy *data* — produced
+a given decision; a code change to scoring/gate/decision semantics left no
+trace on the decision row, so two decisions with identical policy shas could
+still have been produced by different rules. (3) The bundle itself lived only
+as bytes on disk at the moment a process happened to read them: nothing made
+it durably reconstructable, so a past decision's exact rubric could not be
+proven after the fact, and there was no way to reload a specific historical
+bundle on demand (e.g. to reprocess an old run) once the on-disk files moved
+on.
+
+**Decision.** A DB-backed, content-hashed bundle store
+(`policy_bundles`, keyed by `bundle_hash`, `files_json` base64-encoded, every
+write and read reconstruct-verified so a corrupt row fails loudly rather than
+silently drifting) replaces "whatever is on disk" as the durable source of
+policy bundles. The pipeline **resolves the bundle to score under at job
+entry** — before any adapter call, side effect, or token/email is created:
+flag off, always the process-loaded bundle (byte-identical to pre-PR6); flag
+on, the run's immutable creation pin (`runs.policy_bundle_hash`) loaded from
+the store, with a miss raising `BundleUnavailable` and dead-lettering the job
+with zero side effects rather than silently falling back to the process
+bundle. Flag-on, **decision-time scoring is pinned to the resolved rubric**:
+`score()`, `evaluate_gates()`, and the callback checks-summary re-derive
+points and gate-category for **every live check** from the resolved bundle,
+not from whatever value happened to be stamped on the row when it was
+written — so a check that survived from an earlier, different bundle is
+re-priced under the rubric the run is actually being decided under (immutable
+check rows and validator PASS/FAIL themselves are untouched; re-judging
+evidence is PR 6b). Every automatic decision **atomically** stamps both
+bundle provenance (`checks.policy_bundle_hash`, `decisions.policy_shas`, the
+audit `resolved_policy_bundle_hash`) and engine provenance
+(`runs.engine_build_id` = `decisions.engine_build_id` = `ENGINE_BUILD_ID`) in
+the same decide transaction, while `runs.policy_bundle_hash` — the creation
+pin — is never rewritten. `ENGINE_BUILD_ID` (`domain/engine.py`) makes the
+engine build an explicit, versioned identifier, held honest by a **framed
+whole-tree guard test**: a sha256 over every `src/kyc_tool/**/*.py` file,
+each framed as `relpath \x00 len(bytes) \x00 bytes` in sorted order, so a
+rename, a byte-identical cross-file move, or an empty-file add all change the
+digest and the whole source tree — not a curated list that could omit a file
+— is in the closure. A durable, singleton **activation epoch**
+(`bundle_pinning_epoch`) marks the point after which every check/decision is
+expected to carry its provenance stamp, backing a per-surface alert for any
+post-epoch row that doesn't.
+
+**Rollout.** `Settings.enforce_bundle_pinning` defaults `false`. Phase 1
+ships rolling: migration 011, the durable store, and bundle+engine
+provenance recording go out first, without universal coverage (a rollover
+old replica can still write NULL provenance). `ops.activate_bundle_pinning_epoch`
+is the durable boundary that makes provenance trustworthy from that point
+on — run only from the pinned release image, only after every old API and
+worker is confirmed gone; it verifies the local engine build and process
+bundle against the operator-supplied expectations, writes the epoch with
+database time, and read-back-fails rather than silently no-op-ing if a
+concurrent activation wrote different values. Phase 2 is a **drained**
+worker-pool cutover, not a rolling deploy: `ops.verify_pinnable_backlog`
+preflight (every runnable/requeueable run's bundle must resolve; seed any
+gap with `ops.seed_policy_bundle`) → disable autoscaling/restarts and
+confirm at the orchestrator that zero old workers remain → run
+`ops.requeue_interrupted_jobs` (its precondition is "all workers confirmed
+stopped") → enable the flag and start only flag-on workers, each logging a
+startup attestation (`bundle_pinning_ready`: flag / bundle_hash /
+engine_build_id) → resume, with the API staying up throughout. Rollback is
+the same drained shape in reverse, flag-off, on the PR6 image — never a
+resume on the pre-epoch writer, which would mint permanent post-epoch NULLs.
+`docs/DEPLOYMENT.md` has the full operator sequence; `docs/RUNBOOK.md` has
+the ops commands and the alert.
+
+**Consequences.** Flag-off is a strict **scoring no-op** — golden cases stay
+byte-identical to pre-PR6 — while still recording bundle **and** engine
+provenance on every automatic and manual decision, so Phase 1 alone earns
+audit value with zero behavior change. Once the epoch is active, a post-epoch
+check or decision missing its provenance stamp is always an anomaly (a
+rollover gap or a bypassed path), never an expected state, and is exactly
+what the per-surface alert watches for. Migration 011's downgrade is
+**forward-only after use**: once any `policy_bundles` row, either provenance
+column, or the epoch row is populated, downgrade refuses rather than
+deleting audit evidence to recreate the empty schema — matching the
+precedent migration 010 set in ADR-003. Explicitly out of scope and left to
+later units: revalidating pre-existing checks under a since-changed rubric
+(PR 6b), immutable source-evidence containment (PR 8), and broker-state
+reproducibility (PR 10).
+
+---
+
 ## ADR-004 — Review-record binding (PR 5b)
 
 **Context.** Two holes remained on the human-review path. On website

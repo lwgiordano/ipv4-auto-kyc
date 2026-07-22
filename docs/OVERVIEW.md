@@ -217,6 +217,17 @@ end-to-end. A green draft PR carries the entire build.
   re-scores cleanly as new evidence arrives).
 - A full audit trail: every decision reconstructs from event → evidence →
   checks → score → gates → decision → callback.
+- **Per-run policy bundle pinning (PR 6).** The exact policy bundle behind
+  any decision is now durably stored and reconstructable (content-hashed,
+  not merely a hash of whatever files happened to be on disk), and every
+  automatic/manual decision records both that bundle **and** the engine
+  build (the scoring/gate/decision code itself) that produced it. Behind
+  the `enforce_bundle_pinning` flag, a run resolves and scores under **the
+  bundle it was created under**, not whichever bundle the worker process
+  currently has loaded — see `docs/architecture-decisions.md` ADR-005.
+  Still ahead: revalidating pre-existing evidence under a since-changed
+  rubric (PR 6b), immutable source-evidence containment (PR 8), and
+  broker-state reproducibility (PR 10).
 - An **ops console** at `/ui`: cases, scores, gates, run state, integrations
   status, and a composer for sending test events.
 - A one-command local dev stack (`scripts/dev.sh`) and a **Dockerfile** for
@@ -362,7 +373,14 @@ hiding the controls, is the actual boundary for reviewer events.
   **versioned**: a change is made deliberately, tested, and released, and every
   decision records which policy version produced it, so the audit trail always
   holds. There is intentionally no hot-reload; the blocklist can be updated in
-  the database for urgent additions.
+  the database for urgent additions. Since **PR 6**, that policy bundle is
+  also durably stored (content-hashed, so an exact historical bundle can
+  always be reloaded, not just referenced by a sha of files that may have
+  moved on) and, once `enforce_bundle_pinning` is cut over
+  (`docs/DEPLOYMENT.md` §10), a run resolves and scores under **the bundle
+  it was created under** rather than whichever bundle a worker process
+  currently has loaded; the engine build that produced the decision is
+  recorded alongside it (ADR-005).
 
 ---
 
@@ -410,7 +428,12 @@ hiding the controls, is the actual boundary for reviewer events.
 
 - **Policy-as-data, versioned per release.** Scoring rules live in data files,
   not code; each decision records the exact policy version, so any past
-  decision is fully explainable. No silent rule edits.
+  decision is fully explainable. No silent rule edits. **Per-run bundle
+  pinning (PR 6)** makes that policy version durably reconstructable (a
+  content-hashed store, not just on-disk files) and, behind a flag, pins a
+  run to resolve and score under its own creation-time bundle rather than
+  whatever the worker process has loaded, with the producing engine build
+  recorded alongside it — see `docs/architecture-decisions.md` ADR-005.
 - **Deterministic validation.** Given the same evidence, the tool always
   produces the same decision, essential for a compliance tool and for testing.
 - **Append-only checks + supersession.** Evidence is never overwritten; a case

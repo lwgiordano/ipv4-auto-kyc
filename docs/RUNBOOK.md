@@ -10,6 +10,9 @@
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily); prunes per KYC_RETENTION_DAYS |
 | Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 (see below) |
 | v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, POST-cutover (PR 5a §6a); idempotent |
+| Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot; PRE-cutover for `enforce_bundle_pinning` (PR 6, `docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
+| Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot; stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
+| Bundle epoch activation | `python -m kyc_tool.ops.activate_bundle_pinning_epoch --expect-bundle-hash <sha256> --expect-engine <id>` | one-shot, POST-cutover (PR 6, `docs/DEPLOYMENT.md` §10); idempotent on a matching re-run, fails on a mismatched one |
 
 > **Migration 010 (PR 5a) is a non-hot, forward-only-after-reuse cutover.** It
 > drops the global unique on `events.idempotency_key`, which the *old* image's
@@ -19,6 +22,18 @@
 > the old constraint); roll forward instead. After the new replicas are up and
 > readiness-verified, run the activation command above once to start the v1
 > observation clock.
+
+> **`enforce_bundle_pinning` (PR 6) is a drained, not rolling, flag flip.**
+> Off (default), every worker scores under its own process-loaded policy
+> bundle — today's behavior, unchanged. On, a worker resolves and scores each
+> run under **that run's creation-pin bundle** (`runs.policy_bundle_hash`)
+> loaded from the durable `policy_bundles` store, and refuses the job
+> (dead-letter, zero side effects — no adapter call, check, decision, token,
+> or outbox row) rather than silently falling back if that bundle can't be
+> loaded. An inconsistent flag value across the worker pool risks different
+> workers resolving different rubrics for the same run — flip it only via
+> the drained cutover in `docs/DEPLOYMENT.md` §10, preflighted by the bundle
+> preflight command above.
 
 ## Production configuration (startup kill switches)
 
@@ -84,8 +99,11 @@ exercises the same binding production enforces rather than bypassing it.
 - `GET /healthz` — liveness + the policy bundle hash. **A hash change without a
   deploy is an incident** (policy files are immutable per release).
 - `GET /readyz` — readiness: config validity (production), DB connectivity,
-  migration head match, and S3 access. `503` on any failing check; wire it to
-  the load balancer so a mis-migrated or misconfigured instance drains.
+  migration head match, S3 access, and — **unconditionally, regardless of
+  `enforce_bundle_pinning`** — that this process's own loaded policy bundle
+  is durably resolvable from the `policy_bundles` store (PR 6). `503` on any
+  failing check, including a missing/corrupt bundle row; wire it to the load
+  balancer so a mis-migrated, misconfigured, or un-seeded instance drains.
 - `GET /v1/metrics` — watch: `jobs_by_status.dead` (alert > 0),
   `outbox_by_status.dead` (alert > 0), `runs_by_state.FAILED`,
   `review_tasks_open_by_type` growth, `event_to_decision_seconds.p95`
@@ -109,6 +127,16 @@ UPDATE runs SET state='QUEUED', error=NULL, finished_at=NULL
 immediately without doing anything.) `recalculate.requested` also produces a
 fresh decision from current live checks, but it does **not** re-run the broker
 screen — after a blocklist update, re-send the original evidence event instead.
+
+**Died with `BundleUnavailable` (PR 6, `enforce_bundle_pinning=true`)?** The
+run's creation-pin bundle (`runs.policy_bundle_hash`) isn't in the
+`policy_bundles` store. **Requeuing without seeding it first just fails
+again the same way.** To reprocess the run, you must first seed that exact
+historical bundle: run `ops.seed_policy_bundle --expect-hash
+<runs.policy_bundle_hash>` pointed at a `KYC_POLICY_DIR` containing those
+exact files (the command computes-then-compares-then-stores, so a
+mismatched directory writes nothing) — only then does the requeue above
+succeed.
 
 ### Dead outbox row (callback undeliverable)
 The run sits in PUBLISH_DECISION (visible, correct). Confirm the platform
@@ -155,6 +183,44 @@ Rubric/decision/broker JSON changes ship as a deploy: bump the file's
 `version`, update `tests/policy_driven/policy_baseline.json` in the same
 commit (the drift-guard test enforces this), redeploy. Every run/decision
 records the sha of the policy that produced it.
+
+## Policy bundle pinning & provenance (PR 6)
+
+Full cutover procedure: `docs/DEPLOYMENT.md` §10. Summary of the ongoing
+operator surface once it's live:
+
+- **The flag.** `enforce_bundle_pinning` (default off) — see the callout
+  under Processes above. Flip it only via a drained cutover, never a rolling
+  toggle.
+- **`ops.verify_pinnable_backlog`** — preflight before enabling the flag;
+  prints the run ids whose creation-pin bundle wouldn't resolve and exits
+  nonzero if any exist.
+- **`ops.seed_policy_bundle --expect-hash <sha256>`** — the only way to add
+  a bundle to the durable store by hand (compute → compare to
+  `--expect-hash` → store; a mismatch writes nothing). Every process also
+  self-seeds its own on-disk bundle at startup, so day-to-day this command
+  is for the preflight gap case above and for **historical recovery** — see
+  the reprocess note below.
+- **`GET /readyz`** — 503 when the process's own policy bundle isn't in the
+  store (unconditional, both flag states).
+- **Post-epoch NULL-provenance check.** Once
+  `ops.activate_bundle_pinning_epoch` has run, any `checks` row with `NULL
+  policy_bundle_hash`, or any `decisions`/`runs` row with `NULL
+  engine_build_id`, created **after** `bundle_pinning_epoch.activated_at` is
+  an anomaly — a rollover gap or a bypassed write path, never an expected
+  state (a legitimately still-queued run is not flagged). The check is
+  `kyc_tool.ops.activate_bundle_pinning_epoch.post_epoch_null_provenance(session)`
+  — it returns `{"decisions": [...], "checks": [...], "runs": [...]}` of the
+  offending ids; it is not yet wired to `/v1/metrics` or a CLI, so run it
+  ad hoc (a Python shell against the production DB) or wire it into your own
+  alerting.
+- **To reprocess a run, you must first seed its bundle.** Whether via
+  `enforce_bundle_pinning` at the time (a live `BundleUnavailable`
+  dead-letter — see the failure playbook above) or later, historical
+  reprocessing under a run's original rubric requires that exact bundle to
+  be in `policy_bundles` first; `ops.seed_policy_bundle --expect-hash
+  <hash>` against the matching historical policy directory is the only
+  supported path to add it back.
 
 ## Secrets
 
