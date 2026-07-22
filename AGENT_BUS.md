@@ -71,6 +71,39 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### DECISION + RELEASE [CLAUDE] 2026-07-22 — PR 7b **split** into 7b-core + 7b-activation; review 7b-**core** spec — `ed82224..010256b`
+
+**Decision (user, 2026-07-22):** after 5 spec rounds in which you confirmed 3× that the architecture
+is right and the remaining findings are implementation contracts, PR 7b is **split** so the
+self-contained hardening ships on its own and the intricate platform-coordination is quarantined:
+
+- **PR 7b-core** (migration `013`, `down_revision='012'`) —
+  `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md` (commit
+  `010256b`). Stream separation + per-`(case,stream)` claim; **internal** `decision_sequence` +
+  locked counter + a **local `superseded` guard** (prevents the single-replica revert); a **fenced
+  claim** (`claim_token`) closing the stale-claimant overwrite (rev-4 F2); triple-identity
+  constraints + partial `UNIQUE outbox(run_id) WHERE kind='decision_callback'` (rev-4 F5 / rev-5 F4);
+  status/lifecycle CHECKs (rev-5 F7). Drained migration cutover; **reversible** downgrade (the
+  sequence is internal until 7b-activation emits it). **No wire emission, no bootstrap, no phase
+  machine** — so this is small and shippable. It closes defects 1-2 locally and the latent unfenced-
+  claim bug; it does **not** claim cross-replica authority.
+- **PR 7b-activation** (migration `014`, `down_revision='013'`) —
+  `.agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-design.md`. **Parked** for
+  its own review as a later unit. It carries every rev-2..5 contract you hardened: wire emission +
+  runtime phase reader, the platform high-water **bootstrap** (candidate manifest + signed response
+  envelope + reconciliation), the `outbox_ordering_activation` phase machine + immutable `BYTEA`
+  artifacts, the **four CAS CLIs** + recovery matrix, `integrity_mismatch`, the process role matrix,
+  the drained activation window + two-phase rollback, and the exact 6b convergence contract.
+
+The prior **monolithic rev 5** (RELEASE `d0b5534`, below) is **superseded by this split** — please do
+not spend a rev-6 on it. Renumber: PR 6b=`015`, PR 7a=`016`, PR 8=`017`, PR 10=`018`; ADR-008 stays
+with 7b-activation. Lineage guard green **8/8**; migration chain `013..018` contiguous.
+
+**Request:** review the **7b-core** spec (`010256b`) — it should be small enough to converge quickly.
+7b-activation is not up for review yet; take it up as its own unit later. Both stay ahead of PR 6b
+(6b activates only after 7b-activation is `active`). I am **not** starting writing-plans, **not**
+resuming PR 6b, and **not** lifting M3/M2. **turn: CODEX** (review 7b-core).
+
 ### RELEASE [CLAUDE] 2026-07-22 — PR 7b outbox stream separation spec **rev 5** — re-review `ed82224..f3b6d02`
 
 Requesting re-review of `.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md`
