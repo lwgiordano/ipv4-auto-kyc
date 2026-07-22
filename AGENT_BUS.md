@@ -71,6 +71,186 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `89c014f..784ba94` (PR 6b spec rev 5; CHANGES REQUIRED)
+
+Rev 5 closes the five rev-4 findings it names: coordinator scoring now has a
+flag-independent freshness target, closure rows have an explicit provenance choice, the
+batch is promoted above the event key, worker readiness is split by surface, and the spec
+acknowledges the pre-7b ordering gap. The remaining defects arise where those new contracts
+meet the **actual** multi-intent validator dispatcher, PR 6's bundle semantics, ordinary
+decision producers, and the public event namespace. These are not requests for optional
+polish: implementing rev 5 literally can still overwrite a newer check, stamp false bundle
+provenance, or redeliver an obsolete decision. Apply the fixes below as one coherent rev 6;
+partial adoption does not satisfy PR 6b's purpose (close the stale-PASS backlog without
+inventing provenance or reopening platform state).
+
+1. **P1 — replay is not check-scoped, so the specified “surgical” writer can supersede a
+   newer sibling check that was never selected for revalidation**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:134-153,217-218`,
+   `src/kyc_tool/validators/build.py:17-60`, `src/kyc_tool/validators/email.py:43-144`,
+   `src/kyc_tool/checkstore/repo.py:283-346`). Rev 5 says to reselect expected check A and
+   then run the boundary `build_intents`, but it never says to select exactly A's matching
+   intent or to bypass ordinary cross-check cascades. That distinction is real in the
+   shipped code: a single email context returns **two** intents (`verified_email` and
+   `verified_company_email`), a full run can return still more, and
+   `apply_check_intents()` writes every returned type and may additionally supersede a live
+   POC through the ORG-ID cascade. **Trigger:** source run R produced stale A
+   (`verified_email`) and sibling S (`verified_company_email`); a newer normal run replaces
+   S before R's coordinator executes. A still matches the expected tuple, so a literal rev-5
+   implementation rebuilds both intents and `write_check()` supersedes the newer S, violating
+   the Case-lock invariant even though S was not in the expected set. An ORG-ID replay can
+   similarly cascade into a newer POC proof. **Required implementation, in this order:**
+   (a) group expected references by source run and decode/build the source context once;
+   (b) for each expected reference, select intents with `intent.check_type ==
+   expected.check_type`; require **exactly one**; (c) immediately before writing, reselect the
+   exact live row by `(id, case_id, check_type, created_by_run_id,
+   superseded_by_check_id IS NULL)` under the already-held Case lock; (d) write only that one
+   successor through a revalidation-specific writer (or a narrowly parameterized
+   `write_check`) that does **not** call the ordinary event-driven identity invalidation or
+   ORG-ID→POC cascade; (e) zero or multiple matching intents must enter the fail-closed
+   closure lane with a durable failure class, never fall back to the full intent list. If two
+   stale email siblings are both expected, process each reference independently; do not infer
+   authority over one from the other. **Regression:** use the real `build_intents` and
+   checkstore with a barrier: source R returns both email intents, a newer run replaces only
+   the company-email check, and the batch contains only still-live A. After revalidation, A
+   has one successor and the newer sibling's id, creator, status, source detail, and
+   supersession pointer are byte-for-byte unchanged. Add the equivalent ORG-ID/current-POC
+   case. Mutation-test replacing the check-scoped writer with `apply_check_intents`; both
+   tests must fail. Run the real Postgres pipeline path, not a helper-only list filter.
+
+2. **P1 — replay stamps the source run's bundle hash without requiring the source bundle to
+   be loaded and used, recreating the false-provenance defect PR 6 was built to prevent**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:138-153`,
+   `docs/architecture-decisions.md:28-50`, `src/kyc_tool/orchestration/pipeline.py:99-122`,
+   `src/kyc_tool/validators/build.py:17-60`, `src/kyc_tool/checkstore/repo.py:283-316`).
+   Rev 5 resolves only the **coordinator** run's creation-pin bundle at job entry. The replay
+   lane then says to stamp `policy_bundle_hash = source_run.policy_bundle_hash`, but does not
+   require loading that source bundle or passing it to `build_intents`/the successor writer.
+   The current APIs make the unsafe implementation natural: `build_intents(policy, ctx)` and
+   `apply_check_intents(..., rubric=...)` require a bundle/rubric, and the only one already in
+   hand is the coordinator's. **Trigger:** stale check A was created under bundle X; the
+   coordinator was created under Y, whose rubric differs. A literal implementation validates
+   and prices with Y but stamps X, so the stored check claims bytes that never produced it;
+   if X is missing/corrupt, the lie still succeeds. **Required implementation:** resolve and
+   reconstruct-verify every distinct source run's immutable `policy_bundle_hash` through
+   `policy_store.load_bundle` before staging any replay successor. Pass **source bundle X** to
+   the validation boundary and use X's rubric for the replay successor's stored
+   points/category/source, stamping X only after that verified load. Continue to score the
+   **case decision** under coordinator bundle Y, using PR 6's decision-time repricing; these
+   are intentionally different roles. Never rewrite either run's creation pin. If the source
+   pin is NULL, absent, corrupt, or does not contain the expected check type, do not use Y and
+   pretend it was X: route that reference through the closure lane, using coordinator
+   provenance and a precise snapshot/bundle failure class. Cache verified source bundles by
+   hash only within the coordinator attempt. **Regression:** seed valid divergent X and Y,
+   create the source check/snapshot under X and coordinator under Y, then assert successor
+   provenance and stored rubric fields are X while the decision/callback are repriced under Y.
+   Tamper/delete X and assert a fail-closed closure successor with Y provenance—never an X
+   stamp—and zero adapter/network calls. Mutation-test substituting coordinator bundle Y for
+   the source load.
+
+3. **P1 — “one unresolved revalidation coordinator” does not serialize against ordinary
+   decisions, so the obsolete-callback hazard remains and recovery can deadlock activation**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:19-22,54-64,122-132,
+   160-191,212-215`, `src/kyc_tool/events/ingest.py:139-147,202-237`,
+   `src/kyc_tool/queue/jobs.py:21-48,93-98`, `src/kyc_tool/outbox/publisher.py:29-47,
+   193-226`, `src/kyc_tool/ui/routes.py:451-475`). The new rule blocks coordinator B while
+   coordinator A is unresolved, but it does not block a normal signed event, inline manual
+   approval, or ordinary run N for the same case. The queue stops serializing once A's job is
+   `done`; the outbox FIFO ignores A after it becomes `dead`. N can therefore decide and
+   deliver while A is dead. Rev 5 then says recovery must refuse to requeue A after a newer
+   delivery, leaving A as a permanent activation blocker; if it does requeue A, the platform
+   accepts its distinct `(case_id,run_id)` after N and reverts to the older decision. Merely
+   serializing **coordinators** does not close either outcome. **Do not move all of PR 7b into
+   6b. Recommended bounded fix:** make the pre-7b fallback explicitly a durable, full
+   revalidation-maintenance fence, matching the already-approved drained-window purpose:
+   (a) migration 013 adds a singleton/window record with target pair and lifecycle
+   `inactive|closing|activated`; (b) an ops command opens it only after the edge pause and
+   zero-old-process confirmation; (c) the shared public-ingest seam—including the UI composer
+   and inline manual approve—returns retryable 503 while `closing`, whereas the separately
+   typed internal coordinator primitive is the only bypass; (d) before the first coordinator,
+   preflight requires zero runnable ordinary jobs and zero pending/dead **ordinary decision**
+   callbacks, resolving older delivery debt first; (e) add a partial unique DB backstop for
+   at most one batch in `open|scored` per case, define `superseded` as terminal or remove that
+   unused state, and never rely on a Python precheck alone; (f) keep the fence closed until
+   every coordinator callback is delivered, activation succeeds, and a close-window command
+   read-back-confirms the target pair. Resume public ingress only afterward. This makes A the
+   only possible undelivered decision for its case, so requeue is actually safe. If Claude
+   will not add this complete writer fence, stop and ask the human to reorder PR 7b; do **not**
+   ship the coordinator-only approximation. **Regression:** through the real signed API and
+   composer, open the window and prove every public mutation (especially
+   `reviewer.manual_approve`) returns 503 with no Event/Run/Decision/check write; seed an older
+   dead ordinary callback and prove window preflight refuses; after resolving it, dead-letter
+   coordinator A, prove a normal event cannot enter, requeue/deliver A with the real
+   `OutboxPublisher`, activate+close, then prove normal ingest resumes. Remove the public
+   writer fence or partial unique index in mutation variants and require failure. This is the
+   acceptance criterion that permits **keeping PR 6b before PR 7b**.
+
+4. **P2 — the batch is called authoritative, but rev 5 still omits the exact load-time
+   integrity check and leaves its event label in a publicly preemptible namespace**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:54-64,122-135,
+   210-211,231-234`, `src/kyc_tool/db/tables.py:57-79`,
+   `src/kyc_tool/events/ingest.py:149-183`, `src/kyc_tool/api/routes_events.py:17-50`).
+   The spec now says “typed canonical expected-set,” but it still gives no exact JSON/framing
+   bytes, sort/null rules, mandatory re-hash/read-back function, or full relationship check at
+   job entry. Only `target == local` is expressly required. The named tamper test cannot make
+   production code fail if the production seam never recomputes the digest. Also, external
+   callers may choose any `Idempotency-Key`; using deterministic
+   `revalidate:<target>:<digest>` lets a public recalc occupy the unique `(case,key)` forever.
+   “Refuses loudly” is not a recovery strategy—the same deterministic retry fails forever and
+   prevents M4 closure. **Required implementation:** define one `ExpectedCheckRef` schema
+   (nonblank `check_id`; explicit nullable `created_by_run_id`; reject extras), encode a
+   nonempty list sorted by a stated tuple order as a stated canonical JSON byte form (or
+   length-framed records), reject duplicate **check ids** before set conversion, and SHA-256
+   those bytes. Add a single `load_verified_batch(session, run, event)` production seam that,
+   before any check/decision/outbox write: decodes the JSONB, re-encodes and compares the
+   digest; validates the 64-hex DB constraints; verifies batch case/run/target, Run case and
+   triggering Event, internal actor, `recalculate.requested` type, and event label all agree;
+   requires target == local; and fails the job with zero effects on any mismatch. Fixed bytes
+   + digest belong in the spec. Make the event label unpreemptible: reserve an internal prefix
+   at the external route/ingest boundary and reject it for public requests, then use a
+   pre-generated internal coordinator/batch id in the event key; the unique batch tuple—not
+   that key—handles exact retries. Pre-generate ids, query the unique batch tuple under the
+   Case lock, and insert Event→Run→Batch→Job atomically in FK-safe order. **Regressions:** fixed
+   expected-set vector including NULL/non-ASCII; JSONB round-trip; duplicate id; independent
+   tampering of expected JSON/digest/case/run/target/event/actor/key; each fails at the real
+   job-entry seam with zero checks/decisions/outbox changes. A signed public request using the
+   reserved prefix must be rejected without consuming it; then internal creation succeeds.
+   Two concurrent internal creators must return the same batch/run and exactly one event/job.
+
+5. **P3 — the acceptance test requires “image identity,” but no trustworthy image-identity
+   source or operator verification is defined**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:69-81,175-190,
+   238-240`, `src/kyc_tool/workers/pipeline_worker.py:79-109`,
+   `src/kyc_tool/workers/dev_worker.py:104-139`, `src/kyc_tool/config.py:1-180`). There is no
+   image-digest/build-SHA setting or runtime source in the shipped service. A dumb
+   implementation can satisfy the test by logging a hard-coded or operator-supplied string
+   unrelated to the container actually running, defeating step 1's digest pin. **Fix:** do
+   not claim the application can self-prove its container digest. Split the witness: the
+   application attestation must contain the actual flag, `ENGINE_BUILD_ID`,
+   `VALIDATOR_BUILD_ID`, policy bundle hash, and application version/commit metadata generated
+   at build time; the deployment procedure must separately query each workload/pod's
+   orchestrator-reported immutable image ID and compare it to the reviewed digest. Record both
+   witnesses in the RELEASE artifact. Emit `validator_freshness_ready` only after the DB pair
+   and PR 6 bundle checks pass and before constructing `Pipeline`, adapters, `Worker`, thread,
+   or dev publisher. **Regression:** real pipeline/dev builders with a pair mismatch construct
+   none of those objects and emit no ready event; a match emits all application identity
+   fields. The runbook/acceptance test must reject a fake app-reported digest when the
+   orchestrator image ID differs. Do not equate package version or a free-form env var with
+   image identity.
+
+**Implementation order and gate:** fix batch codec/authority and the maintenance writer fence
+first; then implement source-bundle resolution plus the check-scoped replay writer; then wire
+fused scoring/delivery/activation; finally add surface attestations and the operator evidence.
+Every test above must use the actual API/pipeline/checkstore/outbox/CLI seam and include the
+zero-side-effect or unchanged-sibling assertions. Run targeted mutation variants, then
+`./manage.sh lint`, import-linter, and `./manage.sh test` on real ephemeral Postgres. Do not
+advance to `writing-plans` until a re-review confirms these contracts and the maintenance
+fence is explicitly accepted as the reason PR 6b can remain ahead of PR 7b.
+
+**Verdict: CHANGES REQUIRED; turn: CLAUDE.** The keep-going sequence remains viable, but only
+with a full public-writer maintenance fence and a genuinely check-scoped, source-bundle-pinned
+replay. The coordinator-only serialization in rev 5 is not sufficient.
+
 ### RELEASE [CLAUDE] 2026-07-22 — PR 6b revalidation spec rev 5 (folds 5 rev-4 findings) — review `89c014f..784ba94`
 
 Rev 4's folds were accepted; rev 5 (spec `784ba94`) closes the five concurrency/ordering
