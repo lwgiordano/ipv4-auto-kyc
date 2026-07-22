@@ -18,7 +18,7 @@ from kyc_tool.config import (
 )
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.policy.loader import PolicyBundle, load_policy
-from kyc_tool.policy_store.repo import attest, seed_and_verify
+from kyc_tool.policy_store.repo import attest, load_bundle, seed_and_verify
 
 
 def _alembic_head() -> str | None:
@@ -122,6 +122,20 @@ def create_app(
             except Exception as exc:  # noqa: BLE001
                 checks["object_store"] = {"ok": False, "error": str(exc)[:200]}
                 ready = False
+
+        # PR 6 (Task 10): UNCONDITIONALLY (regardless of enforce_bundle_pinning
+        # or the checks above) confirm the process's loaded policy bundle is
+        # durably resolvable — a missing/corrupt row means neither a flag-on
+        # worker nor a bundle-pinning-epoch activation could resolve it.
+        bundle_hash = app.state.policy.bundle_hash
+        try:
+            with app.state.session_factory() as session:
+                pinnable = load_bundle(session, bundle_hash) is not None
+            checks["policy_bundle"] = {"ok": pinnable, "bundle_hash": bundle_hash}
+            ready = ready and pinnable
+        except Exception as exc:  # noqa: BLE001 — any failure means not-ready
+            checks["policy_bundle"] = {"ok": False, "bundle_hash": bundle_hash, "error": str(exc)[:200]}
+            ready = False
 
         return JSONResponse(
             status_code=200 if ready else 503, content={"ready": ready, "checks": checks}
