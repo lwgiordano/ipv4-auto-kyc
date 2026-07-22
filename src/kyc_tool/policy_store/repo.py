@@ -2,10 +2,18 @@ import base64
 import binascii
 import json
 
+import structlog
 from sqlalchemy import text
 
+from kyc_tool.db.session import uow
 from kyc_tool.domain.engine import ENGINE_BUILD_ID
-from kyc_tool.policy.loader import POLICY_FILES, build_bundle  # PolicyBundle also lives here
+from kyc_tool.policy.loader import (  # PolicyBundle also lives here
+    POLICY_FILES,
+    build_bundle,
+    read_policy_files,
+)
+
+log = structlog.get_logger(__name__)
 
 
 class BundleCorrupt(Exception): ...
@@ -69,3 +77,16 @@ def read_epoch(session):
     row = session.execute(text(
         "SELECT bundle_hash, engine_build_id FROM bundle_pinning_epoch WHERE id=1")).first()
     return (row.bundle_hash, row.engine_build_id) if row else None
+
+def seed_and_verify(session_factory, policy_dir) -> str:
+    """Startup seam: store the on-disk policy bundle and read back to prove it
+    persisted intact. Raises BundleCorrupt on a corrupt existing row — the
+    caller (API/pipeline/dev startup) must let that fail the process boot."""
+    with uow(session_factory) as s:
+        h = store_bundle(s, read_policy_files(policy_dir))
+        return h
+
+def attest(*, flag: bool, bundle_hash: str) -> None:
+    """Deployment witness (§8.18): only called after a successful seed_and_verify."""
+    log.info("bundle_pinning_ready", flag=flag, bundle_hash=bundle_hash,
+              engine_build_id=ENGINE_BUILD_ID)

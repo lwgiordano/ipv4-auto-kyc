@@ -25,6 +25,7 @@ from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.policy.loader import load_policy
+from kyc_tool.policy_store.repo import attest, seed_and_verify
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import ObjectStore, make_object_store
 
@@ -81,6 +82,8 @@ def build_worker() -> Worker:
         validate_for_production(settings)  # fail-closed on stub/unsafe config
     session_factory = make_session_factory(make_engine(settings.database_url))
     policy = load_policy(settings.policy_dir)
+    h = seed_and_verify(session_factory, settings.policy_dir)
+    attest(flag=settings.enforce_bundle_pinning, bundle_hash=h)
     store = make_object_store(
         settings.object_store, fs_root=settings.object_store_root, s3_bucket=settings.s3_bucket
     )

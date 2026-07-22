@@ -18,6 +18,7 @@ from kyc_tool.config import (
 )
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.policy.loader import PolicyBundle, load_policy
+from kyc_tool.policy_store.repo import attest, seed_and_verify
 
 
 def _alembic_head() -> str | None:
@@ -49,6 +50,9 @@ def create_app(
             structlog.processors.JSONRenderer(),
         ]
     )
+
+    h = seed_and_verify(session_factory, settings.policy_dir)
+    attest(flag=settings.enforce_bundle_pinning, bundle_hash=h)
 
     app = FastAPI(title="IPv4.Global KYC Tool", version=__version__)
     app.state.settings = settings
