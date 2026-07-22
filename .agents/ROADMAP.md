@@ -9,11 +9,12 @@ Status: **PR 1–4 shipped** (`c37c052`, `7a19a9f`, `4c91be6`; PR 4 this commit)
 Items 1–6 complete (PR 5a shipped: HMAC v2 + per-case idempotency). Item 11
 complete (PR 5b shipped: review-record binding). Item 7A complete (PR 6
 shipped: per-run policy bundle pinning + `engine_build_id`) — but M2 stays a
-HARD STOP (see §D). **PR 7b (item 8, outbox stream separation + decision
-ordering) is next — reordered ahead of PR 6b** to supply the callback-ordering
-guarantee 6b's revalidation coordinator rests on (Codex PR-6b rev-5 F3); both
-still pending. Auto-enforcement of positive decisions (M2) is a **hard stop**
-far downstream (§D).
+HARD STOP (see §D). **PR 7b (item 8) was split into PR 7b-core (`013`, shippable
+outbox hardening — stream separation + local decision ordering) and PR
+7b-activation (`014`, the platform-authoritative cutover); 7b-core is next.**
+Both are ahead of PR 6b, which supplies the callback-ordering guarantee 6b's
+revalidation coordinator rests on (Codex PR-6b rev-5 F3); all still pending.
+Auto-enforcement of positive decisions (M2) is a **hard stop** far downstream (§D).
 
 ---
 
@@ -70,12 +71,13 @@ that lands its migration.
 | PR 5a | 6 | shipped | 010 | drop global idem unique, add per-case unique, `request_nonces` |
 | PR 5b | 11 | — | — | review-record binding |
 | PR 6 | 7A | shipped | 011, 012 | `policy_bundles`, `checks.policy_bundle_hash`, `runs/decisions.engine_build_id` (011); `VALIDATE` those provenance CHECKs (012, audit round 1) |
-| PR 7b | 8 | pending | 013 | `outbox.ordering_stream` (NOT NULL), `outbox.{decision_sequence,resolved_at}`, `decisions.decision_sequence` + `UNIQUE(case_id, decision_sequence)`, `cases.last_decision_sequence` (reordered ahead of 6b; drained cutover) |
-| PR 6b | 7B | pending | 014 | revalidation / rollout staging |
-| PR 7a | 9 | pending | 015 | `jobs.lease_token` |
-| PR 8 | 10 | pending | 016 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
+| PR 7b-core | 8 | pending | 013 | `outbox.ordering_stream` (NOT NULL) + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + local `superseded` guard; triple identity (`UNIQUE decisions(run_id)`, triple FK, partial callback index); fenced claim (`claim_token`); status/lifecycle CHECKs (drained cutover, **reversible** downgrade — sequence internal) |
+| PR 7b-activation | 8 | pending | 014 | wire `decision_sequence` emission + `integrity_mismatch`; platform high-water bootstrap (candidate manifest + signed response envelope); `outbox_ordering_activation` phase machine + immutable `BYTEA` artifacts; four CAS CLIs + activation cutover (`down_revision='013'`, forward-only-after-use) |
+| PR 6b | 7B | pending | 015 | revalidation / rollout staging |
+| PR 7a | 9 | pending | 016 | `jobs.lease_token` |
+| PR 8 | 10 | pending | 017 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
 | PR 9a/b/c | 12 | — | — | contract + adapter-output validation + real providers |
-| PR 10 | 13 | pending | 017 | broker full-list snapshots, `runs.{matched_broker_entity_id,matched_identifier_class,broker_snapshot_revision}` |
+| PR 10 | 13 | pending | 018 | broker full-list snapshots, `runs.{matched_broker_entity_id,matched_identifier_class,broker_snapshot_revision}` |
 
 ---
 
@@ -96,7 +98,7 @@ that lands its migration.
   path, and until the rest of the durability/evidence/provenance work lands._
 - **M3 — Platform contract cutovers** (schedule with platform, ship flagged): PR 2
   (`event_sequence`), PR 5a/5b-HMAC (canonical v2 dual-accept + split secrets),
-  PR 7b (`decision_sequence` + platform high-water-mark dedupe), PR 8 (`ObjectRef`),
+  PR 7b-activation (`decision_sequence` + platform high-water-mark dedupe), PR 8 (`ObjectRef`),
   PR 9 (`evidence.refresh_requested` local extension + discriminated contract).
 - **M4 — Backlog closed** requires: Phase B revalidation shipped (PR 6b) and
   RDAP #6 resolved. (`engine_build_id` stamping shipped in PR 6.) Until then
@@ -265,53 +267,59 @@ on runs + decisions**. Worker loads the run's bundle by hash, refuses if unloada
 `HARD_CONFLICT_REASON_CODES`** — must live in the bundle or be covered by
 `engine_build_id`). Behind `enforce_bundle_pinning`.
 
-### PR 7b — Outbox stream separation + platform-authoritative decision ordering (item 8) — reordered FIRST
+### PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — reordered FIRST
 Migration **013** (`down_revision='012'`): `outbox.{ordering_stream (NOT NULL, decision|email),
-decision_sequence, resolved_at, claim_lease_expires_at, claim_token, claimed_by, failure_class}`,
+decision_sequence, resolved_at, claim_lease_expires_at, claim_token, claimed_by}`,
 `decisions.decision_sequence` (D1), `cases.last_decision_sequence`; **triple-identity integrity** —
 `UNIQUE decisions(run_id)` + `UNIQUE decisions(run_id, case_id, decision_sequence)` + a triple FK
 `outbox(run_id, case_id, decision_sequence) → decisions` + a partial `UNIQUE outbox(run_id) WHERE
 kind='decision_callback'` (one callback per run), plus manual/automatic, kind/stream, **status
-vocabulary + lifecycle-tuple**, and token/lease-pairing CHECKs; and the **activation authority** — an
-`outbox_ordering_activation` phase singleton (`legacy→bootstrap_in_progress→bootstrapped→active`,
-ordered timestamps, 64-hex digests, no reverse transition) with kind-typed FKs to an **immutable
-`BYTEA` `outbox_ordering_bootstrap_artifacts`** table (UPDATE/DELETE-refusing trigger). **Allocate
-`decision_sequence` via the locked case counter** (not `max()+1`), callback-emitting decisions only;
-claim FIFO scoped per `(case_id, ordering_stream)` with a **fenced claim** (`claim_token` +
-`claim_lease_expires_at`) separate from the retry schedule (`next_attempt_at`), so a stuck POC email
-never blocks the decision callback, recovery resets only claimed rows, and a stale claimant cannot
-overwrite the reclaiming publisher's terminal. **Platform per-case high-water is the ordering
-authority** — `decision_sequence` on the wire, emission decided at the publisher via a shared runtime
-phase reader (checked before claim and before HTTP, fail-closed; flag uniform across all
-activation-reading processes before CAS), seeded by an **authenticated bootstrap** (signed request +
-**signed response envelope**) from the platform's accepted-run ledger (reconciling manual/reverted
-state) and sticky thereafter; the local `superseded` guard is an optimization, and a tuple mismatch
-is a distinct non-retryable `integrity_mismatch` terminal (never `superseded`). **Two drained
-windows** (migration cutover reusing the shipped `requeue_interrupted_jobs` + a claim-lease-reset
-one-shot; then an activation cutover with publishers drained to zero and pre-armed at flag=true;
-digest-pinned; no mutating prod smoke); **four** single-purpose CAS CLIs
-(`export_outbox_ordering_manifest`, `begin_outbox_ordering_bootstrap`,
+vocabulary + lifecycle-tuple**, and token/lease-pairing CHECKs. **Allocate `decision_sequence` via the
+locked case counter** (not `max()+1`), callback-emitting decisions only; claim FIFO scoped per
+`(case_id, ordering_stream)` with a **fenced claim** (`claim_token` + `claim_lease_expires_at`)
+separate from the retry schedule (`next_attempt_at`), so a stuck POC email never blocks the decision
+callback, recovery resets only claimed rows, and a stale claimant cannot overwrite the reclaiming
+publisher's terminal. The **local `superseded` guard** (a higher-sequence delivered decision → mark an
+older requeued callback `superseded`, never send) prevents the **single-replica** revert;
+`decision_sequence` is **internal** (not on the wire). Drained migration cutover (shipped
+`requeue_interrupted_jobs` + a claim-lease-reset one-shot; digest-pinned; no mutating prod smoke);
+**reversible** downgrade (sequence internal until 7b-activation emits it). Cross-replica authority is
+7b-activation.
+
+### PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2)
+Migration **014** (`down_revision='013'`): `outbox.failure_class`; the `outbox_ordering_activation`
+phase singleton (`legacy→bootstrap_in_progress→bootstrapped→active`, ordered timestamps, 64-hex
+digests, no reverse transition) with kind-typed FKs to an **immutable `BYTEA`
+`outbox_ordering_bootstrap_artifacts`** table (UPDATE/DELETE-refusing trigger). Puts
+`decision_sequence` **on the wire** (emission decided at the publisher via a shared runtime phase
+reader, checked before claim and before HTTP, fail-closed; flag uniform across all activation-reading
+processes before CAS); **platform per-case high-water is the ordering authority**, seeded by an
+**authenticated bootstrap** (signed request + **signed response envelope**) from the platform's
+accepted-run ledger (reconciling manual/reverted state) and sticky thereafter; a wire-tuple mismatch
+is a distinct non-retryable `integrity_mismatch` terminal (never `superseded`). **Four** single-purpose
+CAS CLIs (`export_outbox_ordering_manifest`, `begin_outbox_ordering_bootstrap`,
 `record_platform_ordering_bootstrap`, `activate_outbox_ordering`) + a phase recovery matrix, modeled on
-`activate_bundle_pinning_epoch`; **forward-only-after-use** downgrade; **two-phase irreversible**
-rollback (startup refuses `phase=active` with flag off). Reordered ahead of 6b to supply the ordering
-guarantee 6b's coordinator callbacks consume (ADR-008).
+`activate_bundle_pinning_epoch`; drained activation window (publishers to zero, pre-armed flag=true);
+**forward-only-after-use** downgrade; **two-phase irreversible** rollback (startup refuses
+`phase=active` with flag off). Supplies the ordering guarantee 6b's coordinator callbacks consume; 6b
+may build on 7b-core's primitive but not activate until `phase='active'` (ADR-008).
 
 ### PR 6b — Revalidation (item 7B) — PENDING, required for M4
-Migration **014** (`down_revision='013'`). Revalidate immutable evidence under the run's pinned
+Migration **015** (`down_revision='014'`). Revalidate immutable evidence under the run's pinned
 bundle+engine, write **superseding** checks; a tightened pass rule marks prior PASSes stale until
-revalidated; block rollout activation until successors exist. Consumes PR 7b's exact convergence
-contract (greatest per-case sequence platform-acknowledged, incl. `dead` as a hard blocker); rev 6
-must separately prove a superseded coordinator's higher delivered decision was under the target
-validator pair (7b ordering ≠ freshness).
+revalidated; block rollout activation until successors exist. Consumes PR 7b-activation's exact
+convergence contract (greatest per-case sequence platform-acknowledged, incl. `dead` as a hard
+blocker); rev 6 must separately prove a superseded coordinator's higher delivered decision was under
+the target validator pair (7b ordering ≠ freshness).
 
 ### PR 7a — Queue lease fencing (item 9)
-Migration **015** (`down_revision='014'`): `jobs.lease_token`. Every transition gated on
+Migration **016** (`down_revision='015'`): `jobs.lease_token`. Every transition gated on
 `(id, locked_by, lease_token, status='running')`; heartbeat ≤ lease/3; cadence
 reaper fails the run in the **same txn**; fenced complete inside the decide txn
 (stale worker rolls back the decision).
 
 ### PR 8 — Object-store containment + immutable evidence (item 10)
-Migration 016. Structured `ObjectRef{key, sha256, size?, content_type?, version_id?}`
+Migration 017. Structured `ObjectRef{key, sha256, size?, content_type?, version_id?}`
 (**no bucket field**); separate input vs evidence buckets; `_safe_path` containment
 (reject traversal/absolute/symlink/foreign-bucket); streamed byte cap; verify digest;
 copy source doc to a content-addressed immutable evidence key **before** OCR is
@@ -329,7 +337,7 @@ close the OCR ownership decision (recommend `TextractOcrEngine`, keep
 `document.uploaded`).
 
 ### PR 10 — Production ops hardening (item 13)
-Migration 017: broker **full-list immutable snapshots** `(revision, sha256,
+Migration 018: broker **full-list immutable snapshots** `(revision, sha256,
 json_bytes, author, timestamp)` — NOT per-entity versioning (6 entities; snapshots
 reproduce matches AND non-matches, simpler); run records matched entity + snapshot
 revision. `adapters/retry.py` (transient classification + Retry-After — job-layer
