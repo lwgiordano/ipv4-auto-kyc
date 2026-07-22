@@ -51,8 +51,22 @@ def create_app(
         ]
     )
 
-    h = seed_and_verify(session_factory, settings.policy_dir)
-    attest(flag=settings.enforce_bundle_pinning, bundle_hash=h)
+    # The selected policy (injected or on-disk) is the single startup identity: seed/verify
+    # THAT bundle — not settings.policy_dir, which can differ from an injected policy — so the
+    # attestation and /readyz describe exactly what the app serves. Fail boot on any mismatch.
+    if policy.policy_dir is not None:
+        seeded = seed_and_verify(session_factory, policy.policy_dir)
+        if seeded != policy.bundle_hash:
+            raise RuntimeError(
+                f"startup bundle mismatch: seeded {seeded} != selected policy {policy.bundle_hash}"
+            )
+    else:  # DB-reconstructed injection: no directory to seed — require the exact hash present
+        with session_factory() as session:
+            if load_bundle(session, policy.bundle_hash) is None:
+                raise RuntimeError(
+                    f"selected policy {policy.bundle_hash} is not resolvable from the store"
+                )
+    attest(flag=settings.enforce_bundle_pinning, bundle_hash=policy.bundle_hash)
 
     app = FastAPI(title="IPv4.Global KYC Tool", version=__version__)
     app.state.settings = settings

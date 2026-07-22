@@ -377,3 +377,74 @@ def test_epoch_fk_rejects_unknown_bundle(engine, clean_db):
             ),
             {"h": "0" * 64},
         )
+
+
+# --- P3 audit fix: create_app() must attest the SELECTED policy (injected or
+# on-disk) as the single startup identity, never settings.policy_dir when it
+# can differ from what the app actually serves ---
+
+
+def test_create_app_attests_injected_policy_not_settings_dir(
+        session_factory, settings, engine, clean_db, tmp_path, monkeypatch):
+    import structlog
+    from fastapi.testclient import TestClient
+
+    from kyc_tool.api.app import create_app
+    from tests.integration._bundle_helpers import make_bundle_y
+    # settings points at X (normative); inject a DIFFERENT on-disk bundle Y
+    ydir, by = make_bundle_y(tmp_path, threshold=101)
+    assert by.bundle_hash != bundle_x().bundle_hash and by.policy_dir is not None
+    # create_app() unconditionally calls structlog.configure() with a brand-new
+    # processor list on every invocation (pre-existing, unrelated to this fix);
+    # neutralize it here so it doesn't clobber capture_logs()'s own capture setup,
+    # which relies on mutating the CURRENT processors list in place.
+    monkeypatch.setattr(structlog, "configure", lambda *a, **k: None)
+    with structlog.testing.capture_logs() as logs:
+        app = create_app(settings, session_factory=session_factory, policy=by)
+    # served identity == Y, attestation names Y (not X), and Y is now seeded/loadable
+    assert app.state.policy.bundle_hash == by.bundle_hash
+    rec = next(r for r in logs if r.get("event") == "bundle_pinning_ready")
+    assert rec["bundle_hash"] == by.bundle_hash
+    assert TestClient(app).get("/readyz").status_code == 200
+    with session_factory() as s:
+        assert store.load_bundle(s, by.bundle_hash) is not None   # Y (served) was seeded
+
+
+def test_create_app_db_reconstructed_policy_requires_store_presence(
+        session_factory, settings, engine, clean_db, monkeypatch):
+    from kyc_tool.api.app import create_app
+    from kyc_tool.policy.loader import build_bundle, read_policy_files
+    recon = build_bundle(read_policy_files(settings.policy_dir), policy_dir=None)  # policy_dir None
+    assert recon.policy_dir is None and recon.bundle_hash == bundle_x().bundle_hash
+    # (a) absent from store -> boot fails
+    with pytest.raises(RuntimeError):
+        create_app(settings, session_factory=session_factory, policy=recon)
+    # (b) present in store -> boots, attests, /readyz 200
+    with session_factory() as s:
+        store.store_bundle(s, read_policy_files(settings.policy_dir))
+        s.commit()
+    import structlog
+    # neutralize create_app()'s internal structlog.configure() call (see comment in
+    # test_create_app_attests_injected_policy_not_settings_dir above) so capture_logs()
+    # actually sees the event.
+    monkeypatch.setattr(structlog, "configure", lambda *a, **k: None)
+    with structlog.testing.capture_logs() as logs:
+        create_app(settings, session_factory=session_factory, policy=recon)
+    rec = next(r for r in logs if r.get("event") == "bundle_pinning_ready")
+    assert rec["bundle_hash"] == recon.bundle_hash
+
+
+def test_create_app_db_reconstructed_policy_corrupt_row_fails_boot(
+        session_factory, settings, engine, clean_db):
+    from kyc_tool.api.app import create_app
+    from kyc_tool.policy.loader import build_bundle, read_policy_files
+    recon = build_bundle(read_policy_files(settings.policy_dir), policy_dir=None)
+    with session_factory() as s:
+        store.store_bundle(s, read_policy_files(settings.policy_dir))
+        s.commit()
+    with engine.begin() as c:  # corrupt the stored row so load_bundle raises BundleCorrupt
+        c.execute(text("UPDATE policy_bundles SET files_json = jsonb_set("
+                        "files_json,'{scoring_rubric.json}','\"%%%\"') WHERE bundle_hash=:h"),
+                  {"h": recon.bundle_hash})
+    with pytest.raises(store.BundleCorrupt):
+        create_app(settings, session_factory=session_factory, policy=recon)

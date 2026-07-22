@@ -24,7 +24,9 @@ def _boom_session_factory():
 
 
 def _app(policy, monkeypatch, **overrides):
-    monkeypatch.setattr(app_module, "seed_and_verify", lambda *a, **k: "stub-hash")
+    # return the SERVED policy's own hash so create_app's startup identity check
+    # (PR 6 audit) passes without a real DB write — the sentinel factory stays untouched
+    monkeypatch.setattr(app_module, "seed_and_verify", lambda *a, **k: policy.bundle_hash)
     monkeypatch.setattr(app_module, "attest", lambda **k: None)
     settings = Settings(environment="development", **overrides)
     return create_app(settings, session_factory=_boom_session_factory, policy=policy)
