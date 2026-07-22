@@ -153,10 +153,11 @@ def test_supersession_is_atomic_with_insert(engine, session_factory, policy, cas
 # --- item 5: event-driven identity invalidation -------------------------------
 
 
-def _invalidate(session_factory, case_id, event_type, payload):
+def _invalidate(session_factory, policy, case_id, event_type, payload):
     with uow(session_factory) as session:
         checkstore.supersede_stale_identity_proof(
-            session, case_id=case_id, event_type=event_type, payload=payload, run_id=None
+            session, case_id=case_id, event_type=event_type, payload=payload,
+            run_id=None, rubric=policy.rubric,
         )
 
 
@@ -183,7 +184,7 @@ def test_org_change_invalidates_proof_independent_of_adapter(session_factory, po
     )
     # a DIFFERENT ORG-ID is submitted; the revalidation adapter never runs (no new
     # org_id_match intent) — the stale proofs must lose PASS anyway (fail-closed)
-    _invalidate(session_factory, case_id, "org_id.submitted", {"rir": "arin", "org_handle": "ORG-B"})
+    _invalidate(session_factory, policy, case_id, "org_id.submitted", {"rir": "arin", "org_handle": "ORG-B"})
     live = _live(session_factory, case_id)
     assert live["org_id_match"][0] == "needs_review"
     assert "org_id_revalidation_pending" in live["org_id_match"][1]
@@ -205,7 +206,7 @@ def test_same_org_resubmission_is_a_noop(session_factory, policy, case_id):
         ),
     )
     # canonical-equal handle ("org-a" vs "ORG-A") is NOT an identity change
-    _invalidate(session_factory, case_id, "org_id.submitted", {"rir": "arin", "org_handle": "org-a"})
+    _invalidate(session_factory, policy, case_id, "org_id.submitted", {"rir": "arin", "org_handle": "org-a"})
     live = _live(session_factory, case_id)
     assert live["org_id_match"][0] == "pass"
     assert live["poc_verified"][0] == "pass"
@@ -225,7 +226,7 @@ def test_resource_bound_poc_survives_org_change(session_factory, policy, case_id
             source_detail={"poc_handle": "JD-1", "resource": "192.0.2.0/24"},
         ),
     )
-    _invalidate(session_factory, case_id, "org_id.submitted", {"rir": "arin", "org_handle": "ORG-B"})
+    _invalidate(session_factory, policy, case_id, "org_id.submitted", {"rir": "arin", "org_handle": "ORG-B"})
     assert _live(session_factory, case_id)["poc_verified"][0] == "pass"
 
 
@@ -241,7 +242,7 @@ def test_poc_handle_change_supersedes_prior_poc(session_factory, policy, case_id
             source_detail={"poc_handle": "JD-1", "org_handle": "ORG-A"},
         ),
     )
-    _invalidate(session_factory, case_id, "poc.submitted", {"rir": "arin", "poc_handle": "XX-9"})
+    _invalidate(session_factory, policy, case_id, "poc.submitted", {"rir": "arin", "poc_handle": "XX-9"})
     live = _live(session_factory, case_id)
     assert live["poc_verified"][0] == "needs_review"
     assert "poc_not_associated" in live["poc_verified"][1]
@@ -269,6 +270,7 @@ def test_poc_identity_change_same_handle_supersedes(session_factory, policy, cas
     )
     _invalidate(
         session_factory,
+        policy,
         case_id,
         "poc.submitted",
         {"rir": "ripe", "poc_handle": "JD123-ARIN", "org_handle": "ORG-B",
@@ -294,8 +296,43 @@ def test_poc_resubmit_identical_identity_keeps_proof(session_factory, policy, ca
     )
     _invalidate(
         session_factory,
+        policy,
         case_id,
         "poc.submitted",
         {"rir": "arin", "poc_handle": "JD123-ARIN", "org_handle": "ORG-A"},
     )
     assert _live(session_factory, case_id)["poc_verified"][0] == "pass"
+
+
+# --- audit round 1, finding 3: successor category comes from the resolved rubric --
+
+
+def test_cascade_successor_category_from_resolved_rubric(session_factory, policy, case_id):
+    # Finding 3: a cascade successor stamped under bundle X must carry X's rubric
+    # category, NOT the category copied from the superseded row (which may be from a
+    # different bundle). Seed a live poc with a deliberately WRONG category, then
+    # invalidate it via an ORG-ID change under the resolved rubric.
+    stale = "stale_from_other_bundle"
+    resolved = policy.rubric.item("poc_verified").category
+    assert resolved != stale                       # the seed must actually differ
+    with uow(session_factory) as session:
+        checkstore.write_check(
+            session, case_id=case_id, check_type="poc_verified", status=CheckStatus.PASS,
+            points_awarded=25, category=stale, source="seed",
+            source_detail={"poc_handle": "JD-1", "org_handle": "ORG-A"},
+        )
+    with uow(session_factory) as session:
+        checkstore.supersede_stale_identity_proof(
+            session, case_id=case_id, event_type="org_id.submitted",
+            payload={"rir": "arin", "org_handle": "ORG-B"}, run_id=None,
+            policy_bundle_hash="hashX", rubric=policy.rubric,
+        )
+    with uow(session_factory) as session:
+        live = {c.check_type: c for c in checkstore.live_checks(session, case_id)}
+        old = [c for c in checkstore.all_checks(session, case_id) if c.superseded_by_check_id]
+    succ = live["poc_verified"]
+    assert succ.status == "needs_review" and succ.points_awarded == 0
+    assert succ.category == resolved               # resolved rubric category (mutation-resistant)
+    assert succ.policy_bundle_hash == "hashX"
+    assert len(old) == 1                            # the superseded row is immutable:
+    assert old[0].category == stale and old[0].policy_bundle_hash is None

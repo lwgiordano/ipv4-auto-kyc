@@ -272,9 +272,15 @@ def test_cascade_successor_carries_resolved_hash(
     with session_factory() as s:
         store.store_bundle(s, raw_x())
         s.execute(text("INSERT INTO cases (id) VALUES ('case-cas')"))
+        # deliberately WRONG categories: a stale bundle-Y-era row must not leak its
+        # category into the successor stamped under the resolved (pinned X) bundle
         checkstore.write_check(s, case_id="case-cas", check_type="org_id_match",
-                               status=CheckStatus.PASS, points_awarded=25, category="control_proof",
+                               status=CheckStatus.PASS, points_awarded=25, category="wrong_org_cat",
                                source="direct_rir_rdap", source_detail={"org_handle": "ORG-A"})
+        checkstore.write_check(s, case_id="case-cas", check_type="poc_verified",
+                               status=CheckStatus.PASS, points_awarded=25, category="wrong_poc_cat",
+                               source="seed",
+                               source_detail={"poc_handle": "JD-1", "org_handle": "ORG-A"})
         s.commit()                                          # pre-pinning: policy_bundle_hash NULL
     post_event("case-cas", "org_id.submitted", {"rir": "arin", "org_handle": "ORG-B"})
     cfg = settings.model_copy(update={"enforce_bundle_pinning": True})
@@ -282,7 +288,31 @@ def test_cascade_successor_carries_resolved_hash(
     Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
            on_dead_letter=pl.on_dead_letter).run_until_idle()
     with session_factory() as s:
-        succ = s.execute(text("SELECT status, policy_bundle_hash FROM checks WHERE case_id='case-cas' "
-                              "AND check_type='org_id_match' AND superseded_by_check_id IS NULL")).one()
-        assert succ.status == "needs_review"                # cascade successor (points removed)
-        assert succ.policy_bundle_hash == bx.bundle_hash    # stamped under the resolved (pinned X) bundle
+        live_rows = {
+            r.check_type: r
+            for r in s.execute(text(
+                "SELECT check_type, status, policy_bundle_hash, category FROM checks "
+                "WHERE case_id='case-cas' AND superseded_by_check_id IS NULL"
+            ))
+        }
+        old_rows = {
+            r.check_type: r
+            for r in s.execute(text(
+                "SELECT check_type, category, policy_bundle_hash FROM checks "
+                "WHERE case_id='case-cas' AND superseded_by_check_id IS NOT NULL"
+            ))
+        }
+    succ = live_rows["org_id_match"]
+    assert succ.status == "needs_review"                # cascade successor (points removed)
+    assert succ.policy_bundle_hash == bx.bundle_hash    # stamped under the resolved (pinned X) bundle
+    assert succ.category == policy.rubric.item("org_id_match").category  # resolved, NOT "wrong_org_cat"
+    poc_succ = live_rows["poc_verified"]
+    assert poc_succ.status == "needs_review"
+    assert poc_succ.policy_bundle_hash == bx.bundle_hash
+    assert poc_succ.category == policy.rubric.item("poc_verified").category  # resolved, NOT "wrong_poc_cat"
+    # the superseded (old) rows are immutable: still the seeded stale category, and
+    # never stamped with a policy_bundle_hash (they were written pre-pinning)
+    assert old_rows["org_id_match"].category == "wrong_org_cat"
+    assert old_rows["org_id_match"].policy_bundle_hash is None
+    assert old_rows["poc_verified"].category == "wrong_poc_cat"
+    assert old_rows["poc_verified"].policy_bundle_hash is None

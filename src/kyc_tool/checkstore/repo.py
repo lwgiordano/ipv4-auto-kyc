@@ -18,6 +18,16 @@ from kyc_tool.domain.reasons import ReasonCode
 from kyc_tool.validators.normalize import canon_id
 
 
+def _resolved_category(rubric, check_type: str) -> str:
+    """The successor's category comes from the RESOLVED rubric, not the superseded
+    row (which may have been written under a different bundle). A type absent from
+    the resolved rubric contributes no category (matches scoring.rubric_scoring_views)."""
+    try:
+        return rubric.item(check_type).category
+    except KeyError:
+        return ""
+
+
 def live_checks(session: Session, case_id: str) -> list[Check]:
     return list(
         session.execute(
@@ -133,17 +143,20 @@ def supersede_without_replacement(
     run_id: str | None,
     reason: str,
     policy_bundle_hash: str | None = None,
+    rubric,
 ) -> None:
     """Cascade path (e.g. ORG-ID change invalidates a verified POC): the old
     check is superseded by a successor carrying the cascade reason, status
-    needs_review, zero points."""
+    needs_review, zero points. The successor's category is derived from the
+    RESOLVED rubric (see _resolved_category), NOT copied from the superseded
+    row — which may have been written under a different policy bundle."""
     write_check(
         session,
         case_id=check.case_id,
         check_type=check.check_type,
         status=CheckStatus.NEEDS_REVIEW,
         points_awarded=0,
-        category=check.category,
+        category=_resolved_category(rubric, check.check_type),
         source=check.source,
         reason_codes=[reason],
         source_detail={"cascaded_from": check.id},
@@ -188,6 +201,7 @@ def _supersede_on_identity_change(
     reason: str,
     *,
     policy_bundle_hash: str | None = None,
+    rubric,
 ) -> None:
     live = _live_check(session, case_id, check_type)
     if live is None:
@@ -198,7 +212,8 @@ def _supersede_on_identity_change(
     # POC on an ORG-ID change — is left alone)
     if submitted and recorded and recorded != submitted:
         supersede_without_replacement(
-            session, live, run_id=run_id, reason=reason, policy_bundle_hash=policy_bundle_hash
+            session, live, run_id=run_id, reason=reason,
+            policy_bundle_hash=policy_bundle_hash, rubric=rubric,
         )
 
 
@@ -210,6 +225,7 @@ def supersede_stale_identity_proof(
     payload: dict,
     run_id: str | None,
     policy_bundle_hash: str | None = None,
+    rubric,
 ) -> None:
     """Item 5: an identity change invalidates identity-bound proof INDEPENDENT of
     whether the revalidation adapter succeeds. Runs in the decide txn BEFORE the
@@ -229,6 +245,7 @@ def supersede_stale_identity_proof(
             run_id,
             ReasonCode.ORG_ID_REVALIDATION_PENDING.value,
             policy_bundle_hash=policy_bundle_hash,
+            rubric=rubric,
         )
         _supersede_on_identity_change(
             session,
@@ -239,6 +256,7 @@ def supersede_stale_identity_proof(
             run_id,
             ReasonCode.POC_NOT_ASSOCIATED.value,
             policy_bundle_hash=policy_bundle_hash,
+            rubric=rubric,
         )
     elif event_type == "poc.submitted":
         # a POC proof is bound to the FULL (rir, poc, org, resource) tuple, so a
@@ -258,6 +276,7 @@ def supersede_stale_identity_proof(
                 run_id=run_id,
                 reason=ReasonCode.POC_NOT_ASSOCIATED.value,
                 policy_bundle_hash=policy_bundle_hash,
+                rubric=rubric,
             )
 
 
@@ -323,5 +342,6 @@ def apply_check_intents(
                     run_id=run_id,
                     reason="poc_not_associated",
                     policy_bundle_hash=policy_bundle_hash,
+                    rubric=rubric,
                 )
     return written

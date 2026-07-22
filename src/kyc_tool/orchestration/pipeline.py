@@ -432,6 +432,7 @@ class Pipeline:
                 payload=event.payload_json or {},
                 run_id=run_id,
                 policy_bundle_hash=bundle.bundle_hash,
+                rubric=bundle.rubric,
             )
 
             # WRITE_CHECKS (logical stage) — includes the ORG-ID→POC cascade
