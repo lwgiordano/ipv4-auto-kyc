@@ -71,6 +71,191 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `e1594d7..ced12c1` (PR 7b spec rev 3; CHANGES REQUIRED)
+
+Rev 3 preserves the accepted rev-2 controls and materially fixes all six findings from the
+previous round: the publisher now owns wire emission, frozen rows are backfilled, rollback no
+longer names the incompatible pre-7b binary, the shipped job recovery seam is used, the 6b
+predicate includes dead debt, and ROADMAP's table **and** detailed sections now agree (the real
+lineage test is green 8/8). It is still not ready for `writing-plans`. Six implementation-blocking
+gaps remain in the **bootstrap/activation state machine, the actual platform state that must be
+reconciled, outbox claim recovery, and relational binding**. These are directly tied to the unit's
+purpose: no obsolete callback may change platform state, no current callback may be silently
+acknowledged without being applied, and PR 6b may consume 7b only after that is provable. Claude:
+fold the six items below as one rev 4; do not improvise a flag-only rollout or weaken them into
+runbook prose.
+
+1. **P1 — the later bootstrap/flag rollout has a live silent-loss window: an unsequenced producer
+   can receive `200 no-op` and then mark a callback delivered locally**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:164-190,229-268`,
+   `src/kyc_tool/outbox/publisher.py:82-122,143-191`). Step 6 resumes normal processing. Step 7,
+   "later," bootstraps the platform, stamps `platform_bootstrapped_at`, then stamps
+   `emission_active_at` and sets the flag **per producer**. As soon as the receiver is initialized,
+   its new contract makes a missing sequence a successful no-op. Any already-running publisher
+   whose flag is still false (or whose effective check still sees `emission_active_at=NULL`) strips
+   the field, receives 2xx, and `_record_delivered` atomically sets outbox `delivered`, run
+   `COMPLETE`, and `decisions.published_at` even though the platform deliberately did not apply the
+   decision. This defeats both the no-loss goal and 6b's convergence witness. **Required design:**
+   make bootstrap/activation a second explicit drained window, not a per-producer flag rollout.
+   Before any platform high-water mutation: pause platform KYC state changes (including manual
+   approvals), stop and orchestrator-attest zero outbox publishers **and `dev_worker` processes**, and
+   persist local phase `bootstrap_in_progress`. Keep publishers at zero through the external
+   bootstrap, local verification, and config rollout. Pre-arm every exact-digest publisher with
+   `callback_include_decision_sequence=true` while it is stopped; compare-and-set the durable phase
+   to `active`; only then start/attest publishers and resume. Define one shared runtime state reader:
+   `legacy` (no bootstrap started → strip), `bootstrap_in_progress|bootstrapped` (refuse to claim or
+   send), `active + flag=true` (require/emit), every other tuple (fail closed). Check it before claim
+   **and again immediately before HTTP**. An already-running false-flag process must halt on an
+   active row, not reinterpret active as emission-off. **Regression:** barrier an old false-flag
+   publisher immediately before HTTP, enter bootstrap, and prove zero HTTP + no delivered/published
+   stamps; hold the external response after the platform commits and prove the system stays
+   quiesced; activate and start only true-flag publishers, then prove the queued callback applies
+   once. Mutations that omit `dev_worker`, permit legacy sends in an intermediate phase, or stamp
+   local delivery on receiver no-op must fail.
+
+2. **P1 — the bootstrap manifest is not derivable from the tool and cannot represent manual or
+   historically reverted platform state**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:169-185,207-227`,
+   `src/kyc_tool/events/ingest.py:242-267`, `docs/PLATFORM_INTEGRATION.md:145-156`,
+   `docs/SALESFORCE_MAPPING.md:14-27`, `tests/integration/test_phase4_platform.py:84-103`). The spec
+   says the **tool** emits `{case_id, platform_current_run_id, sequence}`, while also saying the
+   **platform** derives the current run from its actually-effective record. The tool does not know
+   that external fact. More importantly, `reviewer.manual_approve` is explicitly platform-enforced,
+   has `DecisionRow.run_id=NULL`, and emits no callback, so a platform-current manual state has no
+   current callback run to put in this tuple. The original defect also permits this real history:
+   callback seq 2 applied, then legacy seq 1 reverts it; both local rows are `delivered`, platform
+   current is seq 1. Seeding `h=1` leaves the platform stale and no row will resend seq 2; seeding
+   `h=2` without applying seq-2 content permanently blocks seq 2. Yet §7 would call greatest seq 2
+   converged merely because its local row is delivered. **Required protocol/data model:** the tool
+   exports a candidate manifest containing **every** immutable callback decision
+   `(case_id, run_id, decision_sequence, callback_body_sha256, local_outbox_status)`; it never
+   invents `platform_current_run_id`. The platform returns, for the exact agreed case universe,
+   (a) its accepted callback-run ledger or at minimum the greatest accepted callback run, and
+   (b) its current effective source separately (`callback:<run_id>` or
+   `manual:<manual-event-id>`)—manual state must not erase the last accepted callback identity.
+   Map every returned callback run uniquely to the candidate set and calculate `h` as the greatest
+   sequence the platform proves it accepted. If current source is a callback below that greatest
+   accepted sequence, activation **must refuse until content is reconciled and re-attested**; do
+   not merely advance the integer. A manual current source may remain effective while `h` is seeded
+   from the callback ledger, preventing any older callback from overwriting the manual action.
+   Define explicit `no prior callback` for new/manual-only cases and require exact two-sided
+   coverage; unknown, duplicate, extra, or omitted cases fail closed. Feed the resulting attested
+   mapping into §7—local `published_at` alone is not platform-current proof. **Regression:** cover
+   (i) seq2-then-seq1 legacy revert, (ii) a manual-current case with an older accepted callback,
+   (iii) manual-only/no-callback, and (iv) a send-before-local-stamp callback. Each must produce one
+   deterministic high-water or block with a named reconciliation reason; a mutation that uses the
+   tool's latest/local-delivered row as platform truth must fail.
+
+3. **P1 — `outbox_ordering_activation` is only a bag of nullable timestamps/digests, not an
+   executable, authenticated, crash-recoverable authority transition**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:60-62,89-93,176-188,257-268`,
+   `src/kyc_tool/ops/activate_hmac_v1_observation.py:1-38`,
+   `src/kyc_tool/ops/activate_bundle_pinning_epoch.py:1-84`,
+   `src/kyc_tool/policy_store/repo.py:73-90`). The proposed row has no CHECK preventing
+   `emission_active_at` without bootstrap/digests, no digest format/codec, no immutable artifact to
+   re-audit, and no named command or compare-and-set behavior. A lost HTTP response is especially
+   dangerous: the platform may have committed sticky high-waters while the tool still believes it
+   is legacy. Two bare digests do not prove what was exchanged, who authenticated it, full coverage,
+   or whether a retry is the same operation. **Required implementation contract:** (a) define a
+   versioned canonical byte codec (for example compact UTF-8 JSON, sorted object keys and rows,
+   integer sequences, no floats) and lowercase SHA-256; (b) persist the exact request and response
+   bytes in an immutable companion table keyed by digest, with the singleton row FK-bound to them;
+   (c) make the platform bootstrap endpoint authenticated with the existing path-bound HMAC-v2
+   contract, idempotent on `request_digest`, and queryable by that digest after a timeout; (d) add
+   an explicit phase enum/state machine plus DB CHECKs: `legacy → bootstrap_in_progress →
+   bootstrapped → active`, timestamps ordered, required 64-hex digests/artifact FKs present in the
+   latter phases, no reverse transition; (e) ship exact CLIs—`export_outbox_ordering_manifest`,
+   `record_platform_ordering_bootstrap --expect-request-sha --response-file`, and
+   `activate_outbox_ordering --expect-request-sha --expect-response-sha`—that lock row 1, validate
+   local artifact/returned signature+coverage, use DB time, write once, read back, and make an exact
+   rerun idempotent while refusing a different rerun. On timeout/unknown external commit, remain
+   `bootstrap_in_progress` with publishers stopped and query/reconcile by digest; never resume
+   legacy delivery. `/readyz`, `outbox_worker.build_publisher`, `dev_worker.main`, metrics, and 6b
+   consume the same state reader. **Regression:** direct SQL for every illegal state tuple fails;
+   real CLI wrong digest/signature/partial coverage leaves the row byte-stable; commit-platform /
+   lose-response / retry-same-digest converges; retry-different-digest refuses. Mutations that only
+   compare digests in a test helper, overwrite an existing epoch, or treat a missing row/query error
+   as legacy must fail.
+
+4. **P2 — the proposed outbox recovery command cannot identify a claimed row because the shipped
+   schema overloads `next_attempt_at` as both retry schedule and claim lease**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:229-247,320-325`,
+   `src/kyc_tool/outbox/publisher.py:29-48,143-158,193-222`,
+   `src/kyc_tool/db/tables.py:261-279`). A claim changes only `next_attempt_at` while status remains
+   `pending`; a failed delivery also changes only that same timestamp while status remains pending.
+   Therefore `UPDATE ... SET next_attempt_at=now() WHERE status='pending'` cannot reset "claimed"
+   rows—it accelerates **every legitimate retry backoff**, including POC emails, and can create an
+   avoidable callback/email storm at restart. **Required implementation:** use migration 013 to
+   separate schedule from ownership: add nullable `outbox.claim_lease_expires_at` (and a stable
+   `claimed_by`/claim token if diagnostics need identity). `_CLAIM_SQL` keeps
+   `next_attempt_at` as the retry due time, requires no live claim lease, and sets only the claim
+   lease; success/failure clears it, while failure alone advances `next_attempt_at`. The digest-pinned
+   recovery CLI, after orchestrator-attested zero publishers, clears **only non-NULL claim leases**
+   and read-back-asserts zero; it must not move ordinary retry schedules. If this schema addition is
+   rejected, delete the one-shot claim and require waiting the configured maximum lease instead—the
+   current column cannot support a selective reset. **Regression:** seed one due+claimed row and one
+   unclaimed future-backoff decision/email row, drive the real CLI, and prove only the claimed row is
+   immediately claimable while the scheduled retry remains unchanged. Kill after HTTP-before-stamp
+   to preserve the documented duplicate-send behavior. Mutation resetting all pending rows must
+   fail.
+
+5. **P2 — the proposed constraints do not bind a decision callback's complete identity; NULL
+   `case_id` bypasses the FK and a wrong `run_id` can stamp the wrong decision published**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:84-113,128-157,272-277`,
+   `src/kyc_tool/db/tables.py:211-227,261-279`, `src/kyc_tool/outbox/publisher.py:160-190`). Existing
+   `outbox.case_id`/`run_id` are nullable. Rev 3's CHECK requires only kind/stream/sequence; its
+   composite FK is `(case_id,sequence)`, which the spec itself notes is not enforced when a member
+   is NULL. It also leaves `outbox.run_id` unrelated to that FK, while `_record_delivered` stamps
+   `decisions.published_at` **by run_id**. A malformed row can therefore be a valid
+   decision-stream/positive-sequence row with NULL case (no FK), or bind `(case A,seq 2)` while
+   carrying another run id; a sequence-only pre-HTTP comparison does not prove the callback tuple.
+   **Required schema:** preflight existing automatic decisions/callbacks for exactly-one mapping;
+   add `UNIQUE decisions(run_id)` (multiple NULL manual rows remain legal) and a unique referenced
+   identity over `(run_id,case_id,decision_sequence)`; require automatic decisions to have non-NULL
+   run + positive sequence and manual decisions to have both NULL; require decision-callback outbox
+   rows to have non-NULL case/run + positive sequence, email rows to have NULL run/sequence; add the
+   triple FK from outbox to the exact decision and a uniqueness rule giving each automatic run one
+   decision callback. The pre-HTTP integrity reader must compare **case_id, run_id, and sequence**
+   across the decision row, outbox columns, and internal JSON—not sequence alone. The shared 6b
+   predicate treats a missing/duplicate callback mapping as a blocker, never as converged.
+   **Regression:** direct-commit negatives for NULL decision case/run, zero/negative sequence,
+   wrong-case same sequence, wrong-run same sequence, duplicate decision per run, duplicate/missing
+   callback mapping, and payload tuple mismatch; every DB-invalid shape fails at commit, every JSON
+   mismatch produces zero HTTP. Mutation dropping any tuple member from the FK/runtime comparison
+   must fail.
+
+6. **P2 — two acceptance/lifecycle instructions are not executable: a dead row cannot emit after
+   a flag flip, and an integrity mismatch must never be classified/requeued as superseded debt**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md:150-157,192-205,296-332`,
+   `src/kyc_tool/outbox/publisher.py:29-48,193-226`, `src/kyc_tool/ui/routes.py:451-476`). The claim
+   query selects only `status='pending'`; flipping publisher state cannot make a **dead** row emit,
+   contrary to lines 306-308. The real route can requeue a dead decision callback, which the later
+   test correctly uses. Separately, line 157 permits integrity corruption to become
+   "dead/superseded per case." `superseded` specifically means a higher delivered decision proved
+   the row obsolete and is excluded from alerts; it must never hide row/body/decision corruption.
+   Marking it ordinary `dead` without a class is also unsafe because the generic admin route will
+   blindly requeue the same corrupted payload. **Required tests/lifecycle:** split the backlog proof:
+   pending-off → activate → publisher emits sequence; dead-off → authenticated real UI requeue →
+   pending → publisher emits sequence. Define integrity mismatch as immediate, non-retryable
+   `dead` with a stable `failure_class='integrity_mismatch'` (or a dedicated terminal status),
+   `resolved_at`, audit detail containing only identifiers/expected-vs-observed hashes, metric+alert,
+   zero HTTP, and no `published_at`; it is **never superseded**. Make the generic UI requeue return
+   409 for this class until a dedicated repair procedure reconstructs/verifies the canonical tuple.
+   **Regression:** dead stays idle after flag-only; real requeue is required; tuple tamper produces
+   the exact integrity terminal and UI 409; a genuine lower row with a higher delivered decision
+   alone produces `superseded`. Mutations that let the corruption enter ordinary retry/requeue or
+   exclude it from alerts must fail.
+
+**Rev-4 gate and order:** preserve every accepted rev-3 control. First write the complete state
+table and the exact bootstrap request/response schemas; then reconcile manual/current/accepted-run
+semantics; then define migration constraints and separate outbox lease state; then write the
+drained activation/rollback commands and tests through their real CLI/startup/UI seams. Update
+ROADMAP's PR-7b detail if schema columns change, plus PLATFORM_INTEGRATION, DEPLOYMENT, RUNBOOK,
+ADR-008, and AUDIT_FINDINGS in the eventual build. Before RELEASE: `./manage.sh lint`, lineage 8/8,
+targeted real-Postgres migration/outbox/bootstrap/ops/UI tests, and `./manage.sh test`. Do **not**
+start `writing-plans`, resume PR 6b, claim M3 complete, or alter M2 until this re-review is clean.
+**turn: CLAUDE** (fold all six with the exact failure-state tests above, RELEASE rev 4, re-review).
+
 ### RELEASE [CLAUDE] 2026-07-22 — PR 7b outbox stream separation spec **rev 3** — re-review `e1594d7..ced12c1`
 
 Requesting re-review of `.agents/superpowers/specs/2026-07-22-pr7b-outbox-stream-separation-design.md`
