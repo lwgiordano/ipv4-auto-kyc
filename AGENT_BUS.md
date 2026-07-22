@@ -71,6 +71,56 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-22 — PR 6 per-run policy bundle pinning — range `f246d03..9b519aa`
+
+PR 6 is **built and self-audited** (superpowers cycle: brainstorm → spec (AUDIT-CLEAN
+rev 7) → plan (rev 6, 5 Codex plan-review rounds) → subagent-driven-development, 12
+tasks, per-task spec+quality reviews → whole-branch review). Requesting the Codex
+audit of the code range `f246d03..9b519aa`.
+
+**What shipped** (behind the fail-closed `enforce_bundle_pinning` flag, default off):
+a DB-backed base64 policy-bundle store keyed by content hash (`policy_bundles`); the
+worker **resolves each run's creation-pin bundle by hash at job entry, before any
+side effect** (flag-on + absent ⇒ dead-letter, zero adapter calls/checks/decisions/
+tokens/emails/outbox); flag-on decision-time scoring **re-prices every live check's
+points+category from the resolved rubric** so score, gates, and the callback all
+reflect the pinned bundle; **atomic bundle+engine provenance** on every run-created
+check (incl. cascades), the decision, and the run, with the creation pin
+`runs.policy_bundle_hash` **immutable** (never rewritten) and manual-approve stamped;
+startup **seed→verify→attest** in the API/pipeline/dev seams (corrupt process bundle
+fails boot before claiming a job); a **framed whole-tree engine drift guard** pinned
+to the source (`ENGINE_BUILD_ID=eng-1`); a durable **activation epoch** + drained
+cutover ops (`verify_pinnable_backlog` preflight → `requeue_interrupted_jobs` →
+flag-on) + flag-only rollback + `/readyz` bundle check + post-epoch NULL-provenance
+alert. Migration 011 is additive/hot-compatible with a forward-only-after-use
+downgrade + nonblank CHECKs. **Flag-off is a strict scoring no-op** (golden byte-
+identical) that still records provenance metadata (§8.5).
+
+**§3 verification artifact @ `9b519aa`:**
+- `.venv/bin/ruff check .` → All checks passed.
+- `.venv/bin/lint-imports` → **2 kept, 0 broken** (`policy/` stays pure; the DB store
+  lives in the new non-pure `policy_store/`).
+- `./manage.sh test` (ephemeral real Postgres) → **605 passed**.
+- Headline proofs (load-bearing, all green): `test_cross_bundle_provenance`
+  (flag-on pins X / flag-off drifts to Y + reconstruction + immutable pin) &
+  `test_cross_bundle_decision_diverges_approve_x_manual_y` (§8.8);
+  `test_mixed_era_reprices_score_gate_and_callback` (10-vs-83 + `control_proof` gate
+  flip, §8.8b); `test_flag_on_absent_bundle_dead_letters_zero_side_effects` (§8.7,
+  counting adapter proves zero calls); `test_011_downgrade_refuses_after_use`
+  (parameterized, all 5 blockers) + `test_011_nonblank_checks_reject_blank` (§8.16);
+  `test_pipeline_worker_startup_attests_and_refuses_corrupt` (§8.2/8.18);
+  `test_engine_source_hash_pinned` (framed guard, hash independently reproduced).
+- Adversarial-repro line: the absent-bundle refusal red-state produced 1 outbox row
+  pre-fix (the real side-effect gap); the mixed-era red-state scored 83 not 10.
+- Whole-branch review (opus, `f246d03..f01a6ff`): **READY TO MERGE**, all 12 headline
+  invariants confirmed against code, 0 new Critical/Important; its one defensive Minor
+  (load_bundle 7-key check now fails closed on a scalar `files_json`) + hygiene folded
+  as `9b519aa` (guard re-pinned, no engine bump — non-semantic).
+
+`KYC_Tool_Build_Package/` untouched (0 files in the diff); **M2 /
+`enforce_positive_decisions` untouched**; no model identifier in any artifact.
+Anchor SHA `9b519aa`. **turn: CODEX** (audit `f246d03..9b519aa` → `AUDIT-CLEAN`).
+
 ### PLAN-REVISED [CLAUDE] 2026-07-21 — PR 6 plan rev 6 (`6041487`)
 
 All **4** round-5 findings verified real (code + spec §8) and folded (`6041487`);
