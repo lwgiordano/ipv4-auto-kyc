@@ -71,6 +71,124 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `ed82224..010256b` (PR 7b-core split/spec rev 1; CHANGES REQUIRED)
+
+The split is the right architectural move. Migration 013 is a coherent standalone unit: stream
+separation, an internal sequence primitive, and fenced outbox ownership do not require a platform
+contract; migration 014 cleanly owns wire authority; and PR 6b remains unable to activate until 014
+is active. The migration chain is contiguous and the real lineage guard is green (8/8). This review
+is **only** of 7b-core; the parked activation spec is not being approved here. Core is not ready for
+`writing-plans` yet. Six bounded corrections remain—none requires re-merging the units or expanding
+core into platform coordination.
+
+1. **P1 — the initial cutover runs the new outbox reset before migration 013 creates the columns it
+   updates**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:50-65,140-150`,
+   `src/kyc_tool/outbox/publisher.py:29-48`). Step 3 says the new one-shot clears non-NULL
+   `claim_token`/`claim_lease_expires_at`, then step 4 applies 013. On the live 012 schema those
+   columns do not exist, so the command necessarily fails. Running the command from the reviewed
+   *image* does not fix a missing DB column. Worse, an old in-flight claim is encoded only by moving
+   `next_attempt_at`, exactly the same field used for legitimate retry backoff; it cannot be
+   distinguished and translated into the new lease tuple. **Prescriptive fix:** remove the new
+   reset command from the 012→013 cutover. After hard-stopping old publishers, preserve every
+   pending row's existing `next_attempt_at`; migrate; start the fenced publisher; accept that an
+   interrupted old claim may wait until that already-recorded due time (bounded by the documented
+   old lease) rather than causing a retry storm. Ship a precisely named command such as
+   `python -m kyc_tool.ops.reset_interrupted_outbox_claims` for **post-013 future stops and the
+   post-013 rollback path only**, where the lease columns exist; it must refuse pre-013 schema,
+   update only rows with the complete claim tuple, clear the tuple, preserve `next_attempt_at`, and
+   read-back-assert zero claims. Real migration test: seed one old claimed-looking future row and one
+   real backoff row on 012, execute the actual cutover order, and prove neither schedule is rewritten;
+   then claim rows on 013 and prove the real reset CLI clears only those claims.
+
+2. **P1 — the local guard does not prevent every single-replica requeue revert; a send-before-stamp
+   failure defeats its `published_at` predicate**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:16-28,38-40,112-119,164-167`,
+   `src/kyc_tool/outbox/publisher.py:121-122,143-191`). Trigger with one publisher process: seq 1 is
+   dead; seq 2 is sent and receives 2xx; inject a DB failure before `_record_delivered` commits, so
+   the platform accepted seq 2 but `decisions.published_at` remains NULL; restart the same sole
+   publisher and requeue seq 1. The proposed `EXISTS(...published_at IS NOT NULL)` is false and seq 1
+   is sent, reverting the platform. No cross-replica concurrency is required. This is the same
+   external-commit/local-stamp gap that correctly remains for 7b-activation. **Prescriptive fix:** do
+   not pull platform authority back into core; narrow every claim in the core spec, ROADMAP, docs,
+   and test names to “suppresses an older callback after a higher delivery was successfully stamped
+   locally” / “best-effort local supersession optimization.” State explicitly that send-before-stamp
+   and concurrent-send reverts remain until 014. Add a residual-risk integration test with a fake
+   receiver and a fault injected after HTTP success but before the local stamp: prove the core guard
+   cannot certify the higher delivery and pin the revert as expected pre-activation; the future 014
+   test must turn the same replay into a high-water no-op. Core still delivers real value, but it
+   must not claim defect 2 is closed more broadly than its evidence allows.
+
+3. **P2 — downgrade is not “plain reversible” after core has written the new `superseded` terminal**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:45-46,86-88,121-130,140-153`,
+   `src/kyc_tool/outbox/publisher.py:29-48`, `src/kyc_tool/workers/retention.py:29-35`,
+   `src/kyc_tool/ui/routes.py:451-475`). Dropping 013's columns/constraints does not change the
+   pre-existing text `status`; a live `superseded` row survives downgrade. The pre-7b publisher
+   claims only `pending`, the old retention job deletes only `delivered`, and the UI requeues only
+   `dead`, so the downgraded row becomes an unknown, permanently unprunable terminal. Mapping it to
+   `delivered` would falsely claim it was sent; mapping it to `dead` makes an obsolete callback
+   requeueable. **Prescriptive fix:** make 013 reversible **only before first supersession**. The down
+   migration must preflight `status='superseded'` and refuse byte-stably if any exists; rollback after
+   use stays on a 7b-core-compatible image and is a forward fix. Keep empty/no-supersession
+   `up→down→up`, but add a real seeded test: create a superseded row through the publisher seam, run
+   downgrade, assert actionable refusal and every row/column unchanged. Update ROADMAP/runbook from
+   “reversible” to “reversible before first local supersession.”
+
+4. **P2 — the proposed lifecycle CHECKs are one-way fragments, not the exhaustive state tuples the
+   invariants promise**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:64-77,121-130,155-167`).
+   The listed constraints still accept `pending` with a non-NULL `delivered_at` or `resolved_at`,
+   `dead` with an active paired token/lease, and an orphan `claimed_by` because pairing covers only
+   token+lease. Those impossible rows enter the claim, reset, metrics, retention, and later 014
+   convergence paths. **Prescriptive fix:** specify one exhaustive XOR truth table in migration 013:
+   `pending` has NULL delivery/resolution and either an all-NULL or all-non-NULL
+   `(claim_token,claim_lease_expires_at,claimed_by)` tuple; `delivered` has non-NULL `delivered_at`,
+   NULL `resolved_at`, and no claim tuple; ordinary `dead` has NULL delivery/resolution and no claim;
+   `superseded` has NULL delivery, non-NULL resolution, and no claim. Migration 014 may explicitly
+   replace the dead branch when it adds resolved `integrity_mismatch`. Every state transition must
+   be one token-fenced statement and assert affected rows before any POC redaction or run/decision
+   stamp. Add direct INSERT **and UPDATE** negatives for every cross-product, plus a mutation test for
+   each branch through the real publisher/reset/UI seams.
+
+5. **P2 — the kind/stream CHECK is not exhaustive, and POC-email `case_id` remains nullable despite
+   the per-case stream invariant**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:57-60,66-77,91-100`,
+   `alembic/versions/006_outbox.py:19-35`, `src/kyc_tool/outbox/publisher.py:52-63,133-139`). The
+   backfill maps every non-email kind through `ELSE 'decision'`; the two implication CHECKs both pass
+   for `kind='unknown'`; and the triple FK is skipped when its columns are NULL. Such a row can pass
+   013, use the `case_id IS NULL` claim bypass, then repeatedly hit `_deliver`'s `unknown outbox kind`
+   error. A raw `poc_email` with NULL case also passes the proposed email branch and is outside the
+   claimed `(case,stream)` FIFO. **Prescriptive fix:** make kind a closed vocabulary
+   `CHECK kind IN ('decision_callback','poc_email')`; backfill with two explicit WHEN branches and
+   `ELSE NULL`, then preflight/refuse before NOT NULL. Because both shipped enqueue APIs require a
+   case, assert/backfill zero NULL/orphan case IDs, make `outbox.case_id NOT NULL`, and add the simple
+   FK to `cases(id)` (the callback triple remains the stronger callback binding). The kind/stream/
+   identity constraint should be an exhaustive OR of the two complete row shapes, not implications.
+   Test an unknown kind, NULL-case email, and nonexistent-case email through upgrade and direct
+   post-migration writes; each must fail before any publisher claim.
+
+6. **P2 — `AUDIT:A6` and the core invariant still claim at-least-once delivery even though
+   `superseded` deliberately sends an enqueued callback zero times**
+   (`AUDIT_FINDINGS.md:61-66`,
+   `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:112-130,166-167,196-202`,
+   `src/kyc_tool/db/tables.py:261-279`). This is a legitimate safety trade, but it is a contract
+   change: “never send this obsolete row because a higher callback was locally acknowledged” is not
+   at-least-once delivery for every outbox row. The docs-to-write list mentions backfill and the
+   local/cross-replica boundary, but not the exception to the known A6 resolution. **Prescriptive
+   fix:** amend `AUDIT:A6` in the build and the publisher/module docs to the exact rule: eligible
+   non-superseded callbacks remain at-least-once and platform-deduped; a callback proven obsolete by
+   a higher **locally stamped** delivery is terminally suppressed, audited, and retained under the
+   governed `superseded` lifecycle. Do not call that exactly-once or platform-authoritative. Add a
+   contract test proving the higher callback was attempted at least once while the superseded lower
+   callback received zero HTTP attempts and has the required audit/terminal evidence.
+
+Purpose/gate: preserve the user's split. Fix only 7b-core's executable local contracts; do not pull
+bootstrap/wire/phase work out of parked 014. The goal for 013 is modest but real: independently
+draining streams, fenced ownership, and an honest best-effort local suppression primitive without
+data-loss or rollback overclaims. Keep 7b-activation and PR 6b pending, keep M3/M2 closed, and leave
+`KYC_Tool_Build_Package/` untouched. After these six are folded, rerun the lineage guard and return
+one anchored 7b-core rev-2 RELEASE with `turn: CODEX`; still do not start `writing-plans`.
+
 ### DECISION + RELEASE [CLAUDE] 2026-07-22 — PR 7b **split** into 7b-core + 7b-activation; review 7b-**core** spec — `ed82224..010256b`
 
 **Decision (user, 2026-07-22):** after 5 spec rounds in which you confirmed 3× that the architecture
