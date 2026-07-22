@@ -192,24 +192,51 @@ def test_rollback_inflight_job_requeued_then_flag_off_decides_once(
 def test_post_epoch_null_alert(session_factory, engine, clean_db):
     from kyc_tool.ops.activate_bundle_pinning_epoch import post_epoch_null_provenance
 
+    # no epoch row yet → nothing to alert on (early-return branch)
+    with session_factory() as s:
+        assert post_epoch_null_provenance(s) == {"decisions": [], "checks": [], "runs": []}
+
     with session_factory() as s:
         h = store.store_bundle(s, raw_x())
         store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-1")
         s.commit()
     with engine.begin() as c:
         c.execute(text("INSERT INTO cases (id) VALUES ('c-al')"))
-        c.execute(
-            text(
-                "INSERT INTO decisions (id, case_id, decision, score, gates_json, "
-                "buy_enablement, policy_shas, manual) VALUES ('d-al','c-al','x',0,"
-                "'{}'::jsonb,'buy_locked_org_id_required','{}'::jsonb,false)"
-            )
-        )  # decided_at=now()>epoch, engine NULL
+        # a run the flagged decision references — exercises the RUNS surface (was vacuous)
         c.execute(
             text(
                 "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                "actor_json, payload_json, event_sequence) VALUES ('e-q','c-al','kq','ph','email.verified',"
-                "'{}'::jsonb,'{}'::jsonb,1)"
+                "actor_json, payload_json, event_sequence) VALUES ('e-flag','c-al','kf','ph',"
+                "'email.verified','{}'::jsonb,'{}'::jsonb,1)"
+            )
+        )
+        c.execute(
+            text(
+                "INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                "VALUES ('r-flag','c-al','e-flag','QUEUED')"
+            )
+        )
+        # post-epoch decision missing engine_build_id, WITH run_id → flags decisions + runs
+        c.execute(
+            text(
+                "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+                "buy_enablement, policy_shas, manual) VALUES ('d-al','c-al','r-flag','x',0,"
+                "'{}'::jsonb,'buy_locked_org_id_required','{}'::jsonb,false)"
+            )
+        )  # decided_at=now()>epoch, engine NULL
+        # post-epoch check missing policy_bundle_hash → exercises the CHECKS surface (was untested)
+        c.execute(
+            text(
+                "INSERT INTO checks (id, case_id, check_type, status, points_awarded, category, "
+                "source) VALUES ('k-al','c-al','verified_email','pass',10,'account_access','seed')"
+            )
+        )  # created_at=now()>epoch, policy_bundle_hash NULL
+        # a legit queued run with NO decision → must NOT appear in runs
+        c.execute(
+            text(
+                "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                "actor_json, payload_json, event_sequence) VALUES ('e-q','c-al','kq','ph',"
+                "'email.verified','{}'::jsonb,'{}'::jsonb,2)"
             )
         )  # events.event_sequence NN since migration 008
         c.execute(
@@ -217,10 +244,13 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
                 "INSERT INTO runs (id, case_id, triggering_event_id, state) "
                 "VALUES ('r-q','c-al','e-q','QUEUED')"
             )
-        )  # queued, NULL engine — legitimate
+        )
     with session_factory() as s:
         alert = post_epoch_null_provenance(s)
-    assert "d-al" in alert["decisions"] and "r-q" not in alert.get("runs", [])
+    assert "d-al" in alert["decisions"]  # decisions surface
+    assert "k-al" in alert["checks"]  # checks surface (was untested)
+    assert "r-flag" in alert["runs"]  # runs surface positive (was vacuous)
+    assert "r-q" not in alert["runs"]  # a run with no post-epoch NULL-engine decision
 
 
 # §8.15 activation identity gate — three runnable rejections (each pins a guard whose
