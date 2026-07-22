@@ -11,7 +11,13 @@ runs.engine_build_id, decisions.engine_build_id.
 
 ADDITIVE + HOT-COMPATIBLE: every new column is nullable and both new tables are
 brand new, so an old replica still running the prior image is unaffected during
-a rolling deploy.
+a rolling deploy. The three provenance-column CHECKs on the existing checks/
+runs/decisions tables are added NOT VALID here — a brief, metadata-only lock
+with no scan of pre-existing rows — and validated in a separate follow-on
+revision (012). That two-step is what keeps this migration hot-compatible on
+production-sized audit tables: a single-step validating ADD CONSTRAINT would
+hold ACCESS EXCLUSIVE for the full table scan, stalling every concurrent
+ingest/decide writer until it commits.
 
 Downgrade is FORWARD-ONLY after use: once a bundle/epoch row exists, or any
 check/run/decision has recorded pinning provenance, those rows are immutable
@@ -51,25 +57,27 @@ def upgrade() -> None:
         sa.CheckConstraint("btrim(engine_build_id) <> ''", name="ck_epoch_engine_nonblank"),
     )
 
+    # NOT VALID: metadata-only, no scan of pre-existing rows, brief lock. Still
+    # enforced against every new/updated row immediately. Validated for
+    # pre-existing rows by the separate follow-on revision 012 (see module
+    # docstring) under a non-blocking lock instead of here under ACCESS
+    # EXCLUSIVE, which is what keeps this migration hot-compatible.
     op.add_column("checks", sa.Column("policy_bundle_hash", sa.Text(), nullable=True))
-    op.create_check_constraint(
-        "ck_checks_policy_bundle_hash_nonblank",
-        "checks",
-        "policy_bundle_hash IS NULL OR btrim(policy_bundle_hash) <> ''",
+    op.execute(
+        "ALTER TABLE checks ADD CONSTRAINT ck_checks_policy_bundle_hash_nonblank "
+        "CHECK (policy_bundle_hash IS NULL OR btrim(policy_bundle_hash) <> '') NOT VALID"
     )
 
     op.add_column("runs", sa.Column("engine_build_id", sa.Text(), nullable=True))
-    op.create_check_constraint(
-        "ck_runs_engine_build_id_nonblank",
-        "runs",
-        "engine_build_id IS NULL OR btrim(engine_build_id) <> ''",
+    op.execute(
+        "ALTER TABLE runs ADD CONSTRAINT ck_runs_engine_build_id_nonblank "
+        "CHECK (engine_build_id IS NULL OR btrim(engine_build_id) <> '') NOT VALID"
     )
 
     op.add_column("decisions", sa.Column("engine_build_id", sa.Text(), nullable=True))
-    op.create_check_constraint(
-        "ck_decisions_engine_build_id_nonblank",
-        "decisions",
-        "engine_build_id IS NULL OR btrim(engine_build_id) <> ''",
+    op.execute(
+        "ALTER TABLE decisions ADD CONSTRAINT ck_decisions_engine_build_id_nonblank "
+        "CHECK (engine_build_id IS NULL OR btrim(engine_build_id) <> '') NOT VALID"
     )
 
 

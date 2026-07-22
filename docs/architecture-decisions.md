@@ -61,7 +61,14 @@ post-epoch row that doesn't.
 **Rollout.** `Settings.enforce_bundle_pinning` defaults `false`. Phase 1
 ships rolling: migration 011, the durable store, and bundle+engine
 provenance recording go out first, without universal coverage (a rollover
-old replica can still write NULL provenance). `ops.activate_bundle_pinning_epoch`
+old replica can still write NULL provenance). Migration 011 adds the three
+provenance-column CHECKs `NOT VALID` — a brief, metadata-only lock with no
+scan of existing rows — rather than a single validating `ADD CONSTRAINT`,
+which would hold `ACCESS EXCLUSIVE` for a full table scan and stall every
+ingest/decide writer until commit; a follow-on migration 012 then runs
+`VALIDATE CONSTRAINT`, which needs only `SHARE UPDATE EXCLUSIVE` and does not
+block concurrent reads or writes, so both steps stay hot-compatible on
+production-sized `checks`/`decisions` tables. `ops.activate_bundle_pinning_epoch`
 is the durable boundary that makes provenance trustworthy from that point
 on — run only from the pinned release image, only after every old API and
 worker is confirmed gone; it verifies the local engine build and process

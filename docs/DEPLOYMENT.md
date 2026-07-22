@@ -285,7 +285,12 @@ safe to roll).
 **Rolling — migration + provenance, flag stays off.** Migration 011
 (`policy_bundles`, `bundle_pinning_epoch`, and the new nullable provenance
 columns) is additive and hot-compatible — deploy it through the normal §4
-flow. On the PR6 image, the API and pipeline worker seed and read back the
+flow. It is hot-compatible precisely because its three provenance-column
+CHECKs land `NOT VALID` (a brief, metadata-only lock, no table scan) and are
+validated by the follow-on migration 012 via `VALIDATE CONSTRAINT` under a
+non-blocking lock, so the rolling `alembic upgrade head` does not stall
+ingest/decide writers on large `checks`/`decisions` audit tables. On the PR6
+image, the API and pipeline worker seed and read back the
 on-disk policy bundle at startup (failing closed on a corrupt persisted row)
 and every automatic/manual decision starts recording bundle **and** engine
 provenance immediately — `Settings.enforce_bundle_pinning`

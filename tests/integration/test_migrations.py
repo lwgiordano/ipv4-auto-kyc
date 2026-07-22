@@ -183,3 +183,118 @@ def test_011_nonblank_checks_reject_blank(pg, surface, blank):
         for stmt in _NONBLANK_SURFACES[surface].split("; "):
             conn.execute(text(stmt), {"blank": blank})  # extra param ignored where unused
     engine.dispose()
+
+
+# P1 fix: migration 011 adds the three provenance CHECKs NOT VALID (metadata-only,
+# no scan); revision 012 VALIDATEs them separately (SHARE UPDATE EXCLUSIVE, does not
+# block concurrent writers). `pg_constraint.convalidated` is the ground truth for
+# "has this CHECK been proven against pre-existing rows yet".
+_PINNING_CHECK_NAMES = (
+    "ck_checks_policy_bundle_hash_nonblank",
+    "ck_runs_engine_build_id_nonblank",
+    "ck_decisions_engine_build_id_nonblank",
+)
+_PINNING_CONVALIDATED_QUERY = text(
+    "SELECT conname, convalidated FROM pg_constraint WHERE conname IN "
+    "('ck_checks_policy_bundle_hash_nonblank', 'ck_runs_engine_build_id_nonblank', "
+    "'ck_decisions_engine_build_id_nonblank')"
+)
+
+
+def test_011_checks_not_valid_then_012_validates(pg):
+    """011's three provenance CHECKs land NOT VALID (convalidated=false); 012's
+    VALIDATE CONSTRAINT flips all three to true without weakening enforcement.
+
+    Rows are populated at revision 010 — before the provenance columns exist —
+    so 011 adds them all-NULL on already-populated cases/events/runs/checks/
+    decisions, the real "validate would have to scan existing rows" shape a
+    rolling deploy hits on a production-sized audit table."""
+    url = _fresh_db(pg, "kyc_mig_011_notvalid")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "010")
+
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text(_VALID_CASE))
+        conn.execute(text(_VALID_EVENT))
+        conn.execute(
+            text(
+                "INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                "VALUES ('r','c','ev','QUEUED')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO checks (id, case_id, check_type, status, points_awarded, "
+                "category, source) VALUES ('k','c','verified_email','pass',10,'x','seed')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO decisions (id, case_id, decision, score, gates_json, "
+                "buy_enablement, policy_shas, manual) VALUES ('d','c',"
+                "'manual_review_insufficient',0,'{}'::jsonb,'buy_locked_org_id_required',"
+                "'{}'::jsonb,false)"
+            )
+        )
+
+    alembic_command.upgrade(cfg, "011")  # NOT VALID adds only — must not scan/validate yet
+    with engine.connect() as conn:
+        rows = {r.conname: r.convalidated for r in conn.execute(_PINNING_CONVALIDATED_QUERY)}
+    assert set(rows) == set(_PINNING_CHECK_NAMES)
+    assert all(v is False for v in rows.values()), rows
+
+    alembic_command.upgrade(cfg, "head")  # 012 VALIDATEs all three
+    with engine.connect() as conn:
+        rows = {r.conname: r.convalidated for r in conn.execute(_PINNING_CONVALIDATED_QUERY)}
+    assert set(rows) == set(_PINNING_CHECK_NAMES)
+    assert all(v is True for v in rows.values()), rows
+
+    from sqlalchemy.exc import IntegrityError
+
+    # Enforcement is orthogonal to validity (NOT VALID already enforced new rows) —
+    # this just confirms 012's VALIDATE didn't loosen anything.
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO checks (id, case_id, check_type, status, points_awarded, "
+                "category, source, policy_bundle_hash) VALUES ('k2','c','provenance_probe',"
+                "'pass',10,'x','seed','   ')"
+            )
+        )
+    engine.dispose()
+
+
+def test_012_validate_does_not_block_writers(pg):
+    """Concurrent-writer witness: VALIDATE CONSTRAINT takes SHARE UPDATE EXCLUSIVE,
+    which is compatible with a concurrent uncommitted writer's RowExclusiveLock, so
+    it must complete without hitting a short lock_timeout. If a future regression
+    folds VALIDATE back into a validating ADD CONSTRAINT (ACCESS EXCLUSIVE), this
+    blocks on connection A and times out."""
+    url = _fresh_db(pg, "kyc_mig_012_lock")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "011")
+
+    engineA = create_engine(url)
+    engineB = create_engine(url)
+    connA = engineA.connect()
+    txA = connA.begin()
+    try:
+        connA.execute(text(_VALID_CASE))
+        connA.execute(
+            text(
+                "INSERT INTO checks (id, case_id, check_type, status, points_awarded, "
+                "category, source) VALUES ('k','c','verified_email','pass',10,'x','seed')"
+            )
+        )  # uncommitted: holds a RowExclusiveLock on checks, never committed nor rolled back yet
+
+        with engineB.begin() as connB:  # separate connection: the concurrent-writer witness
+            connB.execute(text("SET lock_timeout = '5s'"))
+            connB.execute(
+                text("ALTER TABLE checks VALIDATE CONSTRAINT ck_checks_policy_bundle_hash_nonblank")
+            )  # must succeed without raising — a validating ADD here would block on A and time out
+    finally:
+        txA.rollback()
+        connA.close()
+    engineA.dispose()
+    engineB.dispose()
