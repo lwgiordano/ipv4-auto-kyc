@@ -9,8 +9,11 @@ Status: **PR 1–4 shipped** (`c37c052`, `7a19a9f`, `4c91be6`; PR 4 this commit)
 Items 1–6 complete (PR 5a shipped: HMAC v2 + per-case idempotency). Item 11
 complete (PR 5b shipped: review-record binding). Item 7A complete (PR 6
 shipped: per-run policy bundle pinning + `engine_build_id`) — but M2 stays a
-HARD STOP (see §D). PR 6b (item 7B, revalidation) next; still pending.
-Auto-enforcement of positive decisions (M2) is a **hard stop** far downstream (§D).
+HARD STOP (see §D). **PR 7b (item 8, outbox stream separation + decision
+ordering) is next — reordered ahead of PR 6b** to supply the callback-ordering
+guarantee 6b's revalidation coordinator rests on (Codex PR-6b rev-5 F3); both
+still pending. Auto-enforcement of positive decisions (M2) is a **hard stop**
+far downstream (§D).
 
 ---
 
@@ -67,9 +70,9 @@ that lands its migration.
 | PR 5a | 6 | shipped | 010 | drop global idem unique, add per-case unique, `request_nonces` |
 | PR 5b | 11 | — | — | review-record binding |
 | PR 6 | 7A | shipped | 011, 012 | `policy_bundles`, `checks.policy_bundle_hash`, `runs/decisions.engine_build_id` (011); `VALIDATE` those provenance CHECKs (012, audit round 1) |
-| PR 6b | 7B | pending | 013 | revalidation / rollout staging |
-| PR 7a | 9 | pending | 014 | `jobs.lease_token` |
-| PR 7b | 8 | pending | 015 | `outbox.ordering_stream`, `decisions.decision_sequence`, `cases.last_decision_sequence`, `UNIQUE(case_id, decision_sequence)` |
+| PR 7b | 8 | pending | 013 | `outbox.ordering_stream` (NOT NULL), `outbox.{decision_sequence,resolved_at}`, `decisions.decision_sequence` + `UNIQUE(case_id, decision_sequence)`, `cases.last_decision_sequence` (reordered ahead of 6b; drained cutover) |
+| PR 6b | 7B | pending | 014 | revalidation / rollout staging |
+| PR 7a | 9 | pending | 015 | `jobs.lease_token` |
 | PR 8 | 10 | pending | 016 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
 | PR 9a/b/c | 12 | — | — | contract + adapter-output validation + real providers |
 | PR 10 | 13 | pending | 017 | broker full-list snapshots, `runs.{matched_broker_entity_id,matched_identifier_class,broker_snapshot_revision}` |
@@ -333,5 +336,7 @@ ADR-003 + `AUDIT:` (per-case idempotency), **ADR-005 — written (PR 6, per-run
 policy bundle pinning)**, ADR-006 (PR 6b: revalidation under the pinned
 engine — validator-axis staleness + replay), ADR-007 + `AUDIT:` (PR 10:
 broker gate on recalculate — shifted from ADR-006 now that PR 6b owns it),
+**ADR-008 (PR 7b: platform-authoritative decision ordering — `decision_sequence`
+on the wire + platform per-case high-water dedupe; ADR-006/007 left intact)**,
 `AUDIT:` (local `evidence.refresh_requested` extension), `AUDIT:`
 (OpenAPI as derived contract).
