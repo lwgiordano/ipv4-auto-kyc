@@ -265,24 +265,33 @@ on runs + decisions**. Worker loads the run's bundle by hash, refuses if unloada
 `HARD_CONFLICT_REASON_CODES`** — must live in the bundle or be covered by
 `engine_build_id`). Behind `enforce_bundle_pinning`.
 
+### PR 7b — Outbox stream separation + platform-authoritative decision ordering (item 8) — reordered FIRST
+Migration **013** (`down_revision='012'`): `outbox.{ordering_stream (NOT NULL, decision|email),
+decision_sequence, resolved_at}`, `decisions.decision_sequence` (D1), `cases.last_decision_sequence`,
+`UNIQUE(case_id, decision_sequence)` + composite FK + kind/stream/sequence CHECK, and a singleton
+`outbox_ordering_activation` record. **Allocate `decision_sequence` via the locked case counter**
+(not `max()+1`), callback-emitting decisions only; claim FIFO scoped per `(case_id, ordering_stream)`
+so a stuck POC email never blocks the decision callback. **Platform per-case high-water is the
+ordering authority** — `decision_sequence` on the wire (emission decided at the publisher, gated on
+flag AND `emission_active_at`), bootstrapped from the platform's effective state before flag-on,
+sticky thereafter; the local `superseded` guard is an optimization only. **Drained cutover** (reuses
+the shipped `requeue_interrupted_jobs` one-shot + a symmetric outbox-lease reset; digest-pinned; no
+mutating prod smoke); **forward-only-after-use** downgrade; **two-phase irreversible** rollback.
+Reordered ahead of 6b to supply the ordering guarantee 6b's coordinator callbacks consume (ADR-008).
+
 ### PR 6b — Revalidation (item 7B) — PENDING, required for M4
-Migration 013 (`down_revision='012'`). Revalidate immutable evidence under the run's pinned bundle+engine,
-write **superseding** checks; a tightened pass rule marks prior PASSes stale until
-revalidated; block rollout activation until successors exist.
+Migration **014** (`down_revision='013'`). Revalidate immutable evidence under the run's pinned
+bundle+engine, write **superseding** checks; a tightened pass rule marks prior PASSes stale until
+revalidated; block rollout activation until successors exist. Consumes PR 7b's exact convergence
+contract (greatest per-case sequence platform-acknowledged, incl. `dead` as a hard blocker); rev 6
+must separately prove a superseded coordinator's higher delivered decision was under the target
+validator pair (7b ordering ≠ freshness).
 
 ### PR 7a — Queue lease fencing (item 9)
-Migration 014: `jobs.lease_token`. Every transition gated on
+Migration **015** (`down_revision='014'`): `jobs.lease_token`. Every transition gated on
 `(id, locked_by, lease_token, status='running')`; heartbeat ≤ lease/3; cadence
 reaper fails the run in the **same txn**; fenced complete inside the decide txn
 (stale worker rolls back the decision).
-
-### PR 7b — Outbox stream separation (item 8)
-Migration 015: `outbox.ordering_stream` (decision|email), `decisions.decision_sequence`
-(D1), `cases.last_decision_sequence`, `UNIQUE(case_id, decision_sequence)`.
-**Allocate `decision_sequence` via the locked case counter** (not `max()+1`), only
-for callback-emitting decisions. Claim predicate scopes FIFO per
-`(case_id, ordering_stream)` so POC-email failure never blocks the decision callback.
-Requeue marks `superseded`, never reverts a newer decision.
 
 ### PR 8 — Object-store containment + immutable evidence (item 10)
 Migration 016. Structured `ObjectRef{key, sha256, size?, content_type?, version_id?}`

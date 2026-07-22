@@ -1,4 +1,4 @@
-# PR 7b — Outbox stream separation + platform-authoritative decision ordering (item 8) — design (rev 2)
+# PR 7b — Outbox stream separation + platform-authoritative decision ordering (item 8) — design (rev 3)
 
 ## Context
 
@@ -8,360 +8,360 @@ fence (Codex PR-6b rev-5 F3). The tool's transactional outbox
 (`src/kyc_tool/outbox/publisher.py`) has two present defects:
 
 1. **One mixed per-case FIFO.** `_CLAIM_SQL` (`publisher.py:29-49`) claims the **min-id pending**
-   row **per `case_id`**, mixing `decision_callback` and `poc_email` rows. A POC email that keeps
-   failing stays `pending` on backoff as the case's min-id row, so it **blocks that case's
-   decision callbacks** behind it.
+   row **per `case_id`**, mixing `decision_callback` and `poc_email` rows. A stuck POC email
+   **blocks that case's decision callbacks** behind it.
 2. **No decision ordering / revert guard.** Decision callbacks are ordered only by outbox `id`. A
-   **requeued older** decision (a retried or 6b-revalidation-obsoleted row, lower `id`) can be
-   re-claimed and delivered **after** a newer decision already delivered, reverting the platform
-   to the stale decision. Delivery stamps `decisions.published_at` and moves the run to `COMPLETE`
-   (`_record_delivered`, `publisher.py:160-191`) — 6b's activation gate reads this — but nothing
-   prevents the revert.
+   **requeued older** decision (retried or 6b-obsoleted, lower `id`) can be delivered **after** a
+   newer decision, reverting the platform. Delivery stamps `decisions.published_at` and moves the
+   run to `COMPLETE` (`_record_delivered`, `publisher.py:160-191`) — 6b's activation gate reads
+   this — but nothing prevents the revert.
 
-### What rev 1 got wrong (why this is a full rewrite, not a patch)
+### Revision history (what each round corrected)
 
-Rev 1 proposed a **DB-only** guard (deliver only if no higher-sequence decision has
-`published_at`) and claimed the migration was **rolling-safe**. Both are wrong, and the second
-compounds into three separate holes:
+- **Rev 1** proposed a DB-only guard and a rolling migration. Both wrong: the publisher commits its
+  claim (`publisher.py:146-148`), does HTTP **outside** any transaction (`151-152`), then stamps
+  `published_at` in a **second** transaction (`160-191`), so two replicas race and no local guard
+  closes it; and an old replica writes NULL `ordering_stream` (`52-63` sets neither column) →
+  unclaimable NULL/NULL rows + unguarded NULL-sequence reverts. ROADMAP **M3**(`:96`)/**D1**(`:32`)
+  already reserved `decision_sequence` for the wire with platform high-water dedupe — rev 1
+  under-delivered.
+- **Rev 2** made the platform high-water the authority, put `decision_sequence` on the wire, and
+  replaced the rolling migration with a drained transactional cutover, legacy sequencing,
+  forward-only downgrade, a `superseded` lifecycle, and relational integrity.
+- **Rev 3 (this doc)** closes six defects where that design meets **frozen outbox payloads, the
+  platform's pre-existing effective state, real rollback binaries, and the shipped worker-recovery
+  machinery**: (F1) emission is decided at the **publisher**, not frozen at decide time, and the
+  sequence is persisted in the internal payload + backfilled into existing rows; (F2) a **platform
+  high-water bootstrap** seeds the receiver from its *actually-effective* state before flag-on;
+  (F3) **two-phase irreversible rollback** on schema-compatible images only; (F4) the cutover
+  reuses the **shipped** recovery one-shot + a symmetric outbox-lease reset, digest-pinned, with no
+  mutating production smoke; (F5) an **exact** 6b convergence contract; (F6) the ROADMAP
+  **detailed sections** are renumbered too. The keystone is a durable **singleton activation
+  record** (modeled on PR 5a's `hmac_v1_observation`) that every consumer — `/readyz`, the
+  publisher, PR 6b — reads to tell "flag configured" from "platform authority bootstrapped."
 
-- **The tool cannot unilaterally prevent the revert.** The publisher commits its claim/lease
-  (`publisher.py:146-148`), does the HTTP **outside any transaction** (`151-152`), and only
-  *afterward* opens a second transaction to stamp `published_at` (`160-191`). Two publisher
-  replicas therefore race: A sends seq 2 and pauses before `_record_delivered`; an operator
-  requeues dead seq 1; B claims seq 1, its `published_at` probe still sees no delivered higher
-  row, and **B sends seq 1 after seq 2** — the platform reverts. No purely-local guard closes
-  this gap.
-- **The canonical roadmap already says the fix is on the wire.** ROADMAP **M3**
-  (`.agents/ROADMAP.md:94-97`) defines PR 7b as "`decision_sequence` + platform high-water-mark
-  dedupe," and **D1** (`:32-33`) reserves `decision_sequence` as an on-the-wire field. Rev 1 put
-  nothing on the wire (`api/schemas.py:144-164` carries only the separately-gated `event_sequence`;
-  `config.py:77-79` has only `callback_include_event_sequence`). Rev 1 under-delivered against the
-  plan both agents follow.
-- **"Rolling-safe" manufactures unclaimable rows and unguarded reverts.** An old replica's enqueue
-  omits `ordering_stream` (`publisher.py:52-63` set neither column), so its insert is NULL and the
-  proposed inner predicate `o2.ordering_stream = o.ordering_stream` is SQL UNKNOWN for NULL/NULL —
-  the row is permanently unclaimable. The same old replica writes NULL-sequence callbacks that
-  rev 1 explicitly delivers **unguarded**, and the authenticated UI can requeue a dead one
-  (`ui/routes.py:451-476`). A plain reversible downgrade then destroys an externally-observed
-  monotonic namespace and reuses sequence numbers after re-upgrade.
+This is `.agents/ROADMAP.md` item 8.
 
-**Rev 2 corrects the architecture:** the **platform's per-case high-water mark is the ordering
-authority** (M3 cutover, flag-gated, exactly the dual-accept pattern PR 5a already established);
-the tool's local `superseded` guard is a best-effort **optimization**, never the authority;
-migration 013 is a **drained, non-hot cutover** with a **forward-only-after-use** downgrade; and
-every denormalized sequence is bound by a real DB constraint. This is `.agents/ROADMAP.md` item 8.
+## Decisions (rev 3)
 
-## Decisions (rev 2)
-
-1. **Stream separation** — `outbox.ordering_stream` (`decision`|`email`), **NOT NULL**; the claim
-   FIFO is scoped per **`(case_id, ordering_stream)`** so the two streams drain independently.
-2. **Per-case decision sequence** — `decisions.decision_sequence`, allocated from the **locked
-   case counter** (`cases.last_decision_sequence`, never `max()+1`), only for callback-emitting
-   decisions; unique per case; **put on the wire** (M3, flag-gated).
-3. **The platform high-water is the ordering authority** (F1). Its receiver transactionally
-   compares `(case_id, decision_sequence)` against a durable per-case high-water, applies and
-   advances **only** a higher value, and returns success/no-op for lower-or-equal. This is what
-   makes an obsolete callback unable to revert state — under every replica race.
-4. **The local `superseded` guard is an optimization** — the tool still declines to send a
-   callback it can locally prove obsolete (avoids pointless HTTP, keeps the outbox truthful), but
-   correctness does **not** depend on it. It has a full, honest lifecycle (§6).
-5. **Drained cutover migration** (F2/F3) — 013 is **not** rolling-safe. All old API, pipeline,
-   and outbox processes are stopped and attested before it runs; only the reviewed image starts
-   after. Ordinary transactional DDL (no `CONCURRENTLY`, no autocommit split).
-6. **Forward-only-after-use downgrade** (F4) — 013 down-migrates only when no sequence/binding/
-   counter was ever populated; otherwise it refuses. Operational rollback is **new image +
-   emission flag off**, never a schema downgrade.
-7. **Integrity binding** (F6) — `UNIQUE(case_id, decision_sequence)` on `decisions`, a composite
-   FK from decision-stream outbox rows into it, and a CHECK binding kind↔stream↔sequence
-   nullability. The wire body is built from the **same allocated scalar** and asserted before HTTP.
+1. **Stream separation** — `outbox.ordering_stream` (`decision`|`email`), **NOT NULL**; claim FIFO
+   scoped per **`(case_id, ordering_stream)`**.
+2. **Per-case decision sequence** — `decisions.decision_sequence`, allocated from the **locked case
+   counter** (`cases.last_decision_sequence`, never `max()+1`), callback-emitting decisions only;
+   unique per case; **persisted in the internal outbox payload** at enqueue (not flag-gated there).
+3. **The platform high-water is the ordering authority** (F1/F2). Its receiver compares
+   `(case_id, decision_sequence)` against a durable per-case high-water, applies/advances **only**
+   higher, no-ops lower-or-equal, and — once a case is initialized (or after the global cutover) —
+   treats an **absent** sequence as a no-op (**sticky**), never a mutation.
+4. **Emission is decided at the publisher** (F1), the single network emitter. The internal payload
+   always carries the sequence; `_deliver_decision_callback` builds an **outbound copy** that
+   includes the field iff emission is active. Pipeline code never freezes the flag decision into a
+   long-lived row.
+5. **A durable singleton activation record** (F2/F3/F5) tracks the lifecycle: `schema_migrated` →
+   `platform_bootstrapped` (manifest verified) → `emission_active`. It is the single source of
+   truth for `/readyz`, the publisher, and 6b.
+6. **The local `superseded` guard is an optimization** (never the authority), with a full honest
+   lifecycle (§6).
+7. **Drained cutover migration** (F4) using the **shipped** recovery machinery; **forward-only-
+   after-use** and **two-phase irreversible** rollback (F3); ordinary transactional DDL.
+8. **Integrity binding** (rev-2, kept) — `UNIQUE(case_id, decision_sequence)`, composite FK, and a
+   kind↔stream↔sequence CHECK; the outbound body's sequence is asserted against the row before HTTP.
 
 ## Architecture
 
 ### 1. Migration 013 — drained cutover (`down_revision='012'`)
 
-**7b now owns `013`** (reordered ahead of 6b). Per finding 7 the ROADMAP renumber is done **in
-this spec's commit** (§ROADMAP renumber below), not deferred to build: PR 7b `013` (pending),
-PR 6b `014`, PR 7a `015`, PR 8 `016`, PR 10 `017`. The build flips only PR 7b's row to `shipped`.
+**7b owns `013`.** The ROADMAP renumber (table **and** detailed sections, F6) is done in this
+spec's commit: PR 7b `013` / PR 6b `014` / PR 7a `015` / PR 8 `016` / PR 10 `017`; the build flips
+only PR 7b's row to `shipped`.
 
-**Precondition (operator, enforced by runbook order — §Rollout):** platform submission paused,
-and **zero** old API/pipeline/outbox processes running, attested before `alembic upgrade`. The
-migration assumes it is the sole writer.
+**Precondition (operator, §Rollout):** platform submission paused; **zero** app writers running,
+attested at the **orchestrator/process level** (not `pg_stat_activity` — engines set no
+`application_name`, `session.py:16-17`); the shipped job + outbox recovery one-shots already run.
 
-Schema (one ordinary transaction — writers are stopped, so no `CONCURRENTLY`):
+Schema (one ordinary transaction — writers stopped, so no `CONCURRENTLY`):
 
-- **`outbox.ordering_stream TEXT`** — add nullable → backfill
-  `UPDATE outbox SET ordering_stream = CASE kind WHEN 'poc_email' THEN 'email' ELSE 'decision' END`
-  → **assert zero NULL/unknown** (`SELECT count(*) … WHERE ordering_stream IS NULL OR ordering_stream
-  NOT IN ('decision','email')` must be 0, else `raise`) → add and **VALIDATE**
-  `CHECK (ordering_stream IS NOT NULL AND ordering_stream IN ('decision','email'))`. (`NOT VALID`
-  does not change NULL semantics — the CHECK names `IS NOT NULL` explicitly.)
-- **`outbox.decision_sequence BIGINT NULL`** — set on enqueue for `decision` rows; NULL for emails.
-- **`outbox.resolved_at TIMESTAMPTZ NULL`** (F5) — truthful terminal timestamp for `superseded`
-  rows (delivered rows keep `delivered_at`; the two are disjoint by construction).
-- **`decisions.decision_sequence BIGINT NULL`** (NULL = manual/non-callback decision).
-- **`cases.last_decision_sequence BIGINT NOT NULL DEFAULT 0`** — the locked allocation counter.
+- **`outbox.ordering_stream TEXT`** — add nullable → backfill by kind → **assert zero NULL/unknown**
+  → add+VALIDATE `CHECK (ordering_stream IS NOT NULL AND ordering_stream IN ('decision','email'))`.
+- **`outbox.decision_sequence BIGINT NULL`**, **`outbox.resolved_at TIMESTAMPTZ NULL`** (F5
+  terminal timestamp for `superseded`), **`decisions.decision_sequence BIGINT NULL`**,
+  **`cases.last_decision_sequence BIGINT NOT NULL DEFAULT 0`**.
+- **Singleton activation record** — `outbox_ordering_activation(id smallint PRIMARY KEY DEFAULT 1
+  CHECK (id=1), schema_migrated_at, platform_bootstrapped_at, emission_active_at,
+  manifest_expected_digest, manifest_returned_digest)`, seeded one row with only
+  `schema_migrated_at=now()` set (bootstrap/activation NULL). Modeled on `hmac_v1_observation`
+  (`tables.py:282-289`).
 
-**Historical backfill (F3) — deterministic per-case sequencing of *existing* callbacks:**
+**Historical backfill (rev-2, kept):** per case, `decision_sequence = row_number() OVER (PARTITION
+BY case_id ORDER BY decided_at, id)` for callback-producing decisions (`manual=false AND run_id IS
+NOT NULL`); manual stays NULL. Bind every existing `decision_callback` outbox row (delivered/
+pending/**dead**) to its decision's sequence via `run_id`; seed `cases.last_decision_sequence =
+max` per case. **Also backfill the sequence into the frozen payload (F1):**
+`UPDATE outbox SET payload_json = jsonb_set(payload_json, '{decision_sequence}',
+to_jsonb(decision_sequence)) WHERE kind='decision_callback' AND decision_sequence IS NOT NULL` — so
+a pre-flag pending/dead callback can emit its sequence when the publisher's emission turns on,
+never stranded. **Preflight refusals** (raise, rolling the cutover back): orphan callback,
+duplicate-run decision, sequence mismatch, remaining NULL `decision`-stream sequence, `email` row
+with a sequence. Record in `AUDIT_FINDINGS.md`: reconstructed order is **deterministic backfill
+(`decided_at,id`), not proof of original publication order**.
 
-- For each case, assign contiguous `decision_sequence = row_number() OVER (PARTITION BY case_id
-  ORDER BY decided_at, id)` to every **callback-producing** decision (`manual = false AND run_id
-  IS NOT NULL`). Manual decisions (`manual = true`) stay NULL.
-- Bind **every** existing `decision_callback` outbox row — `delivered`, `pending`, **and `dead`** —
-  to its decision's sequence via `run_id` (one automatic decision per callback run; see preflight).
-- Seed `cases.last_decision_sequence = max(decision_sequence)` per case (0 where none).
-- **Preflight refusals** (the migration `raise`s, rolling back the whole cutover, before any
-  irreversible write) on: an orphan `decision_callback` outbox row (no matching decision/run); a
-  callback run with more than one automatic decision; an outbox/decision sequence mismatch after
-  binding; any remaining NULL `decision_sequence` on a `decision`-stream outbox row; any
-  `email`-stream row with a non-NULL sequence.
-- Record in the migration docstring + `AUDIT_FINDINGS.md`: reconstructed order is **deterministic
-  backfill (`decided_at,id`), not proof of original publication order** (mirrors D2's
-  `event_sequence` framing). `decided_at` ties break by `id`.
+**Integrity (rev-2, kept):** `UNIQUE(case_id, decision_sequence)` on `decisions` (Postgres allows
+multiple NULLs); composite FK `outbox(case_id, decision_sequence) → decisions(case_id,
+decision_sequence)` (NULL member ⇒ not enforced for email rows, correct); CHECK
+`(kind='decision_callback' AND ordering_stream='decision' AND decision_sequence IS NOT NULL) OR
+(kind='poc_email' AND ordering_stream='email' AND decision_sequence IS NULL)`. Add
+`ix_outbox_stream_claim (case_id, ordering_stream, status, next_attempt_at)`.
 
-**Integrity constraints (F6):**
-
-- `UNIQUE(case_id, decision_sequence)` on `decisions` — an **ordinary** unique constraint (Postgres
-  permits multiple NULLs, so manual/pre-callback rows never collide; no partial index needed).
-- Composite FK: `outbox(case_id, decision_sequence) REFERENCES decisions(case_id,
-  decision_sequence)` — applies only to `decision`-stream rows (email rows have NULL sequence, and
-  a NULL member makes the composite FK not enforced for that row, which is correct).
-- `CHECK` binding kind↔stream↔sequence:
-  `(kind='decision_callback' AND ordering_stream='decision' AND decision_sequence IS NOT NULL)
-  OR (kind='poc_email' AND ordering_stream='email' AND decision_sequence IS NULL)`.
-
-**Index:** the `(case_id, ordering_stream)` claim path reuses the existing `ix_outbox_claim`
-(`status, next_attempt_at`) plus the `case_id` index; add `ix_outbox_stream_claim` on
-`(case_id, ordering_stream, status, next_attempt_at)` to keep the scoped claim sargable. Built
-in-transaction (writers stopped).
-
-**Downgrade — forward-only-after-use (F4):** the down migration first runs a preflight —
-`EXISTS(SELECT 1 FROM decisions WHERE decision_sequence IS NOT NULL)` OR any
-`outbox.decision_sequence IS NOT NULL` OR `EXISTS(SELECT 1 FROM cases WHERE last_decision_sequence
-> 0)` — and **raises an actionable error** ("013 down refused: decision-sequence namespace is
-externally observed by the platform high-water; roll back with the reviewed prior image and
-`callback_include_decision_sequence=false`, do not downgrade schema") if any is populated. On a
-never-used schema (empty namespace) it cleanly drops the columns/constraints/counter, so
-`up → down → up` on a fresh DB stays green. ORM (`db/tables.py`): the five columns + constraints.
+**Downgrade — forward-only-after-use (F3/rev-2):** the down migration raises if any
+`decisions.decision_sequence`, `outbox.decision_sequence`, `cases.last_decision_sequence > 0`, **or
+a non-NULL `platform_bootstrapped_at`/`emission_active_at`** exists — the sequence namespace and the
+activation epoch are externally observed. On a never-used schema it drops cleanly (`up→down→up`
+green on a fresh DB).
 
 ### 2. Stream-scoped claim (publisher)
 
-`_CLAIM_SQL`'s inner correlated subquery (`publisher.py:39-42`) gains
-`AND o2.ordering_stream = o.ordering_stream`, so the eligible row is the **min-id pending row of
-its own `(case_id, ordering_stream)`**. Because 013 guarantees `ordering_stream` is NOT NULL for
-every row, the equality is never UNKNOWN (F2 dissolved). Emails and decisions of the same case
-become independent FIFOs. `enqueue_decision_callback` sets `ordering_stream='decision'` +
-`decision_sequence`; `enqueue_poc_email` sets `ordering_stream='email'`. (`case_id IS NULL` rows,
-if any, keep the global path — they are non-case system mail.)
+`_CLAIM_SQL`'s inner subquery (`publisher.py:39-42`) gains `AND o2.ordering_stream =
+o.ordering_stream`. Because 013 makes `ordering_stream` NOT NULL, the equality is never UNKNOWN.
+`enqueue_decision_callback` sets `ordering_stream='decision'` + `decision_sequence`;
+`enqueue_poc_email` sets `ordering_stream='email'`. (`case_id IS NULL` rows keep the global path.)
 
 ### 3. Decision-sequence allocation (decide transaction)
 
-Exact seam: `pipeline._decide_txn` (`pipeline.py:351-518`) already holds the **Case `FOR UPDATE`**
-from `_load` (`pipeline.py:201`, `session.get(Case, run.case_id, with_for_update=True)`) across the
-`DecisionRow` build (`:485-495`) and `enqueue_decision_callback` (`:506`). For a
-**callback-emitting** decision (the `_decide_txn` path; **manual approve** goes through a different
-path and writes no callback — AUDIT C3 — so it allocates **no** sequence):
+Seam: `pipeline._decide_txn` (`pipeline.py:351-518`) holds the Case `FOR UPDATE` from `_load`
+(`:201`) across the `DecisionRow` build (`:485-495`) and enqueue (`:506`). For a callback-emitting
+decision (manual approve takes a different path, no callback → no sequence): increment
+`cases.last_decision_sequence` under the lock (never `max()+1`); stamp `DecisionRow.decision_sequence`;
+pass it to `enqueue_decision_callback(..., decision_sequence=seq)`, which records it on the outbox
+row **and inside `payload_json` (the internal canonical body always carries it)**. Single writer of
+the counter, always under the case lock; the UNIQUE constraint backstops any bug.
 
-- increment `cases.last_decision_sequence` under the held case lock (race-free; never `max()+1`),
-- stamp it on `DecisionRow.decision_sequence` (`:485-495`),
-- pass it to `enqueue_decision_callback(..., decision_sequence=seq)` (`:506`) which records it on
-  the outbox row and its `ordering_stream='decision'`.
+### 4. Emission at the publisher (F1) — not frozen at decide time
 
-The allocation is the **single writer** of `last_decision_sequence`, always under the case lock, so
-two concurrent decides on one case produce strictly increasing, unique sequences; the
-`UNIQUE(case_id, decision_sequence)` constraint backstops any bug.
+The pipeline no longer flag-gates `decision_sequence` in `_callback_body` (`pipeline.py:571-598`);
+it always writes the sequence into the internal payload (§3). All M3 emission logic moves to the
+one real network emitter, `_deliver_decision_callback` (`publisher.py:82-122`):
 
-### 4. Wire emission (F1) — flag + schema + body-from-allocated-scalar
+- **Config** (`config.py`, beside `callback_include_event_sequence:77-79`):
+  `callback_include_decision_sequence: bool = False` — default off, prod-configurable. **Effective
+  emission** = this flag AND the activation record's `emission_active_at IS NOT NULL` (both, so a
+  stray flag can't emit before bootstrap; §5).
+- **Schema** (`api/schemas.py:144-164`): `decision_sequence: int | None = None` on `DecisionCallback`
+  (preserved on validate, like `event_sequence`).
+- **Outbound copy:** `_deliver_decision_callback(row)` reads the internal `payload_json` and builds
+  the wire body: emission active ⇒ **require** a non-NULL `decision_sequence` (integrity-fail if
+  missing on a `decision`-stream row) and include it; emission off ⇒ **strip** the field so the
+  body is byte-identical to today's. A pre-flag frozen row therefore emits correctly after
+  activation (it was backfilled, §1) and never strands.
+- **Pre-HTTP integrity seam:** before `self.http.send`, load the decision + outbox column + internal
+  JSON value and compare; on mismatch take an **explicit immediate integrity-failure path** (zero
+  HTTP, durable audit + terminal `dead`/superseded per case), **not** the ordinary retry loop.
 
-- **Config** (`config.py`, beside `callback_include_event_sequence:77-79`): add
-  `callback_include_decision_sequence: bool = False` — **default off, independently
-  production-configurable**, flipped per environment only after the staging activation test (§5).
-- **Schema** (`api/schemas.py:144-164`): add `decision_sequence: int | None = None` to
-  `DecisionCallback`, documented like `event_sequence` (preserved on validate, not dropped).
-- **Body** (`pipeline._callback_body`, `pipeline.py:571-598`): when the flag is on, set
-  `body["decision_sequence"] = seq` from the **exact scalar allocated to the persisted
-  `DecisionRow`** in §3 — not a re-read, not `event_sequence`. `event_sequence` (D1, the
-  triggering event's ordinal) and `decision_sequence` (the decision's ordinal) are distinct and
-  both may be present.
-- **Pre-HTTP assertion seam** (`publisher._deliver_decision_callback`, `publisher.py:82-122`):
-  before `self.http.send`, assert the claimed outbox row's `decision_sequence` equals the JSON
-  body's `decision_sequence` (when the flag is on); a mismatch raises a terminal, actionable error
-  and makes **zero** HTTP calls (guards against a drifted denormalized row sending the wrong
-  ordinal — F6).
+### 5. Platform authority — contract, bootstrap, and sticky semantics (F1/F2)
 
-### 5. Platform high-water contract (F1) — the authority
+Documented in `PLATFORM_INTEGRATION.md` + **ADR-008** (ADR-006 reserved for 6b, ADR-007 for PR 10 —
+left intact). Receiver contract:
 
-Documented in `PLATFORM_INTEGRATION.md` + **ADR-008** (leave PR 6b's reserved ADR-006 and PR 10's
-ADR-007 intact; record the ADR-008 reservation in ROADMAP). The receiver contract:
+> On `POST /kyc/decision` for `case_id=c` with `decision_sequence=s`: in one transaction, read the
+> durable per-case high-water `h(c)`; if `s > h(c)`, apply and set `h(c)=s`; if `s ≤ h(c)`, no-op +
+> success. Once `h(c)` is initialized (or after the global cutover), a body **without**
+> `decision_sequence` is a no-op (**sticky**), never a mutation. Emails carry no sequence.
 
-> On `POST /kyc/decision` with `decision_sequence = s` for `case_id = c`: in one transaction, read
-> the durable per-case high-water `h(c)` (default 0); if `s > h(c)`, apply the decision and set
-> `h(c) = s`; if `s <= h(c)`, **no-op** and return success (idempotent). Never apply a
-> lower-or-equal sequence. Emails carry no `decision_sequence` and are unaffected.
+**Production high-water bootstrap (F2) — before any emission:** a staging `seq 2 → seq 1` test
+proves the *algorithm*; it does **not** initialize production, where the platform already has
+effective state keyed on legacy `(case_id, run_id)` (`test_phase4_platform.py:88`) and its
+high-water would default to 0. Without bootstrap: legacy seq 2 already applied, tool crashed before
+`published_at`, 013 leaves platform h=0, requeued old seq 1 is admitted (`1>0`) → **revert**.
+Bootstrap procedure:
 
-**Activation (M3 cutover, gated):** `callback_include_decision_sequence` stays **off** until a v2
-**staging receiver test** proves that delivering `seq 2` then `seq 1` leaves **seq 2 effective**;
-then emission is enabled on **every** producer. The local `published_at`/`superseded` guard (§6)
-is retained only as an optimization and never as the authority. **Residual risk while the flag is
-off** (documented, mirrors PR 5a's pre-sunset v1 residual): the cross-replica race of §Context is
-covered only by the local best-effort guard; full cross-replica safety begins at flag-on. **PR 6b
-may not rely on 7b's ordering until this activation is complete** (§7 interaction).
+1. The tool emits a canonical, **hash-stamped manifest** of `{case_id, platform_current_run_id,
+   mapped decision_sequence}` (platform_current_run_id from the tool's immutable decisions).
+2. The **platform** derives each case's current run id from its **actually-effective** record,
+   resolves it uniquely against that manifest, seeds `h(case)` transactionally **without changing
+   decision content**, and returns a coverage/result manifest with a digest.
+3. The tool **refuses activation** on any unknown/duplicate run id, missing case, sequence mismatch,
+   or partial application; on full coverage it stamps `platform_bootstrapped_at` +
+   `manifest_expected_digest`/`manifest_returned_digest` on the singleton record.
+4. Only after bootstrap **and** the adversarial staging test may `emission_active_at` be stamped and
+   the flag turned on, per producer.
 
-### 6. Local `superseded` guard as optimization — full lifecycle (F5)
+`/readyz`, the publisher's effective-emission check, and 6b all read the singleton record to
+distinguish **flag configured** from **platform authority bootstrapped**. Residual risk before
+bootstrap (documented, mirrors PR 5a's pre-sunset v1 residual): only the local best-effort guard
+covers ordering; full cross-replica safety begins at `emission_active_at`.
+
+### 6. Local `superseded` guard as optimization — full lifecycle (F5/rev-2)
 
 In `process_once` (`publisher.py:143-158`), after claiming a `decision`-stream row with a non-NULL
-`decision_sequence`, **before `_deliver`**: if a higher-sequence decision for the case is already
-delivered —
-`EXISTS(SELECT 1 FROM decisions WHERE case_id=:c AND decision_sequence > :seq AND published_at IS
-NOT NULL)` — call a new **`_record_superseded(row)`** and return without sending. Otherwise deliver
-as today.
+sequence, before `_deliver`: if a higher-sequence decision for the case is already delivered
+(`EXISTS(SELECT 1 FROM decisions WHERE case_id=:c AND decision_sequence > :seq AND published_at IS
+NOT NULL)`), call `_record_superseded(row)` and return without sending. `_record_superseded` is one
+all-or-nothing txn (guarded `WHERE status='pending'`): sets `outbox.status='superseded'` +
+`resolved_at=now()`; **leaves `DecisionRow.published_at` NULL** (never sent); transitions the run
+through the **existing legal** `PUBLISH_DECISION→COMPLETE` edge with `finished_at` (**no** new
+`SUPERSEDED` RunState — that would contradict `domain/models.py:35-46`); appends audit
+`outbox.superseded` with old/superseding sequence + reason `higher_decision_already_published`.
+Retention prunes `superseded` alongside `delivered` (`retention.py:29-35`); metrics report it
+separately and **exclude** it from pending/dead alerts (`routes_metrics.py:60`); requeue already
+409s non-dead rows (`ui/routes.py:459`).
 
-`_record_superseded` is **one transaction** (all-or-nothing) that, for the still-`pending` outbox
-row (guarded `WHERE status='pending'` so a concurrent deliver can't double-resolve):
+### 7. PR 6b convergence contract (F5) — the exact shared predicate
 
-- sets `outbox.status='superseded'`, `outbox.resolved_at=now()` (a new terminal status alongside
-  `delivered`/`dead`),
-- **leaves `DecisionRow.published_at` NULL** — truthful: this decision was never sent,
-- transitions the run through the **existing legal edge** `PUBLISH_DECISION→COMPLETE` with
-  `finished_at` (guarded `WHERE state='PUBLISH_DECISION'`; **no** new `SUPERSEDED` RunState —
-  inventing one would contradict the normative state machine, `domain/models.py:35-46`),
-- appends an audit event `outbox.superseded` with `{case_id, run_id, outbox_id, old_sequence:seq,
-  superseding_sequence, reason:'higher_decision_already_published'}`.
+6b's activation must consume a **precise** predicate, not "latest delivered or superseded." For
+each case, over its allocated `decision_sequence` values:
 
-Lifecycle wiring:
+- Let `g` = the greatest allocated sequence. **Convergence for `g` holds iff** `g` is durably
+  **platform-acknowledged** — its decision has `published_at` set **and** its outbox row is
+  `delivered`. If `g`'s row is `pending` **or `dead`**, activation **blocks** (a later manual
+  requeue of a dead higher row legitimately changes platform state — higher wins — so it is a hard
+  blocker, matching 6b rev-5).
+- A `superseded` row counts resolved **only** when a strictly higher **delivered** sequence exists
+  (a truly-latest sequence can never be `superseded`, since superseding requires a strictly higher
+  one that would then be latest — so the rev-2 phrasing "delivered or superseded" was ill-formed).
+- **Lower** `dead` rows may be classified safe **only after** `emission_active_at` is stamped
+  (sticky platform high-water active, F1/F2) — before that, the local guard cannot prove safety.
+- For a **superseded 6b coordinator** callback, 6b **rev 6** must *separately* prove the higher
+  delivered decision was produced under the **target validator pair** — 7b ordering proves *order*,
+  not *freshness*.
 
-- **Retention** (`workers/retention.py:29-35`): extend the delivered-prune to also prune
-  `superseded` rows past retention (`status IN ('delivered','superseded') AND
-  COALESCE(delivered_at, resolved_at) < now() - …`), so a superseded row is not unpruned forever.
-- **Metrics/health** (`api/routes_metrics.py:60`, `outbox_by_status` already groups by status, so
-  `superseded` surfaces automatically): confirm the dead-letter/pending **alert** logic keys only
-  on `dead` (and genuine pending backlog) and **excludes** `superseded` (it is resolved, neither
-  pending nor dead). UI dead-letter panels (`ui/routes.py:110-118`) already filter `status='dead'`
-  — unaffected.
-- **Requeue** (`ui/routes.py:451-476`): `requeue_outbox` already refuses anything not `dead`
-  (`:459`), so a `superseded` row returns 409 unchanged — add a test pinning that.
+This predicate is written once as the shared query 6b imports; 7b ships it and its tests, 6b
+consumes it.
 
-### 7. Interaction with PR 6b (why this unblocks it — honestly scoped)
+## Rollout / cutover (operator order — RUNBOOK + DEPLOYMENT) (F4)
 
-6b's revalidation coordinator emits a **new** (higher-sequence) decision callback. An older
-callback later requeued is (a) declined locally by the `superseded` guard and (b) **authoritatively**
-ignored by the platform high-water. 6b's activation "delivery convergence" then reduces to: the
-latest per-case decision is delivered (or superseded) and no `pending` decision row outranks it —
-no maintenance fence, no public-write pause. **Honest dependency:** because the cross-replica race
-is closed only by the platform high-water, **6b may resume building on this primitive immediately,
-but 6b's own activation waits on the M3 decision-sequence cutover (§5) being complete** (flag on,
-staging-proven, all producers emitting). This is a real scheduling edge, recorded in ROADMAP M3.
+Every step names what the **tool** proves vs what the **platform/orchestrator** attests. Images are
+**digest-pinned**; every one-shot and service runs the reviewed digest.
 
-## Rollout / cutover (operator order — RUNBOOK + DEPLOYMENT)
+0. Build/publish the reviewed image; pin **every** one-shot/service to its digest.
+1. **Pause** platform submission and **edge-block** the composer; **disable autoscaling/restarts**
+   (so nothing respawns a writer).
+2. **Hard-stop** API, pipeline, outbox, `dev_worker` (owns queue **and** outbox,
+   `dev_worker.py:128-139`), retention, and every other DB writer. Prove zero by
+   **orchestrator replica/process state** — not a heartbeat (none exists) and not `pg_stat_activity`.
+3. From the pinned image: run **`python -m kyc_tool.ops.requeue_interrupted_jobs`** (the shipped
+   one-shot — requeues `running` jobs and **decrements attempts** so a killed final attempt is
+   retried, not passively dead-lettered; it refuses if any worker is live) and assert zero
+   `running`; then run a **dedicated outbox-lease-reset one-shot** (new, symmetric) that resets
+   every claimed-but-pending outbox lease (`next_attempt_at=now()` on `status='pending'`) **only
+   after** zero publishers, so a killed publisher's in-flight claim is immediately re-claimable.
+4. Run `alembic upgrade head` (013) — backfill + preflights + constraints, transactional; a
+   preflight `raise` rolls the whole cutover back untouched.
+5. Start **API only**; direct-probe `/readyz` (dynamic head + schema/activation state). Then start
+   and attest pipeline/outbox workers. **No mutating production smoke decision** — behavior is
+   proven against the exact digest in **staging / an isolated DB**, never by emitting a real
+   callback here.
+6. **Resume** submission. Start **no** old/non-digest writer after this point.
+7. Later, on the platform's schedule: run the **bootstrap** (§5) → stamp `platform_bootstrapped_at`;
+   run the adversarial staging `seq2→seq1` test; then stamp `emission_active_at` and set
+   `callback_include_decision_sequence=true` per producer. Only then may PR 6b activate.
 
-1. Announce + **pause/buffer** platform submission.
-2. **Stop** all API, pipeline, and outbox processes; **attest zero** old processes (documented
-   probe: no listeners on the API port, no worker heartbeats, `pg_stat_activity` shows no app
-   sessions).
-3. `alembic upgrade head` (013) — backfill + preflights + constraints, transactional. On any
-   preflight `raise`, the cutover rolls back untouched; fix the flagged data and retry.
-4. Start **only** the reviewed new image (API + workers). Direct-probe `/readyz` (dynamic head)
-   and a smoke decision.
-5. Resume submission. **Start no old writer after this point** (enforced by deploy tooling +
-   documented).
-6. Later, on the platform's schedule: run the staging high-water activation test (§5), then flip
-   `callback_include_decision_sequence=true` on every producer. Only then may PR 6b activate.
+## Rollback — two irreversible phases (F3)
 
-**Operational rollback** (not a schema downgrade — F4): redeploy the reviewed prior image with
-`callback_include_decision_sequence=false`. The schema stays; the down migration refuses once the
-namespace is used. Document the exact preflight query and recovery in RUNBOOK.
+- **Before `platform_bootstrapped_at`/`emission_active_at` exist:** operational rollback is allowed
+  **only on the schema-compatible PR-7b image** with publisher emission off — **never** the pre-7b
+  binary (its enqueue writes no `ordering_stream`/`decision_sequence`, `publisher.py:52-63`, and
+  fails 013's NOT-NULL/CHECK/FK on every insert). Recovery reuses the same stop→recover sequence.
+- **After activation:** emission-off is **prohibited** (a sticky-sequenced case would reject every
+  new callback, or — if missing values were still accepted — reopen the revert). Rollback stays on a
+  sequence-capable image with **emission on**; a code defect is handled by **forward-fix** or a
+  **separately approved** full maintenance/reconciliation procedure. **Production
+  startup/readiness FAILS if the activation record exists but `callback_include_decision_sequence`
+  is false.** Document the exact permitted image digests per phase and the preflight query.
 
-## Invariants (Global Constraints + review rubric)
+## Invariants
 
-- The claim FIFO is per `(case_id, ordering_stream)`; a stuck row in one stream never blocks the
-  other. `ordering_stream` is NOT NULL for every row (no unclaimable NULL/NULL).
-- `decision_sequence` is allocated **only** under `Case FOR UPDATE` from the locked counter, is
-  unique per case (`UNIQUE(case_id, decision_sequence)`), and is monotonic.
-- Every `decision`-stream outbox row is sequenced and FK-bound to its decision; every `email` row
-  has NULL sequence; the CHECK enforces the kind↔stream↔nullability triple. The wire body's
-  sequence is asserted equal to the row's before any HTTP.
-- **Ordering authority is the platform high-water** (flag-gated M3 cutover). The local `superseded`
-  guard is a best-effort optimization; it never sends a locally-provable-obsolete callback but is
-  not relied on for cross-replica correctness.
-- `superseded` is a real terminal state: run reaches `COMPLETE` via the existing legal edge,
-  `published_at` stays NULL (never sent), `resolved_at` set, same retention as `delivered`, metrics
-  report it separately and exclude it from pending/dead alerts, requeue refuses it.
-- 013 is a **drained cutover** (no `CONCURRENTLY`, no rolling deploy) with a
-  **forward-only-after-use** downgrade.
-- Delivery still stamps `decisions.published_at` + run `COMPLETE` (unchanged; 6b depends on it).
-- At-least-once preserved (a non-superseded row still retries with backoff; `superseded` is a
+- Claim FIFO per `(case_id, ordering_stream)`; `ordering_stream` NOT NULL everywhere (no
+  NULL/NULL). `decision_sequence` allocated only under `Case FOR UPDATE`, unique per case, monotonic.
+- Every `decision`-stream row is sequenced, FK-bound, and carries the sequence in its internal
+  payload; every `email` row has NULL sequence; the CHECK enforces the triple. **Emission is decided
+  at the publisher**, gated on the flag **and** `emission_active_at`; the outbound body's sequence is
+  asserted against the row before HTTP.
+- Ordering authority is the **platform high-water**, bootstrapped from its effective state before
+  flag-on and **sticky** thereafter. The local `superseded` guard is a best-effort optimization only.
+- `superseded` is a real terminal: run `COMPLETE` via the legal edge, `published_at` NULL,
+  `resolved_at` set, same retention as `delivered`, metrics separate, requeue refuses.
+- The migration is a **drained cutover** using the shipped recovery one-shot + a symmetric
+  outbox-lease reset; the downgrade is **forward-only-after-use**; rollback is **two-phase
+  irreversible**; startup refuses flag-off after activation.
+- The **6b convergence contract** (§7) is exact: greatest sequence platform-acknowledged or
+  activation blocks (incl. `dead`); superseded resolved only under a strictly higher **delivered**.
+- Delivery still stamps `published_at` + run `COMPLETE`. At-least-once preserved (`superseded` is a
   deliberate terminal for a *superseded* decision, never a drop of a *current* one).
-- **No `ENGINE_BUILD_ID`/scoring change** — delivery-layer only. The whole-tree drift guard
+- **No `ENGINE_BUILD_ID`/scoring change** — delivery-layer only; the whole-tree drift guard
   (`EXPECTED_ENGINE_SOURCE_HASH` over `src/kyc_tool/**/*.py`) re-pins on the src touch **with no
-  bump** (adding a delivery field/flag is not a scoring/gate/decision semantic change; same
-  handling as `callback_include_event_sequence`). Golden decision *content* is byte-identical; only
-  delivery ordering, the new optional wire field, and the terminal-state set change.
-- `KYC_Tool_Build_Package/` + **M2** untouched. This lifts nothing about enforcement/scoring scope;
-  it makes an obsolete callback unable to revert platform state, which is a strict hardening.
+  bump** (same handling as `callback_include_event_sequence`). Golden decision *content*
+  byte-identical; only ordering, the optional wire field, and the terminal-state set change.
+- `KYC_Tool_Build_Package/` + **M2** untouched. This lifts nothing about enforcement/scoring; it
+  makes an obsolete callback unable to revert platform state — strict hardening.
 
 ## Testing strategy (each finding carries a mutation witness)
 
-- **Migration 013 (F2/F3/F6):** seed both kinds + delivered/pending/**dead** pre-013 callbacks +
-  manual decisions; upgrade; assert every row mapped and claimable, contiguous unique automatic
-  sequences per case in `(decided_at,id)` order, manual sequences NULL, outbox sequences matching
-  their decisions, `last_decision_sequence = per-case max`. Prove a direct post-migration insert of
-  a NULL/bad `ordering_stream`, a `decision`-stream row with NULL sequence, an `email` row with a
-  sequence, an outbox sequence ≠ its decision's, and a duplicate `(case_id, decision_sequence)` all
-  **fail at commit** (CHECK/FK/UNIQUE). Preflight: seed an orphan callback / duplicate-run decision
-  / remaining-NULL and assert the migration **refuses** (rolls back). Mutation: removing the CHECK,
-  the FK, the assert-zero-NULL step, or the backfill each makes a test fail. `up→down→up` clean on
-  an empty schema.
-- **Downgrade refusal (F4):** empty-schema `up→down→up` works; then populate/publish one sequence
-  and assert downgrade **refuses without deleting or changing** any decision/outbox/counter row.
-  Mutation-removing any one populated surface from the preflight must fail.
-- **Stream separation (F-defect-1):** a perpetually-failing POC email (stuck `pending` on backoff)
-  never blocks the same case's decision callback — the decision delivers while the email retries.
-  Real `OutboxPublisher` + real Postgres.
-- **Sequence allocation:** two concurrent decide transactions on one case (a real barrier) produce
-  strictly increasing, unique sequences; the UNIQUE constraint backstops a forced duplicate.
-- **Cross-replica revert / platform authority (F1 — the load-bearing 6b test):** two real
-  `OutboxPublisher` instances with a barrier at HTTP-success/before-DB-stamp; requeue seq 1 in the
-  gap; assert the **fake high-water receiver** sees both attempts but keeps **seq 2 effective**.
-  Mutation: deleting the `decision_sequence` callback field, disabling the receiver high-water, or
-  treating a lower sequence as an ordinary update each makes the test **fail**. Also: the pre-HTTP
-  body/row assertion — tamper the JSON body's sequence and prove **zero** HTTP calls + a terminal
-  error.
-- **Local superseded optimization + lifecycle (F5):** decision seq 2 delivered; requeue seq 1 →
-  claimed → `_record_superseded`: assert the atomic tuple (outbox `superseded`+`resolved_at`, run
-  `COMPLETE`+`finished_at`, decision `published_at` **still NULL**, audit `outbox.superseded` with
-  old/superseding sequence), retention eligibility, metrics report `superseded` separately and it
-  does **not** trip pending/dead alerts, and the UI requeue returns **409**. Fault between each
-  staged update and commit → all-or-nothing. Normal progression seq 1→2→3 all delivered in order
-  (guard never fires). A NULL-sequence (email) row delivers with no guard.
-- **Legacy dead callback via real UI (F3):** deliver a new high sequence; requeue a backfilled old
-  **dead** decision callback through the real `POST /ui/api/requeue/outbox/{id}` endpoint; assert
-  it is superseded locally and cannot change the fake receiver's high-water. Mutation: allowing one
-  old (NULL-sequence-writing) writer after cutover must fail a rollout-order assertion.
-- **Lineage (F7):** `tests/unit/test_migration_lineage.py` green after the §C renumber (7b=`013`
-  `pending` until authored). Do **not** add a helper-only ownership test duplicating the table.
-- **Gate:** `./manage.sh lint` (ruff + import-linter 2/0); targeted real-Postgres
-  migration/outbox/UI tests above; `tests/unit/test_migration_lineage.py`; then `./manage.sh test`
-  full suite green.
+- **Migration 013 (rev-2 + F1 payload backfill):** seed both kinds + delivered/pending/**dead**
+  pre-013 callbacks + manual decisions; upgrade; assert mapped/claimable rows, contiguous unique
+  per-case sequences (`decided_at,id`), manual NULL, outbox sequences matching decisions, counter =
+  per-case max, **and each pre-013 `decision_callback.payload_json` now contains its sequence**.
+  Direct post-migration inserts of NULL/bad stream, NULL-sequence decision row, sequenced email row,
+  outbox≠decision sequence, and duplicate `(case_id, decision_sequence)` all **fail at commit**.
+  Preflight refusals (orphan/dup-run/remaining-NULL) roll back. Mutation: removing the CHECK, FK,
+  assert-zero-NULL, or the payload backfill each fails a test. `up→down→up` clean on empty schema.
+- **Frozen-payload emission (F1):** create pending **and** dead callbacks while emission off; flip
+  only the publisher's effective emission on; prove **both emit their backfilled sequence**. Then
+  send seq 2, then a body with **no** sequence, and prove the latter **cannot** change receiver
+  state (sticky). Mutations that gate in `_callback_body`, omit the JSON backfill, or accept
+  missing-after-sequenced must fail. Tamper the outbound body's sequence ≠ the row → **zero** HTTP +
+  terminal integrity error.
+- **Production bootstrap (F2):** platform effectively at legacy seq 2, high-water unset; prove
+  **activation refuses** and seq 1 cannot be admitted; seed the verified mapping to `h=2`; prove
+  seq 1 is a no-op and seq 3 applies. Mutation-skipping coverage, digest comparison, or
+  platform-current-run binding must fail.
+- **Two-phase rollback (F3):** execute the **old** enqueue SQL against post-013 constraints and
+  prove it **fails** (pre-7b image barred). Stamp `emission_active_at`, boot with the flag false,
+  and prove **startup/readiness fails** (no publisher constructed, no callback claimed). Mutation
+  permitting post-activation flag-off must fail.
+- **Hard-stop recovery (F4):** kill a **final-attempt** pipeline job and an outbox publisher
+  **after claim**; run the real `requeue_interrupted_jobs` + outbox-lease-reset one-shots; prove the
+  job is requeued **without consuming the forced-stop attempt** and the callback is **immediately
+  claimable**. Duplicate HTTP after a send-before-crash is allowed and handled by receiver
+  dedupe/high-water. Mutation omitting either recovery command must fail. Assert the runbook order
+  bars any post-cutover non-digest writer and forbids a mutating production smoke.
+- **Downgrade refusal (F3/rev-2):** empty-schema `up→down→up` works; populate/publish one sequence
+  **or** stamp bootstrap/activation and prove downgrade **refuses without changing** any row.
+- **Stream separation / allocation / superseded lifecycle / legacy-dead-via-UI** (rev-2, kept):
+  stuck POC email never blocks the case's decision; two concurrent decides → strictly increasing
+  unique sequences; superseded atomic tuple (outbox+run+decision+audit) + retention + metrics-
+  separate + requeue-409; a backfilled old **dead** callback requeued through the real
+  `POST /ui/api/requeue/outbox/{id}` is superseded and cannot change the fake receiver.
+- **6b convergence contract (F5):** highest row **dead** ⇒ convergence **false**; lower row
+  superseded by a delivered higher ⇒ **true for ordering**; coordinator superseded by a higher
+  **pre-target** decision ⇒ 6b activation still **false**.
+- **Lineage (F6):** `tests/unit/test_migration_lineage.py` green after the §C **and detailed-section**
+  renumber; `rg` shows no contradictory live ROADMAP allocation. No helper-only duplicate test.
+- **Gate:** `./manage.sh lint`; the real lineage test; targeted real-Postgres migration/outbox/UI/
+  **ops** tests above; then `./manage.sh test`.
 
 ## Docs + governance (updated in the build)
 
-`PLATFORM_INTEGRATION.md` (receiver high-water contract), `DEPLOYMENT.md` + `RUNBOOK.md` (drained
-cutover order, attest-zero probe, activation test, forward-only-after-use rollback + preflight
-query), `OVERVIEW.md` (stream separation + ordering authority), **ADR-008** (platform-authoritative
-decision ordering; ADR-006 reserved for 6b, ADR-007 for PR 10 — left intact), `AUDIT_FINDINGS.md`
-(backfill = deterministic reconstruction, not proof of publication order), `.agents/ROADMAP.md`
-(renumber + ADR-008 reservation, done in this spec commit per F7).
+`PLATFORM_INTEGRATION.md` (receiver contract + bootstrap manifest + sticky semantics),
+`DEPLOYMENT.md` + `RUNBOOK.md` (digest-pinned stop→recover→migrate→start order, orchestrator
+attestation, bootstrap, activation, **two-phase** rollback + startup-refusal + preflight queries),
+`OVERVIEW.md` (stream separation + platform-authoritative ordering), **ADR-008**, `AUDIT_FINDINGS.md`
+(backfill = deterministic reconstruction, not proof of publication order; activation record),
+`.agents/ROADMAP.md` (table **and** detailed sections + ADR-008, this commit).
 
-## ROADMAP renumber (F7 — done in this spec's commit, not deferred)
+## ROADMAP renumber (F6 — table **and** detailed sections, this commit)
 
-§C reservation table and status prose updated **now**: PR 7b `013` (item 8, **pending** until the
-migration is authored), PR 6b `014` (item 7B), PR 7a `015` (item 9), PR 8 `016`, PR 10 `017`; the
-"next unit" prose reflects the approved reorder (PR 7b before PR 6b). The build flips only PR 7b's
-State to `shipped` when 013 lands. The real lineage parser/validator is run after the edit.
+§C table, status prose, **and the per-unit detailed sections** updated now: PR 7b `013`/down `012`
+(item 8, **pending** until authored, rev-3 schema/cutover), PR 6b `014`/down `013`, PR 7a `015`/down
+`014`; 8=`016`, 10=`017`. `rg` the repo for stale reservation prose (the paused PR-6b rev-5 spec may
+stay historically versioned, but its future rev 6 uses `014`). Keep the table-based lineage test; the
+build flips only PR 7b's State to `shipped`.
 
 ## Out of scope (YAGNI)
 
-- No email-semantics change beyond stream separation (POC emails already redacted on delivery/dead).
-- No per-decision *content* change; no cross-case ordering (each case independent).
+- No email-semantics change beyond stream separation. No per-decision *content* change; no
+  cross-case ordering.
 - No enforcement/scoring/`ENGINE_BUILD_ID` change; M2 untouched.
+- `event_sequence` (D1, shipped in PR 2) keeps its existing `_callback_body` gate — it is an
+  ordering *hint*, not the authority, and is out of scope here; only `decision_sequence` moves to
+  publisher-side emission. (A future unit may align `event_sequence` to the same pattern.)
 - PR 7a (queue lease fencing) and PR 6b (revalidation) remain separate units; 7b supplies the
-  ordering primitive + platform contract 6b consumes.
+  ordering primitive, platform contract, and activation record 6b consumes.
