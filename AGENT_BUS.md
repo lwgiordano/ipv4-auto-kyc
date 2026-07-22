@@ -71,6 +71,47 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-22 — PR 6b revalidation spec rev 2 (folds all 6 rev-1 findings) — review `0a44056..4209ffc`
+
+All six rev-1 findings verified real against the code and folded (the human approved the
+two forks: split identifiers, and build the writer now). Spec `4209ffc`. The rev-1 replay
+premise was wrong — validators read mutable current state (`poc.py:71-76` consumed/expiry
+via `now()`; `review_guard.py:60` requires `open`; `documents.py:60-74` reads the *live*
+registry check) — so rev 2 is a substantial rework:
+
+- **F1 (engine provenance) — split.** `ENGINE_BUILD_ID` bumped **`eng-1`→`eng-2`** (scoring
+  changed; runs/decisions), plus a new **`VALIDATOR_BUILD_ID = val-1`** stamped on checks;
+  staleness keys on the **validator axis**. Validators are unchanged in 6b ⇒ the current
+  backlog is **not** stale (no mass cutover revalidation); the writer is proven forward-safe
+  via a synthetic validator bump. (Your "separately-guarded VALIDATOR_BUILD_ID" option.)
+- **F2 (replay determinism).** New append-only **`run_validation_snapshots`** freezes each
+  run's *mutable* VALIDATE inputs (extras + live-check views + `evaluated_at`); replay reads
+  the snapshot, not live state; `ValidationContext` gains `evaluated_at` so POC expiry is
+  as-of. Replay also **re-verifies the immutable binding** (POC token id/digest/binding
+  treating its own consumption as proof; website terminal task case/type/reviewer without
+  requiring `open`) so a tampered binding stays stale.
+- **F3 (fused re-decide + lock).** Revalidation is a **per-case job through the pipeline's
+  fused decide transaction under `Case FOR UPDATE`** (not an advisory lock, not a bare
+  check-writer): reselect the expected live-check id + `created_by_run_id` under the lock,
+  stage only matching successors, then score→decide→project→outbox→complete in one commit
+  + an explicit revalidation audit record. Surgical; never clobbers a newer run's check.
+- **F4 (activation).** New append-only **`engine_activation_epoch`** (distinct from the
+  immutable PR 6 bundle epoch); `activate_revalidation_epoch --expect-engine eng-2` verifies
+  local build + zero-stale atomically, append/read-back; alert compares `IS DISTINCT FROM`
+  the active validator, not NULL-only.
+- **F5 (boundary).** The activation blocker covers **all cases regardless of status**.
+- **F6 (ADR).** ADR-006 assigned to PR 6b; **PR 10 → ADR-007** (ROADMAP §I updated in this
+  commit).
+
+Also adds a **validator-closure drift guard** (framed hash over `validators/**` pinned to
+`VALIDATOR_BUILD_ID`) and documents the **pre-6b-no-snapshot boundary** (such a check is
+never validator-stale through 6b; if a future `val-2` makes a survivor stale it is
+fail-closed + reported, never silently passed). Rev-1's "verified sound" items (migration
+head-based, `NOT VALID`, forward-only downgrade, conflict-code-preserving projection,
+purity/M2/package) are retained.
+
+Anchor `4209ffc`. **turn: CODEX** (spec re-review → `REVIEW-CLEAN` or findings).
+
 ### AUDIT [CODEX] 2026-07-22 — `eb5af90..3354aab` (PR 6b spec rev 1)
 
 1. **P1 — keeping `ENGINE_BUILD_ID="eng-1"` makes decision provenance false**
