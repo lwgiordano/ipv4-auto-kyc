@@ -29,6 +29,7 @@ from kyc_tool.db.session import uow
 from kyc_tool.db.tables import AdapterResult, Case, DecisionRow, Event, Run
 from kyc_tool.domain import scoring
 from kyc_tool.domain.decision import decide, hold_positive_for_manual_review
+from kyc_tool.domain.engine import ENGINE_BUILD_ID
 from kyc_tool.domain.models import (
     AdapterStatus,
     BrokerStatus,
@@ -362,6 +363,11 @@ class Pipeline:
             if not self._hop(session, run_id, from_state, RunState.PUBLISH_DECISION):
                 return  # another attempt already decided
 
+            # PR 6 (Task 9): which engine build resolved/scored this run — paired
+            # with the run's IMMUTABLE creation-pin policy_bundle_hash (never
+            # written here). Stamped on every decide, flag on or off.
+            run.engine_build_id = ENGINE_BUILD_ID
+
             # Authoritative website-completion guard (PR 5b): the case is
             # already FOR UPDATE from _load above, so locking the referenced
             # ReviewTask here preserves a consistent case→task lock order.
@@ -425,6 +431,7 @@ class Pipeline:
                 event_type=event.event_type,
                 payload=event.payload_json or {},
                 run_id=run_id,
+                policy_bundle_hash=bundle.bundle_hash,
             )
 
             # WRITE_CHECKS (logical stage) — includes the ORG-ID→POC cascade
@@ -434,6 +441,7 @@ class Pipeline:
                 intents=intents,
                 rubric=bundle.rubric,
                 run_id=run_id,
+                policy_bundle_hash=bundle.bundle_hash,
             )
             if self.side_effects is not None:
                 self.side_effects.on_event(
@@ -481,6 +489,7 @@ class Pipeline:
                 gates_json=result.gates.as_dict(),
                 buy_enablement=result.buy_enablement.value,
                 policy_shas=bundle.shas,
+                engine_build_id=ENGINE_BUILD_ID,
             )
             session.add(decision_row)
 
@@ -508,6 +517,7 @@ class Pipeline:
                 gates=result.gates.as_dict(),
                 buy_enablement=result.buy_enablement.value,
                 policy_bundle_hash=bundle.bundle_hash,
+                resolved_policy_bundle_hash=bundle.bundle_hash,
                 partial=run.partial,
             )
 

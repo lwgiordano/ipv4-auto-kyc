@@ -28,6 +28,7 @@ from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Case, DecisionRow, Event, ReviewTask, Run
 from kyc_tool.domain import scoring
 from kyc_tool.domain.decision import buy_enablement_for
+from kyc_tool.domain.engine import ENGINE_BUILD_ID
 from kyc_tool.domain.models import BuyStatus, CaseStatus
 from kyc_tool.events.review_guard import reviewer_actor_reason
 from kyc_tool.policy.loader import PolicyBundle
@@ -260,6 +261,7 @@ def _handle_manual_approve(
             gates_json={"bypassed": True},
             buy_enablement=buy_enablement_for(org_passed).value,
             policy_shas=policy.shas,
+            engine_build_id=ENGINE_BUILD_ID,
             manual=True,
             reviewer_id=reviewer_id,
         )

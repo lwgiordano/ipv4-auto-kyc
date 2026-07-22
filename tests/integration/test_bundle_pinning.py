@@ -4,12 +4,36 @@
 # `structlog.testing.capture_logs()` is the sink (event dict keyed by `event` + kwargs).
 # Both proofs drive `pipeline_worker.build_worker()` (the actual startup path), not a
 # test-authored seed_and_verify/attest ordering.
+import hashlib
+
 import pytest
 import structlog
 from sqlalchemy import text
 
+from kyc_tool.adapters.base import AdapterOutput, hash_inputs
+from kyc_tool.checkstore import repo as checkstore
+from kyc_tool.domain.models import AdapterStatus, CheckStatus
+from kyc_tool.orchestration.pipeline import Pipeline
+from kyc_tool.policy.loader import POLICY_FILES, read_policy_files
 from kyc_tool.policy_store import repo as store
-from tests.integration._bundle_helpers import bundle_x
+from kyc_tool.queue.worker import Worker
+from kyc_tool.storage.object_store import FsStore
+from tests.integration._bundle_helpers import bundle_x, make_bundle_y, raw_x
+from tests.integration.shared import ACME_KYB
+
+_EMAIL_KYB = {**ACME_KYB, "email": {"email": "ops@acme.example", "domain": "acme.example"}}
+
+
+class _OkEmailAdapter:                                   # writes a real verified_email check
+    adapter_id = "email_verification"
+
+    def input_hash(self, snapshot, event):
+        return hash_inputs(self.adapter_id, snapshot.get("email"))
+
+    def run(self, snapshot, event) -> AdapterOutput:
+        e = snapshot.get("email")
+        return AdapterOutput(self.adapter_id, AdapterStatus.OK, raw=b"{}",
+                             normalized={"verified": True, "email": e["email"], "domain": e["domain"]})
 
 
 def test_pipeline_worker_startup_attests_and_refuses_corrupt(
@@ -137,3 +161,128 @@ def test_mixed_era_reprices_score_gate_and_callback(
     publisher.process_pending()
     checks = callback_capture.requests[-1]["body"]["checks"]
     assert any(c["type"] == T and c["points"] == 10 for c in checks)  # re-priced points in callback
+
+
+# --- Task 9: atomic bundle+engine provenance; immutable run pin ------------
+
+
+@pytest.mark.parametrize("flag, resolved_is_x", [(True, True), (False, False)],
+                         ids=["flag_on_pins_X", "flag_off_drifts_to_Y"])
+def test_cross_bundle_provenance(session_factory, policy, settings, tmp_path, engine,
+                                 clean_db, post_event, flag, resolved_is_x):
+    bx = bundle_x()
+    ydir, by = make_bundle_y(tmp_path, check_type="verified_email", points=1, category="supporting")
+    with session_factory() as s:
+        store.store_bundle(s, raw_x())                    # X from the normative dir
+        store.store_bundle(s, read_policy_files(ydir))
+        s.commit()
+    # app ingests under X (records bx.bundle_hash on the run); worker process bundle = Y
+    post_event("case-xy", "kyb.run_requested", _EMAIL_KYB)
+    cfg = settings.model_copy(update={"enforce_bundle_pinning": flag})
+    pl = Pipeline(session_factory, by, FsStore(tmp_path/"e"), cfg,
+                  adapters={"email_verification": _OkEmailAdapter()})
+    Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+           on_dead_letter=pl.on_dead_letter).run_until_idle()
+    expected = bx if resolved_is_x else by
+    with session_factory() as s:
+        run = s.execute(text("SELECT policy_bundle_hash, engine_build_id FROM runs "
+                             "WHERE case_id='case-xy'")).first()
+        assert run.policy_bundle_hash == bx.bundle_hash      # creation pin ALWAYS X (immutable)
+        assert run.engine_build_id == "eng-1"
+        chk = s.execute(
+            text("SELECT policy_bundle_hash FROM checks WHERE case_id='case-xy' "
+                 "AND check_type='verified_email' AND superseded_by_check_id IS NULL")
+        ).scalar_one()
+        assert chk == expected.bundle_hash                   # stamped under the resolved bundle
+        dec = s.execute(text("SELECT policy_shas, engine_build_id FROM decisions "
+                             "WHERE case_id='case-xy' ORDER BY decided_at DESC LIMIT 1")).first()
+        assert dec.policy_shas == expected.shas and dec.engine_build_id == "eng-1"
+        # reconstruct the bundle hash from the recorded shas (loader.py:56-58 formula:
+        # sha256 of "".join(f"{name}:{sha};") over POLICY_FILES) → equals the resolved bundle
+        rebuilt = hashlib.sha256("".join(f"{n}:{dec.policy_shas[n]};"
+                  for n in POLICY_FILES).encode()).hexdigest()
+        assert rebuilt == expected.bundle_hash
+
+
+def test_cross_bundle_decision_diverges_approve_x_manual_y(
+        session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
+    ydir, by = make_bundle_y(tmp_path, threshold=101)     # Y differs ONLY in threshold
+    with session_factory() as s:
+        store.store_bundle(s, raw_x())
+        store.store_bundle(s, read_policy_files(ydir))
+        s.execute(text("INSERT INTO cases (id) VALUES ('case-div')"))   # broker_status defaults 'clear'
+        for ct, cat in [("verified_company_email", "control_proof"),
+                        ("official_registry_match", "legal_business_proof"),
+                        ("org_id_match", "control_proof"),
+                        ("business_document_verified", "legal_business_proof")]:
+            checkstore.write_check(s, case_id="case-div", check_type=ct, status=CheckStatus.PASS,
+                                   points_awarded=25, category=cat, source="seed")   # stamped sum = 100
+        s.commit()
+
+    def _decide(flag: bool) -> str:
+        post_event("case-div", "recalculate.requested", {})   # run pinned to app bundle X
+        cfg = settings.model_copy(update={"enforce_bundle_pinning": flag})
+        pl = Pipeline(session_factory, by, FsStore(tmp_path / f"e{flag}"), cfg, adapters={})
+        Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+               on_dead_letter=pl.on_dead_letter).run_until_idle()
+        with session_factory() as s:
+            return s.execute(text("SELECT decision FROM decisions WHERE case_id='case-div' "
+                                  "ORDER BY decided_at DESC LIMIT 1")).scalar_one()
+
+    assert _decide(flag=True) == "approve"                      # pinned X: 100>=100, all gates, org_id
+    assert _decide(flag=False) == "manual_review_insufficient"  # process Y: 100<101 → score_met False
+
+
+def test_manual_approve_stamps_engine_build_id(session_factory, clean_db, post_event):
+    # manual-approve writes DecisionRow(run_id=None) synchronously in the API
+    # (events/ingest.py:_handle_manual_approve) — Task 9 stamps ENGINE_BUILD_ID there.
+    post_event("c-ma", "reviewer.manual_approve", {"reviewer_id": "rev-1"},
+               actor={"type": "reviewer", "id": "rev-1"})
+    with session_factory() as s:
+        eid = s.execute(text("SELECT engine_build_id FROM decisions WHERE case_id='c-ma' "
+                             "AND manual=true ORDER BY decided_at DESC LIMIT 1")).scalar_one()
+    assert eid == "eng-1"
+
+
+def test_broker_blocked_short_circuit_stamps_provenance(
+        session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
+    bx = bundle_x()
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO cases (id, broker_status) VALUES ('case-blk','blocked')"))
+    with session_factory() as s:
+        store.store_bundle(s, raw_x())
+        s.commit()
+    post_event("case-blk", "email.verified",
+               {"email": "o@acme.test", "domain": "acme.test", "verified_at": "2026-07-21T00:00:00Z"})
+    cfg = settings.model_copy(update={"enforce_bundle_pinning": True})
+    pl = Pipeline(session_factory, policy, FsStore(tmp_path/"e"), cfg, adapters={})  # no broker_matcher
+    Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+           on_dead_letter=pl.on_dead_letter).run_until_idle()
+    with session_factory() as s:
+        dec = s.execute(text("SELECT decision, policy_shas, engine_build_id FROM decisions "
+                             "WHERE case_id='case-blk' ORDER BY decided_at DESC LIMIT 1")).first()
+        assert dec.decision == "reject" and dec.engine_build_id == "eng-1" and dec.policy_shas == bx.shas
+        reid = s.execute(text("SELECT engine_build_id FROM runs WHERE case_id='case-blk'")).scalar_one()
+        assert reid == "eng-1"
+
+
+def test_cascade_successor_carries_resolved_hash(
+        session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
+    bx = bundle_x()
+    with session_factory() as s:
+        store.store_bundle(s, raw_x())
+        s.execute(text("INSERT INTO cases (id) VALUES ('case-cas')"))
+        checkstore.write_check(s, case_id="case-cas", check_type="org_id_match",
+                               status=CheckStatus.PASS, points_awarded=25, category="control_proof",
+                               source="direct_rir_rdap", source_detail={"org_handle": "ORG-A"})
+        s.commit()                                          # pre-pinning: policy_bundle_hash NULL
+    post_event("case-cas", "org_id.submitted", {"rir": "arin", "org_handle": "ORG-B"})
+    cfg = settings.model_copy(update={"enforce_bundle_pinning": True})
+    pl = Pipeline(session_factory, policy, FsStore(tmp_path/"e"), cfg, adapters={})  # no rdap
+    Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
+           on_dead_letter=pl.on_dead_letter).run_until_idle()
+    with session_factory() as s:
+        succ = s.execute(text("SELECT status, policy_bundle_hash FROM checks WHERE case_id='case-cas' "
+                              "AND check_type='org_id_match' AND superseded_by_check_id IS NULL")).one()
+        assert succ.status == "needs_review"                # cascade successor (points removed)
+        assert succ.policy_bundle_hash == bx.bundle_hash    # stamped under the resolved (pinned X) bundle

@@ -64,6 +64,7 @@ def write_check(
     reason_codes: list[str] | None = None,
     source_detail: dict | None = None,
     created_by_run_id: str | None = None,
+    policy_bundle_hash: str | None = None,
 ) -> Check:
     """Insert a new check, superseding the live check of the same type (if any)
     in the same transaction. Points are only ever awarded on PASS."""
@@ -96,6 +97,7 @@ def write_check(
         source_detail_json=source_detail or {},
         reason_codes=list(reason_codes or []),
         created_by_run_id=created_by_run_id,
+        policy_bundle_hash=policy_bundle_hash,
     )
     session.add(new_check)
     session.flush()
@@ -125,7 +127,12 @@ def write_check(
 
 
 def supersede_without_replacement(
-    session: Session, check: Check, *, run_id: str | None, reason: str
+    session: Session,
+    check: Check,
+    *,
+    run_id: str | None,
+    reason: str,
+    policy_bundle_hash: str | None = None,
 ) -> None:
     """Cascade path (e.g. ORG-ID change invalidates a verified POC): the old
     check is superseded by a successor carrying the cascade reason, status
@@ -141,6 +148,7 @@ def supersede_without_replacement(
         reason_codes=[reason],
         source_detail={"cascaded_from": check.id},
         created_by_run_id=run_id,
+        policy_bundle_hash=policy_bundle_hash,
     )
 
 
@@ -178,6 +186,7 @@ def _supersede_on_identity_change(
     submitted: str,
     run_id: str | None,
     reason: str,
+    policy_bundle_hash: str | None = None,
 ) -> None:
     live = _live_check(session, case_id, check_type)
     if live is None:
@@ -187,7 +196,9 @@ def _supersede_on_identity_change(
     # than what was just submitted (a blank `recorded` — e.g. a resource-bound
     # POC on an ORG-ID change — is left alone)
     if submitted and recorded and recorded != submitted:
-        supersede_without_replacement(session, live, run_id=run_id, reason=reason)
+        supersede_without_replacement(
+            session, live, run_id=run_id, reason=reason, policy_bundle_hash=policy_bundle_hash
+        )
 
 
 def supersede_stale_identity_proof(
@@ -197,6 +208,7 @@ def supersede_stale_identity_proof(
     event_type: str,
     payload: dict,
     run_id: str | None,
+    policy_bundle_hash: str | None = None,
 ) -> None:
     """Item 5: an identity change invalidates identity-bound proof INDEPENDENT of
     whether the revalidation adapter succeeds. Runs in the decide txn BEFORE the
@@ -215,6 +227,7 @@ def supersede_stale_identity_proof(
             submitted_org,
             run_id,
             ReasonCode.ORG_ID_REVALIDATION_PENDING.value,
+            policy_bundle_hash=policy_bundle_hash,
         )
         _supersede_on_identity_change(
             session,
@@ -224,6 +237,7 @@ def supersede_stale_identity_proof(
             submitted_org,
             run_id,
             ReasonCode.POC_NOT_ASSOCIATED.value,
+            policy_bundle_hash=policy_bundle_hash,
         )
     elif event_type == "poc.submitted":
         # a POC proof is bound to the FULL (rir, poc, org, resource) tuple, so a
@@ -238,7 +252,11 @@ def supersede_stale_identity_proof(
             and _poc_identity(payload) != _poc_identity(live.source_detail_json or {})
         ):
             supersede_without_replacement(
-                session, live, run_id=run_id, reason=ReasonCode.POC_NOT_ASSOCIATED.value
+                session,
+                live,
+                run_id=run_id,
+                reason=ReasonCode.POC_NOT_ASSOCIATED.value,
+                policy_bundle_hash=policy_bundle_hash,
             )
 
 
@@ -249,6 +267,7 @@ def apply_check_intents(
     intents: list,
     rubric,
     run_id: str | None,
+    policy_bundle_hash: str | None = None,
 ) -> list[Check]:
     """Record validated intents and apply the spec's dynamic cascade rules
     (scoring_rubric.json dynamic_rules):
@@ -273,6 +292,7 @@ def apply_check_intents(
                 reason_codes=list(intent.reason_codes),
                 source_detail=dict(intent.source_detail),
                 created_by_run_id=run_id,
+                policy_bundle_hash=policy_bundle_hash,
             )
         )
 
@@ -301,5 +321,6 @@ def apply_check_intents(
                     live_poc,
                     run_id=run_id,
                     reason="poc_not_associated",
+                    policy_bundle_hash=policy_bundle_hash,
                 )
     return written
