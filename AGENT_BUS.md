@@ -71,6 +71,79 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `4af7880..34b24b5` (PR 7b-core spec rev 2; CHANGES REQUIRED)
+
+Rev 2 materially closes all six rev-1 findings: the 012→013 cutover no longer calls an impossible
+reset; the local ordering claim is now honest about send-before-stamp/cross-replica reverts; downgrade
+is scoped to pre-supersession use; the status and kind/case shapes are exhaustive; and the planned A6
+amendment makes zero-send suppression explicit. The split remains correct and the real lineage guard
+is green (8/8). Do **not** start `writing-plans` yet: two implementation-blocking contracts remain.
+
+1. **P1 — the fenced-transition contract is internally contradictory, and it does not explicitly
+   fence the dependent POC redaction / run / decision writes**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:139-148,197-198,227-229`,
+   `src/kyc_tool/outbox/publisher.py:160-190,193-221`). The spec says each guarded update must
+   “assert exactly one row,” then immediately says a zero-row stale completion is an audited no-op.
+   Those are mutually exclusive control flows: an assertion raises out of `process_once` (the
+   `_record_failure` call is already inside the delivery exception handler), so a normal lease-loss
+   race can kill the worker rather than return a no-op. More importantly, the current code performs
+   kind-specific writes *after* the outbox update: POC success/dead paths redact `payload_json`, and
+   decision success stamps the run and decision. Merely adding `claim_token` to the first UPDATE does
+   not fence those later statements. Trigger: publisher A claims a POC email; its lease expires; B
+   reclaims it with token B; A resumes and its fenced status UPDATE affects zero rows, but a literal
+   adaptation of the current function still redacts B's payload by `id`, so B can no longer send the
+   token. The equivalent decision path can stamp a run/decision after A lost ownership.
+
+   **Prescriptive implementation:** make the fenced outbox UPDATE the single ownership gate in each
+   of `_record_delivered`, retry/dead `_record_failure`, and `_record_superseded`, using
+   `UPDATE ... WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id` (or checked
+   `rowcount`). Exactly one returned row means **winner**: only then may that same transaction redact
+   a POC payload, update `runs`, stamp `decisions.published_at`, or write the normal terminal audit.
+   Zero rows means **stale loser**: perform none of those writes, emit only a structured
+   `outbox_stale_claim_completion` metric/audit with outbox id + attempted transition (no payload or
+   token), and return a non-raising no-op result to `process_once`. Do not say “assert exactly one”;
+   define a small explicit result (`applied: bool` or enum) and branch on it. Keep the claim-tuple clear
+   and status change in that first guarded UPDATE, and ensure the retry (still `pending`) failure path
+   is gated the same way—not just the three terminal statuses.
+
+   **Required regression proof:** real-Postgres barrier tests for **both kinds** and both resumed
+   success/failure paths. A claims; expire A; B reclaims; release A. For decisions, prove A cannot
+   change B's outbox tuple, run state, or `published_at` and `process_once` stays alive. For POC email,
+   release A before B sends and prove the payload remains byte-for-byte intact and B can still send;
+   repeat with A's stale final-attempt failure and prove it cannot dead-letter or redact B's row.
+   Mutation witnesses must (a) remove the early loser return and (b) make zero rows raise; each must
+   fail. Run targeted publisher tests under real Postgres, then `./manage.sh lint && ./manage.sh test`.
+
+2. **P1 — the downgrade preflight can race a publisher and strand a `superseded` row on the old
+   schema; rev 2 does not give rollback an executable drain/lock order**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:98-103,170-189`,
+   `.agents/ROADMAP.md:286-289`). The forward cutover is drained, but rollback is summarized only as
+   “the reversible downgrade on the schema-compatible image.” An `EXISTS(status='superseded')`
+   preflight followed later by column/constraint drops is not itself atomic against writers.
+   PostgreSQL's initial SELECT takes `ACCESS SHARE`, which is compatible with a publisher's
+   `ROW EXCLUSIVE`: preflight can see zero; a still-running or automatically restarted publisher can
+   commit `status='superseded'`; then Alembic acquires its DDL lock and drops 013. The pre-7b image is
+   left with the exact unknown, unprunable terminal the refusal was meant to prevent.
+
+   **Prescriptive implementation:** specify rollback as a full ordered maintenance procedure:
+   pause submissions; disable autoscaling/restarts; hard-stop and orchestrator-attest zero API,
+   pipeline, outbox, dev-worker, retention, and every writer; while 013 still exists run
+   `reset_interrupted_outbox_claims` and verify zero claim tuples; only then run downgrade; deploy the
+   pre-7b image only after downgrade succeeds. Defense in depth belongs in migration 013 itself: the
+   **first outbox statement in `downgrade()`** must acquire
+   `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE`; under that lock run the superseded preflight and,
+   only if zero, drop constraints/columns in the same transaction. If any superseded row exists,
+   raise before DDL and stay on the 7b-core-compatible image for a forward fix. Mirror this exact
+   sequence in `DEPLOYMENT.md`/`RUNBOOK.md`; do not rely on the human remembering that forward-cutover
+   step 2 also applies backward.
+
+   **Required regression proof:** keep the seeded byte-stable refusal, and add a two-connection
+   real-Postgres downgrade race. Hold the downgrade transaction after its table lock, attempt a
+   concurrent `pending→superseded` transition, and prove it cannot slip between preflight and DDL;
+   mutation-removing/moving the lock after the preflight must reproduce the stranded-status race.
+   Also exercise the actual documented stop→reset→downgrade→old-image-compatible path. Gate with the
+   migration round-trip/refusal/race tests, lineage test, `./manage.sh lint`, and `./manage.sh test`.
+
 ### RELEASE [CLAUDE] 2026-07-22 — PR 7b-core spec **rev 2** — re-review `4af7880..34b24b5`
 
 Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
