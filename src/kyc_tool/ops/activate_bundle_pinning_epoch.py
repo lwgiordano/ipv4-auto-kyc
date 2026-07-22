@@ -26,9 +26,11 @@ from kyc_tool.policy_store import repo as store
 def post_epoch_null_provenance(session) -> dict:
     """Alert payload (PR 6 §7): decisions/checks/runs recorded AFTER the epoch
     activated but missing their pinning provenance — decisions by
-    `decided_at`, checks by `created_at`, runs via the decisions that
-    reference them. Empty lists mean nothing to alert on. No epoch row yet
-    means nothing has been activated, so there is nothing to check."""
+    `decided_at`, checks by `created_at`, runs by finding post-epoch
+    decisions, joining to the runs they reference, and surfacing runs whose
+    OWN `engine_build_id` is NULL — independent of whether the decision
+    itself was stamped. Empty lists mean nothing to alert on. No epoch row
+    yet means nothing has been activated, so there is nothing to check."""
     ep = session.execute(text("SELECT activated_at FROM bundle_pinning_epoch WHERE id=1")).first()
     if ep is None:
         return {"decisions": [], "checks": [], "runs": []}
@@ -48,11 +50,11 @@ def post_epoch_null_provenance(session) -> dict:
         )
     ]
     runs = [
-        r.run_id
+        r.id
         for r in session.execute(
             text(
-                "SELECT DISTINCT run_id FROM decisions "
-                "WHERE decided_at > :at AND engine_build_id IS NULL AND run_id IS NOT NULL"
+                "SELECT DISTINCT r.id FROM decisions d JOIN runs r ON r.id = d.run_id "
+                "WHERE d.decided_at > :at AND r.engine_build_id IS NULL"
             ),
             {"at": at},
         )

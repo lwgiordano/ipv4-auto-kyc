@@ -200,57 +200,123 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
         h = store.store_bundle(s, raw_x())
         store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-1")
         s.commit()
+
+    # Truth table over (decision.engine_build_id, run.engine_build_id): the runs
+    # surface must key off the RUN's OWN stamp, independent of the decision's
+    # (AUDIT P2). Each group is its own case+event+run (FK) [+ decision].
     with engine.begin() as c:
-        c.execute(text("INSERT INTO cases (id) VALUES ('c-al')"))
-        # a run the flagged decision references — exercises the RUNS surface (was vacuous)
+        # (a) decision stamped eng-1 / run engine NULL ⇒ run flagged, decision NOT
+        c.execute(text("INSERT INTO cases (id) VALUES ('c-a')"))
         c.execute(
             text(
                 "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                "actor_json, payload_json, event_sequence) VALUES ('e-flag','c-al','kf','ph',"
-                "'email.verified','{}'::jsonb,'{}'::jsonb,1)"
+                "actor_json, payload_json, event_sequence) VALUES "
+                "('e-a','c-a','k-a','ph','email.verified','{}'::jsonb,'{}'::jsonb,1)"
             )
-        )
+        )  # event_sequence NN (008)
         c.execute(
             text(
                 "INSERT INTO runs (id, case_id, triggering_event_id, state) "
-                "VALUES ('r-flag','c-al','e-flag','QUEUED')"
+                "VALUES ('r-a','c-a','e-a','QUEUED')"
             )
-        )
-        # post-epoch decision missing engine_build_id, WITH run_id → flags decisions + runs
+        )  # engine_build_id omitted ⇒ NULL
         c.execute(
             text(
                 "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                "buy_enablement, policy_shas, manual) VALUES ('d-al','c-al','r-flag','x',0,"
-                "'{}'::jsonb,'buy_locked_org_id_required','{}'::jsonb,false)"
+                "buy_enablement, policy_shas, manual, engine_build_id) VALUES "
+                "('d-a','c-a','r-a','x',0,'{}'::jsonb,'buy_locked_org_id_required',"
+                "'{}'::jsonb,false,'eng-1')"
             )
-        )  # decided_at=now()>epoch, engine NULL
-        # post-epoch check missing policy_bundle_hash → exercises the CHECKS surface (was untested)
-        c.execute(
-            text(
-                "INSERT INTO checks (id, case_id, check_type, status, points_awarded, category, "
-                "source) VALUES ('k-al','c-al','verified_email','pass',10,'account_access','seed')"
-            )
-        )  # created_at=now()>epoch, policy_bundle_hash NULL
-        # a legit queued run with NO decision → must NOT appear in runs
+        )  # decided_at=now()>epoch, engine stamped eng-1
+
+        # (b) decision engine NULL / run stamped eng-1 ⇒ decision flagged, run NOT
+        c.execute(text("INSERT INTO cases (id) VALUES ('c-b')"))
         c.execute(
             text(
                 "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                "actor_json, payload_json, event_sequence) VALUES ('e-q','c-al','kq','ph',"
-                "'email.verified','{}'::jsonb,'{}'::jsonb,2)"
+                "actor_json, payload_json, event_sequence) VALUES "
+                "('e-b','c-b','k-b','ph','email.verified','{}'::jsonb,'{}'::jsonb,1)"
             )
-        )  # events.event_sequence NN since migration 008
+        )
+        c.execute(
+            text(
+                "INSERT INTO runs (id, case_id, triggering_event_id, state, engine_build_id) "
+                "VALUES ('r-b','c-b','e-b','QUEUED','eng-1')"
+            )
+        )
+        c.execute(
+            text(
+                "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+                "buy_enablement, policy_shas, manual) VALUES "
+                "('d-b','c-b','r-b','x',0,'{}'::jsonb,'buy_locked_org_id_required',"
+                "'{}'::jsonb,false)"
+            )
+        )  # engine_build_id omitted ⇒ NULL
+
+        # (c) both stamped eng-1 ⇒ neither flagged
+        c.execute(text("INSERT INTO cases (id) VALUES ('c-c')"))
+        c.execute(
+            text(
+                "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                "actor_json, payload_json, event_sequence) VALUES "
+                "('e-c','c-c','k-c','ph','email.verified','{}'::jsonb,'{}'::jsonb,1)"
+            )
+        )
+        c.execute(
+            text(
+                "INSERT INTO runs (id, case_id, triggering_event_id, state, engine_build_id) "
+                "VALUES ('r-c','c-c','e-c','QUEUED','eng-1')"
+            )
+        )
+        c.execute(
+            text(
+                "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+                "buy_enablement, policy_shas, manual, engine_build_id) VALUES "
+                "('d-c','c-c','r-c','x',0,'{}'::jsonb,'buy_locked_org_id_required',"
+                "'{}'::jsonb,false,'eng-1')"
+            )
+        )
+
+        # (d) queued run, NO decision ⇒ neither (the join with decisions excludes it)
+        c.execute(text("INSERT INTO cases (id) VALUES ('c-d')"))
+        c.execute(
+            text(
+                "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                "actor_json, payload_json, event_sequence) VALUES "
+                "('e-d','c-d','k-d','ph','email.verified','{}'::jsonb,'{}'::jsonb,1)"
+            )
+        )
         c.execute(
             text(
                 "INSERT INTO runs (id, case_id, triggering_event_id, state) "
-                "VALUES ('r-q','c-al','e-q','QUEUED')"
+                "VALUES ('r-d','c-d','e-d','QUEUED')"
             )
-        )
+        )  # engine_build_id omitted ⇒ NULL; no decision references it
+
+        # checks surface: NULL policy_bundle_hash flagged; non-null NOT flagged
+        c.execute(
+            text(
+                "INSERT INTO checks (id, case_id, check_type, status, points_awarded, category, "
+                "source) VALUES ('k-al','c-a','verified_email','pass',10,'account_access','seed')"
+            )
+        )  # created_at=now()>epoch, policy_bundle_hash NULL
+        c.execute(
+            text(
+                "INSERT INTO checks (id, case_id, check_type, status, points_awarded, category, "
+                "source, policy_bundle_hash) VALUES "
+                "('k-ok','c-b','verified_email','pass',10,'account_access','seed','pinned-hash')"
+            )
+        )  # created_at=now()>epoch, policy_bundle_hash present ⇒ NOT flagged
+        # (distinct case_id than k-al: uq_checks_live_per_type is unique per case_id+check_type)
+
     with session_factory() as s:
         alert = post_epoch_null_provenance(s)
-    assert "d-al" in alert["decisions"]  # decisions surface
-    assert "k-al" in alert["checks"]  # checks surface (was untested)
-    assert "r-flag" in alert["runs"]  # runs surface positive (was vacuous)
-    assert "r-q" not in alert["runs"]  # a run with no post-epoch NULL-engine decision
+    assert "r-a" in alert["runs"] and "r-b" not in alert["runs"]
+    assert "r-c" not in alert["runs"] and "r-d" not in alert["runs"]
+    assert "d-b" in alert["decisions"] and "d-a" not in alert["decisions"]
+    assert "d-c" not in alert["decisions"]
+    assert "k-al" in alert["checks"]  # NULL policy_bundle_hash flagged
+    assert "k-ok" not in alert["checks"]  # non-null policy_bundle_hash NOT flagged
 
 
 # §8.15 activation identity gate — three runnable rejections (each pins a guard whose
