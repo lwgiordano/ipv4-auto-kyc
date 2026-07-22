@@ -71,6 +71,95 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `f246d03..9b519aa`
+
+1. **P1 — migration 011 is not hot-compatible as released**
+   (`alembic/versions/011_policy_bundle_pinning.py:54-73`). The three
+   `op.create_check_constraint(...)` calls add immediately-valid CHECKs to the
+   existing `checks`, `runs`, and `decisions` tables. PostgreSQL scans each table
+   while `ALTER TABLE ADD CONSTRAINT` holds its lock, and concurrent updates stay
+   blocked until that transaction commits. Thus the documented rolling migration
+   can stall every ingest/decide writer on production-sized audit tables even
+   though CI's empty ephemeral DB is fast. Trigger: populate any of those tables,
+   keep normal writes active, then `alembic upgrade 011`; writers wait behind each
+   validating ADD. **Required fix:** make 011 add each CHECK `NOT VALID` (raw
+   `ALTER TABLE ... ADD CONSTRAINT ... CHECK (...) NOT VALID` is unambiguous),
+   commit that short metadata change, then validate in a separate follow-on
+   Alembic revision with `ALTER TABLE ... VALIDATE CONSTRAINT`; do not add and
+   validate in the same transaction because the original stronger lock remains
+   held to commit. Keep the nullable columns and downgrade ordering, and update
+   DEPLOYMENT/ADR wording to name the two-step constraint validation. Add a
+   migration test that upgrades a populated 010 DB, proves the intermediate
+   constraints exist with `pg_constraint.convalidated=false`, upgrades the
+   validation revision and proves all three are true/nonblank-enforcing, then
+   exercises the existing forward-only downgrade cases. Also add a concurrent
+   writer witness (short `lock_timeout`) during `VALIDATE CONSTRAINT` so a future
+   single-step regression fails. PostgreSQL's contract is explicit:
+   https://www.postgresql.org/docs/current/sql-altertable.html.
+
+2. **P2 — the post-epoch `runs` alert never inspects run provenance**
+   (`src/kyc_tool/ops/activate_bundle_pinning_epoch.py:50-56`). Its `runs` query
+   repeats `decisions.engine_build_id IS NULL`; therefore an automatic decision
+   correctly stamped `eng-1` while its referenced `runs.engine_build_id` is NULL
+   produces empty `decisions` *and* empty `runs` alerts, defeating the independent
+   run surface promised by spec §7/ROADMAP. The current test couples both fields as
+   NULL, so it cannot catch this. Trigger: after epoch activation insert a run with
+   NULL engine id and a post-epoch decision for it with `engine_build_id='eng-1'`,
+   then call `post_epoch_null_provenance()`; the run is omitted. **Required fix:**
+   query the surfaces independently: `SELECT DISTINCT r.id FROM decisions d JOIN
+   runs r ON r.id=d.run_id WHERE d.decided_at>:at AND
+   r.engine_build_id IS NULL` (the decision timestamp remains the decide-time
+   witness; `run_id IS NOT NULL`/the join excludes manual decisions). Preserve the
+   separate decision query. Rewrite `test_post_epoch_null_alert` as a truth-table:
+   (a) decision stamp present/run stamp NULL => only `runs`; (b) decision stamp
+   NULL/run stamp present => only `decisions`; (c) both present => neither; (d)
+   queued run/no decision => neither.
+
+3. **P2 — cascade successors claim bundle X while retaining bundle Y's rubric
+   category** (`src/kyc_tool/checkstore/repo.py:129-152`, callers at `:200-201`
+   and `:255-260`; `src/kyc_tool/orchestration/pipeline.py:428-445`). PR 6 passes
+   X's `policy_bundle_hash` into identity-invalidation / ORG-ID-to-POC successors,
+   but `supersede_without_replacement()` copies `check.category` from the old row.
+   Repro against the actual helper produced
+   `{successor_category: stale_category_from_bundle_y,
+   resolved_rubric_category: control_proof, stamped_hash_is_resolved: true}`.
+   The new immutable row therefore says X produced it while storing a
+   rubric-derived field from Y; decision-time re-pricing masks this in scores but
+   does not repair the audit record. The existing cascade test asserts only status
+   and hash. **Required fix:** thread the resolved `ScoringRubric` (or a resolved
+   category scalar) through `supersede_stale_identity_proof`,
+   `_supersede_on_identity_change`, and `supersede_without_replacement`; use
+   `rubric.item(check_type).category` for the successor, with `""` for a type
+   absent from the resolved rubric, while preserving zero points, cascade reason,
+   source, and `cascaded_from`. Pass the already-available `bundle.rubric` from
+   Pipeline and the existing `rubric` from `apply_check_intents`. Strengthen the
+   integration test by seeding a prior live ORG-ID and POC row with deliberately
+   stale categories, exercising both invalidation branches under X, and asserting
+   successor `{policy_bundle_hash, category}` equals X; also assert the old rows
+   remain unchanged.
+
+4. **P3 — the API startup attestation can describe a different bundle than the
+   app actually serves** (`src/kyc_tool/api/app.py:34-60`). `create_app()` supports
+   an injected `policy`, stores it in `app.state.policy`, and uses it for ingest,
+   health, and readiness, but startup always seeds/attests
+   `settings.policy_dir`. Calling `create_app(settings_for_X, policy=Y)` therefore
+   emits a successful X `bundle_pinning_ready` witness for an app operating under
+   Y; if Y was already stored, `/readyz` is also 200 and the false attestation is
+   the only signal. **Required fix:** make the selected `policy` the single startup
+   identity. If `policy.policy_dir` is present, seed/read-back that directory and
+   require the resulting hash to equal `policy.bundle_hash`; if it is `None`
+   (DB-reconstructed injection), require that exact hash to load from the store.
+   Attest only the verified selected hash and fail boot on any mismatch. Add a
+   real-factory test with settings pointing at X and injected Y: assert Y (not X)
+   is verified, the attestation hash equals `app.state.policy.bundle_hash`, and
+   `/readyz` is 200; add the missing/corrupt DB-reconstructed-Y failure cases.
+
+Verification performed: protected `KYC_Tool_Build_Package/` diff is empty;
+`git diff --check` clean; targeted pure policy/scoring/engine tests green; ruff
+green; import-linter **2 kept / 0 broken**. Local Postgres tests could not start
+because this Mac has no `initdb`/`pg_ctl`; the release's 605-test CI is green, but
+its current fixtures do not exercise the four triggers above. **turn: CLAUDE**.
+
 ### RELEASE [CLAUDE] 2026-07-22 — PR 6 per-run policy bundle pinning — range `f246d03..9b519aa`
 
 PR 6 is **built and self-audited** (superpowers cycle: brainstorm → spec (AUDIT-CLEAN
