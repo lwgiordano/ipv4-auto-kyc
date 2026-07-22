@@ -71,6 +71,139 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `eb5af90..3354aab` (PR 6b spec rev 1)
+
+1. **P1 — keeping `ENGINE_BUILD_ID="eng-1"` makes decision provenance false**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:173-196,206-208`,
+   `src/kyc_tool/domain/engine.py:1-4`, `src/kyc_tool/orchestration/pipeline.py:455-494`).
+   The existing contract says to bump the engine id whenever scoring/gate/validator/
+   decision semantics change. PR 6b changes scoring semantics: with the flag on, the
+   same stale PASS counts before PR 6b and is projected to NEEDS_REVIEW after PR 6b,
+   yet both decisions would stamp `eng-1`. Re-pinning the source digest acknowledges
+   changed bytes but does not repair the provenance collision. **Fix:** ship PR 6b as
+   `eng-2`; update the constant, drift digest, activation expectations, attestation,
+   docs, and revalidate the live backlog to `eng-2` before enabling it. If avoiding
+   whole-engine check churn is a hard requirement, introduce a separately guarded
+   `VALIDATOR_BUILD_ID`; do not silently reuse the whole-engine id. **Regression:**
+   seed an `eng-1` PASS, decide under the PR 6 worker and the PR 6b worker, and assert
+   the changed decision is stamped `eng-2`; also pin `ENGINE_BUILD_ID == "eng-2"` in
+   the PR 6b migration/cutover test. Verify with the engine drift guard plus the real
+   cross-engine integration test.
+
+2. **P1 — the proposed replay does not reconstruct immutable historical context and
+   already changes valid outcomes under the unchanged engine**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:28-34,111-138`,
+   `src/kyc_tool/validators/poc.py:64-76`,
+   `src/kyc_tool/orchestration/side_effects.py:188-235`,
+   `src/kyc_tool/events/review_guard.py:41-63`,
+   `src/kyc_tool/orchestration/pipeline.py:398-407`,
+   `src/kyc_tool/validators/documents.py:58-74`). Three real
+   triggers disprove the spec's “same validators ⇒ same outcome” premise: (a) every
+   successful POC flow sets `verified_at` + `consumed_at`, while replaying that row
+   through `poc_token_intent` returns `poc_token_consumed` (and a once-valid token may
+   now also be expired); (b) every successful website completion sets its task to
+   `done`, while the shared live guard rejects every non-`open` task, yielding no
+   website intent; (c) document validation consumes the *current* live registry check,
+   so a later registry run or merely changing sweep order can alter the replayed
+   document verdict. **Fix:** define an explicit replay context instead of reusing the
+   live `_validation_extras` contract. It must carry an original evaluation time and a
+   deterministic as-of-run check view; POC replay must verify the persisted event's
+   exact token id/digest/binding and recognize the original successful consumption
+   rather than treating it as reuse, evaluating expiry at the original validation
+   time; website replay must verify the terminal task against persisted event
+   case/type/result/reviewer without requiring `open`; cross-check inputs must be
+   reconstructed as of the original event sequence (or captured immutably before this
+   rollout), never read from whichever check is live when the sweep happens.
+   **Regression:** run the real successful POC and website flows, confirm token
+   consumed/task done, age them past expiry, then revalidate and require identical
+   PASS successors; tampered digest/binding/task attribution must remain stale and
+   make the CLI nonzero. Revalidate the same document/registry history in both run
+   orders and require identical results. The current `test_consumed_token_cannot_verify_twice`
+   is the concrete mutation witness a naive shared-context implementation must not
+   bypass on the live path.
+
+3. **P1 — a standalone ops writer would split checks from decision/outbox and its
+   “surgical” guard is not synchronized with the pipeline**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:121-130,142-158`,
+   `AGENTS.md:57-58`,
+   `KYC_Tool_Build_Package/machine_readable/state_machine.json:48-50`,
+   `KYC_Tool_Build_Package/machine_readable/platform_events.json:45-47`,
+   `src/kyc_tool/checkstore/repo.py:81-113`,
+   `src/kyc_tool/orchestration/pipeline.py:199-203,455-508`). The spec writes
+   superseding checks from `revalidate_backlog` but never rescores/redecides/projects
+   the case or queues a callback. Trigger: a stale PASS is replayed to FAIL; the live
+   check changes while
+   `cases.current_score/latest_decision`, the latest decision row, and the platform
+   callback still describe the old PASS. That violates the normative fused-transaction
+   rule. The concurrency claim is also false as written: the pipeline takes the Case
+   row `FOR UPDATE`, not a PostgreSQL advisory lock. If the revalidator prechecks run R,
+   a normal run can install newer live check N before `write_check`; `write_check` then
+   locks and unconditionally supersedes N. **Fix:** execute revalidation as a per-case
+   `recalculate.requested` run (or an equivalent internal run/job using the same fused
+   decide transaction), acquiring the Case row `FOR UPDATE` in the pipeline's existing
+   lock order. Under that lock, reselect the exact expected live check id +
+   `created_by_run_id`, stage only matching successors, then score, write the decision,
+   project the case, enqueue the outbox callback, and complete the job in one commit.
+   Do not use an advisory lock unless every competing writer adopts it. Add an explicit
+   revalidation audit record with old/new check ids and engine id rather than making the
+   original run appear to have executed again. **Regression:** fault after successors
+   are staged and assert checks/decision/case/outbox all roll back; then use two real
+   PostgreSQL sessions with a barrier between selection and write and prove a newer
+   normal-run check is never superseded. Verify the emitted callback matches the new
+   live-check set and the retry creates exactly one decision/outbox effect.
+
+4. **P1 — the existing singleton bundle epoch cannot activate the engine transition
+   this design claims to make forward-safe**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:28-34,147-158`,
+   `alembic/versions/011_policy_bundle_pinning.py:45-58`,
+   `src/kyc_tool/policy_store/repo.py:73-90`,
+   `src/kyc_tool/ops/activate_bundle_pinning_epoch.py:26-62`).
+   `activate_epoch` is intentionally first-writer-wins: once PR 6 records `(bundle,
+   eng-1)`, a correct PR 6b/future `eng-2` call executes `ON CONFLICT DO NOTHING` and
+   then raises because the read-back tuple differs. Keeping `eng-1` only hides this by
+   causing finding 1. The proposed alert is also NULL-only, so a post-cutover old writer
+   stamping non-NULL `eng-1` would evade it. **Fix:** leave the PR 6 bundle epoch
+   immutable and add a distinct append-only engine/revalidation activation history in
+   migration 013 (DB-sequenced id, unique engine id, DB activation time). A dedicated
+   `activate_revalidation_epoch --expect-engine eng-2` must verify the local build and
+   zero-stale preflight atomically, append/read-back the new epoch, and make the current
+   active engine unambiguous. Readiness/alerts compare check ids with `IS DISTINCT FROM`
+   the active engine, not only NULL; rollback disables the flag on the PR 6b image and
+   never deletes history. **Regression:** seed the real existing PR 6 `(bundle,eng-1)`
+   epoch, prove eng-2 activation fails while one stale check exists, succeeds after the
+   sweep without altering the old row, is idempotent, and flags a later eng-1 writer.
+
+5. **P2 — “non-terminal cases” is not a safe backlog boundary**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:142-149,240-246`,
+   `src/kyc_tool/domain/models.py:49-59`, `src/kyc_tool/events/ingest.py:126-238`).
+   `CaseStatus` defines no terminal-state set and ingest
+   accepts later events for approved, manually approved, and rejected cases. Excluding
+   any of those statuses can let activation report clean while a future event exposes a
+   still-stale live PASS (and it also leaves the denormalized old decision described in
+   finding 3). **Fix:** the activation blocker must cover every live stale check,
+   regardless of case status. Only a future explicit archived/tombstoned state that the
+   API refuses to reopen could be excluded. **Regression:** seed stale live checks on
+   `account_approved`, `approved_manual`, and `rejected` cases and assert the real CLI
+   reports all three and refuses activation until each has a successor.
+
+6. **P3 — ADR ownership remains unresolved at the design gate**
+   (`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md:162-165,240-243`,
+   `.agents/ROADMAP.md:330-334`). The
+   canonical roadmap already reserves ADR-006 for PR 10, so “resolve at write time” can
+   recreate the numbering collision the lineage guard just eliminated for migrations.
+   **Fix:** assign PR 6b ADR-006 now and shift PR 10's reservation to ADR-007 in the same
+   spec/ROADMAP revision; add a lightweight unique/ordered ADR-number check if ADR
+   reservations will remain machine-significant. **Regression:** the docs task must
+   assert exactly one ADR-006 heading and the ROADMAP names PR 10 as ADR-007.
+
+Verified sound in rev 1: migration 013 is based on live head 012; `NOT VALID` still
+enforces new nonblank values; forward-only-after-use downgrade is appropriate; the
+ephemeral stale-PASS projection correctly preserves hard-conflict reason codes; policy
+purity, M2, and the normative package remain untouched. Evidence: exact-range
+`git diff --check` clean; targeted POC/scoring/lineage suite **22 passed**; Ruff clean
+on the traced Python seams. No implementation files changed in this round. **CHANGES
+REQUIRED; do not start `writing-plans`. turn: CLAUDE.**
+
 ### RELEASE [CLAUDE] 2026-07-22 — PR 6b revalidation spec rev 1 — review `eb5af90..3354aab`
 
 PR 6 converged (AUDIT-CLEAN below). Starting the next ROADMAP unit, **PR 6b —
