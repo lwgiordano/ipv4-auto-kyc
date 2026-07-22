@@ -51,21 +51,28 @@ is linear. Rebase each to the live head at merge. **CI gate on every migration P
 rebased `down_revision` + `upgrade head && downgrade -1 && upgrade head` on a fresh
 DB. `/readyz` resolves the head **dynamically** (shipped in PR 1 — do not regress).
 
-| Unit | Item(s) | Migration | Content |
-|------|---------|-----------|---------|
-| PR 1 / 1.1 | 1 | — | lockdown, auth, /readyz (shipped + follow-up) |
-| PR 2 | 2 | 008 | `runs.input_snapshot_json` (**nullable**), `cases.event_sequence`, `events.event_sequence` |
-| PR 3 | 3, 4 | — | fail-closed validators + gate-5 frozenset (JSON reason codes) |
-| PR 4 | 5 | 009 | `poc_tokens.{rir,org_handle,resource,consumed_at}` |
-| PR 5a | 6 | 010 | drop global idem unique, add per-case unique, `request_nonces` |
-| PR 5b | 11 | — | review-record binding |
-| PR 6 | 7A | 011, 012 | `policy_bundles`, `checks.policy_bundle_hash`, `runs/decisions.engine_build_id` (011); `VALIDATE` those provenance CHECKs (012, audit round 1) |
-| PR 6b | 7B | 013 | revalidation / rollout staging |
-| PR 7a | 9 | 014 | `jobs.lease_token` |
-| PR 7b | 8 | 015 | `outbox.ordering_stream`, `decisions.decision_sequence`, `cases.last_decision_sequence`, `UNIQUE(case_id, decision_sequence)` |
-| PR 8 | 10 | 016 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
-| PR 9a/b/c | 12 | — | contract + adapter-output validation + real providers |
-| PR 10 | 13 | 017 | broker full-list snapshots, `runs.{matched_broker_entity_id,matched_identifier_class,broker_snapshot_revision}` |
+The **State** column (`shipped`/`pending`/`—`) is machine-checked by
+`tests/unit/test_migration_lineage.py`: every authored Alembic revision at or above
+the first reservation must be owned by a `shipped` row, every `pending` revision must
+be absent from the Alembic chain, the first `pending` revision must be `head+1`, and
+no revision may be double-booked. Update a row's State to `shipped` in the same PR
+that lands its migration.
+
+| Unit | Item(s) | State | Migration | Content |
+|------|---------|-------|-----------|---------|
+| PR 1 / 1.1 | 1 | — | — | lockdown, auth, /readyz (shipped + follow-up) |
+| PR 2 | 2 | shipped | 008 | `runs.input_snapshot_json` (**nullable**), `cases.event_sequence`, `events.event_sequence` |
+| PR 3 | 3, 4 | — | — | fail-closed validators + gate-5 frozenset (JSON reason codes) |
+| PR 4 | 5 | shipped | 009 | `poc_tokens.{rir,org_handle,resource,consumed_at}` |
+| PR 5a | 6 | shipped | 010 | drop global idem unique, add per-case unique, `request_nonces` |
+| PR 5b | 11 | — | — | review-record binding |
+| PR 6 | 7A | shipped | 011, 012 | `policy_bundles`, `checks.policy_bundle_hash`, `runs/decisions.engine_build_id` (011); `VALIDATE` those provenance CHECKs (012, audit round 1) |
+| PR 6b | 7B | pending | 013 | revalidation / rollout staging |
+| PR 7a | 9 | pending | 014 | `jobs.lease_token` |
+| PR 7b | 8 | pending | 015 | `outbox.ordering_stream`, `decisions.decision_sequence`, `cases.last_decision_sequence`, `UNIQUE(case_id, decision_sequence)` |
+| PR 8 | 10 | pending | 016 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
+| PR 9a/b/c | 12 | — | — | contract + adapter-output validation + real providers |
+| PR 10 | 13 | pending | 017 | broker full-list snapshots, `runs.{matched_broker_entity_id,matched_identifier_class,broker_snapshot_revision}` |
 
 ---
 
