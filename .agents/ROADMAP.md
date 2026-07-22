@@ -267,17 +267,29 @@ on runs + decisions**. Worker loads the run's bundle by hash, refuses if unloada
 
 ### PR 7b — Outbox stream separation + platform-authoritative decision ordering (item 8) — reordered FIRST
 Migration **013** (`down_revision='012'`): `outbox.{ordering_stream (NOT NULL, decision|email),
-decision_sequence, resolved_at}`, `decisions.decision_sequence` (D1), `cases.last_decision_sequence`,
-`UNIQUE(case_id, decision_sequence)` + composite FK + kind/stream/sequence CHECK, and a singleton
-`outbox_ordering_activation` record. **Allocate `decision_sequence` via the locked case counter**
-(not `max()+1`), callback-emitting decisions only; claim FIFO scoped per `(case_id, ordering_stream)`
-so a stuck POC email never blocks the decision callback. **Platform per-case high-water is the
-ordering authority** — `decision_sequence` on the wire (emission decided at the publisher, gated on
-flag AND `emission_active_at`), bootstrapped from the platform's effective state before flag-on,
-sticky thereafter; the local `superseded` guard is an optimization only. **Drained cutover** (reuses
-the shipped `requeue_interrupted_jobs` one-shot + a symmetric outbox-lease reset; digest-pinned; no
-mutating prod smoke); **forward-only-after-use** downgrade; **two-phase irreversible** rollback.
-Reordered ahead of 6b to supply the ordering guarantee 6b's coordinator callbacks consume (ADR-008).
+decision_sequence, resolved_at, claim_lease_expires_at, claimed_by, failure_class}`,
+`decisions.decision_sequence` (D1), `cases.last_decision_sequence`; **triple-identity integrity** —
+`UNIQUE decisions(run_id)` + `UNIQUE decisions(run_id, case_id, decision_sequence)` + a triple FK
+`outbox(run_id, case_id, decision_sequence) → decisions`, plus manual/automatic and kind/stream
+CHECKs; and the **activation authority** — an `outbox_ordering_activation` phase singleton
+(`legacy→bootstrap_in_progress→bootstrapped→active`, ordered timestamps, 64-hex digests, no reverse
+transition) FK-bound to an immutable `outbox_ordering_bootstrap_artifacts` table. **Allocate
+`decision_sequence` via the locked case counter** (not `max()+1`), callback-emitting decisions only;
+claim FIFO scoped per `(case_id, ordering_stream)` with the claim lease (`claim_lease_expires_at`)
+separate from the retry schedule (`next_attempt_at`), so a stuck POC email never blocks the decision
+callback and recovery resets only claimed rows. **Platform per-case high-water is the ordering
+authority** — `decision_sequence` on the wire, emission decided at the publisher via a shared
+runtime phase reader (checked before claim and before HTTP, fail-closed), seeded by an
+**authenticated bootstrap** from the platform's accepted-run ledger (reconciling manual/reverted
+state) and sticky thereafter; the local `superseded` guard is an optimization, and a tuple mismatch
+is a distinct non-retryable `integrity_mismatch` terminal (never `superseded`). **Two drained
+windows** (migration cutover reusing the shipped `requeue_interrupted_jobs` + a claim-lease-reset
+one-shot; then an activation cutover with publishers drained to zero and pre-armed at flag=true;
+digest-pinned; no mutating prod smoke); three CAS CLIs (`export_outbox_ordering_manifest`,
+`record_platform_ordering_bootstrap`, `activate_outbox_ordering`) modeled on
+`activate_bundle_pinning_epoch`; **forward-only-after-use** downgrade; **two-phase irreversible**
+rollback (startup refuses `phase=active` with flag off). Reordered ahead of 6b to supply the ordering
+guarantee 6b's coordinator callbacks consume (ADR-008).
 
 ### PR 6b — Revalidation (item 7B) — PENDING, required for M4
 Migration **014** (`down_revision='013'`). Revalidate immutable evidence under the run's pinned
