@@ -71,7 +71,7 @@ that lands its migration.
 | PR 5a | 6 | shipped | 010 | drop global idem unique, add per-case unique, `request_nonces` |
 | PR 5b | 11 | — | — | review-record binding |
 | PR 6 | 7A | shipped | 011, 012 | `policy_bundles`, `checks.policy_bundle_hash`, `runs/decisions.engine_build_id` (011); `VALIDATE` those provenance CHECKs (012, audit round 1) |
-| PR 7b-core | 8 | pending | 013 | `outbox.ordering_stream` (NOT NULL) + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + local `superseded` guard; triple identity (`UNIQUE decisions(run_id)`, triple FK, partial callback index); fenced claim (`claim_token`); status/lifecycle CHECKs (drained cutover, **reversible** downgrade — sequence internal) |
+| PR 7b-core | 8 | pending | 013 | `outbox.ordering_stream` (NOT NULL) + `case_id` NOT NULL + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + a **best-effort** local `superseded` guard (higher *locally-stamped* delivery only; send-before-stamp/cross-replica reverts remain for 7b-activation); triple identity (`UNIQUE decisions(run_id)`, triple FK, partial callback index); fenced claim (`claim_token`); exhaustive per-status lifecycle CHECKs (drained cutover, **reversible-before-first-supersession** downgrade) |
 | PR 7b-activation | 8 | pending | 014 | wire `decision_sequence` emission + `integrity_mismatch`; platform high-water bootstrap (candidate manifest + signed response envelope); `outbox_ordering_activation` phase machine + immutable `BYTEA` artifacts; four CAS CLIs + activation cutover (`down_revision='013'`, forward-only-after-use) |
 | PR 6b | 7B | pending | 015 | revalidation / rollout staging |
 | PR 7a | 9 | pending | 016 | `jobs.lease_token` |
@@ -279,12 +279,14 @@ locked case counter** (not `max()+1`), callback-emitting decisions only; claim F
 `(case_id, ordering_stream)` with a **fenced claim** (`claim_token` + `claim_lease_expires_at`)
 separate from the retry schedule (`next_attempt_at`), so a stuck POC email never blocks the decision
 callback, recovery resets only claimed rows, and a stale claimant cannot overwrite the reclaiming
-publisher's terminal. The **local `superseded` guard** (a higher-sequence delivered decision → mark an
-older requeued callback `superseded`, never send) prevents the **single-replica** revert;
-`decision_sequence` is **internal** (not on the wire). Drained migration cutover (shipped
-`requeue_interrupted_jobs` + a claim-lease-reset one-shot; digest-pinned; no mutating prod smoke);
-**reversible** downgrade (sequence internal until 7b-activation emits it). Cross-replica authority is
-7b-activation.
+publisher's terminal. The **best-effort local `superseded` guard** (mark an older requeued callback
+`superseded` only when a higher-sequence decision was *locally stamped* `published_at`) **reduces the
+common** single-replica revert; the **send-before-stamp** and **cross-replica** reverts remain until
+7b-activation (documented residual risk). `decision_sequence` is **internal** (not on the wire).
+Drained migration cutover (shipped `requeue_interrupted_jobs`; **no** pre-013 outbox reset — the
+claim columns don't exist yet; a `reset_interrupted_outbox_claims` CLI is post-013-only; digest-pinned;
+no mutating prod smoke); **reversible-before-first-supersession** downgrade (refuses once a
+`superseded` row exists). Cross-replica authority is 7b-activation.
 
 ### PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2)
 Migration **014** (`down_revision='013'`): `outbox.failure_class`; the `outbox_ordering_activation`
