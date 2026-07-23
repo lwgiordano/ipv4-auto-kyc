@@ -15,10 +15,10 @@
 - **Python 3.11, FastAPI, SQLAlchemy 2 (sync psycopg), Postgres, Alembic.** Tests run against real ephemeral Postgres — the session-scoped `pg` fixture (`tests/pg.py`) self-provisions a cluster, so `.venv/bin/pytest <selector>` runs real-Postgres tests with no extra setup.
 - **Test commands.** `./manage.sh test` runs the WHOLE suite (it ignores path args — `.substrate/lib.sh:214` `sub_test` → `test_python` runs bare `pytest`). Targeted red→green in each step uses **`.venv/bin/pytest <selector> -v`**. The final gate per task runs `./manage.sh test`.
 - **Lint gate.** `.venv/bin/ruff check .` (rules `E,F,I,UP,B,SIM`; **no `;`/E702 multi-statement lines**) **and** `.venv/bin/lint-imports` (import-linter, **2 contracts kept / 0 broken**). New code lives in `db`/`outbox`/`orchestration`/`events`/`workers`/`api`/`ui`/`ops` — never add an import into `domain`/`validators`/`policy`/`adapters`, so both contracts stay green. **Never run `./manage.sh fmt`.**
-- **CANONICAL CLOSE-OUT ORDER for any `src/kyc_tool/**`-touching task (findings 6):** the whole-source drift guard (`test_engine_source_hash_pinned`) fails on ANY `src/` edit, so `./manage.sh test` returns nonzero until the hash is re-pinned. Every such task's close-out therefore runs **in this exact order — never `./manage.sh test` before the re-pin**: (1) run the task's targeted `.venv/bin/pytest` selectors green; (2) run the drift-guard test once to observe it RED (the deliberately-red TDD step — label it RED, never a gate); (3) compute+paste the new `EXPECTED_ENGINE_SOURCE_HASH` and re-run the drift-guard test GREEN; (4) `./manage.sh test` → exit 0; (5) `.venv/bin/ruff check .` → exit 0; (6) `.venv/bin/lint-imports` → exit 0; (7) commit. Tasks that touch only `alembic/`, docs, or `.agents/` skip steps 2-3 and run `./manage.sh test` directly.
+- **CANONICAL CLOSE-OUT ORDER for any `src/kyc_tool/**`-touching task (findings 6):** the whole-source drift guard (`test_engine_source_hash_pinned`) fails on ANY `src/` edit, so `./manage.sh test` returns nonzero until the hash is re-pinned. Every such task's close-out therefore runs **in this exact order — never `./manage.sh test` before the re-pin**: (1) run the task's targeted `.venv/bin/pytest` selectors green; (2) run the drift-guard test once to observe it RED (the deliberately-red TDD step — label it RED, never a gate); (3) compute+paste the new `EXPECTED_ENGINE_SOURCE_HASH` and re-run the drift-guard test GREEN; (4) `./manage.sh test` → exit 0; (5) `.venv/bin/ruff check .` → exit 0; (6) `.venv/bin/lint-imports` → exit 0; (7) **checkpoint or commit — see below**. **Tasks 1-6 are worktree CHECKPOINTS that end at step (6) with `git status` (NO commit); the single atomic `013`+runtime commit is made at the end of Task 6 (F1).** Tasks 7-9 (and Task 6's final step) commit normally. Tasks that touch only `alembic/`, docs, or `.agents/` skip steps 2-3 and run `./manage.sh test` directly.
 - **Exact exception types in tests (finding 9).** Never assert a bare `pytest.raises(Exception)` on an authoritative refusal. Use: `sqlalchemy.exc.IntegrityError` for CHECK / FK / unique / NOT-NULL violations; `sqlalchemy.exc.OperationalError` with `exc.value.orig.sqlstate == "55P03"` for a `lock_timeout` (psycopg3 exposes `.sqlstate` on `.orig`); `RuntimeError` for a migration/CLI fail-closed refusal raised in Python (`alembic.command.upgrade`/`downgrade` propagate the migration's `RuntimeError` unwrapped) — always paired with an assertion on the message substring. Match a `lock_timeout` on a real statement with `conn.execute(text("SET lock_timeout='2s'"))` first.
 - **Delivery-layer only — NO scoring/gate/decision semantic change.** The callback HTTP body stays **byte-identical** to pre-7b: `decision_sequence` is written to the `decisions`/`outbox` **columns only**, never added to `payload_json` or the wire (that is 7b-activation / `014`).
-- **Engine drift guard.** Every task that edits any file under `src/kyc_tool/**` MUST re-pin `EXPECTED_ENGINE_SOURCE_HASH` in `tests/policy_driven/test_engine_build_id_guard.py` **in the same commit** (see the re-pin one-liner in "Test infrastructure" below). **Do NOT bump `ENGINE_BUILD_ID`** — this is not a scoring change. The src-touching tasks are **1, 2 (the shared `ops/backfill_parity.py`), 3, 4, 5, 7, 8** — each re-pins. Tasks that touch only `alembic/`, docs, or `.agents/` (parts of 6, 9) do NOT re-pin (the guard closure is `src/kyc_tool/**/*.py` only).
+- **Engine drift guard.** Every task that edits any file under `src/kyc_tool/**` MUST re-pin `EXPECTED_ENGINE_SOURCE_HASH` in `tests/policy_driven/test_engine_build_id_guard.py` **in the same commit** (see the re-pin one-liner in "Test infrastructure" below). **Do NOT bump `ENGINE_BUILD_ID`** — this is not a scoring change. The src-touching tasks are **1, 2 (the frozen `migration_contracts/v013_backfill.py`), 3, 4, 5, 7, 8** — each re-pins. Tasks that touch only `alembic/`, docs, or `.agents/` (parts of 6, 9) do NOT re-pin (the guard closure is `src/kyc_tool/**/*.py` only).
 - **Do NOT edit `KYC_Tool_Build_Package/`** (normative spec, immutable) or anything touching **M2** / `KYC_ENFORCE_POSITIVE_DECISIONS` / `enforce_positive_decisions`.
 - **ROADMAP lineage.** `.agents/ROADMAP.md §C` already reserves PR 7b-core = `013` (row 74, State `pending`) and 7b-activation = `014`. Do **not** renumber or edit the reservations except to flip 7b-core's State `pending → shipped` in the same PR that lands `013` (Task 9). `tests/unit/test_migration_lineage.py` must stay green.
 - **Codex build constraints (carry verbatim):** migration/outbox/CLI mutation proofs run against **real Postgres and the real CLI entry points** (`main()` / `python -m …`), never a helper-only shim. The retention "zero active tasks before it deletes" attestation is a **runbook / `TODO(integration)`** deployment acceptance, **NOT** a pytest (retention is a scheduled one-shot with no in-repo liveness registry).
@@ -28,6 +28,14 @@
   Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK
   ```
+
+## Execution protocol (parent session — bus lifecycle & gates, F8)
+
+**Human plan-approval gate (required first).** PLAN-CLEAN / AUDIT-CLEAN on this plan is a *plan* gate, **not** implementation permission. Do **not** begin the sequence below until the human explicitly approves execution.
+
+- [ ] **Step 0 (parent-only, BEFORE Task 1) — CLAIM.** `git pull`; read `AGENT_BUS.md` and `.agents/ROADMAP.md`; verify **no conflicting active Claude CLAIM** overlaps this work. Then post + push **one** bus CLAIM covering the final file set — the migration `alembic/versions/013_outbox_stream_separation.py`, `src/kyc_tool/migration_contracts/**`, `src/kyc_tool/{db/tables.py,outbox/publisher.py,orchestration/pipeline.py,workers/retention.py,api/routes_metrics.py,ops/verify_pr7b_core_backfill.py,ops/reset_interrupted_outbox_claims.py}`, the new/edited `tests/**`, `docs/{OVERVIEW,RUNBOOK,DEPLOYMENT}.md`, `AUDIT_FINDINGS.md`, `.agents/ROADMAP.md`, and the re-pinned `tests/policy_driven/test_engine_build_id_guard.py`. Only then begin Task 1.
+- The **parent session is the sole committer/pusher/bus-writer.** Subagents implement and hand diffs back; Tasks 1-6 accumulate one commit (end of Task 6); Tasks 7-9 commit normally (see each task).
+- [ ] **After Task 9 — RELEASE + audit hold.** Commit the code anchor first; rerun the exact **Final gate** commands on that SHA; then post a **separate** bus RELEASE that names: the literal anchor commit/range, the commands + results, the migration witnesses (single-`013`-commit finish gate; up/down/up; backfill order authority; downgrade race), the honest residual-risk boundary (send-before-stamp / cross-replica remain until 7b-activation), and "**M2 / `KYC_Tool_Build_Package/` untouched**"; set `turn: CODEX`. Push and **hold for `AUDIT-CLEAN`** before considering the work done.
 
 ## Test infrastructure (real, from `tests/conftest.py`)
 
@@ -49,25 +57,27 @@ print(h.hexdigest())
 PY
 ```
 
-## Green-at-every-commit ordering (why the migration is built across tasks)
+## Build order: Tasks 1-6 accumulate ONE atomic `013` commit (F1)
 
-`conftest.migrated` upgrades a fresh DB to **head** for the whole suite, so any constraint migration `013` adds is live for every test. A migration constraint that *requires a column value* can only land once the code that *writes* that value is in place, and columns must exist before code writes them. Therefore:
+Migration `013` is built up across Tasks 1-6 in the **worktree**, but is **committed to git exactly once — at the end of Task 6** — as a single atomic *schema + runtime* commit. This is mandatory: Alembic records a revision by its id, so if Task 1 committed `013` in its blank-insertion-point form and a persistent DB applied it, later tasks editing the SAME revision id would leave that DB at `current==head==013` and it would `alembic upgrade head` to a **no-op**, silently missing the backfill / triple FK / race-safe downgrade. Fresh ephemeral DBs hide this (each test replays the final file from `012`); a real deployment would not.
 
-- **Task 1** adds `013`'s columns + the outbox stream/case_id/lifecycle CHECKs (none reference `decision_sequence`) + updates the enqueue funcs to set `ordering_stream` — so the suite stays green.
-- **Task 2** ships the shared parity matrix (`src/kyc_tool/ops/backfill_parity.py`, run by BOTH the migration and the Task-7 CLI) and the legacy `decision_sequence` backfill (touches only legacy rows; no new-row CHECK yet).
-- **Task 3** fences the claim + terminals (the `claim_token` is set by the claim and cleared by every terminal in the same step — they cannot split without violating the lifecycle CHECK).
-- **Task 4** makes the pipeline allocate `decision_sequence` **and**, in the same step, adds the decision-identity constraints (kind/stream identity CHECK, `manual`/`automatic` CHECK, the three decisions uniques, the triple FK, the partial callback unique) — now both legacy (backfilled) and live (allocated) rows satisfy them.
-- **Task 5** adds the local guard + `superseded` lifecycle wiring.
-- **Task 6** hardens `013`'s downgrade (LOCK + `superseded` preflight).
-- **Tasks 7–8** ship the two ops CLIs; **Task 9** ships docs + the ROADMAP flip.
+Therefore **Tasks 1-6 are non-committing worktree TDD/review checkpoints** (each still runs the full close-out gates green so a reviewer can inspect the accumulated diff), and the parent makes the **single** `013` + runtime commit at the end of Task 6. Tasks 7, 8, 9 commit normally. `conftest.migrated` upgrades a fresh DB to **head** for the whole suite, so any constraint `013` adds is live for every test; a constraint that *requires a column value* can only land once the code that *writes* that value is in place, and columns must exist first. Hence the accumulation order:
 
-Each task edits `alembic/versions/013_outbox_stream_separation.py` at clearly marked insertion points; every test run re-applies `013` from scratch on a fresh DB, so cross-task edits to one migration file are safe.
+- **Task 1** (checkpoint) — `013`'s columns + the outbox stream/case_id/lifecycle CHECKs (none reference `decision_sequence`) + enqueue funcs set `ordering_stream`; ORM columns. Suite green.
+- **Task 2** (checkpoint) — the FROZEN backfill contract (`src/kyc_tool/migration_contracts/v013_backfill.py`, run by BOTH the migration and the Task-7 CLI) + the legacy `decision_sequence` backfill (touches only legacy rows; no new-row CHECK yet).
+- **Task 3** (checkpoint) — fences the claim + terminals (the `claim_token` is set by the claim and cleared by every terminal in the same step — they cannot split without violating the lifecycle CHECK).
+- **Task 4** (checkpoint) — pipeline allocates `decision_sequence` **and**, in the same step, adds the decision-identity constraints (kind/stream identity CHECK, `manual`/`automatic` CHECK, the three decisions uniques, the triple FK, the partial callback unique) — now both legacy (backfilled) and live (allocated) rows satisfy them.
+- **Task 5** (checkpoint) — local guard + `superseded` lifecycle wiring.
+- **Task 6** (**the single commit**) — hardens `013`'s downgrade (LOCK + `superseded` preflight), then commits everything accumulated in Tasks 1-6 as one atomic schema+runtime commit + runs the finish gate.
+- **Tasks 7–8** commit the two ops CLIs normally; **Task 9** commits docs + the ROADMAP flip.
+
+Each checkpoint edits `alembic/versions/013_outbox_stream_separation.py` at clearly marked insertion points; every test run re-applies `013` from scratch on a fresh DB, so cross-checkpoint edits to one migration file are safe, and the single final commit is the only `013` in git history. **The engine-drift guard is re-pinned at each checkpoint too** (it is a worktree edit, not a commit), so `./manage.sh test` stays green for review; the final re-pinned hash rides the Task-6 commit.
 
 ## File Structure
 
 **Create:**
 - `alembic/versions/013_outbox_stream_separation.py` — the single migration (`down_revision='012'`): all columns, backfills, constraints, index, and the race-safe downgrade. Authored across Tasks 1, 2, 4, 6.
-- `src/kyc_tool/ops/backfill_parity.py` — the shared schema-012 parity matrix (`PARITY_CHECKS` + `run_parity`) run by BOTH migration 013's preflight and the diagnostic CLI (Task 2).
+- `src/kyc_tool/migration_contracts/v013_backfill.py` — the shared schema-012 parity matrix (`PARITY_CHECKS` + `run_parity`) run by BOTH migration 013's preflight and the diagnostic CLI (Task 2).
 - `src/kyc_tool/ops/verify_pr7b_core_backfill.py` — schema-012-compatible, `SHARE`-locked, read-only pre-window diagnostic CLI (Task 7).
 - `src/kyc_tool/ops/reset_interrupted_outbox_claims.py` — post-013-only claim-tuple reset CLI (Task 8).
 - `tests/integration/test_outbox_fencing.py` — stream-scoped fenced claim + fenced terminals (Task 3).
@@ -517,47 +527,50 @@ Expected: **FAIL** (`src/kyc_tool changed`). This is the RED step — do NOT run
 Run the re-pin one-liner (see Test infrastructure), paste the digest into `EXPECTED_ENGINE_SOURCE_HASH` in `tests/policy_driven/test_engine_build_id_guard.py`, then:
 Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` → PASS.
 
-- [ ] **Step 11: Full gate (now that the guard is re-pinned) + commit** — canonical close-out order:
+- [ ] **Step 11: CHECKPOINT — full gate green, NO git commit (F1)**
 
+`013` is committed once at the end of Task 6. Run the gates and hand the accumulated worktree diff to review; do **not** `git commit`:
 ```bash
 ./manage.sh test                       # whole suite, exit 0 (live decide enqueues ordering_stream='decision')
 .venv/bin/ruff check .                 # exit 0
 .venv/bin/lint-imports                 # 2 kept / 0 broken
-git add alembic/versions/013_outbox_stream_separation.py src/kyc_tool/db/tables.py \
-        src/kyc_tool/outbox/publisher.py tests/integration/test_migrations.py \
-        tests/policy_driven/test_engine_build_id_guard.py
-git commit -m "feat(013): outbox stream separation, case_id NOT NULL, lifecycle+claim CHECKs
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
+git status                             # review the worktree diff — do NOT commit yet
 ```
 
 ---
 
-## Task 2: Migration 013 part B — shared parity matrix + legacy `decision_sequence` backfill (order authority = `outbox.id`)
+## Task 2: Migration 013 part B — frozen backfill contract + legacy `decision_sequence` backfill (order authority = `outbox.id`)
 
-Creates the schema-012-compatible **shared parity matrix** (`src/kyc_tool/ops/backfill_parity.py`) that BOTH migration `013`'s preflight AND the `verify_pr7b_core_backfill` diagnostic (Task 7) run, then wires it into the migration: refuse (with actionable ids, `BLOCKED_NO_AUTHORITATIVE_MAPPING` on a missing mapping) BEFORE any DDL, else rank per case by `outbox.id`, stamp `decisions.decision_sequence` + copy to the callback, seed `cases.last_decision_sequence`. **Touches `src/` (the parity module) → re-pins the drift guard.**
+Creates the schema-012-compatible **frozen migration contract** (`src/kyc_tool/migration_contracts/v013_backfill.py`, raw SQL + stable constants ONLY — no other imports) that BOTH migration `013`'s preflight AND the `verify_pr7b_core_backfill` diagnostic (Task 7) run, then wires it into the migration: refuse (with actionable ids, `BLOCKED_NO_AUTHORITATIVE_MAPPING` on a missing mapping) BEFORE any DDL, else rank per case by `outbox.id`, stamp `decisions.decision_sequence` + copy to the callback, seed `cases.last_decision_sequence`. The contract is **immutable history** — a dedicated frozen-SHA test forbids ever re-pinning it (any later semantics get a new `v014_…` module). **Touches `src/` (the contract module) → re-pins the whole-source drift guard (separately from the frozen-SHA test).**
 
 **Files:**
-- Create: `src/kyc_tool/ops/backfill_parity.py` (shared, raw-SQL parity matrix — no 013-only ORM)
+- Create: `src/kyc_tool/migration_contracts/__init__.py` (empty package marker)
+- Create: `src/kyc_tool/migration_contracts/v013_backfill.py` (raw-SQL parity matrix + constants — imports ONLY `sqlalchemy.text`)
+- Create: `tests/unit/test_migration_contract_v013.py` (the frozen-SHA guard — NEVER re-pinned)
 - Modify: `alembic/versions/013_outbox_stream_separation.py` (insertion points A + B in `upgrade`)
 - Modify: `tests/integration/test_migrations.py`
-- Re-pin: `tests/policy_driven/test_engine_build_id_guard.py`
+- Re-pin: `tests/policy_driven/test_engine_build_id_guard.py` (whole-source guard only — NOT the frozen-SHA test)
 
 **Interfaces:**
-- Produces: `PARITY_CHECKS: list[tuple[str, str]]` (name, schema-012 SQL selecting offending `a`,`b` id pairs); `run_parity(executor) -> list[tuple[str, list[tuple]]]` (checks with offenders); constants `MISSING_CALLBACK`, `BLOCKED_SENTINEL="BLOCKED_NO_AUTHORITATIVE_MAPPING"`. `run_parity` accepts anything with `.execute(text(...))` (an alembic `Connection` OR a `Session`).
-- Produces: `_PARITY_BAD_SEEDS: dict[str, str]` in `test_migrations.py` (one invalid legacy state per key), imported by Task 7's CLI test.
+- Produces: `PARITY_CHECKS: list[tuple[str, str]]` (name, schema-012 SQL selecting offending `a`,`b` id pairs); `run_parity(executor) -> list[tuple[str, list[tuple]]]` (checks with offenders); constants `MISSING_CALLBACK`, `BLOCKED_SENTINEL="BLOCKED_NO_AUTHORITATIVE_MAPPING"`. `run_parity` accepts anything with `.execute(text(...))` (an alembic `Connection` OR a `Session`). The module imports ONLY `sqlalchemy.text` (dependency-light, freezable).
+- Produces: `_PARITY_BAD_SEEDS: dict[str, list[str]]` in `test_migrations.py` (one invalid legacy state per key), imported by Task 7's CLI test.
 - Consumes: schema from Task 1 (columns present, no decision-identity constraints yet).
 
-- [ ] **Step 1: Create the shared parity matrix** — create `src/kyc_tool/ops/backfill_parity.py`:
+- [ ] **Step 1: Create the frozen migration contract** — create `src/kyc_tool/migration_contracts/__init__.py` (empty), then `src/kyc_tool/migration_contracts/v013_backfill.py`:
 
 ```python
-"""Shared schema-012-compatible parity matrix for the 7b-core backfill. Migration 013's
-preflight AND the verify_pr7b_core_backfill diagnostic (ops CLI) both run THIS matrix, so
-the two can never diverge. Raw SQL only — references NO 013-only columns (ordering_stream,
-decision_sequence, claim_*). Each check SELECTs offending id pairs (a, b); empty ⇒ clean.
-MISSING_CALLBACK is the fail-closed no-authoritative-mapping state (a decision whose callback
-was pruned): the safe order cannot be reconstructed, so it maps to BLOCKED_NO_AUTHORITATIVE_MAPPING.
+"""FROZEN migration contract for the 7b-core 012→013 backfill (historical & immutable).
+
+Migration 013's preflight AND the verify_pr7b_core_backfill diagnostic both run THIS matrix,
+so the two can never diverge. This module is deliberately dependency-light — it imports ONLY
+`sqlalchemy.text` — and is pinned by a frozen-SHA test (tests/unit/test_migration_contract_v013.py)
+that must NEVER be re-pinned: changing this file changes how a historical 012→013 upgrade behaves.
+For any later backfill semantics, add a NEW `v014_*.py` contract instead of editing this one.
+
+Raw SQL only — references NO 013-only columns (ordering_stream, decision_sequence, claim_*). Each
+check SELECTs offending id pairs (a, b); empty ⇒ clean. MISSING_CALLBACK is the fail-closed
+no-authoritative-mapping state (a decision whose callback was pruned): the safe order cannot be
+reconstructed, so it maps to BLOCKED_NO_AUTHORITATIVE_MAPPING.
 """
 
 from sqlalchemy import text
@@ -609,6 +622,32 @@ def run_parity(executor) -> list[tuple[str, list[tuple]]]:
             found.append((name, [(r.a, r.b) for r in rows]))
     return found
 ```
+
+- [ ] **Step 1b: Pin the frozen contract SHA (separate from the whole-source drift guard)** — create `tests/unit/test_migration_contract_v013.py`. Compute the sha256 of `v013_backfill.py` once it is final and paste it into `V013_BACKFILL_SHA`:
+
+```python
+"""FROZEN historical migration contract guard. NEVER re-pin V013_BACKFILL_SHA — a change to
+v013_backfill.py alters how a historical 012→013 upgrade behaves on a persistent DB. For any
+later backfill semantics, add src/kyc_tool/migration_contracts/v014_*.py and pin it separately.
+(This is distinct from the whole-source engine drift guard, which stays re-pinnable.)"""
+
+import hashlib
+
+from kyc_tool.config import REPO_ROOT
+
+_CONTRACT = REPO_ROOT / "src" / "kyc_tool" / "migration_contracts" / "v013_backfill.py"
+V013_BACKFILL_SHA = "<sha256 of v013_backfill.py — paste once; then NEVER change>"
+
+
+def test_v013_backfill_contract_is_frozen():
+    got = hashlib.sha256(_CONTRACT.read_bytes()).hexdigest()
+    assert got == V013_BACKFILL_SHA, (
+        "v013_backfill.py is a FROZEN historical migration contract — do NOT re-pin this hash; "
+        "create migration_contracts/v014_*.py for any later semantics."
+    )
+```
+
+Compute the hash with `python -c "import hashlib,pathlib;print(hashlib.sha256(pathlib.Path('src/kyc_tool/migration_contracts/v013_backfill.py').read_bytes()).hexdigest())"` after Step 1 is final, paste it into `V013_BACKFILL_SHA`, and run `.venv/bin/pytest tests/unit/test_migration_contract_v013.py -v` → PASS. (A full empty `base→head` upgrade is already exercised by `test_upgrade_downgrade_upgrade`; a populated `012→013` upgrade importing only the installed package is exercised by the Step-2 backfill tests below — both run migration 013's `from kyc_tool.migration_contracts.v013_backfill import …` with no test-only or mutable dependency.)
 
 - [ ] **Step 2: Write the failing tests** — append to `tests/integration/test_migrations.py`:
 
@@ -821,7 +860,7 @@ Replace `# === Task 2 insertion point A: shared parity preflight (runs BEFORE an
 
 ```python
     # --- shared parity preflight (fail-closed BEFORE any DDL) ---
-    from kyc_tool.ops.backfill_parity import BLOCKED_SENTINEL, MISSING_CALLBACK, run_parity
+    from kyc_tool.migration_contracts.v013_backfill import BLOCKED_SENTINEL, MISSING_CALLBACK, run_parity
 
     violations = run_parity(conn)
     if violations:
@@ -885,24 +924,20 @@ Then, in `test_013_upgrade_sets_stream_and_notnull_metadata`, change the final c
 
 - [ ] **Step 6: Mutation checks (manual, no commit)** — (a) change the assignment `ORDER BY o.id` → `ORDER BY d.decided_at, o.id`; rerun `test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersession` → confirm it FAILS at `seqs == {"dA":1,"dB":2}` (and, at final head with the Task-5 guard, also at the delivery order / no-supersession assertions). Restore. (b) Delete the `run_parity` block; rerun `test_013_upgrade_refuses_parity_violation_before_ddl` → confirm every parametrization FAILS (no refusal). Restore.
 
-- [ ] **Step 7: RED drift-guard step** — the new `src/kyc_tool/ops/backfill_parity.py` changed the source tree:
+- [ ] **Step 7: RED drift-guard step** — the new `src/kyc_tool/migration_contracts/v013_backfill.py` changed the source tree:
 
 Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` → **FAIL** (RED step; do NOT run `./manage.sh test` yet).
 
 - [ ] **Step 8: Re-pin the drift guard → GREEN** — run the re-pin one-liner, paste into `EXPECTED_ENGINE_SOURCE_HASH`, rerun the guard test → PASS.
 
-- [ ] **Step 9: Full gate + commit** (canonical close-out order)
+- [ ] **Step 9: CHECKPOINT — full gate green, NO git commit (F1)** — also run the frozen-contract SHA test:
 
 ```bash
+.venv/bin/pytest tests/unit/test_migration_contract_v013.py -v   # frozen contract pinned (Step 1b)
 ./manage.sh test
 .venv/bin/ruff check .
 .venv/bin/lint-imports
-git add src/kyc_tool/ops/backfill_parity.py alembic/versions/013_outbox_stream_separation.py \
-        tests/integration/test_migrations.py tests/policy_driven/test_engine_build_id_guard.py
-git commit -m "feat(013): shared parity matrix + decision_sequence backfill ranked by outbox.id
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
+git status                             # review the accumulated worktree diff — do NOT commit yet
 ```
 
 ---
@@ -1281,25 +1316,20 @@ Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` →
 
 - [ ] **Step 7: Re-pin the drift guard → GREEN** — run the re-pin one-liner, paste into `EXPECTED_ENGINE_SOURCE_HASH`, rerun the guard test → PASS.
 
-- [ ] **Step 8: Full gate + commit** (canonical close-out order)
+- [ ] **Step 8: CHECKPOINT — full gate green, NO git commit (F1)**
 
 ```bash
 ./manage.sh test          # whole suite green (delivery still stamps published_at + run COMPLETE)
 .venv/bin/ruff check .
 .venv/bin/lint-imports
-git add src/kyc_tool/outbox/publisher.py tests/integration/test_outbox_fencing.py \
-        tests/policy_driven/test_engine_build_id_guard.py
-git commit -m "feat(outbox): stream-scoped fenced claim + fenced winner/loser terminals
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
+git status                # review the accumulated worktree diff — do NOT commit yet
 ```
 
 ---
 
 ## Task 4: Decision-sequence allocation + decision-identity constraints
 
-Makes `_decide_txn` increment `cases.last_decision_sequence` under the already-held Case `FOR UPDATE`, stamp `DecisionRow.decision_sequence`, and pass it to `enqueue_decision_callback`. In the **same** commit, adds `013`'s decision-identity constraints (the kind/stream identity CHECK, the `manual`/`automatic` CHECK, the three decisions uniques, the triple FK, the partial callback unique) — now both legacy (backfilled) and live (allocated) rows satisfy them, so the suite stays green.
+Makes `_decide_txn` increment `cases.last_decision_sequence` under the already-held Case `FOR UPDATE`, stamp `DecisionRow.decision_sequence`, and pass it to `enqueue_decision_callback`. In the **same** checkpoint, adds `013`'s decision-identity constraints (the kind/stream identity CHECK, the `manual`/`automatic` CHECK, the three decisions uniques, the triple FK, the partial callback unique) — now both legacy (backfilled) and live (allocated) rows satisfy them, so the suite stays green.
 
 **Files:**
 - Modify: `src/kyc_tool/orchestration/pipeline.py` (`_decide_txn` 485-506; the Case is FOR UPDATE from `_load` at 362)
@@ -1351,22 +1381,35 @@ def _seed_run_at_decide(session_factory, *, case_id, run_id, ev_seq):
 
 
 def test_concurrent_decides_serialize_via_case_lock(session_factory, pipeline, policy, monkeypatch):
-    """Two REAL _decide_txn calls on ONE case, released simultaneously by a barrier placed
-    immediately before _load (which takes the Case FOR UPDATE). The real row lock serializes
-    them → sequences {1,2}, counter 2, no uniqueness error. Mutation: dropping with_for_update
-    (or max()+1 allocation) lets both read the same counter → duplicate seq → uq violation."""
+    """Deterministic lock-contention proof (F3). A `_load` wrapper keyed by run id: A takes the
+    Case FOR UPDATE (real `_load`), signals `a_has_case_lock` AFTER it returns, and is HELD before
+    allocation/commit; B signals `b_entered_load` before its `_load` and `b_returned_from_load`
+    only AFTER it returns. With the real FOR UPDATE, B must block INSIDE `_load` while A holds —
+    so `b_returned_from_load` stays unset. Releasing A → A=1, B=2, counter=2, two bound callbacks.
+    MUTATION: removing `with_for_update=True` (or substituting `max()+1`) lets B return while A is
+    held → `assert not b_returned_from_load.wait(2)` fails deterministically, regardless of commit
+    order. Both threads must terminate (a timeout must not masquerade as success)."""
     jid_a = _seed_run_at_decide(session_factory, case_id="cc", run_id="ra", ev_seq=1)
     jid_b = _seed_run_at_decide(session_factory, case_id="cc", run_id="rb", ev_seq=2)
 
-    barrier = threading.Barrier(2)
+    a_has_case_lock = threading.Event()
+    release_a = threading.Event()
+    b_entered_load = threading.Event()
+    b_returned_from_load = threading.Event()
     orig_load = pipeline._load
 
-    def barriered_load(session, run_id):
-        barrier.wait()  # both threads poised BEFORE either takes the Case FOR UPDATE
-        return orig_load(session, run_id)
+    def wrapped_load(session, run_id):
+        if run_id == "ra":
+            result = orig_load(session, run_id)   # A acquires the Case FOR UPDATE here
+            a_has_case_lock.set()
+            release_a.wait(timeout=20)            # hold A (with the lock) before allocation/commit
+            return result
+        b_entered_load.set()
+        result = orig_load(session, run_id)       # B blocks here on the FOR UPDATE while A holds
+        b_returned_from_load.set()
+        return result
 
-    monkeypatch.setattr(pipeline, "_load", barriered_load)
-
+    monkeypatch.setattr(pipeline, "_load", wrapped_load)
     errors: list[Exception] = []
 
     def decide(run_id, jid):
@@ -1376,20 +1419,26 @@ def test_concurrent_decides_serialize_via_case_lock(session_factory, pipeline, p
             errors.append(e)
 
     ta = threading.Thread(target=decide, args=("ra", jid_a))
-    tb = threading.Thread(target=decide, args=("rb", jid_b))
     ta.start()
+    assert a_has_case_lock.wait(timeout=15)                 # A holds the case lock
+    tb = threading.Thread(target=decide, args=("rb", jid_b))
     tb.start()
+    assert b_entered_load.wait(timeout=15)                  # B has entered _load
+    assert not b_returned_from_load.wait(timeout=2)         # ... and is BLOCKED on the FOR UPDATE
+    release_a.set()
     ta.join(timeout=15)
     tb.join(timeout=15)
+    assert not ta.is_alive() and not tb.is_alive()         # both terminated (no timeout-as-success)
 
     assert errors == []  # no uq_decisions_case_decision_sequence violation
     with session_factory() as s:
-        seqs = sorted(r.decision_sequence for r in s.execute(text(
-            "SELECT decision_sequence FROM decisions WHERE case_id='cc' AND manual=false")))
+        by_run = {r.run_id: r.decision_sequence for r in s.execute(text(
+            "SELECT run_id, decision_sequence FROM decisions WHERE case_id='cc' AND manual=false"))}
         counter = s.execute(text("SELECT last_decision_sequence FROM cases WHERE id='cc'")).scalar_one()
         cbs = sorted(r.decision_sequence for r in s.execute(text(
             "SELECT decision_sequence FROM outbox WHERE case_id='cc' AND kind='decision_callback'")))
-    assert seqs == [1, 2] and counter == 2 and cbs == [1, 2]
+    assert by_run == {"ra": 1, "rb": 2}  # A (first under the lock) = 1, B = 2
+    assert counter == 2 and cbs == [1, 2]
 
 
 def test_manual_approve_allocates_no_sequence(client, session_factory, post_event, worker, sign):
@@ -1457,17 +1506,23 @@ Change the `enqueue_decision_callback` call (line 506) to pass the sequence:
     op.create_unique_constraint(
         "uq_decisions_run_case_sequence", "decisions", ["run_id", "case_id", "decision_sequence"]
     )
+    # NULL-explicit exhaustive row shapes (F2). An implication form like
+    # `NOT(manual=false) OR (run_id IS NOT NULL AND decision_sequence>0)` evaluates to UNKNOWN
+    # (and thus PASSES) for (manual=false, run_id set, decision_sequence NULL) — a hole. Spell
+    # every column's NULL-ness in each branch so a NULL sequence on an automatic row is rejected.
     op.create_check_constraint(
         "ck_decisions_manual_sequence", "decisions",
-        "(NOT (manual = false) OR (run_id IS NOT NULL AND decision_sequence > 0)) "
-        "AND (NOT (manual = true) OR (run_id IS NULL AND decision_sequence IS NULL))",
+        "((manual = false AND run_id IS NOT NULL AND decision_sequence IS NOT NULL "
+        "AND decision_sequence > 0) "
+        "OR (manual = true AND run_id IS NULL AND decision_sequence IS NULL))",
     )
-    # --- outbox callback binding: exhaustive-OR shape + triple FK + one callback per run ---
+    # --- outbox callback binding: NULL-explicit exhaustive shape + triple FK + one callback per run ---
     op.create_check_constraint(
         "ck_outbox_kind_stream_identity", "outbox",
-        "(kind='decision_callback' AND ordering_stream='decision' AND run_id IS NOT NULL "
-        "AND decision_sequence > 0) OR (kind='poc_email' AND ordering_stream='email' "
-        "AND run_id IS NULL AND decision_sequence IS NULL)",
+        "((kind='decision_callback' AND ordering_stream='decision' AND run_id IS NOT NULL "
+        "AND decision_sequence IS NOT NULL AND decision_sequence > 0) "
+        "OR (kind='poc_email' AND ordering_stream='email' AND run_id IS NULL "
+        "AND decision_sequence IS NULL))",
     )
     op.create_foreign_key(
         "fk_outbox_decision_triple", "outbox", "decisions",
@@ -1528,7 +1583,7 @@ Extend `Outbox.__table_args__` (from Task 1) to include the callback binding:
 - [ ] **Step 6: Run allocation tests + the concurrency mutation witness (manual, no `./manage.sh test` yet)**
 
 Run: `.venv/bin/pytest tests/integration/test_decision_sequence.py -v` → PASS.
-**Concurrency mutation:** in `pipeline._load` remove `with_for_update=True` from `session.get(Case, run.case_id, with_for_update=True)` (or substitute a `max(decision_sequence)+1` allocation for the locked-counter increment); rerun `test_concurrent_decides_serialize_via_case_lock` → it must FAIL (both threads read the same counter → duplicate seq → `uq_decisions_case_decision_sequence` violation captured in `errors`, or `seqs == [1, 1]`). Restore.
+**Concurrency mutation:** in `pipeline._load` remove `with_for_update=True` from `session.get(Case, run.case_id, with_for_update=True)` (or substitute a `max(decision_sequence)+1` allocation for the locked-counter increment); rerun `test_concurrent_decides_serialize_via_case_lock` → it must FAIL **deterministically** at `assert not b_returned_from_load.wait(timeout=2)` — with no lock, B returns from `_load` while A is held (regardless of commit order), and the run also trips `uq_decisions_case_decision_sequence`. Restore.
 
 - [ ] **Step 7: Add the full identity INSERT/UPDATE negative cross-product** — append to `tests/integration/test_migrations.py`:
 
@@ -1619,6 +1674,9 @@ _DECISION_IDENTITY_BAD = {
         "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
         "policy_shas, manual, decision_sequence) VALUES ('d','c1',NULL,'approve',0,'{}'::jsonb,'enabled',"
         "'{}'::jsonb,false,1)"),
+    "auto_null_sequence": ("ck_decisions_manual_sequence",  # automatic row, run set, sequence NULL (F2 hole)
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual) VALUES ('d','c1','rX','approve',0,'{}'::jsonb,'enabled','{}'::jsonb,false)"),
 }
 
 
@@ -1642,11 +1700,13 @@ def test_013_decision_identity_insert_negatives(pg, case):
     engine.dispose()
 
 
-def test_013_decision_identity_update_negative(pg):
-    """UPDATE variant: a valid automatic decision cannot be UPDATEd into a zero sequence."""
+@pytest.mark.parametrize("bad", ["0", "NULL"], ids=["zero", "auto_null_sequence"])
+def test_013_decision_identity_update_negative(pg, bad):
+    """UPDATE variants: a valid automatic decision cannot be UPDATEd into a zero OR NULL
+    sequence — ck_decisions_manual_sequence fires on UPDATE too (F2)."""
     from sqlalchemy.exc import IntegrityError
 
-    url = _fresh_db(pg, "kyc_mig_013_di_upd")
+    url = _fresh_db(pg, f"kyc_mig_013_di_upd_{bad}")
     cfg = _config(url)
     alembic_command.upgrade(cfg, "013")
     engine = create_engine(url)
@@ -1654,7 +1714,7 @@ def test_013_decision_identity_update_negative(pg):
         _mk_case(conn)
         _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
     with pytest.raises(IntegrityError), engine.begin() as conn:
-        conn.execute(text("UPDATE decisions SET decision_sequence=0 WHERE id='dA'"))
+        conn.execute(text(f"UPDATE decisions SET decision_sequence={bad} WHERE id='dA'"))
     engine.dispose()
 
 
@@ -1669,6 +1729,9 @@ _OUTBOX_BINDING_BAD = {
     "callback_negative_seq": ("ck_outbox_kind_stream_identity",
         "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
         "VALUES ('decision_callback','c1','rA','decision',-1,'pending')"),
+    "callback_null_sequence": ("ck_outbox_kind_stream_identity",  # callback, run set, sequence NULL (F2 hole)
+        "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, status) "
+        "VALUES ('decision_callback','c1','rA','decision','pending')"),
     "email_sequenced": ("ck_outbox_kind_stream_identity",  # email carrying a sequence
         "INSERT INTO outbox (kind, case_id, ordering_stream, decision_sequence, status) "
         "VALUES ('poc_email','c1','email',1,'pending')"),
@@ -1733,6 +1796,25 @@ def test_013_outbox_binding_update_negative(pg):
     with pytest.raises(IntegrityError), engine.begin() as conn:
         conn.execute(text("UPDATE outbox SET decision_sequence=9 WHERE run_id='rA'"))  # (rA,c1,9) absent
     engine.dispose()
+
+
+def test_013_outbox_callback_null_sequence_update_negative(pg):
+    """UPDATE variant (F2): a valid callback cannot be UPDATEd to a NULL decision_sequence —
+    ck_outbox_kind_stream_identity requires the sequence IS NOT NULL for a callback row."""
+    from sqlalchemy.exc import IntegrityError
+
+    url = _fresh_db(pg, "kyc_mig_013_ob_upd_null")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        _mk_case(conn)
+        _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
+        conn.execute(text("INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+                          "VALUES ('decision_callback','c1','rA','decision',1,'pending')"))
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text("UPDATE outbox SET decision_sequence=NULL WHERE run_id='rA'"))
+    engine.dispose()
 ```
 
 - [ ] **Step 8: Run negatives + per-constraint INDEPENDENT mutation witnesses (manual, no commit)**
@@ -1742,7 +1824,9 @@ Mutate each constraint away INDEPENDENTLY and confirm the NAMED test fails, then
 - drop `uq_decisions_case_decision_sequence` → `test_013_two_runs_same_case_sequence_rejected` FAILS (proving the outbox partial index is NOT the backstop).
 - drop `uq_decisions_run_id` → `test_013_two_decisions_same_run_rejected` FAILS.
 - drop `ck_decisions_manual_sequence` → `test_013_decision_identity_insert_negatives[auto_zero_seq]` + `[manual_with_run]` FAIL.
+- remove **only** `AND decision_sequence IS NOT NULL` from `ck_decisions_manual_sequence` (the F2 NULL hole) → `test_013_decision_identity_insert_negatives[auto_null_sequence]` + `test_013_decision_identity_update_negative[auto_null_sequence]` FAIL (a NULL-sequence automatic row now passes the UNKNOWN implication).
 - drop `ck_outbox_kind_stream_identity` → `test_013_outbox_binding_insert_negatives[callback_null_run]` + `[callback_stream_swap]` + `[email_with_run]` FAIL.
+- remove **only** `AND decision_sequence IS NOT NULL` from `ck_outbox_kind_stream_identity` (the F2 NULL hole) → `test_013_outbox_binding_insert_negatives[callback_null_sequence]` + `test_013_outbox_callback_null_sequence_update_negative` FAIL.
 - drop `fk_outbox_decision_triple` → `test_013_outbox_binding_insert_negatives[callback_wrong_case]` + `test_013_outbox_binding_update_negative` FAIL.
 - drop `uq_outbox_decision_callback_run` → `test_013_outbox_binding_insert_negatives[dup_callback]` FAILS.
 
@@ -1752,19 +1836,13 @@ Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` →
 
 - [ ] **Step 10: Re-pin the drift guard → GREEN** — re-pin one-liner → paste → rerun guard test → PASS.
 
-- [ ] **Step 11: Full gate + commit** (canonical close-out order)
+- [ ] **Step 11: CHECKPOINT — full gate green, NO git commit (F1)**
 
 ```bash
 ./manage.sh test
 .venv/bin/ruff check .
 .venv/bin/lint-imports
-git add src/kyc_tool/orchestration/pipeline.py src/kyc_tool/db/tables.py \
-        alembic/versions/013_outbox_stream_separation.py tests/integration/test_migrations.py \
-        tests/integration/test_decision_sequence.py tests/policy_driven/test_engine_build_id_guard.py
-git commit -m "feat(013): per-case decision_sequence allocation + decision-identity constraints
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
+git status                # review the accumulated worktree diff — do NOT commit yet
 ```
 
 ---
@@ -1978,24 +2056,56 @@ In `src/kyc_tool/api/routes_metrics.py`, keep the `outbox_by_status` grouping (l
 Append to `tests/integration/test_outbox_supersession.py`:
 
 ```python
-def test_residual_risk_send_before_stamp_reverts_expected(session_factory, settings, publisher, callback_capture):
-    """Honest boundary (§5): seq 2 is really SENT (HTTP #1) and stamped, but then its
-    published_at is made NOT locally visible (published_at→NULL) — the exact observable of
-    send-before-stamp (the stamp txn not committed here) or a cross-replica send. The seq-1
-    guard predicate is then false and seq 1 IS sent (HTTP #2) — the revert that stays EXPECTED
-    until 7b-activation turns the same replay into a platform high-water no-op."""
-    _seed_decisions(session_factory, "c3", [1, 2])
-    _enqueue_cb(session_factory, "c3", 2)
-    assert publisher.process_pending() == 1              # seq 2 SENT (HTTP #1) + stamped
-    assert len(callback_capture.requests) == 1
-    with session_factory() as s:                          # inject: the higher stamp is not locally visible
-        s.execute(text("UPDATE decisions SET published_at=NULL WHERE id='c3-r2-d'"))
+class _InjectedFault(RuntimeError):
+    pass
+
+
+def test_residual_risk_send_before_stamp_reverts_expected(
+    client, session_factory, settings, publisher, callback_capture, monkeypatch
+):
+    """Honest boundary (§5) via the REACHABLE lifecycle: seq 1 is an OLDER dead callback (lower
+    outbox id); seq 2 is pending. The publisher SENDS seq 2 (HTTP #1, 2xx) but a fault injected
+    in `_record_delivered` BEFORE its transaction leaves seq 2 pending/claimed and its decision
+    UNSTAMPED (the real HTTP→terminal gap). seq 1 is requeued through the REAL UI endpoint; on the
+    next pass its local guard predicate is false (seq 2 unstamped) and seq 1 IS sent (HTTP #2) —
+    the exact residual revert 7b-activation later turns into a platform high-water no-op."""
+    _seed_decisions(session_factory, "c3", [1, 2])  # decisions/runs at PUBLISH_DECISION, unstamped
+    with session_factory() as s:  # seq 1 callback as an OLDER dead row (lower id)
+        seq1_id = s.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+            "VALUES ('decision_callback','c3','c3-r1','decision',1,'dead') RETURNING id")).scalar_one()
         s.commit()
-    _enqueue_cb(session_factory, "c3", 1)
-    assert publisher.process_pending() == 1              # seq 1 guard predicate false → SENT
-    assert len(callback_capture.requests) == 2           # HTTP #2 — the documented, expected revert
+    _enqueue_cb(session_factory, "c3", 2)  # seq 2 pending, higher id
+
+    def _boom(self, row, token):  # raise BEFORE any terminal transaction starts
+        raise _InjectedFault("send-before-stamp: HTTP sent, terminal not committed")
+
+    monkeypatch.setattr(type(publisher), "_record_delivered", _boom)
+    with pytest.raises(_InjectedFault):
+        publisher.process_once()  # claims seq 2 → _deliver (HTTP #1) → _boom
+    assert len(callback_capture.requests) == 1  # seq 2 was really SENT
+    with session_factory() as s:
+        assert s.execute(text("SELECT status FROM outbox WHERE run_id='c3-r2'")).scalar_one() == "pending"
+        assert s.execute(text("SELECT published_at FROM decisions WHERE id='c3-r2-d'")).scalar_one() is None
+
+    monkeypatch.undo()  # restore the real _record_delivered
+    resp = client.post(f"/ui/api/requeue/outbox/{seq1_id}")  # REAL UI requeue (dead → pending)
+    assert resp.status_code == 200
+
+    assert publisher.process_pending() >= 1     # seq 1 (lower id) claimed; guard predicate false
+    assert len(callback_capture.requests) == 2  # HTTP #2 — the documented, expected revert
     with session_factory() as s:
         assert s.execute(text("SELECT status FROM outbox WHERE run_id='c3-r1'")).scalar_one() == "delivered"
+
+
+def test_guard_predicate_only_unit(session_factory, settings, publisher, callback_capture):
+    """Named unit companion: with a higher decision UNSTAMPED (published_at NULL), the guard
+    predicate is false, so an older callback is sent — isolates the predicate without the HTTP
+    gap (kept separate from the lifecycle proof above, not a substitute)."""
+    _seed_decisions(session_factory, "cu", [1, 2])  # both unstamped
+    _enqueue_cb(session_factory, "cu", 1)
+    assert publisher.process_pending() == 1
+    assert len(callback_capture.requests) == 1  # seq 1 sent (no higher stamped delivery)
 
 
 def test_retention_prunes_superseded(session_factory):
@@ -2061,7 +2171,7 @@ In `src/kyc_tool/outbox/publisher.py`, insert these lines into the existing modu
     platform-authoritative (send-before-stamp / cross-replica reverts remain for 7b-activation).
 ```
 
-- [ ] **Step 7: Run all supersession tests, then RED guard → re-pin → full gate → commit**
+- [ ] **Step 7: CHECKPOINT — RED guard → re-pin → full gate green, NO git commit (F1)**
 
 ```bash
 .venv/bin/pytest tests/integration/test_outbox_supersession.py -v     # all pass
@@ -2071,20 +2181,14 @@ In `src/kyc_tool/outbox/publisher.py`, insert these lines into the existing modu
 ./manage.sh test
 .venv/bin/ruff check .
 .venv/bin/lint-imports
-git add src/kyc_tool/outbox/publisher.py src/kyc_tool/workers/retention.py \
-        src/kyc_tool/api/routes_metrics.py AUDIT_FINDINGS.md \
-        tests/integration/test_outbox_supersession.py tests/policy_driven/test_engine_build_id_guard.py
-git commit -m "feat(outbox): best-effort local superseded guard + lifecycle wiring (A6 exception)
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
+git status                # review the accumulated worktree diff — do NOT commit yet (Task 6 commits)
 ```
 
 ---
 
-## Task 6: Migration 013 downgrade race-safety (LOCK + `superseded` preflight)
+## Task 6: Migration 013 downgrade race-safety + THE single atomic `013` commit (F1)
 
-Hardens `013`'s `downgrade()`: the **first** statement is `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE`, then an `EXISTS(status='superseded')` preflight that refuses byte-stably before any DROP. A bare preflight is a TOCTOU race (its `ACCESS SHARE` is compatible with a publisher's `ROW EXCLUSIVE`, so a `superseded` row could commit between the check and the DDL, stranding an unknown terminal a pre-7b image cannot prune). Migration-only — no drift re-pin.
+Hardens `013`'s `downgrade()`: the **first** statement is `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE`, then an `EXISTS(status='superseded')` preflight that refuses byte-stably before any DROP. A bare preflight is a TOCTOU race (its `ACCESS SHARE` is compatible with a publisher's `ROW EXCLUSIVE`, so a `superseded` row could commit between the check and the DDL, stranding an unknown terminal a pre-7b image cannot prune). **This task ends with the ONE commit of everything accumulated in Tasks 1-6** (schema + runtime + tests + the final re-pinned drift hash) — see the finish gate.
 
 **Files:**
 - Modify: `alembic/versions/013_outbox_stream_separation.py` (`downgrade` body)
@@ -2225,18 +2329,40 @@ Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_downgrade or
 
 - [ ] **Step 5: Mutation check (manual, no commit)** — move `op.execute("LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE")` to AFTER the `EXISTS` preflight (or delete it); rerun `.venv/bin/pytest tests/integration/test_migrations.py::test_013_downgrade_lock_prevents_concurrent_supersede -v` → it must FAIL (the preflight now holds only ACCESS SHARE, so the concurrent `pending→superseded` UPDATE commits — no 55P03 — and `pytest.raises(OperationalError)` is unsatisfied). Restore.
 
-- [ ] **Step 6: Commit** (migration-only — no drift re-pin; `./manage.sh test` runs directly)
+- [ ] **Step 6: THE single atomic `013` commit (everything from Tasks 1-6)**
+
+The downgrade harden is migration-only, but the drift guard is already green from the Task-5 re-pin (kept green across this checkpoint). Confirm the full gate, then make the ONE commit of the entire accumulated worktree (migration + all runtime + the frozen contract + all tests + the final re-pinned hash):
 
 ```bash
 ./manage.sh test
 .venv/bin/ruff check .
 .venv/bin/lint-imports
-git add alembic/versions/013_outbox_stream_separation.py tests/integration/test_migrations.py
-git commit -m "feat(013): race-safe downgrade (ACCESS EXCLUSIVE lock + superseded preflight)
+git add alembic/versions/013_outbox_stream_separation.py \
+        src/kyc_tool/migration_contracts/__init__.py src/kyc_tool/migration_contracts/v013_backfill.py \
+        src/kyc_tool/db/tables.py src/kyc_tool/outbox/publisher.py src/kyc_tool/orchestration/pipeline.py \
+        src/kyc_tool/workers/retention.py src/kyc_tool/api/routes_metrics.py AUDIT_FINDINGS.md \
+        tests/integration/test_migrations.py tests/integration/test_outbox_fencing.py \
+        tests/integration/test_decision_sequence.py tests/integration/test_outbox_supersession.py \
+        tests/unit/test_migration_contract_v013.py tests/policy_driven/test_engine_build_id_guard.py
+git commit -m "feat(013): outbox stream separation + local decision ordering (schema + runtime, atomic)
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
 ```
+
+- [ ] **Step 7: Finish gate — prove exactly ONE `013` commit + a real `012→013` upgrade of the complete file**
+
+```bash
+# exactly one 7b-core commit touched the 013 revision (no incomplete intermediate forms in history)
+test "$(git log --format=%H -- alembic/versions/013_outbox_stream_separation.py | wc -l | tr -d ' ')" = "1"
+```
+Then, on a **dedicated DB held at 012**, upgrade once to the complete `013` and re-assert the final metadata/backfill/constraints (the persistent-DB hazard F1 guards against):
+```bash
+.venv/bin/pytest "tests/integration/test_migrations.py::test_013_upgrade_sets_stream_and_notnull_metadata" \
+                 "tests/integration/test_migrations.py::test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersession" \
+                 tests/unit/test_migration_contract_v013.py -v
+```
+(These upgrade a fresh `012` DB straight to the final single-file `013`; there is no intermediate `013` revision to land on.)
 
 ---
 
@@ -2259,7 +2385,6 @@ Ships the pre-window diagnostic: raw parameterized SQL that imports **no** 013-o
 """PR 7b-core: schema-012 pre-window backfill diagnostic — REAL CLI entry point (subprocess),
 the shared parity matrix (CLI + 013 both refuse), and the retention-race DB-lock half."""
 
-import inspect
 import os
 import subprocess
 import sys
@@ -2272,7 +2397,6 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 
 from kyc_tool.db.session import make_engine, make_session_factory
-from kyc_tool.ops import verify_pr7b_core_backfill as diag
 from kyc_tool.workers.retention import prune
 from tests.integration.test_migrations import _PARITY_BAD_SEEDS, _config, _fresh_db, _seed_parity_bad
 
@@ -2318,8 +2442,9 @@ def test_cli_green_on_healthy_012_subprocess(pg):
 
 def test_cli_blocked_no_backup_sentinel_subprocess(pg):
     """Missing mapping with no restorable backup: the REAL CLI exits nonzero with the EXACT
-    BLOCKED_NO_AUTHORITATIVE_MAPPING sentinel + decision/run ids, makes NO writes, and no 014
-    module is referenced (7b-activation is downstream)."""
+    BLOCKED_NO_AUTHORITATIVE_MAPPING sentinel + decision/run ids, and leaves the DB on 012 with
+    NO 013 columns and byte/count unchanged (proving the 014-downstream boundary behaviorally —
+    no substitute migration ran)."""
     url = _fresh_db(pg, "kyc_diag_missing")
     command.upgrade(_config(url), "012")
     engine = create_engine(url)
@@ -2330,25 +2455,30 @@ def test_cli_blocked_no_backup_sentinel_subprocess(pg):
     assert proc.returncode != 0
     assert "BLOCKED_NO_AUTHORITATIVE_MAPPING" in proc.stdout  # exact sentinel (one token)
     assert "'d'" in proc.stdout and "'r'" in proc.stdout       # actionable ids
-    after = engine.connect().execute(text("SELECT count(*) FROM outbox")).scalar_one()
-    assert before == after                                     # no writes
-    assert "014" not in inspect.getsource(diag)                # no 014 substitute is invoked
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "012"
+        cols = {r.column_name for r in conn.execute(text(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='outbox'"))}
+        assert "claim_token" not in cols  # no 013 (or 014) migration ran
+        assert conn.execute(text("SELECT count(*) FROM outbox")).scalar_one() == before  # no writes
     engine.dispose()
 
 
 @pytest.mark.parametrize("name", list(_PARITY_BAD_SEEDS))
 def test_cli_and_013_both_refuse_on_parity_state(pg, name):
-    """The CLI and migration 013 share ONE parity matrix — both must refuse every invalid
-    legacy state, the migration BEFORE any DDL (rolled back → no claim_token column)."""
+    """The CLI and migration 013 share ONE frozen contract — both must refuse every invalid
+    legacy state. The CLI is exercised through its REAL subprocess entry point (nonzero exit +
+    the exact violation name / sentinel in stdout); the migration refuses BEFORE any DDL."""
     url = _fresh_db(pg, f"kyc_diag_parity_{name}")
     command.upgrade(_config(url), "012")
     engine = create_engine(url)
     _seed_parity_bad(engine, name)
 
-    code, ids = diag.verify_backfill(_sf(url))  # the real CLI core (SHARE-locked, no writes)
-    assert code != 0 and ids
+    proc = _run_cli(url)  # the REAL entry point, not the helper
+    assert proc.returncode != 0
+    assert (name in proc.stdout) or ("BLOCKED_NO_AUTHORITATIVE_MAPPING" in proc.stdout)
 
-    with pytest.raises(RuntimeError):           # the real 013 upgrade refuses
+    with pytest.raises(RuntimeError):           # the real 013 upgrade refuses too
         command.upgrade(_config(url), "013")
     with engine.connect() as conn:
         cols = {r.column_name for r in conn.execute(text(
@@ -2357,14 +2487,17 @@ def test_cli_and_013_both_refuse_on_parity_state(pg, name):
     engine.dispose()
 
 
-def test_cli_share_lock_blocks_on_uncommitted_retention_delete(pg):
-    """Retention-race DB-lock half (the automatable proof): the REAL retention `prune` runs in
-    a thread, paused by a global after_cursor_execute barrier fired AFTER its outbox DELETE but
-    BEFORE commit (holding ROW EXCLUSIVE). The CLI subprocess's `LOCK TABLE outbox IN SHARE
-    MODE` must BLOCK while prune holds. On commit the callback is truly gone → CLI nonzero + ids.
-    MUTATION removing the SHARE lock lets the CLI snapshot before commit → it would report green.
+@pytest.mark.parametrize("mode", ["commit", "rollback"])
+def test_cli_share_lock_blocks_until_retention_resolves(pg, mode):
+    """Retention-race DB-lock half (the automatable proof), for BOTH resolutions: the REAL
+    retention `prune` runs in a thread, paused by a global barrier fired AFTER its outbox DELETE
+    but BEFORE `uow()` resolves (holding ROW EXCLUSIVE). The CLI subprocess's `LOCK TABLE outbox
+    IN SHARE MODE` must BLOCK while prune holds — in BOTH modes. On **commit** the callback is
+    truly gone → CLI nonzero + ids. On **rollback** the barrier raises an injected fault so
+    `uow()` rolls the DELETE back → the callback survives → CLI exit 0. MUTATION removing the
+    SHARE lock fails the blocked assertion in both modes AND the commit-mode nonzero outcome.
     (The external zero-retention-process attestation stays a runbook TODO(integration).)"""
-    url = _fresh_db(pg, "kyc_diag_race")
+    url = _fresh_db(pg, f"kyc_diag_race_{mode}")
     command.upgrade(_config(url), "012")
     engine = create_engine(url)
     _seed_healthy(engine, delivered_at="now() - interval '3000 days'")  # old → prune deletes it
@@ -2376,13 +2509,15 @@ def test_cli_share_lock_blocks_on_uncommitted_retention_delete(pg):
         if "delete from outbox where status='delivered'" in statement.lower():
             at_delete.set()
             release.wait(timeout=30)  # hold prune's txn (ROW EXCLUSIVE) open, uncommitted
+            if mode == "rollback":
+                raise RuntimeError("injected retention fault → uow rolls back the DELETE")
 
     event.listen(Engine, "after_cursor_execute", _barrier)
     prune_err: list[Exception] = []
 
     def run_prune():
         try:
-            prune(_sf(url), 7 * 365)  # the REAL retention seam
+            prune(_sf(url), 7 * 365)  # the REAL retention seam; uow() commits or rolls back
         except Exception as e:  # noqa: BLE001
             prune_err.append(e)
 
@@ -2397,18 +2532,22 @@ def test_cli_share_lock_blocks_on_uncommitted_retention_delete(pg):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         time.sleep(3)
-        assert proc.poll() is None  # STILL BLOCKED on the SHARE lock while prune holds
+        assert proc.poll() is None  # STILL BLOCKED on the SHARE lock in BOTH modes
         release.set()
         t.join(timeout=15)
         out, _ = proc.communicate(timeout=30)
-        assert proc.returncode != 0 and "'d'" in out  # missing mapping surfaced after commit
+        if mode == "commit":
+            assert proc.returncode != 0 and "'d'" in out  # callback gone → missing mapping
+            assert prune_err == []
+        else:
+            assert proc.returncode == 0, out              # callback restored → parity clean
+            assert prune_err and isinstance(prune_err[0], RuntimeError)
     finally:
         release.set()
         if proc is not None and proc.poll() is None:
             proc.kill()
         t.join(timeout=15)
         event.remove(Engine, "after_cursor_execute", _barrier)
-    assert prune_err == []
     engine.dispose()
 ```
 
@@ -2423,7 +2562,7 @@ Expected: FAIL — `ModuleNotFoundError: kyc_tool.ops.verify_pr7b_core_backfill`
 """Pre-window backfill diagnostic (PR 7b-core §Rollout step 0). Run BEFORE any outage, with
 the retention schedule suspended AND every active retention task terminated (orchestrator-
 attested zero-running) — see docs/RUNBOOK.md. Schema-012-compatible: it runs the SAME shared
-parity matrix as migration 013 (kyc_tool.ops.backfill_parity), imports NO 013-only ORM.
+parity matrix as migration 013 (kyc_tool.migration_contracts.v013_backfill), imports NO 013-only ORM.
 
 It begins its transaction with `LOCK TABLE outbox IN SHARE MODE` BEFORE any SELECT (defense in
 depth: the SHARE lock waits for any in-flight DELETE's ROW EXCLUSIVE to resolve and blocks a
@@ -2442,7 +2581,7 @@ from sqlalchemy import text
 
 from kyc_tool.config import get_settings
 from kyc_tool.db.session import make_engine, make_session_factory
-from kyc_tool.ops.backfill_parity import BLOCKED_SENTINEL, MISSING_CALLBACK, run_parity
+from kyc_tool.migration_contracts.v013_backfill import BLOCKED_SENTINEL, MISSING_CALLBACK, run_parity
 
 
 def verify_backfill(session_factory) -> tuple[int, list[str]]:
@@ -2482,7 +2621,7 @@ if __name__ == "__main__":
 
 Run: `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py -v` → PASS.
 
-- [ ] **Step 5: Mutation check (manual, no commit)** — remove `s.execute(text("LOCK TABLE outbox IN SHARE MODE"))`; rerun `test_cli_share_lock_blocks_on_uncommitted_retention_delete` → it must FAIL (`proc.poll()` is not None after 3s — the CLI no longer blocks on prune and can report green before the delete commits). Restore.
+- [ ] **Step 5: Mutation check (manual, no commit)** — remove `s.execute(text("LOCK TABLE outbox IN SHARE MODE"))`; rerun `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py::test_cli_share_lock_blocks_until_retention_resolves -v` → BOTH params must FAIL the `assert proc.poll() is None` blocked check (the CLI no longer waits on prune), and the `[commit]` param additionally fails its nonzero-outcome assertion (it reads the still-visible callback before the delete commits). Restore.
 
 - [ ] **Step 6: RED drift-guard step** — the new CLI changed `src/`:
 
@@ -2758,6 +2897,8 @@ Documents stream separation + local ordering + the 7b-core/activation boundary i
 - Modify: `docs/OVERVIEW.md`, `docs/RUNBOOK.md`, `docs/DEPLOYMENT.md`
 - Modify: `AUDIT_FINDINGS.md` (backfill provenance note; A6 already amended in Task 5 — confirm)
 - Modify: `.agents/ROADMAP.md` (§C row 74 State)
+- Create: `tests/unit/test_docs_cutover_parity.py` (RUNBOOK/DEPLOYMENT full-body parity)
+- Create: `tests/integration/test_rollback_command.py` (the exact `alembic … downgrade 012` command)
 - Verify: `tests/unit/test_migration_lineage.py` (green after the flip)
 
 **Interfaces:**
@@ -2827,9 +2968,9 @@ high-water mark. 7b-core does not claim exactly-once (see `AUDIT_FINDINGS.md` A6
 3. Run the shipped `python -m kyc_tool.ops.requeue_interrupted_jobs`. NO outbox reset here — the
    pre-013 schema has no claim columns; an interrupted old claim simply waits until its already-
    recorded `next_attempt_at`. Preserve every pending row's `next_attempt_at`.
-4. `alembic upgrade head` (013). This repeats the §0 parity preflights under the zero-writer boundary
-   and is the authoritative fail-closed check (the pre-window diagnostic is an early detector, not a
-   substitute).
+4. Run `.venv/bin/alembic -c alembic.ini upgrade head` (013) — the deployment image runs its exact
+   equivalent. This repeats the §0 parity preflights under the zero-writer boundary and is the
+   authoritative fail-closed check (the pre-window diagnostic is an early detector, not a substitute).
 5. Start API only, probe `/readyz`, then start + attest the fenced workers. No mutating prod smoke.
 6. Resume submission and re-enable retention.
 
@@ -2839,9 +2980,11 @@ R2. Hard-stop and orchestrator-attest zero API, pipeline, outbox, `dev_worker`, 
 R3. While 013 still exists, run `python -m kyc_tool.ops.reset_interrupted_outbox_claims` (post-013-only;
     clears complete claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero) and
     verify zero claim tuples.
-R4. `alembic downgrade` (its `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` + preflight
+R4. Run `.venv/bin/alembic -c alembic.ini downgrade 012` (the revision is a REQUIRED positional
+    argument — a bare `alembic downgrade` exits with a usage error mid-outage). Its
+    `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` + preflight
     `SELECT count(*) FROM outbox WHERE status='superseded'` refuses byte-stably if any superseded row
-    exists — then rollback stays on a 7b-core-compatible image and is a forward fix).
+    exists — then rollback stays on a 7b-core-compatible image and is a forward fix.
 R5. Deploy the pre-7b image ONLY after the downgrade succeeds. Redeploying the pre-7b image BEFORE 013
     is applied is also safe.
 ```
@@ -2862,23 +3005,98 @@ R5. Deploy the pre-7b image ONLY after the downgrade succeeds. Redeploying the p
   7b-activation's platform high-water mark. 7b-core is not exactly-once and not platform-authoritative.
 ```
 
-- [ ] **Step 7: Verify parity + full gate + commit**
+- [ ] **Step 7: Add the docs-contract test + the exact-rollback-command acceptance test** — create `tests/unit/test_docs_cutover_parity.py`:
+
+```python
+"""The PR 7b-core cutover/rollback procedure must be byte-identical in RUNBOOK.md and
+DEPLOYMENT.md (only the section-header line may differ), including wrapped continuation lines."""
+
+from pathlib import Path
+
+from kyc_tool.config import REPO_ROOT
+
+_HEADING = "PR 7b-core cutover"
+
+
+def _body(path: Path) -> str:
+    """Section body from the '## ... PR 7b-core cutover ...' heading (EXCLUSIVE of the heading
+    line) to the next top-level '## ' — every wrapped continuation line included."""
+    lines = path.read_text().splitlines()
+    start = next(i for i, l in enumerate(lines) if l.startswith("## ") and _HEADING in l)
+    out = []
+    for l in lines[start + 1:]:
+        if l.startswith("## "):
+            break
+        out.append(l)
+    return "\n".join(out).strip("\n")
+
+
+def test_runbook_and_deployment_cutover_bodies_identical():
+    rb = _body(REPO_ROOT / "docs" / "RUNBOOK.md")
+    dp = _body(REPO_ROOT / "docs" / "DEPLOYMENT.md")
+    assert rb == dp  # FULL bodies identical (mutating any continuation line in either fails this)
+    for token in (
+        "restore from authoritative backup", "BLOCKED_NO_AUTHORITATIVE_MAPPING",
+        "zero at the orchestrator", "reset_interrupted_outbox_claims",
+        ".venv/bin/alembic -c alembic.ini downgrade 012", "R5.",
+    ):
+        assert token in rb  # safety-critical details survive, not just the numbered leaders
+```
+
+Create `tests/integration/test_rollback_command.py`:
+
+```python
+"""The documented rollback command form (positional revision) must be valid against a real 013 DB."""
+
+import subprocess
+import sys
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, text
+
+from kyc_tool.config import REPO_ROOT
+from tests.integration.test_migrations import _fresh_db
+
+pytestmark = pytest.mark.postgres
+
+
+def test_documented_rollback_command_downgrades_013(pg, tmp_path):
+    url = _fresh_db(pg, "kyc_rollback_cmd")
+    cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.upgrade(cfg, "013")
+    ini = tmp_path / "alembic.ini"
+    ini.write_text(f"[alembic]\nscript_location = {REPO_ROOT / 'alembic'}\nsqlalchemy.url = {url}\n")
+
+    ok = subprocess.run([sys.executable, "-m", "alembic", "-c", str(ini), "downgrade", "012"],
+                        capture_output=True, text=True, timeout=60)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    eng = create_engine(url)
+    with eng.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "012"
+    eng.dispose()
+
+    bad = subprocess.run([sys.executable, "-m", "alembic", "-c", str(ini), "downgrade"],
+                         capture_output=True, text=True, timeout=60)
+    assert bad.returncode != 0  # a bare `alembic downgrade` (no revision) is the invalid form
+```
+
+- [ ] **Step 8: Verify + full gate + commit**
 
 ```bash
 # ROADMAP: 7b-core shipped/013, 7b-activation still pending/014, no contradictory allocation
 rg -n "PR 7b-core \| 8 \| shipped \| 013" .agents/ROADMAP.md
 rg -n "PR 7b-activation \| 8 \| pending \| 014" .agents/ROADMAP.md
-# RUNBOOK.md and DEPLOYMENT.md carry the SAME numbered cutover/rollback body (parity)
-diff <(rg -n "^(0\.[0-9]|[1-6]\.|R[1-5]\.) " docs/RUNBOOK.md | sed 's/^[0-9]*://') \
-     <(rg -n "^(0\.[0-9]|[1-6]\.|R[1-5]\.) " docs/DEPLOYMENT.md | sed 's/^[0-9]*://')   # must be empty
-# both docs reference both CLIs + the sentinel
-rg -c "verify_pr7b_core_backfill" docs/RUNBOOK.md docs/DEPLOYMENT.md   # each >= 1
-rg -c "BLOCKED_NO_AUTHORITATIVE_MAPPING" docs/RUNBOOK.md docs/DEPLOYMENT.md  # each >= 1
-.venv/bin/pytest tests/unit/test_migration_lineage.py -v   # head 013 shipped, pending[0]=014
-./manage.sh test          # whole 013 suite + lineage
+.venv/bin/pytest tests/unit/test_docs_cutover_parity.py tests/unit/test_migration_lineage.py \
+                 tests/integration/test_rollback_command.py -v
+./manage.sh test          # whole 013 suite + lineage + docs parity
 .venv/bin/ruff check .
 .venv/bin/lint-imports
-git add docs/OVERVIEW.md docs/RUNBOOK.md docs/DEPLOYMENT.md AUDIT_FINDINGS.md .agents/ROADMAP.md
+git add docs/OVERVIEW.md docs/RUNBOOK.md docs/DEPLOYMENT.md AUDIT_FINDINGS.md .agents/ROADMAP.md \
+        tests/unit/test_docs_cutover_parity.py tests/integration/test_rollback_command.py
 git commit -m "docs(7b-core): stream-separation overview, drained cutover/rollback, ROADMAP shipped
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
@@ -2906,11 +3124,22 @@ Every spec section maps to a task: §1 Migration 013 → Tasks 1 (columns/stream
 2. **Stale-claim (Task 3)** now claims token A, expires it, and lets B RECLAIM without terminalizing; A runs stale success + stale final-attempt failure and must touch nothing (byte-identical payload, B's tuple/attempts/clock intact); the two named mutations (remove loser return; raise on zero rows) each fail a named test; unused `DECISION_CALLBACK` import removed.
 3. **Concurrency + manual path (Task 4)** now calls the REAL `_decide_txn` from two threads with a barrier monkeypatched immediately before `_load`'s `FOR UPDATE`; dropping the lock fails it. Manual approve uses the required `reviewer_id` payload + matching actor and asserts HTTP 200.
 4. **Downgrade TOCTOU (Task 6)** now drives the REAL migration `downgrade()` in a thread, paused by a global `after_cursor_execute` barrier at its superseded preflight (AFTER the production `LOCK TABLE`); the concurrent `pending→superseded` UPDATE fails with SQLSTATE `55P03`; moving/removing the lock fails the test.
-5. **Diagnostic (Tasks 2+7)** now share ONE parity matrix (`backfill_parity.run_parity`) covering all 11 listed states; the migration refuses BEFORE any DDL and the CLI refuses via the real `python -m` subprocess (`KYC_DATABASE_URL`, exact exit/stdout/`BLOCKED_NO_AUTHORITATIVE_MAPPING`/no-writes); the retention race runs the REAL `prune` in a thread with a barrier after its outbox DELETE and asserts the CLI subprocess stays blocked until commit; removing the SHARE lock fails it. Healthy rows carry a real `delivered_at`.
+5. **Diagnostic (Tasks 2+7)** now share ONE parity matrix (`migration_contracts.v013_backfill.run_parity`) covering all 11 listed states; the migration refuses BEFORE any DDL and the CLI refuses via the real `python -m` subprocess (`KYC_DATABASE_URL`, exact exit/stdout/`BLOCKED_NO_AUTHORITATIVE_MAPPING`/no-writes); the retention race runs the REAL `prune` in a thread with a barrier after its outbox DELETE and asserts the CLI subprocess stays blocked until commit; removing the SHARE lock fails it. Healthy rows carry a real `delivered_at`.
 6. **Command ordering** — every src-touching task (1, 2, 3, 4, 5, 7, 8) now runs targeted tests → RED drift-guard step → re-pin GREEN → `./manage.sh test` + ruff + import-linter, in that order; the deliberately-red guard is labeled a RED step, never a PASS/gate.
 7. **Guard/A6/residual (Task 5)** now creates TWO real callbacks, delivers the higher one over the mock HTTP first (≥1 request) and asserts the lower gets zero HTTP + `superseded` + run COMPLETE + `published_at` NULL + an `audit_log` row carrying BOTH sequences (`_record_superseded` now `audit()`s them); adds a real seq 1→2→3 test, a real send-before-stamp revert (HTTP #1 then #2), and an `outbox_alerting` metrics assertion.
 8. **Reset CLI (Task 8)** now probes `information_schema` with `table_schema=current_schema()`, rolls back BEFORE commit on a surviving tuple (atomic), and is exercised via `python -m` subprocess on 012 (refuses, timestamps unchanged) and 013 (clears only claimed, preserves `next_attempt_at`) plus a barrier race proving atomic rollback.
 9. **Migration matrix (Tasks 1+4)** now seeds legacy pending/delivered(timestamped)/dead + both kinds + manual rows, adds the full INSERT+UPDATE identity cross-product (null/zero/negative sequence, wrong case/run, stream swaps, email-with-run, dup callback, run-id uniqueness), and mutates each CHECK/FK/unique/partial-index/`SET NOT NULL` independently against a NAMED test; authority cases assert exact `RuntimeError`/`IntegrityError`/`OperationalError`+`55P03`.
 10. **Finish-time (Tasks 2/7/10)** — unused example-code imports removed; Task 9 is copy-ready (exact OVERVIEW subsection + anchor, one canonical numbered cutover/rollback block pasted verbatim into RUNBOOK.md and DEPLOYMENT.md with a `diff` parity check + `rg` sentinel/lineage checks, honest blocking `TODO(integration)` for the orchestrator attestation).
 
-**Adaptations to the real fixtures (where Codex's prescription needed adjustment):** (a) the send-before-stamp revert is single-publisher-deterministic by delivering seq 2 for real then resetting its `decisions.published_at` to NULL — the exact observable of "stamp not locally committed" — because the fenced FIFO otherwise prevents a single publisher from sending seq 1 while seq 2's row is still pending; (b) the TOCTOU and retention-race barriers use a global `after_cursor_execute`/`before_cursor_execute` listener on `sqlalchemy.engine.Engine` (removed in `finally`) since the project's `alembic/env.py` builds its own connection and cannot be handed an injected one; (c) migration-refusal assertions use `pytest.raises(RuntimeError)` on the basis that `alembic.command` propagates the migration's `RuntimeError` unwrapped — if a given environment wraps it, widen to the wrapper in-cycle. **Not executed:** per the coordinator, the named `.venv/bin/pytest`/subprocess selectors are build-cycle steps, not run here (no local Postgres).
+**Adaptations to the real fixtures (round 1) (where Codex's prescription needed adjustment):** (a) [SUPERSEDED by round-2 F5 — the send-before-stamp revert now uses the reachable lifecycle: seq 1 as an older `dead` callback, a fault injected in `_record_delivered` before its txn, and the REAL UI requeue]; (b) the TOCTOU and retention-race barriers use a global `after_cursor_execute`/`before_cursor_execute` listener on `sqlalchemy.engine.Engine` (removed in `finally`) since the project's `alembic/env.py` builds its own connection and cannot be handed an injected one; (c) migration-refusal assertions use `pytest.raises(RuntimeError)` on the basis that `alembic.command` propagates the migration's `RuntimeError` unwrapped — if a given environment wraps it, widen to the wrapper in-cycle. **Not executed:** per the coordinator, the named `.venv/bin/pytest`/subprocess selectors are build-cycle steps, not run here (no local Postgres).
+
+## Codex plan-review round 2 — 8 findings closed (all real; decomposition + REVIEW-CLEAN boundary preserved)
+
+1. **(P1) One atomic `013` commit.** Tasks 1-6 are now **worktree checkpoints** (full gates green, `git status`, NO commit); the parent makes the single schema+runtime `013` commit at the end of Task 6, with a finish gate asserting `git log … -- 013_…py` shows exactly one commit and a dedicated `012` DB upgrades once to the complete `013`. Tasks 7-9 commit normally. The build-order section, Global Constraints close-out, and every task commit step were rewritten to match.
+2. **(P1) NULL-hole CHECKs.** Both identity CHECKs are now NULL-explicit OR-of-shapes (`… decision_sequence IS NOT NULL AND decision_sequence > 0 …`); added named `auto_null_sequence` / `callback_null_sequence` INSERT **and** UPDATE negatives, and a mutation that removes only `AND decision_sequence IS NOT NULL` from each CHECK → the matching named test fails.
+3. **(P1) Deterministic concurrency.** The `_load` wrapper is now thread-identity-keyed with explicit `a_has_case_lock` / `b_entered_load` / `b_returned_from_load` events; with the real lock B must block INSIDE `_load` (`assert not b_returned_from_load.wait(2)`), both threads must terminate, and removing `with_for_update` fails that assertion deterministically regardless of commit order.
+4. **(P2) Task 7 real-CLI matrix.** Deleted the guaranteed-fail `inspect.getsource` assertion (replaced with a behavioral boundary: DB stays on `012`, no `013` columns, count unchanged); the 12-state matrix now invokes the real `_run_cli` subprocess (nonzero + name/sentinel) beside the real 013 refusal; the retention race is parametrized `[commit, rollback]` (rollback injects a fault so `uow()` rolls back → CLI exit 0; commit → nonzero + ids).
+5. **(P2) Reachable send-before-stamp.** Seeds seq 1 as an older `dead` callback, sends seq 2 for real then raises an injected fault in `_record_delivered` before its txn (seq 2 stays pending/unstamped), requeues seq 1 through the REAL UI endpoint, and asserts HTTP #2 — plus a separately-named predicate-only unit companion.
+6. **(P2) Frozen migration contract.** Moved the matrix to `src/kyc_tool/migration_contracts/v013_backfill.py` (imports ONLY `sqlalchemy.text`), imported by both the migration and the CLI, with a dedicated frozen-SHA test (`V013_BACKFILL_SHA`, "never re-pin — create `v014_*` for later semantics"), distinct from the re-pinnable whole-source guard.
+7. **(P2) Valid rollback command + full docs parity.** Both docs now carry `.venv/bin/alembic -c alembic.ini downgrade 012` (positional revision); a rollback-command acceptance test runs that exact form (and proves the bare form fails); a docs-contract test compares the FULL RUNBOOK/DEPLOYMENT section bodies byte-for-byte (continuation lines included) + asserts the safety tokens.
+8. **(P3) Bus lifecycle + gates.** Added the parent-only Step 0 CLAIM (read `AGENT_BUS.md`/`ROADMAP`, verify no conflicting CLAIM, post+push the final file set) and the post-Task-9 RELEASE (anchor, commands/results, migration witnesses, residual-risk boundary, "M2/normative untouched", `turn: CODEX`, hold for `AUDIT-CLEAN`), and stated the human plan-approval gate precedes execution.
