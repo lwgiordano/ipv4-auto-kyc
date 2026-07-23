@@ -71,6 +71,71 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `b868938..ac9157b` (PR 7b-core spec rev 4; CHANGES REQUIRED)
+
+Rev 4 closes all four rev-3 findings at the actual authority surfaces: the dedicated per-case
+decision UNIQUE is distinct from the triple-FK target and callback-per-run index; the fenced
+winner/loser invariant no longer asserts; the parked activation spec is honest about core being
+pending and best-effort; and both `case_id`/`ordering_stream` are specified as physical NOT NULL
+columns. Lineage is green (8/8). I then repeated the whole-unit state, claim/send/stamp, populated
+migration, downgrade, adjacent-consumer, and core/activation-boundary matrix. One P1 remains in the
+legacy backfill. It can silently suppress the newer of two real decisions, so core is not ready for
+`writing-plans` yet.
+
+1. **P1 — ordering legacy decisions by `decided_at` can invert the case-lock serialization order,
+   causing the local guard to suppress the actually newer callback**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:104-110,149-156,251-277`,
+   `src/kyc_tool/orchestration/pipeline.py:351-364,485-506`,
+   `alembic/versions/003_checks_decisions.py:50-64`, `alembic/versions/006_outbox.py:18-32`). The
+   proposed backfill is `row_number() ... ORDER BY decided_at,id`, but `decided_at` defaults to
+   PostgreSQL `now()`, which is the **transaction-start** timestamp, not lock-acquisition or commit
+   time. `_decide_txn` begins and reads the run before it acquires the case `FOR UPDATE`; therefore a
+   transaction B can start first and pause before the case lock, transaction A can start later,
+   acquire the lock and commit decision/callback A first, and B can then acquire the lock and commit
+   decision/callback B second. The durable order is A then B, and the outbox ids are A=1/B=2 because
+   enqueue happens under that same serialized case lock, but the proposed backfill assigns B=1/A=2
+   because B's transaction timestamp is older. Concrete trigger after 013: leave both callbacks
+   pending during cutover; FIFO sends/stamps A first; when B is claimed, the local guard sees
+   published A at the incorrectly higher sequence and marks B `superseded` without HTTP. The tool's
+   case reflects newer B while the platform is left on older A—the exact revert/loss this unit exists
+   to reduce. This follows PostgreSQL's documented `now()` semantics; no speculative clock skew is
+   required.
+
+   **Prescriptive implementation (follow this order; do not patch only the test):**
+   1. Replace the legacy `ORDER BY decided_at,id` authority. Before assigning any sequence, build and
+      validate a one-to-one mapping from every `manual=false` decision to exactly one surviving
+      `decision_callback` outbox row by `run_id`; refuse with the decision/run ids for missing,
+      orphan, or duplicate mappings. The shipped decide path writes the decision and callback in one
+      transaction, so a missing row means retention/corruption and its safe order cannot be guessed.
+   2. Assign legacy automatic decisions with `row_number() OVER (PARTITION BY decision.case_id ORDER
+      BY outbox.id)`, then copy that sequence to the matching outbox row and seed
+      `cases.last_decision_sequence=max`. `outbox.id` is allocated at enqueue **after** the case lock
+      and therefore preserves the successful same-case decide serialization for the rows the local
+      guard can actually deliver. Keep manual decisions NULL and keep all four rev-4 constraints.
+   3. If the product must migrate databases where retention already removed callback rows, do **not**
+      fall back to `decided_at`. Add explicit reconstruction provenance and prohibit local
+      supersession between two ambiguously reconstructed legacy rows. The simpler and recommended
+      PR-7b-core behavior is fail-closed migration refusal; platform-authoritative reconciliation
+      remains 7b-activation's job.
+   4. Amend the reconstruction wording in this spec/ROADMAP/AUDIT_FINDINGS so it states the precise
+      authority and residual boundary. The current post-backfill duplicate preflight may remain as an
+      assertion, but remove the claimed “seeded pre-existing duplicate” migration witness: a 012
+      database has no `decision_sequence` column, and this migration's own `row_number()` creates the
+      values, so that fixture cannot exercise a real pre-upgrade state. Runtime INSERT/UPDATE
+      mutation tests remain the proof for `uq_decisions_case_decision_sequence`.
+
+   **Required regression proof:** use real PostgreSQL and two connections. Start B's transaction and
+   establish its transaction timestamp; pause it before the case lock. Start A later, lock the case,
+   insert decision+callback, commit; then release B to lock, insert, and commit. Assert
+   `B.decided_at < A.decided_at` while `A.outbox_id < B.outbox_id`; upgrade 013; assert A gets seq 1,
+   B seq 2, counter=2, and publishing both leaves B as the platform's last callback with neither row
+   superseded. Mutation-ordering the backfill by `decided_at,id` must reproduce B's erroneous
+   suppression. Separately, seed a valid automatic decision with no callback on 012 and require the
+   migration to refuse byte-stably. Retain the concurrent live-allocation barrier, dedicated-UNIQUE
+   INSERT/UPDATE negatives, up/down/up, downgrade race, fenced-winner/loser, lineage, lint, and full
+   suite gates. This preserves the program goal: no silent decision loss/revert, an honest local-only
+   core boundary, and no premature M3/M2 claim.
+
 ### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core spec **rev 4** — re-review `b868938..ac9157b`
 
 Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
