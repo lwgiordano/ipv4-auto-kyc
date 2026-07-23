@@ -1040,6 +1040,8 @@ Rewrites `_CLAIM_SQL` to claim the min-id pending row of one `(case_id, ordering
 ```python
 """PR 7b-core: stream-scoped fenced claim + fenced terminals (defect 3)."""
 
+import json
+
 import httpx
 import pytest
 import structlog
@@ -1061,7 +1063,11 @@ def _enqueue_email(session_factory, *, case_id, to, status="pending", next_at="n
                 f"INSERT INTO outbox (kind, case_id, ordering_stream, payload_json, status, next_attempt_at) "
                 f"VALUES ('poc_email',:c,'email',CAST(:p AS jsonb),:st,{next_at})"
             ),
-            {"c": case_id, "p": '{"to":"%s","subject":"s","body":"b"}' % to, "st": status},
+            {
+                "c": case_id,
+                "p": json.dumps({"to": to, "subject": "s", "body": "b"}),
+                "st": status,
+            },
         )
         s.commit()
 
@@ -3106,12 +3112,13 @@ high-water mark. 7b-core does not claim exactly-once (see `AUDIT_FINDINGS.md` A6
    equivalent. This repeats the §0 parity preflights under the zero-writer boundary and is the
    authoritative fail-closed check (the pre-window diagnostic is an early detector, not a substitute).
 5. Start API only, probe `/readyz`, then start + attest the fenced workers. No mutating prod smoke.
-6. RESUME (forward completion): re-enable retention, autoscaling/restarts, and submissions. The window
-   is NOT closed until all four paused controls (retention, autoscaling, restarts, submissions) are on.
+6. RESUME (forward completion): re-enable retention, autoscaling/restarts, and submissions, and
+   remove the composer edge block. The window is NOT closed until all five paused controls
+   (retention, autoscaling, restarts, submissions, composer edge block) are restored or removed.
 
 **Rollback — a two-branch maintenance state machine (as drained as the forward cutover). BOTH branches
 end in a full resume — never leave the system stopped or retention frozen:**
-R1. Pause submissions, disable autoscaling/restarts.
+R1. Pause submissions, edge-block the composer, disable autoscaling/restarts.
 R2. Hard-stop and orchestrator-attest zero API, pipeline, outbox, `dev_worker`, retention, every writer.
 R3. While 013 still exists, run `python -m kyc_tool.ops.reset_interrupted_outbox_claims` (post-013-only;
     clears complete claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero) and
@@ -3123,12 +3130,13 @@ R4. Run `.venv/bin/alembic -c alembic.ini downgrade 012` (the revision is a REQU
 R5. ROLLBACK OUTCOME A — downgrade REFUSED (a `superseded` row exists): the pre-7b image is unsafe (it
     cannot interpret or prune `superseded`), so KEEP or redeploy the reviewed 013-COMPATIBLE image
     digest — PROHIBIT the pre-7b image. Verify `/readyz`, start + attest its fenced workers, then
-    re-enable retention, autoscaling/restarts, and submissions — OR remain in a DELIBERATELY DECLARED
-    maintenance incident while the forward fix is applied. Do not end stopped.
+    re-enable retention, autoscaling/restarts, and submissions and remove the composer edge block —
+    OR remain in a DELIBERATELY DECLARED maintenance incident while the forward fix is applied. Do
+    not end stopped.
 R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image digest; start API, probe
     `/readyz`, then start + attest its workers; attest image digest + running processes; then re-enable
-    retention, autoscaling/restarts, and submissions. Redeploying the pre-7b image BEFORE 013 is applied
-    is also safe.
+    retention, autoscaling/restarts, and submissions and remove the composer edge block. Redeploying
+    the pre-7b image BEFORE 013 is applied is also safe.
 ```
 
 - [ ] **Step 6: Extend `AUDIT_FINDINGS.md`** — confirm the A6 **Resolution** already carries the PR 7b-core exception from Task 5 (if not, re-apply it). Then add this exact item at the end of section **D. Design tightenings adopted** (after line 144):
@@ -3185,8 +3193,11 @@ def test_runbook_and_deployment_cutover_bodies_identical():
         # frozen retention) — the F1 completeness the earlier first-line-only diff missed:
         "ROLLBACK OUTCOME A", "ROLLBACK OUTCOME B", "PROHIBIT the pre-7b image",
         "re-enable retention, autoscaling/restarts, and submissions",
+        "remove the composer edge block",
     ):
         assert token in rb  # safety-critical details survive, not just the numbered leaders
+    assert rb.count("edge-block the composer") == 2  # forward + rollback both establish the fence
+    assert rb.count("remove the composer edge block") == 3  # forward + both rollback outcomes clear it
 ```
 
 Create `tests/integration/test_rollback_command.py`:
@@ -3298,7 +3309,7 @@ Every spec section maps to a task: §1 Migration 013 → Tasks 1 (columns/stream
 
 ## Codex plan-review round 3 — 6 findings closed (all real; REVIEW-CLEAN boundary intact, no 014 pulled in)
 
-1. **(P1) Rollback/forward resume.** The canonical RUNBOOK/DEPLOYMENT block is now a two-branch state machine: forward step 6 re-enables all four paused controls; rollback R4 branches to **R5 (downgrade REFUSED → keep the 013-compatible image, prohibit pre-7b, re-enable all four OR declared incident)** and **R6 (downgrade SUCCEEDED → deploy prior digest, /readyz + workers, re-enable all four)**. `test_docs_cutover_parity.py` now requires both `ROLLBACK OUTCOME A/B`, `PROHIBIT the pre-7b image`, and the resume token — beside the full-body byte-identical compare.
+1. **(P1) Rollback/forward resume.** The canonical RUNBOOK/DEPLOYMENT block is now a two-branch state machine: forward step 6 restores all five paused controls; rollback R4 branches to **R5 (downgrade REFUSED → keep the 013-compatible image, prohibit pre-7b, restore all five OR declare an incident)** and **R6 (downgrade SUCCEEDED → deploy prior digest, `/readyz` + workers, restore all five)**. "All five" includes removing the composer edge block in addition to retention, autoscaling, restarts, and submissions. `test_docs_cutover_parity.py` requires both `ROLLBACK OUTCOME A/B`, `PROHIBIT the pre-7b image`, the resume token, two edge-block establishments, and three edge-block removals — beside the full-body byte-identical compare.
 2. **(P2) Lifecycle-gap in the shared preflight.** Added `invalid_legacy_outbox_lifecycle` to the frozen contract (the schema-012 projection of `ck_outbox_status_lifecycle`: status vocabulary + delivered_at shape); four `_PARITY_BAD_SEEDS` (`lifecycle_pending_delivered_at`/`_delivered_null_at`/`_dead_delivered_at`/`_unknown_status`) prove the real CLI **and** the real 013 upgrade refuse each before DDL, a `test_013_valid_lifecycle_rows_upgrade_clean` proves valid pending/delivered/dead pass, and a named mutation removing the check is the witness. A `_PARITY_SEED_VIOLATION` map pins the exact violation name per seed.
 3. **(P2) Exact rollback command.** `test_documented_rollback_command_downgrades_013` now runs **exactly** `[str(REPO_ROOT/'.venv/bin/alembic'), '-c', 'alembic.ini', 'downgrade', '012']` with `cwd=REPO_ROOT` + `KYC_DATABASE_URL` (`alembic.ini` ships an empty `sqlalchemy.url`, so env.py falls to that var), asserts head `012`, and asserts the same argv without `012` exits nonzero — identical to the documented command.
 4. **(P2) Ruff-clean copy-ready Python.** Wrapped all 39 over-110 lines (string implicit-concatenation / arg breaks / split asserts) → **0** lines >110; self-review actually ran `.venv/bin/ruff check --select E,W` on every fenced block (0 E501/whitespace/indent findings) and `compile()` on every real module block (0 SyntaxErrors); the two residual ruff flags are provable false positives on non-code insertion fragments (a docstring-text snippet, the `ARRAY, JSONB, UUID` import line used in the full `tables.py`).
@@ -3306,3 +3317,18 @@ Every spec section maps to a task: §1 Migration 013 → Tasks 1 (columns/stream
 6. **(P3) Real frozen SHA + label.** Computed `V013_BACKFILL_SHA = bdd2342be673c2b324af02cf00644ecde70739a233e7c7cb39670123fb6d1c04` (sha256 over the exact Step-1 `v013_backfill.py` bytes: block content + one LF) and pasted the literal 64-char lowercase hex; added the byte-convention note (fix the file, never re-pin the SHA); strict placeholder scan (`<sha256`/`<...>`/`TBD`) is clean; fixed the stale "Tasks 2/7/10" label (this plan has nine tasks).
 
 **Fixture adaptation (round 3):** the rollback-command test relies on `alembic.ini`'s empty `sqlalchemy.url` so env.py's `_database_url()` honors `KYC_DATABASE_URL`; the frozen SHA is computed over the plan's exact create-file block bytes (LF, single trailing newline) and the note tells the implementer to fix the FILE (not the SHA) on any mismatch. **Not executed:** the named `.venv/bin/pytest`/subprocess selectors remain build-cycle steps (no local Postgres); the ruff/compile self-review WAS run against every fenced block during this revision.
+
+## Codex plan-review round 4 — 2 residual findings implemented directly
+
+1. **(P2) Composer fence lifecycle.** Forward step 1 explicitly installed a composer edge block, but
+   the rev-4 forward and both rollback completion branches restored only retention, autoscaling,
+   restarts, and submissions. Rollback also lacked the composer fence before stopping the old
+   processes. The final state machine now establishes the fence in both forward and rollback entry,
+   removes it on forward success and both rollback-success outcomes, and calls the controls five
+   rather than four. The docs parity test asserts the exact establishment/removal counts so a branch
+   cannot silently leave the operator surface blocked or writable during the drain.
+2. **(P2) Full Ruff contract.** Rev 4 ran only `ruff --select E,W`; the repository actually enforces
+   `E,F,I,UP,B,SIM`. The advertised `test_outbox_fencing.py` create-file block still failed `UP031`
+   because it built JSON with percent formatting. It now uses `json.dumps`, and every complete
+   create-file block is compiled and checked under its advertised path against the full project
+   selector set. The exact frozen-contract SHA remains unchanged and verified.
