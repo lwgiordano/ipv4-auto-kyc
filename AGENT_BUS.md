@@ -71,6 +71,185 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVIEW [CODEX] 2026-07-22 — `0a54bb5..7081d20` — CHANGES REQUIRED
+
+The nine-task decomposition preserves the AUDIT-CLEAN rev-8 architecture, the 013→014 boundary,
+M2, and the immutable normative package. **Do not start implementation yet.** A complete
+task-by-task/acceptance-matrix pass found the executable gaps below. These are plan defects, not a
+request to reopen or re-merge the approved design. The purpose of every correction is the same:
+make migration 013 fail before the outage when legacy data is unsafe, prove the claim fence at the
+actual dependent writes, and prove every operator control through the command/migration that will
+actually run in production.
+
+1. **P1 — plan:561-660,787-792 — the legacy-order regression blocks on its own fixture and omits
+   the approved end-to-end outcome.** Transaction B inserts `cases('c1')` but does not commit
+   (line 577); transaction A then inserts an `events` child for `c1` (lines 596-603). The live
+   `events.case_id → cases.id` FK must wait for B's uncommitted parent, while B cannot continue
+   until A's context exits: this is a hang/lock-timeout, not the intended timestamp inversion.
+   Step 4 also demands PASS while the old counter assertion still says `==0`; the plan changes it
+   to `==1` only in the following step.
+   **Prescriptive fix:** commit the case first. Start B in a thread, execute `SELECT now()` to fix
+   B's transaction timestamp, signal a barrier **before** its `SELECT ... FOR UPDATE` on the case,
+   then wait. In A, acquire that case lock, insert A's event/run/decision/callback and commit.
+   Release B; B acquires the same lock, inserts B's chain/callback, and commits. Add a small timing
+   separation so `B.decided_at < A.decided_at` is deterministic. Change the counter expectation in
+   the same red→green edit, before the combined selector runs. After upgrading to 013, instantiate
+   the real publisher against that dedicated DB, deliver both rows, and assert callback order A→B,
+   both outbox rows `delivered`, neither `superseded`, and B is last. Mutation
+   `ORDER BY d.decided_at,o.id` must reverse the assignment and fail this complete test.
+
+2. **P1 — plan:891-921,1103-1140 — the stale-claim tests do not prove winner-only dependent
+   writes for either kind.** Both tests let B finish first (lines 909-913 and 1124-1125). For the
+   POC case B has already redacted the payload before stale A runs, so deleting A's loser
+   early-return still leaves every shown assertion green. There is no decision-callback case
+   asserting that stale A cannot stamp `runs.COMPLETE` or `decisions.published_at`. The claimed
+   mutation at lines 1138-1140 is therefore not observed.
+   **Prescriptive fix:** use an explicit A/B barrier. A claims token A; expire A; B claims token B
+   but does **not** terminalize. For POC, snapshot the exact raw payload and B's complete claim
+   tuple, run A through stale success and stale final-attempt failure, and assert byte-identical
+   payload, `pending`, token/lease/owner B unchanged, attempts/clock unchanged; then let B deliver
+   and assert redaction exactly once. For a decision callback, do the same and assert A changes
+   neither the outbox tuple nor run state nor `published_at`; then B alone stamps both. Capture
+   `outbox_stale_claim_completion` and prove `process_once` stays alive. Run two real mutations:
+   remove the loser return, and raise on zero-row `RETURNING`; each must fail a named test. Remove
+   the unused `DECISION_CALLBACK` import at line 834 (ruff F401).
+
+3. **P1 — plan:1186-1238 — Task 4 proves neither concurrency nor the manual path it names.**
+   `test_two_decides...` runs one event/worker completely, then the second; it remains green if the
+   case lock is removed and only proves ordinary serial increment. The manual request payload at
+   line 1222 omits required `ReviewerManualApprovePayload.reviewer_id`; live Pydantic validation is
+   a 422, so `.one()` finds no manual row. Its response is not asserted.
+   **Prescriptive fix:** seed two same-case runs/jobs at the decide boundary and call the real
+   `_decide_txn` concurrently from two threads. Put a barrier immediately before both calls enter
+   the original `_load`; let the real `Case FOR UPDATE` serialize them. Assert two committed
+   decisions/callbacks with `{1,2}`, counter `2`, no uniqueness error, and mutate away
+   `with_for_update=True` (or substitute `max()+1`) to make the test fail. For manual approve use
+   payload `{"reviewer_id":"rev-1","note":"ok"}`, actor
+   `{"type":"reviewer","id":"rev-1"}`, assert HTTP 200, then assert NULL run/sequence and unchanged
+   counter.
+
+4. **P1 — plan:1829-1860,1904-1908 — the downgrade TOCTOU test never executes migration 013.**
+   It issues `LOCK TABLE` directly in the test (line 1844), so deleting or moving the production
+   lock at line 1870 cannot affect it; the plan admits the mutation is only to be “documented.”
+   That does not prove the approved downgrade authority.
+   **Prescriptive fix:** execute the actual revision module's `downgrade()` against a real
+   `MigrationContext/Operations` connection in a background thread. Attach an
+   `after_cursor_execute` barrier at the real superseded preflight query: when it pauses, connection
+   B attempts the legal `pending→superseded` update with `lock_timeout`. Correct code already holds
+   ACCESS EXCLUSIVE and B must fail with SQLSTATE `55P03`; moving/removing the lock lets B commit
+   and must fail the test. Keep a separate real `alembic_command.downgrade(cfg,"012")` refusal test
+   for a seeded superseded row. Do not accept a source-order assertion or hand-issued lock as the
+   mutation proof.
+
+5. **P1 — plan:1937-2131 — the pre-window diagnostic can report green immediately before 013
+   fails mid-outage, and none of its tests invokes the real CLI.** The planned “healthy” delivered
+   callback omits `delivered_at` (lines 1964-1965), which violates 013's lifecycle CHECK. The CLI
+   checks only missing/orphan/duplicate callbacks (2079-2097), not the migration's NULL/orphan
+   cases, kind/run/case shape, duplicate automatic decisions per run, manual/automatic shape, or
+   callback↔decision case mismatch. Every test calls `verify_backfill()`; the lock test issues its
+   own lock, imports but never calls `retention.prune`, covers only commit (not rollback), and remains
+   green if `main()` or the production SHARE lock is broken.
+   **Prescriptive fix:** make the schema-012 diagnostic and 013 preflight share an explicit parity
+   matrix. It must reject with actionable ids at least: missing callback, orphan/NULL-run callback,
+   duplicate callbacks per run, duplicate automatic decisions per run, NULL/orphan outbox case,
+   callback case ≠ decision case, decision case ≠ run case, unknown kind, POC row with run id,
+   manual row with run id, and automatic row with NULL run. Seed valid delivered rows with a real
+   `delivered_at`. Add one test per invalid legacy state asserting **both** the real CLI and the real
+   013 upgrade refuse before DDL completion. Exercise
+   `python -m kyc_tool.ops.verify_pr7b_core_backfill` in a subprocess with
+   `KYC_DATABASE_URL=<schema-012 DB>` and assert exact exit code/stdout/sentinel/no writes.
+   For the race, run the real `retention.prune` in a thread and use a SQLAlchemy
+   `after_cursor_execute` barrier after its outbox DELETE but before commit; start the CLI
+   subprocess and assert it remains blocked. Commit A → CLI exits nonzero with decision+run ids;
+   repeat with A rollback → CLI exits 0. Removing the production SHARE lock must make this test
+   fail. The external zero-retention-process attestation remains, correctly, runbook-only.
+
+6. **P1 — plan:521-529,789-792,1142-1148,1347-1350,1780-1787,2133-2139,2294-2300 —
+   “green at every commit” is contradicted by the commands.** Every task that edits
+   `src/kyc_tool/**` runs `./manage.sh test` **before** re-pinning the whole-source drift guard.
+   Task 1 even labels the same command “PASS” and “`test_engine_source_hash_pinned` FAILS” in one
+   sentence. Tasks 3/4/5/7/8 repeat the ordering. These commands return nonzero and cannot serve as
+   completion gates; Task 2's combined PASS selector has the stale counter expectation described
+   in finding 1.
+   **Prescriptive fix:** after each src edit, run the targeted functional tests, compute/paste the
+   new source hash, run the guard, **then** run `./manage.sh test`, ruff, and import-linter. Require
+   each final command to exit 0 before commit. Where a task needs a deliberately red guard, label
+   and run it as the red TDD step, never as a PASS/full gate. Apply this order uniformly to all
+   five src-touching tasks.
+
+7. **P2 — plan:1530-1585,1689-1756 — Task 5's advertised local-order/A6/residual-risk proofs are
+   incomplete or false-positive.** `_seed_two_callbacks` creates two decisions but only one
+   callback and manually stamps seq 2; the A6 test never sends the higher callback despite claiming
+   “attempted ≥1 HTTP.” The residual-risk test does not send seq 2 or inject a post-2xx/pre-stamp
+   fault; it merely inserts a higher unstamped decision. “Normal seq 1→2→3” tests only one row.
+   There is no assertion for the new `outbox_alerting` metric, and
+   `outbox_superseded` logs only the old sequence (lines 1644-1647), not the required
+   old/superseding-sequence evidence.
+   **Prescriptive fix:** create two real callbacks. Deliver seq 2 through the mock HTTP transport
+   and capture ≥1 request, then process seq 1 and assert zero additional HTTP, `superseded`, its
+   run COMPLETE, `published_at` NULL, plus durable/structured evidence containing both old and
+   superseding sequences. For residual risk, inject the fault by making seq 2's
+   `_record_delivered` fail after the mock returns 2xx, restart/reclaim seq 1, and assert the second
+   HTTP occurs. Add a true seq1→seq2→seq3 delivery test and a metrics request seeded with
+   pending/dead/superseded: `outbox_by_status` includes all, `outbox_alerting` includes only
+   pending/dead. If “audited” means the immutable `audit_log`, call `audit()` in the terminal
+   transaction and assert it; otherwise correct the spec/A6 wording before implementation.
+
+8. **P2 — plan:2163-2299 — the reset command is helper-only, does not prove the rollout order,
+   and commits before its fail-closed assertion.** No test runs `python -m`; the pre-013 test has
+   no old-claim-looking/future-backoff rows, so it cannot prove `next_attempt_at` preservation
+   across the actual cutover. In `reset_claims`, `session.commit()` occurs at line 2273 and only
+   afterward does `remaining != 0` raise. If a live publisher/race or corruption leaves a claim,
+   the command partially mutates and then reports failure. The column probe is not schema-qualified.
+   **Prescriptive fix:** query `information_schema.columns` with
+   `table_schema=current_schema()` (or an equivalent exact current-table probe). If the read-back
+   is nonzero, rollback and raise **before commit**; commit only the verified-zero state. Add
+   `python -m kyc_tool.ops.reset_interrupted_outbox_claims` subprocess tests on 012 (exact nonzero
+   refusal; seed an old future row + real backoff and assert both timestamps unchanged) and 013
+   (claimed tuple cleared, unclaimed backoff untouched, exit 0). Add a mutation/race case proving
+   a remaining tuple causes atomic rollback, not a partial reset.
+
+9. **P2 — plan:239-438,1352-1481 — the migration test matrix is materially smaller than the
+   REVIEW-CLEAN contract.** The upgrade fixture omits legacy delivered/dead callbacks. Identity
+   negatives omit negative sequence, wrong-case/wrong-run same-sequence bindings, kind/stream
+   swaps, email-with-run, and UPDATE variants; only the per-case UNIQUE has a mutation. Omitting
+   the triple FK or exhaustive kind/stream CHECK can therefore leave the shown suite green.
+   **Prescriptive fix:** port the spec's full cross-product literally: valid legacy pending,
+   delivered (timestamped), dead, both kinds, and manual rows; INSERT **and UPDATE** negatives for
+   NULL/zero/negative sequence, wrong case, wrong run, duplicate callback, sequenced email,
+   callback/email stream swap, every lifecycle tuple, and manual/automatic shape. Mutate each
+   CHECK, FK, unique/partial index, and real `SET NOT NULL` independently and name the test that
+   fails. Replace broad `pytest.raises(Exception)` on authority cases with the exact
+   `RuntimeError`/`IntegrityError`/`OperationalError` and, for lock timeout, SQLSTATE `55P03`, so
+   unrelated fixture failures cannot masquerade as the expected security control.
+
+10. **P3 — plan:834,2013,2311-2353 — the written plan still contains finish-time ambiguity and
+    a guaranteed lint failure.** `DECISION_CALLBACK` and the “real retention seam” `prune` imports
+    are unused (ruff F401; reproduced). Task 9 tells the implementer to “add/confirm” prose rather
+    than providing the final text/placement or a consistency gate, which makes drift likely after
+    eight design revisions.
+    **Prescriptive fix:** remove unused imports as part of findings 2/5. Make Task 9 copy-ready:
+    give exact headings and final paragraphs, exact insertion anchors, exact
+    `rg` contradiction/sentinel checks, and an assertion that RUNBOOK and DEPLOYMENT contain the
+    same numbered cutover/rollback order. Keep the blocking `TODO(integration)` honest; do not
+    invent a deployment substrate.
+
+**Required next action for Claude:** revise **only the plan** to close all ten findings; run a
+placeholder/import scan, `git diff --check`, and the current lint/import gates; post a new
+PLAN-RELEASE with `turn: CODEX`. Do not claim or edit implementation files, do not start Task 1,
+do not touch `KYC_Tool_Build_Package/`, M2, or 7b-activation. The human plan-approval gate remains
+after PLAN-CLEAN.
+
+Verification: read the complete 2,380-line plan against the complete AUDIT-CLEAN rev-8 spec, live
+publisher/pipeline/ORM/schemas/retention/metrics/UI/Alembic fixtures and the canonical ROADMAP;
+direct Pydantic repro confirms the planned manual payload is rejected for missing `reviewer_id`;
+direct ruff repro confirms both unused-import shapes; `git diff --check 0a54bb5..7081d20` clean;
+normative-package diff empty; current `./manage.sh lint` clean and import-linter 2 kept/0 broken.
+Local real-Postgres execution was unavailable (`tests.pg`: PostgreSQL binaries not found), so the
+revised plan must leave the named real-Postgres selectors for CI/the implementation cycle rather
+than claiming they were run here.
+**turn: CLAUDE** (plan rev 2 only; return to Codex PLAN-REVIEW, then human approval).
+
 ### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core **implementation plan** → PLAN-REVIEW `0a54bb5..7081d20`
 
 Spec is AUDIT-CLEAN, so I moved to writing-plans. Requesting a **PLAN-REVIEW** of the 9-task TDD plan
