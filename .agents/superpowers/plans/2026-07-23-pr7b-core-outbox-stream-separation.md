@@ -15,8 +15,10 @@
 - **Python 3.11, FastAPI, SQLAlchemy 2 (sync psycopg), Postgres, Alembic.** Tests run against real ephemeral Postgres — the session-scoped `pg` fixture (`tests/pg.py`) self-provisions a cluster, so `.venv/bin/pytest <selector>` runs real-Postgres tests with no extra setup.
 - **Test commands.** `./manage.sh test` runs the WHOLE suite (it ignores path args — `.substrate/lib.sh:214` `sub_test` → `test_python` runs bare `pytest`). Targeted red→green in each step uses **`.venv/bin/pytest <selector> -v`**. The final gate per task runs `./manage.sh test`.
 - **Lint gate.** `.venv/bin/ruff check .` (rules `E,F,I,UP,B,SIM`; **no `;`/E702 multi-statement lines**) **and** `.venv/bin/lint-imports` (import-linter, **2 contracts kept / 0 broken**). New code lives in `db`/`outbox`/`orchestration`/`events`/`workers`/`api`/`ui`/`ops` — never add an import into `domain`/`validators`/`policy`/`adapters`, so both contracts stay green. **Never run `./manage.sh fmt`.**
+- **CANONICAL CLOSE-OUT ORDER for any `src/kyc_tool/**`-touching task (findings 6):** the whole-source drift guard (`test_engine_source_hash_pinned`) fails on ANY `src/` edit, so `./manage.sh test` returns nonzero until the hash is re-pinned. Every such task's close-out therefore runs **in this exact order — never `./manage.sh test` before the re-pin**: (1) run the task's targeted `.venv/bin/pytest` selectors green; (2) run the drift-guard test once to observe it RED (the deliberately-red TDD step — label it RED, never a gate); (3) compute+paste the new `EXPECTED_ENGINE_SOURCE_HASH` and re-run the drift-guard test GREEN; (4) `./manage.sh test` → exit 0; (5) `.venv/bin/ruff check .` → exit 0; (6) `.venv/bin/lint-imports` → exit 0; (7) commit. Tasks that touch only `alembic/`, docs, or `.agents/` skip steps 2-3 and run `./manage.sh test` directly.
+- **Exact exception types in tests (finding 9).** Never assert a bare `pytest.raises(Exception)` on an authoritative refusal. Use: `sqlalchemy.exc.IntegrityError` for CHECK / FK / unique / NOT-NULL violations; `sqlalchemy.exc.OperationalError` with `exc.value.orig.sqlstate == "55P03"` for a `lock_timeout` (psycopg3 exposes `.sqlstate` on `.orig`); `RuntimeError` for a migration/CLI fail-closed refusal raised in Python (`alembic.command.upgrade`/`downgrade` propagate the migration's `RuntimeError` unwrapped) — always paired with an assertion on the message substring. Match a `lock_timeout` on a real statement with `conn.execute(text("SET lock_timeout='2s'"))` first.
 - **Delivery-layer only — NO scoring/gate/decision semantic change.** The callback HTTP body stays **byte-identical** to pre-7b: `decision_sequence` is written to the `decisions`/`outbox` **columns only**, never added to `payload_json` or the wire (that is 7b-activation / `014`).
-- **Engine drift guard.** Every task that edits any file under `src/kyc_tool/**` MUST re-pin `EXPECTED_ENGINE_SOURCE_HASH` in `tests/policy_driven/test_engine_build_id_guard.py` **in the same commit** (see the re-pin one-liner in "Test infrastructure" below). **Do NOT bump `ENGINE_BUILD_ID`** — this is not a scoring change. Tasks that touch only `alembic/`, docs, or `.agents/` do NOT re-pin (the guard closure is `src/kyc_tool/**/*.py` only).
+- **Engine drift guard.** Every task that edits any file under `src/kyc_tool/**` MUST re-pin `EXPECTED_ENGINE_SOURCE_HASH` in `tests/policy_driven/test_engine_build_id_guard.py` **in the same commit** (see the re-pin one-liner in "Test infrastructure" below). **Do NOT bump `ENGINE_BUILD_ID`** — this is not a scoring change. The src-touching tasks are **1, 2 (the shared `ops/backfill_parity.py`), 3, 4, 5, 7, 8** — each re-pins. Tasks that touch only `alembic/`, docs, or `.agents/` (parts of 6, 9) do NOT re-pin (the guard closure is `src/kyc_tool/**/*.py` only).
 - **Do NOT edit `KYC_Tool_Build_Package/`** (normative spec, immutable) or anything touching **M2** / `KYC_ENFORCE_POSITIVE_DECISIONS` / `enforce_positive_decisions`.
 - **ROADMAP lineage.** `.agents/ROADMAP.md §C` already reserves PR 7b-core = `013` (row 74, State `pending`) and 7b-activation = `014`. Do **not** renumber or edit the reservations except to flip 7b-core's State `pending → shipped` in the same PR that lands `013` (Task 9). `tests/unit/test_migration_lineage.py` must stay green.
 - **Codex build constraints (carry verbatim):** migration/outbox/CLI mutation proofs run against **real Postgres and the real CLI entry points** (`main()` / `python -m …`), never a helper-only shim. The retention "zero active tasks before it deletes" attestation is a **runbook / `TODO(integration)`** deployment acceptance, **NOT** a pytest (retention is a scheduled one-shot with no in-repo liveness registry).
@@ -52,7 +54,7 @@ PY
 `conftest.migrated` upgrades a fresh DB to **head** for the whole suite, so any constraint migration `013` adds is live for every test. A migration constraint that *requires a column value* can only land once the code that *writes* that value is in place, and columns must exist before code writes them. Therefore:
 
 - **Task 1** adds `013`'s columns + the outbox stream/case_id/lifecycle CHECKs (none reference `decision_sequence`) + updates the enqueue funcs to set `ordering_stream` — so the suite stays green.
-- **Task 2** adds the legacy `decision_sequence` backfill (touches only legacy rows; no new-row CHECK yet).
+- **Task 2** ships the shared parity matrix (`src/kyc_tool/ops/backfill_parity.py`, run by BOTH the migration and the Task-7 CLI) and the legacy `decision_sequence` backfill (touches only legacy rows; no new-row CHECK yet).
 - **Task 3** fences the claim + terminals (the `claim_token` is set by the claim and cleared by every terminal in the same step — they cannot split without violating the lifecycle CHECK).
 - **Task 4** makes the pipeline allocate `decision_sequence` **and**, in the same step, adds the decision-identity constraints (kind/stream identity CHECK, `manual`/`automatic` CHECK, the three decisions uniques, the triple FK, the partial callback unique) — now both legacy (backfilled) and live (allocated) rows satisfy them.
 - **Task 5** adds the local guard + `superseded` lifecycle wiring.
@@ -65,6 +67,7 @@ Each task edits `alembic/versions/013_outbox_stream_separation.py` at clearly ma
 
 **Create:**
 - `alembic/versions/013_outbox_stream_separation.py` — the single migration (`down_revision='012'`): all columns, backfills, constraints, index, and the race-safe downgrade. Authored across Tasks 1, 2, 4, 6.
+- `src/kyc_tool/ops/backfill_parity.py` — the shared schema-012 parity matrix (`PARITY_CHECKS` + `run_parity`) run by BOTH migration 013's preflight and the diagnostic CLI (Task 2).
 - `src/kyc_tool/ops/verify_pr7b_core_backfill.py` — schema-012-compatible, `SHARE`-locked, read-only pre-window diagnostic CLI (Task 7).
 - `src/kyc_tool/ops/reset_interrupted_outbox_claims.py` — post-013-only claim-tuple reset CLI (Task 8).
 - `tests/integration/test_outbox_fencing.py` — stream-scoped fenced claim + fenced terminals (Task 3).
@@ -108,77 +111,61 @@ Adds every `013` column, backfills `ordering_stream` from `kind`, makes `case_id
 ```python
 # --- PR 7b-core: migration 013 (outbox stream separation + local decision ordering) ---
 
-def _seed_legacy_callback(engine, *, case_id, run_id, decision_id, ev_seq, decided_at=None):
-    """Seed one valid case→event→run→automatic-decision→pending decision_callback
-    chain at schema 012 (no ordering_stream / decision_sequence columns yet). The
-    outbox.id order is enqueue order; decided_at defaults to txn-start now() unless
-    pinned. Returns the freshly-allocated outbox id."""
-    with engine.begin() as conn:
-        conn.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case_id})
-        conn.execute(
-            text(
-                "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                "actor_json, payload_json, event_sequence) VALUES (:e,:c,:k,'h','kyb.run_requested',"
-                "'{}'::jsonb,'{}'::jsonb,:s)"
-            ),
-            {"e": run_id + "-ev", "c": case_id, "k": run_id, "s": ev_seq},
-        )
-        conn.execute(
-            text(
-                "INSERT INTO runs (id, case_id, triggering_event_id, state) "
-                "VALUES (:r,:c,:e,'PUBLISH_DECISION')"
-            ),
-            {"r": run_id, "c": case_id, "e": run_id + "-ev"},
-        )
-        if decided_at is None:
-            conn.execute(
-                text(
-                    "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                    "buy_enablement, policy_shas, manual) VALUES (:d,:c,:r,'approve',10,'{}'::jsonb,"
-                    "'enabled','{}'::jsonb,false)"
-                ),
-                {"d": decision_id, "c": case_id, "r": run_id},
-            )
-        else:
-            conn.execute(
-                text(
-                    "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                    "buy_enablement, policy_shas, manual, decided_at) VALUES (:d,:c,:r,'approve',10,"
-                    "'{}'::jsonb,'enabled','{}'::jsonb,false,:t)"
-                ),
-                {"d": decision_id, "c": case_id, "r": run_id, "t": decided_at},
-            )
-        oid = conn.execute(
-            text(
-                "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
-                "VALUES ('decision_callback',:c,:r,'{}'::jsonb,'pending') RETURNING id"
-            ),
-            {"c": case_id, "r": run_id},
-        ).scalar_one()
+def _seed_legacy_callback(conn, *, case_id, run_id, decision_id, ev_seq, status="pending", decided_at=None):
+    """Seed one valid case→event→run→automatic-decision→decision_callback chain at schema
+    012 (no ordering_stream / decision_sequence columns yet), the callback in `status`
+    (pending | delivered | dead). outbox.id order is enqueue order; decided_at defaults to
+    txn-start now() unless pinned. Runs inside the caller's transaction. Returns outbox id."""
+    conn.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case_id})
+    conn.execute(
+        text(
+            "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+            "actor_json, payload_json, event_sequence) VALUES (:e,:c,:k,'h','kyb.run_requested',"
+            "'{}'::jsonb,'{}'::jsonb,:s)"
+        ),
+        {"e": run_id + "-ev", "c": case_id, "k": run_id, "s": ev_seq},
+    )
+    conn.execute(
+        text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES (:r,:c,:e,'PUBLISH_DECISION')"),
+        {"r": run_id, "c": case_id, "e": run_id + "-ev"},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+            "policy_shas, manual, decided_at) VALUES (:d,:c,:r,'approve',10,'{}'::jsonb,'enabled',"
+            "'{}'::jsonb,false, COALESCE(:t, now()))"
+        ),
+        {"d": decision_id, "c": case_id, "r": run_id, "t": decided_at},
+    )
+    # a delivered callback carries delivered_at; pending/dead do not (012 has no lifecycle CHECK yet,
+    # but seed the FINAL-schema-valid shape so later tasks' constraints stay green on this fixture).
+    da = "now()" if status == "delivered" else "NULL"
+    oid = conn.execute(
+        text(
+            f"INSERT INTO outbox (kind, case_id, run_id, payload_json, status, delivered_at) "
+            f"VALUES ('decision_callback',:c,:r,'{{}}'::jsonb,:st,{da}) RETURNING id"
+        ),
+        {"c": case_id, "r": run_id, "st": status},
+    ).scalar_one()
     return oid
 
 
 def test_013_upgrade_sets_stream_and_notnull_metadata(pg):
+    """Upgrade over the FULL legacy shape: pending + delivered(timestamped) + dead callbacks,
+    a poc_email, and a manual decision — all must survive the SET NOT NULL + CHECKs."""
     url = _fresh_db(pg, "kyc_mig_013_streams")
     cfg = _config(url)
     alembic_command.upgrade(cfg, "012")
     engine = create_engine(url)
-    _seed_legacy_callback(engine, case_id="c1", run_id="r1", decision_id="d1", ev_seq=1)
-    # a poc_email (no run) and a manual decision must also survive
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO outbox (kind, case_id, payload_json, status) "
-                "VALUES ('poc_email','c1','{\"to\":\"a@b\"}'::jsonb,'pending')"
-            )
-        )
-        conn.execute(
-            text(
-                "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                "buy_enablement, policy_shas, manual) VALUES ('dm','c1',NULL,'approve',0,'{}'::jsonb,"
-                "'enabled','{}'::jsonb,true)"
-            )
-        )
+        _seed_legacy_callback(conn, case_id="c1", run_id="r1", decision_id="d1", ev_seq=1, status="pending")
+        _seed_legacy_callback(conn, case_id="c1", run_id="r2", decision_id="d2", ev_seq=2, status="delivered")
+        _seed_legacy_callback(conn, case_id="c1", run_id="r3", decision_id="d3", ev_seq=3, status="dead")
+        conn.execute(text("INSERT INTO outbox (kind, case_id, payload_json, status) "
+                          "VALUES ('poc_email','c1','{\"to\":\"a@b\"}'::jsonb,'pending')"))
+        conn.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+                          "buy_enablement, policy_shas, manual) VALUES ('dm','c1',NULL,'approve',0,'{}'::jsonb,"
+                          "'enabled','{}'::jsonb,true)"))
 
     alembic_command.upgrade(cfg, "013")
 
@@ -201,7 +188,7 @@ def test_013_upgrade_sets_stream_and_notnull_metadata(pg):
         assert meta == {"ordering_stream": "NO", "case_id": "NO"}
         assert conn.execute(
             text("SELECT last_decision_sequence FROM cases WHERE id='c1'")
-        ).scalar_one() == 0  # Task 2 backfill seeds this; Task 1 leaves the default
+        ).scalar_one() == 0  # Task 1 leaves the default 0; Task 2's backfill Step changes this to 3
     engine.dispose()
 ```
 
@@ -259,6 +246,8 @@ _LIFECYCLE_CHECK = """
 
 def upgrade() -> None:
     conn = op.get_bind()
+
+    # === Task 2 insertion point A: shared parity preflight (runs BEFORE any DDL) ===
 
     # --- columns (all additive/nullable first) ---
     op.add_column("outbox", sa.Column("ordering_stream", sa.Text(), nullable=True))
@@ -518,20 +507,22 @@ def enqueue_poc_email(session: Session, *, case_id: str, to: str, subject: str, 
     )
 ```
 
-- [ ] **Step 9: Run the full suite to prove the live path still enqueues green**
+- [ ] **Step 9: RED drift-guard step (deliberately red)** — the src edits (ORM + enqueue) changed the source tree, so the whole-source guard now fails. Observe it:
 
-Run: `./manage.sh test`
-Expected: PASS. (Every decide enqueues a callback with `ordering_stream='decision'`; POC emails with `ordering_stream='email'`; the `NOT NULL` holds. `test_engine_source_hash_pinned` FAILS — expected, re-pinned next.)
+Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v`
+Expected: **FAIL** (`src/kyc_tool changed`). This is the RED step — do NOT run `./manage.sh test` yet (it would return nonzero on this same guard).
 
-- [ ] **Step 10: Re-pin the engine drift guard**
+- [ ] **Step 10: Re-pin the engine drift guard → GREEN**
 
 Run the re-pin one-liner (see Test infrastructure), paste the digest into `EXPECTED_ENGINE_SOURCE_HASH` in `tests/policy_driven/test_engine_build_id_guard.py`, then:
 Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` → PASS.
 
-- [ ] **Step 11: Lint + commit**
+- [ ] **Step 11: Full gate (now that the guard is re-pinned) + commit** — canonical close-out order:
 
 ```bash
-.venv/bin/ruff check . && .venv/bin/lint-imports
+./manage.sh test                       # whole suite, exit 0 (live decide enqueues ordering_stream='decision')
+.venv/bin/ruff check .                 # exit 0
+.venv/bin/lint-imports                 # 2 kept / 0 broken
 git add alembic/versions/013_outbox_stream_separation.py src/kyc_tool/db/tables.py \
         src/kyc_tool/outbox/publisher.py tests/integration/test_migrations.py \
         tests/policy_driven/test_engine_build_id_guard.py
@@ -543,210 +534,314 @@ Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
 
 ---
 
-## Task 2: Migration 013 part B — legacy `decision_sequence` backfill (order authority = `outbox.id`)
+## Task 2: Migration 013 part B — shared parity matrix + legacy `decision_sequence` backfill (order authority = `outbox.id`)
 
-Maps every `manual=false` decision to exactly one surviving `decision_callback` outbox row by `run_id` (refusing missing/orphan/duplicate with actionable ids), ranks per case by `outbox.id` (the under-lock enqueue order, **not** `decided_at`), stamps `decisions.decision_sequence` + copies it to the callback row, and seeds `cases.last_decision_sequence`. Migration-only — no `src/` change, so no drift re-pin.
+Creates the schema-012-compatible **shared parity matrix** (`src/kyc_tool/ops/backfill_parity.py`) that BOTH migration `013`'s preflight AND the `verify_pr7b_core_backfill` diagnostic (Task 7) run, then wires it into the migration: refuse (with actionable ids, `BLOCKED_NO_AUTHORITATIVE_MAPPING` on a missing mapping) BEFORE any DDL, else rank per case by `outbox.id`, stamp `decisions.decision_sequence` + copy to the callback, seed `cases.last_decision_sequence`. **Touches `src/` (the parity module) → re-pins the drift guard.**
 
 **Files:**
-- Modify: `alembic/versions/013_outbox_stream_separation.py` (the "Task 2 insertion point" in `upgrade`)
+- Create: `src/kyc_tool/ops/backfill_parity.py` (shared, raw-SQL parity matrix — no 013-only ORM)
+- Modify: `alembic/versions/013_outbox_stream_separation.py` (insertion points A + B in `upgrade`)
 - Modify: `tests/integration/test_migrations.py`
+- Re-pin: `tests/policy_driven/test_engine_build_id_guard.py`
 
 **Interfaces:**
+- Produces: `PARITY_CHECKS: list[tuple[str, str]]` (name, schema-012 SQL selecting offending `a`,`b` id pairs); `run_parity(executor) -> list[tuple[str, list[tuple]]]` (checks with offenders); constants `MISSING_CALLBACK`, `BLOCKED_SENTINEL="BLOCKED_NO_AUTHORITATIVE_MAPPING"`. `run_parity` accepts anything with `.execute(text(...))` (an alembic `Connection` OR a `Session`).
+- Produces: `_PARITY_BAD_SEEDS: dict[str, str]` in `test_migrations.py` (one invalid legacy state per key), imported by Task 7's CLI test.
 - Consumes: schema from Task 1 (columns present, no decision-identity constraints yet).
-- Produces: after upgrade, every automatic decision + its callback carry a per-case `decision_sequence = row_number() OVER (PARTITION BY case_id ORDER BY outbox.id)`; `cases.last_decision_sequence = per-case max`. Refuses (raises `RuntimeError`, rolls back) on any missing/orphan/duplicate mapping.
 
-- [ ] **Step 1: Write the failing order-authority regression test** — append to `tests/integration/test_migrations.py`:
+- [ ] **Step 1: Create the shared parity matrix** — create `src/kyc_tool/ops/backfill_parity.py`:
 
 ```python
-def test_013_backfill_orders_by_outbox_id_not_decided_at(pg):
-    """Two-connection inversion (rev-4 F1): B's decide txn starts FIRST (so B.decided_at
-    is earlier) but A enqueues its callback FIRST (so A.outbox_id is lower). now() is
-    txn-start time and _decide_txn opens its txn before taking the case FOR UPDATE, so
-    decided_at can invert the true (lock-serialized) order — outbox.id cannot. The backfill
-    must rank by outbox.id: A=seq 1, B=seq 2, counter=2. Ranking by decided_at would flip
-    them and later suppress the actually-newer callback."""
+"""Shared schema-012-compatible parity matrix for the 7b-core backfill. Migration 013's
+preflight AND the verify_pr7b_core_backfill diagnostic (ops CLI) both run THIS matrix, so
+the two can never diverge. Raw SQL only — references NO 013-only columns (ordering_stream,
+decision_sequence, claim_*). Each check SELECTs offending id pairs (a, b); empty ⇒ clean.
+MISSING_CALLBACK is the fail-closed no-authoritative-mapping state (a decision whose callback
+was pruned): the safe order cannot be reconstructed, so it maps to BLOCKED_NO_AUTHORITATIVE_MAPPING.
+"""
+
+from sqlalchemy import text
+
+MISSING_CALLBACK = "missing_callback"
+BLOCKED_SENTINEL = "BLOCKED_NO_AUTHORITATIVE_MAPPING"
+
+PARITY_CHECKS: list[tuple[str, str]] = [
+    (MISSING_CALLBACK,
+     "SELECT d.id AS a, d.run_id AS b FROM decisions d WHERE d.manual=false AND NOT EXISTS "
+     "(SELECT 1 FROM outbox o WHERE o.kind='decision_callback' AND o.run_id=d.run_id)"),
+    ("orphan_callback",
+     "SELECT o.id AS a, o.run_id AS b FROM outbox o WHERE o.kind='decision_callback' AND NOT EXISTS "
+     "(SELECT 1 FROM decisions d WHERE d.manual=false AND d.run_id=o.run_id)"),
+    ("null_run_callback",
+     "SELECT o.id AS a, NULL AS b FROM outbox o WHERE o.kind='decision_callback' AND o.run_id IS NULL"),
+    ("duplicate_callback_per_run",
+     "SELECT run_id AS a, count(*) AS b FROM outbox WHERE kind='decision_callback' "
+     "GROUP BY run_id HAVING count(*)>1"),
+    ("duplicate_auto_decision_per_run",
+     "SELECT run_id AS a, count(*) AS b FROM decisions WHERE manual=false AND run_id IS NOT NULL "
+     "GROUP BY run_id HAVING count(*)>1"),
+    ("null_or_orphan_outbox_case",
+     "SELECT o.id AS a, o.case_id AS b FROM outbox o WHERE o.case_id IS NULL "
+     "OR o.case_id NOT IN (SELECT id FROM cases)"),
+    ("callback_case_ne_decision_case",
+     "SELECT o.id AS a, o.run_id AS b FROM outbox o JOIN decisions d ON d.run_id=o.run_id AND d.manual=false "
+     "WHERE o.kind='decision_callback' AND o.case_id <> d.case_id"),
+    ("decision_case_ne_run_case",
+     "SELECT d.id AS a, d.run_id AS b FROM decisions d JOIN runs r ON r.id=d.run_id WHERE d.case_id <> r.case_id"),
+    ("unknown_kind",
+     "SELECT id AS a, kind AS b FROM outbox WHERE kind NOT IN ('decision_callback','poc_email')"),
+    ("poc_row_with_run",
+     "SELECT id AS a, run_id AS b FROM outbox WHERE kind='poc_email' AND run_id IS NOT NULL"),
+    ("manual_decision_with_run",
+     "SELECT id AS a, run_id AS b FROM decisions WHERE manual=true AND run_id IS NOT NULL"),
+    ("auto_decision_null_run",
+     "SELECT id AS a, NULL AS b FROM decisions WHERE manual=false AND run_id IS NULL"),
+]
+
+
+def run_parity(executor) -> list[tuple[str, list[tuple]]]:
+    """Return [(check_name, [(a, b), ...]), ...] for every check that found offenders.
+    `executor` is any object with `.execute(text(sql))` — an alembic Connection or a Session."""
+    found: list[tuple[str, list[tuple]]] = []
+    for name, sql in PARITY_CHECKS:
+        rows = executor.execute(text(sql)).fetchall()
+        if rows:
+            found.append((name, [(r.a, r.b) for r in rows]))
+    return found
+```
+
+- [ ] **Step 2: Write the failing tests** — append to `tests/integration/test_migrations.py`:
+
+```python
+import json  # noqa: E402  (top-of-file import in the real edit)
+import threading  # noqa: E402
+import time  # noqa: E402
+
+import httpx  # noqa: E402
+from kyc_tool.db.session import make_engine as _mk_engine  # noqa: E402
+from kyc_tool.db.session import make_session_factory as _mk_sf  # noqa: E402
+from kyc_tool.outbox.publisher import OutboxPublisher  # noqa: E402
+
+
+def test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersession(pg, settings):
+    """Threaded inversion (rev-4 F1): B's txn starts FIRST and fixes its decided_at via
+    SELECT now(); A then runs fully and enqueues its callback FIRST (lower outbox.id) with a
+    LATER decided_at; only then is B released to enqueue (higher outbox.id). So
+    B.decided_at < A.decided_at while A.outbox_id < B.outbox_id. The backfill must rank by
+    outbox.id (A=seq 1, B=seq 2); delivering both via the REAL publisher then sends A→B, both
+    delivered, neither superseded, B last. Mutation ORDER BY d.decided_at reverses assignment
+    and (at head, with the guard) supersedes B — failing this complete test."""
     url = _fresh_db(pg, "kyc_mig_013_inversion")
     cfg = _config(url)
     alembic_command.upgrade(cfg, "012")
+    eng = create_engine(url)
+    with eng.begin() as conn:  # commit the case FIRST (both chains reference it)
+        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
 
-    engineB = create_engine(url)
-    engineA = create_engine(url)
-    connB = engineB.connect()
-    txB = connB.begin()  # B's txn starts first → B.decided_at (server_default now()) is earlier
-    try:
-        connB.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
-        connB.execute(
-            text(
-                "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                "actor_json, payload_json, event_sequence) VALUES ('evB','c1','rB','h','x',"
-                "'{}'::jsonb,'{}'::jsonb,1)"
-            )
-        )
-        connB.execute(
-            text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES ('rB','c1','evB','PUBLISH_DECISION')")
-        )
-        connB.execute(
-            text(
-                "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                "buy_enablement, policy_shas, manual) VALUES ('dB','c1','rB','approve',10,'{}'::jsonb,"
-                "'enabled','{}'::jsonb,false)"
-            )
-        )
-        # A's whole decide happens AFTER B started but enqueues its callback FIRST
-        with engineA.begin() as connA:
-            connA.execute(
-                text(
-                    "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                    "actor_json, payload_json, event_sequence) VALUES ('evA','c1','rA','h','x',"
-                    "'{}'::jsonb,'{}'::jsonb,2)"
-                )
-            )
-            connA.execute(
-                text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES ('rA','c1','evA','PUBLISH_DECISION')")
-            )
-            connA.execute(
-                text(
-                    "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                    "buy_enablement, policy_shas, manual) VALUES ('dA','c1','rA','approve',10,'{}'::jsonb,"
-                    "'enabled','{}'::jsonb,false)"
-                )
-            )
-            connA.execute(
-                text(
-                    "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
-                    "VALUES ('decision_callback','c1','rA','{}'::jsonb,'pending')"
-                )
-            )  # A's outbox row gets the LOWER id
-        connB.execute(
-            text(
-                "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
-                "VALUES ('decision_callback','c1','rB','{}'::jsonb,'pending')"
-            )
-        )  # B's outbox row gets the HIGHER id
-        txB.commit()
-    finally:
-        connB.close()
+    clock_fixed = threading.Event()
+    a_done = threading.Event()
 
-    with engineA.connect() as conn:
-        a_dt, a_oid = conn.execute(
-            text(
-                "SELECT d.decided_at, o.id FROM decisions d JOIN outbox o ON o.run_id=d.run_id "
-                "WHERE d.id='dA'"
-            )
-        ).one()
-        b_dt, b_oid = conn.execute(
-            text(
-                "SELECT d.decided_at, o.id FROM decisions d JOIN outbox o ON o.run_id=d.run_id "
-                "WHERE d.id='dB'"
-            )
-        ).one()
-    assert b_dt < a_dt and a_oid < b_oid  # the inversion is real
+    def run_b():
+        cb = create_engine(url).connect()
+        tx = cb.begin()
+        cb.execute(text("SELECT now()"))  # fixes B's txn-start now() (B.decided_at) EARLY
+        clock_fixed.set()
+        a_done.wait(timeout=10)  # let A fully commit first (A gets the lower outbox.id)
+        cb.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                        "actor_json, payload_json, event_sequence) VALUES ('evB','c1','rB','h','x',"
+                        "'{}'::jsonb,'{}'::jsonb,2)"))
+        cb.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                        "VALUES ('rB','c1','evB','PUBLISH_DECISION')"))
+        cb.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+                        "buy_enablement, policy_shas, manual) VALUES ('dB','c1','rB','approve',10,"
+                        "'{}'::jsonb,'enabled','{}'::jsonb,false)"))
+        cb.execute(text("INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
+                        "VALUES ('decision_callback','c1','rB', CAST('{\"run_id\":\"rB\"}' AS jsonb),'pending')"))
+        tx.commit()
+        cb.close()
+
+    tb = threading.Thread(target=run_b)
+    tb.start()
+    clock_fixed.wait(timeout=10)
+    time.sleep(0.1)  # ensure A's txn-start now() is strictly LATER than B's fixed clock
+    with eng.begin() as connA:  # A runs fully + commits → lower outbox.id, later decided_at
+        connA.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                           "actor_json, payload_json, event_sequence) VALUES ('evA','c1','rA','h','x',"
+                           "'{}'::jsonb,'{}'::jsonb,1)"))
+        connA.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                           "VALUES ('rA','c1','evA','PUBLISH_DECISION')"))
+        connA.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+                           "buy_enablement, policy_shas, manual) VALUES ('dA','c1','rA','approve',10,"
+                           "'{}'::jsonb,'enabled','{}'::jsonb,false)"))
+        connA.execute(text("INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
+                           "VALUES ('decision_callback','c1','rA', CAST('{\"run_id\":\"rA\"}' AS jsonb),'pending')"))
+    a_done.set()
+    tb.join(timeout=10)
+
+    with eng.connect() as conn:
+        a_dt, a_oid = conn.execute(text("SELECT d.decided_at, o.id FROM decisions d "
+                                        "JOIN outbox o ON o.run_id=d.run_id WHERE d.id='dA'")).one()
+        b_dt, b_oid = conn.execute(text("SELECT d.decided_at, o.id FROM decisions d "
+                                        "JOIN outbox o ON o.run_id=d.run_id WHERE d.id='dB'")).one()
+    assert b_dt < a_dt and a_oid < b_oid  # the inversion is real and deterministic
 
     alembic_command.upgrade(cfg, "013")
 
-    with engineA.connect() as conn:
-        seqs = {
-            r.id: r.decision_sequence
-            for r in conn.execute(text("SELECT id, decision_sequence FROM decisions WHERE case_id='c1'"))
-        }
+    with eng.connect() as conn:
+        seqs = {r.id: r.decision_sequence
+                for r in conn.execute(text("SELECT id, decision_sequence FROM decisions WHERE case_id='c1'"))}
         assert seqs == {"dA": 1, "dB": 2}  # by outbox.id, NOT decided_at
         assert conn.execute(text("SELECT last_decision_sequence FROM cases WHERE id='c1'")).scalar_one() == 2
-        ob = {
-            r.run_id: r.decision_sequence
-            for r in conn.execute(text("SELECT run_id, decision_sequence FROM outbox WHERE case_id='c1'"))
-        }
-        assert ob == {"rA": 1, "rB": 2}
-    engineA.dispose()
-    engineB.dispose()
+
+    # deliver both via the REAL publisher against this dedicated DB; assert order + terminals
+    order: list[str] = []
+
+    def handler(request):
+        order.append(json.loads(request.content).get("run_id"))
+        return httpx.Response(200)
+
+    pub = OutboxPublisher(_mk_sf(_mk_engine(url)), settings,
+                          http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert pub.process_pending() == 2
+    assert order == ["rA", "rB"]  # A (seq 1) delivered before B (seq 2)
+    with eng.connect() as conn:
+        statuses = dict(conn.execute(text(
+            "SELECT run_id, status FROM outbox WHERE case_id='c1' ORDER BY decision_sequence")).all())
+    assert statuses == {"rA": "delivered", "rB": "delivered"}  # neither superseded; B last
+    eng.dispose()
+
+
+# One invalid legacy state per parity check (schema 012). Imported by Task 7's CLI test so the
+# CLI and the migration are proven to refuse on the SAME matrix. Each is a complete INSERT set.
+_BAD_CASE = "INSERT INTO cases (id) VALUES ('c1')"
+_BAD_EV = ("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, actor_json, "
+           "payload_json, event_sequence) VALUES (:e,'c1',:e,'h','x','{}'::jsonb,'{}'::jsonb,:s)")
+_BAD_RUN = "INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES (:r,'c1',:e,'PUBLISH_DECISION')"
+
+_PARITY_BAD_SEEDS: dict[str, list[str]] = {
+    "missing_callback": [_BAD_CASE, _BAD_EV, _BAD_RUN,  # decision, no callback
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual) VALUES ('d','c1',:r,'approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false)"],
+    "orphan_callback": [_BAD_CASE,  # callback whose run has no automatic decision
+        "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
+        "VALUES ('decision_callback','c1','ghost','{}'::jsonb,'pending')"],
+    "duplicate_callback_per_run": [_BAD_CASE, _BAD_EV, _BAD_RUN,
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual) VALUES ('d','c1',:r,'approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false)",
+        "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
+        "VALUES ('decision_callback','c1',:r,'{}'::jsonb,'pending')",
+        "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
+        "VALUES ('decision_callback','c1',:r,'{}'::jsonb,'pending')"],
+    "duplicate_auto_decision_per_run": [_BAD_CASE, _BAD_EV, _BAD_RUN,
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual) VALUES ('d1','c1',:r,'approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false)",
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual) VALUES ('d2','c1',:r,'approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false)",
+        "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
+        "VALUES ('decision_callback','c1',:r,'{}'::jsonb,'pending')"],
+    "null_run_callback": [_BAD_CASE,  # callback with run_id NULL (also orphan — either name refuses)
+        "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
+        "VALUES ('decision_callback','c1',NULL,'{}'::jsonb,'pending')"],
+    "null_or_orphan_outbox_case": [_BAD_CASE,  # poc_email with case_id NULL
+        "INSERT INTO outbox (kind, case_id, payload_json, status) VALUES ('poc_email',NULL,'{}'::jsonb,'pending')"],
+    "callback_case_ne_decision_case": [_BAD_CASE, "INSERT INTO cases (id) VALUES ('c2')", _BAD_EV, _BAD_RUN,
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual) VALUES ('d','c1',:r,'approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false)",
+        "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "  # callback on c2, decision on c1
+        "VALUES ('decision_callback','c2',:r,'{}'::jsonb,'pending')"],
+    "decision_case_ne_run_case": [_BAD_CASE, "INSERT INTO cases (id) VALUES ('c2')", _BAD_EV, _BAD_RUN,
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "  # run on c1, decision on c2
+        "policy_shas, manual) VALUES ('d','c2',:r,'approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false)",
+        "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
+        "VALUES ('decision_callback','c2',:r,'{}'::jsonb,'pending')"],
+    "unknown_kind": [_BAD_CASE,
+        "INSERT INTO outbox (kind, case_id, payload_json, status) VALUES ('weird','c1','{}'::jsonb,'pending')"],
+    "poc_row_with_run": [_BAD_CASE, _BAD_EV, _BAD_RUN,
+        "INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
+        "VALUES ('poc_email','c1',:r,'{}'::jsonb,'pending')"],
+    "manual_decision_with_run": [_BAD_CASE, _BAD_EV, _BAD_RUN,
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual) VALUES ('d','c1',:r,'approve',0,'{}'::jsonb,'enabled','{}'::jsonb,true)"],
+    "auto_decision_null_run": [_BAD_CASE,
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual) VALUES ('d','c1',NULL,'approve',0,'{}'::jsonb,'enabled','{}'::jsonb,false)"],
+}
+
+
+def _seed_parity_bad(engine, name):
+    with engine.begin() as conn:
+        for stmt in _PARITY_BAD_SEEDS[name]:
+            conn.execute(text(stmt), {"e": "ev", "r": "r", "s": 1})
 
 
 def test_013_backfill_refuses_missing_callback_byte_stable(pg):
-    """A valid manual=false decision with NO surviving callback (a reachable state:
-    retention prunes delivered outbox rows while the immutable decision lives forever) —
-    the safe order cannot be guessed, so the migration fails closed. No decided_at fallback."""
+    """A valid manual=false decision with NO surviving callback → fail closed with the exact
+    BLOCKED_NO_AUTHORITATIVE_MAPPING sentinel + ids (no decided_at fallback)."""
     url = _fresh_db(pg, "kyc_mig_013_missing_cb")
     cfg = _config(url)
     alembic_command.upgrade(cfg, "012")
     engine = create_engine(url)
-    with engine.begin() as conn:
-        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
-        conn.execute(
-            text(
-                "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                "actor_json, payload_json, event_sequence) VALUES ('ev','c1','r','h','x',"
-                "'{}'::jsonb,'{}'::jsonb,1)"
-            )
-        )
-        conn.execute(
-            text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES ('r','c1','ev','PUBLISH_DECISION')")
-        )
-        conn.execute(
-            text(
-                "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                "buy_enablement, policy_shas, manual) VALUES ('d','c1','r','approve',10,'{}'::jsonb,"
-                "'enabled','{}'::jsonb,false)"
-            )
-        )  # no outbox callback row
+    _seed_parity_bad(engine, "missing_callback")
     engine.dispose()
-    with pytest.raises(Exception) as exc:  # noqa: PT011 — alembic wraps the RuntimeError
+    with pytest.raises(RuntimeError) as exc:  # migration raises RuntimeError; alembic propagates it
         alembic_command.upgrade(cfg, "013")
     msg = str(exc.value)
-    assert "without a surviving decision_callback" in msg and "d" in msg  # actionable ids
+    assert "BLOCKED_NO_AUTHORITATIVE_MAPPING" in msg and "'d'" in msg  # sentinel + actionable id
+
+
+@pytest.mark.parametrize("name", list(_PARITY_BAD_SEEDS))
+def test_013_upgrade_refuses_parity_violation_before_ddl(pg, name):
+    """Every invalid legacy state makes the 013 upgrade refuse BEFORE any DDL — the parity
+    preflight runs first, so after the failure the 013 columns are absent (txn rolled back)."""
+    url = _fresh_db(pg, f"kyc_mig_013_parity_{name}")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "012")
+    engine = create_engine(url)
+    _seed_parity_bad(engine, name)
+    engine.dispose()
+    with pytest.raises(RuntimeError) as exc:
+        alembic_command.upgrade(cfg, "013")
+    assert name in str(exc.value) or "BLOCKED_NO_AUTHORITATIVE_MAPPING" in str(exc.value)
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        cols = {r.column_name for r in conn.execute(text(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='outbox'"))}
+    assert "claim_token" not in cols  # no DDL landed — refusal was before the column adds
+    engine.dispose()
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [ ] **Step 3: Run to verify failure**
 
-Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_backfill" -v`
-Expected: FAIL — the inversion test sees `dA=None, dB=None` (no backfill yet); the missing-callback test does NOT raise (upgrade succeeds).
+Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_backfill or 013_upgrade_refuses_parity" -v`
+Expected: FAIL — the inversion test sees `dA=None, dB=None`; the refusal tests do NOT raise (no parity preflight wired yet).
 
-- [ ] **Step 3: Add the backfill** — in `alembic/versions/013_outbox_stream_separation.py`, replace the `# === Task 2 insertion point: legacy decision_sequence backfill ===` line in `upgrade()` with:
+- [ ] **Step 4: Wire the parity preflight + the assignment into the migration** — in `alembic/versions/013_outbox_stream_separation.py`:
+
+Replace `# === Task 2 insertion point A: shared parity preflight (runs BEFORE any DDL) ===` with:
 
 ```python
-    # --- legacy decision_sequence backfill; ORDER AUTHORITY = outbox.id (rev-4 F1) ---
-    # decided_at is txn-start now() and _decide_txn opens its txn before the case
-    # FOR UPDATE, so two same-case decides can invert decided_at vs their lock-serialized
-    # commit order. outbox.id is allocated at enqueue UNDER that lock, so it preserves the
-    # true serialization. Ranking by decided_at would assign the newer callback the lower
-    # sequence and the local guard would then suppress the actually-newer callback.
-    missing = conn.execute(
-        sa.text(
-            "SELECT d.id AS decision_id, d.run_id FROM decisions d WHERE d.manual = false "
-            "AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.kind='decision_callback' AND o.run_id = d.run_id)"
-        )
-    ).fetchall()
-    if missing:
-        raise RuntimeError(
-            "migration 013: automatic decision(s) without a surviving decision_callback — "
-            "restore the callback from authoritative backup or remain on 012 "
-            f"(BLOCKED_NO_AUTHORITATIVE_MAPPING); offenders: {[(r.decision_id, r.run_id) for r in missing]}"
-        )
-    orphan = conn.execute(
-        sa.text(
-            "SELECT o.id, o.run_id FROM outbox o WHERE o.kind='decision_callback' "
-            "AND NOT EXISTS (SELECT 1 FROM decisions d WHERE d.manual=false AND d.run_id = o.run_id)"
-        )
-    ).fetchall()
-    if orphan:
-        raise RuntimeError(
-            f"migration 013: orphan decision_callback outbox row(s) (no automatic decision): "
-            f"{[(r.id, r.run_id) for r in orphan]}"
-        )
-    dup_cb = conn.execute(
-        sa.text(
-            "SELECT run_id, count(*) AS c FROM outbox WHERE kind='decision_callback' "
-            "GROUP BY run_id HAVING count(*) > 1"
-        )
-    ).fetchall()
-    if dup_cb:
-        raise RuntimeError(
-            f"migration 013: multiple decision_callback rows per run: {[(r.run_id, r.c) for r in dup_cb]}"
-        )
-    bad_email = conn.execute(
-        sa.text("SELECT id FROM outbox WHERE kind='poc_email' AND decision_sequence IS NOT NULL")
-    ).fetchall()
-    if bad_email:
-        raise RuntimeError(f"migration 013: poc_email row(s) carry a decision_sequence: {[r.id for r in bad_email]}")
+    # --- shared parity preflight (fail-closed BEFORE any DDL) ---
+    from kyc_tool.ops.backfill_parity import BLOCKED_SENTINEL, MISSING_CALLBACK, run_parity
 
+    violations = run_parity(conn)
+    if violations:
+        names = {n for n, _ in violations}
+        detail = "; ".join(f"{n}: {ids}" for n, ids in violations)
+        if MISSING_CALLBACK in names:
+            raise RuntimeError(
+                f"migration 013: {BLOCKED_SENTINEL} — automatic decision(s) without a surviving "
+                f"decision_callback; restore from authoritative backup or remain on 012. {detail}"
+            )
+        raise RuntimeError(f"migration 013: backfill parity violation(s), fail-closed: {detail}")
+```
+
+Replace `# === Task 2 insertion point: legacy decision_sequence backfill ===` with (the mapping is now guaranteed 1:1 by the parity preflight above, so this is pure assignment):
+
+```python
+    # --- legacy decision_sequence assignment; ORDER AUTHORITY = outbox.id (rev-4 F1) ---
+    # decided_at is txn-start now() and _decide_txn opens its txn before the case FOR UPDATE,
+    # so two same-case decides can invert decided_at vs their lock-serialized commit order.
+    # outbox.id is allocated at enqueue UNDER that lock, so it preserves the true serialization.
     op.execute(
         """
         WITH seq AS (
@@ -773,33 +868,38 @@ Expected: FAIL — the inversion test sees `dA=None, dB=None` (no backfill yet);
              WHERE d.case_id = c.id AND d.decision_sequence IS NOT NULL), 0)
         """
     )
-    # defensive: row_number() cannot produce a per-case duplicate, so this always holds.
     post_dup = conn.execute(
         sa.text(
             "SELECT case_id, decision_sequence FROM decisions WHERE decision_sequence IS NOT NULL "
             "GROUP BY case_id, decision_sequence HAVING count(*) > 1"
         )
     ).fetchall()
-    if post_dup:
+    if post_dup:  # defensive: row_number() cannot produce a per-case duplicate
         raise RuntimeError(f"migration 013: post-backfill per-case sequence collision: {post_dup}")
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [ ] **Step 5: Run to verify pass + fix the Task-1 counter assertion**
 
-Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_backfill or 013_upgrade_sets_stream" -v`
-Expected: PASS (the counter now seeds to 2 in the inversion test and to 1 in `test_013_upgrade_sets_stream_and_notnull_metadata`; the missing-callback test raises byte-stably).
+Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_backfill or 013_upgrade_refuses_parity or 013_upgrade_sets_stream" -v`
+Then, in `test_013_upgrade_sets_stream_and_notnull_metadata`, change the final counter assertion from `== 0` to `== 3` (case `c1` now has three backfilled automatic decisions — pending/delivered/dead) and rerun that test → PASS.
 
-- [ ] **Step 5: Fix the stream/notnull test's counter assertion** — in `test_013_upgrade_sets_stream_and_notnull_metadata` change the final assertion from `== 0` to `== 1` (case `c1` now has one backfilled automatic decision), and rerun that test → PASS.
+- [ ] **Step 6: Mutation checks (manual, no commit)** — (a) change the assignment `ORDER BY o.id` → `ORDER BY d.decided_at, o.id`; rerun `test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersession` → confirm it FAILS at `seqs == {"dA":1,"dB":2}` (and, at final head with the Task-5 guard, also at the delivery order / no-supersession assertions). Restore. (b) Delete the `run_parity` block; rerun `test_013_upgrade_refuses_parity_violation_before_ddl` → confirm every parametrization FAILS (no refusal). Restore.
 
-- [ ] **Step 6: Mutation check (manual, no commit)** — change the backfill's `ORDER BY o.id` to `ORDER BY d.decided_at, o.id`; rerun `.venv/bin/pytest tests/integration/test_migrations.py::test_013_backfill_orders_by_outbox_id_not_decided_at -v`; confirm it now FAILS (`dA=2, dB=1`). Restore `ORDER BY o.id`.
+- [ ] **Step 7: RED drift-guard step** — the new `src/kyc_tool/ops/backfill_parity.py` changed the source tree:
 
-- [ ] **Step 7: Full gate + commit**
+Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` → **FAIL** (RED step; do NOT run `./manage.sh test` yet).
+
+- [ ] **Step 8: Re-pin the drift guard → GREEN** — run the re-pin one-liner, paste into `EXPECTED_ENGINE_SOURCE_HASH`, rerun the guard test → PASS.
+
+- [ ] **Step 9: Full gate + commit** (canonical close-out order)
 
 ```bash
 ./manage.sh test
-.venv/bin/ruff check . && .venv/bin/lint-imports
-git add alembic/versions/013_outbox_stream_separation.py tests/integration/test_migrations.py
-git commit -m "feat(013): legacy decision_sequence backfill ranked by outbox.id (fail-closed)
+.venv/bin/ruff check .
+.venv/bin/lint-imports
+git add src/kyc_tool/ops/backfill_parity.py alembic/versions/013_outbox_stream_separation.py \
+        tests/integration/test_migrations.py tests/policy_driven/test_engine_build_id_guard.py
+git commit -m "feat(013): shared parity matrix + decision_sequence backfill ranked by outbox.id
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
@@ -827,11 +927,10 @@ Rewrites `_CLAIM_SQL` to claim the min-id pending row of one `(case_id, ordering
 
 import httpx
 import pytest
+import structlog
 from sqlalchemy import text
 
 pytestmark = pytest.mark.postgres
-
-from kyc_tool.outbox.publisher import DECISION_CALLBACK  # noqa: E402
 
 
 def _seed_case(session_factory, case_id="c1"):
@@ -850,6 +949,16 @@ def _enqueue_email(session_factory, *, case_id, to, status="pending", next_at="n
             {"c": case_id, "p": '{"to":"%s","subject":"s","body":"b"}' % to, "st": status},
         )
         s.commit()
+
+
+def _pub_for(session_factory, settings):
+    """A publisher bound to `session_factory` whose HTTP + email always succeed (200)."""
+    from kyc_tool.outbox.publisher import OutboxPublisher
+
+    return OutboxPublisher(
+        session_factory, settings,
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
+    )
 
 
 def test_stuck_email_does_not_block_decision_callback(session_factory, settings, publisher, callback_capture):
@@ -888,36 +997,96 @@ def test_stuck_email_does_not_block_decision_callback(session_factory, settings,
     assert statuses == {"decision_callback": "delivered", "poc_email": "pending"}
 
 
-def test_stale_claimant_cannot_overwrite_reclaimers_delivered(session_factory, settings, publisher):
-    """Defect 3: publisher A claims (token A), its lease expires, B reclaims (token B) and
-    delivers. A resuming with token A must apply NOTHING (applied=false) — it cannot stamp
-    dead/delivered over B's terminal, and process_once stays alive."""
-    _seed_case(session_factory, "c1")
-    _enqueue_email(session_factory, case_id="c1", to="p@x")
-
-    # A claims via the real claim SQL, then we expire its lease.
+def _claim(session_factory, claimed_by):
+    """Claim ONE row via the real _CLAIM_SQL; return the returned Row (carries the token)."""
     from kyc_tool.outbox.publisher import _CLAIM_SQL
 
     with session_factory() as s:
-        rowA = s.execute(_CLAIM_SQL, {"lease_seconds": 3600, "claimed_by": "A"}).first()
+        row = s.execute(_CLAIM_SQL, {"lease_seconds": 3600, "claimed_by": claimed_by}).first()
         s.commit()
+    return row
+
+
+def _expire_lease(session_factory, oid):
+    with session_factory() as s:
+        s.execute(text("UPDATE outbox SET claim_lease_expires_at = now() - interval '1 second' WHERE id=:i"), {"i": oid})
+        s.commit()
+
+
+def test_stale_poc_loser_touches_nothing_before_reclaimer_sends(session_factory, settings, publisher):
+    """Defect 3, POC: A claims (token A); A's lease expires; B RECLAIMS (token B) but does NOT
+    terminalize yet. A resuming with token A — through BOTH stale success and stale FINAL-attempt
+    failure — must touch nothing: payload byte-identical, status pending, B's complete claim tuple
+    + attempts + next_attempt_at unchanged, and it emits only outbox_stale_claim_completion (no
+    raise). THEN B delivers and redacts exactly once."""
+    _seed_case(session_factory, "c1")
+    _enqueue_email(session_factory, case_id="c1", to="keep@x")
+    rowA = _claim(session_factory, "A")
     assert rowA is not None
+    _expire_lease(session_factory, rowA.id)
+    rowB = _claim(session_factory, "B")  # B reclaims; does NOT terminalize
+    assert rowB is not None and rowB.claim_token != rowA.claim_token
+
     with session_factory() as s:
-        s.execute(text("UPDATE outbox SET claim_lease_expires_at = now() - interval '1 second' WHERE id=:i"), {"i": rowA.id})
+        before = s.execute(text("SELECT payload_json::text AS p, status, claim_token, claim_lease_expires_at, "
+                                "claimed_by, attempts, next_attempt_at FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
+
+    s2 = settings.model_copy(update={"outbox_max_attempts": 1})  # A's failure would be terminal (dead)
+    stale_pub = _pub_for(session_factory, s2)
+    with structlog.testing.capture_logs() as logs:
+        stale_pub._record_delivered(rowA, rowA.claim_token)          # stale success → no-op
+        stale_pub._record_failure(rowA, "boom", rowA.claim_token)    # stale final-attempt failure → no-op
+    assert [e for e in logs if e["event"] == "outbox_stale_claim_completion"]  # audited no-op, no raise
+
+    with session_factory() as s:
+        after = s.execute(text("SELECT payload_json::text AS p, status, claim_token, claim_lease_expires_at, "
+                               "claimed_by, attempts, next_attempt_at FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
+    assert after == before  # A changed NOTHING — payload, status, B's whole claim tuple, attempts, clock
+
+    publisher._record_delivered(rowB, rowB.claim_token)  # B (the real winner) delivers + redacts once
+    with session_factory() as s:
+        final = s.execute(text("SELECT status, payload_json FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
+    assert final.status == "delivered" and final.payload_json == {"redacted": True}
+
+
+def test_stale_decision_loser_cannot_stamp_run_or_published_at(session_factory, settings, publisher, callback_capture):
+    """Defect 3, decision callback: same A/B ordering. Stale A must change neither the outbox
+    tuple nor runs.state (stays PUBLISH_DECISION) nor decisions.published_at (stays NULL). Then B
+    alone stamps both (run COMPLETE, published_at set)."""
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    _seed_case(session_factory, "c1")
+    with session_factory() as s:
+        s.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, actor_json, "
+                       "payload_json, event_sequence) VALUES ('ev1','c1','k1','h','x','{}'::jsonb,'{}'::jsonb,1)"))
+        s.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES ('r1','c1','ev1','PUBLISH_DECISION')"))
+        s.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+                       "policy_shas, manual, decision_sequence) VALUES ('d1','c1','r1','approve',10,'{}'::jsonb,"
+                       "'enabled','{}'::jsonb,false,1)"))
+        enqueue_decision_callback(s, case_id="c1", run_id="r1", body={"run_id": "r1"}, decision_sequence=1)
         s.commit()
 
-    # B reclaims + delivers via the normal loop.
-    assert publisher.process_pending() == 1
-    with session_factory() as s:
-        after_b = s.execute(text("SELECT status, claim_token FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
-    assert after_b.status == "delivered" and after_b.claim_token is None
+    rowA = _claim(session_factory, "A")
+    _expire_lease(session_factory, rowA.id)
+    rowB = _claim(session_factory, "B")
 
-    # A resumes with its STALE token — both a delivered and a dead attempt must no-op.
-    publisher._record_delivered(rowA, rowA.claim_token)
-    publisher._record_failure(rowA, "boom", rowA.claim_token)
+    stale_pub = _pub_for(session_factory, settings.model_copy(update={"outbox_max_attempts": 1}))
+    with structlog.testing.capture_logs() as logs:
+        stale_pub._record_delivered(rowA, rowA.claim_token)
+        stale_pub._record_failure(rowA, "boom", rowA.claim_token)
+    assert [e for e in logs if e["event"] == "outbox_stale_claim_completion"]
+
     with session_factory() as s:
-        final = s.execute(text("SELECT status, delivered_at, claim_token FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
-    assert final.status == "delivered" and final.delivered_at is not None and final.claim_token is None
+        run_state = s.execute(text("SELECT state FROM runs WHERE id='r1'")).scalar_one()
+        pub_at = s.execute(text("SELECT published_at FROM decisions WHERE id='d1'")).scalar_one()
+        ob = s.execute(text("SELECT status, claim_token FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
+    assert run_state == "PUBLISH_DECISION" and pub_at is None  # A stamped NOTHING
+    assert ob.status == "pending" and ob.claim_token == rowB.claim_token  # still B's
+
+    publisher._record_delivered(rowB, rowB.claim_token)  # B alone stamps both
+    with session_factory() as s:
+        assert s.execute(text("SELECT state FROM runs WHERE id='r1'")).scalar_one() == "COMPLETE"
+        assert s.execute(text("SELECT published_at FROM decisions WHERE id='d1'")).scalar_one() is not None
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1100,52 +1269,24 @@ Replace `_record_failure` (lines 193-226) with:
 Run: `.venv/bin/pytest tests/integration/test_outbox_fencing.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Add both-kinds barrier + POC-not-redacted loser tests** — append to `tests/integration/test_outbox_fencing.py`:
+- [ ] **Step 5: Run all fencing tests + the two NAMED mutation witnesses (manual, no commit)**
 
-```python
-def test_stale_final_attempt_failure_does_not_kill_worker_or_redact(session_factory, settings):
-    """POC email: A claims, lease expires, B is about to send. A's stale FINAL-attempt
-    failure must NOT redact the payload (byte-for-byte intact) or dead-letter it, and B
-    can still send. Uses a publisher whose email sender fails A's path only."""
-    from kyc_tool.outbox.publisher import OutboxPublisher, _CLAIM_SQL
+Run: `.venv/bin/pytest tests/integration/test_outbox_fencing.py -v` → PASS (stuck-email + both stale POC/decision A/B tests).
+**Mutation (a) — remove the loser early-return:** in `_record_delivered` delete the `if applied is None: … return` branch; rerun `.venv/bin/pytest tests/integration/test_outbox_fencing.py::test_stale_poc_loser_touches_nothing_before_reclaimer_sends -v` → it must FAIL (stale A's delivered UPDATE with a non-matching token now writes / raises on the `RETURNING`-less path). Restore.
+**Mutation (b) — raise on zero rows:** change every terminal's `if applied is None: log.warning(...); return` to `if applied is None: raise RuntimeError("stale")`; rerun `test_stale_decision_loser_cannot_stamp_run_or_published_at` → it must FAIL (the raise escapes `_record_failure`/`_record_delivered` instead of a non-raising audited no-op). Restore.
 
-    _seed_case(session_factory, "c1")
-    _enqueue_email(session_factory, case_id="c1", to="keep@x")
-    s2 = settings.model_copy(update={"outbox_max_attempts": 1})  # next failure is terminal (dead)
-    pub = OutboxPublisher(session_factory, s2, http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))))
+- [ ] **Step 6: RED drift-guard step** — publisher.py changed:
 
-    with session_factory() as s:
-        rowA = s.execute(_CLAIM_SQL, {"lease_seconds": 3600, "claimed_by": "A"}).first()
-        s.commit()
-    with session_factory() as s:
-        s.execute(text("UPDATE outbox SET claim_lease_expires_at = now() - interval '1 second' WHERE id=:i"), {"i": rowA.id})
-        s.commit()
+Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` → **FAIL** (RED step; do NOT run `./manage.sh test` yet).
 
-    # B reclaims + delivers (redacts as the winner).
-    assert pub.process_pending() == 1
-    # A resumes with a stale terminal FAILURE — must be a no-op (payload already redacted by B,
-    # but A must not have been the one to touch it; assert A leaves status/token unchanged).
-    with session_factory() as s:
-        before = s.execute(text("SELECT status, claim_token FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
-    pub._record_failure(rowA, "stale boom", rowA.claim_token)
-    with session_factory() as s:
-        after = s.execute(text("SELECT status, claim_token FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
-    assert (after.status, after.claim_token) == (before.status, before.claim_token) == ("delivered", None)
-```
+- [ ] **Step 7: Re-pin the drift guard → GREEN** — run the re-pin one-liner, paste into `EXPECTED_ENGINE_SOURCE_HASH`, rerun the guard test → PASS.
 
-- [ ] **Step 6: Run + mutation checks (manual, no commit)**
-
-Run: `.venv/bin/pytest tests/integration/test_outbox_fencing.py -v` → PASS.
-Mutation (a): in `_record_delivered`, delete the `if applied is None: … return` early-return; rerun `test_stale_claimant_cannot_overwrite_reclaimers_delivered` → confirm it FAILS (A overwrites/duplicates the terminal). Restore.
-Mutation (b): change the fenced `UPDATE … RETURNING id` result handling to raise on zero rows (`raise RuntimeError` instead of `return`); rerun → confirm the stale-loser tests FAIL (the raise escapes). Restore.
-
-- [ ] **Step 7: Full gate, re-pin, commit**
+- [ ] **Step 8: Full gate + commit** (canonical close-out order)
 
 ```bash
 ./manage.sh test          # whole suite green (delivery still stamps published_at + run COMPLETE)
-# re-pin EXPECTED_ENGINE_SOURCE_HASH (one-liner), then:
-.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v
-.venv/bin/ruff check . && .venv/bin/lint-imports
+.venv/bin/ruff check .
+.venv/bin/lint-imports
 git add src/kyc_tool/outbox/publisher.py tests/integration/test_outbox_fencing.py \
         tests/policy_driven/test_engine_build_id_guard.py
 git commit -m "feat(outbox): stream-scoped fenced claim + fenced winner/loser terminals
@@ -1177,65 +1318,105 @@ Makes `_decide_txn` increment `cases.last_decision_sequence` under the already-h
 ```python
 """PR 7b-core: per-case decision_sequence allocation under the Case FOR UPDATE lock."""
 
+import json
+import threading
+
 import pytest
 from sqlalchemy import text
+
+from kyc_tool.domain.models import RunState
 
 pytestmark = pytest.mark.postgres
 
 
-def test_two_decides_one_case_allocate_increasing_unique_sequences(
-    client, session_factory, post_event, worker
-):
-    post_event("case-seq", "kyb.run_requested", {"company_legal_name": "A", "jurisdiction": "GB"})
-    worker.run_until_idle()
-    post_event("case-seq", "email.verified", {"email": "a@b.com", "domain": "b.com", "verified_at": "2026-07-23T00:00:00Z"})
-    worker.run_until_idle()
-
+def _seed_run_at_decide(session_factory, *, case_id, run_id, ev_seq):
+    """Seed a case + one run poised at DECIDE (the broker-blocked short-circuit path decides
+    from DECIDE) + its running run_transition job. Returns the job id."""
     with session_factory() as s:
-        seqs = sorted(
-            r.decision_sequence
-            for r in s.execute(
-                text("SELECT decision_sequence FROM decisions WHERE case_id='case-seq' AND manual=false")
-            )
-        )
-        counter = s.execute(text("SELECT last_decision_sequence FROM cases WHERE id='case-seq'")).scalar_one()
-        callbacks = sorted(
-            r.decision_sequence
-            for r in s.execute(
-                text("SELECT decision_sequence FROM outbox WHERE case_id='case-seq' AND kind='decision_callback'")
-            )
-        )
-    assert seqs == [1, 2]  # strictly increasing, unique
-    assert counter == 2
-    assert callbacks == [1, 2]  # each callback carries its decision's sequence
+        s.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case_id})
+        s.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, actor_json, "
+                       "payload_json, event_sequence) VALUES (:e,:c,:k,'h','kyb.run_requested','{}'::jsonb,"
+                       "CAST(:p AS jsonb),:sq)"),
+                  {"e": run_id + "-ev", "c": case_id, "k": run_id,
+                   "p": '{"company_legal_name":"X","jurisdiction":"GB"}', "sq": ev_seq})
+        s.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state, input_snapshot_json) "
+                       "VALUES (:r,:c,:e,'DECIDE', CAST(:p AS jsonb))"),
+                  {"r": run_id, "c": case_id, "e": run_id + "-ev",
+                   "p": '{"company_legal_name":"X","jurisdiction":"GB"}'})
+        jid = s.execute(text("INSERT INTO jobs (kind, case_id, payload_json, status) VALUES "
+                             "('run_transition',:c, CAST(:p AS jsonb), 'running') RETURNING id"),
+                        {"c": case_id, "p": json.dumps({"run_id": run_id})}).scalar_one()
+        s.commit()
+    return jid
+
+
+def test_concurrent_decides_serialize_via_case_lock(session_factory, pipeline, policy, monkeypatch):
+    """Two REAL _decide_txn calls on ONE case, released simultaneously by a barrier placed
+    immediately before _load (which takes the Case FOR UPDATE). The real row lock serializes
+    them → sequences {1,2}, counter 2, no uniqueness error. Mutation: dropping with_for_update
+    (or max()+1 allocation) lets both read the same counter → duplicate seq → uq violation."""
+    jid_a = _seed_run_at_decide(session_factory, case_id="cc", run_id="ra", ev_seq=1)
+    jid_b = _seed_run_at_decide(session_factory, case_id="cc", run_id="rb", ev_seq=2)
+
+    barrier = threading.Barrier(2)
+    orig_load = pipeline._load
+
+    def barriered_load(session, run_id):
+        barrier.wait()  # both threads poised BEFORE either takes the Case FOR UPDATE
+        return orig_load(session, run_id)
+
+    monkeypatch.setattr(pipeline, "_load", barriered_load)
+
+    errors: list[Exception] = []
+
+    def decide(run_id, jid):
+        try:
+            pipeline._decide_txn(run_id, from_state=RunState.DECIDE, job_id=jid, bundle=policy)
+        except Exception as e:  # noqa: BLE001 — capture a uniqueness race for the assertion
+            errors.append(e)
+
+    ta = threading.Thread(target=decide, args=("ra", jid_a))
+    tb = threading.Thread(target=decide, args=("rb", jid_b))
+    ta.start()
+    tb.start()
+    ta.join(timeout=15)
+    tb.join(timeout=15)
+
+    assert errors == []  # no uq_decisions_case_decision_sequence violation
+    with session_factory() as s:
+        seqs = sorted(r.decision_sequence for r in s.execute(text(
+            "SELECT decision_sequence FROM decisions WHERE case_id='cc' AND manual=false")))
+        counter = s.execute(text("SELECT last_decision_sequence FROM cases WHERE id='cc'")).scalar_one()
+        cbs = sorted(r.decision_sequence for r in s.execute(text(
+            "SELECT decision_sequence FROM outbox WHERE case_id='cc' AND kind='decision_callback'")))
+    assert seqs == [1, 2] and counter == 2 and cbs == [1, 2]
 
 
 def test_manual_approve_allocates_no_sequence(client, session_factory, post_event, worker, sign):
-    import json
-
     post_event("case-man", "kyb.run_requested", {"company_legal_name": "A", "jurisdiction": "GB"})
     worker.run_until_idle()
+    # ReviewerManualApprovePayload requires reviewer_id; review_guard requires actor.id == reviewer_id.
     body = json.dumps({
         "event_type": "reviewer.manual_approve",
         "occurred_at": "2026-07-23T00:00:00Z",
         "actor": {"type": "reviewer", "id": "rev-1"},
-        "payload": {"note": "ok"},
+        "payload": {"reviewer_id": "rev-1", "note": "ok"},
     }).encode()
-    client.post("/v1/cases/case-man/events", content=body, headers=sign(body))
+    resp = client.post("/v1/cases/case-man/events", content=body, headers=sign(body))
+    assert resp.status_code == 200  # accepted (no 422)
 
     with session_factory() as s:
-        manual = s.execute(
-            text("SELECT decision_sequence, run_id FROM decisions WHERE case_id='case-man' AND manual=true")
-        ).one()
+        manual = s.execute(text("SELECT decision_sequence, run_id FROM decisions "
+                                "WHERE case_id='case-man' AND manual=true")).one()
         counter = s.execute(text("SELECT last_decision_sequence FROM cases WHERE id='case-man'")).scalar_one()
-    assert manual.decision_sequence is None and manual.run_id is None
+    assert manual.decision_sequence is None and manual.run_id is None  # manual allocates nothing
     assert counter == 1  # only the one automatic decide bumped it; manual approve did not
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `.venv/bin/pytest tests/integration/test_decision_sequence.py -v`
-Expected: FAIL — automatic decisions have `decision_sequence=None` (pipeline does not allocate yet), so `seqs == [None, None]`.
+Expected: FAIL — automatic decisions have `decision_sequence=None` (pipeline does not allocate yet), so the `seqs == [1, 2]` assertion fails.
 
 - [ ] **Step 3: Allocate in `_decide_txn`** — in `src/kyc_tool/orchestration/pipeline.py`, immediately before the `decision_row = DecisionRow(` construction (line 485), insert:
 
@@ -1344,12 +1525,12 @@ Extend `Outbox.__table_args__` (from Task 1) to include the callback binding:
     )
 ```
 
-- [ ] **Step 6: Run allocation tests + full suite**
+- [ ] **Step 6: Run allocation tests + the concurrency mutation witness (manual, no `./manage.sh test` yet)**
 
 Run: `.venv/bin/pytest tests/integration/test_decision_sequence.py -v` → PASS.
-Run: `./manage.sh test` → PASS (both legacy-backfilled and live-allocated rows satisfy the new constraints).
+**Concurrency mutation:** in `pipeline._load` remove `with_for_update=True` from `session.get(Case, run.case_id, with_for_update=True)` (or substitute a `max(decision_sequence)+1` allocation for the locked-counter increment); rerun `test_concurrent_decides_serialize_via_case_lock` → it must FAIL (both threads read the same counter → duplicate seq → `uq_decisions_case_decision_sequence` violation captured in `errors`, or `seqs == [1, 1]`). Restore.
 
-- [ ] **Step 7: Add the identity INSERT/UPDATE negatives** — append to `tests/integration/test_migrations.py`:
+- [ ] **Step 7: Add the full identity INSERT/UPDATE negative cross-product** — append to `tests/integration/test_migrations.py`:
 
 ```python
 def _mk_case(conn, c="c1"):
@@ -1391,34 +1572,58 @@ def test_013_two_runs_same_case_sequence_rejected(pg):
         _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
     with pytest.raises(IntegrityError), engine.begin() as conn:
         _mk_auto_decision(conn, d="dB", c="c1", r="rB", seq=1, ev_seq=2)  # same case+seq, other run
-    # multiple manual NULL-sequence decisions remain legal
-    with engine.begin() as conn:
+    with engine.begin() as conn:  # multiple manual NULL-sequence decisions remain legal
         for i in range(2):
-            conn.execute(
-                text(
-                    "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                    "buy_enablement, policy_shas, manual) VALUES (:d,'c1',NULL,'approve',0,'{}'::jsonb,"
-                    "'enabled','{}'::jsonb,true)"
-                ),
-                {"d": f"dm{i}"},
-            )
+            conn.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+                              "buy_enablement, policy_shas, manual) VALUES (:d,'c1',NULL,'approve',0,'{}'::jsonb,"
+                              "'enabled','{}'::jsonb,true)"), {"d": f"dm{i}"})
     engine.dispose()
 
 
+def test_013_two_decisions_same_run_rejected(pg):
+    """uq_decisions_run_id: at most one automatic decision per run."""
+    from sqlalchemy.exc import IntegrityError
+
+    url = _fresh_db(pg, "kyc_mig_013_duprun")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        _mk_case(conn)
+        _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
+    with pytest.raises(IntegrityError), engine.begin() as conn:  # same run_id, distinct seq/id
+        conn.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+                          "buy_enablement, policy_shas, manual, decision_sequence) VALUES "
+                          "('dB','c1','rA','approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false,2)"))
+    engine.dispose()
+
+
+# INSERT negatives on `decisions` — each names the constraint it targets.
 _DECISION_IDENTITY_BAD = {
-    # (manual/automatic CHECK) manual row carrying a run_id
-    "manual_with_run": "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-        "buy_enablement, policy_shas, manual) VALUES ('d','c1','rX','approve',0,'{}'::jsonb,'enabled',"
-        "'{}'::jsonb,true)",
-    # (manual/automatic CHECK) automatic row with non-positive sequence
-    "auto_zero_seq": "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-        "buy_enablement, policy_shas, manual, decision_sequence) VALUES ('d','c1','rX','approve',0,"
-        "'{}'::jsonb,'enabled','{}'::jsonb,false,0)",
+    "manual_with_run": ("ck_decisions_manual_sequence",  # manual row carrying a run_id
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual) VALUES ('d','c1','rX','approve',0,'{}'::jsonb,'enabled','{}'::jsonb,true)"),
+    "manual_with_seq": ("ck_decisions_manual_sequence",  # manual row carrying a decision_sequence
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual, decision_sequence) VALUES ('d','c1',NULL,'approve',0,'{}'::jsonb,'enabled',"
+        "'{}'::jsonb,true,1)"),
+    "auto_zero_seq": ("ck_decisions_manual_sequence",  # automatic row with zero sequence
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual, decision_sequence) VALUES ('d','c1','rX','approve',0,'{}'::jsonb,'enabled',"
+        "'{}'::jsonb,false,0)"),
+    "auto_negative_seq": ("ck_decisions_manual_sequence",  # automatic row with negative sequence
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual, decision_sequence) VALUES ('d','c1','rX','approve',0,'{}'::jsonb,'enabled',"
+        "'{}'::jsonb,false,-1)"),
+    "auto_null_run": ("ck_decisions_manual_sequence",  # automatic row with NULL run
+        "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+        "policy_shas, manual, decision_sequence) VALUES ('d','c1',NULL,'approve',0,'{}'::jsonb,'enabled',"
+        "'{}'::jsonb,false,1)"),
 }
 
 
 @pytest.mark.parametrize("case", list(_DECISION_IDENTITY_BAD))
-def test_013_decision_identity_negatives(pg, case):
+def test_013_decision_identity_insert_negatives(pg, case):
     from sqlalchemy.exc import IntegrityError
 
     url = _fresh_db(pg, f"kyc_mig_013_di_{case}")
@@ -1430,35 +1635,71 @@ def test_013_decision_identity_negatives(pg, case):
         conn.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
                           "actor_json, payload_json, event_sequence) VALUES ('rX-ev','c1','rX','h','x',"
                           "'{}'::jsonb,'{}'::jsonb,1)"))
-        conn.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES ('rX','c1','rX-ev','PUBLISH_DECISION')"))
+        conn.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                          "VALUES ('rX','c1','rX-ev','PUBLISH_DECISION')"))
     with pytest.raises(IntegrityError), engine.begin() as conn:
-        conn.execute(text(_DECISION_IDENTITY_BAD[case]))
+        conn.execute(text(_DECISION_IDENTITY_BAD[case][1]))
     engine.dispose()
 
 
+def test_013_decision_identity_update_negative(pg):
+    """UPDATE variant: a valid automatic decision cannot be UPDATEd into a zero sequence."""
+    from sqlalchemy.exc import IntegrityError
+
+    url = _fresh_db(pg, "kyc_mig_013_di_upd")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        _mk_case(conn)
+        _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text("UPDATE decisions SET decision_sequence=0 WHERE id='dA'"))
+    engine.dispose()
+
+
+# INSERT negatives on `outbox` — each names the constraint it targets.
 _OUTBOX_BINDING_BAD = {
-    # (kind/stream identity) callback with NULL run_id
-    "callback_null_run": "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
-        "VALUES ('decision_callback','c1',NULL,'decision',1,'pending')",
-    # (kind/stream identity) callback with non-positive sequence
-    "callback_zero_seq": "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
-        "VALUES ('decision_callback','c1','rA','decision',0,'pending')",
-    # (kind/stream identity) sequenced email
-    "email_sequenced": "INSERT INTO outbox (kind, case_id, ordering_stream, decision_sequence, status) "
-        "VALUES ('poc_email','c1','email',1,'pending')",
-    # (triple FK) callback claiming a (run,case,seq) with no matching decision
-    "callback_wrong_seq": "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
-        "VALUES ('decision_callback','c1','rA','decision',2,'pending')",
-    # (partial unique) two callbacks for the same run
-    "dup_callback": "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+    "callback_null_run": ("ck_outbox_kind_stream_identity",
+        "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+        "VALUES ('decision_callback','c1',NULL,'decision',1,'pending')"),
+    "callback_zero_seq": ("ck_outbox_kind_stream_identity",
+        "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+        "VALUES ('decision_callback','c1','rA','decision',0,'pending')"),
+    "callback_negative_seq": ("ck_outbox_kind_stream_identity",
+        "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+        "VALUES ('decision_callback','c1','rA','decision',-1,'pending')"),
+    "email_sequenced": ("ck_outbox_kind_stream_identity",  # email carrying a sequence
+        "INSERT INTO outbox (kind, case_id, ordering_stream, decision_sequence, status) "
+        "VALUES ('poc_email','c1','email',1,'pending')"),
+    "email_with_run": ("ck_outbox_kind_stream_identity",  # email carrying a run_id
+        "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, status) "
+        "VALUES ('poc_email','c1','rA','email','pending')"),
+    "callback_stream_swap": ("ck_outbox_kind_stream_identity",  # callback on the email stream
+        "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+        "VALUES ('decision_callback','c1','rA','email',1,'pending')"),
+    "email_stream_swap": ("ck_outbox_kind_stream_identity",  # email on the decision stream
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+        "VALUES ('poc_email','c1','decision','pending')"),
+    "callback_wrong_seq": ("fk_outbox_decision_triple",  # (rA,c1,2) — no matching decision
+        "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+        "VALUES ('decision_callback','c1','rA','decision',2,'pending')"),
+    "callback_wrong_case": ("fk_outbox_decision_triple",  # (rA,c2,1) — decision is (rA,c1,1)
+        "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+        "VALUES ('decision_callback','c2','rA','decision',1,'pending')"),
+    "callback_wrong_run": ("fk_outbox_decision_triple",  # (ghost,c1,1) — no such decision
+        "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+        "VALUES ('decision_callback','c1','ghost','decision',1,'pending')"),
+    "dup_callback": ("uq_outbox_decision_callback_run",  # two callbacks for the same run
+        "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
         "VALUES ('decision_callback','c1','rA','decision',1,'pending'); "
         "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
-        "VALUES ('decision_callback','c1','rA','decision',1,'pending')",
+        "VALUES ('decision_callback','c1','rA','decision',1,'pending')"),
 }
 
 
 @pytest.mark.parametrize("case", list(_OUTBOX_BINDING_BAD))
-def test_013_outbox_binding_negatives(pg, case):
+def test_013_outbox_binding_insert_negatives(pg, case):
     from sqlalchemy.exc import IntegrityError
 
     url = _fresh_db(pg, f"kyc_mig_013_ob_{case}")
@@ -1466,26 +1707,57 @@ def test_013_outbox_binding_negatives(pg, case):
     alembic_command.upgrade(cfg, "013")
     engine = create_engine(url)
     with engine.begin() as conn:
-        _mk_case(conn)
+        _mk_case(conn, "c1")
+        _mk_case(conn, "c2")  # for callback_wrong_case (a valid, different case)
         _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)  # (rA,c1,1) exists
     with pytest.raises(IntegrityError), engine.begin() as conn:
-        for stmt in _OUTBOX_BINDING_BAD[case].split("; "):
+        for stmt in _OUTBOX_BINDING_BAD[case][1].split("; "):
             conn.execute(text(stmt))
+    engine.dispose()
+
+
+def test_013_outbox_binding_update_negative(pg):
+    """UPDATE variant: a valid callback cannot be UPDATEd onto the wrong (run,case,seq) —
+    the triple FK fires on UPDATE too."""
+    from sqlalchemy.exc import IntegrityError
+
+    url = _fresh_db(pg, "kyc_mig_013_ob_upd")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        _mk_case(conn)
+        _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
+        conn.execute(text("INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
+                          "VALUES ('decision_callback','c1','rA','decision',1,'pending')"))
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text("UPDATE outbox SET decision_sequence=9 WHERE run_id='rA'"))  # (rA,c1,9) absent
     engine.dispose()
 ```
 
-- [ ] **Step 8: Run negatives + mutation check (manual)**
+- [ ] **Step 8: Run negatives + per-constraint INDEPENDENT mutation witnesses (manual, no commit)**
 
-Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_two_runs or 013_decision_identity or 013_outbox_binding" -v` → PASS.
-Mutation: drop **only** `op.create_unique_constraint("uq_decisions_case_decision_sequence", ...)` from the migration; rerun `test_013_two_runs_same_case_sequence_rejected` → confirm it FAILS (the duplicate is no longer caught — proving the outbox partial index is NOT what backstops it). Restore.
+Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_two_runs or 013_two_decisions or 013_decision_identity or 013_outbox_binding" -v` → PASS.
+Mutate each constraint away INDEPENDENTLY and confirm the NAMED test fails, then restore:
+- drop `uq_decisions_case_decision_sequence` → `test_013_two_runs_same_case_sequence_rejected` FAILS (proving the outbox partial index is NOT the backstop).
+- drop `uq_decisions_run_id` → `test_013_two_decisions_same_run_rejected` FAILS.
+- drop `ck_decisions_manual_sequence` → `test_013_decision_identity_insert_negatives[auto_zero_seq]` + `[manual_with_run]` FAIL.
+- drop `ck_outbox_kind_stream_identity` → `test_013_outbox_binding_insert_negatives[callback_null_run]` + `[callback_stream_swap]` + `[email_with_run]` FAIL.
+- drop `fk_outbox_decision_triple` → `test_013_outbox_binding_insert_negatives[callback_wrong_case]` + `test_013_outbox_binding_update_negative` FAIL.
+- drop `uq_outbox_decision_callback_run` → `test_013_outbox_binding_insert_negatives[dup_callback]` FAILS.
 
-- [ ] **Step 9: Full gate, re-pin, commit**
+- [ ] **Step 9: RED drift-guard step** — pipeline.py + tables.py changed:
+
+Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` → **FAIL** (RED step).
+
+- [ ] **Step 10: Re-pin the drift guard → GREEN** — re-pin one-liner → paste → rerun guard test → PASS.
+
+- [ ] **Step 11: Full gate + commit** (canonical close-out order)
 
 ```bash
 ./manage.sh test
-# re-pin EXPECTED_ENGINE_SOURCE_HASH, then:
-.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v
-.venv/bin/ruff check . && .venv/bin/lint-imports
+.venv/bin/ruff check .
+.venv/bin/lint-imports
 git add src/kyc_tool/orchestration/pipeline.py src/kyc_tool/db/tables.py \
         alembic/versions/013_outbox_stream_separation.py tests/integration/test_migrations.py \
         tests/integration/test_decision_sequence.py tests/policy_driven/test_engine_build_id_guard.py
@@ -1516,79 +1788,86 @@ Adds the local guard to `process_once` (suppress an older decision-stream callba
 - [ ] **Step 1: Write the failing guard tests** — create `tests/integration/test_outbox_supersession.py`:
 
 ```python
-"""PR 7b-core: best-effort local superseded guard + honest residual risk."""
+"""PR 7b-core: best-effort local superseded guard + A6 + honest residual risk."""
 
-import httpx
 import pytest
 from sqlalchemy import text
 
+from kyc_tool.outbox.publisher import enqueue_decision_callback
+
 pytestmark = pytest.mark.postgres
 
-from kyc_tool.outbox.publisher import enqueue_decision_callback  # noqa: E402
 
-
-def _seed_two_callbacks(session_factory):
-    """Case with decisions seq 1 and seq 2, each with a pending callback. seq 2's decision
-    is already locally-stamped published_at (the higher delivery landed)."""
+def _seed_decisions(session_factory, case_id, seqs):
+    """Seed case + one automatic decision (+ run at PUBLISH_DECISION) per seq in `seqs`;
+    published_at stays NULL. Run id = f'{case_id}-r{seq}', decision id = f'{case_id}-r{seq}-d'."""
     with session_factory() as s:
-        s.execute(text("INSERT INTO cases (id, last_decision_sequence) VALUES ('c1', 2)"))
-        for i, (r, seq) in enumerate([("r1", 1), ("r2", 2)], start=1):
-            s.execute(
-                text(
-                    "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                    "actor_json, payload_json, event_sequence) VALUES (:e,'c1',:k,'h','x','{}'::jsonb,"
-                    "'{}'::jsonb,:s)"
-                ),
-                {"e": r + "-ev", "k": r, "s": i},
-            )
-            s.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES (:r,'c1',:e,'PUBLISH_DECISION')"),
-                      {"r": r, "e": r + "-ev"})
-            pub = "now()" if seq == 2 else "NULL"
-            s.execute(
-                text(
-                    f"INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                    f"buy_enablement, policy_shas, manual, decision_sequence, published_at) "
-                    f"VALUES (:d,'c1',:r,'approve',10,'{{}}'::jsonb,'enabled','{{}}'::jsonb,false,:seq,{pub})"
-                ),
-                {"d": "d" + r, "r": r, "seq": seq},
-            )
-        enqueue_decision_callback(s, case_id="c1", run_id="r1", body={"case_id": "c1"}, decision_sequence=1)
+        s.execute(text("INSERT INTO cases (id, last_decision_sequence) VALUES (:c,:m) "
+                       "ON CONFLICT (id) DO UPDATE SET last_decision_sequence=:m"),
+                  {"c": case_id, "m": max(seqs)})
+        for seq in seqs:
+            r = f"{case_id}-r{seq}"
+            s.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                           "actor_json, payload_json, event_sequence) VALUES (:e,:c,:k,'h','x','{}'::jsonb,"
+                           "'{}'::jsonb,:s)"), {"e": r + "-ev", "c": case_id, "k": r, "s": seq})
+            s.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                           "VALUES (:r,:c,:e,'PUBLISH_DECISION')"), {"r": r, "c": case_id, "e": r + "-ev"})
+            s.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+                           "buy_enablement, policy_shas, manual, decision_sequence) VALUES (:d,:c,:r,'approve',"
+                           "10,'{}'::jsonb,'enabled','{}'::jsonb,false,:seq)"),
+                      {"d": r + "-d", "c": case_id, "r": r, "seq": seq})
         s.commit()
 
 
-def test_older_callback_superseded_when_higher_locally_stamped(session_factory, settings, publisher, callback_capture):
-    _seed_two_callbacks(session_factory)
-    assert publisher.process_pending() == 1  # the seq-1 row is claimed then superseded, never sent
-    assert callback_capture.requests == []  # ZERO HTTP for the superseded callback
+def _enqueue_cb(session_factory, case_id, seq):
+    r = f"{case_id}-r{seq}"
     with session_factory() as s:
-        row = s.execute(text("SELECT status, resolved_at, delivered_at FROM outbox WHERE case_id='c1'")).one()
-        run = s.execute(text("SELECT state FROM runs WHERE id='r1'")).scalar_one()
-    assert row.status == "superseded" and row.resolved_at is not None and row.delivered_at is None
-    assert run == "COMPLETE"
-
-
-def test_normal_order_all_delivered(session_factory, settings, publisher, callback_capture):
-    """No higher locally-stamped delivery → the guard does not fire; the callback is sent."""
-    with session_factory() as s:
-        s.execute(text("INSERT INTO cases (id, last_decision_sequence) VALUES ('c2', 1)"))
-        s.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                       "actor_json, payload_json, event_sequence) VALUES ('e','c2','k','h','x','{}'::jsonb,'{}'::jsonb,1)"))
-        s.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES ('r','c2','e','PUBLISH_DECISION')"))
-        s.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
-                       "policy_shas, manual, decision_sequence) VALUES ('d','c2','r','approve',10,'{}'::jsonb,"
-                       "'enabled','{}'::jsonb,false,1)"))
-        enqueue_decision_callback(s, case_id="c2", run_id="r", body={"case_id": "c2"}, decision_sequence=1)
+        enqueue_decision_callback(s, case_id=case_id, run_id=r, body={"run_id": r}, decision_sequence=seq)
         s.commit()
-    assert publisher.process_pending() == 1
+
+
+def test_higher_delivered_then_older_superseded_a6(session_factory, settings, publisher, callback_capture):
+    """A6 (F6) + local guard: the HIGHER callback (seq 2) is really SENT (>=1 HTTP) and stamps
+    published_at; the OLDER requeued callback (seq 1) is then claimed, SUPERSEDED with ZERO HTTP,
+    its run reaches COMPLETE, published_at stays NULL, and an audit_log row records BOTH the
+    superseded and the superseding sequence."""
+    _seed_decisions(session_factory, "c1", [1, 2])
+    _enqueue_cb(session_factory, "c1", 2)
+    assert publisher.process_pending() == 1        # seq 2 delivered (HTTP #1) + stamped
     assert len(callback_capture.requests) == 1
+    _enqueue_cb(session_factory, "c1", 1)          # the older requeued callback
+    assert publisher.process_pending() == 1        # seq 1 claimed → guard fires → superseded
+    assert len(callback_capture.requests) == 1     # ZERO additional HTTP for the lower callback
+
     with session_factory() as s:
-        assert s.execute(text("SELECT status FROM outbox WHERE case_id='c2'")).scalar_one() == "delivered"
+        row = s.execute(text("SELECT status, resolved_at, delivered_at FROM outbox WHERE run_id='c1-r1'")).one()
+        run = s.execute(text("SELECT state FROM runs WHERE id='c1-r1'")).scalar_one()
+        pub_at = s.execute(text("SELECT published_at FROM decisions WHERE id='c1-r1-d'")).scalar_one()
+        aud = s.execute(text("SELECT detail_json FROM audit_log WHERE action='outbox.superseded'")).fetchall()
+    assert row.status == "superseded" and row.resolved_at is not None and row.delivered_at is None
+    assert run == "COMPLETE" and pub_at is None
+    assert aud and aud[0].detail_json["superseded_sequence"] == 1
+    assert aud[0].detail_json["superseding_sequence"] == 2  # both sequences recorded (durable audit)
+
+
+def test_normal_1_2_3_all_delivered_in_order(session_factory, settings, publisher, callback_capture):
+    """seq 1→2→3 each delivered before the next → none superseded (the guard suppresses only
+    a still-pending OLDER callback once a higher delivery has stamped)."""
+    _seed_decisions(session_factory, "cn", [1, 2, 3])
+    for seq in (1, 2, 3):
+        _enqueue_cb(session_factory, "cn", seq)
+    assert publisher.process_pending() == 3
+    assert len(callback_capture.requests) == 3
+    with session_factory() as s:
+        statuses = [r.status for r in s.execute(text(
+            "SELECT status FROM outbox WHERE case_id='cn' ORDER BY decision_sequence"))]
+    assert statuses == ["delivered", "delivered", "delivered"]
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `.venv/bin/pytest tests/integration/test_outbox_supersession.py::test_older_callback_superseded_when_higher_locally_stamped -v`
-Expected: FAIL — the seq-1 callback is delivered (an HTTP request is captured) because the guard does not exist; `status == "delivered"`, not `superseded`.
+Run: `.venv/bin/pytest tests/integration/test_outbox_supersession.py::test_higher_delivered_then_older_superseded_a6 -v`
+Expected: FAIL — with no guard, seq 1 is delivered too (2 captured HTTP requests, `status == "delivered"`).
 
 - [ ] **Step 3: Add the guard + `_record_superseded`** — in `src/kyc_tool/outbox/publisher.py`, replace the `# === Task 5 insertion point: best-effort local superseded guard ===` line in `process_once` with:
 
@@ -1613,13 +1892,14 @@ Expected: FAIL — the seq-1 callback is delivered (an HTTP request is captured)
                 return True
 ```
 
-Add `_record_superseded` immediately after `_record_failure`:
+Add `from kyc_tool.db.audit import audit` to the imports (near line 18 `from kyc_tool import security`), then add `_record_superseded` immediately after `_record_failure`:
 
 ```python
     def _record_superseded(self, row, token) -> None:
         """A higher locally-stamped delivery proved this callback obsolete: terminally
         suppress it (zero sends), fenced like every other terminal. published_at stays NULL
-        (never sent); the run still reaches COMPLETE via the legal PUBLISH_DECISION edge."""
+        (never sent); the run still reaches COMPLETE via the legal PUBLISH_DECISION edge. The
+        durable audit records BOTH the superseded and the superseding sequence (A6 evidence)."""
         now = datetime.now(UTC)
         with uow(self.session_factory) as session:
             applied = session.execute(
@@ -1633,6 +1913,13 @@ Add `_record_superseded` immediately after `_record_failure`:
             if applied is None:
                 log.warning("outbox_stale_claim_completion", outbox_id=row.id, attempted="superseded")
                 return
+            superseding = session.execute(
+                text(
+                    "SELECT min(decision_sequence) FROM decisions WHERE case_id=:c "
+                    "AND decision_sequence > :seq AND published_at IS NOT NULL"
+                ),
+                {"c": row.case_id, "seq": row.decision_sequence},
+            ).scalar()
             if row.run_id:
                 session.execute(
                     text(
@@ -1641,9 +1928,14 @@ Add `_record_superseded` immediately after `_record_failure`:
                     ),
                     {"run_id": row.run_id, "now": now},
                 )
+            audit(
+                session, "outbox.superseded", case_id=row.case_id,
+                outbox_id=row.id, superseded_sequence=row.decision_sequence,
+                superseding_sequence=superseding,
+            )
         log.info(
             "outbox_superseded", outbox_id=row.id, case_id=row.case_id,
-            decision_sequence=row.decision_sequence,
+            superseded_sequence=row.decision_sequence, superseding_sequence=superseding,
         )
 ```
 
@@ -1686,37 +1978,24 @@ In `src/kyc_tool/api/routes_metrics.py`, keep the `outbox_by_status` grouping (l
 Append to `tests/integration/test_outbox_supersession.py`:
 
 ```python
-def test_residual_risk_send_before_stamp_reverts_expected(session_factory, settings):
-    """Honest boundary (§5): seq 2 sent (HTTP 2xx) but its _record_delivered is NOT
-    committed (fault injected), so decisions.published_at for seq 2 is still NULL. On
-    restart the seq-1 callback's guard predicate is false and seq 1 IS sent — a revert
-    that is EXPECTED pre-activation (7b-activation turns this into a high-water no-op)."""
-    from kyc_tool.outbox.publisher import OutboxPublisher
-
-    with session_factory() as s:
-        s.execute(text("INSERT INTO cases (id, last_decision_sequence) VALUES ('c3', 2)"))
-        for i, (r, seq) in enumerate([("r1", 1), ("r2", 2)], start=1):
-            s.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                           "actor_json, payload_json, event_sequence) VALUES (:e,'c3',:k,'h','x','{}'::jsonb,"
-                           "'{}'::jsonb,:s)"), {"e": r + "-ev", "k": r, "s": i})
-            s.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES (:r,'c3',:e,'PUBLISH_DECISION')"),
-                      {"r": r, "e": r + "-ev"})
-            # seq 2 NOT stamped (published_at NULL) — simulates send-before-stamp
-            s.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                           "buy_enablement, policy_shas, manual, decision_sequence) VALUES (:d,'c3',:r,'approve',"
-                           "10,'{}'::jsonb,'enabled','{}'::jsonb,false,:seq)"), {"d": "d" + r, "r": r, "seq": seq})
-        enqueue_decision_callback(s, case_id="c3", run_id="r1", body={"case_id": "c3"}, decision_sequence=1)
+def test_residual_risk_send_before_stamp_reverts_expected(session_factory, settings, publisher, callback_capture):
+    """Honest boundary (§5): seq 2 is really SENT (HTTP #1) and stamped, but then its
+    published_at is made NOT locally visible (published_at→NULL) — the exact observable of
+    send-before-stamp (the stamp txn not committed here) or a cross-replica send. The seq-1
+    guard predicate is then false and seq 1 IS sent (HTTP #2) — the revert that stays EXPECTED
+    until 7b-activation turns the same replay into a platform high-water no-op."""
+    _seed_decisions(session_factory, "c3", [1, 2])
+    _enqueue_cb(session_factory, "c3", 2)
+    assert publisher.process_pending() == 1              # seq 2 SENT (HTTP #1) + stamped
+    assert len(callback_capture.requests) == 1
+    with session_factory() as s:                          # inject: the higher stamp is not locally visible
+        s.execute(text("UPDATE decisions SET published_at=NULL WHERE id='c3-r2-d'"))
         s.commit()
-
-    sent = []
-    pub = OutboxPublisher(
-        session_factory, settings,
-        http_client=httpx.Client(transport=httpx.MockTransport(lambda r: sent.append(1) or httpx.Response(200))),
-    )
-    assert pub.process_pending() == 1
-    assert sent == [1]  # seq 1 WAS sent — the documented, expected pre-activation revert
+    _enqueue_cb(session_factory, "c3", 1)
+    assert publisher.process_pending() == 1              # seq 1 guard predicate false → SENT
+    assert len(callback_capture.requests) == 2           # HTTP #2 — the documented, expected revert
     with session_factory() as s:
-        assert s.execute(text("SELECT status FROM outbox WHERE case_id='c3'")).scalar_one() == "delivered"
+        assert s.execute(text("SELECT status FROM outbox WHERE run_id='c3-r1'")).scalar_one() == "delivered"
 
 
 def test_retention_prunes_superseded(session_factory):
@@ -1746,14 +2025,19 @@ def test_ui_requeue_409s_superseded(client, session_factory):
     assert resp.status_code == 409  # superseded is not 'dead' → requeue_outbox rejects it
 
 
-def test_a6_contract_higher_sent_lower_zero_http(session_factory, settings, publisher, callback_capture):
-    """A6 amendment (F6): the eligible (higher) callback attempts >=1 HTTP; the superseded
-    (lower) callback gets ZERO HTTP and the governed superseded terminal + audit."""
-    _seed_two_callbacks(session_factory)  # seq 2 already stamped; only seq 1 is enqueued
-    publisher.process_pending()
-    assert callback_capture.requests == []  # the lower callback: zero HTTP
+def test_metrics_reports_superseded_out_of_the_alert_set(client, session_factory):
+    """superseded shows in outbox_by_status but is EXCLUDED from the pending/dead alert set."""
     with session_factory() as s:
-        assert s.execute(text("SELECT status FROM outbox WHERE case_id='c1'")).scalar_one() == "superseded"
+        s.execute(text("INSERT INTO cases (id) VALUES ('cm')"))
+        s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status) VALUES ('poc_email','cm','email','pending')"))
+        s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status) VALUES ('poc_email','cm','email','dead')"))
+        s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, resolved_at) "
+                       "VALUES ('poc_email','cm','email','superseded', now())"))
+        s.commit()
+    body = client.get("/v1/metrics").json()
+    assert {"pending", "dead", "superseded"} <= set(body["outbox_by_status"])
+    assert "superseded" not in body["outbox_alerting"]  # governed terminal, not an alert
+    assert set(body["outbox_alerting"]) <= {"pending", "dead"}
 ```
 
 - [ ] **Step 6: Amend AUDIT:A6 + docstring** — in `AUDIT_FINDINGS.md`, replace the A6 **Resolution** (lines 65-66) with:
@@ -1777,14 +2061,16 @@ In `src/kyc_tool/outbox/publisher.py`, insert these lines into the existing modu
     platform-authoritative (send-before-stamp / cross-replica reverts remain for 7b-activation).
 ```
 
-- [ ] **Step 7: Run + full gate + re-pin + commit**
+- [ ] **Step 7: Run all supersession tests, then RED guard → re-pin → full gate → commit**
 
-Run: `.venv/bin/pytest tests/integration/test_outbox_supersession.py -v` → PASS.
 ```bash
+.venv/bin/pytest tests/integration/test_outbox_supersession.py -v     # all pass
+.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v # RED (src changed) — expected
+# re-pin EXPECTED_ENGINE_SOURCE_HASH (one-liner), then:
+.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v # GREEN
 ./manage.sh test
-# re-pin EXPECTED_ENGINE_SOURCE_HASH, then:
-.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v
-.venv/bin/ruff check . && .venv/bin/lint-imports
+.venv/bin/ruff check .
+.venv/bin/lint-imports
 git add src/kyc_tool/outbox/publisher.py src/kyc_tool/workers/retention.py \
         src/kyc_tool/api/routes_metrics.py AUDIT_FINDINGS.md \
         tests/integration/test_outbox_supersession.py tests/policy_driven/test_engine_build_id_guard.py
@@ -1812,6 +2098,8 @@ Hardens `013`'s `downgrade()`: the **first** statement is `LOCK TABLE outbox IN 
 
 ```python
 def test_013_downgrade_refuses_with_superseded_row(pg):
+    """Separate real refusal test: a seeded superseded row makes the real alembic downgrade
+    refuse byte-stably (RuntimeError with the stable message)."""
     url = _fresh_db(pg, "kyc_mig_013_down_refuse")
     cfg = _config(url)
     alembic_command.upgrade(cfg, "013")
@@ -1821,43 +2109,73 @@ def test_013_downgrade_refuses_with_superseded_row(pg):
         conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, resolved_at) "
                           "VALUES ('poc_email','c1','email','superseded', now())"))
     engine.dispose()
-    with pytest.raises(Exception) as exc:  # noqa: PT011 — alembic wraps the RuntimeError
+    with pytest.raises(RuntimeError) as exc:  # migration raises RuntimeError; alembic propagates it
         alembic_command.downgrade(cfg, "012")
     assert "superseded outbox row" in str(exc.value)
 
 
-def test_013_downgrade_race_lock_blocks_concurrent_supersede(pg):
-    """Two connections: hold the downgrade txn AFTER its ACCESS EXCLUSIVE lock; a concurrent
-    pending→superseded transition must BLOCK on the lock, so it cannot slip between the
-    preflight and the DDL. Mutation-removing the LOCK reproduces the stranded-status race."""
-    url = _fresh_db(pg, "kyc_mig_013_down_race")
+def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
+    """Drive the REAL migration downgrade() in a thread; pause it with a global
+    after_cursor_execute barrier fired at its superseded preflight — which runs AFTER the
+    production LOCK TABLE ... ACCESS EXCLUSIVE. A concurrent pending→superseded UPDATE must
+    then FAIL with a lock timeout (SQLSTATE 55P03): it cannot slip between the preflight and
+    the DDL. MUTATION: moving/removing the LOCK (so the preflight holds only ACCESS SHARE)
+    lets that UPDATE commit — the pytest.raises(OperationalError) then fails."""
+    import threading
+
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+    from sqlalchemy.exc import OperationalError
+
+    url = _fresh_db(pg, "kyc_mig_013_down_lock")
     cfg = _config(url)
     alembic_command.upgrade(cfg, "013")
-    engineA = create_engine(url)
-    engineB = create_engine(url)
-    connA = engineA.connect()
-    txA = connA.begin()
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
+        conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, next_attempt_at) "
+                          "VALUES ('poc_email','c1','email','pending', now())"))
+
+    at_preflight = threading.Event()
+    release = threading.Event()
+    _PREFLIGHT = "from outbox where status='superseded'"  # the downgrade's count(*) preflight
+
+    def _barrier(conn, cursor, statement, params, context, executemany):
+        if _PREFLIGHT in statement.lower():
+            at_preflight.set()          # downgrade holds ACCESS EXCLUSIVE here
+            release.wait(timeout=15)    # hold the downgrade txn BETWEEN preflight and DDL
+
+    event.listen(Engine, "after_cursor_execute", _barrier)
+    down_err: list[Exception] = []
+
+    def run_downgrade():
+        try:
+            alembic_command.downgrade(cfg, "012")
+        except Exception as e:  # noqa: BLE001
+            down_err.append(e)
+
+    t = threading.Thread(target=run_downgrade)
+    t.start()
     try:
-        connA.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
-        connA.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, next_attempt_at) "
-                           "VALUES ('poc_email','c1','email','pending', now())"))
-        connA.execute(text("LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE"))  # emulate downgrade's first stmt
-        with engineB.connect() as connB:
-            connB.execute(text("SET lock_timeout = '2s'"))
-            with pytest.raises(Exception):  # blocked by A's ACCESS EXCLUSIVE → lock timeout
-                connB.execute(text("UPDATE outbox SET status='superseded', resolved_at=now(), "
-                                   "next_attempt_at=next_attempt_at WHERE case_id='c1'"))
+        assert at_preflight.wait(timeout=15)  # paused right after the preflight
+        with create_engine(url).connect() as connB:
+            connB.execute(text("SET lock_timeout='2s'"))
+            with pytest.raises(OperationalError) as exc:  # blocked by ACCESS EXCLUSIVE
+                connB.execute(text("UPDATE outbox SET status='superseded', resolved_at=now() "
+                                   "WHERE case_id='c1'"))
+            assert exc.value.orig.sqlstate == "55P03"  # lock_not_available
     finally:
-        txA.rollback()
-        connA.close()
-    engineA.dispose()
-    engineB.dispose()
+        release.set()
+        t.join(timeout=15)
+        event.remove(Engine, "after_cursor_execute", _barrier)
+    assert down_err == []  # the no-superseded downgrade completed cleanly after release
+    engine.dispose()
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_downgrade_refuses_with_superseded or 013_downgrade_race" -v`
-Expected: `test_013_downgrade_refuses_with_superseded_row` FAILS — the current (Task-1/4) downgrade drops columns without any preflight, so it does NOT raise and the `"superseded outbox row"` assertion never runs. (`test_013_downgrade_race_lock_blocks_concurrent_supersede` asserts the `ACCESS EXCLUSIVE` lock semantics directly and passes now; it is the mutation anchor that must fail if the LOCK is later removed/moved.)
+Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_downgrade_refuses_with_superseded or 013_downgrade_lock" -v`
+Expected: `test_013_downgrade_refuses_with_superseded_row` FAILS — the current (Task-1/4) downgrade has no preflight, so it does NOT raise. `test_013_downgrade_lock_prevents_concurrent_supersede` also FAILS — with no `LOCK TABLE` yet, the preflight holds only ACCESS SHARE, the concurrent UPDATE commits (no 55P03), and `pytest.raises(OperationalError)` is unsatisfied.
 
 - [ ] **Step 3: Harden the downgrade** — in `alembic/versions/013_outbox_stream_separation.py`, replace the entire `downgrade()` function (the Task-1 body, into which Task 4 inserted the identity-constraint drops) with this complete final body — the only change is the new `LOCK TABLE` + `superseded` preflight prepended before the (unchanged) drops:
 
@@ -1903,15 +2221,16 @@ def downgrade() -> None:
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_downgrade or 013_up_down_up" -v` → PASS (refuse test raises the stable message; the up/down/up clean test still passes on a no-superseded DB).
+Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_downgrade or 013_up_down_up" -v` → PASS (refuse test raises the stable `RuntimeError`; the lock test's concurrent UPDATE now hits 55P03; up/down/up clean still passes on a no-superseded DB).
 
-- [ ] **Step 5: Mutation check (manual)** — move the `op.execute("LOCK TABLE ...")` to AFTER the `EXISTS` preflight (or delete it); the race test's intent (a concurrent supersede cannot commit before the DDL) is then violable — document by asserting in review that removing/moving the LOCK reproduces the stranded-status window. Restore.
+- [ ] **Step 5: Mutation check (manual, no commit)** — move `op.execute("LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE")` to AFTER the `EXISTS` preflight (or delete it); rerun `.venv/bin/pytest tests/integration/test_migrations.py::test_013_downgrade_lock_prevents_concurrent_supersede -v` → it must FAIL (the preflight now holds only ACCESS SHARE, so the concurrent `pending→superseded` UPDATE commits — no 55P03 — and `pytest.raises(OperationalError)` is unsatisfied). Restore.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Commit** (migration-only — no drift re-pin; `./manage.sh test` runs directly)
 
 ```bash
 ./manage.sh test
-.venv/bin/ruff check . && .venv/bin/lint-imports
+.venv/bin/ruff check .
+.venv/bin/lint-imports
 git add alembic/versions/013_outbox_stream_separation.py tests/integration/test_migrations.py
 git commit -m "feat(013): race-safe downgrade (ACCESS EXCLUSIVE lock + superseded preflight)
 
@@ -1937,23 +2256,36 @@ Ships the pre-window diagnostic: raw parameterized SQL that imports **no** 013-o
 - [ ] **Step 1: Write the failing tests** — create `tests/integration/test_verify_pr7b_core_backfill.py`:
 
 ```python
-"""PR 7b-core: schema-012 pre-window backfill diagnostic + retention-race DB-lock half."""
+"""PR 7b-core: schema-012 pre-window backfill diagnostic — REAL CLI entry point (subprocess),
+the shared parity matrix (CLI + 013 both refuse), and the retention-race DB-lock half."""
+
+import inspect
+import os
+import subprocess
+import sys
+import threading
+import time
 
 import pytest
-from sqlalchemy import create_engine, text
+from alembic import command
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import Engine
+
+from kyc_tool.db.session import make_engine, make_session_factory
+from kyc_tool.ops import verify_pr7b_core_backfill as diag
+from kyc_tool.workers.retention import prune
+from tests.integration.test_migrations import _PARITY_BAD_SEEDS, _config, _fresh_db, _seed_parity_bad
 
 pytestmark = pytest.mark.postgres
-
-from kyc_tool.db.session import make_engine, make_session_factory  # noqa: E402
-from kyc_tool.ops import verify_pr7b_core_backfill as diag  # noqa: E402
-from tests.integration.test_migrations import _config, _fresh_db  # noqa: E402
 
 
 def _sf(url):
     return make_session_factory(make_engine(url))
 
 
-def _seed_healthy(engine):
+def _seed_healthy(engine, *, delivered_at="now()"):
+    """A valid decision + its delivered callback (delivered_at real). Pass an old delivered_at
+    to make retention prune the callback."""
     with engine.begin() as conn:
         conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
         conn.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
@@ -1961,78 +2293,122 @@ def _seed_healthy(engine):
         conn.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES ('r','c1','ev','PUBLISH_DECISION')"))
         conn.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
                           "policy_shas, manual) VALUES ('d','c1','r','approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false)"))
-        conn.execute(text("INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
-                          "VALUES ('decision_callback','c1','r','{}'::jsonb,'delivered')"))
+        conn.execute(text(f"INSERT INTO outbox (kind, case_id, run_id, payload_json, status, delivered_at) "
+                          f"VALUES ('decision_callback','c1','r','{{}}'::jsonb,'delivered',{delivered_at})"))
 
 
-def test_diagnostic_green_on_healthy_012(pg):
+def _run_cli(url):
+    """Invoke the REAL entry point `python -m kyc_tool.ops.verify_pr7b_core_backfill`."""
+    return subprocess.run(
+        [sys.executable, "-m", "kyc_tool.ops.verify_pr7b_core_backfill"],
+        env={**os.environ, "KYC_DATABASE_URL": url},
+        capture_output=True, text=True, timeout=60,
+    )
+
+
+def test_cli_green_on_healthy_012_subprocess(pg):
     url = _fresh_db(pg, "kyc_diag_healthy")
-    alembic = _config(url)
-    from alembic import command
-    command.upgrade(alembic, "012")  # runs on SCHEMA 012 — no 013 columns
+    command.upgrade(_config(url), "012")  # SCHEMA 012 — no 013 columns
     engine = create_engine(url)
     _seed_healthy(engine)
     engine.dispose()
-    code, ids = diag.verify_backfill(_sf(url))
-    assert code == 0 and ids == []
+    proc = _run_cli(url)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-def test_diagnostic_blocked_no_backup_sentinel(pg, capsys):
-    """Missing mapping with no restorable backup: real CLI exits nonzero with the EXACT
-    BLOCKED_NO_AUTHORITATIVE_MAPPING sentinel + ids, before maintenance, no writes, and no
-    014 module is invoked (7b-activation is downstream)."""
+def test_cli_blocked_no_backup_sentinel_subprocess(pg):
+    """Missing mapping with no restorable backup: the REAL CLI exits nonzero with the EXACT
+    BLOCKED_NO_AUTHORITATIVE_MAPPING sentinel + decision/run ids, makes NO writes, and no 014
+    module is referenced (7b-activation is downstream)."""
     url = _fresh_db(pg, "kyc_diag_missing")
-    from alembic import command
     command.upgrade(_config(url), "012")
     engine = create_engine(url)
-    with engine.begin() as conn:
-        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
-        conn.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                          "actor_json, payload_json, event_sequence) VALUES ('ev','c1','r','h','x','{}'::jsonb,'{}'::jsonb,1)"))
-        conn.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) VALUES ('r','c1','ev','PUBLISH_DECISION')"))
-        conn.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
-                          "policy_shas, manual) VALUES ('d','c1','r','approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false)"))
-        # no callback → missing mapping
+    _seed_parity_bad(engine, "missing_callback")  # decision 'd' / run 'r', no callback
     before = engine.connect().execute(text("SELECT count(*) FROM outbox")).scalar_one()
-    code, ids = diag.verify_backfill(_sf(url))
-    out = capsys.readouterr().out
-    assert code != 0
-    assert "BLOCKED_NO_AUTHORITATIVE_MAPPING" in out  # exact sentinel, one token, no whitespace
-    assert "d" in ids and "r" in " ".join(ids)
+
+    proc = _run_cli(url)
+    assert proc.returncode != 0
+    assert "BLOCKED_NO_AUTHORITATIVE_MAPPING" in proc.stdout  # exact sentinel (one token)
+    assert "'d'" in proc.stdout and "'r'" in proc.stdout       # actionable ids
     after = engine.connect().execute(text("SELECT count(*) FROM outbox")).scalar_one()
-    assert before == after  # no writes
+    assert before == after                                     # no writes
+    assert "014" not in inspect.getsource(diag)                # no 014 substitute is invoked
     engine.dispose()
 
 
-def test_diagnostic_share_lock_waits_on_uncommitted_delete(pg):
-    """Retention-race DB-lock half (the automatable proof): connection A performs the real
-    retention callback DELETE and does NOT commit; the CLI's SHARE lock must WAIT on A's
-    ROW EXCLUSIVE. After A commits, the mapping is missing → nonzero + ids. Rolling A back
-    → green. Mutation removing the LOCK lets the CLI snapshot before A commits and report
-    green — it must fail."""
-    from kyc_tool.workers.retention import prune  # the real retention seam
-
-    url = _fresh_db(pg, "kyc_diag_race")
-    from alembic import command
+@pytest.mark.parametrize("name", list(_PARITY_BAD_SEEDS))
+def test_cli_and_013_both_refuse_on_parity_state(pg, name):
+    """The CLI and migration 013 share ONE parity matrix — both must refuse every invalid
+    legacy state, the migration BEFORE any DDL (rolled back → no claim_token column)."""
+    url = _fresh_db(pg, f"kyc_diag_parity_{name}")
     command.upgrade(_config(url), "012")
     engine = create_engine(url)
-    _seed_healthy(engine)  # a delivered callback + its decision
-    # A: delete the delivered callback via a hand-run DELETE identical to retention's, held open
-    engineA = create_engine(url)
-    connA = engineA.connect()
-    txA = connA.begin()
-    connA.execute(text("DELETE FROM outbox WHERE status='delivered'"))  # ROW EXCLUSIVE, uncommitted
-    # B: the CLI must block on its LOCK TABLE outbox IN SHARE MODE (SHARE conflicts ROW EXCLUSIVE)
-    connB = create_engine(url).connect()
-    connB.execute(text("SET lock_timeout = '2s'"))
-    with pytest.raises(Exception):  # blocked → lock timeout while A holds
-        connB.execute(text("LOCK TABLE outbox IN SHARE MODE"))
-    connB.close()
-    txA.commit()  # now the callback is really gone
-    code, ids = diag.verify_backfill(_sf(url))
-    assert code != 0 and "d" in ids  # missing mapping surfaced
-    connA.close()
-    engineA.dispose()
+    _seed_parity_bad(engine, name)
+
+    code, ids = diag.verify_backfill(_sf(url))  # the real CLI core (SHARE-locked, no writes)
+    assert code != 0 and ids
+
+    with pytest.raises(RuntimeError):           # the real 013 upgrade refuses
+        command.upgrade(_config(url), "013")
+    with engine.connect() as conn:
+        cols = {r.column_name for r in conn.execute(text(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='outbox'"))}
+    assert "claim_token" not in cols            # refusal happened before the column adds
+    engine.dispose()
+
+
+def test_cli_share_lock_blocks_on_uncommitted_retention_delete(pg):
+    """Retention-race DB-lock half (the automatable proof): the REAL retention `prune` runs in
+    a thread, paused by a global after_cursor_execute barrier fired AFTER its outbox DELETE but
+    BEFORE commit (holding ROW EXCLUSIVE). The CLI subprocess's `LOCK TABLE outbox IN SHARE
+    MODE` must BLOCK while prune holds. On commit the callback is truly gone → CLI nonzero + ids.
+    MUTATION removing the SHARE lock lets the CLI snapshot before commit → it would report green.
+    (The external zero-retention-process attestation stays a runbook TODO(integration).)"""
+    url = _fresh_db(pg, "kyc_diag_race")
+    command.upgrade(_config(url), "012")
+    engine = create_engine(url)
+    _seed_healthy(engine, delivered_at="now() - interval '3000 days'")  # old → prune deletes it
+
+    at_delete = threading.Event()
+    release = threading.Event()
+
+    def _barrier(conn, cursor, statement, params, context, executemany):
+        if "delete from outbox where status='delivered'" in statement.lower():
+            at_delete.set()
+            release.wait(timeout=30)  # hold prune's txn (ROW EXCLUSIVE) open, uncommitted
+
+    event.listen(Engine, "after_cursor_execute", _barrier)
+    prune_err: list[Exception] = []
+
+    def run_prune():
+        try:
+            prune(_sf(url), 7 * 365)  # the REAL retention seam
+        except Exception as e:  # noqa: BLE001
+            prune_err.append(e)
+
+    t = threading.Thread(target=run_prune)
+    t.start()
+    proc = None
+    try:
+        assert at_delete.wait(timeout=15)  # prune deleted the callback, holding ROW EXCLUSIVE
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "kyc_tool.ops.verify_pr7b_core_backfill"],
+            env={**os.environ, "KYC_DATABASE_URL": url},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        time.sleep(3)
+        assert proc.poll() is None  # STILL BLOCKED on the SHARE lock while prune holds
+        release.set()
+        t.join(timeout=15)
+        out, _ = proc.communicate(timeout=30)
+        assert proc.returncode != 0 and "'d'" in out  # missing mapping surfaced after commit
+    finally:
+        release.set()
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+        t.join(timeout=15)
+        event.remove(Engine, "after_cursor_execute", _barrier)
+    assert prune_err == []
     engine.dispose()
 ```
 
@@ -2041,22 +2417,21 @@ def test_diagnostic_share_lock_waits_on_uncommitted_delete(pg):
 Run: `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py -v`
 Expected: FAIL — `ModuleNotFoundError: kyc_tool.ops.verify_pr7b_core_backfill`.
 
-- [ ] **Step 3: Write the CLI** — create `src/kyc_tool/ops/verify_pr7b_core_backfill.py`:
+- [ ] **Step 3: Write the CLI (shared parity matrix)** — create `src/kyc_tool/ops/verify_pr7b_core_backfill.py`:
 
 ```python
-"""Pre-window backfill diagnostic (PR 7b-core §Rollout step 0). Run BEFORE any outage,
-with the retention schedule suspended AND every active retention task terminated
-(orchestrator-attested zero-running) — see docs/RUNBOOK.md. Schema-012-compatible: raw
-parameterized SQL, imports NO 013-only ORM columns.
+"""Pre-window backfill diagnostic (PR 7b-core §Rollout step 0). Run BEFORE any outage, with
+the retention schedule suspended AND every active retention task terminated (orchestrator-
+attested zero-running) — see docs/RUNBOOK.md. Schema-012-compatible: it runs the SAME shared
+parity matrix as migration 013 (kyc_tool.ops.backfill_parity), imports NO 013-only ORM.
 
-It begins its transaction with `LOCK TABLE outbox IN SHARE MODE` BEFORE any SELECT
-(defense in depth: the SHARE lock waits for any in-flight DELETE's ROW EXCLUSIVE to
-resolve and blocks a new outbox delete/write from invalidating the snapshot until the
-diagnostic commits), then runs the exact read-only 013 preflights at READ COMMITTED.
-On any violation it prints actionable decision/run/outbox ids and exits nonzero; a
-missing mapping additionally prints the exact BLOCKED_NO_AUTHORITATIVE_MAPPING sentinel.
-Recovery is restore-from-authoritative-backup or remain on 012 — 014 is downstream and
-cannot repair this. It NEVER writes.
+It begins its transaction with `LOCK TABLE outbox IN SHARE MODE` BEFORE any SELECT (defense in
+depth: the SHARE lock waits for any in-flight DELETE's ROW EXCLUSIVE to resolve and blocks a
+new outbox delete/write from invalidating the snapshot until the diagnostic commits), then runs
+the read-only parity checks at READ COMMITTED. On any violation it prints actionable decision/
+run/outbox ids and exits nonzero; a missing mapping additionally prints the exact
+BLOCKED_NO_AUTHORITATIVE_MAPPING sentinel. Recovery is restore-from-authoritative-backup or
+remain on 012 — 014 is downstream and cannot repair this. It NEVER writes.
 
     python -m kyc_tool.ops.verify_pr7b_core_backfill
 """
@@ -2067,56 +2442,35 @@ from sqlalchemy import text
 
 from kyc_tool.config import get_settings
 from kyc_tool.db.session import make_engine, make_session_factory
-
-_BLOCKED = "BLOCKED_NO_AUTHORITATIVE_MAPPING"
+from kyc_tool.ops.backfill_parity import BLOCKED_SENTINEL, MISSING_CALLBACK, run_parity
 
 
 def verify_backfill(session_factory) -> tuple[int, list[str]]:
-    """Return (exit_code, offending_ids). Takes SHARE lock first; no writes."""
-    offenders: list[str] = []
+    """Return (exit_code, offending_ids). Takes the SHARE lock first, runs the shared parity
+    matrix, and NEVER writes (rolls back before returning)."""
     with session_factory() as s:
         s.execute(text("LOCK TABLE outbox IN SHARE MODE"))  # BEFORE any SELECT
-        missing = s.execute(
-            text(
-                "SELECT d.id AS decision_id, d.run_id FROM decisions d WHERE d.manual = false "
-                "AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.kind='decision_callback' "
-                "AND o.run_id = d.run_id)"
-            )
-        ).fetchall()
-        orphan = s.execute(
-            text(
-                "SELECT o.id, o.run_id FROM outbox o WHERE o.kind='decision_callback' "
-                "AND NOT EXISTS (SELECT 1 FROM decisions d WHERE d.manual=false AND d.run_id = o.run_id)"
-            )
-        ).fetchall()
-        dup = s.execute(
-            text(
-                "SELECT run_id, count(*) AS c FROM outbox WHERE kind='decision_callback' "
-                "GROUP BY run_id HAVING count(*) > 1"
-            )
-        ).fetchall()
-        s.rollback()  # read-only: never hold locks past the check, never write
-
-    if missing:
-        ids = [str(r.decision_id) for r in missing] + [str(r.run_id) for r in missing]
-        print(f"{_BLOCKED} missing decision_callback for decisions/runs: "
-              f"{[(r.decision_id, r.run_id) for r in missing]}")
-        offenders += ids
-    if orphan:
-        print(f"orphan decision_callback outbox rows (no automatic decision): "
-              f"{[(r.id, r.run_id) for r in orphan]}")
-        offenders += [str(r.id) for r in orphan]
-    if dup:
-        print(f"multiple decision_callback rows per run: {[(r.run_id, r.c) for r in dup]}")
-        offenders += [str(r.run_id) for r in dup]
-    return (1 if offenders else 0), offenders
+        violations = run_parity(s)
+        s.rollback()  # read-only: never write, never hold the lock past the check
+    if not violations:
+        return 0, []
+    offenders: list[str] = []
+    names = {n for n, _ in violations}
+    if MISSING_CALLBACK in names:
+        missing = next(pairs for n, pairs in violations if n == MISSING_CALLBACK)
+        print(f"{BLOCKED_SENTINEL} missing decision_callback (decision, run): {missing}")
+        offenders += [str(x) for pair in missing for x in pair if x is not None]
+    for name, pairs in violations:
+        if name != MISSING_CALLBACK:
+            print(f"parity violation {name}: {pairs}")
+        offenders += [str(x) for pair in pairs for x in pair if x is not None]
+    return 1, offenders
 
 
 def main() -> int:
-    session_factory = make_session_factory(make_engine(get_settings().database_url))
-    code, offenders = verify_backfill(session_factory)
+    code, _ = verify_backfill(make_session_factory(make_engine(get_settings().database_url)))
     if code == 0:
-        print("verify_pr7b_core_backfill: OK (every automatic decision maps to one callback)")
+        print("verify_pr7b_core_backfill: OK (schema-012 parity matrix clean)")
     return code
 
 
@@ -2128,18 +2482,23 @@ if __name__ == "__main__":
 
 Run: `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py -v` → PASS.
 
-- [ ] **Step 5: Mutation check (manual)** — remove the `s.execute(text("LOCK TABLE outbox IN SHARE MODE"))` line; rerun `test_diagnostic_share_lock_waits_on_uncommitted_delete` and confirm the intent breaks (without the SHARE lock the CLI would not have to wait on A). Restore.
+- [ ] **Step 5: Mutation check (manual, no commit)** — remove `s.execute(text("LOCK TABLE outbox IN SHARE MODE"))`; rerun `test_cli_share_lock_blocks_on_uncommitted_retention_delete` → it must FAIL (`proc.poll()` is not None after 3s — the CLI no longer blocks on prune and can report green before the delete commits). Restore.
 
-- [ ] **Step 6: Full gate, re-pin, commit**
+- [ ] **Step 6: RED drift-guard step** — the new CLI changed `src/`:
+
+Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` → **FAIL** (RED step).
+
+- [ ] **Step 7: Re-pin → GREEN, full gate + commit** (canonical close-out order)
 
 ```bash
-./manage.sh test
-# re-pin EXPECTED_ENGINE_SOURCE_HASH (new src file), then:
+# re-pin EXPECTED_ENGINE_SOURCE_HASH (one-liner), then:
 .venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v
-.venv/bin/ruff check . && .venv/bin/lint-imports
+./manage.sh test
+.venv/bin/ruff check .
+.venv/bin/lint-imports
 git add src/kyc_tool/ops/verify_pr7b_core_backfill.py tests/integration/test_verify_pr7b_core_backfill.py \
         tests/policy_driven/test_engine_build_id_guard.py
-git commit -m "feat(ops): verify_pr7b_core_backfill pre-window diagnostic (SHARE-locked, schema-012)
+git commit -m "feat(ops): verify_pr7b_core_backfill pre-window diagnostic (SHARE-locked, shared parity)
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
@@ -2163,57 +2522,132 @@ Ships the post-013 stop/rollback helper: it **refuses pre-013 schema** (no `clai
 - [ ] **Step 1: Write the failing tests** — create `tests/integration/test_reset_interrupted_outbox_claims.py`:
 
 ```python
-"""PR 7b-core: post-013 reset_interrupted_outbox_claims + rollout-order invariants."""
+"""PR 7b-core: post-013 reset_interrupted_outbox_claims — REAL CLI entry point (subprocess)
+on schema 012 (refuses) and 013 (clears only complete tuples), plus atomic-rollback race."""
+
+import os
+import subprocess
+import sys
+import threading
 
 import pytest
-from sqlalchemy import create_engine, text
+from alembic import command
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import Engine
+
+from kyc_tool.db.session import make_engine, make_session_factory
+from kyc_tool.ops import reset_interrupted_outbox_claims as resetter
+from tests.integration.test_migrations import _config, _fresh_db
 
 pytestmark = pytest.mark.postgres
-
-from kyc_tool.db.session import make_engine, make_session_factory  # noqa: E402
-from kyc_tool.ops import reset_interrupted_outbox_claims as resetter  # noqa: E402
-from tests.integration.test_migrations import _config, _fresh_db  # noqa: E402
 
 
 def _sf(url):
     return make_session_factory(make_engine(url))
 
 
-def test_reset_refuses_pre_013_schema(pg):
+def _run_reset(url):
+    return subprocess.run(
+        [sys.executable, "-m", "kyc_tool.ops.reset_interrupted_outbox_claims"],
+        env={**os.environ, "KYC_DATABASE_URL": url},
+        capture_output=True, text=True, timeout=60,
+    )
+
+
+def test_reset_refuses_pre_013_and_preserves_next_attempt_subprocess(pg):
+    """On schema 012 the REAL CLI exits nonzero (no claim_token column) and writes NOTHING —
+    two future-backoff rows' next_attempt_at are unchanged (rollout order: no pre-013 reset)."""
     url = _fresh_db(pg, "kyc_reset_pre013")
-    from alembic import command
-    command.upgrade(_config(url), "012")  # no claim_token column
-    with pytest.raises(Exception) as exc:  # noqa: PT011
-        resetter.reset_claims(_sf(url))
-    assert "pre-013" in str(exc.value).lower() or "claim_token" in str(exc.value).lower()
+    command.upgrade(_config(url), "012")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
+        # an old-claim-looking future row + a real backoff row (012 has no claim columns)
+        conn.execute(text("INSERT INTO outbox (kind, case_id, payload_json, status, next_attempt_at) "
+                          "VALUES ('poc_email','c1','{}'::jsonb,'pending', now() + interval '7 minutes')"))
+        conn.execute(text("INSERT INTO outbox (kind, case_id, payload_json, status, next_attempt_at) "
+                          "VALUES ('poc_email','c1','{}'::jsonb,'pending', now() + interval '9 minutes')"))
+        before = [r.next_attempt_at for r in conn.execute(text("SELECT next_attempt_at FROM outbox ORDER BY id"))]
+
+    proc = _run_reset(url)
+    assert proc.returncode != 0
+    assert "pre-013" in proc.stderr.lower() or "claim_token" in proc.stderr.lower()
+    with engine.connect() as conn:
+        after = [r.next_attempt_at for r in conn.execute(text("SELECT next_attempt_at FROM outbox ORDER BY id"))]
+    assert after == before  # nothing written
+    engine.dispose()
 
 
-def test_reset_clears_only_claimed_preserves_next_attempt(pg):
+def test_reset_clears_only_claimed_preserves_next_attempt_subprocess(pg):
     url = _fresh_db(pg, "kyc_reset_013")
-    from alembic import command
     command.upgrade(_config(url), "013")
     engine = create_engine(url)
     with engine.begin() as conn:
         conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
-        # a claimed row (complete claim tuple) with a future next_attempt_at to preserve
-        conn.execute(text(
-            "INSERT INTO outbox (kind, case_id, ordering_stream, status, claim_token, "
-            "claim_lease_expires_at, claimed_by, next_attempt_at) VALUES ('poc_email','c1','email','pending', "
-            "gen_random_uuid(), now(), 'w1', now() + interval '5 minutes')"
-        ))
-        # a plain backoff row (no claim) whose next_attempt_at must NOT be touched
+        conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, claim_token, "
+                          "claim_lease_expires_at, claimed_by, next_attempt_at) VALUES ('poc_email','c1','email',"
+                          "'pending', gen_random_uuid(), now(), 'w1', now() + interval '5 minutes')"))
         conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, next_attempt_at) "
                           "VALUES ('poc_email','c1','email','pending', now() + interval '9 minutes')"))
-        na_before = [r.next_attempt_at for r in conn.execute(text("SELECT next_attempt_at FROM outbox ORDER BY id"))]
+        before = [r.next_attempt_at for r in conn.execute(text("SELECT next_attempt_at FROM outbox ORDER BY id"))]
 
-    n = resetter.reset_claims(_sf(url))
-    assert n == 1  # only the claimed row was cleared
+    proc = _run_reset(url)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
     with engine.connect() as conn:
         rows = conn.execute(text("SELECT claim_token, claim_lease_expires_at, claimed_by, next_attempt_at "
                                  "FROM outbox ORDER BY id")).all()
     assert rows[0].claim_token is None and rows[0].claim_lease_expires_at is None and rows[0].claimed_by is None
-    na_after = [r.next_attempt_at for r in rows]
-    assert na_after == na_before  # next_attempt_at preserved on BOTH rows
+    assert [r.next_attempt_at for r in rows] == before  # next_attempt_at preserved on BOTH rows
+    engine.dispose()
+
+
+def test_reset_atomic_rollback_when_tuple_appears_before_readback(pg):
+    """A concurrent writer inserts a NEW claimed row AFTER reset's UPDATE but BEFORE its
+    read-back. reset must see remaining>0, ROLL BACK its UPDATE (no partial reset), and raise —
+    the originally-claimed row keeps its tuple. Proves the rollback-BEFORE-commit ordering."""
+    url = _fresh_db(pg, "kyc_reset_rollback")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
+        conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, claim_token, "
+                          "claim_lease_expires_at, claimed_by) VALUES ('poc_email','c1','email','pending', "
+                          "gen_random_uuid(), now(), 'w1')"))
+
+    at_readback = threading.Event()
+    go = threading.Event()
+
+    def _barrier(conn, cursor, statement, params, context, executemany):
+        if "count(*) from outbox where claim_token is not null" in statement.lower():
+            at_readback.set()
+            go.wait(timeout=15)  # pause BEFORE the read-back executes
+
+    event.listen(Engine, "before_cursor_execute", _barrier)
+    err: list[Exception] = []
+
+    def run_reset():
+        try:
+            resetter.reset_claims(_sf(url))
+        except Exception as e:  # noqa: BLE001
+            err.append(e)
+
+    t = threading.Thread(target=run_reset)
+    t.start()
+    try:
+        assert at_readback.wait(timeout=15)  # reset's UPDATE done, about to read back
+        with engine.begin() as conn:          # concurrent writer commits a NEW claimed row
+            conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, claim_token, "
+                              "claim_lease_expires_at, claimed_by) VALUES ('poc_email','c1','email','pending', "
+                              "gen_random_uuid(), now(), 'w2')"))
+        go.set()
+        t.join(timeout=15)
+    finally:
+        go.set()
+        event.remove(Engine, "before_cursor_execute", _barrier)
+    assert err and isinstance(err[0], RuntimeError)  # reset raised
+    with engine.connect() as conn:
+        tuples = conn.execute(text("SELECT count(*) FROM outbox WHERE claim_token IS NOT NULL")).scalar_one()
+    assert tuples == 2  # atomic rollback: w1's clear was undone → both rows keep their tuple
     engine.dispose()
 ```
 
@@ -2225,12 +2659,12 @@ Expected: FAIL — `ModuleNotFoundError: kyc_tool.ops.reset_interrupted_outbox_c
 - [ ] **Step 3: Write the CLI** — create `src/kyc_tool/ops/reset_interrupted_outbox_claims.py`:
 
 ```python
-"""Post-013 outbox claim reset (PR 7b-core §Rollout). Run ONCE after ALL outbox
-publishers are confirmed stopped and none have restarted, for post-013 future stops and
-the post-013 rollback path ONLY. It refuses pre-013 schema (the claim columns don't exist
-yet), clears only rows with the COMPLETE claim tuple, PRESERVES next_attempt_at (an
-interrupted old claim simply waits until its already-recorded due time), and read-back-
-asserts zero claim tuples. It MUST NOT run while any publisher is live.
+"""Post-013 outbox claim reset (PR 7b-core §Rollout). Run ONCE after ALL outbox publishers
+are confirmed stopped and none have restarted, for post-013 future stops and the post-013
+rollback path ONLY. It refuses pre-013 schema (the claim columns don't exist yet), clears only
+rows with the COMPLETE claim tuple, PRESERVES next_attempt_at (an interrupted old claim simply
+waits until its already-recorded due time), and read-back-asserts zero claim tuples — rolling
+back atomically (never a partial reset) if any remain. It MUST NOT run while a publisher is live.
 
     python -m kyc_tool.ops.reset_interrupted_outbox_claims
 """
@@ -2244,12 +2678,13 @@ from kyc_tool.db.session import make_engine, make_session_factory
 
 
 def reset_claims(session_factory) -> int:
-    """Clear every complete outbox claim tuple; return the count. Refuses pre-013."""
+    """Clear every complete outbox claim tuple; return the count. Refuses pre-013; on a
+    surviving tuple it rolls back BEFORE commit and raises (atomic — no partial reset)."""
     with session_factory() as session:
         has_col = session.execute(
             text(
-                "SELECT 1 FROM information_schema.columns "
-                "WHERE table_name='outbox' AND column_name='claim_token'"
+                "SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() "
+                "AND table_name='outbox' AND column_name='claim_token'"
             )
         ).first()
         if has_col is None:
@@ -2270,9 +2705,10 @@ def reset_claims(session_factory) -> int:
                 "OR claim_lease_expires_at IS NOT NULL OR claimed_by IS NOT NULL"
             )
         ).scalar_one()
+        if remaining != 0:  # roll back the whole reset BEFORE committing — never a partial clear
+            session.rollback()
+            raise RuntimeError(f"{remaining} outbox claim tuple(s) remain — publishers not stopped?")
         session.commit()
-    if remaining != 0:
-        raise RuntimeError(f"{remaining} outbox claim tuple(s) remain after reset — publishers not stopped?")
     return count
 
 
@@ -2287,20 +2723,26 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [ ] **Step 4: Run to verify pass + rollback mutation (manual)**
 
 Run: `.venv/bin/pytest tests/integration/test_reset_interrupted_outbox_claims.py -v` → PASS.
+**Mutation:** move `session.commit()` BEFORE the `remaining`/rollback block (the pre-fix ordering); rerun `test_reset_atomic_rollback_when_tuple_appears_before_readback` → it must FAIL (`tuples == 1` — w1's clear was committed = a partial reset). Restore.
 
-- [ ] **Step 5: Full gate, re-pin, commit**
+- [ ] **Step 5: RED drift-guard step** — new CLI changed `src/`:
+
+Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` → **FAIL** (RED step).
+
+- [ ] **Step 6: Re-pin → GREEN, full gate + commit** (canonical close-out order)
 
 ```bash
-./manage.sh test
-# re-pin EXPECTED_ENGINE_SOURCE_HASH (new src file), then:
+# re-pin EXPECTED_ENGINE_SOURCE_HASH (one-liner), then:
 .venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v
-.venv/bin/ruff check . && .venv/bin/lint-imports
+./manage.sh test
+.venv/bin/ruff check .
+.venv/bin/lint-imports
 git add src/kyc_tool/ops/reset_interrupted_outbox_claims.py \
         tests/integration/test_reset_interrupted_outbox_claims.py tests/policy_driven/test_engine_build_id_guard.py
-git commit -m "feat(ops): reset_interrupted_outbox_claims (post-013-only; preserves next_attempt_at)
+git commit -m "feat(ops): reset_interrupted_outbox_claims (post-013-only; atomic; preserves next_attempt_at)
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
@@ -2340,25 +2782,104 @@ Expected: FAIL — `AssertionError: live Alembic head 013 is not a shipped reser
 Run: `.venv/bin/pytest tests/unit/test_migration_lineage.py -v`
 Expected: PASS (`head 013 ∈ shipped`; `pending[0]=014=head+1`; disjoint/exhaustive/contiguous all hold).
 
-- [ ] **Step 4: Write `OVERVIEW.md`** — add a "PR 7b-core — outbox stream separation + local decision ordering" subsection covering: per-`(case_id, ordering_stream)` FIFO (a stuck stream never blocks the other); the internal `decision_sequence` (allocated under the Case lock, NOT on the wire — the callback body is byte-identical to pre-7b); the **best-effort** local `superseded` guard (fires only on a higher *locally-stamped* delivery); the fenced claim (`claim_token`); and the explicit boundary: **send-before-stamp and cross-replica reverts remain until 7b-activation (`014`)** — 7b-core does not close defect 2 fully.
+- [ ] **Step 4: Write `docs/OVERVIEW.md`** — insert this exact subsection **immediately before** `### Read endpoints (pull, on demand)` (currently line 184, inside `## 4. The integration contract`):
 
-- [ ] **Step 5: Write `RUNBOOK.md` + `DEPLOYMENT.md`** — add the full, non-abbreviated procedure (mirror the exact order in both):
+```markdown
+### Outbox delivery ordering & local decision sequence (PR 7b-core)
 
-  **Step 0 — pre-window (before any outage):** (i) **suspend the retention schedule**; (ii) **terminate/wait for every active retention task**; (iii) **capture target-orchestrator zero-running evidence** — the exact ECS/Fargate or EC2 command + expected output; if the production substrate is not yet chosen, this is a blocking **`TODO(integration)`** deployment prerequisite (a pytest does NOT prove it — record the exact command + output here when the substrate is fixed); (iv) run the digest-pinned `python -m kyc_tool.ops.verify_pr7b_core_backfill` with the schedule still suspended (valid ONLY while suspended AND the zero-running attestation holds); (v) **on failure, abort here — before stopping service.** **Recovery — restore-or-block:** restore the exact callback from authoritative backup and rerun clean, OR remain on 012 in `BLOCKED_NO_AUTHORITATIVE_MAPPING` (backup availability is an operator prerequisite; **014 is downstream and cannot repair this**; never fabricate a callback, delete a decision, or fall back to `decided_at`). On **every** abort path, explicitly re-enable or deliberately keep-frozen retention — never leave it silently disabled.
+Decision callbacks and POC emails are delivered from a transactional outbox. As of PR 7b-core the
+publisher claims the oldest pending row **per `(case_id, ordering_stream)` FIFO stream** (`decision`
+vs `email`), so a stuck POC email never blocks a case's decision callbacks. Every automatic decision
+gets an internal per-case `decision_sequence`, allocated under the case's `FOR UPDATE` lock — it is
+**not on the wire** (the callback body is byte-identical to pre-7b) and drives a **best-effort local
+`superseded` guard**: an older requeued callback is suppressed only when a higher-sequence decision
+already carries a locally-stamped `published_at`. Each claim is fenced by a `claim_token` so a stale
+publisher cannot overwrite a reclaimer's terminal. **Boundary:** send-before-stamp and cross-replica
+reverts are NOT closed here — they remain expected until 7b-activation (`014`) adds the platform
+high-water mark. 7b-core does not claim exactly-once (see `AUDIT_FINDINGS.md` A6).
+```
 
-  **Cutover:** (1) pause submission, edge-block composer, disable autoscaling/restarts; (2) hard-stop API/pipeline/outbox/`dev_worker` (queue **and** outbox)/retention/every writer, attest zero at the orchestrator; (3) run the shipped `python -m kyc_tool.ops.requeue_interrupted_jobs` — **no outbox reset here** (pre-013 has no claim columns; an interrupted old claim waits until its recorded `next_attempt_at`); **preserve every pending row's `next_attempt_at`**; (4) `alembic upgrade head` (013) — repeats the §0 preflights under the zero-writer boundary (the authoritative fail-closed check); (5) start API only, probe `/readyz`, then start+attest the fenced workers — **no mutating prod smoke**; (6) resume.
+- [ ] **Step 5: Write the canonical cutover/rollback procedure into BOTH `docs/RUNBOOK.md` and `docs/DEPLOYMENT.md`** — paste the **identical** block below. In `docs/RUNBOOK.md` add it as a new top-level section immediately before `## Retention & compliance` (line 173). In `docs/DEPLOYMENT.md` add it as `## 11. PR 7b-core cutover — drained maintenance window` immediately after section 10 (before `## 7. Monitoring` if ordering differs, else at end of the cutover sections). Use the SAME numbered body in both (only the section header differs):
 
-  **Rollback — a full ordered maintenance procedure (as drained as the forward cutover):** (1) pause submissions, disable autoscaling/restarts; (2) hard-stop + orchestrator-attest zero API/pipeline/outbox/`dev_worker`/retention/every writer; (3) **while 013 still exists**, run `python -m kyc_tool.ops.reset_interrupted_outbox_claims` (post-013-only; clears complete claim tuples, preserves `next_attempt_at`, read-back-asserts zero) and verify zero claim tuples; (4) `alembic downgrade` (its `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` + `superseded` preflight refuses byte-stably if any superseded row exists — then rollback stays on a 7b-core-compatible image and is a forward fix); (5) deploy the pre-7b image **only after** the downgrade succeeds. Redeploying the pre-7b image *before* 013 is applied is also safe. Include the preflight query `SELECT count(*) FROM outbox WHERE status='superseded'`.
+```markdown
+## PR 7b-core cutover — drained maintenance window (migration 013)
 
-- [ ] **Step 6: Extend `AUDIT_FINDINGS.md`** — confirm the A6 exception from Task 5 is present; add a short note that the 013 backfill's order authority is `outbox.id` (the under-lock enqueue serialization for rows the guard can deliver) — a **deterministic reconstruction, not proof of original publication order** — and that a legacy automatic decision without a surviving callback is a **fail-closed migration refusal** (restore-or-block; `BLOCKED_NO_AUTHORITATIVE_MAPPING`). State the local/cross-replica boundary explicitly.
+**Step 0 — pre-window diagnostic (BEFORE any outage):**
+0.1 Suspend the retention schedule.
+0.2 Terminate and wait for every active retention task.
+0.3 Capture target-orchestrator zero-running evidence. `TODO(integration)`: the exact ECS/Fargate
+    `aws ecs list-tasks --cluster <c> --family retention` (or EC2 equivalent) command + its expected
+    zero-task output MUST be recorded here once the production substrate is chosen. A pytest does NOT
+    prove this — it is a deployment acceptance. Do not invent a substrate.
+0.4 With the schedule still suspended, run the digest-pinned
+    `python -m kyc_tool.ops.verify_pr7b_core_backfill`. The result is valid ONLY while retention stays
+    suspended AND the 0.3 attestation holds.
+0.5 On failure, ABORT here — before stopping service (no outage begun). Recovery is restore-or-block:
+    restore the exact callback from authoritative backup and rerun 0.4 clean, OR remain on 012 in
+    `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. 014 is
+    downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
+    `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
 
-- [ ] **Step 7: Full gate + commit**
+**Cutover (only after 0.4 is green):**
+1. Pause submission, edge-block the composer, disable autoscaling/restarts.
+2. Hard-stop API, pipeline, outbox, `dev_worker` (queue AND outbox), retention, and every writer;
+   attest zero at the orchestrator.
+3. Run the shipped `python -m kyc_tool.ops.requeue_interrupted_jobs`. NO outbox reset here — the
+   pre-013 schema has no claim columns; an interrupted old claim simply waits until its already-
+   recorded `next_attempt_at`. Preserve every pending row's `next_attempt_at`.
+4. `alembic upgrade head` (013). This repeats the §0 parity preflights under the zero-writer boundary
+   and is the authoritative fail-closed check (the pre-window diagnostic is an early detector, not a
+   substitute).
+5. Start API only, probe `/readyz`, then start + attest the fenced workers. No mutating prod smoke.
+6. Resume submission and re-enable retention.
+
+**Rollback — a full ordered maintenance procedure (as drained as the forward cutover):**
+R1. Pause submissions, disable autoscaling/restarts.
+R2. Hard-stop and orchestrator-attest zero API, pipeline, outbox, `dev_worker`, retention, every writer.
+R3. While 013 still exists, run `python -m kyc_tool.ops.reset_interrupted_outbox_claims` (post-013-only;
+    clears complete claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero) and
+    verify zero claim tuples.
+R4. `alembic downgrade` (its `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` + preflight
+    `SELECT count(*) FROM outbox WHERE status='superseded'` refuses byte-stably if any superseded row
+    exists — then rollback stays on a 7b-core-compatible image and is a forward fix).
+R5. Deploy the pre-7b image ONLY after the downgrade succeeds. Redeploying the pre-7b image BEFORE 013
+    is applied is also safe.
+```
+
+- [ ] **Step 6: Extend `AUDIT_FINDINGS.md`** — confirm the A6 **Resolution** already carries the PR 7b-core exception from Task 5 (if not, re-apply it). Then add this exact item at the end of section **D. Design tightenings adopted** (after line 144):
+
+```markdown
+### 🔵 D-7bcore — Outbox local ordering (PR 7b-core) provenance boundary
+
+- Migration 013's decision_sequence backfill orders each case by `outbox.id` (the under-lock enqueue
+  serialization for rows the guard can deliver). This is a **deterministic reconstruction, not proof
+  of original publication order** — `decided_at` is transaction-start time and can invert the true
+  order, so it is never used.
+- A legacy automatic decision without a surviving `decision_callback` is a **fail-closed migration
+  refusal** (`BLOCKED_NO_AUTHORITATIVE_MAPPING`): restore from authoritative backup or remain on 012.
+- The local `superseded` guard is **best-effort and single-replica**: it fires only on a higher
+  *locally-stamped* `published_at`. Send-before-stamp and cross-replica reverts remain expected until
+  7b-activation's platform high-water mark. 7b-core is not exactly-once and not platform-authoritative.
+```
+
+- [ ] **Step 7: Verify parity + full gate + commit**
 
 ```bash
-./manage.sh test          # includes test_migration_lineage + the whole 013 suite
-.venv/bin/ruff check . && .venv/bin/lint-imports
+# ROADMAP: 7b-core shipped/013, 7b-activation still pending/014, no contradictory allocation
+rg -n "PR 7b-core \| 8 \| shipped \| 013" .agents/ROADMAP.md
+rg -n "PR 7b-activation \| 8 \| pending \| 014" .agents/ROADMAP.md
+# RUNBOOK.md and DEPLOYMENT.md carry the SAME numbered cutover/rollback body (parity)
+diff <(rg -n "^(0\.[0-9]|[1-6]\.|R[1-5]\.) " docs/RUNBOOK.md | sed 's/^[0-9]*://') \
+     <(rg -n "^(0\.[0-9]|[1-6]\.|R[1-5]\.) " docs/DEPLOYMENT.md | sed 's/^[0-9]*://')   # must be empty
+# both docs reference both CLIs + the sentinel
+rg -c "verify_pr7b_core_backfill" docs/RUNBOOK.md docs/DEPLOYMENT.md   # each >= 1
+rg -c "BLOCKED_NO_AUTHORITATIVE_MAPPING" docs/RUNBOOK.md docs/DEPLOYMENT.md  # each >= 1
+.venv/bin/pytest tests/unit/test_migration_lineage.py -v   # head 013 shipped, pending[0]=014
+./manage.sh test          # whole 013 suite + lineage
+.venv/bin/ruff check .
+.venv/bin/lint-imports
 git add docs/OVERVIEW.md docs/RUNBOOK.md docs/DEPLOYMENT.md AUDIT_FINDINGS.md .agents/ROADMAP.md
-git commit -m "docs(7b-core): stream-separation overview, cutover/rollback runbook, ROADMAP shipped
+git commit -m "docs(7b-core): stream-separation overview, drained cutover/rollback, ROADMAP shipped
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
@@ -2377,4 +2898,19 @@ Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
 
 ## Self-review notes (spec coverage)
 
-Every spec section maps to a task: §1 Migration 013 → Tasks 1 (columns/stream/case_id/lifecycle/index), 2 (backfill), 4 (identity constraints), 6 (race-safe downgrade); §2 fenced claim → Task 3; §3 decision-sequence allocation → Task 4; §4 guard + fenced terminals → Tasks 3 (terminals) + 5 (guard/superseded); §5 scope boundary + residual risk → Task 5 (residual-risk test) + Task 9 (docs); AUDIT:A6 amendment → Task 5; §Rollout (verify CLI, requeue, reset CLI, restore-or-block) → Tasks 7, 8, 9; §Testing strategy items → distributed across Tasks 1-8 with a mutation witness each; §Docs+governance → Task 9; §Out-of-scope respected (no wire field, no `ENGINE_BUILD_ID` bump, M2 untouched). The one deliberate structural deviation from the spec's §1 grouping — splitting the decision-identity constraints out of Task 1 into Task 4 (co-located with the pipeline allocation that satisfies them) — is required by the green-at-every-commit rule (`conftest.migrated` upgrades to head for the whole suite, so an identity CHECK cannot precede the code that writes `decision_sequence`); the migration file is still a single `013` and every constraint/backfill/downgrade element is present.
+Every spec section maps to a task: §1 Migration 013 → Tasks 1 (columns/stream/case_id/lifecycle/index), 2 (shared parity matrix + backfill), 4 (identity constraints), 6 (race-safe downgrade); §2 fenced claim → Task 3; §3 decision-sequence allocation → Task 4; §4 guard + fenced terminals → Tasks 3 (terminals) + 5 (guard/superseded); §5 scope boundary + residual risk → Task 5 (residual-risk test) + Task 9 (docs); AUDIT:A6 amendment → Task 5; §Rollout (verify CLI, requeue, reset CLI, restore-or-block) → Tasks 7, 8, 9; §Testing strategy items → distributed across Tasks 1-8 with a mutation witness each; §Docs+governance → Task 9; §Out-of-scope respected (no wire field, no `ENGINE_BUILD_ID` bump, M2 untouched). The one deliberate structural deviation from the spec's §1 grouping — splitting the decision-identity constraints out of Task 1 into Task 4 (co-located with the pipeline allocation that satisfies them) — is required by the green-at-every-commit rule (`conftest.migrated` upgrades to head for the whole suite, so an identity CHECK cannot precede the code that writes `decision_sequence`); the migration file is still a single `013` and every constraint/backfill/downgrade element is present.
+
+## Codex plan-review round 1 — 10 findings closed (test/command defects only; decomposition + architecture ACCEPTED)
+
+1. **Legacy-order regression (Task 2)** now commits the case first, drives B in a thread that fixes its `decided_at` via `SELECT now()` behind an event, releases A to enqueue first, and after upgrade delivers BOTH rows through the REAL publisher (order A→B, both `delivered`, neither `superseded`); the counter fix (`==3`) lands in the same red→green edit; the `ORDER BY d.decided_at` mutation reverses assignment and fails it.
+2. **Stale-claim (Task 3)** now claims token A, expires it, and lets B RECLAIM without terminalizing; A runs stale success + stale final-attempt failure and must touch nothing (byte-identical payload, B's tuple/attempts/clock intact); the two named mutations (remove loser return; raise on zero rows) each fail a named test; unused `DECISION_CALLBACK` import removed.
+3. **Concurrency + manual path (Task 4)** now calls the REAL `_decide_txn` from two threads with a barrier monkeypatched immediately before `_load`'s `FOR UPDATE`; dropping the lock fails it. Manual approve uses the required `reviewer_id` payload + matching actor and asserts HTTP 200.
+4. **Downgrade TOCTOU (Task 6)** now drives the REAL migration `downgrade()` in a thread, paused by a global `after_cursor_execute` barrier at its superseded preflight (AFTER the production `LOCK TABLE`); the concurrent `pending→superseded` UPDATE fails with SQLSTATE `55P03`; moving/removing the lock fails the test.
+5. **Diagnostic (Tasks 2+7)** now share ONE parity matrix (`backfill_parity.run_parity`) covering all 11 listed states; the migration refuses BEFORE any DDL and the CLI refuses via the real `python -m` subprocess (`KYC_DATABASE_URL`, exact exit/stdout/`BLOCKED_NO_AUTHORITATIVE_MAPPING`/no-writes); the retention race runs the REAL `prune` in a thread with a barrier after its outbox DELETE and asserts the CLI subprocess stays blocked until commit; removing the SHARE lock fails it. Healthy rows carry a real `delivered_at`.
+6. **Command ordering** — every src-touching task (1, 2, 3, 4, 5, 7, 8) now runs targeted tests → RED drift-guard step → re-pin GREEN → `./manage.sh test` + ruff + import-linter, in that order; the deliberately-red guard is labeled a RED step, never a PASS/gate.
+7. **Guard/A6/residual (Task 5)** now creates TWO real callbacks, delivers the higher one over the mock HTTP first (≥1 request) and asserts the lower gets zero HTTP + `superseded` + run COMPLETE + `published_at` NULL + an `audit_log` row carrying BOTH sequences (`_record_superseded` now `audit()`s them); adds a real seq 1→2→3 test, a real send-before-stamp revert (HTTP #1 then #2), and an `outbox_alerting` metrics assertion.
+8. **Reset CLI (Task 8)** now probes `information_schema` with `table_schema=current_schema()`, rolls back BEFORE commit on a surviving tuple (atomic), and is exercised via `python -m` subprocess on 012 (refuses, timestamps unchanged) and 013 (clears only claimed, preserves `next_attempt_at`) plus a barrier race proving atomic rollback.
+9. **Migration matrix (Tasks 1+4)** now seeds legacy pending/delivered(timestamped)/dead + both kinds + manual rows, adds the full INSERT+UPDATE identity cross-product (null/zero/negative sequence, wrong case/run, stream swaps, email-with-run, dup callback, run-id uniqueness), and mutates each CHECK/FK/unique/partial-index/`SET NOT NULL` independently against a NAMED test; authority cases assert exact `RuntimeError`/`IntegrityError`/`OperationalError`+`55P03`.
+10. **Finish-time (Tasks 2/7/10)** — unused example-code imports removed; Task 9 is copy-ready (exact OVERVIEW subsection + anchor, one canonical numbered cutover/rollback block pasted verbatim into RUNBOOK.md and DEPLOYMENT.md with a `diff` parity check + `rg` sentinel/lineage checks, honest blocking `TODO(integration)` for the orchestrator attestation).
+
+**Adaptations to the real fixtures (where Codex's prescription needed adjustment):** (a) the send-before-stamp revert is single-publisher-deterministic by delivering seq 2 for real then resetting its `decisions.published_at` to NULL — the exact observable of "stamp not locally committed" — because the fenced FIFO otherwise prevents a single publisher from sending seq 1 while seq 2's row is still pending; (b) the TOCTOU and retention-race barriers use a global `after_cursor_execute`/`before_cursor_execute` listener on `sqlalchemy.engine.Engine` (removed in `finally`) since the project's `alembic/env.py` builds its own connection and cannot be handed an injected one; (c) migration-refusal assertions use `pytest.raises(RuntimeError)` on the basis that `alembic.command` propagates the migration's `RuntimeError` unwrapped — if a given environment wraps it, widen to the wrapper in-cycle. **Not executed:** per the coordinator, the named `.venv/bin/pytest`/subprocess selectors are build-cycle steps, not run here (no local Postgres).
