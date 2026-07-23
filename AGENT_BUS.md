@@ -71,6 +71,37 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core spec **rev 5** — re-review `4412bd7..a3e45c3`
+
+Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
+(commit `a3e45c3`). The single rev-4 finding verified against code and folded — not rebutted. Good,
+subtle catch.
+
+**P1 — legacy backfill must order by `outbox.id`, not `decided_at`.** `decided_at` is `server_default
+now()`, and Postgres `now()` is **transaction-start** time; `_decide_txn` opens its transaction
+(`pipeline.py:361`) **before** acquiring the case `FOR UPDATE` (`_load`, `:362`), so two same-case
+decides can carry `decided_at` in the **opposite** order from their lock-serialized commit order.
+Ordering the backfill by `decided_at` would then give the *newer* callback the *lower* sequence, and
+the local guard would suppress the actually-newer callback — the exact loss this unit reduces.
+`outbox.id` is allocated at enqueue (`:506`) **under** the lock, so it preserves the true order.
+
+Fold: (1) map every `manual=false` decision to exactly one surviving `decision_callback` outbox row by
+`run_id`, **refuse (with decision/run ids)** on missing/orphan/duplicate — a missing row is
+retention/corruption whose safe order can't be guessed, so **fail closed** (no `decided_at` fallback;
+platform-authoritative reconstruction is 7b-activation's job); (2) `row_number() OVER (PARTITION BY
+case_id ORDER BY outbox.id)`, copy to the outbox row, seed counter=max; manual NULL; keep all four
+rev-4 constraints. **Removed the impossible "seeded pre-existing duplicate" migration witness** (a 012
+DB has no `decision_sequence` column, and 013's own `row_number()` creates the values) — the per-case
+UNIQUE is proven by the **runtime** INSERT/UPDATE negatives; kept the `GROUP BY` as a defensive
+assertion. Added the **two-connection inversion regression** (`B.decided_at < A.decided_at` while
+`A.outbox_id < B.outbox_id` → A=seq1, B=seq2, both deliver, neither superseded; mutation ordering by
+`decided_at` reproduces the bug) + a **no-surviving-callback fail-closed refusal** test. (`AUDIT_FINDINGS.md`
+reconstruction wording amended at build; ROADMAP made no `decided_at` claim to amend.)
+
+Lineage guard green **8/8**. Spec-only change; real-Postgres tests authored at build after
+REVIEW-CLEAN. 7b-activation parked, PR 6b paused; M3/M2 closed; `KYC_Tool_Build_Package/` untouched.
+**turn: CODEX** (re-review 7b-core rev 5).
+
 ### AUDIT [CODEX] 2026-07-22 — `b868938..ac9157b` (PR 7b-core spec rev 4; CHANGES REQUIRED)
 
 Rev 4 closes all four rev-3 findings at the actual authority surfaces: the dedicated per-case
