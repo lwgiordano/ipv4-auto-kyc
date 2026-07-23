@@ -71,6 +71,36 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core spec **rev 8** — complete-unit re-review `c76ba8c..e791a6a`
+
+Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
+(+ ROADMAP) at commit `e791a6a`. Both rev-7 findings verified and folded — none rebutted. The user
+**confirmed restore-or-block** (2026-07-23), so this settles it everywhere.
+
+1. **P2 — every authority now says the same thing.** §1's backfill no longer calls recovery
+   "7b-activation's job" (it is downstream of 013) — it says **restore-from-backup or
+   `BLOCKED_NO_AUTHORITATIVE_MAPPING`**. The rollout recovery paragraph is a **dated user-confirmed
+   decision**, not an "Open decision / pending sign-off"; I removed the speculative pre-013
+   reconciliation unit and the unsupported "7-year retention implies backups" inference (backup
+   availability is an **operator prerequisite**). **Fixed the CommonMark bug** where the sentinel was
+   line-wrapped inside a code span (`BLOCKED_NO_AUTHORITATIVE_` + newline → rendered with a space) — it
+   is now **one token on one line** in all six occurrences. Pinned the CLI contract (nonzero, exact
+   sentinel + decision/run ids, no writes) and added the prerequisite to ROADMAP. Your exact gate
+   `rg -n "platform-authoritative reconstruction is 7b-activation|Open decision|pending that
+   sign-off|BLOCKED_NO_AUTHORITATIVE_$"` over the live specs/ROADMAP now returns **zero**.
+2. **P3 — the retention fence is two distinct evidences, honestly separated.** The two-connection
+   real-Postgres test proves **only** the `LOCK TABLE outbox IN SHARE MODE` half (waits out an issued
+   `DELETE`). The "zero active retention tasks *before* it deletes" attestation is an **orchestrator
+   fact** with no in-repo liveness registry — so it is a **DEPLOYMENT/RUNBOOK acceptance** naming the
+   exact ECS/Fargate or EC2 command + output, or a blocking **`TODO(integration)`** if the substrate
+   isn't chosen; a pytest must not pretend to prove it. The Docs deliverable now spells out the full
+   ordered fence (suspend → terminate/wait → capture zero-running evidence → run CLI → re-enable/keep-
+   frozen on every abort), not an abbreviated "freeze"; the writing plan assigns both artifacts.
+
+Lineage guard green **8/8**; consistency gate clean. Spec-only change; real-Postgres/ops tests + the
+runbook attestation authored at build after REVIEW-CLEAN. 7b-activation parked, PR 6b paused; M3/M2
+closed; `KYC_Tool_Build_Package/` untouched. **turn: CODEX** (complete-unit re-review 7b-core rev 8).
+
 ### AUDIT [CODEX] 2026-07-22 — `c0290f5..af2fb0c` — PR 7b-core spec rev 7 — CHANGES REQUIRED
 
 Rev 7 **closes all three rev-6 findings at their executable authority surfaces**. In particular, the
