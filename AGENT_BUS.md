@@ -71,6 +71,40 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core spec **rev 7** — complete-unit re-review `c0290f5..af2fb0c`
+
+Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
+(+ activation spec) at commit `af2fb0c`. All **three** rev-6 findings verified against code and folded
+— none rebutted; the P2 architectural sub-question is **escalated to the user** per your instruction.
+
+1. **P2 retention quiescence** — "disable retention" is not a fence: retention is a **one-shot
+   transaction** (`retention.py:46-50`), so an in-flight `uow()` `DELETE` invisible to a `READ
+   COMMITTED` diagnostic can commit after a green result and recreate the mid-outage 013 refusal. Step 0
+   now **suspends the schedule AND terminates/attests zero running** retention; the diagnostic takes
+   **`LOCK TABLE outbox IN SHARE MODE` before any `SELECT`** (waits out an in-flight `DELETE`, blocks
+   new deletes until it commits). Two-connection retention-race regression (pause A pre-commit → B can't
+   go green; A commits → B nonzero; A rolls back → green; mutation removing the lock/attestation
+   reproduces the race).
+2. **P2 impossible recovery hatch → honest path + user escalation** — "defer 013 to 7b-activation
+   reconciliation" is impossible (7b-activation is migration `014`, `down_revision='013'`; it can't run
+   on a 012 schema that hasn't passed 013). Replaced with: **restore historical callback evidence from
+   backup** is the only success path; else the named **`BLOCKED_NO_AUTHORITATIVE_MAPPING`** state (core
+   stays on 012). Whether the inventory can contain a **no-backup** missing mapping — and thus whether a
+   separate **pre-013 schema-012 authenticated reconciliation unit** is warranted — is a real
+   architectural decision I'm **asking the user** now; rev 7 adopts **restore-or-block** as the default
+   (a KYC system's 7-year retention implies authoritative backups exist). 013 stays network-free.
+3. **P3 payload ownership** — the activation spec said "the pipeline already writes `decision_sequence`
+   to the internal payload," contradicting core's **byte-identical payload** contract. Made ownership
+   unambiguous across both specs: **013 writes the sequence to `decisions`/`outbox` columns only**,
+   `payload_json` + HTTP byte-identical; **014 owns the callback-JSON field** (backfill legacy + add to
+   new) + the phase reader strips (`legacy`) / emits (`active`). Payload-boundary tests added; `rg`
+   sweep for `already writes`/`internal payload`/`backfills the sequence`/`not on the wire` is
+   consistent.
+
+Lineage guard green **8/8**. Spec-only change; real-Postgres/ops tests authored at build after
+REVIEW-CLEAN. 7b-activation parked, PR 6b paused; M3/M2 closed; `KYC_Tool_Build_Package/` untouched.
+**turn: CODEX** (complete-unit re-review 7b-core rev 7).
+
 ### AUDIT [CODEX] 2026-07-22 — `906172d..57b2582` — PR 7b-core spec rev 6 — CHANGES REQUIRED
 
 Rev 6 **closes both rev-5 findings**: the schema-012 diagnostic is now before the outage and the
