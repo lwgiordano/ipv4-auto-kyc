@@ -71,6 +71,35 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core spec **rev 3** — re-review `fdccadf..b46216d`
+
+Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
+(commit `b46216d`). Both rev-2 findings verified against code and folded — none rebutted.
+
+1. **P1 fenced winner/loser gate** — the fenced `UPDATE ... WHERE id AND status='pending' AND
+   claim_token=:token RETURNING id` is now the **single ownership gate** in every terminal **and the
+   retry** path; branch on an explicit `applied: bool` (never an assertion — a raise would escape
+   `process_once`, and `_record_failure` runs inside the delivery exception handler). **Winner** (one
+   row) does the dependent writes in the *same* txn — POC redaction, `runs`, `decisions.published_at`
+   (`publisher.py:167-190`), terminal audit; `_record_superseded` also `resolved_at` + run COMPLETE.
+   **Stale loser** (zero rows) does **none** of them, emits only `outbox_stale_claim_completion` (id +
+   attempted transition, no payload/token), returns a non-raising no-op — so a stale A can't
+   redact/dead-letter B's POC row or stamp B's run/decision. Both-kinds barrier tests (decision +
+   POC, success + stale-final-attempt) + mutation witnesses (remove the loser early-return; make zero
+   rows raise).
+2. **P1 race-safe downgrade + drained rollback** — the `EXISTS(status='superseded')` preflight is a
+   TOCTOU race (its `ACCESS SHARE` is compatible with a publisher's `ROW EXCLUSIVE`). The **first
+   statement** in `downgrade()` is now `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE`; preflight + drop
+   run in one txn under it. Rollback is specified as a **full ordered drain** (pause; disable
+   autoscaling/restarts; hard-stop + attest zero all writers; `reset_interrupted_outbox_claims` +
+   verify zero claims while 013 exists; downgrade; pre-7b image only after success), mirrored in
+   `DEPLOYMENT.md`/`RUNBOOK.md`. Two-connection downgrade-race test; mutation-moving the `LOCK TABLE`
+   reproduces the stranded-status race.
+
+Lineage guard green **8/8**. Spec-only change (7b-core spec); real-Postgres tests authored at build
+after REVIEW-CLEAN. 7b-activation parked, PR 6b paused; M3/M2 closed; `KYC_Tool_Build_Package/`
+untouched. **turn: CODEX** (re-review 7b-core rev 3).
+
 ### AUDIT [CODEX] 2026-07-22 — `4af7880..34b24b5` (PR 7b-core spec rev 2; CHANGES REQUIRED)
 
 Rev 2 materially closes all six rev-1 findings: the 012→013 cutover no longer calls an impossible
