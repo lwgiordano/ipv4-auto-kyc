@@ -95,12 +95,19 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   callback, `>1` callback per run, remaining NULL decision-stream sequence, sequenced email row,
   automatic decision with NULL run / non-positive sequence. `AUDIT_FINDINGS.md`: deterministic
   reconstruction (`decided_at,id`), not proof of publication order.
-- **Downgrade — reversible before first local supersession (F3):** the down migration **preflights
-  `EXISTS(status='superseded')` and refuses byte-stably** if any exists (dropping 013's columns would
-  leave a pre-7b image an unknown, unprunable terminal — old retention deletes only `delivered`
-  (`retention.py:29-35`), old claim takes only `pending`, old UI requeues only `dead`,
-  `ui/routes.py:451-475`). With no supersession it drops the columns/constraints cleanly; the
-  migration test proves `up→down→up` on a no-supersession DB **and** the seeded-superseded refusal.
+- **Downgrade — reversible before first local supersession, race-safe (F3 + rev-2 F2):** the **first
+  statement** in `downgrade()` is `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` — a bare
+  `EXISTS(status='superseded')` preflight is a TOCTOU race (its `ACCESS SHARE` is compatible with a
+  publisher's `ROW EXCLUSIVE`, so a still-running/auto-restarted publisher can commit a `superseded`
+  row *between* the preflight and the DDL, stranding the exact unknown terminal the refusal prevents).
+  **Under that lock**, in one transaction: run the `EXISTS(status='superseded')` preflight and **refuse
+  byte-stably** if any exists (dropping 013's columns would leave a pre-7b image an unknown, unprunable
+  terminal — old retention deletes only `delivered` `retention.py:29-35`, old claim takes only
+  `pending`, old UI requeues only `dead` `ui/routes.py:451-475`); otherwise drop the
+  columns/constraints. Tests: `up→down→up` on a no-supersession DB; the seeded-`superseded`
+  byte-stable refusal; **and a two-connection race** — hold the downgrade txn after its table lock,
+  attempt a concurrent `pending→superseded`, prove it cannot slip between preflight and DDL (mutation:
+  removing/moving the `LOCK TABLE` after the preflight reproduces the stranded-status race).
 - Add `ix_outbox_stream_claim (case_id, ordering_stream, status, next_attempt_at)`. ORM in `db/tables.py`.
 
 ### 2. Stream-scoped, fenced claim (publisher)
@@ -136,16 +143,29 @@ replica sent it, the predicate is false and the older callback **is** sent — a
 **expected** until 7b-activation's platform high-water (§5). 7b-core does not close that gap and must
 not be described as if it does.
 
-**All terminal transitions are fenced** (`_record_delivered`/`_record_failure`/`_record_superseded`):
-`WHERE id=:id AND status='pending' AND claim_token=:token`, **assert exactly one row**, and clear the
-whole `claim` tuple. A zero-row stale completion (lease expired, another publisher reclaimed +
-finished) is an **audited/metric no-op** that never stamps the run/decision — closing defect 3.
-`_record_superseded` sets outbox `superseded` + `resolved_at`, leaves `published_at` NULL (never
-sent), moves the run through the existing legal `PUBLISH_DECISION→COMPLETE` edge with `finished_at`
-(**no** new `RunState`, `models.py:35-46`), and audits with old/superseding sequence. Retention prunes
-`superseded` with `delivered` (`retention.py:29-35`); metrics report it separately and exclude it from
-pending/dead alerts (`routes_metrics.py:60`); the UI requeue already 409s non-`dead` rows
-(`ui/routes.py:459`).
+**The fenced outbox UPDATE is the single ownership gate** in every terminal *and the retry* path
+(`_record_delivered`, `_record_failure`'s **retry and dead** branches, `_record_superseded`). Each
+begins with `UPDATE outbox SET <status/claim-clear/...> WHERE id=:id AND status='pending' AND
+claim_token=:token RETURNING id` and branches on an explicit result (`applied: bool` from the returned
+row / `rowcount`) — **never** an assertion (a raise would escape `process_once`, and `_record_failure`
+already runs inside the delivery exception handler, so a normal lease-loss race must not kill the
+worker). The dependent writes are gated on `applied`, because the shipped code performs them
+**after** the outbox UPDATE, keyed by `id`/`run_id` (`publisher.py:167-190` POC redaction + run +
+`decisions.published_at`), so fencing only the first statement does not protect them:
+- **Winner (`applied=true`)** — in the *same* transaction: redact a POC payload, update `runs`, stamp
+  `decisions.published_at`, write the normal terminal audit; `_record_superseded` additionally set
+  `resolved_at`, leave `published_at` NULL (never sent), move the run through the existing legal
+  `PUBLISH_DECISION→COMPLETE` edge with `finished_at` (**no** new `RunState`, `models.py:35-46`), and
+  audit old/superseding sequence.
+- **Stale loser (`applied=false`)** — its lease expired and another publisher (token B) reclaimed +
+  finished: perform **none** of those writes (no POC redaction, no run/decision stamp, no retry-clock
+  reset), emit only a structured `outbox_stale_claim_completion` metric/audit (outbox id + attempted
+  transition; **no** payload or token), and return a non-raising no-op to `process_once`. Closing
+  defect 3 — a stale A can neither dead-letter/redact B's POC row nor stamp B's run/decision.
+
+Retention prunes `superseded` with `delivered` (`retention.py:29-35`); metrics report it separately and
+exclude it from pending/dead alerts (`routes_metrics.py:60`); the UI requeue already 409s non-`dead`
+rows (`ui/routes.py:459`).
 
 ### 5. Scope boundary (what 7b-activation adds) — and the honest residual risk
 
@@ -183,10 +203,16 @@ already-recorded due time (bounded by the documented old lease); (4) `alembic up
 only rows with the complete claim tuple, clears the tuple, **preserves `next_attempt_at`**, and
 read-back-asserts zero claims.
 
-**Rollback:** before first supersession → the reversible downgrade (§1) on the schema-compatible
-image, or redeploy the pre-7b image only **before** 013 is applied. **After a `superseded` row
-exists** → downgrade **refuses** (F3); rollback stays on a 7b-core-compatible image and is a forward
-fix. (7b-activation is separately forward-only-after-use.)
+**Rollback — a full ordered maintenance procedure (rev-2 F2), not a bare downgrade** (rollback is as
+drained as the forward cutover; the `LOCK TABLE` in §1 is defense-in-depth, not a substitute): (1)
+pause submissions, disable autoscaling/restarts; (2) hard-stop and orchestrator-attest **zero** API,
+pipeline, outbox, `dev_worker`, retention, and every writer; (3) **while 013 still exists**, run
+`reset_interrupted_outbox_claims` and verify zero claim tuples; (4) run `alembic downgrade` (its
+`LOCK TABLE` + preflight refuses byte-stably if any `superseded` row exists — then rollback stays on a
+7b-core-compatible image and is a forward fix); (5) deploy the pre-7b image **only after** the
+downgrade succeeds. Redeploying the pre-7b image *before* 013 is applied is also safe. (7b-activation
+is separately forward-only-after-use.) Mirror this exact order in `DEPLOYMENT.md`/`RUNBOOK.md` — do not
+rely on the operator remembering that the forward drain also applies backward.
 
 ## Invariants
 
@@ -224,9 +250,17 @@ fix. (7b-activation is separately forward-only-after-use.)
   fault injected **after HTTP 2xx but before `_record_delivered` commits**; restart, requeue seq 1 →
   the guard's `published_at` predicate is false and seq 1 **is** sent — assert the revert is
   **expected pre-activation** (the future 014 test turns the same replay into a high-water no-op).
-- **Fenced claim (defect 3):** barrier publisher A after claim; expire its lease; B reclaims +
-  delivers; release A into **both** failure and success paths → B's terminal tuple/run/`published_at`
-  unchanged; A affects zero rows (audited no-op). Mutation removing the `claim_token` predicate fails.
+- **Fenced claim (defect 3) — both kinds, winner/loser (rev-2 F1):** barrier publisher A after claim;
+  expire its lease; B reclaims. **Decision:** B delivers; release A into **both** success and
+  stale-final-attempt failure paths → B's outbox tuple, run state, and `published_at` are unchanged and
+  `process_once` stays alive (A emits only `outbox_stale_claim_completion`). **POC email:** release A
+  **before** B sends → A must **not** redact the payload (byte-for-byte intact) or dead-letter it, and
+  B can still send; repeat with A's stale final-attempt failure. Mutation witnesses — (a) removing the
+  loser early-return and (b) making zero rows **raise** — must each **fail**.
+- **Downgrade race (rev-2 F2):** two connections — hold the `alembic downgrade` transaction after its
+  `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE`, attempt a concurrent `pending→superseded` transition,
+  and prove it **cannot** slip between the preflight and the DDL; mutation-removing/moving the
+  `LOCK TABLE` after the preflight reproduces the stranded-status race.
 - **A6 contract (F6):** the higher callback attempted ≥1 HTTP; the superseded lower callback got
   **zero** HTTP + the required audit/terminal evidence.
 - **Rollout order (F1):** on 012, seed one old claimed-looking future row + one real backoff row;
