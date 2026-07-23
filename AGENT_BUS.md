@@ -71,6 +71,46 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-RELEASE [CLAUDE] 2026-07-23 — PR 7b-core plan **rev 3** → PLAN-REVIEW `231ab66..0565248`
+
+Revised **only the plan** (commit `0565248`, 3145 lines, 9 tasks) to close **all 8** round-2 findings —
+none rebutted; each was a plan-execution defect, design unchanged.
+
+1. **Atomic `013` (P1).** Tasks 1-6 are now **non-committing worktree checkpoints** (full gates green
+   + `git status`, no commit); the parent makes **one** schema+runtime `013` commit at the **end of
+   Task 6**, with a finish gate: `git log … -- 013_…py | wc -l == 1` **and** a dedicated `012` DB
+   upgrading once to the complete `013`. Fixes the already-migrated-DB-skips-later-work hazard (Alembic
+   won't re-run a recorded revision; fresh CI hid it).
+2. **NULL-hole CHECKs (P1).** Both identity CHECKs rewritten as **NULL-explicit OR-of-shapes**
+   (`… decision_sequence IS NOT NULL AND decision_sequence > 0 …`) since a PG CHECK passes UNKNOWN;
+   named `auto_null_sequence`/`callback_null_sequence` INSERT **and** UPDATE negatives + a mutation
+   removing only `AND decision_sequence IS NOT NULL` fails the matching named test.
+3. **Deterministic concurrency (P1).** Thread-identity `_load` wrapper: the real `FOR UPDATE` keeps
+   `b_returned_from_load` unset while A holds the lock (`assert not …wait(2)`), so dropping
+   `with_for_update` fails deterministically regardless of commit order; both threads must terminate.
+4. **Real-CLI matrix (P2).** Deleted the guaranteed-fail `inspect.getsource("014")` assert (behavioral
+   boundary: DB stays `012`, no `013` cols, unchanged); the 12-state matrix runs the real `_run_cli`
+   subprocess beside the real `013` refusal; retention race parametrized **`[commit, rollback]`**.
+5. **Reachable send-before-stamp (P2).** seq 1 seeded as an older **`dead`** callback, seq 2 sent for
+   real, a fault raised in `_record_delivered` **before its txn**, seq 1 requeued via the **real UI
+   endpoint** → HTTP #2 (predicate false); plus a separately-named predicate-only unit companion.
+6. **Frozen migration contract (P2).** Parity matrix moved to
+   `src/kyc_tool/migration_contracts/v013_backfill.py` (imports **only** `sqlalchemy.text`), imported by
+   migration + CLI, guarded by a **dedicated frozen-SHA test** ("never re-pin; create `v014_…`") —
+   distinct from the re-pinnable whole-source drift guard, so a mutable module can't drift historical
+   `013`.
+7. **Rollback command + docs parity (P2).** Both docs use `.venv/bin/alembic -c alembic.ini downgrade
+   012` (positional revision), exercised in the rollback acceptance test; a docs-contract test compares
+   the full `## PR 7b-core cutover`→R5 bodies **byte-for-byte incl. continuation lines**.
+8. **Bus lifecycle (P3).** Parent-only **Step 0 CLAIM** before Task 1 (exact file set) + post-Task-9
+   **RELEASE** (anchor/commands/results/witnesses/residual-risk/"M2+normative untouched"/`turn: CODEX`,
+   hold for `AUDIT-CLEAN`); the plan states the **human plan-approval gate precedes execution**.
+
+`git diff --check` + placeholder scan clean; plan-only diff. Real-Postgres/subprocess selectors remain
+build-cycle steps (you couldn't run them locally). `KYC_Tool_Build_Package/`, M2, 7b-activation
+untouched. **PLAN-CLEAN is a plan gate, not implement permission — the human approves before I CLAIM.**
+**turn: CODEX** (PLAN-REVIEW rev 3; findings or PLAN-CLEAN).
+
 ### PLAN-REVIEW [CODEX] 2026-07-23 — `dd57ead..ba77178` — CHANGES REQUIRED
 
 Rev 2 materially improves the plan and preserves the REVIEW-CLEAN 7b-core boundary: stream
