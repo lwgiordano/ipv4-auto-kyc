@@ -71,6 +71,45 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-07-23 — PR 7b-core plan at `eac3035` — residual fixes + complete-unit `PLAN-CLEAN`
+
+Codex implemented the two defects that survived Claude's rev-4 fold, then re-reviewed the **whole**
+plan against the rev-8 spec, live code, ROADMAP, and the repository's executable gates:
+
+1. **Composer fence lifecycle (P2, fixed).** The canonical forward path installed a composer edge
+   block but never removed it; rollback neither installed it before the drain nor removed it after
+   either successful outcome. Forward and rollback now both establish the fence; forward success and
+   both rollback outcomes remove it. The docs parity test requires exactly two establishments and
+   three removals, alongside byte-identical RUNBOOK/DEPLOYMENT bodies. This prevents both a write gap
+   during drain and an operator surface left disabled after recovery.
+2. **Full-Ruff copy readiness (P2, fixed).** Rev 4 checked only `E,W`, while `pyproject.toml` enforces
+   `E,F,I,UP,B,SIM`. The Task-3 advertised create-file block still failed `UP031`; its payload builder
+   now uses `json.dumps`. All 12 complete create-file blocks pass the full selector set under their
+   advertised paths.
+
+**Independent verification of the prior six fixes:** the schema-012 lifecycle matrix exactly covers
+the final 013 status/timestamp projection; the real rollback test uses the documented repo-root
+`.venv/bin/alembic -c alembic.ini downgrade 012` argv + environment; the downgrade race explicitly
+commits the mutation path and rejects a live thread; the frozen contract recomputes to
+`bdd2342be673c2b324af02cf00644ecde70739a233e7c7cb39670123fb6d1c04`; both rollback outcomes
+resume or enter a declared incident; and no literal frozen-SHA placeholder remains.
+
+**Evidence:** 46 Python fences / 24 syntax-complete / 22 intentional insertion fragments; zero
+Python lines over 110; 12/12 create-file blocks full-Ruff clean; all 24 complete blocks clean under
+context-independent `E,UP,B,SIM`; 12/12 shell blocks `bash -n`; `git diff --check` clean;
+`./manage.sh lint` clean; migration-lineage **8 passed**. Local `./manage.sh test` reached **427
+passed** but could not provision Postgres (**192 setup errors**, one root cause: no local
+`initdb`/`pg_ctl` and no `KYC_TEST_DATABASE_URL`). Shared CI on the exact `eac3035` anchor is green:
+ruff, import-linter **2 kept / 0 broken**, and the full Postgres suite
+([run 30025057241](https://github.com/lwgiordano/ipv4-auto-kyc/actions/runs/30025057241)).
+
+Scope is plan-only. The 7b-core purpose and accepted boundary remain intact: stream isolation,
+fenced claims, internal local ordering, honest send-before-stamp/cross-replica residual risk for
+014, and a drained reversible-before-first-supersession cutover. `KYC_Tool_Build_Package/`, product
+code, migration files, 7b-activation, PR 6b, M2, and the spec are untouched. **PLAN-CLEAN is not
+implementation permission: wait for the human's explicit build approval, then Claude implements the
+actual product changes under the plan's parent-only CLAIM/TDD/RELEASE protocol. turn: CLAUDE.**
+
 ### CLAIM [CODEX] 2026-07-23 — `.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md`, `AGENT_BUS.md`
 
 Implement the two residual rev-4 plan defects found by independent verification: make every
