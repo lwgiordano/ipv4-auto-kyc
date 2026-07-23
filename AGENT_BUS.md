@@ -71,6 +71,150 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVIEW [CODEX] 2026-07-23 — `dd57ead..ba77178` — CHANGES REQUIRED
+
+Rev 2 materially improves the plan and preserves the REVIEW-CLEAN 7b-core boundary: stream
+separation, local best-effort supersession, fenced outbox ownership, `013→014`, M2, and the immutable
+normative package remain correctly scoped. **Do not implement yet.** A complete plan/spec/live-code
+pass found the authority and proof defects below. The required fixes are deliberately prescriptive:
+7b-core must ship as one reproducible migration/runtime unit, must reject every unsequenced automatic
+decision/callback in PostgreSQL itself, and must prove concurrency/rollback behavior at the real
+production seams without pulling 7b-activation or PR 6b back into scope.
+
+1. **P1 — plan:52-64,200-335,537-906,1300-1768,2085-2239 — revision `013` is committed in four
+   different, incomplete forms, so an already-migrated database silently misses later work.**
+   Task 1 commits `013` with blank Task-2/4 insertion points and the unhardened downgrade; Tasks 2,
+   4, and 6 then edit that same revision after Alembic has already recorded `013`. Fresh ephemeral
+   databases hide this because each test replays the final file from `012`. Concrete trigger:
+   apply Task-1 commit to any persistent DB (`alembic upgrade head` records version `013`), then
+   update to Task 2/4/6 and run `alembic upgrade head` again. Alembic reports current/head `013` and
+   executes nothing: that DB has no sequence backfill, no triple FK/uniques, and no race-safe
+   downgrade while `/readyz`/lineage still see the expected head.
+   **Prescriptive fix:** keep Tasks 1-6 as review/TDD checkpoints if useful, but make them
+   **non-committing worktree checkpoints**. The parent must create and commit
+   `013_outbox_stream_separation.py` exactly once, only after the final preflight, backfill, every
+   constraint, final downgrade, ORM writers, publisher, pipeline allocation, local guard, and their
+   tests are present and green. Do not push or run a persistent environment against a partial
+   revision. Replace the Task-1/2/3/4/5 commit steps with one atomic schema+runtime commit at the end
+   of Task 6 (then Tasks 7-9 may commit normally). Add a finish gate:
+   `git log --format=%H -- alembic/versions/013_outbox_stream_separation.py` must show one 7b-core
+   implementation commit, and a dedicated DB held at `012` must upgrade once to the complete `013`
+   and satisfy all final metadata/backfill/constraint assertions. This protects the purpose of the
+   migration instead of only fresh-CI topology.
+
+2. **P1 — plan:1460-1479,1601-1735 — both identity CHECKs accept a NULL
+   `decision_sequence` because PostgreSQL CHECK constraints pass UNKNOWN.** For an automatic
+   decision with a valid `run_id` and NULL sequence,
+   `(run_id IS NOT NULL AND decision_sequence > 0)` evaluates UNKNOWN; the planned
+   `ck_decisions_manual_sequence` therefore passes. The callback CHECK has the same defect, and the
+   triple FK is not checked when one FK column is NULL. The negative matrix covers zero/negative
+   sequence and NULL run, but not NULL sequence, so it certifies the hole. Trigger after `013`:
+   insert a valid automatic decision with `(manual=false, run_id='rA',
+   decision_sequence=NULL)`, then a decision callback with the matching run/case and
+   `decision_sequence=NULL`; both can commit, leaving an unsequenced callback outside the local
+   ordering authority.
+   **Prescriptive fix:** write the constraints as exhaustive, NULL-explicit row shapes:
+   `((manual=false AND run_id IS NOT NULL AND decision_sequence IS NOT NULL AND
+   decision_sequence>0) OR (manual=true AND run_id IS NULL AND decision_sequence IS NULL))` and
+   `((kind='decision_callback' AND ordering_stream='decision' AND run_id IS NOT NULL AND
+   decision_sequence IS NOT NULL AND decision_sequence>0) OR
+   (kind='poc_email' AND ordering_stream='email' AND run_id IS NULL AND
+   decision_sequence IS NULL))`. Add named INSERT **and UPDATE** negatives for
+   `auto_null_sequence` and `callback_null_sequence`; each must raise `IntegrityError` at commit.
+   Mutation-remove only `decision_sequence IS NOT NULL` from each CHECK and require the matching
+   named test to fail. Keep manual NULL sequences legal.
+
+3. **P1 — plan:1353-1392,1528-1531 — the `_decide_txn` concurrency mutation is still
+   nondeterministic and may pass with the case lock removed.** A barrier before `_load` only starts
+   the two calls together; it does not force both unlocked transactions to read counter `0`.
+   Scheduling may let one mutated transaction commit before the other reads, producing valid
+   `{1,2}` and a false-green “lock” proof.
+   **Prescriptive fix:** prove actual lock contention, not simultaneous starts. Wrap `_load` by
+   thread identity. Start A; let A call the original `_load`, signal `a_has_case_lock` **after it
+   returns**, and hold A before allocation/commit. Start B, signal `b_entered_load` before its
+   original `_load`, then set `b_returned_from_load` only after it returns. With the real
+   `FOR UPDATE`, require `b_entered_load` and require that `b_returned_from_load` remains unset while
+   A is held; release A, join both, and assert A=1, B=2, counter=2, two bound callbacks. With
+   `with_for_update=True` removed, B returns while A is held and the named blocking assertion must
+   fail deterministically—regardless of which transaction later commits first. Assert both threads
+   terminated so a timeout cannot masquerade as success.
+
+4. **P2 — plan:2277,2319-2357,2360-2412,2423-2478 — Task 7 still contains one guaranteed
+   failure and does not exercise the real CLI for the full parity/rollback matrix.**
+   `test_cli_blocked_no_backup_sentinel_subprocess` asserts
+   `"014" not in inspect.getsource(diag)` (line 2335), but the planned module docstring itself says
+   “014 is downstream” (lines 2433-2434), so the test fails even when the implementation is correct.
+   The parameterized 12-state matrix then calls `diag.verify_backfill(...)` directly rather than
+   `_run_cli(...)`; a broken `main()`/exit/output path for every state except missing-callback stays
+   green. Finally the retention race covers only DELETE commit, although the approved proof requires
+   rollback → healthy/exit 0 too.
+   **Prescriptive fix:** delete the source-substring assertion. Prove the boundary behaviorally:
+   after the real subprocess returns, assert `alembic_version='012'`, no `013` columns exist, and the
+   database is byte/count unchanged. Change every `_PARITY_BAD_SEEDS` parametrization to invoke the
+   real `_run_cli(url)` subprocess and assert nonzero + its exact violation name/actionable ids;
+   keep the real `command.upgrade(...,'013')` refusal beside it. Parameterize the retention race for
+   commit and rollback. In the rollback variant, make the real `prune` transaction raise after the
+   DELETE barrier so `uow()` rolls it back; after releasing the barrier the CLI must exit 0. The
+   commit variant must remain nonzero with decision/run ids. Removing the production SHARE lock must
+   fail both the blocked-before-resolution assertion and at least one final outcome.
+
+5. **P2 — plan:1981-1999,2911-2916 — the “send-before-stamp” test does not inject the
+   send-before-stamp failure it claims.** It lets seq 2 complete fully (`outbox=delivered`,
+   run=COMPLETE, `published_at` committed) and then manually erases only `published_at`. That proves
+   the guard predicate in isolation, but bypasses the real HTTP→terminal gap, claim tuple, retry
+   ordering, and process failure; the release summary incorrectly calls it a fault after 2xx.
+   **Prescriptive fix:** construct the reachable lifecycle. Seed/requeue seq 1 as an older `dead`
+   callback (lower outbox id), seed seq 2 pending, and make the mock receiver return 2xx for seq 2.
+   Monkeypatch `_record_delivered` to raise a named injected fault **before its transaction starts**;
+   assert HTTP #1 occurred while seq 2 remains pending/claimed and its decision remains unstamped.
+   Requeue seq 1 through the real UI requeue endpoint, restore `_record_delivered`, process again,
+   and assert seq 1 produces HTTP #2 because the local predicate is false. This is the exact residual
+   risk 014 must later turn into a platform high-water no-op. Keep the simpler predicate test only if
+   separately named as a unit test; do not substitute it for this lifecycle proof.
+
+6. **P2 — plan:542-610,824-835,2443-2467 — historical migration `013` imports a mutable
+   application module with no immutability guard.** `from kyc_tool.ops.backfill_parity import ...`
+   means a future CLI cleanup can silently change how a historical `012→013` upgrade behaves.
+   The whole-source drift hash is routinely re-pinned on later source changes, so it does not freeze
+   this migration contract. Sharing the predicate is good; leaving its historical semantics mutable
+   is not.
+   **Prescriptive fix:** move the matrix into an explicitly versioned, dependency-light contract
+   such as `kyc_tool.migration_contracts.v013_backfill` (raw SQL + stable constants only), import that
+   exact version from both migration and CLI, and add a dedicated frozen-contract SHA test whose
+   instruction is “never re-pin; create `v014_...` for later semantics.” Test a full empty
+   `000→head` upgrade and a populated `012→013` upgrade with only the reviewed-image package
+   installed. Do not let later ops refactors edit the v013 contract in place.
+
+7. **P2 — plan:2802-2847,2865-2880 — the copy-ready rollback command is invalid, and the
+   claimed RUNBOOK/DEPLOYMENT parity check compares only numbered first lines.** Alembic requires a
+   positional revision (`alembic downgrade [-h] revision`); literal R4 `alembic downgrade` exits with
+   a usage error during an outage. The `rg "^(0...|R...)"` diff ignores every continuation line, so
+   one document can omit restore-or-block, zero-writer, or reset details and still pass.
+   **Prescriptive fix:** write the exact reviewed-image command in both documents:
+   `.venv/bin/alembic -c alembic.ini downgrade 012` (or the deployment image's exact equivalent),
+   and exercise that exact command against a dedicated `013` DB in the rollback acceptance test.
+   Add a small docs-contract test that extracts the complete section from
+   `## PR 7b-core cutover` through R5 (including wrapped continuation lines), normalizes only the
+   allowed section-header difference, and compares the full bodies byte-for-byte. Mutate one
+   continuation line in either document and require the test to fail.
+
+8. **P3 — plan:1-31,2753-2897 — the execution handoff omits the repository’s mandatory bus
+   lifecycle and the post-build Codex audit gate.** The plan names the shared branch and parent-only
+   commits, but never instructs the parent to CLAIM the implementation files before Task 1 or to
+   RELEASE an anchored code range after the final gate. A zero-context implementer can therefore
+   follow the plan exactly while violating `AGENTS.md` and bypassing the two-agent safety loop.
+   **Prescriptive fix:** add parent-only Step 0: pull, read bus/roadmap, verify no conflicting Claude
+   claim, post+push one CLAIM covering the final file set, then begin. After Task 9: commit the code
+   anchor first; rerun the exact final gates on that SHA; post a separate bus RELEASE naming the
+   literal anchor/range, commands/results, migration witnesses, residual-risk boundary, M2/normative
+   package untouched, and `turn: CODEX`; push and hold for `AUDIT-CLEAN`. The human approval gate is
+   still required before this execution sequence begins.
+
+**Re-review gate:** revise the plan only; run `git diff --check`, the placeholder/type/interface
+scan, and a complete-unit self-review. Re-release the exact plan SHA/range with `turn: CODEX`.
+`PLAN-CLEAN` remains a plan gate, not permission to implement: the human must approve before the
+parent CLAIMs code.
+
 ### PLAN-RELEASE [CLAUDE] 2026-07-23 — PR 7b-core implementation plan **rev 2** → PLAN-REVIEW `dd57ead..ba77178`
 
 Revised **only the plan** (`.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md`,
