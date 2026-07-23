@@ -1,4 +1,4 @@
-# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 7)
+# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 8)
 
 ## Context
 
@@ -112,8 +112,9 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   decision to exactly one surviving `decision_callback` outbox row by `run_id`, **refusing with the
   decision/run ids** on any missing, orphan, or duplicate mapping (the decide path writes decision +
   callback in one transaction, so a missing row means retention/corruption and its safe order **cannot
-  be guessed** — fail closed; platform-authoritative reconstruction is 7b-activation's job, never a
-  `decided_at` fallback); (2) `decision_sequence = row_number() OVER (PARTITION BY decision.case_id
+  be guessed** — fail closed; recovery is **restore-from-authoritative-backup or remain on 012 in
+  `BLOCKED_NO_AUTHORITATIVE_MAPPING`** (§Rollout step 0; 014 is downstream and cannot repair this),
+  never a `decided_at` fallback); (2) `decision_sequence = row_number() OVER (PARTITION BY decision.case_id
   ORDER BY outbox.id)`, copy it to the matching outbox row, seed `last_decision_sequence = per-case
   max`; manual stays NULL. Other preflight refusals (raise, roll back): `>1` callback per run,
   sequenced email row, automatic decision with NULL run / non-positive sequence. A **defensive**
@@ -235,19 +236,16 @@ read-only 013 preflights at `READ COMMITTED` (every `manual=false` decision maps
 `decision_callback` by `run_id`; no orphan/duplicate; all case/run/kind identities valid), prints
 actionable decision/run/outbox ids, and exits nonzero on any violation. The result is valid **only
 while the schedule stays suspended and the zero-running attestation holds**. **On failure, abort here
-— before stopping service** (no outage begun). **Recovery (rev-6 P2 — the only valid success path is
-restoration):** restore the exact historical callback evidence from authoritative backup, then re-run
-the diagnostic clean. If no restorable backup exists, the database is **`BLOCKED_NO_AUTHORITATIVE_
-MAPPING`**: core stays on 012 and **cannot proceed** — the earlier "defer to 7b-activation" option was
-**wrong** (7b-activation is migration `014`, `down_revision='013'`; its reconciliation cannot run on a
-012 schema that has not passed 013, so no `014` command is a substitute). **Open decision (escalated to
-the user):** whether the production/staging inventory can actually contain a no-backup missing mapping
-— and thus whether a **separate, numbered pre-013 schema-012 authenticated reconciliation unit** (which
-013 would verify + consume offline; 013 stays network-free) is warranted — is a real architectural
-choice. Rev 7 adopts **restore-or-block** as the default pending that sign-off; a KYC system's 7-year
-retention implies authoritative backups exist, so block-or-restore is expected to suffice. Never
-fabricate a callback, delete an immutable decision, or fall back to `decided_at`. Either abort branch
-must **explicitly
+— before stopping service** (no outage begun). **Recovery — restore-or-block (user-confirmed decision,
+2026-07-23):** the only valid success path is to **restore the exact callback row from authoritative
+backup and rerun the diagnostic clean**; otherwise **remain on 012 in `BLOCKED_NO_AUTHORITATIVE_MAPPING`**
+(the exact sentinel — one token, no whitespace). **014 is downstream (`down_revision='013'`) and cannot
+repair this** — no `014` command is a substitute. There is **no** pre-013 reconciliation unit in this
+approved core design (the user considered and declined it). Backup availability is an **operator
+prerequisite**, not a consequence of the retention setting. Never fabricate a callback, delete an
+immutable decision, or fall back to `decided_at`. The CLI contract on this path: **nonzero exit, the
+exact stable `BLOCKED_NO_AUTHORITATIVE_MAPPING` sentinel plus actionable decision/run ids, and no
+writes**. Either abort branch must **explicitly
 re-settle retention** (keep it frozen while restoring/rerunning, or re-enable it if the cutover is
 deferred) — never leave a compliance process silently disabled. On success proceed. (1) pause submission, edge-block
 composer, disable autoscaling/restarts; (2) hard-stop API/pipeline/outbox/`dev_worker` (queue **and**
@@ -328,16 +326,20 @@ rely on the operator remembering that the forward drain also applies backward.
   (no outage). Cover healthy / duplicate / orphan / missing mappings. Mutation removing the
   retention-freeze-then-diagnostic step from the rollout contract **must fail**. Keep the 013
   migration-refusal test as defense in depth (the two share the predicate).
-- **Retention-race quiescence (rev-6 P1) — two connections, real retention seam:** pause A **after** its
-  callback `DELETE` but **before commit**; start the real CLI in B; assert B **cannot report green**
-  (its `LOCK TABLE outbox IN SHARE MODE` waits on A). After A **commits**, B returns **nonzero** with
-  the decision/run ids; repeat with A **rolling back** and require **green**. Mutation removing the
-  table lock — **or** allowing the diagnostic before the zero-running retention attestation —
-  reproduces "green diagnostic → retention commit → 013 refusal" and **must fail**. Exercise the real
-  CLI entry point, not a helper.
-- **No-backup blocked state (rev-6 P2):** a missing mapping with **no** restorable backup yields the
-  named **`BLOCKED_NO_AUTHORITATIVE_MAPPING`** outcome **before** maintenance, leaves schema/data
-  **unchanged**, and the test proves **no existing `014` CLI** can be invoked as a substitute
+- **Retention-race — DB-lock half (rev-6 P1; the *automatable* proof):** two connections, real retention
+  seam: pause A **after** its callback `DELETE` but **before commit**; start the real CLI in B; assert B
+  **cannot report green** (its `LOCK TABLE outbox IN SHARE MODE` waits on A). After A **commits**, B
+  returns **nonzero** with the decision/run ids; repeat with A **rolling back** and require **green**.
+  Mutation **removing the table lock must fail**. Exercise the real CLI entry point, not a helper. **The
+  orchestrator "zero active retention tasks *before* it starts deleting" half is NOT provable in pytest**
+  (retention is a scheduled one-shot with no in-repo liveness registry) — it is a **deployment/runbook
+  acceptance** (§Docs): the exact `TODO(integration)` orchestrator command + output proving zero
+  running tasks. The two halves are distinct evidence; do not let a helper-only test pretend to prove
+  the external attestation.
+- **No-backup blocked state (rev-6 P2; user-confirmed restore-or-block):** a missing mapping with **no**
+  restorable backup makes the real CLI exit **nonzero** with the **exact** `BLOCKED_NO_AUTHORITATIVE_MAPPING`
+  sentinel (asserted literally) + actionable decision/run ids, **before** maintenance, leaving
+  schema/data **unchanged**; the test proves **no existing `014` CLI/module** is invoked as a substitute
   (7b-activation is downstream of 013).
 - **Stream separation:** a perpetually-failing POC email never blocks the case's decision callback.
 - **Sequence allocation + per-case uniqueness (F1):** two concurrent decides on one case → strictly
@@ -378,12 +380,20 @@ rely on the operator remembering that the forward drain also applies backward.
 ## Docs + governance (in the build)
 
 `OVERVIEW.md` (stream separation + local ordering + the 7b-core/activation boundary; the guard is
-best-effort), `RUNBOOK.md`/`DEPLOYMENT.md` (the **step-0 pre-window `verify_pr7b_core_backfill` diagnostic + retention
-freeze, run before any outage with the abort-before-service-stop path**; drained cutover **without** a
-pre-013 reset; the post-013 `reset_interrupted_outbox_claims` CLI; reversible-before-first-supersession
-rollback + the preflight query), `AUDIT_FINDINGS.md` (the **A6 exception** + backfill = deterministic reconstruction + the
-local/cross-replica boundary), `.agents/ROADMAP.md` (the split + renumber, this commit; "reversible"
-→ "reversible before first local supersession"). No ADR needed for core; ADR-008 covers 7b-activation.
+best-effort), `RUNBOOK.md`/`DEPLOYMENT.md` — the **step-0 pre-window contract spelled out in full, not
+abbreviated to "freeze" (rev-7 P3):** (i) **suspend the retention schedule**, (ii) **terminate/wait for
+every active retention task**, (iii) **capture target-orchestrator zero-running evidence** — the exact
+ECS/Fargate or EC2 command + expected output; if the production substrate is not yet chosen, this is a
+blocking **`TODO(integration)`** deployment prerequisite (a pytest does **not** prove it), (iv) run the
+digest-pinned `verify_pr7b_core_backfill` diagnostic with the schedule still suspended, (v) on **every**
+abort path explicitly re-enable or deliberately keep-frozen retention; plus the **restore-or-block**
+recovery (restore from authoritative backup, else `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012 — backup
+availability is an **operator prerequisite**), the drained cutover **without** a pre-013 reset, the
+post-013 `reset_interrupted_outbox_claims` CLI, and reversible-before-first-supersession rollback +
+preflight query. `AUDIT_FINDINGS.md` (the **A6 exception** + backfill = deterministic reconstruction +
+the local/cross-replica boundary), `.agents/ROADMAP.md` (the split + renumber, this commit; "reversible"
+→ "reversible before first local supersession"; the restore-or-block prerequisite). No ADR needed for
+core; ADR-008 covers 7b-activation.
 
 ## Out of scope (YAGNI)
 

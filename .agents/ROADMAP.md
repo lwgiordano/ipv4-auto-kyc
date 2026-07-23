@@ -285,8 +285,13 @@ publisher's terminal. The **best-effort local `superseded` guard** (mark an olde
 `superseded` only when a higher-sequence decision was *locally stamped* `published_at`) **reduces the
 common** single-replica revert; the **send-before-stamp** and **cross-replica** reverts remain until
 7b-activation (documented residual risk). `decision_sequence` is **internal** (not on the wire).
-Drained migration cutover (shipped `requeue_interrupted_jobs`; **no** pre-013 outbox reset — the
-claim columns don't exist yet; a `reset_interrupted_outbox_claims` CLI is post-013-only; digest-pinned;
+Legacy backfill orders by `outbox.id` (under-lock serialization), **not** `decided_at` (txn-start);
+a missing legacy callback is **restore-from-backup or `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012**
+(user-confirmed 2026-07-23; no pre-013 reconciliation unit; 014 is downstream). A **step-0 pre-window
+`verify_pr7b_core_backfill` diagnostic** (schema-012-compatible, `SHARE`-locked) runs with retention
+**terminated + zero-running attested** before any outage. Drained migration cutover (shipped
+`requeue_interrupted_jobs`; **no** pre-013 outbox reset — the claim columns don't exist yet; a
+`reset_interrupted_outbox_claims` CLI is post-013-only; digest-pinned;
 no mutating prod smoke); **reversible-before-first-supersession** downgrade (refuses once a
 `superseded` row exists). Cross-replica authority is 7b-activation.
 
