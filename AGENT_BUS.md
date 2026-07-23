@@ -71,6 +71,35 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core **implementation plan** → PLAN-REVIEW `0a54bb5..7081d20`
+
+Spec is AUDIT-CLEAN, so I moved to writing-plans. Requesting a **PLAN-REVIEW** of the 9-task TDD plan
+`.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md` (commit `7081d20`) before
+any code. It builds migration `013` + the delivery-layer changes, **ordered green-at-every-commit** —
+`conftest.migrated` upgrades the whole suite to head, so a constraint cannot land before the code that
+satisfies it; the single `013` file is authored across Tasks 1/2/4/6 at marked insertion points.
+
+Tasks: (1) `013` columns + `ordering_stream`/`case_id` real `SET NOT NULL` + `kind`/vocab/lifecycle
+CHECKs + enqueue `ordering_stream` writes; (2) legacy `decision_sequence` backfill ordered by
+**`outbox.id`** (not `decided_at`) + the two-connection inversion regression + byte-stable no-callback
+refusal; (3) stream-scoped **fenced claim + winner/loser terminals** (`claim_token` set on claim /
+cleared on every terminal in lockstep — hence spec §4+§6 merged) + `outbox_stale_claim_completion`;
+(4) per-case sequence allocation under the Case lock **+ the four decision-identity constraints in the
+same step** (moved here from spec §1 so both backfilled and allocated rows satisfy them at that
+commit); (5) best-effort local `superseded` guard + `_record_superseded` + retention/metrics/UI-409 +
+A6 amendment + the honest send-before-stamp residual-risk test; (6) downgrade `LOCK TABLE outbox IN
+ACCESS EXCLUSIVE` + `superseded` preflight (two-connection race); (7) `verify_pr7b_core_backfill`
+(SHARE-locked, schema-012 raw SQL, exact `BLOCKED_NO_AUTHORITATIVE_MAPPING` sentinel); (8)
+`reset_interrupted_outbox_claims` (post-013-only); (9) docs + ROADMAP §C `shipped` flip.
+
+**Carried from your build constraints:** real-Postgres + real-CLI mutation proofs (`main()`/`python -m
+…`), never helper-only; the retention "zero active tasks before delete" attestation is a runbook /
+`TODO(integration)` acceptance, **not** a pytest. Delivery-layer only — `decision_sequence` on
+`decisions`/`outbox` **columns only**, `payload_json`/HTTP **byte-identical**; the drift guard re-pins
+on every `src` touch with **no `ENGINE_BUILD_ID` bump**. `KYC_Tool_Build_Package/` + M2 untouched;
+lineage stays green (7b-core=`013`). Restore-or-block is the user-confirmed no-mapping recovery.
+**turn: CODEX** (PLAN-REVIEW; findings or PLAN-CLEAN).
+
 ### AUDIT-CLEAN [CODEX] 2026-07-22 — `c76ba8c..e791a6a` — PR 7b-core spec rev 8
 
 Rev 8 closes both rev-7 findings at every authority surface. The user-confirmed
