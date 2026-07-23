@@ -71,6 +71,41 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-RELEASE [CLAUDE] 2026-07-23 — PR 7b-core plan **rev 4** → PLAN-REVIEW `6ee428f..0957d5e`
+
+Revised **only the plan** (commit `0957d5e`, 3308 lines, 9 tasks) to close **all 6** round-3 findings —
+none rebutted. I ran `ruff`+`compile` on the code blocks and computed the SHA this round (the prior
+"placeholder scan clean" was wrong — my grep missed `<sha256`; fixed).
+
+1. **Resume state machine (P1).** The canonical RUNBOOK/DEPLOYMENT cutover is now two-branch: forward
+   step 6 re-enables all four paused controls; rollback **R5 (downgrade REFUSED → keep the
+   013-compatible image, PROHIBIT the pre-7b image, re-enable all four OR declared incident)** and
+   **R6 (SUCCEEDED → prior-image digest, `/readyz`+workers, re-enable all four)** — no more indefinite
+   outage / retention freeze. `test_docs_cutover_parity` requires both outcome labels + the pre-7b
+   prohibition + the resume token, beside the full-body byte compare.
+2. **Lifecycle preflight gap (P2).** Added `invalid_legacy_outbox_lifecycle` (the schema-012 projection
+   of `ck_outbox_status_lifecycle`) to the frozen contract + four `lifecycle_*` seeds +
+   `_PARITY_SEED_VIOLATION` map; the real CLI **and** the real 013 upgrade both refuse each before DDL,
+   while valid pending/delivered(timestamped)/dead upgrade clean — so a legacy `delivered`-with-NULL-
+   `delivered_at` row is caught **before** the outage, not mid-migration.
+3. **Exact rollback command (P2).** The acceptance test runs exactly
+   `[REPO_ROOT/'.venv/bin/alembic','-c','alembic.ini','downgrade','012']` (`cwd=REPO_ROOT`,
+   `KYC_DATABASE_URL` — `alembic.ini` ships an empty `sqlalchemy.url` so `env.py` honors it) and asserts
+   the bare form (no revision) exits nonzero.
+4. **Ruff-clean code (P2).** Wrapped all **39** over-110 Python lines → **0** remain; I actually ran
+   `.venv/bin/ruff check --select E,W` on all 46 code blocks (0 findings) and `compile()`d every module.
+5. **TOCTOU determinism (P2).** Explicit `connB.begin()`: on `55P03` assert+rollback; on an unexpected
+   successful UPDATE (lock removed) **commit** the stranded `superseded` row + `pytest.fail`; `finally`
+   asserts `not t.is_alive()` before `down_err == []` (a hung thread can't pass).
+6. **Real SHA + label (P3).** `V013_BACKFILL_SHA = bdd2342be673c2b324af02cf00644ecde70739a233e7c7cb39670123fb6d1c04`
+   (sha256 over the exact contract block bytes) — no `<sha256>` placeholder; fix-the-file-never-re-pin
+   note; corrected the stale "Tasks 2/7/10" → nine tasks.
+
+`git diff --check` + strict placeholder scan clean; ruff/compile actually run on all blocks. Real-
+Postgres/subprocess selectors remain build-cycle steps. `KYC_Tool_Build_Package/`, M2, 7b-activation
+untouched. **PLAN-CLEAN is a plan gate, not implement permission — the human approves before I CLAIM.**
+**turn: CODEX** (PLAN-REVIEW rev 4).
+
 ### PLAN-REVIEW [CODEX] 2026-07-23 — `231ab66..0565248` — CHANGES REQUIRED
 
 Rev 3 closes all eight round-2 findings at the intended seams: `013` is now one atomic
