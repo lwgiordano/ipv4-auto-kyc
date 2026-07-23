@@ -101,13 +101,27 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
 - **`kind`/`stream`/identity as an exhaustive OR of the two complete row shapes** (not implications):
   `(kind='decision_callback' AND ordering_stream='decision' AND run_id NOT NULL AND decision_sequence
   > 0) OR (kind='poc_email' AND ordering_stream='email' AND run_id NULL AND decision_sequence NULL)`.
-- **Legacy backfill:** per case `decision_sequence = row_number() OVER (PARTITION BY case_id ORDER BY
-  decided_at, id)` for callback decisions (`manual=false AND run_id NOT NULL`); manual NULL; bind
-  every existing `decision_callback` outbox row (incl. **dead**) via `run_id`; seed
-  `last_decision_sequence = per-case max`. Preflight refusals (raise, roll back): orphan/dup-run
-  callback, `>1` callback per run, remaining NULL decision-stream sequence, sequenced email row,
-  automatic decision with NULL run / non-positive sequence. `AUDIT_FINDINGS.md`: deterministic
-  reconstruction (`decided_at,id`), not proof of publication order.
+- **Legacy backfill — ordered by `outbox.id`, not `decided_at` (rev-4 F1):** `decided_at` is
+  `server_default now()`, and Postgres `now()` is the **transaction-start** time; `_decide_txn` opens
+  its transaction (`pipeline.py:361`) **before** acquiring the case `FOR UPDATE` (`_load`, `:362`), so
+  two same-case decides can carry `decided_at` in the **opposite** order from their lock-serialized
+  commit order — ordering the backfill by `decided_at` would then assign the *newer* callback the
+  *lower* sequence, and the local guard would suppress the actually-newer callback (the exact loss this
+  unit reduces). `outbox.id` is allocated at enqueue (`:506`) **under** that lock, so it preserves the
+  true same-case serialization. Recipe: (1) build a **one-to-one** map from every `manual=false`
+  decision to exactly one surviving `decision_callback` outbox row by `run_id`, **refusing with the
+  decision/run ids** on any missing, orphan, or duplicate mapping (the decide path writes decision +
+  callback in one transaction, so a missing row means retention/corruption and its safe order **cannot
+  be guessed** — fail closed; platform-authoritative reconstruction is 7b-activation's job, never a
+  `decided_at` fallback); (2) `decision_sequence = row_number() OVER (PARTITION BY decision.case_id
+  ORDER BY outbox.id)`, copy it to the matching outbox row, seed `last_decision_sequence = per-case
+  max`; manual stays NULL. Other preflight refusals (raise, roll back): `>1` callback per run,
+  sequenced email row, automatic decision with NULL run / non-positive sequence. A **defensive**
+  post-backfill `GROUP BY case_id, decision_sequence HAVING count(*)>1` assertion (`row_number` cannot
+  produce a per-case duplicate, so it always holds). `AUDIT_FINDINGS.md`: order authority is
+  `outbox.id` (the under-lock serialization for rows the guard can deliver), a deterministic
+  reconstruction, **not** proof of original publication order; a legacy automatic decision without a
+  surviving callback is a fail-closed migration refusal.
 - **Downgrade — reversible before first local supersession, race-safe (F3 + rev-2 F2):** the **first
   statement** in `downgrade()` is `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` — a bare
   `EXISTS(status='superseded')` preflight is a TOCTOU race (its `ACCESS SHARE` is compatible with a
@@ -259,8 +273,18 @@ rely on the operator remembering that the forward drain also applies backward.
   callback per run**; sequenced email; and every illegal status tuple (`pending`+`delivered_at`,
   `pending`+`resolved_at`, `dead`+claim tuple, orphan `claimed_by`, `superseded`+NULL `resolved_at`,
   `delivered`+claim). `up→down→up` clean on a no-supersession DB; **downgrade refuses byte-stably with a
-  seeded `superseded` row** (F3); the backfill **preflight refuses** a seeded pre-existing per-case
-  duplicate (F1). Mutation-removing any CHECK/index/FK/`SET NOT NULL` fails.
+  seeded `superseded` row** (F3). (No "seeded pre-existing per-case duplicate" fixture — a 012 DB has
+  no `decision_sequence` column and 013's own `row_number()` creates the values; the per-case UNIQUE is
+  proven by the runtime INSERT/UPDATE negatives above, not a migration fixture.) Mutation-removing any
+  CHECK/index/FK/`SET NOT NULL` fails.
+- **Backfill order authority (rev-4 F1) — two connections, real Postgres:** start B's decide
+  transaction (fixing `B.decided_at`) and pause it **before** the case lock; start A later, lock the
+  case, insert decision + callback, commit; release B to lock, insert, commit. Assert `B.decided_at <
+  A.decided_at` **while** `A.outbox_id < B.outbox_id`; upgrade 013; assert **A=seq 1, B=seq 2,
+  counter=2**, and delivering both leaves **B** as the platform's last callback with **neither**
+  superseded. Mutation: ordering the backfill by `decided_at,id` reproduces B's erroneous suppression
+  and **must fail**. Separately, seed a valid `manual=false` decision with **no** surviving callback
+  row on 012 and prove the migration **refuses byte-stably** (no `decided_at` fallback).
 - **Stream separation:** a perpetually-failing POC email never blocks the case's decision callback.
 - **Sequence allocation + per-case uniqueness (F1):** two concurrent decides on one case → strictly
   increasing unique sequences, counter=max. Direct **INSERT and UPDATE** negatives: **two distinct
