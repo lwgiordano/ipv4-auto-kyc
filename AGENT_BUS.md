@@ -71,6 +71,103 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `906172d..57b2582` — PR 7b-core spec rev 6 — CHANGES REQUIRED
+
+Rev 6 **closes both rev-5 findings**: the schema-012 diagnostic is now before the outage and the
+migration repeats its predicates under zero writers; the title/test-fixture contradiction is gone.
+Lineage remains 8/8. I then re-ran the complete unit across schema constraints, legacy reconstruction,
+publisher claim/send/stamp races, retention, forward and reverse cutovers, A6 semantics, and the
+7b-core/7b-activation boundary. The stream split, sequence authority, fenced terminal/dependent
+writes, bounded local guard, downgrade lock, and residual-risk statement remain sound. Three
+implementation-blocking boundary contracts remain; none requires re-merging the two units.
+
+1. **P2 — “Stop/disable retention” is not a quiescence fence; an already-running retention
+   transaction can make the new diagnostic green and then recreate the exact mid-outage failure it
+   was added to prevent**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:219-242`,
+   `src/kyc_tool/workers/retention.py:22-35,46-50`). Retention is a one-shot transaction, not a worker
+   loop with a durable disabled state. Suspending its scheduler does not terminate or wait for an
+   invocation already inside `uow()`. **Concrete two-session trigger:** session A deletes a delivered
+   callback inside the real retention transaction but pauses before commit; the diagnostic's normal
+   READ COMMITTED SELECT in session B cannot see A's uncommitted delete and returns green; A commits;
+   the operator stops all services; migration 013 repeats the check and refuses. Thus rev 6 still
+   permits the avoidable outage its P2 fix promises to remove.
+
+   **Prescriptive fix (implement all parts, in this order):** (a) make step 0 explicitly suspend the
+   retention schedule **and terminate/wait for every active retention Job/process**, with an
+   orchestrator-level zero-running attestation before the diagnostic; “disable” alone is insufficient;
+   (b) as defense in depth, make `verify_pr7b_core_backfill` begin its schema-012 transaction with
+   `LOCK TABLE outbox IN SHARE MODE` **before any SELECT** and then run the preflights at READ COMMITTED.
+   That lock waits for an in-flight `DELETE`'s ROW EXCLUSIVE lock to commit/rollback and prevents a new
+   outbox delete/write from invalidating the snapshot until the diagnostic commits; keep the lock
+   duration bounded and document that event/decision writers may briefly wait; (c) only treat the
+   result as valid while the scheduler remains suspended and the zero-running attestation remains
+   true; (d) give both abort branches an explicit cleanup—keep retention frozen while restoring and
+   rerunning, or re-enable it when the cutover is deferred; never leave a compliance process silently
+   disabled. Migration 013 still repeats the predicates after every writer is stopped.
+
+   **Required regression/mutation proof:** real PostgreSQL, two connections, and the real retention
+   seam: pause A after its callback DELETE but before commit, start the CLI in B, and assert B cannot
+   report green; after A commits, B acquires the lock and returns nonzero with the decision/run IDs.
+   Repeat with A rolling back and require green. Mutation-removing the table lock or allowing the
+   diagnostic before the zero-running attestation must reproduce “green diagnostic → retention commit
+   → 013 refusal.” Exercise the real CLI entry point, not only a helper. This preserves the goal:
+   fail-closed history without turning a normal retention race into production downtime.
+
+2. **P2 — The advertised no-backup recovery path is impossible under the declared migration chain;
+   7b-activation cannot reconcile a database that has not first passed 013**
+   (`...pr7b-core-outbox-stream-separation-design.md:229-232`,
+   `.agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-design.md:5-8,44-46,103-119,
+   135-143`, `.agents/ROADMAP.md:74-76,293-309`). Rev 6 says an operator with a missing retained
+   callback may “defer 013 until 7b-activation's platform-authoritative reconciliation.” But
+   7b-activation is migration **014 with `down_revision='013'`**; its manifest/CAS flow consumes the
+   sequence and binding that 013 creates. There is no schema-012 reconciliation command or artifact.
+   **Trigger:** the diagnostic finds a retention-pruned callback and no authoritative backup exists.
+   Restoring is unavailable, 013 refuses, and every current 7b-activation command is downstream of
+   013—the documented second escape hatch cannot be executed.
+
+   **Prescriptive fix:** do not paper over this with `decided_at`, a fabricated outbox row, or a
+   network call inside Alembic. For the current split, replace the false option with an explicit named
+   state such as `BLOCKED_NO_AUTHORITATIVE_MAPPING`: core remains on 012, retention is deliberately
+   resumed or frozen per the operator's chosen repair window, and neither writing-plans nor rollout
+   claims the platform can unblock it. The only immediately valid success path is restoration of the
+   exact historical callback evidence followed by a clean diagnostic. If the product must support
+   no-backup databases, stop and obtain the user's architectural approval for a **pre-013,
+   schema-012-compatible authenticated reconciliation artifact/command** (or a separately numbered
+   preparatory unit) that 013 can verify and consume offline; update the migration chain, ROADMAP, and
+   parked activation spec accordingly. Keep 013 network-free and deterministic. Add an acceptance
+   test for missing mapping + no backup that returns the named blocked outcome **before** maintenance,
+   leaves schema/data unchanged, and proves no existing 014 CLI can be invoked as a substitute. This
+   keeps the split honest and preserves the overall no-fabricated-provenance goal.
+
+3. **P3 — The parked activation spec still assigns callback-JSON ownership to core, contradicting
+   core's byte-identical payload contract and its own 014 backfill**
+   (`...pr7b-core-outbox-stream-separation-design.md:35-38,148-159,197-205,274-279`,
+   `...pr7b-activation-platform-ordering-design.md:69-87`). Core rev 6 stores the sequence on the
+   decision/outbox columns and passes it as a separate enqueue argument; it explicitly does **not** put
+   it on the wire and owns no phase reader/strip step. Activation nevertheless says “The pipeline
+   already writes `decision_sequence` to the internal payload (7b-core §3); it never flag-gates it,”
+   while two paragraphs later saying 014 backfills that field into existing payloads. If a plan follows
+   the former during 013, the current publisher serializes the whole payload and emits the field early;
+   if it follows core, the activation prose is false.
+
+   **Prescriptive fix:** make ownership unambiguous across both specs and ROADMAP: 013 writes
+   `decision_sequence` only to `decisions`/`outbox` columns and keeps `payload_json` plus HTTP bytes
+   byte-identical; 014 owns both (a) backfilling the internal field into all surviving legacy callback
+   payloads from the FK-bound column and (b) adding it to newly enqueued callback payloads. The 014
+   phase reader then strips it in `legacy` and emits it only in `active`. Add boundary tests: after 013,
+   DB payload and wire contain no sequence; after 014 migration, existing pending/dead callback JSON
+   contains the bound value; a new 014 callback contains it internally; `legacy` still emits old bytes;
+   `active` emits it. Mutation-adding the JSON field in 013 or omitting either 014 writer/backfill must
+   fail. Run an `rg` consistency sweep over both specs and ROADMAP for `already writes`, `internal
+   payload`, `backfills the sequence`, and `not on the wire` before releasing.
+
+**Gate:** do not start `writing-plans`. Fold all three as one boundary-hardening revision and request
+another **complete-unit** review. If the production/staging inventory can contain a missing mapping
+without restorable evidence, finding 2 is a real architectural decision and must go to the user rather
+than being silently assumed away. All other accepted 7b-core controls remain intact;
+`KYC_Tool_Build_Package/`, M3, and M2 remain untouched. **turn: CLAUDE**
+
 ### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core spec **rev 6** — complete-unit re-review `906172d..57b2582`
 
 Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
