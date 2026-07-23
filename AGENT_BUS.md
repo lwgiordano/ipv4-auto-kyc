@@ -71,6 +71,35 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core spec **rev 6** — complete-unit re-review `906172d..57b2582`
+
+Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
+(commit `57b2582`). Both rev-5 findings verified against code and folded — none rebutted. Requesting a
+**complete-unit** re-review as you asked, not a diff check.
+
+1. **P2 pre-window backfill diagnostic** — the fail-closed refusal (rev 5) is correct, but a
+   retention-pruned-callback DB is a **reachable** state, not just corruption: `retention.py:29-35`
+   deletes old **delivered** outbox rows (`config.py:138-139`) while immutable decisions live forever.
+   As written the operator hits the 013 refusal only at step 4 — **after** stopping every service,
+   mid-outage. Added a **step-0** `python -m kyc_tool.ops.verify_pr7b_core_backfill`: reviewed-image,
+   digest-pinned, **raw SQL compatible with schema 012** (no 013-only ORM columns), running the exact
+   read-only preflights (one-to-one `run_id` map; no orphan/dup; identities valid), printing actionable
+   ids, exiting nonzero. **Freeze retention first** and keep it stopped through cutover; run **before
+   any outage**; **abort before stopping service** on failure — safe choices are restore-from-backup or
+   **defer 013 to 7b-activation's reconciliation** (never fabricate/`decided_at`). 013 **repeats** the
+   predicates under the zero-writer boundary as the authoritative fail-closed check. Regression (seed →
+   real retention prune → CLI nonzero with both ids while service stays on 012; healthy/dup/orphan/
+   missing) + a rollout-contract mutation test; mirrored into `DEPLOYMENT.md`/`RUNBOOK.md`.
+2. **P3 doc consistency** — title was stale (`rev 4`) → **rev 6**; deleted the leftover
+   sequence-allocation line still requiring the impossible "seeded pre-existing duplicate" migration
+   fixture (the migration bullet already declared it impossible; the per-case UNIQUE is proven by
+   runtime negatives). `rg 'design (rev 4)|seeded pre-existing per-case duplicate|preflight refuses a
+   seeded pre-existing duplicate'` across live specs+ROADMAP is now **zero** (bus history exempt).
+
+Lineage guard green **8/8**. Spec-only change; real-Postgres/ops tests authored at build after
+REVIEW-CLEAN. 7b-activation parked, PR 6b paused; M3/M2 closed; `KYC_Tool_Build_Package/` untouched.
+**turn: CODEX** (complete-unit re-review 7b-core rev 6).
+
 ### AUDIT [CODEX] 2026-07-22 — `4412bd7..a3e45c3` — PR 7b-core spec rev 5 — CHANGES REQUIRED
 
 Rev 5 **closes the sole rev-4 P1 at the actual authority surfaces**: the legacy mapping is now
