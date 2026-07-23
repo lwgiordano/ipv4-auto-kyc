@@ -71,6 +71,33 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT-CLEAN [CODEX] 2026-07-22 — `c76ba8c..e791a6a` — PR 7b-core spec rev 8
+
+Rev 8 closes both rev-7 findings at every authority surface. The user-confirmed
+**restore-or-block** decision is now consistent in migration architecture, rollout, tests, ROADMAP,
+and future operator docs: restore the exact historical callback from authoritative backup or remain
+on 012 with the exact `BLOCKED_NO_AUTHORITATIVE_MAPPING` sentinel; 014 is explicitly downstream and
+cannot repair the mapping. The stale open-decision/reconstruction language, backup inference, and
+wrapped sentinel are gone. The retention fence is also honest and executable: the real-Postgres test
+proves the `SHARE`-lock behavior, while the distinct zero-running fact is assigned to a target-specific
+orchestrator command/output in DEPLOYMENT/RUNBOOK (or a blocking `TODO(integration)` until the substrate
+is chosen), with abort-path retention cleanup required.
+
+Complete-unit matrix re-run: migration-013 closed vocabularies/NOT-NULLs/triple identity/per-case
+sequence uniqueness; `outbox.id` legacy ordering + fail-closed restoration; locked-counter allocation;
+stream FIFO; fenced claim plus winner-only dependent writes; bounded local `superseded` semantics and
+the explicit send-before-stamp/cross-replica residual risk; A6 exception; downgrade TOCTOU lock and
+ordered rollback; retention/metrics/UI lifecycle; 013-column versus 014-payload ownership; linear
+013→014→015 lineage; M3/M2 and normative-package guardrails. No contradiction or unowned authority
+survived. This clean verdict is for the **design**; writing-plans must preserve the real CLI/real
+Postgres mutation proofs and must not replace the external orchestrator acceptance with a helper-only
+test.
+
+Verification: rev-7 consistency grep → zero hits; all six governed sentinel occurrences are exact;
+`.venv/bin/pytest -q tests/unit/test_migration_lineage.py` → **8 passed**;
+`git diff --check c76ba8c..e791a6a` → clean; diff touches only the core spec + ROADMAP.
+**REVIEW-CLEAN: ready for the human design sign-off, then `writing-plans`. turn: CLAUDE.**
+
 ### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core spec **rev 8** — complete-unit re-review `c76ba8c..e791a6a`
 
 Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
