@@ -1,4 +1,4 @@
-# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 2)
+# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 4)
 
 ## Context
 
@@ -62,18 +62,31 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   binding; this is the baseline for email rows and removes the `case_id IS NULL` claim bypass.)
 - **`outbox.ordering_stream TEXT`** — add nullable → backfill with **two explicit branches**
   `CASE WHEN kind='poc_email' THEN 'email' WHEN kind='decision_callback' THEN 'decision' ELSE NULL
-  END` → **preflight-refuse** any NULL/unknown → add+VALIDATE `CHECK (ordering_stream IS NOT NULL AND
-  ordering_stream IN ('decision','email'))`. (A DB default can't work — it would mislabel emails —
-  hence the drain.)
+  END` → **preflight-refuse** any NULL/unknown → **`ALTER COLUMN ordering_stream SET NOT NULL`** (the
+  real column attribute, so `information_schema.columns.is_nullable='NO'` — a bare
+  `CHECK (... IS NOT NULL)` rejects NULL *values* but leaves the metadata `YES`, contradicting the
+  ORM/schema contract and tripping schema-diff drift; F4) + a **separate permanent vocabulary CHECK**
+  `ordering_stream IN ('decision','email')`. (The drain means the plain `SET NOT NULL` scan is fine; a
+  DB default can't work — it would mislabel emails.) The ORM field is **non-optional**.
 - **`outbox.{decision_sequence BIGINT NULL, resolved_at TIMESTAMPTZ NULL}`**,
   **`decisions.decision_sequence BIGINT NULL`**,
   **`cases.last_decision_sequence BIGINT NOT NULL DEFAULT 0`**.
 - **Fenced claim:** `outbox.{claim_lease_expires_at TIMESTAMPTZ NULL, claim_token UUID NULL,
   claimed_by TEXT NULL}`, claim tuple treated **all-three-together** (below).
-- **Triple identity:** `UNIQUE decisions(run_id)` (multiple NULL manual rows legal),
-  `UNIQUE decisions(run_id, case_id, decision_sequence)`, triple FK `outbox(run_id, case_id,
-  decision_sequence) → decisions(...)`, partial `UNIQUE outbox(run_id) WHERE kind='decision_callback'`
-  (one callback per automatic run — the FK alone cannot enforce this). CHECK on `decisions`:
+- **Triple identity + per-case sequence uniqueness (F1):** four constraints, each load-bearing —
+  `UNIQUE decisions(run_id)` (one automatic decision per run; multiple NULL manual rows legal);
+  **`UNIQUE decisions(case_id, decision_sequence)` named `uq_decisions_case_decision_sequence`** — the
+  actual per-case ordering invariant (a plain PG UNIQUE; manual rows keep `decision_sequence=NULL`, so
+  multiple NULLs stay legal). *Without this the namespace is not unique:* since `run_id` is already
+  unique, `UNIQUE(run_id, case_id, decision_sequence)` adds **no** per-case uniqueness — `(run=A,
+  case=C, seq=1)` and `(run=B, case=C, seq=1)` satisfy it, and after 014 the second to reach the
+  platform is a high-water no-op that **silently discards a distinct decision**. Keep also
+  `UNIQUE decisions(run_id, case_id, decision_sequence)` (the exact **triple-FK target**), the triple
+  FK `outbox(run_id, case_id, decision_sequence) → decisions(...)`, and the partial `UNIQUE
+  outbox(run_id) WHERE kind='decision_callback'` (one callback per run). In 013, **after the
+  deterministic backfill and before creating `uq_decisions_case_decision_sequence`**, preflight
+  `SELECT case_id, decision_sequence FROM decisions WHERE decision_sequence IS NOT NULL GROUP BY 1,2
+  HAVING count(*) > 1` and **refuse with actionable identifiers** if any survive. CHECK on `decisions`:
   `(manual=false → run_id NOT NULL AND decision_sequence > 0) AND (manual=true → run_id NULL AND
   decision_sequence NULL)`.
 - **Exhaustive per-status XOR lifecycle CHECK (F4)** — not one-way fragments. With
@@ -220,8 +233,12 @@ rely on the operator remembering that the forward drain also applies backward.
   stuck stream never blocks the other.
 - `decision_sequence` allocated only under `Case FOR UPDATE`, unique per case, monotonic; **internal**
   (not emitted). Each callback bound by the triple identity to exactly one automatic decision.
-- Every terminal transition is **fenced** on `claim_token` (assert one row); a stale write is a no-op
-  that never stamps the run/decision. The claim lease is separate from the retry schedule.
+- Every **retry and terminal** transition uses one fenced `UPDATE ... WHERE id AND status='pending'
+  AND claim_token=:token RETURNING id`: **one row** applies all dependent writes in the same
+  transaction (retry-clock reset, POC redaction, run completion, `decisions.published_at`, terminal
+  audit); **zero rows** returns a non-raising audited no-op (`outbox_stale_claim_completion`) and
+  stamps nothing — **never** an assertion (it would kill the worker). The claim lease is separate from
+  the retry schedule.
 - The local `superseded` guard is a **best-effort optimization** — it fires only on a higher
   **locally-stamped** delivery; send-before-stamp and cross-replica reverts remain until 7b-activation.
 - Every outbox status/lifecycle tuple is an **exhaustive per-status** DB CHECK. Delivery still stamps
@@ -234,16 +251,24 @@ rely on the operator remembering that the forward drain also applies backward.
 ## Testing strategy (real Postgres, each with a mutation witness)
 
 - **Migration 013:** seed both kinds + delivered/pending/**dead** callbacks + manual decisions;
-  upgrade; assert sequences/counter/binding. Direct **INSERT and UPDATE** negatives **fail at commit**
-  for every cross-product: bad/NULL/unknown `kind`; NULL/orphan `case_id`; NULL-run callback;
-  zero/negative sequence; wrong-case/wrong-run same sequence; **duplicate callback per run**;
-  sequenced email; and every illegal status tuple (`pending`+`delivered_at`, `pending`+`resolved_at`,
-  `dead`+claim tuple, orphan `claimed_by`, `superseded`+NULL `resolved_at`, `delivered`+claim).
-  `up→down→up` clean on a no-supersession DB; **downgrade refuses byte-stably with a seeded
-  `superseded` row** (F3). Mutation-removing any CHECK/index/FK fails.
+  upgrade; assert sequences/counter/binding **and `information_schema.columns.is_nullable='NO'` for
+  `outbox.ordering_stream`** (F4 — real column attribute, not only value rejection). Direct **INSERT
+  and UPDATE** negatives **fail at commit** for every cross-product: bad/NULL/unknown `kind`;
+  NULL/orphan `case_id`; NULL `ordering_stream`; NULL-run callback; zero/negative sequence;
+  wrong-case/wrong-run same sequence; **two runs same `(case_id, decision_sequence)`**; **duplicate
+  callback per run**; sequenced email; and every illegal status tuple (`pending`+`delivered_at`,
+  `pending`+`resolved_at`, `dead`+claim tuple, orphan `claimed_by`, `superseded`+NULL `resolved_at`,
+  `delivered`+claim). `up→down→up` clean on a no-supersession DB; **downgrade refuses byte-stably with a
+  seeded `superseded` row** (F3); the backfill **preflight refuses** a seeded pre-existing per-case
+  duplicate (F1). Mutation-removing any CHECK/index/FK/`SET NOT NULL` fails.
 - **Stream separation:** a perpetually-failing POC email never blocks the case's decision callback.
-- **Sequence allocation:** two concurrent decides on one case → strictly increasing unique sequences;
-  the partial unique index backstops a forced duplicate.
+- **Sequence allocation + per-case uniqueness (F1):** two concurrent decides on one case → strictly
+  increasing unique sequences, counter=max. Direct **INSERT and UPDATE** negatives: **two distinct
+  valid runs/decisions for the same `case_id` at the same positive `decision_sequence` fail at commit**
+  (backstopped by `uq_decisions_case_decision_sequence`, **not** the outbox partial index), while
+  multiple manual NULL-sequence decisions stay legal; build matching valid outbox rows so the duplicate
+  cannot hide behind another constraint. Mutation removing **only** `uq_decisions_case_decision_sequence`
+  must make this fail. Migration 013 preflight refuses a seeded pre-existing duplicate.
 - **Local guard (bounded claim):** seq 2 delivered **and stamped**; requeue seq 1 → `superseded`,
   never sent (atomic tuple + retention + metrics + UI-409); normal seq 1→2→3 all delivered in order.
 - **Residual-risk (F2 — pins the honest boundary):** fake receiver; single publisher; seq 2 sent,

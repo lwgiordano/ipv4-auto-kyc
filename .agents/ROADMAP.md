@@ -71,7 +71,7 @@ that lands its migration.
 | PR 5a | 6 | shipped | 010 | drop global idem unique, add per-case unique, `request_nonces` |
 | PR 5b | 11 | — | — | review-record binding |
 | PR 6 | 7A | shipped | 011, 012 | `policy_bundles`, `checks.policy_bundle_hash`, `runs/decisions.engine_build_id` (011); `VALIDATE` those provenance CHECKs (012, audit round 1) |
-| PR 7b-core | 8 | pending | 013 | `outbox.ordering_stream` (NOT NULL) + `case_id` NOT NULL + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + a **best-effort** local `superseded` guard (higher *locally-stamped* delivery only; send-before-stamp/cross-replica reverts remain for 7b-activation); triple identity (`UNIQUE decisions(run_id)`, triple FK, partial callback index); fenced claim (`claim_token`); exhaustive per-status lifecycle CHECKs (drained cutover, **reversible-before-first-supersession** downgrade) |
+| PR 7b-core | 8 | pending | 013 | `outbox.ordering_stream` (NOT NULL) + `case_id` NOT NULL + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + a **best-effort** local `superseded` guard (higher *locally-stamped* delivery only; send-before-stamp/cross-replica reverts remain for 7b-activation); identity + ordering (`UNIQUE decisions(case_id, decision_sequence)` [per-case namespace] + `UNIQUE(run_id)` + triple FK + partial callback index); fenced claim (`claim_token`); exhaustive per-status lifecycle CHECKs; `ordering_stream`/`case_id` real `SET NOT NULL` (drained cutover, **reversible-before-first-supersession** downgrade) |
 | PR 7b-activation | 8 | pending | 014 | wire `decision_sequence` emission + `integrity_mismatch`; platform high-water bootstrap (candidate manifest + signed response envelope); `outbox_ordering_activation` phase machine + immutable `BYTEA` artifacts; four CAS CLIs + activation cutover (`down_revision='013'`, forward-only-after-use) |
 | PR 6b | 7B | pending | 015 | revalidation / rollout staging |
 | PR 7a | 9 | pending | 016 | `jobs.lease_token` |
@@ -270,11 +270,13 @@ on runs + decisions**. Worker loads the run's bundle by hash, refuses if unloada
 ### PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — reordered FIRST
 Migration **013** (`down_revision='012'`): `outbox.{ordering_stream (NOT NULL, decision|email),
 decision_sequence, resolved_at, claim_lease_expires_at, claim_token, claimed_by}`,
-`decisions.decision_sequence` (D1), `cases.last_decision_sequence`; **triple-identity integrity** —
-`UNIQUE decisions(run_id)` + `UNIQUE decisions(run_id, case_id, decision_sequence)` + a triple FK
-`outbox(run_id, case_id, decision_sequence) → decisions` + a partial `UNIQUE outbox(run_id) WHERE
-kind='decision_callback'` (one callback per run), plus manual/automatic, kind/stream, **status
-vocabulary + lifecycle-tuple**, and token/lease-pairing CHECKs. **Allocate `decision_sequence` via the
+`decisions.decision_sequence` (D1), `cases.last_decision_sequence`; **identity + per-case ordering** —
+**`UNIQUE decisions(case_id, decision_sequence)`** (the per-case namespace; `UNIQUE(run_id)` alone
+does **not** give it) + `UNIQUE decisions(run_id)` + `UNIQUE decisions(run_id, case_id,
+decision_sequence)` (triple-FK target) + a triple FK `outbox(run_id, case_id, decision_sequence) →
+decisions` + a partial `UNIQUE outbox(run_id) WHERE kind='decision_callback'` (one callback per run),
+plus manual/automatic, kind/stream, **status vocabulary + lifecycle-tuple**, token/lease-pairing
+CHECKs, and real `SET NOT NULL` on `ordering_stream`/`case_id` (not only value-rejecting CHECKs). **Allocate `decision_sequence` via the
 locked case counter** (not `max()+1`), callback-emitting decisions only; claim FIFO scoped per
 `(case_id, ordering_stream)` with a **fenced claim** (`claim_token` + `claim_lease_expires_at`)
 separate from the retry schedule (`next_attempt_at`), so a stuck POC email never blocks the decision

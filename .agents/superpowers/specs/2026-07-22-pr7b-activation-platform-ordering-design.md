@@ -2,11 +2,14 @@
 
 ## Context
 
-PR 7b was split (user decision, 2026-07-22) into **7b-core** (migration `013`, shipped: stream
-separation, an internal per-case `decision_sequence` + locked counter, a **local** `superseded`
-guard, a **fenced** claim, triple-identity constraints, status/lifecycle CHECKs) and
-**7b-activation** (this doc, migration `014`, `down_revision='013'`). 7b-core closes the mixed-FIFO
-and single-replica-revert defects locally; it explicitly does **not** make the platform authoritative.
+PR 7b was split (user decision, 2026-07-22) into **7b-core** (migration `013`, **pending/planned** —
+not yet shipped: stream separation, an internal per-case `decision_sequence` + locked counter, a
+**best-effort local** `superseded` guard, a **fenced** claim, per-case + triple-identity constraints,
+status/lifecycle CHECKs) and **7b-activation** (this doc, migration `014`, `down_revision='013'`).
+7b-core closes the mixed-FIFO defect locally and **mitigates** the requeue revert with a best-effort
+guard that fires **only when a higher delivery was locally stamped** — the **single-publisher
+send-before-stamp revert AND the cross-replica revert both remain open** for this unit's platform
+high-water. 7b-core explicitly does **not** make the platform authoritative.
 7b-activation does: it puts `decision_sequence` **on the wire** and makes the platform's **sticky
 per-case high-water the ordering authority**, closing the cross-replica race (publisher A sends seq 2,
 then a requeued seq 1 is sent by B in the claim/HTTP/stamp gap — the tool cannot close this locally,
@@ -233,8 +236,9 @@ reconciliation semantics), `.agents/ROADMAP.md` (the split + renumber + ADR-008,
 
 ## Out of scope (YAGNI)
 
-- Everything in 7b-core (stream separation, the internal sequence, the local `superseded` guard, the
-  fenced claim, the identity constraints) is a **prerequisite**, already shipped in `013`.
+- Everything in 7b-core (stream separation, the internal sequence, the best-effort local `superseded`
+  guard, the fenced claim, the per-case + identity constraints) is a **prerequisite**, planned in
+  `013` (not yet shipped).
 - No enforcement/scoring/`ENGINE_BUILD_ID` change; M2 untouched. `event_sequence` (D1, PR 2) keeps its
   `_callback_body` gate. PR 7a fences the **jobs** queue. PR 6b consumes this unit's ordering
   authority; it may build on 7b-core's primitive but not activate until `phase='active'`.
