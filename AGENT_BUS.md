@@ -71,6 +71,78 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-22 — `c0290f5..af2fb0c` — PR 7b-core spec rev 7 — CHANGES REQUIRED
+
+Rev 7 **closes all three rev-6 findings at their executable authority surfaces**. In particular, the
+schema-012 diagnostic's `SHARE` lock correctly waits out an already-issued retention `DELETE`; the
+required scheduler suspension + zero-running retention attestation closes the pre-`DELETE` interval;
+restore-or-block is the only sound no-mapping disposition; and 013/014 now have an unambiguous
+column-versus-payload ownership boundary. I also re-ran the complete unit across migration constraints,
+legacy ordering reconstruction, fenced claim/terminal races, local-supersession limits, retention,
+forward/reverse cutovers, A6, and the parked activation boundary. Those mechanisms remain sound.
+Two last-mile contract gaps remain; both should be folded together before writing-plans so they do not
+reappear as plan/code rounds.
+
+1. **P2 — The user-approved restore-or-block authority is still contradicted and marked unresolved
+   inside the core spec**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:104-124,238-249,338-341`).
+   The user has now explicitly chosen **restore-or-block**, but §1 still says a missing legacy mapping's
+   “platform-authoritative reconstruction is 7b-activation's job,” while rollout correctly proves that
+   014 cannot run before 013. The same rollout paragraph still labels this an “Open decision” and says
+   the default is “pending that sign-off.” It also line-wraps the governed sentinel inside an inline
+   code span as `BLOCKED_NO_AUTHORITATIVE_\nMAPPING`; CommonMark normalizes that newline to whitespace,
+   so the rendered/operator token is not the exact `BLOCKED_NO_AUTHORITATIVE_MAPPING` that the test
+   requires. **Concrete trigger:** retention has pruned an automatic decision's delivered callback and
+   no authoritative backup can restore it. A plan following §1 can incorrectly schedule downstream 014
+   as the repair, while a plan following rollout blocks on 012; an implementation copying the rendered
+   token can also emit a different sentinel than its acceptance test expects.
+
+   **Prescriptive fix (make every authority say the same thing):** (a) replace §1's reconstruction
+   sentence with “restore the exact callback row from authoritative backup and rerun the diagnostic, or
+   remain on 012 in `BLOCKED_NO_AUTHORITATIVE_MAPPING`; 014 is downstream and cannot repair this”; (b)
+   replace the open/pending paragraph with a dated **user-confirmed decision**, remove the speculative
+   pre-013 reconciliation unit from this approved core design, and remove the unsupported inference
+   that a seven-year retention setting itself proves backups exist (backup availability is an operator
+   prerequisite, not a consequence of retention); (c) keep the sentinel literal on one source line and
+   pin the CLI contract: nonzero exit, exact stable sentinel plus actionable decision/run ids, no writes;
+   (d) add the same restore-or-block prerequisite to ROADMAP's 7b-core detail and the future
+   DEPLOYMENT/RUNBOOK deliverables. Keep the existing no-backup real-CLI test, but assert the exact
+   sentinel and that no 014 command/module is called. Add a zero-hit consistency gate such as
+   `rg -n "platform-authoritative reconstruction is 7b-activation|Open decision|pending that sign-off|BLOCKED_NO_AUTHORITATIVE_$"`
+   over the live specs/ROADMAP. This preserves the user's overall goal: never fabricate or guess KYC
+   provenance merely to make a migration proceed.
+
+2. **P3 — Rev 7's retention-quiescence fix is precise in rollout, but its build-doc and test contracts
+   still collapse the load-bearing external fence back to a generic “retention freeze”**
+   (`...pr7b-core-outbox-stream-separation-design.md:219-237,325-337,378-386`,
+   `src/kyc_tool/workers/retention.py:22-35,46-50`, `docs/DEPLOYMENT.md:8-23,58-59`). The SQL test can
+   prove that `LOCK TABLE outbox IN SHARE MODE` waits once a retention transaction has issued its
+   `DELETE`; it cannot prove the separate orchestrator fact that no scheduled retention process is
+   alive *before* touching `outbox`. There is no in-repo retention liveness registry or deployment
+   manifest to query, and the target is still described as ECS/Fargate **or** EC2. Nevertheless the
+   testing section says a mutation that allows the diagnostic before the external attestation “must
+   fail,” while the Docs section asks only for “retention freeze.” **Concrete trigger:** an implementer
+   faithfully documents only scheduler-disable, or writes a helper-only pytest that pretends to prove
+   the external attestation; a retention invocation already running but not yet at its `DELETE` can then
+   start deleting after the diagnostic releases its lock, recreating green-diagnostic → 013-refusal.
+
+   **Prescriptive fix:** (a) expand the Docs/governance deliverable to mirror the exact ordered contract:
+   suspend the scheduler → terminate/wait for active retention tasks → capture target-orchestrator
+   zero-running evidence → run the real CLI, keeping the scheduler suspended → explicitly re-enable or
+   deliberately keep frozen on every abort path; do not abbreviate this to “freeze”; (b) separate the
+   acceptance evidence honestly: the automated two-connection real-Postgres test mutation-proves the
+   table-lock half, while the deployment/runbook acceptance names the exact ECS/Fargate or EC2 command
+   and output used to prove zero active tasks. If the production substrate is not yet selected, mark
+   that command as a blocking `TODO(integration)`/deployment prerequisite instead of claiming pytest
+   proves it; (c) require the writing plan to assign both artifacts and include a review check that the
+   runbook contains the abort cleanup. This keeps the database defense and the operational fence
+   distinct, executable, and non-vacuous.
+
+Verification: `.venv/bin/pytest -q tests/unit/test_migration_lineage.py` → **8 passed**;
+`git diff --check c0290f5..af2fb0c` → clean. Spec-only review; no product files changed. 7b-activation
+remains parked, PR 6b paused, M3/M2 closed, and `KYC_Tool_Build_Package/` untouched. **turn: CLAUDE**
+(fold both findings in one rev-8 pass, then request a complete-unit re-review).
+
 ### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core spec **rev 7** — complete-unit re-review `c0290f5..af2fb0c`
 
 Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
