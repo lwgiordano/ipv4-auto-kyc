@@ -71,6 +71,51 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-RELEASE [CLAUDE] 2026-07-23 — PR 7b-core implementation plan **rev 2** → PLAN-REVIEW `dd57ead..ba77178`
+
+Revised **only the plan** (`.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md`,
+commit `ba77178`, 2916 lines, still 9 tasks) to close **all 10** PLAN-REVIEW findings — none rebutted;
+each was a false-positive test or a command-order defect, not a design change.
+
+1. Legacy-order regression: commit case first; B fixes `decided_at` behind a barrier, A enqueues first
+   (lower `outbox.id`); the **real publisher** delivers both → order A→B, both `delivered`, neither
+   `superseded`; `ORDER BY d.decided_at` mutation fails the full test.
+2. Stale-claim: B **reclaims (token B) without terminalizing**; A runs stale success + stale-final-attempt
+   failure and must touch nothing (byte-identical POC payload / decision run+`published_at` unchanged);
+   two named mutations each fail a named test; unused `DECISION_CALLBACK` import removed.
+3. Concurrency: two threads call the **real `_decide_txn`**, barrier before `_load`'s `FOR UPDATE`
+   (drop-lock mutation fails → `{1,2}` uniqueness/counter); manual-approve uses `reviewer_id` payload +
+   matching actor → HTTP 200, NULL run/sequence.
+4. Downgrade TOCTOU: drives the **real migration `downgrade()`** in a thread paused by an
+   `after_cursor_execute` barrier at the superseded preflight; concurrent `pending→superseded` fails
+   **`55P03`**; moving/removing the `LOCK TABLE` fails the test. Separate real `alembic downgrade`
+   refusal test kept.
+5. Diagnostic: a **shared `src/kyc_tool/ops/backfill_parity.py` matrix (11 states)** run by BOTH the
+   migration preflight AND the **real `python -m … verify_pr7b_core_backfill` subprocess** (exact
+   exit/stdout/`BLOCKED_NO_AUTHORITATIVE_MAPPING`/no-writes); the retention race runs the **real
+   `retention.prune`** behind a barrier and asserts the CLI subprocess stays blocked until commit;
+   removing the `SHARE` lock fails it; healthy rows carry a real `delivered_at`.
+6. Command order: a canonical close-out (targeted tests → **RED drift-guard** → re-pin GREEN →
+   `./manage.sh test` + ruff + import-linter) applied uniformly to all src tasks — never
+   `./manage.sh test` before the re-pin.
+7. Task 5: two real callbacks; deliver the higher over mock HTTP, the lower gets **zero HTTP** +
+   `superseded` + run COMPLETE + `published_at` NULL + an **`audit_log` row with both sequences**;
+   send-before-stamp revert (fault after 2xx, before stamp); true 1→2→3; `outbox_alerting` metric.
+8. Reset CLI: `current_schema()` probe; **rollback-before-commit** atomicity; real subprocess on 012
+   (refuse; both timestamps unchanged) + 013 (clear only claimed, preserve `next_attempt_at`) + a
+   barrier race proving atomic rollback.
+9. Migration matrix: full **INSERT+UPDATE** identity cross-product; each CHECK/FK/unique/partial-index/
+   `SET NOT NULL` mutated **independently** vs a named test; exact `IntegrityError`/`OperationalError`+
+   `55P03`/`RuntimeError` (no bare `pytest.raises(Exception)`).
+10. Unused imports removed; Task 9 **copy-ready** (exact anchors + one canonical numbered cutover/rollback
+    block pasted into both RUNBOOK/DEPLOYMENT with a `diff` parity + `rg` sentinel/lineage gates; honest
+    `TODO(integration)`).
+
+Per your note, real Postgres was unavailable to you, so the named `.venv/bin/pytest`/subprocess
+selectors stay **build-cycle** steps (not claimed run). `git diff --check` clean; placeholder scan
+clean; plan-only diff. The **human plan-approval gate** remains after PLAN-CLEAN. `KYC_Tool_Build_Package/`,
+M2, 7b-activation untouched. **turn: CODEX** (PLAN-REVIEW rev 2; findings or PLAN-CLEAN).
+
 ### PLAN-REVIEW [CODEX] 2026-07-22 — `0a54bb5..7081d20` — CHANGES REQUIRED
 
 The nine-task decomposition preserves the AUDIT-CLEAN rev-8 architecture, the 013→014 boundary,
