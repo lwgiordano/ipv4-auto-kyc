@@ -1,4 +1,4 @@
-# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 4)
+# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 6)
 
 ## Context
 
@@ -216,14 +216,30 @@ publisher/module docstrings state the same.
 
 ## Rollout / rollback
 
-Digest-pinned drained cutover: (1) pause submission, edge-block composer, disable autoscaling/
-restarts; (2) hard-stop API/pipeline/outbox/`dev_worker` (queue **and** outbox, `dev_worker.py:128-139`)
-/retention/every writer, attest zero at the orchestrator; (3) shipped `python -m
-kyc_tool.ops.requeue_interrupted_jobs` (decrements attempts so a killed final attempt retries) —
+Digest-pinned drained cutover. **(0) Pre-window diagnostic, before any outage (rev-5 F2):** the
+fail-closed backfill (§1) refuses an automatic decision without a surviving callback — but that is a
+**reachable** state, not only corruption: retention deletes old **delivered** outbox rows
+(`retention.py:29-35`, period at `config.py:138-139`) while their immutable decision rows live forever.
+So **first stop/disable the retention process** (and keep it stopped through the cutover, so a green
+result can't be invalidated by later pruning), then run the reviewed-image, digest-pinned
+**`python -m kyc_tool.ops.verify_pr7b_core_backfill`** — raw parameterized SQL **compatible with schema
+012** (imports **no** 013-only ORM columns) that runs the *exact* read-only 013 preflights (every
+`manual=false` decision maps to exactly one `decision_callback` by `run_id`; no orphan/duplicate; all
+case/run/kind identities valid), prints actionable decision/run/outbox ids, and exits nonzero on any
+violation. **On failure, abort here — before stopping service** (no outage begun); the only safe
+operator choices are to restore the missing row from authoritative evidence/backup, or **defer 013
+until 7b-activation's platform-authoritative reconciliation** — never fabricate a callback, delete an
+immutable decision, or fall back to `decided_at`. On success proceed. (1) pause submission, edge-block
+composer, disable autoscaling/restarts; (2) hard-stop API/pipeline/outbox/`dev_worker` (queue **and**
+outbox, `dev_worker.py:128-139`)/retention/every writer, attest zero at the orchestrator; (3) shipped
+`python -m kyc_tool.ops.requeue_interrupted_jobs` (decrements attempts so a killed final attempt
+retries) —
 **no outbox reset here** (F1): the pre-013 schema has no claim columns, and an old in-flight outbox
 claim is encoded only in `next_attempt_at` and cannot be distinguished from legitimate backoff.
 **Preserve every pending row's `next_attempt_at`**; an interrupted old claim simply waits until its
-already-recorded due time (bounded by the documented old lease); (4) `alembic upgrade head` (013);
+already-recorded due time (bounded by the documented old lease); (4) `alembic upgrade head` (013) —
+which **repeats the §0 preflights under the zero-writer boundary** and remains the authoritative
+fail-closed check (the pre-window diagnostic is an early detector, not a substitute);
 (5) start API only, probe `/readyz`, then start+attest the fenced workers — **no mutating prod smoke**;
 (6) resume. A precisely named `python -m kyc_tool.ops.reset_interrupted_outbox_claims` is shipped for
 **post-013 future stops and the post-013 rollback path only**: it **refuses pre-013 schema**, updates
@@ -273,9 +289,10 @@ rely on the operator remembering that the forward drain also applies backward.
   callback per run**; sequenced email; and every illegal status tuple (`pending`+`delivered_at`,
   `pending`+`resolved_at`, `dead`+claim tuple, orphan `claimed_by`, `superseded`+NULL `resolved_at`,
   `delivered`+claim). `up→down→up` clean on a no-supersession DB; **downgrade refuses byte-stably with a
-  seeded `superseded` row** (F3). (No "seeded pre-existing per-case duplicate" fixture — a 012 DB has
-  no `decision_sequence` column and 013's own `row_number()` creates the values; the per-case UNIQUE is
-  proven by the runtime INSERT/UPDATE negatives above, not a migration fixture.) Mutation-removing any
+  seeded `superseded` row** (F3). (There is deliberately **no migration fixture** for the per-case
+  UNIQUE — a 012 DB has no `decision_sequence` column and 013's own `row_number()` cannot produce a
+  per-case collision; that constraint is proven by the runtime INSERT/UPDATE negatives above, not by a
+  migration seed.) Mutation-removing any
   CHECK/index/FK/`SET NOT NULL` fails.
 - **Backfill order authority (rev-4 F1) — two connections, real Postgres:** start B's decide
   transaction (fixing `B.decided_at`) and pause it **before** the case lock; start A later, lock the
@@ -285,6 +302,12 @@ rely on the operator remembering that the forward drain also applies backward.
   superseded. Mutation: ordering the backfill by `decided_at,id` reproduces B's erroneous suppression
   and **must fail**. Separately, seed a valid `manual=false` decision with **no** surviving callback
   row on 012 and prove the migration **refuses byte-stably** (no `decided_at` fallback).
+- **Pre-window diagnostic (rev-5 F2):** on real Postgres/**schema 012**, seed a decision + delivered
+  callback, run the **real retention function** until the callback is pruned (decision survives), and
+  assert `verify_pr7b_core_backfill` exits **nonzero with both ids** while the service can stay on 012
+  (no outage). Cover healthy / duplicate / orphan / missing mappings. Mutation removing the
+  retention-freeze-then-diagnostic step from the rollout contract **must fail**. Keep the 013
+  migration-refusal test as defense in depth (the two share the predicate).
 - **Stream separation:** a perpetually-failing POC email never blocks the case's decision callback.
 - **Sequence allocation + per-case uniqueness (F1):** two concurrent decides on one case → strictly
   increasing unique sequences, counter=max. Direct **INSERT and UPDATE** negatives: **two distinct
@@ -292,7 +315,8 @@ rely on the operator remembering that the forward drain also applies backward.
   (backstopped by `uq_decisions_case_decision_sequence`, **not** the outbox partial index), while
   multiple manual NULL-sequence decisions stay legal; build matching valid outbox rows so the duplicate
   cannot hide behind another constraint. Mutation removing **only** `uq_decisions_case_decision_sequence`
-  must make this fail. Migration 013 preflight refuses a seeded pre-existing duplicate.
+  must make this fail. (No migration fixture for this — a 012 DB has no `decision_sequence` column and
+  013's `row_number()` cannot produce a per-case duplicate; the runtime negatives are the proof.)
 - **Local guard (bounded claim):** seq 2 delivered **and stamped**; requeue seq 1 → `superseded`,
   never sent (atomic tuple + retention + metrics + UI-409); normal seq 1→2→3 all delivered in order.
 - **Residual-risk (F2 — pins the honest boundary):** fake receiver; single publisher; seq 2 sent,
@@ -323,9 +347,10 @@ rely on the operator remembering that the forward drain also applies backward.
 ## Docs + governance (in the build)
 
 `OVERVIEW.md` (stream separation + local ordering + the 7b-core/activation boundary; the guard is
-best-effort), `RUNBOOK.md`/`DEPLOYMENT.md` (drained cutover **without** a pre-013 reset; the post-013
-`reset_interrupted_outbox_claims` CLI; reversible-before-first-supersession rollback + the preflight
-query), `AUDIT_FINDINGS.md` (the **A6 exception** + backfill = deterministic reconstruction + the
+best-effort), `RUNBOOK.md`/`DEPLOYMENT.md` (the **step-0 pre-window `verify_pr7b_core_backfill` diagnostic + retention
+freeze, run before any outage with the abort-before-service-stop path**; drained cutover **without** a
+pre-013 reset; the post-013 `reset_interrupted_outbox_claims` CLI; reversible-before-first-supersession
+rollback + the preflight query), `AUDIT_FINDINGS.md` (the **A6 exception** + backfill = deterministic reconstruction + the
 local/cross-replica boundary), `.agents/ROADMAP.md` (the split + renumber, this commit; "reversible"
 → "reversible before first local supersession"). No ADR needed for core; ADR-008 covers 7b-activation.
 
