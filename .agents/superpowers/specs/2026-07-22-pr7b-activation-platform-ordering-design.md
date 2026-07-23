@@ -68,9 +68,13 @@ Adds only what activation needs (7b-core's `013` already carries stream/sequence
 
 ### 2. Wire emission at the publisher + shared phase reader (F1-heritage)
 
-The pipeline already writes `decision_sequence` to the internal payload (7b-core §3); it never
-flag-gates it. All emission lives at `_deliver_decision_callback` (`publisher.py:82-122`), governed by
-`read_ordering_phase(session) → (phase, flag)`:
+**Payload ownership boundary (rev-6 P3):** 013 (7b-core) writes `decision_sequence` **only to the
+`decisions`/`outbox` columns** and keeps `payload_json` **and the HTTP body byte-identical** to pre-7b
+— it puts nothing on the wire and owns no phase reader. **014 owns the callback-JSON field**: it
+(a) **backfills** the internal field into every surviving legacy `decision_callback.payload_json` from
+the FK-bound column, and (b) **adds** it to newly-enqueued callback payloads. Neither the pipeline nor
+013 flag-gates anything. All emission lives at `_deliver_decision_callback` (`publisher.py:82-122`),
+governed by `read_ordering_phase(session) → (phase, flag)`:
 
 | phase / flag | claim + send behavior |
 |---|---|
@@ -81,10 +85,9 @@ flag-gates it. All emission lives at `_deliver_decision_callback` (`publisher.py
 
 Checked **before claim** and **again immediately before HTTP** (phase can advance between). Config
 (`config.py:77-79`): `callback_include_decision_sequence: bool = False`; schema
-(`api/schemas.py:144-164`): `decision_sequence: int | None = None`. Migration 014 also
-**backfills the sequence into every existing `decision_callback.payload_json`** (from the
-7b-core-bound row) so a pre-flag pending/dead callback emits correctly after activation and never
-strands.
+(`api/schemas.py:144-164`): `decision_sequence: int | None = None`. (014's payload backfill, defined
+in the ownership boundary above, is what lets a pre-flag pending/dead callback emit correctly after
+activation and never strand.)
 
 **Process role matrix:** the flag is deployed **true to every activation-reading process — API
 (`create_app`), outbox worker (`build_publisher`, `outbox_worker.py:9-20`), dev worker
@@ -198,6 +201,12 @@ linked decision is `published`. Ships as the shared query 7b-activation owns and
   phase tuple (`active`/`bootstrapped` without digests/artifacts, reverse transition, out-of-order
   timestamps) fails; `integrity_mismatch` lifecycle CHECK enforced; `up→down→up` clean on a legacy
   schema; downgrade **refuses** once `phase != 'legacy'`.
+- **Payload-ownership boundary (rev-6 P3):** after **013**, the DB `payload_json` **and** the wire body
+  contain **no** `decision_sequence`; after the **014** migration, existing pending/dead
+  `decision_callback.payload_json` contains the FK-bound value and a newly-enqueued 014 callback
+  contains it internally; `legacy` still emits the pre-7b bytes; `active` emits it. Mutations —
+  adding the JSON field in 013, or omitting either the 014 legacy-backfill or the 014 new-enqueue
+  writer — must fail.
 - **Wire emission + silent-loss window:** create pending **and** dead callbacks while `legacy`; enter
   `bootstrap_in_progress`; barrier an old `legacy`/false-flag publisher immediately before HTTP and
   prove **zero HTTP + no delivered/published stamps**; CAS `active` + start only true-flag publishers →

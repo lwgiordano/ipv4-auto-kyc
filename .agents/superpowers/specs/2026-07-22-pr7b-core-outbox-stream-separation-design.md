@@ -1,4 +1,4 @@
-# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 6)
+# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 7)
 
 ## Context
 
@@ -216,20 +216,40 @@ publisher/module docstrings state the same.
 
 ## Rollout / rollback
 
-Digest-pinned drained cutover. **(0) Pre-window diagnostic, before any outage (rev-5 F2):** the
-fail-closed backfill (§1) refuses an automatic decision without a surviving callback — but that is a
+Digest-pinned drained cutover. **(0) Pre-window diagnostic, before any outage (rev-5 F2; rev-6 P2):**
+the fail-closed backfill (§1) refuses an automatic decision without a surviving callback — a
 **reachable** state, not only corruption: retention deletes old **delivered** outbox rows
 (`retention.py:29-35`, period at `config.py:138-139`) while their immutable decision rows live forever.
-So **first stop/disable the retention process** (and keep it stopped through the cutover, so a green
-result can't be invalidated by later pruning), then run the reviewed-image, digest-pinned
-**`python -m kyc_tool.ops.verify_pr7b_core_backfill`** — raw parameterized SQL **compatible with schema
-012** (imports **no** 013-only ORM columns) that runs the *exact* read-only 013 preflights (every
-`manual=false` decision maps to exactly one `decision_callback` by `run_id`; no orphan/duplicate; all
-case/run/kind identities valid), prints actionable decision/run/outbox ids, and exits nonzero on any
-violation. **On failure, abort here — before stopping service** (no outage begun); the only safe
-operator choices are to restore the missing row from authoritative evidence/backup, or **defer 013
-until 7b-activation's platform-authoritative reconciliation** — never fabricate a callback, delete an
-immutable decision, or fall back to `decided_at`. On success proceed. (1) pause submission, edge-block
+Retention is a **one-shot transaction** (`retention.py:46-50`), so *disabling the schedule is not a
+quiescence fence* — an invocation already inside `uow()` can delete a callback after a plain
+`READ COMMITTED` diagnostic has passed and then reintroduce the mid-outage refusal. Therefore: (a)
+**suspend the retention schedule AND terminate/wait for every active retention Job/process, with an
+orchestrator-level zero-running attestation** before the diagnostic (disable alone is insufficient),
+and keep it suspended through the cutover; (b) run the reviewed-image, digest-pinned **`python -m
+kyc_tool.ops.verify_pr7b_core_backfill`** — raw parameterized SQL **compatible with schema 012**
+(imports **no** 013-only ORM columns) that begins its transaction with **`LOCK TABLE outbox IN SHARE
+MODE` before any `SELECT`** (defense in depth: the SHARE lock waits for any in-flight `DELETE`'s
+`ROW EXCLUSIVE` to resolve and blocks a new outbox delete/write from invalidating the snapshot until
+the diagnostic commits — bounded, and event/decision writers may briefly wait), then runs the *exact*
+read-only 013 preflights at `READ COMMITTED` (every `manual=false` decision maps to exactly one
+`decision_callback` by `run_id`; no orphan/duplicate; all case/run/kind identities valid), prints
+actionable decision/run/outbox ids, and exits nonzero on any violation. The result is valid **only
+while the schedule stays suspended and the zero-running attestation holds**. **On failure, abort here
+— before stopping service** (no outage begun). **Recovery (rev-6 P2 — the only valid success path is
+restoration):** restore the exact historical callback evidence from authoritative backup, then re-run
+the diagnostic clean. If no restorable backup exists, the database is **`BLOCKED_NO_AUTHORITATIVE_
+MAPPING`**: core stays on 012 and **cannot proceed** — the earlier "defer to 7b-activation" option was
+**wrong** (7b-activation is migration `014`, `down_revision='013'`; its reconciliation cannot run on a
+012 schema that has not passed 013, so no `014` command is a substitute). **Open decision (escalated to
+the user):** whether the production/staging inventory can actually contain a no-backup missing mapping
+— and thus whether a **separate, numbered pre-013 schema-012 authenticated reconciliation unit** (which
+013 would verify + consume offline; 013 stays network-free) is warranted — is a real architectural
+choice. Rev 7 adopts **restore-or-block** as the default pending that sign-off; a KYC system's 7-year
+retention implies authoritative backups exist, so block-or-restore is expected to suffice. Never
+fabricate a callback, delete an immutable decision, or fall back to `decided_at`. Either abort branch
+must **explicitly
+re-settle retention** (keep it frozen while restoring/rerunning, or re-enable it if the cutover is
+deferred) — never leave a compliance process silently disabled. On success proceed. (1) pause submission, edge-block
 composer, disable autoscaling/restarts; (2) hard-stop API/pipeline/outbox/`dev_worker` (queue **and**
 outbox, `dev_worker.py:128-139`)/retention/every writer, attest zero at the orchestrator; (3) shipped
 `python -m kyc_tool.ops.requeue_interrupted_jobs` (decrements attempts so a killed final attempt
@@ -308,6 +328,17 @@ rely on the operator remembering that the forward drain also applies backward.
   (no outage). Cover healthy / duplicate / orphan / missing mappings. Mutation removing the
   retention-freeze-then-diagnostic step from the rollout contract **must fail**. Keep the 013
   migration-refusal test as defense in depth (the two share the predicate).
+- **Retention-race quiescence (rev-6 P1) — two connections, real retention seam:** pause A **after** its
+  callback `DELETE` but **before commit**; start the real CLI in B; assert B **cannot report green**
+  (its `LOCK TABLE outbox IN SHARE MODE` waits on A). After A **commits**, B returns **nonzero** with
+  the decision/run ids; repeat with A **rolling back** and require **green**. Mutation removing the
+  table lock — **or** allowing the diagnostic before the zero-running retention attestation —
+  reproduces "green diagnostic → retention commit → 013 refusal" and **must fail**. Exercise the real
+  CLI entry point, not a helper.
+- **No-backup blocked state (rev-6 P2):** a missing mapping with **no** restorable backup yields the
+  named **`BLOCKED_NO_AUTHORITATIVE_MAPPING`** outcome **before** maintenance, leaves schema/data
+  **unchanged**, and the test proves **no existing `014` CLI** can be invoked as a substitute
+  (7b-activation is downstream of 013).
 - **Stream separation:** a perpetually-failing POC email never blocks the case's decision callback.
 - **Sequence allocation + per-case uniqueness (F1):** two concurrent decides on one case → strictly
   increasing unique sequences, counter=max. Direct **INSERT and UPDATE** negatives: **two distinct
