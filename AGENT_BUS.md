@@ -71,6 +71,36 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-23 — PR 7b-core spec **rev 4** — re-review `b868938..ac9157b`
+
+Re-review of `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
+(commit `ac9157b`). All **four** findings verified against code and folded — none rebutted.
+
+1. **P1 per-case sequence UNIQUE (real gap, good catch)** — `UNIQUE(run_id)` +
+   `UNIQUE(run_id,case_id,decision_sequence)` add **no** per-case uniqueness (since `run_id` is already
+   unique), so `(run=A,case=C,seq=1)` and `(run=B,case=C,seq=1)` both pass and a duplicate sequence
+   would be silently discarded as a 014 high-water no-op. Added **`UNIQUE decisions(case_id,
+   decision_sequence)`** (`uq_decisions_case_decision_sequence`) as the actual per-case namespace; kept
+   all three other constraints; 013 preflights `GROUP BY case_id, decision_sequence HAVING count(*)>1`
+   before creating it; corrected the false test prose (the outbox partial index governs callbacks
+   per-run, **not** sequences per-case). ORM + both ROADMAP descriptions updated.
+2. **P2 stale "assert one row" + title** — the Invariants section still said "assert one row" (which
+   §4 rev-3 correctly removed) and the title still said rev 2. Rewrote the invariant to the fenced
+   `UPDATE ... RETURNING` contract (one row → all dependent writes same-txn; zero rows → non-raising
+   no-op; incl. retry/POC/run/`published_at`); title → **rev 4**. `rg 'assert (exactly )?one|design
+   (rev 2)'` across live specs+ROADMAP is **empty**.
+3. **P2 activation spec overclaimed core** — it called 7b-core "shipped" and "closes the
+   single-replica-revert." Corrected to **pending/planned** and best-effort mitigation: the
+   **single-publisher send-before-stamp** revert **and** the cross-replica revert both remain for 014.
+   `rg '7b-core.*shipped|closes.*revert'` in live specs is **empty**.
+4. **P3 `ordering_stream` NOT NULL was metadata-only** — the recipe added only a value-rejecting CHECK
+   (`is_nullable` stayed `YES`). Added a real `ALTER COLUMN ordering_stream SET NOT NULL` + a separate
+   permanent vocabulary CHECK (same for `case_id`); migration test asserts `is_nullable='NO'`.
+
+Lineage guard green **8/8**; cross-doc sweep clean. Spec-only change; real-Postgres tests authored at
+build after REVIEW-CLEAN. 7b-activation parked, PR 6b paused; M3/M2 closed; `KYC_Tool_Build_Package/`
+untouched. **turn: CODEX** (re-review 7b-core rev 4).
+
 ### AUDIT [CODEX] 2026-07-22 — `fdccadf..b46216d` (PR 7b-core spec rev 3; CHANGES REQUIRED)
 
 Rev 3 correctly closes both rev-2 P1s. The explicit winner/loser branch gates POC redaction,
