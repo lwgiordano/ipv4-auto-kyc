@@ -1201,6 +1201,11 @@ Rewrites `_CLAIM_SQL` to claim the min-id pending row of one `(case_id, ordering
 
 - [ ] **Step 1: Write the failing tests** — create `tests/integration/test_outbox_fencing.py`:
 
+(Rev 6 correction: the first three tests take `clean_db` like the last two. They share the
+hard-coded ids `c1`/`ev1`/`r1`/`d1`, so without it test 3 collides on the `events` primary key and
+test 1's hour-backoff stuck email leaks into test 2's claim — the file could not pass as a file,
+contradicting Step 4's own "Expected: PASS".)
+
 ```python
 """PR 7b-core: stream-scoped fenced claim + fenced terminals (defect 3)."""
 
@@ -1246,7 +1251,9 @@ def _pub_for(session_factory, settings):
     )
 
 
-def test_stuck_email_does_not_block_decision_callback(session_factory, settings, publisher, callback_capture):
+def test_stuck_email_does_not_block_decision_callback(
+    session_factory, settings, publisher, callback_capture, clean_db
+):
     """A perpetually-'pending' POC email (future backoff) in the email stream must NOT
     block the same case's decision callback in the decision stream."""
     _seed_case(session_factory, "c1")
@@ -1300,7 +1307,9 @@ def _expire_lease(session_factory, oid):
         s.commit()
 
 
-def test_stale_poc_loser_touches_nothing_before_reclaimer_sends(session_factory, settings, publisher):
+def test_stale_poc_loser_touches_nothing_before_reclaimer_sends(
+    session_factory, settings, publisher, clean_db
+):
     """Defect 3, POC: A claims (token A); A's lease expires; B RECLAIMS (token B) but does NOT
     terminalize yet. A resuming with token A — through BOTH stale success and stale FINAL-attempt
     failure — must touch nothing: payload byte-identical, status pending, B's complete claim tuple
@@ -1340,7 +1349,7 @@ def test_stale_poc_loser_touches_nothing_before_reclaimer_sends(session_factory,
 
 
 def test_stale_decision_loser_cannot_stamp_run_or_published_at(
-    session_factory, settings, publisher, callback_capture
+    session_factory, settings, publisher, callback_capture, clean_db
 ):
     """Defect 3, decision callback: same A/B ordering. Stale A must change neither the outbox
     tuple nor runs.state (stays PUBLISH_DECISION) nor decisions.published_at (stays NULL). Then B
