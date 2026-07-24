@@ -22,7 +22,7 @@
 - **Delivery-layer only — NO scoring/gate/decision semantic change.** The callback HTTP body stays **byte-identical** to pre-7b: `decision_sequence` is written to the `decisions`/`outbox` **columns only**, never added to `payload_json` or the wire (that is 7b-activation / `014`).
 - **Engine drift guard.** Every task that edits any file under `src/kyc_tool/**` MUST re-pin `EXPECTED_ENGINE_SOURCE_HASH` in `tests/policy_driven/test_engine_build_id_guard.py` **in the same commit** (see the re-pin one-liner in "Test infrastructure" below). **Do NOT bump `ENGINE_BUILD_ID`** — this is not a scoring change. The src-touching tasks are **1, 2 (the frozen `migration_contracts/v013_backfill.py`), 3, 4, 5, 7, 8** — each re-pins. Tasks that touch only `alembic/`, docs, or `.agents/` (parts of 6, 9) do NOT re-pin (the guard closure is `src/kyc_tool/**/*.py` only).
 - **Do NOT edit `KYC_Tool_Build_Package/`** (normative spec, immutable) or anything touching **M2** / `KYC_ENFORCE_POSITIVE_DECISIONS` / `enforce_positive_decisions`.
-- **ROADMAP lineage.** `.agents/ROADMAP.md §C` already reserves PR 7b-core = `013` (row 74, State `pending`) and 7b-activation = `014`. Do **not** renumber or edit the reservations except to flip 7b-core's State `pending → shipped` in the same PR that lands `013` (Task 9). `tests/unit/test_migration_lineage.py` must stay green.
+- **ROADMAP lineage.** `.agents/ROADMAP.md §C` already reserves PR 7b-core = `013` (row 74, State `pending`) and 7b-activation = `014`. Do **not** renumber or edit the reservations except to flip 7b-core's State `pending → shipped`, which `tests/unit/test_migration_lineage.py` forces as soon as `alembic/versions/013_*.py` exists on disk: make the flip in **Task 1 Step 3b** and commit it in **Task 6's atomic `013` commit** (both files are read off disk, and CI checks out the commit, not the worktree). `tests/unit/test_migration_lineage.py` must stay green from Task 1's checkpoint onward.
 - **Codex build constraints (carry verbatim):** migration/outbox/CLI mutation proofs run against **real Postgres and the real CLI entry points** (`main()` / `python -m …`), never a helper-only shim. The retention "zero active tasks before it deletes" attestation is a **runbook / `TODO(integration)`** deployment acceptance, **NOT** a pytest (retention is a scheduled one-shot with no in-repo liveness registry).
 - **Branch:** work on `claude/project-setup-verify-kpfgjs`. **Never put any model identifier in artifacts.**
 - **Commit trailer on EVERY commit:**
@@ -71,7 +71,7 @@ Therefore **Tasks 1-6 are non-committing worktree TDD/review checkpoints** (each
 - **Task 4** (checkpoint) — pipeline allocates `decision_sequence` **and**, in the same step, adds the decision-identity constraints (kind/stream identity CHECK, `manual`/`automatic` CHECK, the three decisions uniques, the triple FK, the partial callback unique) — now both legacy (backfilled) and live (allocated) rows satisfy them.
 - **Task 5** (checkpoint) — local guard + `superseded` lifecycle wiring.
 - **Task 6** (**the single commit**) — hardens `013`'s downgrade (LOCK + `superseded` preflight), then commits everything accumulated in Tasks 1-6 as one atomic schema+runtime commit + runs the finish gate.
-- **Tasks 7–8** commit the two ops CLIs normally; **Task 9** commits docs + the ROADMAP flip.
+- **Tasks 7–8** commit the two ops CLIs normally; **Task 9** commits docs only (the ROADMAP flip already rode Task 6's atomic `013` commit — see Task 9's intro).
 
 Each checkpoint edits `alembic/versions/013_outbox_stream_separation.py` at clearly marked insertion points; every test run re-applies `013` from scratch on a fresh DB, so cross-checkpoint edits to one migration file are safe, and the single final commit is the only `013` in git history. **The engine-drift guard is re-pinned at each checkpoint too** (it is a worktree edit, not a commit), so `./manage.sh test` stays green for review; the final re-pinned hash rides the Task-6 commit.
 
@@ -92,7 +92,7 @@ Each checkpoint edits `alembic/versions/013_outbox_stream_separation.py` at clea
 - `src/kyc_tool/db/tables.py` — `Outbox` (+`ordering_stream`, `decision_sequence`, `resolved_at`, `claim_lease_expires_at`, `claim_token`, `claimed_by`; `case_id` non-optional + named FK `fk_outbox_case_id` (F9); `status` comment; `__table_args__`), `Case` (+`last_decision_sequence`), `Run` (+`__table_args__` with `uq_runs_id_case_id` — F2), `DecisionRow` (+`decision_sequence`, `__table_args__` uniques + `fk_decisions_run_case` — F2). (Tasks 1, 4.)
 - `src/kyc_tool/outbox/publisher.py` — `_CLAIM_SQL` (fenced, per-stream, `RETURNING` token/stream/sequence), `enqueue_decision_callback`/`enqueue_poc_email` (set `ordering_stream`, `decision_sequence`), `process_once` (thread token + guard), `_record_delivered`/`_record_failure` (fenced winner/loser), `_record_superseded` (new), module docstring (A6). (Tasks 1, 3, 5.)
 - `src/kyc_tool/orchestration/pipeline.py` — `_decide_txn` allocates `decision_sequence` from `cases.last_decision_sequence` and passes it to `enqueue_decision_callback`. (Task 4.)
-- `src/kyc_tool/workers/retention.py` — `prune` deletes `superseded` alongside `delivered`. (Task 5.)
+- `src/kyc_tool/workers/retention.py` — `prune`'s outbox delete narrows to `kind='poc_email'`; `decision_callback` rows become the non-prunable durable ordering authority. (Task 5.)
 - `src/kyc_tool/api/routes_metrics.py` — report `superseded` separately; keep it out of pending/dead alerting. (Task 5.)
 - `tests/integration/test_migrations.py` — all `013` migration up/down/negative/backfill/downgrade-race tests + the schema-012 restore acceptance test (Tasks 1, 2, 4, 6, 7) + the F3 legacy-fixture flips (`manual=true`, named nonblank constraints) (Task 1).
 - `tests/integration/test_ui.py` — F3: the raw dead-POC fixture INSERT gains `ordering_stream='email'` (Task 1).
@@ -100,7 +100,7 @@ Each checkpoint edits `alembic/versions/013_outbox_stream_separation.py` at clea
 - `tests/conftest.py` — F3: shared `seed_automatic_decision` valid-chain helper (Task 4).
 - `tests/integration/test_bundle_pinning_ops.py` — F3: the three automatic-decision fixtures gain valid sequences + case counters via the shared helper (Task 4).
 - `tests/policy_driven/test_engine_build_id_guard.py` — re-pin `EXPECTED_ENGINE_SOURCE_HASH` (every src-touching task).
-- `docs/OVERVIEW.md`, `docs/RUNBOOK.md`, `docs/DEPLOYMENT.md`, `AUDIT_FINDINGS.md`, `.agents/ROADMAP.md` — docs + governance (Task 9).
+- `docs/OVERVIEW.md`, `docs/RUNBOOK.md`, `docs/DEPLOYMENT.md`, `AUDIT_FINDINGS.md` — docs + governance (Task 9). `.agents/ROADMAP.md` — §C State flip (edited Task 1 Step 3b, committed Task 6).
 
 **Do NOT touch** (confirm unchanged): `src/kyc_tool/events/ingest.py` `_handle_manual_approve` (it already writes `run_id=None`, `manual=True`, no callback, and no `decision_sequence` — Task 4 only adds a test proving it allocates none); `src/kyc_tool/ui/routes.py` `requeue_outbox` (already 409s every non-`dead` row incl. `superseded` — Task 5 only adds a confirming test).
 
@@ -117,6 +117,7 @@ Adds every `013` column, backfills `ordering_stream` from `kind`, makes `case_id
 - Modify: `tests/integration/test_migrations.py` (013 tests + the F3 legacy-fixture flips, Step 8b)
 - Modify: `tests/integration/test_ui.py` (F3: `ordering_stream` on the raw dead-POC INSERT, Step 8b)
 - Modify: `tests/integration/test_phase4_platform.py` (F3: interim lifecycle-legal redelivery rewrite, Step 8b — replaced by the real fault injection in Task 3 Step 3b)
+- Modify: `.agents/ROADMAP.md` (§C State flip, Step 3b — forced by the new migration file; committed in Task 6)
 - Re-pin: `tests/policy_driven/test_engine_build_id_guard.py`
 
 **Interfaces:**
@@ -359,6 +360,18 @@ def downgrade() -> None:
     op.drop_column("outbox", "ordering_stream")
 ```
 
+- [ ] **Step 3b: Flip the ROADMAP §C State (forced by the new file on disk)** — `tests/unit/test_migration_lineage.py::test_roadmap_lineage_consistent_with_alembic` asserts `authored_reserved == shipped` and `head ∈ shipped`, reading BOTH `.agents/ROADMAP.md` and `alembic/versions/` off disk. Creating `013_outbox_stream_separation.py` in Step 3 therefore breaks it immediately — it is not deferrable to Task 9. Observe the failure, then flip:
+
+Run: `.venv/bin/pytest tests/unit/test_migration_lineage.py::test_roadmap_lineage_consistent_with_alembic -v`
+Expected: **FAIL** — `live Alembic head 013 is not a shipped reservation` (the 7b-core row still reads `pending`).
+
+In `.agents/ROADMAP.md §C`, change the PR 7b-core row's State cell `pending → shipped` (see Task 9 Step 2 for the exact final row text; leave 7b-activation `014` and every other row untouched). Also update the §C prose note near lines 12-14 if it says "7b-core is next" → "7b-core shipped (`013`); 7b-activation (`014`) is next".
+
+Run: `.venv/bin/pytest tests/unit/test_migration_lineage.py -v`
+Expected: PASS.
+
+**This file is staged in Task 6's atomic `013` commit, not Task 9's** — the guard reads the worktree, but CI checks out the commit, so a ROADMAP flip landing in a later commit than the migration leaves Task 6's commit red.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/bin/pytest tests/integration/test_migrations.py::test_013_upgrade_sets_stream_and_notnull_metadata -v`
@@ -375,35 +388,51 @@ def test_013_up_down_up_clean_no_supersession(pg):
     alembic_command.upgrade(cfg, "013")  # clean re-upgrade on a no-superseded DB
 
 
-# INSERT negatives: each row is otherwise valid; only the constrained column is bad.
+# INSERT negatives: each row is otherwise valid; only the constrained column is bad. Each case
+# pins the constraint (or NOT NULL message) it is INTENDED to trip — same discipline as
+# _NONBLANK_SURFACES. Without the pin, a later-task constraint that rejects the row for an
+# unrelated reason (Task 4's kind/stream identity CHECK rejects every ('poc_email','decision')
+# shape) would keep these green while the constraint under test silently disappeared.
 _OUTBOX_LIFECYCLE_BAD = {
-    "unknown_kind": "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
-        "VALUES ('unknown','c1','decision','pending')",  # ck_outbox_kind_vocab
-    "null_stream": "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
-        "VALUES ('poc_email','c1',NULL,'pending')",  # NOT NULL
-    "unknown_stream": "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
-        "VALUES ('poc_email','c1','carrier-pigeon','pending')",  # ck_outbox_ordering_stream_vocab
-    "orphan_case": "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
-        "VALUES ('poc_email','nope','email','pending')",  # fk_outbox_case_id
-    "null_case": "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
-        "VALUES ('poc_email',NULL,'email','pending')",  # NOT NULL
-    "pending_delivered_at": "INSERT INTO outbox (kind, case_id, ordering_stream, status, delivered_at) "
-        "VALUES ('poc_email','c1','email','pending', now())",  # lifecycle: pending⇒delivered_at NULL
-    "pending_resolved_at": "INSERT INTO outbox (kind, case_id, ordering_stream, status, resolved_at) "
-        "VALUES ('poc_email','c1','email','pending', now())",  # lifecycle: pending⇒resolved_at NULL
-    "delivered_no_delivered_at": "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
-        "VALUES ('poc_email','c1','email','delivered')",  # lifecycle: delivered⇒delivered_at NOT NULL
-    "dead_with_claim": "INSERT INTO outbox (kind, case_id, ordering_stream, status, claim_token, "
-        "claim_lease_expires_at, claimed_by) VALUES ('poc_email','c1','email','dead', gen_random_uuid(), "
-        "now(), 'w1')",  # lifecycle: dead⇒claim all-NULL
-    "orphan_claimed_by": "INSERT INTO outbox (kind, case_id, ordering_stream, status, claimed_by) "
-        "VALUES ('poc_email','c1','email','pending','w1')",  # lifecycle: partial claim tuple
-    "superseded_null_resolved": "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
-        "VALUES ('poc_email','c1','email','superseded')",  # lifecycle: superseded⇒resolved_at NOT NULL
+    "unknown_kind": ("ck_outbox_kind_vocab",
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+        "VALUES ('unknown','c1','decision','pending')"),
+    "null_stream": ('null value in column "ordering_stream"',
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+        "VALUES ('poc_email','c1',NULL,'pending')"),
+    "unknown_stream": ("ck_outbox_ordering_stream_vocab",
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+        "VALUES ('poc_email','c1','carrier-pigeon','pending')"),
+    "orphan_case": ("fk_outbox_case_id",
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+        "VALUES ('poc_email','nope','email','pending')"),
+    "null_case": ('null value in column "case_id"',
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+        "VALUES ('poc_email',NULL,'email','pending')"),
+    "pending_delivered_at": ("ck_outbox_status_lifecycle",  # pending ⇒ delivered_at NULL
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status, delivered_at) "
+        "VALUES ('poc_email','c1','email','pending', now())"),
+    "pending_resolved_at": ("ck_outbox_status_lifecycle",  # pending ⇒ resolved_at NULL
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status, resolved_at) "
+        "VALUES ('poc_email','c1','email','pending', now())"),
+    "delivered_no_delivered_at": ("ck_outbox_status_lifecycle",  # delivered ⇒ delivered_at NOT NULL
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+        "VALUES ('poc_email','c1','email','delivered')"),
+    "dead_with_claim": ("ck_outbox_status_lifecycle",  # dead ⇒ claim tuple all-NULL
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status, claim_token, "
+        "claim_lease_expires_at, claimed_by) VALUES ('poc_email','c1','email','dead', "
+        "gen_random_uuid(), now(), 'w1')"),
+    "orphan_claimed_by": ("ck_outbox_status_lifecycle",  # partial claim tuple
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status, claimed_by) "
+        "VALUES ('poc_email','c1','email','pending','w1')"),
+    "superseded_null_resolved": ("ck_outbox_status_lifecycle",  # superseded ⇒ resolved_at NOT NULL
         # (also trips the F8 decision-only conjunct; the dedicated F8 negatives below isolate it)
-    "delivered_with_claim": "INSERT INTO outbox (kind, case_id, ordering_stream, status, delivered_at, "
-        "claim_token, claim_lease_expires_at, claimed_by) VALUES ('poc_email','c1','email','delivered', "
-        "now(), gen_random_uuid(), now(), 'w1')",  # lifecycle: delivered⇒claim all-NULL
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+        "VALUES ('poc_email','c1','email','superseded')"),
+    "delivered_with_claim": ("ck_outbox_status_lifecycle",  # delivered ⇒ claim tuple all-NULL
+        "INSERT INTO outbox (kind, case_id, ordering_stream, status, delivered_at, "
+        "claim_token, claim_lease_expires_at, claimed_by) VALUES ('poc_email','c1','email',"
+        "'delivered', now(), gen_random_uuid(), now(), 'w1')"),
 }
 
 
@@ -411,17 +440,17 @@ _OUTBOX_LIFECYCLE_BAD = {
 def test_013_outbox_lifecycle_insert_negatives(pg, case):
     from sqlalchemy.exc import IntegrityError
 
+    expected, sql = _OUTBOX_LIFECYCLE_BAD[case]
     url = _fresh_db(pg, f"kyc_mig_013_neg_{case}")
     cfg = _config(url)
     alembic_command.upgrade(cfg, "013")
     engine = create_engine(url)
     with engine.begin() as conn:
         conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
-    with pytest.raises(IntegrityError), engine.begin() as conn:
-        conn.execute(text(_OUTBOX_LIFECYCLE_BAD[case]))
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
+        conn.execute(text(sql))
+    assert expected in str(exc.value)  # the INTENDED constraint, not an unrelated later one
     engine.dispose()
-
-
 def test_013_outbox_lifecycle_update_negative(pg):
     """A live pending row cannot be UPDATEd into an illegal (superseded, NULL resolved_at)
     tuple — the lifecycle CHECK fires at commit on UPDATE too, not only INSERT."""
@@ -2457,7 +2486,7 @@ git status                # review the accumulated worktree diff — do NOT comm
 
 ## Task 5: Best-effort local `superseded` guard + lifecycle wiring (retention, metrics, UI-409, A6)
 
-Adds the local guard to `process_once` (suppress an older decision-stream callback only when a higher-sequence decision already has a locally-stamped `published_at`), the fenced `_record_superseded` terminal, retention pruning of `superseded` alongside `delivered`, separate metrics reporting, a UI-409 confirmation, the honest residual-risk tests (send-before-stamp AND — re-audit F4 — manual-current-then-late-automatic-callback), and the AUDIT:A6 amendment. The guard is explicitly a best-effort optimization — THREE residual reverts remain until 7b-activation: (1) send-before-stamp, (2) cross-replica, (3) a queued automatic callback delivered AFTER a later manual approval (manual rows have `run_id NULL`, no callback, and no sequence, so the local guard sees no higher locally-published automatic sequence).
+Adds the local guard to `process_once` (suppress an older decision-stream callback only when a higher-sequence decision already has a locally-stamped `published_at`), the fenced `_record_superseded` terminal, the retention narrowing that makes `decision_callback` rows the durable ordering authority 7b-activation reconciles against, separate metrics reporting, a UI-409 confirmation, the honest residual-risk tests (send-before-stamp AND — re-audit F4 — manual-current-then-late-automatic-callback), and the AUDIT:A6 amendment. The guard is explicitly a best-effort optimization — THREE residual reverts remain until 7b-activation: (1) send-before-stamp, (2) cross-replica, (3) a queued automatic callback delivered AFTER a later manual approval (manual rows have `run_id NULL`, no callback, and no sequence, so the local guard sees no higher locally-published automatic sequence).
 
 **Files:**
 - Modify: `src/kyc_tool/outbox/publisher.py` (`process_once` guard insertion point; add `_record_superseded`; module docstring 1-7)
@@ -2469,7 +2498,7 @@ Adds the local guard to `process_once` (suppress an older decision-stream callba
 
 **Interfaces:**
 - Consumes: `_record_superseded(self, row, token)` reuses the fenced pattern from Task 3; the guard reads `row.ordering_stream`, `row.decision_sequence`, `row.case_id`.
-- Produces: `_record_superseded` sets `status='superseded'`, `resolved_at`, clears the claim tuple, moves the run `PUBLISH_DECISION→COMPLETE`, leaves `published_at` NULL; logs `outbox_superseded`. `prune` returns key `outbox_superseded`. Metrics expose `outbox_by_status` including `superseded` but the pending/dead alert set excludes it.
+- Produces: `_record_superseded` sets `status='superseded'`, `resolved_at`, clears the claim tuple, moves the run `PUBLISH_DECISION→COMPLETE`, leaves `published_at` NULL; logs `outbox_superseded`. `prune` returns key `outbox_poc_email` (renamed; its outbox delete is now `kind='poc_email'`-scoped and no `superseded` prune is added). Metrics expose `outbox_by_status` including `superseded` but the pending/dead alert set excludes it.
 
 - [ ] **Step 1: Write the failing guard tests** — create `tests/integration/test_outbox_supersession.py`:
 
@@ -2638,22 +2667,30 @@ Run: `.venv/bin/pytest tests/integration/test_outbox_supersession.py -v` → PAS
 - [ ] **Step 5: Wire retention + metrics + add residual-risk, A6, retention, UI tests** — in `src/kyc_tool/workers/retention.py`, replace the `outbox_delivered` prune (lines 29-35) with:
 
 ```python
-        counts["outbox_delivered"] = session.execute(
+        counts["outbox_poc_email"] = session.execute(
             text(
-                "DELETE FROM outbox WHERE status='delivered' "
+                "DELETE FROM outbox WHERE kind='poc_email' AND status='delivered' "
                 "AND delivered_at < now() - make_interval(days => :d)"
             ),
             {"d": retention_days},
         ).rowcount
-        # PR 7b-core: superseded is a terminal (never sent), pruned like delivered.
-        counts["outbox_superseded"] = session.execute(
-            text(
-                "DELETE FROM outbox WHERE status='superseded' "
-                "AND resolved_at < now() - make_interval(days => :d)"
-            ),
-            {"d": retention_days},
-        ).rowcount
 ```
+
+and extend the module docstring's existing "deliberately NOT pruned" sentence (line 7) — same file, same idiom, because this is the durable-authority contract the spec's §Rollout defines:
+
+```python
+# Raw evidence objects and check rows are deliberately NOT pruned here — they are the
+# decision record. PR 7b-core adds decision_callback outbox rows to that list: the row IS
+# the durable ordering authority (id = order, status = local_status, payload_json = body)
+# that 7b-activation reconciles the platform against, and its body is a projection of the
+# never-pruned decisions/checks record, so retaining it retains nothing new. Only poc_email
+# rows are prunable here — their sensitive body (the raw POC token) is already destroyed at
+# delivery by publisher._record_delivered. A poc_email can never reach 'superseded' (that
+# terminal is decision-callback-only, ck_outbox_status_lifecycle), so the single statement
+# above covers every prunable outbox terminal and no superseded prune is added.
+```
+
+(Keep the docstring's existing wording for the first sentence; append from "PR 7b-core adds…". The `outbox_delivered` count key is renamed `outbox_poc_email` because it no longer means "all delivered rows"; nothing consumes it but the log line.)
 
 In `src/kyc_tool/api/routes_metrics.py`, keep the `outbox_by_status` grouping (line 60, it already surfaces every status incl. `superseded`) and add an explicit alert-set comment/derived field right after it:
 
@@ -2742,14 +2779,60 @@ def _superseded_callback(session_factory, case_id, *, resolved_at="now()"):
     return oid
 
 
-def test_retention_prunes_superseded(session_factory):
+def test_retention_keeps_decision_callbacks_and_prunes_poc_email(session_factory):
+    """PR 7b-core durable ordering authority (re-review 0ca264b P1/F4): retention's outbox
+    prune is narrowed to kind='poc_email'. A retention-old delivered decision_callback — and
+    an equally-old superseded one — SURVIVE with every manifest field intact, while an
+    equally-old delivered poc_email is still deleted (proving a narrowing, not a disablement)."""
     from kyc_tool.workers.retention import prune
 
-    _superseded_callback(session_factory, "c4", resolved_at="now() - interval '3000 days'")
-    counts = prune(session_factory, 7 * 365)
-    assert counts["outbox_superseded"] == 1
+    old = "now() - interval '3000 days'"
+    _superseded_callback(session_factory, "c4", resolved_at=old)
     with session_factory() as s:
-        assert s.execute(text("SELECT count(*) FROM outbox WHERE case_id='c4'")).scalar_one() == 0
+        s.execute(text("INSERT INTO cases (id) VALUES ('c4') ON CONFLICT DO NOTHING"))
+        s.execute(text(
+            f"INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+            f"status, delivered_at, payload_json) VALUES ('decision_callback','c4','c4-r9',"
+            f"'decision',9,'delivered',{old},'{{\"decision\":\"approve\"}}'::jsonb)"))
+        s.execute(text(
+            f"INSERT INTO outbox (kind, case_id, ordering_stream, status, delivered_at) "
+            f"VALUES ('poc_email','c4','email','delivered',{old})"))
+        s.commit()
+
+    counts = prune(session_factory, 7 * 365)
+
+    assert counts["outbox_poc_email"] == 1  # the email IS pruned
+    assert "outbox_superseded" not in counts  # no superseded prune exists (decision-only terminal)
+    with session_factory() as s:
+        rows = s.execute(text(
+            "SELECT status, run_id, decision_sequence, delivered_at, payload_json "
+            "FROM outbox WHERE case_id='c4' ORDER BY id")).all()
+        assert [r.status for r in rows] == ["superseded", "delivered"]  # both callbacks survive
+        assert s.execute(text(
+            "SELECT count(*) FROM outbox WHERE case_id='c4' AND kind='poc_email'")).scalar_one() == 0
+        # every field 7b-activation's manifest reads is still derivable from the surviving row
+        delivered = rows[1]
+        assert delivered.run_id == "c4-r9" and delivered.decision_sequence == 9
+        assert delivered.delivered_at is not None  # the ORIGINAL timestamp, not now()
+        assert delivered.payload_json == {"decision": "approve"}  # body intact, never redacted
+        digest = s.execute(text(
+            "SELECT encode(sha256(convert_to(payload_json::text,'UTF8')),'hex') FROM outbox "
+            "WHERE case_id='c4' AND status='delivered'")).scalar_one()
+        assert len(digest) == 64  # callback_body_digest is computable on demand — no stored column
+
+
+def test_retention_still_prunes_its_other_targets(session_factory):
+    """The narrowing is scoped to the outbox: audit_log and poc_tokens pruning is unchanged."""
+    from kyc_tool.workers.retention import prune
+
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('c4b') ON CONFLICT DO NOTHING"))
+        s.execute(text(
+            "INSERT INTO audit_log (case_id, action, actor, detail_json, at) "
+            "VALUES ('c4b','x','system','{}'::jsonb, now() - interval '3000 days')"))
+        s.commit()
+    counts = prune(session_factory, 7 * 365)
+    assert counts["audit_log"] == 1
 
 
 def test_ui_requeue_409s_superseded(client, session_factory):
@@ -3047,7 +3130,8 @@ git add alembic/versions/013_outbox_stream_separation.py \
         tests/integration/test_decision_sequence.py tests/integration/test_outbox_supersession.py \
         tests/integration/test_ui.py tests/integration/test_phase4_platform.py \
         tests/integration/test_bundle_pinning_ops.py tests/conftest.py \
-        tests/unit/test_migration_contract_v013.py tests/policy_driven/test_engine_build_id_guard.py
+        tests/unit/test_migration_contract_v013.py tests/policy_driven/test_engine_build_id_guard.py \
+        .agents/ROADMAP.md
 git commit -m "feat(013): outbox stream separation + local decision ordering (schema + runtime, atomic)
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
@@ -3341,27 +3425,45 @@ Run: `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py -v` �
 - [ ] **Step 4b: The schema-012 restore acceptance test (re-audit F1)** — the runbook's restore-or-block recovery (Task 9 Step 5, step 0.5) is now an EXECUTABLE identity contract: a restore must re-insert the ORIGINAL `outbox.id` with the recorded evidence tuple `(decision_id, run_id, case_id, original_outbox_id, body digest)`; a default-id INSERT is prohibited (it silently reverses the legacy order authority: the pruned OLDER callback would be re-ranked NEWER). This test executes that exact contract end-to-end on schema 012 — append to `tests/integration/test_migrations.py`:
 
 ```python
-# The runbook's executable restore acceptance predicate (Task 9 Step 5, step 0.5): compares
-# the restored row's identity + body digest against the evidence recorded from backup.
-# ZERO returned rows = accepted; any row = a mismatch that MUST block the migration window.
+# The runbook's executable restore acceptance predicate (Task 9 Step 5, step 0.6c). POSITIVE and
+# fail-closed: it asserts the restored row EXISTS and matches every recorded component, and must
+# return EXACTLY ONE row. A negative "select the mismatches, expect zero rows" formulation is
+# prohibited — an absent row, or one restored under the wrong run_id, matches nothing and is then
+# indistinguishable from an exact match (re-review 0ca264b P2).
 _RESTORE_ACCEPTANCE_SQL = text(
-    "SELECT o.id, o.run_id FROM outbox o "
-    "WHERE o.run_id = :run_id AND o.kind = 'decision_callback' "
-    "AND (o.id <> :original_outbox_id OR o.case_id <> :case_id "
-    "OR md5(o.payload_json::text) <> :payload_digest)"
+    "SELECT 1 AS accepted FROM outbox o JOIN decisions d ON d.id = :decision_id "
+    "WHERE o.id = :original_outbox_id AND o.kind = 'decision_callback' "
+    "AND o.case_id = :case_id AND o.run_id = :run_id "
+    "AND d.case_id = o.case_id AND d.run_id = o.run_id "
+    "AND encode(sha256(convert_to(o.payload_json::text,'UTF8')),'hex') = :body_digest "
+    "AND o.status = :original_status "
+    "AND o.delivered_at IS NOT DISTINCT FROM :original_delivered_at"
+)
+
+# Read-only, monotonic sequence precondition (step 0.6d). The id the sequence would hand the NEXT
+# writer must already be PAST the restored id. is_called is load-bearing: on a never-called sequence
+# last_value is the id nextval will RETURN, not one already consumed. This never writes — a live
+# `setval(GREATEST(max(id), last_value))` can rewind the sequence under a concurrent nextval (a
+# non-transactional object; LOCK TABLE does not fence it) and is prohibited (re-review 0ca264b P1).
+_SEQ_HIGH_WATER_SQL = text(
+    "SELECT last_value + (CASE WHEN is_called THEN 1 ELSE 0 END) AS next_id FROM outbox_id_seq"
 )
 
 
 def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
-    """Re-audit F1 — the restore acceptance contract, on schema 012 with the REAL
-    diagnostic CLI and the REAL 013 upgrade:
-    (1) two callbacks (ids captured), evidence tuples recorded (simulating the backup);
+    """Re-audit F1 (+ re-review 0ca264b P1/P2) — the restore acceptance contract, on schema 012
+    with the REAL diagnostic CLI and the REAL 013 upgrade:
+    (1) two callbacks (ids captured), full evidence tuples recorded (simulating the backup);
     (2) the OLDER callback is deleted (simulating a retention prune);
-    (3) a DEFAULT-id INSERT restore is REJECTED by the runbook acceptance predicate
-        (its id differs — the exact silent-order-reversal Codex identified);
-    (4) restored with the EXACT original id → predicate passes, the id sequence is
-        advanced per the runbook, the real diagnostic CLI runs clean, 013 upgrades,
-        and old/new map to decision_sequence 1/2 (order authority preserved)."""
+    (3) the read-only sequence precondition holds — a pruned historical id is BELOW the
+        high-water mark, so no sequence write is needed (and none is performed);
+    (4) an ABSENT row is REJECTED (the fail-open hole the negative predicate had);
+    (5) a DEFAULT-id INSERT restore is REJECTED (its id differs — silent order reversal);
+    (6) each evidence component, mutated alone, is REJECTED (every one is load-bearing);
+    (7) restored with the EXACT original id AND original lifecycle fields → exactly one
+        accepted row, the real diagnostic CLI runs clean, 013 upgrades, and old/new map to
+        decision_sequence 1/2 (order authority preserved)."""
+    import datetime as _dt
     import os
     import subprocess
     import sys
@@ -3376,51 +3478,67 @@ def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
         oid_b = _seed_legacy_callback(conn, case_id="c1", run_id="rB", decision_id="dB",
                                       ev_seq=2, status="pending")
         assert oid_a < oid_b  # A is the authoritative OLDER callback
-        # record the evidence tuples (what the operator captures FROM BACKUP before restoring)
+        # the evidence tuple the operator captures FROM BACKUP before restoring — identity,
+        # body digest, AND the original lifecycle fields (substituting now() is prohibited)
         evidence = {
             r.run_id: {"decision_id": d, "run_id": r.run_id, "case_id": r.case_id,
-                       "original_outbox_id": r.id, "payload_digest": r.digest}
+                       "original_outbox_id": r.id, "body_digest": r.digest,
+                       "original_status": r.status, "original_delivered_at": r.delivered_at}
             for r, d in zip(
-                conn.execute(text("SELECT id, run_id, case_id, md5(payload_json::text) AS digest "
-                                  "FROM outbox ORDER BY id")).all(),
+                conn.execute(text(
+                    "SELECT id, run_id, case_id, status, delivered_at, "
+                    "encode(sha256(convert_to(payload_json::text,'UTF8')),'hex') AS digest "
+                    "FROM outbox ORDER BY id")).all(),
                 ["dA", "dB"], strict=True,
             )
         }
+    ev = evidence["rA"]
+    assert ev["original_status"] == "delivered" and ev["original_delivered_at"] is not None
     with engine.begin() as conn:  # simulate the retention prune of the OLD delivered callback
         conn.execute(text("DELETE FROM outbox WHERE id=:i"), {"i": oid_a})
 
-    with engine.begin() as conn:  # (3) the PROHIBITED default-id restore
+    def _accepted(conn, e):
+        return conn.execute(_RESTORE_ACCEPTANCE_SQL, e).fetchall()
+
+    with engine.begin() as conn:
+        # (3) READ-ONLY precondition: the next id the sequence would hand out is already past
+        # the restored id, so the gap is safe to fill and NO sequence write is required.
+        next_id = conn.execute(_SEQ_HIGH_WATER_SQL).scalar_one()
+        assert next_id > ev["original_outbox_id"]
+        # (4) fail-closed on an ABSENT row: the pre-rev-10 negative predicate returned zero
+        # mismatches here and would have called this "accepted".
+        assert _accepted(conn, ev) == []
+
+    with engine.begin() as conn:  # (5) the PROHIBITED default-id restore
         bad_id = conn.execute(text(
             "INSERT INTO outbox (kind, case_id, run_id, payload_json, status, delivered_at) "
             "VALUES ('decision_callback','c1','rA','{}'::jsonb,'delivered', now()) RETURNING id"
         )).scalar_one()
         assert bad_id > oid_b  # a fresh id — the restored row would rank NEWER than rB
-        ev = evidence["rA"]
-        mismatches = conn.execute(_RESTORE_ACCEPTANCE_SQL, {
-            "run_id": ev["run_id"], "original_outbox_id": ev["original_outbox_id"],
-            "case_id": ev["case_id"], "payload_digest": ev["payload_digest"],
-        }).fetchall()
-        assert mismatches  # REJECTED: the acceptance predicate reports the id mismatch
+        assert _accepted(conn, ev) == []  # REJECTED: the id does not match the evidence
         conn.execute(text("DELETE FROM outbox WHERE id=:i"), {"i": bad_id})  # operator undoes it
 
-    with engine.begin() as conn:  # (4) the governed restore: EXACT original primary key
+    with engine.begin() as conn:  # (7a) the governed restore: EXACT id AND exact lifecycle
         conn.execute(text(
             "INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, delivered_at) "
-            "VALUES (:i,'decision_callback','c1','rA','{}'::jsonb,'delivered', now())"
-        ), {"i": oid_a})
-        ev = evidence["rA"]
-        mismatches = conn.execute(_RESTORE_ACCEPTANCE_SQL, {
-            "run_id": ev["run_id"], "original_outbox_id": ev["original_outbox_id"],
-            "case_id": ev["case_id"], "payload_digest": ev["payload_digest"],
-        }).fetchall()
-        assert mismatches == []  # ACCEPTED: identity + digest match the recorded evidence
-        # runbook: advance/verify the id sequence after any explicit-id INSERT
-        new_last = conn.execute(text(
-            "SELECT setval(pg_get_serial_sequence('outbox','id'), GREATEST("
-            "(SELECT COALESCE(max(id),1) FROM outbox), (SELECT last_value FROM outbox_id_seq)))"
-        )).scalar_one()
-        max_id = conn.execute(text("SELECT max(id) FROM outbox")).scalar_one()
-    assert new_last >= max_id  # future writers cannot collide with the restored id
+            "VALUES (:i,'decision_callback',:c,:r,'{}'::jsonb,:st,:da)"
+        ), {"i": ev["original_outbox_id"], "c": ev["case_id"], "r": ev["run_id"],
+            "st": ev["original_status"], "da": ev["original_delivered_at"]})
+        assert _accepted(conn, ev) == [(1,)]  # ACCEPTED: exactly one row, every component matched
+
+        # (6) every evidence component is separately load-bearing: mutate one at a time, and
+        # the acceptance predicate must reject the (unchanged, correctly restored) row.
+        mutations = {
+            "decision_id": "d-nope",
+            "run_id": "r-nope",
+            "case_id": "c-nope",
+            "original_outbox_id": ev["original_outbox_id"] + 1000,
+            "body_digest": "0" * 64,
+            "original_status": "pending",
+            "original_delivered_at": ev["original_delivered_at"] + _dt.timedelta(seconds=1),
+        }
+        for key, bad in mutations.items():
+            assert _accepted(conn, {**ev, key: bad}) == [], f"{key} is not load-bearing"
 
     proc = subprocess.run(  # the REAL diagnostic must now be clean
         [sys.executable, "-m", "kyc_tool.ops.verify_pr7b_core_backfill"],
@@ -3438,7 +3556,7 @@ def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
 ```
 
 Run: `.venv/bin/pytest tests/integration/test_migrations.py::test_012_restore_acceptance_rejects_default_id_then_accepts_original -v`
-Expected: PASS. **Mutation witness (manual):** change the governed restore INSERT to omit the explicit `id` (making it a second default-id INSERT) → the `mismatches == []` assertion must FAIL (the predicate rejects it), and — if the predicate were also skipped — the final assertion would fail with `{"dA": 2, "dB": 1}` (the silent order reversal this contract exists to block). Restore.
+Expected: PASS. **Mutation witnesses (manual):** (a) change the governed restore INSERT to omit the explicit `id` → the `== [(1,)]` assertion must FAIL (the predicate rejects it), and — if the predicate were also skipped — the final assertion would fail with `{"dA": 2, "dB": 1}` (the silent order reversal this contract exists to block). (b) Replace `_RESTORE_ACCEPTANCE_SQL` with the pre-rev-10 negative form (`SELECT ... WHERE ... AND (o.id <> :original_outbox_id OR ...)`, zero rows = accepted) → the absent-row assertion at (4) must FAIL, proving the fail-open hole is what the positive predicate closes. Restore both.
 
 - [ ] **Step 5: Mutation check (manual, no commit)** — remove `s.execute(text("LOCK TABLE outbox IN SHARE MODE"))`; rerun `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py::test_cli_share_lock_blocks_until_retention_resolves -v` → BOTH params must FAIL the `assert proc.poll() is None` blocked check (the CLI no longer waits on prune), and the `[commit]` param additionally fails its nonzero-outcome assertion (it reads the still-visible callback before the delete commits). Restore.
 
@@ -3715,28 +3833,27 @@ Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
 
 ---
 
-## Task 9: Docs + governance + ROADMAP §C `shipped` flip
+## Task 9: Docs + governance
 
-Documents stream separation + local ordering + the 7b-core/activation boundary in `OVERVIEW.md`; the full ordered step-0 pre-window + drained cutover + reversible-before-first-supersession rollback in `RUNBOOK.md`/`DEPLOYMENT.md`; the A6 exception + backfill-as-deterministic-reconstruction + local/cross-replica boundary in `AUDIT_FINDINGS.md`; and flips `.agents/ROADMAP.md §C` PR 7b-core State `pending → shipped` (keeping `tests/unit/test_migration_lineage.py` green). Docs-only — no `src/` change, no drift re-pin.
+Documents stream separation + local ordering + the 7b-core/activation boundary in `OVERVIEW.md`; the full ordered step-0 pre-window + drained cutover + reversible-before-first-supersession rollback in `RUNBOOK.md`/`DEPLOYMENT.md`; and the A6 exception + backfill-as-deterministic-reconstruction + local/cross-replica boundary in `AUDIT_FINDINGS.md`. Docs-only — no `src/` change, no drift re-pin. **The `.agents/ROADMAP.md §C` `shipped` flip is NOT here** — `test_migration_lineage.py` asserts `authored_reserved == shipped` by reading BOTH the ROADMAP and `alembic/versions/` off disk, so the flip is forced the moment `013_outbox_stream_separation.py` exists (Task 1 Step 3b) and must ride the SAME atomic commit as the migration (Task 6). Deferring it to Task 9 would leave Task 6's commit red in CI, which checks out the commit rather than the worktree.
 
 **Files:**
 - Modify: `docs/OVERVIEW.md`, `docs/RUNBOOK.md`, `docs/DEPLOYMENT.md`
 - Modify: `AUDIT_FINDINGS.md` (backfill provenance note; A6 already amended in Task 5 — confirm)
-- Modify: `.agents/ROADMAP.md` (§C row 74 State)
 - Create: `tests/unit/test_docs_cutover_parity.py` (RUNBOOK/DEPLOYMENT full-body parity)
 - Create: `tests/integration/test_rollback_command.py` (the exact `alembic … downgrade 012` command)
-- Verify: `tests/unit/test_migration_lineage.py` (green after the flip)
+- Verify: `tests/unit/test_migration_lineage.py` (already green — flipped in Task 1, committed in Task 6)
 
 **Interfaces:**
 - Consumes: everything shipped in Tasks 1-8 (CLIs by name, migration behavior).
-- Produces: the lineage invariant `head=013 ∈ shipped`, `pending[0]=014`.
+- Produces: docs + governance only. The lineage invariant `head=013 ∈ shipped`, `pending[0]=014` was established in Task 1 and committed in Task 6.
 
-- [ ] **Step 1: Write the failing lineage guard** — the live head is now `013`. Confirm the guard currently FAILS before the flip:
+- [ ] **Step 1: Confirm the lineage guard is already green** — it was satisfied in Task 1 Step 3b and committed atomically with `013` in Task 6; this step only proves no later task regressed it:
 
-Run: `.venv/bin/pytest tests/unit/test_migration_lineage.py::test_roadmap_lineage_consistent_with_alembic -v`
-Expected: FAIL — `AssertionError: live Alembic head 013 is not a shipped reservation` (7b-core row is still `pending`).
+Run: `.venv/bin/pytest tests/unit/test_migration_lineage.py -v`
+Expected: PASS.
 
-- [ ] **Step 2: Flip the ROADMAP State** — in `.agents/ROADMAP.md §C`, change the PR 7b-core row (line 74) State cell from `pending` to `shipped`:
+- [ ] **Step 2: Confirm the ROADMAP row committed in Task 6 reads exactly this** (do not re-edit it here — it is already in the atomic `013` commit):
 
 ```markdown
 | PR 7b-core | 8 | shipped | 013 | `outbox.ordering_stream` (NOT NULL) + `case_id` NOT NULL + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + a **best-effort** local `superseded` guard (higher *locally-stamped* delivery only; send-before-stamp / cross-replica / manual-current-then-late-automatic-callback reverts remain for 7b-activation); identity + ordering (`UNIQUE decisions(case_id, decision_sequence)` [per-case namespace] + `UNIQUE(run_id)` + triple FK + composite `decisions(run_id,case_id)→runs(id,case_id)` FK + partial callback index); fenced claim (`claim_token`); exhaustive per-status lifecycle CHECKs (`superseded` decision-only); `ordering_stream`/`case_id` real `SET NOT NULL` (drained cutover, **reversible-before-first-supersession** downgrade) |
@@ -3744,7 +3861,7 @@ Expected: FAIL — `AssertionError: live Alembic head 013 is not a shipped reser
 
 (Leave 7b-activation `014` and every other row unchanged. Also update the prose note near line 12-14 if it says "7b-core is next" — change to "7b-core shipped (`013`); 7b-activation (`014`) is next".)
 
-- [ ] **Step 3: Run the lineage guard to verify pass**
+- [ ] **Step 3: Re-run the lineage guard after the docs edits**
 
 Run: `.venv/bin/pytest tests/unit/test_migration_lineage.py -v`
 Expected: PASS (`head 013 ∈ shipped`; `pending[0]=014=head+1`; disjoint/exhaustive/contiguous all hold).
@@ -3792,23 +3909,45 @@ higher locally-published automatic sequence to compare). 7b-core does not claim 
 0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
     advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
     (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
-        callback: `(decision_id, run_id, case_id, original_outbox_id, body_digest)` where
-        `body_digest = md5(payload_json::text)` computed on the backup row.
-    (b) The restore MUST re-insert the ORIGINAL primary key:
+        callback: `(decision_id, run_id, case_id, original_outbox_id, body_digest,
+        original_status, original_delivered_at)` where `body_digest` is computed ON THE BACKUP ROW
+        as `encode(sha256(convert_to(payload_json::text,'UTF8')),'hex')`. `md5(...)` is prohibited.
+    (b) The restore MUST re-insert the ORIGINAL primary key AND the ORIGINAL lifecycle fields:
         `INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, delivered_at, ...)
-         VALUES (<original_outbox_id>, ...)` — a default-id INSERT is prohibited (it allocates a
-        fresh id and re-ranks the restored older callback as newer). If the original id is
-        unavailable, do NOT restore: remain `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012.
-    (c) ACCEPTANCE PREDICATE — run per restored callback; it MUST return ZERO rows before
-        proceeding (any row = mismatch = still blocked):
-        `SELECT o.id, o.run_id FROM outbox o
-         WHERE o.run_id = :run_id AND o.kind = 'decision_callback'
-           AND (o.id <> :original_outbox_id OR o.case_id <> :case_id
-                OR md5(o.payload_json::text) <> :body_digest);`
-    (d) After ANY explicit-id restore, advance/verify the outbox id sequence BEFORE writers resume:
-        `SELECT setval(pg_get_serial_sequence('outbox','id'), GREATEST(
-            (SELECT COALESCE(max(id),1) FROM outbox),
-            (SELECT last_value FROM outbox_id_seq)));`
+         VALUES (<original_outbox_id>, ..., <original_status>, <original_delivered_at>, ...)` — a
+        default-id INSERT is prohibited (it allocates a fresh id and re-ranks the restored older
+        callback as newer), and substituting `now()` for `delivered_at` is prohibited (it falsifies
+        the audit record). If the original id is unavailable, do NOT restore: remain
+        `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012.
+    (c) ACCEPTANCE PREDICATE — POSITIVE and fail-closed. Run per restored callback; it MUST return
+        EXACTLY ONE row before proceeding. ZERO rows = still blocked. Do NOT invert it into a
+        "select the mismatches, expect zero rows" form: an absent row (or one restored under the
+        wrong `run_id`) matches nothing and would read as accepted.
+        `SELECT 1 AS accepted FROM outbox o JOIN decisions d ON d.id = :decision_id
+         WHERE o.id = :original_outbox_id AND o.kind = 'decision_callback'
+           AND o.case_id = :case_id AND o.run_id = :run_id
+           AND d.case_id = o.case_id AND d.run_id = o.run_id
+           AND encode(sha256(convert_to(o.payload_json::text,'UTF8')),'hex') = :body_digest
+           AND o.status = :original_status
+           AND o.delivered_at IS NOT DISTINCT FROM :original_delivered_at;`
+    (d) SEQUENCE PRECONDITION — READ-ONLY. Step 0 runs with API/pipeline/outbox writers LIVE (only
+        retention is suspended; the first hard-stop is cutover step 2), so NO sequence write happens
+        here. `setval(...)` is prohibited on this path: a sequence is a non-transactional object,
+        `LOCK TABLE outbox IN SHARE MODE` does NOT fence it, and a read-modify-write can rewind it
+        below an already-allocated id under a concurrent `nextval` → duplicate primary key. It is
+        also unnecessary: a retention-pruned id fills a gap BELOW the advanced sequence. Instead,
+        BEFORE restoring, confirm the id the sequence would hand the next writer is already past it
+        (`pg_get_serial_sequence('outbox','id')` names the sequence; expected `public.outbox_id_seq`):
+        `SELECT last_value + (CASE WHEN is_called THEN 1 ELSE 0 END) > <original_outbox_id> AS ok
+         FROM outbox_id_seq;`
+        It MUST be `true` — the quantity only ever increases under `nextval`, so observing it once
+        with writers live is durable. If it is `false` the row is NOT a prune (it is a restore from a
+        divergent lineage): ABORT step 0. A genuine sequence repair is a SEPARATE DRAINED action —
+        run it only after cutover step 2 has hard-stopped and attested every writer at zero, using a
+        sequence-serializing statement (`ALTER SEQUENCE`, which excludes concurrent `nextval`, unlike
+        `setval`), then read the value back before any writer restarts:
+        `ALTER SEQUENCE outbox_id_seq RESTART WITH <max(id)+1>;
+         SELECT last_value, is_called FROM outbox_id_seq;`
     (e) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
 
 **Cutover (only after 0.4 is green):**
@@ -3861,9 +4000,21 @@ R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image 
 - A legacy automatic decision without a surviving `decision_callback` is a **fail-closed migration
   refusal** (`BLOCKED_NO_AUTHORITATIVE_MAPPING`): restore from authoritative backup or remain on 012.
   A restore is an **executable identity contract** (RUNBOOK step 0.6): re-insert the EXACT original
-  `outbox.id` with the recorded `(decision_id, run_id, case_id, original_outbox_id, body_digest)`
-  evidence and pass the acceptance predicate — a default-id INSERT is prohibited (it silently
-  reverses the legacy order). If the original id is unavailable, remain blocked.
+  `outbox.id` AND the original lifecycle fields, with the recorded `(decision_id, run_id, case_id,
+  original_outbox_id, body_digest, original_status, original_delivered_at)` evidence, and pass a
+  **positive** acceptance predicate that must return exactly one row — a default-id INSERT is
+  prohibited (it silently reverses the legacy order), `now()` for `delivered_at` is prohibited (it
+  falsifies the record), and a "zero mismatches = accepted" formulation is prohibited (an absent row
+  would read as accepted). If the original id is unavailable, remain blocked. No sequence is written
+  on this path: the precondition is a read-only check that the next id the sequence would allocate is
+  already past the restored id, and a genuine sequence repair is a separate drained `ALTER SEQUENCE`.
+- **Retention no longer prunes `decision_callback` outbox rows** (its outbox delete is scoped to
+  `kind='poc_email'`). The row is the durable ordering authority — `id` is the order, `status` is the
+  local delivery outcome, `payload_json` is the body — which the 7b-activation reconciliation
+  manifest is built from, and which an exact restore would otherwise see re-pruned on the next
+  retention run. This retains no new personal data: the body is a projection of the `decisions` and
+  `checks` records, which are already deliberately never pruned. The POC-token body remains destroyed
+  twice over (redacted at delivery, then pruned on schedule).
 - The local `superseded` guard is **best-effort and single-replica**: it fires only on a higher
   *locally-stamped* `published_at` (and `superseded` is a decision-callback-only terminal —
   DB-enforced). THREE reverts remain expected until 7b-activation's platform high-water mark:
@@ -3915,8 +4066,14 @@ def test_runbook_and_deployment_cutover_bodies_identical():
         "RESTORE ACCEPTANCE CONTRACT", "original_outbox_id",
         "default-id INSERT is prohibited", "ACCEPTANCE PREDICATE",
         "pg_get_serial_sequence('outbox','id')",
+        # re-review 0ca264b P1/P2 — the predicate is POSITIVE and the sequence is READ-ONLY:
+        "MUST return", "EXACTLY ONE row", "ZERO rows = still blocked",
+        "SEQUENCE PRECONDITION", "`setval(...)` is prohibited on this path",
+        "SEPARATE DRAINED action", "ALTER SEQUENCE outbox_id_seq RESTART WITH",
+        "substituting `now()` for `delivered_at` is prohibited",
     ):
         assert token in rb  # safety-critical details survive, not just the numbered leaders
+    assert "setval(pg_get_serial_sequence" not in rb  # the live sequence write must stay deleted
     assert rb.count("edge-block the composer") == 2  # forward + rollback both establish the fence
     assert rb.count("remove the composer edge block") == 3  # forward + both rollback outcomes clear it
 ```
@@ -3979,9 +4136,9 @@ rg -n "PR 7b-activation \| 8 \| pending \| 014" .agents/ROADMAP.md
 ./manage.sh test          # whole 013 suite + lineage + docs parity
 .venv/bin/ruff check .
 .venv/bin/lint-imports
-git add docs/OVERVIEW.md docs/RUNBOOK.md docs/DEPLOYMENT.md AUDIT_FINDINGS.md .agents/ROADMAP.md \
+git add docs/OVERVIEW.md docs/RUNBOOK.md docs/DEPLOYMENT.md AUDIT_FINDINGS.md \
         tests/unit/test_docs_cutover_parity.py tests/integration/test_rollback_command.py
-git commit -m "docs(7b-core): stream-separation overview, drained cutover/rollback, ROADMAP shipped
+git commit -m "docs(7b-core): stream-separation overview, drained cutover/rollback, audit findings
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
@@ -4061,8 +4218,10 @@ Every spec section maps to a task: §1 Migration 013 → Tasks 1 (columns/stream
    `(decision_id, run_id, case_id, original_outbox_id, body_digest)` evidence; a default-id INSERT is
    prohibited; original id unavailable → remain `BLOCKED_NO_AUTHORITATIVE_MAPPING`; an acceptance
    predicate (SQL, zero mismatches) gates proceeding; after any explicit-id restore the outbox id
-   sequence is advanced via `setval(pg_get_serial_sequence('outbox','id'), GREATEST(max(id),
-   last_value))` before writers resume. Task 7 Step 4b adds the full schema-012 recovery acceptance
+   sequence is advanced via `setval(...)` before writers resume. **⚠️ The zero-mismatch predicate and
+   the `setval` in this paragraph were both found defective in round 6 and are SUPERSEDED — see
+   "Codex plan-review round 6" below. Do not implement them.** Task 7 Step 4b adds the full schema-012
+   recovery acceptance
    test (prune old id, prove the default-id restore is REJECTED by the predicate, restore the exact
    id, predicate passes, real diagnostic CLI clean, real 013 upgrade maps old/new to sequences 1/2).
    The frozen contract module `v013_backfill.py` is UNCHANGED (the contract stays historical; the
@@ -4155,3 +4314,82 @@ revision; the verification matrix (full-selector Ruff + compile on every complet
 `bash -n` on shell blocks, frozen-SHA verification, docs parity/lineage, targeted selectors) was
 rerun over the revised blocks. **Not executed here:** the named `.venv/bin/pytest`/subprocess
 selectors remain build-cycle steps (no local Postgres at plan time).
+
+## Codex plan-review round 6 — complete-unit re-review @ `0ca264b`, 4 findings folded + 2 reviewer items (rev 6, 2026-07-24)
+
+All four Codex findings were independently re-verified against the live plan/spec/code before folding
+— none was taken on the review's word, none was rebutted. Two of the four (F2, F4) named an
+alternative that would need a product decision; the **recommended** branch was taken in both, so no
+decision is deferred into the build.
+
+1. **(P1 F1) The pre-window `setval` could rewind the outbox id sequence.** Step 0 runs with
+   API/pipeline/outbox writers LIVE (only retention is suspended; the first hard-stop is cutover
+   step 2), and `setval(GREATEST((SELECT max(id) FROM outbox), (SELECT last_value FROM outbox_id_seq)))`
+   is a read-modify-write on a **non-transactional** object: `max(id)` sees only the txn's MVCC
+   snapshot, `last_value` is read at a different instant from the write, and `LOCK TABLE outbox IN
+   SHARE MODE` does not fence a sequence. A concurrent `nextval` is invisible to both → the sequence
+   can be set below an already-allocated id → duplicate primary key. **Folded as deletion, not
+   hardening:** an exact restore of a retention-pruned *historical* id fills a gap **below** the
+   already-advanced sequence, so the write was never needed. Runbook 0.6(d) and the Task-7 test now
+   carry a **read-only** precondition (`last_value + (is_called ? 1 : 0) > original_outbox_id`,
+   monotonic, therefore durable once observed) that aborts **before** the outage; a genuine repair is
+   a **separate drained action** using `ALTER SEQUENCE … RESTART WITH` (which does exclude concurrent
+   `nextval`) with read-back. `_SEQ_HIGH_WATER_SQL` is asserted in the test; the docs-parity test
+   pins the new tokens **and** asserts `setval(pg_get_serial_sequence` no longer appears.
+2. **(P2 F1) The restore acceptance predicate was fail-open.** "Select the mismatching rows, expect
+   zero" made an **absent** row — and one restored under the wrong `run_id` — indistinguishable from
+   an exact match, and never used the recorded `decision_id` at all. **Folded:** one **positive**
+   assertion returning **exactly one** row, joining `outbox` → `decisions` on the full recorded
+   identity (`o.id`, `kind`, `o.case_id`, `o.run_id`, `d.id = decision_id`, `d.case_id = o.case_id`,
+   `d.run_id = o.run_id`), the body digest, and the **original** lifecycle fields. `md5` → SHA-256;
+   `delivered_at = now()` → the recorded timestamp (the plan's `now()` was itself masking finding 4).
+   The Task-7 test adds an absent-row rejection, a default-id rejection, and a **per-component**
+   mutation loop proving each identity element is separately load-bearing.
+3. **(P1 F2, activation-owned) A bare `s>h(c)` receiver would let a late automatic callback silently
+   override a manual approval.** Verified real at `events/ingest.py:242-267`: `_handle_manual_approve`
+   writes a decision with `run_id=None`, no `decision_sequence` and no outbox enqueue, so it can never
+   advance `h(c)`. Folded into the **activation** spec (rev 3): while a case's effective source is
+   `manual:<event>`, sequenced automatic callbacks are acknowledged, recorded for dedupe, terminalized
+   locally, and may advance `h(c)` — but **must not become the effective source** without an explicit
+   authenticated platform-owned release/override. Manual-wins is stated explicitly; the inverse is a
+   product decision and is never inferred from `s>h(c)`. 7b-core is unchanged by this.
+4. **(P1 F4) Retention deleted the very rows 014's manifest is built from.** `retention.py:29-35`
+   deletes delivered outbox rows past the window, so an exact restore (which reinstates the original
+   7-year-old `delivered_at`) is re-deleted on the next retention run — the plan's `delivered_at=now()`
+   hid this, and 014 then had no durable source for per-callback `(body_digest, local_status)`.
+   **Folded root-cause-first, and deliberately NOT by Codex's suggested mechanism** (a second store):
+   retention's outbox delete is **narrowed to `kind='poc_email'`**, making the existing `outbox` row
+   itself the durable authority. One added predicate; no new table, no new column, no dual write,
+   therefore no drift class to guard — `outbox.id` IS the order and `outbox.status` IS `local_status`.
+   It retains nothing new (the callback body is a projection of the never-pruned `decisions`/`checks`
+   record) and the POC token stays destroyed twice over. A stored `body_sha256` column was designed
+   and then **rejected** for the same reason a second table was: it duplicates an existing fact and
+   would force one canonical encoder to be reproduced in both Python and SQL. The digest is instead a
+   single SQL expression, `encode(sha256(convert_to(payload_json::text,'UTF8')),'hex')`, shared
+   verbatim by the restore predicate and 014's manifest. The `superseded` prune added in rev 5 is
+   dropped with it: `superseded` is decision-callback-only, so it would delete nothing under the
+   narrowed rule, and one rule ("decision callbacks are never pruned") is the maintainable form.
+
+**Reviewer items folded alongside (Task-1 task review, verdict Approved):**
+
+5. **Name-pin the 013 lifecycle negatives.** `_OUTBOX_LIFECYCLE_BAD` becomes a
+   `case → (expected_constraint_or_message, sql)` map and the test asserts the expected string —
+   the same discipline the plan already applies to `_NONBLANK_SURFACES`, whose new comment states the
+   principle ("so 013's new shape CHECK can never produce a false green") but was not carried to the
+   twelve lifecycle negatives. It bites concretely at Task 4, whose kind/stream identity CHECK rejects
+   every `('poc_email','decision')` shape and would keep these green with the lifecycle CHECK deleted.
+   Adjudicated **FIX** rather than a plan conflict: the plan states the principle itself and simply
+   failed to apply it; the constraint names were already in trailing comments on every entry.
+6. **The ROADMAP §C flip moves from Task 9 to Task 1 Step 3b (committed in Task 6).**
+   `test_migration_lineage.py` asserts `authored_reserved == shipped` reading BOTH `.agents/ROADMAP.md`
+   and `alembic/versions/` off disk, so creating `013_outbox_stream_separation.py` in Task 1 breaks it
+   immediately — it is not deferrable. Leaving the flip in Task 9 would also make Task 6's atomic
+   commit red in CI, which checks out the commit rather than the worktree; `.agents/ROADMAP.md` is
+   therefore added to Task 6's `git add` set and removed from Task 9's.
+
+**Not executed in this revision:** the named `.venv/bin/pytest` selectors remain build-cycle steps.
+The ruff/compile self-review WAS run against every fenced create-file block, under its advertised
+path and the full `E,F,I,UP,B,SIM` selector set. The frozen `V013_BACKFILL_SHA` is **unchanged** —
+none of these edits touch `v013_backfill.py` (the acceptance predicate and the retention narrowing
+both live outside the frozen contract).
+

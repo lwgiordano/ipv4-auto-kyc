@@ -1,4 +1,4 @@
-# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 2)
+# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 3)
 
 ## Context
 
@@ -106,10 +106,51 @@ hashes, metric/alert. **Never `superseded`.** The generic UI requeue (`ui/routes
 ### 3. Platform authority — candidate manifest, reconciliation, signed bootstrap (F2/F3-heritage)
 
 **Receiver contract:** `POST /kyc/decision` (`case_id=c`,`decision_sequence=s`): one txn — `s>h(c)`
-apply+advance; `s≤h(c)` no-op+success; once initialized, a **missing** sequence is a sticky no-op.
+**and** the case's effective source is not manual ⇒ apply+advance; `s≤h(c)` no-op+success; once
+initialized, a **missing** sequence is a sticky no-op. The manual clause is **not** an optimization —
+see the runtime manual-authority rule below; `s>h(c)` alone is **not** sufficient authority to apply.
+
+**Runtime manual authority (rev 3, 7b-core rev-5 re-review `0ca264b` P1) — supersedes the
+bootstrap-only floor as the governing rule.** The rev-2 "manual-current high-water floor" (below) is
+a *bootstrap-time* seeding rule: it protects only those cases whose effective source was already
+`manual:<event>` **at bootstrap**, and it never runs again. The identical reversion therefore remains
+reachable **after `phase='active'`**, because manual approval is enforced inline by the platform and
+allocates nothing locally: `_handle_manual_approve` (`src/kyc_tool/events/ingest.py:242-267`) writes a
+`DecisionRow` with `run_id=NULL`, `manual=True`, **no `decision_sequence`**, and enqueues **no**
+callback, so it cannot advance `h(c)`. Trigger: `h(c)=5`; automatic callback seq 6 already pending;
+the platform manually approves; callback 6 arrives; `6>5` ⇒ under the bare rule it **replaces the
+manual-current source**. The rev-2 acceptance claim is thus false outside the activation window.
+
+The governing rule is therefore about **authority**, not about seeding an integer: **while a case's
+effective source is `manual:<event>`, a sequenced automatic callback is acknowledged (2xx), recorded
+for dedupe, and allowed to advance `h(c)` — but it MUST NOT become the effective source.** Only an
+explicit, authenticated, **platform-owned release/override transition** (the platform clearing the
+manual source for that case, carried in the signed response envelope below) returns automatic
+callbacks to effectiveness. Consequences: the tool still terminalizes such a callback locally as
+`delivered` (receiver no-op success — no dead row, no retry storm); `h(c)` still moves so later
+callbacks dedupe correctly; and the platform's current-source field, not the sequence integer, is
+what the convergence query (§6) and the recovery matrix (§4) read. **This is deliberately the
+manual-wins direction.** The inverse — a later automatic decision overriding a manual approval — is a
+product decision that must be made explicitly and is **never** to be inferred from `s>h(c)`.
+**Acceptance:** after `phase='active'`, a pending automatic callback (sequence higher than the manual
+approval's arrival point) delivered **after** a manual approval leaves the manual source effective;
+likewise for a *future* sequence created after the manual approval. A **mutation** restoring the bare
+`s>h(c)` receiver must fail both. The bootstrap floor below is **retained** — it remains necessary for
+cases already manual when the window opens — but it is no longer the whole control.
 
 **Candidate manifest (tool-derivable):** the tool exports every immutable callback decision
-`(case_id, run_id, decision_sequence, callback_body_sha256, local_status)` over an agreed universe; it
+`(case_id, run_id, decision_sequence, callback_body_sha256, local_status)`. **Its universe and its
+source are now defined, not "agreed" (rev 3, `0ca264b` P1/F4):** the manifest is built from 7b-core's
+**durable ordering authority — the `outbox` row itself**, which 013 makes non-prunable (retention's
+outbox prune is narrowed to `kind='poc_email'`, so a delivered `decision_callback` row keeps its
+body indefinitely). `callback_body_sha256` is 7b-core §1's single `callback_body_digest` expression
+evaluated over `outbox.payload_json` — no stored digest column, deliberately (a second
+representation of the body would be one more thing to drift) — and `local_status` is
+`outbox.status`; neither is re-derived from the immutable
+`decisions` row, which cannot carry them. The universe is therefore **every** `decision_callback`
+row, with no exclusion window — the pre-rev-3 formulation could not survive a restored row being
+re-pruned, which would let bootstrap block or silently omit platform history. Exact two-sided
+coverage still applies and still fails closed. It
 **never invents `platform_current_run_id`** (it cannot know the platform's effective state; a manual
 decision has `run_id=NULL` + no callback, `ingest.py:242-267`). New/manual-only cases carry
 `no_prior_callback`.
@@ -246,6 +287,18 @@ linked decision is `published`. Ships as the shared query 7b-activation owns and
   sticky no-op — a mutation seeding `h(c)` from the ledger alone (dropping the allocated-sequence
   floor) must fail**; manual-only; send-before-stamp — each yields one deterministic `h` or a named
   block; a mutation using the tool's local-delivered row as platform truth fails.
+- **Runtime manual authority, POST-activation (rev 3):** with `phase='active'` — (a) create a pending
+  automatic callback at seq 6 with `h(c)=5`, apply a manual approval, then deliver 6: the **manual
+  source remains effective**, 6 is acknowledged and terminalizes locally as `delivered`, and `h(c)`
+  advances; (b) the same with a **future** sequence 7 created *after* the manual approval — manual
+  still effective; (c) an explicit authenticated platform release/override transition returns
+  automatic callbacks to effectiveness. **Mutation:** the bare `s>h(c)` receiver (no manual clause)
+  must **fail** (a) and (b). The bootstrap-time pending/dead case above is retained, not replaced.
+- **Manifest durability (rev 3, `0ca264b` P1/F4):** a `decision_callback` row older than the retention
+  period, with its **original** `delivered_at`, survives a real retention run intact; its manifest
+  entry `(case_id, run_id, decision_sequence, callback_body_sha256, local_status)` is still exactly
+  derivable, and two-sided coverage holds. **Mutation:** widening retention's `DELETE` back over
+  `decision_callback` rows must make bootstrap fail closed rather than silently omit history.
 - **`integrity_mismatch`:** tuple tamper → exact terminal (zero HTTP, `dead`, `resolved_at`, no
   `published_at`, metric/alert) + UI **409**; a genuine lower row under a higher delivered decision →
   `superseded` only (7b-core).
@@ -280,3 +333,30 @@ bootstrap seeds `h(c)` to at least the tool's greatest allocated `decision_seque
 **unaccepted** pending/dead callback older than the manual-current source is a sticky no-op after
 activation and can never replace it. The §Testing reconciliation scenario is extended with the
 unaccepted-callback variant and a ledger-only-seed mutation witness. No other change.
+
+## Revision note — rev 3 (2026-07-24)
+
+Folds the one activation-owned finding from Codex's 7b-core rev-5 complete-unit re-review
+(`0ca264b`), plus the activation-side consequence of the core spec's rev-10 durable-authority
+contract. Rev 2's controls are retained, not replaced.
+
+- **P1 — The manual-current floor protected only the activation window (§3).** The rev-2 floor seeds
+  `h(c)` at **bootstrap** for cases already manual at that instant. Manual approval is enforced inline
+  by the platform and allocates nothing locally — `_handle_manual_approve`
+  (`src/kyc_tool/events/ingest.py:242-267`) writes `run_id=NULL`, `manual=True`, no
+  `decision_sequence`, and no outbox row — so it never advances `h(c)`. After `phase='active'` the
+  bare `s>h(c)` receiver therefore still lets a stale pending automatic callback replace a manual
+  approval, and the floor never runs again. **Resolution:** a **runtime authority rule** replaces
+  `s>h(c)` as the governing condition — while a case's effective source is `manual:<event>`, sequenced
+  automatic callbacks are acknowledged, terminalized locally as `delivered`, and allowed to advance
+  `h(c)`, but **cannot become the effective source** until an explicit authenticated platform-owned
+  release/override transition. The bootstrap floor is retained for cases already manual when the
+  window opens. This is the **manual-wins** direction; the inverse is a product decision that must be
+  made explicitly and is never inferred from `s>h(c)`. Receiver contract, platform integration docs,
+  convergence query, and recovery semantics are updated together.
+- **Manifest universe is now defined (§3), following core rev 10.** The candidate manifest is built
+  from 7b-core's durable ordering authority — the `outbox` row, which 013 makes non-prunable
+  (retention's outbox prune narrows to `kind='poc_email'`) and which therefore keeps both its body
+  and its `status`. The pre-rev-3 "agreed universe" was undefined and could not survive a
+  restored row being re-pruned; the universe is now every `decision_callback` row, with two-sided
+  coverage still failing closed.

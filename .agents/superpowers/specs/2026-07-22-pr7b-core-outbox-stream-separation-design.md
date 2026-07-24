@@ -1,4 +1,4 @@
-# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 9)
+# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 10)
 
 ## Context
 
@@ -71,6 +71,20 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
 - **`outbox.{decision_sequence BIGINT NULL, resolved_at TIMESTAMPTZ NULL}`**,
   **`decisions.decision_sequence BIGINT NULL`**,
   **`cases.last_decision_sequence BIGINT NOT NULL DEFAULT 0`**.
+- **No stored body-digest column — deliberately (rev 10, re-audit P1/F4).** The durable-authority
+  contract in §Rollout keeps the `decision_callback` row *and its `payload_json`* forever, so the
+  body is never lost and a digest is always derivable on demand. A stored `body_sha256` was designed
+  and **rejected**: it must be kept in lockstep with `payload_json` (a second representation of the
+  same fact — precisely the drift class this PR exists to eliminate), it needs a backfill and an
+  enqueue-time write, and it forces one canonical encoder to be reproduced in **both** Python and SQL
+  (`json.dumps` and `jsonb::text` do not agree on separators, so the two consumers could disagree
+  silently). The digest is instead **one SQL expression, defined once** and used verbatim by the
+  §Rollout restore acceptance predicate and by 014's candidate manifest:
+  `callback_body_digest(o) = encode(sha256(convert_to(o.payload_json::text, 'UTF8')), 'hex')`
+  (lowercase hex SHA-256; `sha256`/`convert_to`/`encode` are Postgres core — no `pgcrypto`).
+  `payload_json` is `jsonb`, so `::text` is already key-normalized and whitespace-canonical, making
+  the expression deterministic for equal values on both the backup and the restored database.
+  `md5(...)` is **prohibited** — a weak digest with no offsetting benefit here.
 - **Fenced claim:** `outbox.{claim_lease_expires_at TIMESTAMPTZ NULL, claim_token UUID NULL,
   claimed_by TEXT NULL}`, claim tuple treated **all-three-together** (below).
 - **Triple identity + per-case sequence uniqueness (F1):** four constraints, each load-bearing —
@@ -246,8 +260,12 @@ publisher/module docstrings state the same.
 
 Digest-pinned drained cutover. **(0) Pre-window diagnostic, before any outage (rev-5 F2; rev-6 P2):**
 the fail-closed backfill (§1) refuses an automatic decision without a surviving callback — a
-**reachable** state, not only corruption: retention deletes old **delivered** outbox rows
-(`retention.py:29-35`, period at `config.py:138-139`) while their immutable decision rows live forever.
+**reachable** state, not only corruption: **on schema 012** retention *deletes* old **delivered**
+outbox rows (`retention.py:29-35`, period at `config.py:138-139`) while their immutable decision rows
+live forever. (013 removes `decision_callback` rows from that delete entirely — see the
+durable-authority contract below — but the diagnostic runs **before** 013, against databases whose
+history was already pruned under the delete semantics, so this recovery path ships and must be
+correct regardless.)
 Retention is a **one-shot transaction** (`retention.py:46-50`), so *disabling the schedule is not a
 quiescence fence* — an invocation already inside `uow()` can delete a callback after a plain
 `READ COMMITTED` diagnostic has passed and then reintroduce the mid-outage refusal. Therefore: (a)
@@ -272,23 +290,99 @@ approved core design (the user considered and declined it). Backup availability 
 prerequisite**, not a consequence of the retention setting. Never fabricate a callback, delete an
 immutable decision, or fall back to `decided_at`. The CLI contract on this path: **nonzero exit, the
 exact stable `BLOCKED_NO_AUTHORITATIVE_MAPPING` sentinel plus actionable decision/run ids, and no
-writes**. **Restore acceptance contract (rev 9, re-audit F1)** — "restore the exact callback" is an
-**executable identity requirement**, because the backfill's order authority is `outbox.id` and a
-default-id INSERT silently re-ranks a pruned older callback as newer (the guard would then suppress
-the actually-newer decision): (a) record from the backup, per missing callback, the authoritative
-evidence tuple `(decision_id, run_id, case_id, original_outbox_id, body_digest)` with
-`body_digest = md5(payload_json::text)`; (b) the restore MUST `INSERT … (id, …) VALUES
-(<original_outbox_id>, …)` — a default-id INSERT is prohibited; if the original id is unavailable,
-remain `BLOCKED_NO_AUTHORITATIVE_MAPPING`; (c) an **acceptance predicate** (a SQL SELECT comparing
-the restored row's id/case/digest against the recorded evidence) must return **zero mismatches**
-before proceeding; (d) after any explicit-id restore, advance/verify the backing sequence to at
-least `max(outbox.id)` — `setval(pg_get_serial_sequence('outbox','id'),
-GREATEST((SELECT COALESCE(max(id),1) FROM outbox), (SELECT last_value FROM outbox_id_seq)))` —
-before writers resume; (e) only then rerun the diagnostic clean. The exact runbook text + SQL and
-the schema-012 recovery acceptance test live in the build plan (Task 9 Step 5 / Task 7 Step 4b); the
-frozen `v013_backfill.py` contract itself is unchanged. Either abort branch must **explicitly
-re-settle retention** (keep it frozen while restoring/rerunning, or re-enable it if the cutover is
-deferred) — never leave a compliance process silently disabled. On success proceed. (1) pause submission, edge-block
+writes**. **Restore acceptance contract (rev 10, re-audit F1 + rev-6 P1/P2)** — "restore the exact
+callback" is an **executable identity requirement**, because the backfill's order authority is
+`outbox.id` and a default-id INSERT silently re-ranks a pruned older callback as newer (the guard
+would then suppress the actually-newer decision):
+
+(a) record from the backup, per missing callback, the authoritative evidence tuple
+`(decision_id, run_id, case_id, original_outbox_id, body_digest, original_status,
+original_delivered_at)`. `body_digest` is computed **on the backup row** with the single
+`callback_body_digest` expression defined in §1 — the same expression the predicate below and 014's
+manifest use. `md5(payload_json::text)` is **prohibited**: a weak digest, and not the repo's
+convention.
+
+(b) the restore MUST `INSERT … (id, …) VALUES (<original_outbox_id>, …)` — a default-id INSERT is
+prohibited; if the original id is unavailable, remain `BLOCKED_NO_AUTHORITATIVE_MAPPING`. The restore
+MUST reinstate the **original lifecycle fields** (`status`, `delivered_at`, `resolved_at`, and the
+claim tuple as recorded) — substituting `now()` for `delivered_at` is **not** an exact restore and is
+prohibited (it both falsifies the audit record and, pre-rev-10, silently deferred re-pruning; see the
+durable-authority contract below).
+
+(c) **ACCEPTANCE PREDICATE — positive and fail-closed.** The pre-rev-10 formulation ("a SELECT of
+mismatching rows must return zero rows") was **fail-open**: an absent row, or a row restored under
+the wrong `run_id`, matched no rows and was therefore indistinguishable from an exact match, and the
+recorded `decision_id` was never used at all. The predicate is now a **positive** assertion: exactly
+**one** row must join `outbox` → `decisions` on the full recorded identity
+(`o.id = original_outbox_id`, `o.kind='decision_callback'`, `o.case_id`, `o.run_id`, `d.id =
+decision_id`, `d.case_id = o.case_id`, `d.run_id = o.run_id`) **and** match `body_digest` **and**
+match the recorded lifecycle fields (`status`, `delivered_at`).
+**Zero rows or more than one row BLOCKS** — there is no "no news is good news" path.
+Each identity component is separately load-bearing (dropping any one must fail the acceptance test).
+
+(d) **NO sequence mutation on this path.** The pre-rev-10 step ran
+`setval(pg_get_serial_sequence('outbox','id'), GREATEST(max(id), last_value))` during the **pre-window
+diagnostic**, i.e. while API/pipeline/outbox writers were still live (only retention is suspended at
+§0; the first hard-stop is cutover step 2). That is a read-modify-write on a **non-transactional**
+object: `max(id)` is evaluated against the transaction's MVCC snapshot and `last_value` is read at a
+different instant from the write, so a concurrent `nextval()` in that window is invisible to both and
+`setval` can **rewind the sequence below an already-allocated id**, producing a duplicate primary key
+for the next writer. `LOCK TABLE outbox IN SHARE MODE` does **not** fence a sequence — sequence
+functions are deliberately exempt from transactional semantics, and it is `ALTER SEQUENCE`, not a
+`SELECT`, that excludes concurrent `nextval`/`setval`. **No sequence write ever happens with writers
+live.** It is also unnecessary: the restored id is a retention-pruned *historical* id, so it fills a
+gap **below** the already-advanced sequence and cannot collide. What replaces it is a **read-only
+pre-window precondition**: read `last_value, is_called` from the sequence and assert that the id the
+next writer would be handed is already **past** the restored id —
+`last_value + (CASE WHEN is_called THEN 1 ELSE 0 END) > original_outbox_id` — and **abort before the
+outage** if it does not hold. (`is_called` is load-bearing: on a never-called sequence `last_value`
+is the id `nextval` will *return*, not one already consumed.) The check is durable because that
+quantity is monotonically non-decreasing under `nextval` — once it passes with writers live it stays
+true. If a genuine sequence repair is ever required (the restored id is **not** below the high-water
+mark — not a prune, but a restore from a divergent lineage),
+it is a **separate drained cutover action**, performed only after every writer is hard-stopped and
+attested zero at the orchestrator, using a sequence-serializing operation that excludes concurrent
+`nextval`/`setval` (`ALTER SEQUENCE … RESTART WITH …`), with the resulting value **read back** before
+any writer restarts. Never claim a table lock fences a sequence.
+
+(e) only then rerun the diagnostic clean.
+
+The exact runbook text + SQL and the schema-012 recovery acceptance test live in the build plan
+(Task 9 Step 5 / Task 7 Step 4b); the frozen `v013_backfill.py` contract itself is unchanged. Either
+abort branch must **explicitly re-settle retention** (keep it frozen while restoring/rerunning, or
+re-enable it if the cutover is deferred) — never leave a compliance process silently disabled. On
+success proceed.
+
+**Durable ordering authority — retention no longer prunes decision callbacks (rev 10, re-audit
+P1/F4).** The restore path above repairs *history*; this clause prevents *recurrence*, and it is the
+storage/ownership decision 014 depends on. Before rev 10 an exact restore was self-defeating: it
+reinstates the original 7-year-old `delivered_at`, so `retention.py:29-35`
+(`status='delivered' AND delivered_at < now() - interval`) re-deleted the row on its very next run,
+and the tool then had no way to derive 014's per-callback `(body_digest, local_status)` from the
+immutable `decisions` row. 013 therefore establishes the **`outbox` row itself** as the durable
+authority for a decision callback's identity, order, body, and local status:
+- **Retention's outbox prune is narrowed to `kind='poc_email'`.** That is the whole change — one
+  added predicate, no new column, no backfill, no second store, therefore no drift class to guard.
+  A delivered `decision_callback` row survives indefinitely with `id` (the order authority),
+  `case_id`, `run_id`, `decision_sequence`, `status` (= `local_status`), `delivered_at`, and
+  `payload_json` intact. Every other retention target is unchanged.
+- **It retains nothing new.** The callback body is a *projection* of the `decisions` row (decision,
+  score, the five gate booleans, `buy_enablement`, checks summary), and `decisions`, `checks`, and
+  raw evidence are already deliberately never pruned — they *are* the decision record
+  (`retention.py` module docstring). The genuinely sensitive outbox body is the POC email's raw
+  token, which is destroyed twice over: redacted at delivery (`publisher.py:176-182`) and still
+  pruned on schedule. So no redaction of callbacks is warranted, and none is performed.
+- **014's candidate manifest is built from this authority**, not from an undefined "agreed universe"
+  and not from a row that may have been pruned. `local_status` is read directly from `outbox.status`
+  and the digest from `payload_json` via §1's `callback_body_digest`; there is no second
+  representation to drift against and no dual write to keep consistent.
+- Rows grow 1:1 with `decisions`, which is already unbounded by design.
+The alternatives were considered and rejected: a separate authority table duplicates
+identity/status into a second row and introduces exactly the drift class this PR exists to eliminate;
+a stored `body_sha256` column does the same for the body (see §1);
+"retain everything until 014 bootstraps" is a temporal band-aid that reopens the hole afterwards; a
+signed manifest universe that *excludes* history would require an explicit product decision and a
+proof that exclusion cannot admit stale platform state, which this unit does not have. (1) pause submission, edge-block
 composer, disable autoscaling/restarts; (2) hard-stop API/pipeline/outbox/`dev_worker` (queue **and**
 outbox, `dev_worker.py:128-139`)/retention/every writer, attest zero at the orchestrator; (3) shipped
 `python -m kyc_tool.ops.requeue_interrupted_jobs` (decrements attempts so a killed final attempt
@@ -399,6 +493,31 @@ rely on the operator remembering that the forward drain also applies backward.
   acceptance** (§Docs): the exact `TODO(integration)` orchestrator command + output proving zero
   running tasks. The two halves are distinct evidence; do not let a helper-only test pretend to prove
   the external attestation.
+- **Sequence is never rewound while writers are live (rev-10 P1):** two connections on schema 012.
+  B calls `nextval` on `outbox_id_seq` (reserving the next id) and pauses **without committing**; the
+  restore path then runs in A. Assert A performs **no** sequence write and that the sequence is not
+  rewound; after B commits its insert, the **next** insert must receive a **strictly newer** id than
+  B's — no duplicate primary key. Assert the read-only precondition
+  `original_outbox_id <= last_value` passes for a pruned historical id and **aborts pre-window** when
+  it does not. **Mutation:** restoring the pre-rev-10 live
+  `setval(GREATEST(max(id), last_value))` must **fail** this test. Run this test *first*, then the
+  migration/CLI matrix, then the full suite.
+- **Restore acceptance is fail-closed (rev-10 P2):** the positive single-row join must **block** on
+  each of — row absent, wrong `run_id`, wrong `decision_id`, wrong `case_id`, wrong
+  `original_outbox_id`, wrong body (digest mismatch), wrong lifecycle field
+  (`status`/`delivered_at`), and duplicate evidence rows (>1 match). The one exact row must pass.
+  **Mutation:** dropping each joined identity component **separately** must make a wrong-restore case
+  pass. Exercised through the **real** diagnostic CLI and the **real** 013 upgrade, not a helper-only
+  assertion.
+- **Restore durability under retention (rev-10 P1/F4):** restore an **actually retention-old** row
+  with its **original** `delivered_at` (not `now()`), then run the **real** retention job again.
+  Assert the row **survives** with `id`/`case_id`/`run_id`/`status`/`delivered_at`/`payload_json`
+  intact, and that 014's manifest entry
+  `(case_id, run_id, decision_sequence, callback_body_digest, local_status)` is still exactly
+  derivable from it. Assert in the same run that an equally-old delivered **`poc_email`** row IS
+  deleted, so the narrowing is proven to be a narrowing and not a disablement. **Mutation:** drop the
+  `kind` predicate from the retention DELETE → the callback assertions must fail.
+  `audit_log`/`poc_tokens` pruning is asserted unchanged.
 - **No-backup blocked state (rev-6 P2; user-confirmed restore-or-block):** a missing mapping with **no**
   restorable backup makes the real CLI exit **nonzero** with the **exact** `BLOCKED_NO_AUTHORITATIVE_MAPPING`
   sentinel (asserted literally) + actionable decision/run ids, **before** maintenance, leaving
@@ -482,3 +601,46 @@ Amendments folding the four spec-affecting findings of the Codex complete-unit r
   no sequence for manual rows; 014's acceptance is strengthened against it (activation spec rev 2).
 - **F8 — `superseded` is decision-only (§1):** the lifecycle CHECK's superseded branch additionally
   requires `kind='decision_callback'`; negatives + fixtures updated accordingly.
+
+## Revision note — rev 10 (2026-07-24)
+
+Folds the three core-owned findings from Codex's rev-5 complete-unit re-review (`0ca264b`). Rev 9's
+ten accepted controls are **unchanged and not reopened**; these are additive corrections to the
+recovery path plus one new durable-storage contract. The fourth finding is activation-owned
+(receiver authority) and lands in the activation spec.
+
+- **P1 — Sequence rewind during the pre-window restore (§Rollout (d)).** Step 0 runs *before* the
+  outage — only retention is suspended, so API/pipeline/outbox writers are live until cutover step 2.
+  `setval(GREATEST((SELECT max(id) FROM outbox), (SELECT last_value FROM outbox_id_seq)))` is a
+  read-modify-write on a **non-transactional** object: `max(id)` sees only the txn's MVCC snapshot and
+  `last_value` is read at a different instant from the write, so a concurrent `nextval()` is invisible
+  to both and the sequence can be rewound below an already-allocated id → duplicate primary key. The
+  diagnostic's `LOCK TABLE outbox IN SHARE MODE` does **not** fence a sequence. **Resolution:** the
+  live `setval` is **deleted**, not hardened — an exact restore of a retention-pruned historical id
+  fills a gap *below* the advanced sequence and never needed a sequence write. Replaced by a
+  read-only, monotonic, abort-before-outage precondition (the next id the sequence would hand out,
+  `last_value + (is_called ? 1 : 0)`, is already **past** the restored id), with
+  genuine sequence repair relegated to a separate **drained** cutover action using a
+  sequence-serializing operation with read-back.
+- **P2 — The acceptance predicate was fail-open (§Rollout (c)).** "Zero mismatch rows = accepted"
+  made an **absent** row and a row restored under the **wrong `run_id`** indistinguishable from an
+  exact match, and never used the recorded `decision_id` at all. **Resolution:** one **positive**
+  assertion — exactly one row joining `outbox` → `decisions` on the full recorded identity, matching a
+  lowercase SHA-256 over `payload_json::text` and the **original** lifecycle fields.
+  Zero rows or >1 blocks. `md5(...)` is prohibited (weak, and not the repo convention);
+  substituting `now()` for `delivered_at` is prohibited.
+- **P1 — The restore had no durable authority for 014 (§1, §Rollout).** An exact restore reinstates
+  the original 7-year-old `delivered_at`, so `retention.py:29-35` re-deleted the row on its next run;
+  the plan's `delivered_at=now()` hid this. 014's manifest then had no source for per-callback
+  `(body_digest, local_status)`. **Resolution — the `outbox` row *is* the durable authority:**
+  retention's outbox prune is narrowed to `kind='poc_email'`, so a delivered `decision_callback` row
+  is never deleted and keeps id/case/run/sequence/status/body. Chosen over a separate authority table
+  and over a stored `body_sha256` column (both duplicate an existing fact into a second
+  representation and create the very drift class this PR eliminates) and over "retain everything
+  until 014 bootstraps" (a temporal band-aid that reopens the hole afterwards). It retains no new
+  data: the callback body is a projection of the never-pruned `decisions`/`checks` record.
+  A signed manifest universe that *excludes* history was **not** taken — it would require an explicit
+  product decision and a proof that exclusion cannot admit stale platform state.
+
+Scope discipline: core and activation stay separate, scoring is untouched, M2 and
+`KYC_Tool_Build_Package/` are untouched.
