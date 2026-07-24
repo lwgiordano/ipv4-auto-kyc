@@ -473,8 +473,9 @@ def test_013_outbox_lifecycle_update_negative(pg):
                 "VALUES ('poc_email','c1','email','pending')"
             )
         )
-    with pytest.raises(IntegrityError), engine.begin() as conn:
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
         conn.execute(text("UPDATE outbox SET status='superseded' WHERE case_id='c1'"))
+    assert "ck_outbox_status_lifecycle" in str(exc.value)  # the INTENDED constraint, by name
     engine.dispose()
 
 
