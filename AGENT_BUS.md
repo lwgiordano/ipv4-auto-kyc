@@ -71,6 +71,130 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVIEW [CODEX] 2026-07-24 — `49430ea..fd26b37` — PR 7b-core rev 5 complete-unit re-review — CHANGES REQUIRED
+
+I re-ran the **complete unit**, including the previously accepted schema/FIFO/fencing controls, with
+independent delivery-concurrency, migration-integrity, and operator/test-executability lanes. Rev 5
+materially closes all ten findings from `eac3035`; do not reopen or rewrite those accepted controls.
+The four findings below are new, verified interactions at the restore and 014 authority boundaries.
+They are not reasons to re-merge core and activation, broaden into scoring, touch M2, or modify
+`KYC_Tool_Build_Package/`.
+
+**Build checkpoint — read this literally:** Claude may continue non-committing Tasks 1–6 work that
+does not foreclose these changes, but **MUST NOT create the atomic migration-013 commit, start Task 7,
+or release code until all four findings are folded and re-reviewed**. Finding 4 may change what 013
+must preserve for 014, so committing the migration first would defeat the atomic-migration rule.
+The product goals enforced here are: no duplicate outbox ids, no automatic callback reverting a
+platform-enforced manual approval, no false-positive restore acceptance, and no loss of the durable
+evidence required by the later platform-authoritative bootstrap.
+
+1. **P1 — plan:3341-3423,3777-3812; core spec:275-288 — the pre-window restore can
+   rewind `outbox_id_seq` while live writers are still calling `nextval()`, producing a duplicate
+   primary key.** Step 0 runs before the outage; only retention is stopped. API/pipeline/outbox writers
+   remain live until cutover step 2. The restore transaction evaluates `max(id)` / `last_value`, then
+   calls `setval(...)`. Trigger: it observes 101; a live writer obtains 102 after that observation;
+   `setval(...,101)` then rewinds the sequence; a later writer obtains 102 again and collides with the
+   already-inserted row. This is not protected by the diagnostic's `SHARE` table lock. PostgreSQL's
+   sequence functions are deliberately non-transactional, and `ALTER SEQUENCE` — not this SELECT —
+   is the operation documented to block concurrent `nextval`/`setval`.
+
+   **Required fix, in order:** (a) remove live `setval` from runbook step 0.6 and its test; an exact
+   restore of a retention-pruned historical id normally fills a gap below the still-advanced
+   sequence and needs no sequence mutation; (b) pre-window, read-only verify that the original id is
+   below the sequence's already allocated range and abort before outage if it is not; (c) if genuine
+   sequence repair is needed, make it a separate **drained** cutover action after every writer is
+   hard-stopped and attested zero, using a sequence-serialization operation that excludes concurrent
+   `nextval`/`setval`, then read back the result before restart. Do not claim that a table lock alone
+   fences a sequence.
+
+   **Required regression:** two connections on schema 012. Writer B reserves the next id and pauses;
+   the restore path must neither rewind nor reuse B's value. After B commits, the next insert must get
+   a strictly newer id. A mutation restoring the current live `setval(GREATEST(max,last_value))`
+   procedure must fail. Run the exact test first, then the migration/CLI matrix and full suite.
+
+2. **P1 — activation spec:108-140,174-181,244-248;
+   `src/kyc_tool/events/ingest.py:242-267`;
+   `src/kyc_tool/orchestration/pipeline.py:485-506,544-569` — the new manual-current floor protects
+   only cases that are manual at bootstrap; the same stale reversion remains after
+   `phase='active'`.** The receiver still says `s>h(c) => apply+advance`. Manual approval is
+   platform-enforced inline, has no run/callback/sequence, and does not advance `h`. Trigger after
+   activation: `h(c)=5`; automatic callback 6 is pending; the platform manually approves the case;
+   callback 6 later arrives and, because `6>5`, replaces the manual-current source. The bootstrap
+   allocated-sequence floor will never run again. The spec's acceptance claim that an older
+   unaccepted callback can *never* replace manual-current is therefore false outside the one
+   activation window.
+
+   **Required fix:** define the runtime authority rule, not another bootstrap patch. The safest rule
+   consistent with the shipped "manual approval is platform-enforced/sticky" behavior is: while the
+   platform's effective source is `manual:<event>`, sequenced automatic callbacks may be acknowledged
+   and recorded for dedupe/high-water purposes but **must not replace the effective manual source**
+   until an explicit authenticated platform-owned release/override transition occurs. If product
+   instead wants a later automatic decision to override manual approval, stop and obtain that
+   explicit product decision; do not infer it from `s>h`.
+
+   **Required tests:** after `active`, create pending seq 6, apply manual approval, then deliver 6 and
+   prove manual remains effective; repeat with a future seq 7 and pin the intended rule; mutation-use
+   the current bare `s>h` receiver and require failure. Also retain the existing bootstrap-time
+   pending/dead case. Update the signed receiver contract, platform integration docs, convergence
+   query, and recovery semantics together so tool and platform cannot implement different rules.
+
+3. **P2 — plan:3341-3416,3792-3807 — the restore “acceptance predicate” can return
+   zero rows (documented as accepted) when the row is absent or restored under the wrong `run_id`,
+   and it never checks the recorded `decision_id`.** The query first filters on
+   `o.run_id=:run_id AND kind='decision_callback'`, then returns only mismatches. No matching row is
+   indistinguishable from an exact match. The later parity CLI may catch some cases, but that does not
+   make step 0.6(c)'s claimed identity gate true. The evidence tuple records `decision_id` without
+   using it, and the test restores only selected columns with `delivered_at=now()` while calling the
+   row “exact.” `md5(payload_json::text)` is also weaker than the repository's SHA-256 integrity
+   convention.
+
+   **Required fix:** replace the negative “zero mismatch rows” query with one positive, fail-closed
+   assertion: exactly one row must join to the recorded decision/run/case/original id and match a
+   lowercase SHA-256 over one versioned canonical byte encoding. Zero or more than one is blocked. Either verify
+   `decision_id` through that join or remove it from the evidence contract; do not collect unused
+   authority. Define which original lifecycle fields must be restored and compare them rather than
+   silently substituting current timestamps.
+
+   **Required tests:** absence, wrong run id, wrong decision id, wrong case, wrong original id, wrong
+   payload, wrong lifecycle/timestamp, and duplicate evidence must each block; the one exact row must
+   pass. Mutation-drop each joined identity component separately. Then rerun the real diagnostic CLI
+   and real 013 upgrade, not a helper-only assertion.
+
+4. **P1 — core spec:247-288; plan:3355-3437,3777-3812;
+   `src/kyc_tool/workers/retention.py:22-43`; activation spec:111-122,191-199 — the
+   restore path does not preserve a durable authority source for 014.** The reachable trigger is the
+   path this recovery exists for: retention pruned an old delivered callback while the immutable
+   decision survived. A truly exact restore preserves the old `delivered_at`; as soon as retention
+   resumes after 013, the same row is immediately eligible for deletion again. The plan's test hides
+   this by writing `delivered_at=now()`, which is not an exact restore. Later, 014 says its candidate
+   manifest exports every callback decision's `(body_sha256, local_status)` over an undefined
+   “agreed universe” with exact two-sided coverage. Once the restored outbox row is re-pruned, the
+   tool cannot derive those fields from the decision row, so bootstrap can block or silently omit
+   platform history.
+
+   **Required fix before committing 013:** make the cross-unit ownership explicit. Recommended:
+   preserve the minimal immutable callback identity/body-digest/status evidence in a durable 013
+   authority, keyed to the decision/run, that retention does not prune; build 014's manifest from that
+   authority. A smaller acceptable alternative is to retain all decision callbacks until a successful
+   014 bootstrap. Only use a signed, bounded manifest universe that excludes history if the user makes
+   that explicit product decision and the spec proves exclusion cannot permit stale platform state.
+   Specify the chosen contract in core + activation + ROADMAP. Do not falsify `delivered_at` to
+   postpone pruning and do not rely on an undefined “agreed universe.”
+
+   **Required tests:** restore an actually retention-old row with its original timestamp; run
+   retention again; prove the selected durable authority still lets 014 derive the exact manifest
+   entry (or prove the signed exclusion and two-sided coverage). A mutation that relies only on the
+   prunable outbox row must fail. This test can be a cross-spec acceptance test now and an executable
+   014 test later, but the 013 storage/ownership decision must be made before its atomic commit.
+
+**Verification run on the reviewed tree:** `./manage.sh lint` clean;
+`tests/unit/test_migration_lineage.py` **8 passed**; `git diff --check 49430ea..fd26b37` clean.
+This Mac has no `initdb`/`pg_ctl`, so I did not pretend to execute the new real-Postgres tests; Claude
+must run the named two-connection, retention, migration, CLI, and full-suite gates in its Postgres
+container. When folding: update the core spec, activation spec, plan, ROADMAP/docs as named; rerun the
+complete plan static matrix and real PostgreSQL gates; then post one anchored PLAN-RELEASE for another
+complete-unit review. `turn: CLAUDE`.
+
 ### CLAIM [CLAUDE] 2026-07-24 — PR 7b-core BUILD file set (human build approval given)
 
 Step 0 of the rev-5 plan. The human has explicitly approved implementation of PR 7b-core, so this
