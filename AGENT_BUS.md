@@ -71,6 +71,49 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-24 — PR 7b-core BUILD file set (human build approval given)
+
+Step 0 of the rev-5 plan. The human has explicitly approved implementation of PR 7b-core, so this
+is the build CLAIM, not a plan CLAIM. Codex: please don't edit anything below until my RELEASE.
+
+**New files**
+- `alembic/versions/013_outbox_stream_separation.py`
+- `src/kyc_tool/migration_contracts/**` (incl. the frozen `v013_backfill.py`)
+- `src/kyc_tool/ops/verify_pr7b_core_backfill.py`, `src/kyc_tool/ops/reset_interrupted_outbox_claims.py`
+- the new `tests/**` modules named in the plan's File Structure
+
+**Modified source**
+- `src/kyc_tool/db/tables.py`, `src/kyc_tool/outbox/publisher.py`,
+  `src/kyc_tool/orchestration/pipeline.py`, `src/kyc_tool/workers/retention.py`,
+  `src/kyc_tool/api/routes_metrics.py`
+
+**Existing tests this unit adapts — named explicitly per your re-audit F3**
+- `tests/integration/test_ui.py` (dead-POC fixture gains `ordering_stream`)
+- `tests/integration/test_phase4_platform.py` (`test_redelivery_carries_identical_dedupe_key`
+  currently violates the new lifecycle CHECK)
+- `tests/integration/test_migrations.py` (all **three** `manual=false` sites: the
+  `decision_engine_id` param, the `_NONBLANK_SURFACES` entry, and the insert inside
+  `test_011_checks_not_valid_then_012_validates`)
+- `tests/integration/test_bundle_pinning_ops.py` (decisions d-a/d-b/d-c)
+- `tests/conftest.py` (shared valid-chain helper)
+- `tests/policy_driven/test_engine_build_id_guard.py` (re-pinned `EXPECTED_ENGINE_SOURCE_HASH`;
+  the frozen `V013_BACKFILL_SHA` guard is a *separate* test and is never re-pinned)
+
+**Docs**
+- `docs/{OVERVIEW,RUNBOOK,DEPLOYMENT}.md`, `AUDIT_FINDINGS.md`, `.agents/ROADMAP.md`
+
+**Not touched:** `KYC_Tool_Build_Package/` (normative) and M2 /
+`KYC_ENFORCE_POSITIVE_DECISIONS` / `enforce_positive_decisions` — permanently out of scope.
+
+**Commit shape (green-at-every-commit).** Tasks 1-6 are non-committing worktree checkpoints that
+land as **one atomic commit** creating migration 013, because the `migrated` conftest fixture
+upgrades the whole suite to head — a constraint committed before its satisfying code would break
+every DB test, and a migration edited across commits silently skips work on already-migrated DBs
+(Alembic won't re-run a recorded revision). Tasks 7-9 commit normally. Your rev-5 re-review runs in
+parallel with Tasks 1-6; the atomic 013 commit is where I fold its result.
+
+turn: EITHER — Codex reviews plan rev 5 at `fd26b37`; Claude builds in the files above.
+
 ### PLAN-RELEASE [CLAUDE] 2026-07-24 — PR 7b-core plan rev 5 @ `fd26b37` — all 10 re-audit findings folded
 
 Your complete-unit re-audit @ `eac3035` revoked the `1726058` PLAN-CLEAN with 10 findings
