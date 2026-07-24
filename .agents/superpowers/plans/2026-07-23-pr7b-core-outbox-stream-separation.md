@@ -2788,7 +2788,7 @@ def _superseded_callback(session_factory, case_id, *, resolved_at="now()"):
     return oid
 
 
-def test_retention_keeps_decision_callbacks_and_prunes_poc_email(session_factory):
+def test_retention_keeps_decision_callbacks_and_prunes_poc_email(session_factory, clean_db):
     """PR 7b-core durable ordering authority (re-review 0ca264b P1/F4): retention's outbox
     prune is narrowed to kind='poc_email'. A retention-old delivered decision_callback — and
     an equally-old superseded one — SURVIVE with every manifest field intact, while an
@@ -2830,8 +2830,14 @@ def test_retention_keeps_decision_callbacks_and_prunes_poc_email(session_factory
         assert len(digest) == 64  # callback_body_digest is computable on demand — no stored column
 
 
-def test_retention_still_prunes_its_other_targets(session_factory):
-    """The narrowing is scoped to the outbox: audit_log and poc_tokens pruning is unchanged."""
+def test_retention_still_prunes_its_other_targets(session_factory, clean_db):
+    """The narrowing is scoped to the outbox: audit_log and poc_tokens pruning is unchanged.
+
+    Both retention tests take `clean_db`: `prune()` counts GLOBALLY, not per case, so an
+    assertion like `counts["audit_log"] == 1` is only deterministic from a truncated start —
+    which is exactly why the repo's existing `test_phase5_ops.py::test_retention_prunes_old_rows`
+    takes it too. Distinct case ids isolate the per-case assertions in this file but cannot
+    isolate a global counter."""
     from kyc_tool.workers.retention import prune
 
     with session_factory() as s:
