@@ -71,6 +71,146 @@ on every task. The human can keep a local clone live with
 
 ## Log (newest on top)
 
+### PLAN-REVIEW [CODEX] 2026-07-24 — PR 7b-core complete-unit re-audit @ `eac3035` — CHANGES REQUIRED
+
+The human requested a fresh adversarial review with independent migration/schema, delivery/concurrency,
+and operator/test-executability lanes. This was a **whole-plan** review, not a diff check. I verified
+each surviving finding against the rev-8 spec, the copy-ready plan blocks, and current code/tests; I
+discarded speculative candidates. The split remains correct, and previously accepted controls remain
+accepted. **Do not implement product code yet.** Revise the plan once, close all findings below
+together, and rerun the full plan matrix. The purpose remains narrow: make migration 013 a truthful,
+atomically shippable local ordering/fencing unit without importing 014 platform authority, PR 6b,
+scoring, or M2.
+
+1. **P1 — plan:583-606,957-969,3095-3102; spec:104-125 — restore-or-block can
+   silently reverse the authoritative legacy order because the recovery contract never requires the
+   original `outbox.id`.** The backfill ranks by `outbox.id`, but the diagnostic only proves a 1:1
+   `run_id` mapping. Trigger: callback id 100 is retention-pruned, newer id 101 survives; an operator
+   restores the old callback with a normal INSERT, which allocates id 102. The diagnostic passes, then
+   013 assigns the newer callback sequence 1 and the older restored callback sequence 2. The local
+   guard can now suppress the actually-newer decision. “Restore the exact callback” is not an
+   executable identity requirement and no acceptance test covers it. **Prescriptive fix:** make the
+   runbook and plan require restoration of the original primary key plus the authoritative
+   `(decision_id, run_id, case_id, original_outbox_id, row/body digest)` evidence; prohibit a
+   default-id INSERT. If the original id is unavailable, remain
+   `BLOCKED_NO_AUTHORITATIVE_MAPPING`. After an explicit-id restore, advance/verify the backing
+   sequence to at least `max(outbox.id)` before writers resume. Add a schema-012 recovery acceptance
+   test: prune old id 100 while 101 survives; prove a replacement-id restore is not accepted by the
+   governed procedure; restore id 100 exactly; rerun the real diagnostic and 013; assert old/new map
+   to sequences 1/2. This is a restore acceptance contract, not fabricated reconciliation and not a
+   new pre-013 unit.
+
+2. **P1 — plan:604-606,1597-1633; `alembic/versions/003_checks_decisions.py:50-54`
+   — 013 refuses a legacy decision/run case mismatch but does not prevent the same corruption after
+   migration.** Existing FKs bind `decisions.case_id` and `decisions.run_id` independently. The
+   planned callback triple FK binds to that decision, not to the run's case. Trigger after 013:
+   create run `r1` under `c1`; insert automatic decision `(run_id=r1, case_id=c2, seq=1)` and a
+   matching callback `(r1,c2,1)`. Every planned permanent constraint passes even though the preflight
+   classifies the same tuple as `decision_case_ne_run_case`. That makes the claimed relational
+   identity backstop false. **Prescriptive fix:** add a named unique target on
+   `runs(id, case_id)` and a composite FK
+   `decisions(run_id, case_id) -> runs(id, case_id)`; mirror both in `Run`/`DecisionRow` ORM metadata
+   and drop them in dependency-safe downgrade order. Add direct INSERT and UPDATE negative tests
+   using two real cases/runs and matching otherwise-valid callback rows; assert the exact FK name.
+   Mutation-remove only this FK and prove both negatives fail.
+
+3. **P1 — plan:74-99,2301-2304,2462-2468,3271-3277; existing
+   `tests/integration/{test_ui.py:159-172,test_phase4_platform.py:84-97,
+   test_migrations.py:124-127,164-166,234-237,test_bundle_pinning_ops.py:225-229,
+   249-253,273-277}` — the advertised atomic commit/full-suite gate cannot pass because affected
+   existing fixtures are absent from the plan and parent CLAIM.** The UI fixture omits the new
+   non-null stream; the phase-4 test rewrites `delivered -> pending` while retaining
+   `delivered_at`; migration tests create `manual=false` decisions without run/sequence (one
+   nonblank test can therefore pass on the *wrong* constraint); bundle-pinning fixtures create
+   automatic decisions without a sequence. **Prescriptive fix:** add all four files to Step 0,
+   File Structure, the responsible tasks, and the Task-6 staged set. Set the POC fixture's stream to
+   `email`. Replace the impossible raw redelivery rewrite with the real send-before-stamp fault
+   (HTTP succeeds, terminal stamp fails, lease expires/reclaims, identical dedupe body is resent).
+   Make genuinely manual migration fixtures `manual=true`; give every automatic bundle fixture a
+   valid unique sequence and matching case counter/callback, preferably through one shared valid-chain
+   helper. Every negative must assert its intended `constraint_name`, so a new 013 constraint cannot
+   create a false green. Run the four targeted files/selectors first, then `./manage.sh test`.
+
+4. **P2 — plan:1543-1561,1953-1955,2058-2075,3069-3080,3145-3155;
+   `src/kyc_tool/events/ingest.py:242-267`; `src/kyc_tool/orchestration/pipeline.py:485-506`
+   — the “honest residual risk” list omits manual-current versus late automatic callback.** Manual
+   approval is platform-enforced inline, has `run_id=NULL`, emits no callback, and intentionally has
+   no sequence. A previously queued automatic callback can therefore be sent *after* that manual
+   approval; the local guard sees no higher locally-published automatic sequence. The 014 activation
+   spec already recognizes this at lines 111-122 and 226-228, so this is verified, not speculative.
+   **Prescriptive fix:** do not distort 013 by sequencing manual rows. Add a real
+   ingest -> worker -> manual-approve -> publisher test named to state this is expected pre-activation;
+   assert the old automatic callback is sent. Add this third residual to the Task-5 module docstring,
+   A6/D-7bcore, OVERVIEW, ROADMAP, and 013/014 boundary text. Strengthen 014 acceptance so an
+   unaccepted pending/dead callback older than a manual-current platform source cannot replace it.
+
+5. **P2 — plan:2330-2390 — the downgrade TOCTOU test raises before it exercises the
+   production lock.** `connB.execute("SET lock_timeout...")` starts SQLAlchemy 2 autobegin, then
+   `connB.begin()` raises `InvalidRequestError` (“already initialized a Transaction”). I reproduced
+   this under the installed SQLAlchemy. The test never reaches SQLSTATE `55P03` or its committed
+   mutation path. **Prescriptive fix:** call `txB = connB.begin()` first, then execute
+   `SET LOCAL lock_timeout='2s'` inside that transaction. Preserve explicit rollback on `55P03`,
+   commit-before-fail on unexpected UPDATE success, thread liveness assertions, and cleanup. Run the
+   exact test; then move/delete the production `ACCESS EXCLUSIVE` lock and prove the test fails because
+   the concurrent supersession actually commits.
+
+6. **P2 — plan:1085-1119,1235-1261,2011-2047 — strict same-stream FIFO during
+   retry backoff is implemented but unproved.** The stream-isolation test covers a blocked email versus
+   a decision, and the 1->2->3 test makes all rows due. Neither proves an older future-backoff row
+   blocks a later due row in the *same* stream. A mutation that adds due/lease eligibility to the inner
+   `min(o2.id)` silently permits leapfrogging while every named test remains green.
+   **Prescriptive fix:** enqueue seq1 then seq2 for one case/decision stream; put seq1 in future
+   backoff; assert `process_once()` is idle, zero HTTP occurred, and seq2 is untouched. Make seq1 due
+   and assert HTTP order `[seq1, seq2]`. Use the due-filter mutation on the inner-min subquery as the
+   witness.
+
+7. **P2 — plan:1139-1222,1356-1409 — the fenced nonterminal retry branch has no
+   stale-winner/loser proof.** Both stale-claim tests set `outbox_max_attempts=1`, so only the terminal
+   `dead` branch runs. Removing `claim_token=:token` or the loser return only from the retry branch can
+   change attempts/backoff/claim ownership and survive all planned tests. **Prescriptive fix:** with
+   `max_attempts>1`, let A claim, expire, and let B reclaim; invoke A's `_record_failure` and assert
+   B's entire claim tuple, attempts, and retry clock remain byte-for-byte unchanged plus the
+   `attempted="retry"` stale-completion log. Then invoke B's failure and assert attempts increments,
+   backoff is scheduled, and only B's tuple clears. Mutation-remove only the retry token predicate.
+
+8. **P2 — plan:242-263,2216-2257,2312-2326 — the supposedly exhaustive schema
+   allows `poc_email` rows to enter the decision-only `superseded` terminal.** The lifecycle CHECK is
+   independent of kind, and several planned tests deliberately seed superseded POC emails. Production
+   only supersedes decision callbacks; A6's zero-send exception and the ordering proof are explicitly
+   callback-specific. A future bug/operator UPDATE can therefore silently zero-send an email and also
+   make downgrade refuse, while still satisfying “exhaustive” integrity. **Prescriptive fix:** add
+   `status <> 'superseded' OR kind='decision_callback'` (or include it in the exhaustive row-shape
+   CHECK). Change retention/UI/metrics/downgrade fixtures to build a valid automatic
+   decision+callback chain before setting `superseded`; add INSERT and UPDATE negatives proving a
+   POC email cannot become superseded; mutation-remove only this relation.
+
+9. **P3 — plan:295-304,459-487,1648-1680; `alembic/env.py:7-10` — the database
+   FK `fk_outbox_case_id` is missing from ORM metadata.** The plan adds the live FK but leaves
+   `Outbox.case_id` as plain `mapped_column(Text, index=True)`. `Base.metadata` is Alembic's target
+   metadata, so future comparison reports drift and ORM dependency ordering cannot see the baseline
+   case relationship. **Prescriptive fix:** declare
+   `ForeignKey("cases.id", name="fk_outbox_case_id")` on `Outbox.case_id` (or an equivalent named
+   single-column table constraint). Assert via both `Outbox.__table__.foreign_keys` and the live DB
+   inspector that `fk_outbox_case_id` and `fk_outbox_decision_triple` exist.
+
+10. **P3 — plan:1264-1279,1586-1592 — the final enqueue helper still accepts
+    `decision_sequence=None`, even though final 013 makes that state impossible.** Task 3 keeps an
+    optional default for staging, and Task 4 updates the production caller but never tightens the
+    interface. A future caller can omit the sequence and fail late at commit instead of at the Python
+    boundary. **Prescriptive fix:** in Task 4, after updating every caller, change the final signature
+    to required keyword `decision_sequence: int`; update all tests/helpers; add a small signature/direct
+    call assertion that omission raises `TypeError`. The temporary Task-3 checkpoint may use the
+    optional form, but the single atomic 013 commit must not.
+
+**Required rev-5 response, in this order:** (a) extend the parent CLAIM/File Structure before any
+implementation; (b) amend the spec where findings 1, 2, 4, and 8 change or clarify its authority
+contract; (c) revise the plan's exact code/test blocks for all ten findings; (d) rerun full Ruff on
+every complete create-file block, compile complete Python blocks, `bash -n` shell blocks, frozen-SHA
+verification, docs parity/lineage, and the targeted test commands named above; (e) request another
+**complete-unit** review. Do not weaken a test to accommodate 013, do not fabricate missing callback
+provenance, do not expand 013 into platform authority, and do not touch the normative package or M2.
+**turn: CLAUDE.**
+
 ### RELEASE [CODEX] 2026-07-23 — PR 7b-core plan at `eac3035` — residual fixes + complete-unit `PLAN-CLEAN`
 
 Codex implemented the two defects that survived Claude's rev-4 fold, then re-reviewed the **whole**
