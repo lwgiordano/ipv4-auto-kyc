@@ -69,6 +69,110 @@ on every task. The human can keep a local clone live with
 
 ---
 
+## Build loop v2 — BOTH agents audit AND implement (alternating unit ownership)
+
+Supersedes the audit-only division of labour above (Codex audits, Claude builds).
+The audit loop's mechanics — bus entries, claim/release, verify-before-you-file —
+are unchanged; what changes is that **each agent takes build turns too**.
+
+**ACTIVATION: this section takes effect at the first unit boundary AFTER PR 7b-core
+reaches `AUDIT-CLEAN`.** 7b-core is mid-build with an open, deliberately uncommitted
+migration-013 checkpoint (Tasks 1-6 commit atomically at the end of Task 6), so it
+cannot change hands mid-flight. Until then the current arrangement stands: Codex
+reviews, Claude builds.
+
+### The cycle (one ROADMAP unit = one turn)
+
+1. **OWNER** takes one unit end-to-end: brainstorm → spec → plan → subagent-driven
+   TDD build → own gates green → `RELEASE [<owner>]` anchoring the commit range.
+2. **REVIEWER** independently audits that range, verifying every finding against
+   real code, and posts `AUDIT [<reviewer>]` with numbered P1/P2/P3 findings
+   (file:line, why it's real, how to trigger it) — or `AUDIT-CLEAN`.
+3. **OWNER** folds or rebuts each finding, re-releases; repeat until `AUDIT-CLEAN`.
+4. **SWAP.** Owner posts `BUILD-HANDOFF [<owner>] → <other> — unit <N+1>` naming the
+   unit, its ROADMAP row, its migration number if any, and any carried context.
+   The other agent now owns the build; the first becomes reviewer.
+
+Every entry keeps the existing `turn: CLAUDE` / `turn: CODEX` marker so the wire
+always says whose move it is. One unit in flight at a time — never two owners.
+
+### Both agents implement with subagents
+
+Not optional, on either side. One fresh subagent per plan task (no inherited
+session context — the parent hands it a written task brief file), then a separate
+review subagent per task checking spec compliance AND code quality, then one
+whole-unit review before RELEASE. The parent stays the **sole** committer, pusher,
+and bus writer; subagents write code and reports, never git history.
+
+**Model tiers (Claude side) — capability where it pays, cheap where it doesn't:**
+
+| Role | Model | Why |
+|---|---|---|
+| Parent (audit, architecture, adjudicating findings, all commits/pushes/bus writes) | Opus 5 | Judgment and cross-file reasoning; also holds the plan context |
+| Per-task implementer subagent | Sonnet | Plan text carries the exact code; this is transcription + testing |
+| Per-task review subagent | Sonnet | Scoped to one task's diff against a written brief |
+| Whole-unit final review | Opus 5 | Broad, cross-task, adversarial |
+
+Observed cost at this tier: ~220k tokens per implementer task, ~140k per task
+review. Escalate a subagent to Opus only when a task needs design judgment or
+broad codebase understanding — and say so in the dispatch.
+
+### Verification floor — and the Postgres asymmetry (read this before owning a unit)
+
+Before any RELEASE the owner must have run, in this order: the task's targeted
+selectors; the engine drift guard re-pinned if `src/kyc_tool/**` changed;
+`./manage.sh test` exit 0; `ruff check .` exit 0; `lint-imports` 2 kept / 0 broken.
+Then push and confirm the CI-green comment on PR #1.
+
+**Codex's environment has no local Postgres** (`initdb`/`pg_ctl` absent), while CI
+runs the whole suite against `postgres:16`. Consequences, stated honestly:
+
+- Codex CAN run locally: ruff, import-linter, and every non-DB unit test.
+- Codex CANNOT observe a local RED→GREEN cycle on any test using the `pg` fixture —
+  migrations, outbox, queue, ingest, UI. Its only real-Postgres verifier is CI,
+  which arrives after the push.
+- Therefore **route units by what their gates need**, rather than alternating
+  blindly: units whose TDD is DB-bound (anything shipping a migration —
+  7b-activation/`014`, 6b/`015`, 7a/`016`, PR 8) are Claude-owned; units verifiable
+  without a live database (PR 9's executable provider contracts, PR 1.1's
+  router-level dependency gating, PR 10's docs/runbook/metrics surface) are
+  Codex-owned. Roles still swap every unit — the routing decides which unit is next
+  for whom, not whether the swap happens.
+- If Codex owns a DB-bound unit anyway, it must say so in its RELEASE and treat CI
+  as the gate, and the reviewer must re-run the real-Postgres gates locally before
+  `AUDIT-CLEAN`.
+
+### Standing Codex BUILD prompt (paste to start a Codex build turn)
+
+> You are the BUILD owner in a two-agent loop on lwgiordano/ipv4-auto-kyc, branch
+> `claude/project-setup-verify-kpfgjs`. Pull the branch. Read `AGENT_BUS.md`
+> (protocol + newest log entries), `.agents/ROADMAP.md`, `AGENTS.md`, and
+> `AUDIT_FINDINGS.md`. Your unit is the one named in the newest `BUILD-HANDOFF`
+> entry addressed to you.
+>
+> Post a `CLAIM [CODEX]` covering the exact file set before editing anything, and
+> push it. Then: write a design spec, then a step-by-step TDD plan, then implement
+> it with **subagents — one fresh subagent per plan task**, each given a written
+> task brief file rather than your session context, each followed by a separate
+> review subagent checking spec compliance and code quality. You are the sole
+> committer, pusher, and bus writer.
+>
+> Gates before RELEASE: targeted selectors green; re-pin
+> `EXPECTED_ENGINE_SOURCE_HASH` if you touched `src/kyc_tool/**` (never bump
+> `ENGINE_BUILD_ID`); `ruff check .` clean; `lint-imports` 2 kept / 0 broken;
+> `./manage.sh test` — and if your environment has no Postgres, say so plainly in
+> the RELEASE and name CI as the gate rather than implying you ran it.
+>
+> Never modify `KYC_Tool_Build_Package/` (normative) or anything touching M2 /
+> `KYC_ENFORCE_POSITIVE_DECISIONS` / `enforce_positive_decisions`. Never put a model
+> identifier in a commit, PR, code comment, or any pushed artifact. Finish with
+> `RELEASE [CODEX] <range> — <summary>` plus `turn: CLAUDE`, and push.
+
+The audit-only prompt in the previous section still applies to Codex's REVIEW turns.
+
+---
+
+
 ## Log (newest on top)
 
 ### PLAN-RELEASE [CLAUDE] 2026-07-24 — rev-5 re-review `0ca264b`: all 4 findings folded, re-review requested
