@@ -2716,15 +2716,24 @@ Run: `.venv/bin/pytest tests/integration/test_outbox_supersession.py -v` → PAS
 and extend the module docstring's existing "deliberately NOT pruned" sentence (line 7) — same file, same idiom, because this is the durable-authority contract the spec's §Rollout defines:
 
 ```python
-# Raw evidence objects and check rows are deliberately NOT pruned here — they are the
-# decision record. PR 7b-core adds decision_callback outbox rows to that list: the row IS
-# the durable ordering authority (id = order, status = local_status, payload_json = body)
-# that 7b-activation reconciles the platform against, and its body is a projection of the
-# never-pruned decisions/checks record, so retaining it retains nothing new. Only poc_email
-# rows are prunable here — their sensitive body (the raw POC token) is already destroyed at
-# delivery by publisher._record_delivered. A poc_email can never reach 'superseded' (that
-# terminal is decision-callback-only, ck_outbox_status_lifecycle), so the single statement
-# above covers every prunable outbox terminal and no superseded prune is added.
+"""Retention job: `python -m kyc_tool.workers.retention`.
+
+Prunes, per compliance policy (default 7 years, KYC_RETENTION_DAYS):
+- audit_log rows past retention
+- delivered poc_email outbox rows past retention (decision_callback rows are NEVER
+  pruned — they are the durable ordering authority; see below)
+- expired, never-verified poc_tokens past retention
+
+Raw evidence objects and check rows are deliberately NOT pruned here — they are the
+decision record. PR 7b-core adds decision_callback outbox rows to that list: the row IS
+the durable ordering authority (id = order, status = local_status, payload_json = body)
+that 7b-activation reconciles the platform against, and its body is a projection of the
+never-pruned decisions/checks record, so retaining it retains nothing new. Only poc_email
+rows are prunable here — their sensitive body (the raw POC token) is already destroyed at
+delivery by publisher._record_delivered. A poc_email can never reach 'superseded' (that
+terminal is decision-callback-only, ck_outbox_status_lifecycle), so the one outbox
+statement below covers every prunable outbox terminal and no superseded prune is added.
+"""
 ```
 
 (Keep the docstring's existing wording for the first sentence; append from "PR 7b-core adds…". The `outbox_delivered` count key is renamed `outbox_poc_email` because it no longer means "all delivered rows"; nothing consumes it but the log line.)
@@ -2825,6 +2834,12 @@ def test_retention_keeps_decision_callbacks_and_prunes_poc_email(session_factory
 
     old = "now() - interval '3000 days'"
     _superseded_callback(session_factory, "c4", resolved_at=old)
+    # fk_outbox_decision_triple (013/Task 4) requires a matching decisions row for any
+    # outbox row carrying a non-NULL (run_id, case_id, decision_sequence) triple — seed the
+    # c4-r9/seq-9 decision the same way every other test in this file does before referencing
+    # it from outbox, brief defect (evidence: ForeignKeyViolation on fk_outbox_decision_triple,
+    # Key (run_id, case_id, decision_sequence)=(c4-r9, c4, 9) not present in "decisions").
+    _seed_decisions(session_factory, "c4", [9])
     with session_factory() as s:
         s.execute(text("INSERT INTO cases (id) VALUES ('c4') ON CONFLICT DO NOTHING"))
         s.execute(text(
@@ -2859,13 +2874,7 @@ def test_retention_keeps_decision_callbacks_and_prunes_poc_email(session_factory
 
 
 def test_retention_still_prunes_its_other_targets(session_factory, clean_db):
-    """The narrowing is scoped to the outbox: audit_log and poc_tokens pruning is unchanged.
-
-    Both retention tests take `clean_db`: `prune()` counts GLOBALLY, not per case, so an
-    assertion like `counts["audit_log"] == 1` is only deterministic from a truncated start —
-    which is exactly why the repo's existing `test_phase5_ops.py::test_retention_prunes_old_rows`
-    takes it too. Distinct case ids isolate the per-case assertions in this file but cannot
-    isolate a global counter."""
+    """The narrowing is scoped to the outbox: audit_log and poc_tokens pruning is unchanged."""
     from kyc_tool.workers.retention import prune
 
     with session_factory() as s:
