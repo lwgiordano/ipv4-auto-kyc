@@ -2121,8 +2121,9 @@ def test_013_two_runs_same_case_sequence_rejected(pg):
     with engine.begin() as conn:
         _mk_case(conn)
         _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
-    with pytest.raises(IntegrityError), engine.begin() as conn:
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
         _mk_auto_decision(conn, d="dB", c="c1", r="rB", seq=1, ev_seq=2)  # same case+seq, other run
+    assert "uq_decisions_case_decision_sequence" in str(exc.value)
     with engine.begin() as conn:  # multiple manual NULL-sequence decisions remain legal
         for i in range(2):
             conn.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
@@ -2143,10 +2144,11 @@ def test_013_two_decisions_same_run_rejected(pg):
     with engine.begin() as conn:
         _mk_case(conn)
         _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
-    with pytest.raises(IntegrityError), engine.begin() as conn:  # same run_id, distinct seq/id
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:  # same run_id, distinct seq/id
         conn.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
                           "buy_enablement, policy_shas, manual, decision_sequence) VALUES "
                           "('dB','c1','rA','approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false,2)"))
+    assert "uq_decisions_run_id" in str(exc.value)
     engine.dispose()
 
 
@@ -2181,6 +2183,7 @@ _DECISION_IDENTITY_BAD = {
 def test_013_decision_identity_insert_negatives(pg, case):
     from sqlalchemy.exc import IntegrityError
 
+    expected, sql = _DECISION_IDENTITY_BAD[case]
     url = _fresh_db(pg, f"kyc_mig_013_di_{case}")
     cfg = _config(url)
     alembic_command.upgrade(cfg, "013")
@@ -2192,8 +2195,9 @@ def test_013_decision_identity_insert_negatives(pg, case):
                           "'{}'::jsonb,'{}'::jsonb,1)"))
         conn.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
                           "VALUES ('rX','c1','rX-ev','PUBLISH_DECISION')"))
-    with pytest.raises(IntegrityError), engine.begin() as conn:
-        conn.execute(text(_DECISION_IDENTITY_BAD[case][1]))
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
+        conn.execute(text(sql))
+    assert expected in str(exc.value)
     engine.dispose()
 
 
@@ -2203,15 +2207,16 @@ def test_013_decision_identity_update_negative(pg, bad):
     sequence — ck_decisions_manual_sequence fires on UPDATE too (F2)."""
     from sqlalchemy.exc import IntegrityError
 
-    url = _fresh_db(pg, f"kyc_mig_013_di_upd_{bad}")
+    url = _fresh_db(pg, f"kyc_mig_013_di_upd_{bad.lower()}")  # Postgres folds unquoted "NULL" -> "null"
     cfg = _config(url)
     alembic_command.upgrade(cfg, "013")
     engine = create_engine(url)
     with engine.begin() as conn:
         _mk_case(conn)
         _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
-    with pytest.raises(IntegrityError), engine.begin() as conn:
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
         conn.execute(text(f"UPDATE decisions SET decision_sequence={bad} WHERE id='dA'"))
+    assert "ck_decisions_manual_sequence" in str(exc.value)
     engine.dispose()
 
 
@@ -2220,6 +2225,19 @@ _OUTBOX_BINDING_BAD = {
     "callback_null_run": ("ck_outbox_kind_stream_identity",
         "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
         "VALUES ('decision_callback','c1',NULL,'decision',1,'pending')"),
+    # ck_outbox_kind_stream_identity, verified against REAL Postgres (see task-4-report.md
+    # follow-up fix): a callback row with decision_sequence 0 or negative structurally violates
+    # BOTH this CHECK and fk_outbox_decision_triple (no decisions row with a non-positive
+    # sequence can ever exist, since ck_decisions_manual_sequence requires decision_sequence > 0
+    # on every automatic row) — but Postgres validates CHECK/NOT NULL constraints synchronously
+    # in the executor BEFORE a FK's AFTER-ROW trigger ever runs, so for a row violating both, the
+    # CHECK's error is what Postgres actually raises; the FK trigger never gets a chance to fire.
+    # Confirmed by running these two cases: psycopg.errors.CheckViolation, "violates check
+    # constraint \"ck_outbox_kind_stream_identity\"" — not a ForeignKeyViolation. Pinning this
+    # name (not fk_outbox_decision_triple) is what closes the false-green hole: disabling this
+    # CHECK in the migration flips these two cases to failing (proven by the mutation test),
+    # because the only thing left to reject the row is a ForeignKeyViolation whose message never
+    # contains "ck_outbox_kind_stream_identity".
     "callback_zero_seq": ("ck_outbox_kind_stream_identity",
         "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
         "VALUES ('decision_callback','c1','rA','decision',0,'pending')"),
@@ -2262,6 +2280,7 @@ _OUTBOX_BINDING_BAD = {
 def test_013_outbox_binding_insert_negatives(pg, case):
     from sqlalchemy.exc import IntegrityError
 
+    expected, sql = _OUTBOX_BINDING_BAD[case]
     url = _fresh_db(pg, f"kyc_mig_013_ob_{case}")
     cfg = _config(url)
     alembic_command.upgrade(cfg, "013")
@@ -2270,9 +2289,10 @@ def test_013_outbox_binding_insert_negatives(pg, case):
         _mk_case(conn, "c1")
         _mk_case(conn, "c2")  # for callback_wrong_case (a valid, different case)
         _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)  # (rA,c1,1) exists
-    with pytest.raises(IntegrityError), engine.begin() as conn:
-        for stmt in _OUTBOX_BINDING_BAD[case][1].split("; "):
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
+        for stmt in sql.split("; "):
             conn.execute(text(stmt))
+    assert expected in str(exc.value)
     engine.dispose()
 
 
@@ -2291,8 +2311,9 @@ def test_013_outbox_binding_update_negative(pg):
         conn.execute(text("INSERT INTO outbox (kind, case_id, run_id, "
                           "ordering_stream, decision_sequence, status) "
                           "VALUES ('decision_callback','c1','rA','decision',1,'pending')"))
-    with pytest.raises(IntegrityError), engine.begin() as conn:
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
         conn.execute(text("UPDATE outbox SET decision_sequence=9 WHERE run_id='rA'"))  # (rA,c1,9) absent
+    assert "fk_outbox_decision_triple" in str(exc.value)
     engine.dispose()
 
 
@@ -2311,8 +2332,9 @@ def test_013_outbox_callback_null_sequence_update_negative(pg):
         conn.execute(text("INSERT INTO outbox (kind, case_id, run_id, "
                           "ordering_stream, decision_sequence, status) "
                           "VALUES ('decision_callback','c1','rA','decision',1,'pending')"))
-    with pytest.raises(IntegrityError), engine.begin() as conn:
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
         conn.execute(text("UPDATE outbox SET decision_sequence=NULL WHERE run_id='rA'"))
+    assert "ck_outbox_kind_stream_identity" in str(exc.value)
     engine.dispose()
 
 
