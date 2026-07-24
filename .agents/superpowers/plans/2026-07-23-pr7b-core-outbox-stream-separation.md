@@ -390,17 +390,22 @@ def test_013_up_down_up_clean_no_supersession(pg):
 
 # INSERT negatives: each row is otherwise valid; only the constrained column is bad. Each case
 # pins the constraint (or NOT NULL message) it is INTENDED to trip — same discipline as
-# _NONBLANK_SURFACES. Without the pin, a later-task constraint that rejects the row for an
+# _NONBLANK_SURFACES. NOTE (Task 4): ck_outbox_kind_stream_identity pins kind AND ordering_stream
+# to literals in both branches, so it SUBSUMES both vocab CHECKs — no seed row can violate a vocab
+# CHECK alone, and Postgres reports the alphabetically-first name. The two vocab cases therefore
+# pin the identity constraint. Consequence recorded for final review: the vocab CHECKs are now
+# unguarded by any test.
+# Without the pin, a later-task constraint that rejects the row for an
 # unrelated reason (Task 4's kind/stream identity CHECK rejects every ('poc_email','decision')
 # shape) would keep these green while the constraint under test silently disappeared.
 _OUTBOX_LIFECYCLE_BAD = {
-    "unknown_kind": ("ck_outbox_kind_vocab",
+    "unknown_kind": ("ck_outbox_kind_stream_identity",  # subsumes ck_outbox_kind_vocab (Task 4)
         "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
         "VALUES ('unknown','c1','decision','pending')"),
     "null_stream": ('null value in column "ordering_stream"',
         "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
         "VALUES ('poc_email','c1',NULL,'pending')"),
-    "unknown_stream": ("ck_outbox_ordering_stream_vocab",
+    "unknown_stream": ("ck_outbox_kind_stream_identity",  # subsumes the stream vocab CHECK (Task 4)
         "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
         "VALUES ('poc_email','c1','carrier-pigeon','pending')"),
     "orphan_case": ("fk_outbox_case_id",
