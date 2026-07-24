@@ -1,4 +1,4 @@
-# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 1)
+# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 2)
 
 ## Context
 
@@ -121,6 +121,24 @@ until reconciled and re-attested** (do not merely advance the integer); a **manu
 stays effective while `h(c)` seeds from the ledger; exact two-sided coverage, else fail closed. §6
 convergence consumes this attested mapping — never the tool's local `published_at` alone.
 
+**Manual-current high-water floor (added by 7b-core rev-5 review, 2026-07-24 — acceptance
+strengthening):** seeding `h(c)` from the *accepted ledger alone* is insufficient when the current
+effective source is `manual:<event>` — an **unaccepted** pending/dead callback whose decision
+**predates** the manual approval was never accepted, so the ledger's greatest accepted sequence can
+sit below it; after activation that stale callback would deliver with `s > h(c)` and **replace the
+manual-current state** (7b-core's third residual, replayed *through* the authority this unit
+installs). Therefore the bootstrap MUST, for every case whose current effective source is manual,
+seed `h(c)` to at least the **tool's greatest allocated `decision_sequence` for that case at
+bootstrap time** (`GREATEST(ledger max accepted, max(decisions.decision_sequence))` — allocation
+happens under the case lock and publishers are at zero for the whole window, so this bound is
+stable), making every such older unaccepted pending/dead callback a **sticky no-op** on delivery:
+the manual source stays effective, and the callback row still terminalizes locally as `delivered`
+(receiver no-op success) without becoming the platform's current state. **Acceptance:** an
+unaccepted pending/dead callback OLDER than a manual-current platform source can NEVER replace it
+after activation; the §Testing "manual-current with an older accepted callback" scenario is
+extended with the *unaccepted* pending/dead variant, and a mutation that seeds `h(c)` from the
+ledger alone (dropping the allocated-sequence floor) must fail it.
+
 **Signed response envelope:** the shipped HMAC-v2 (`security.py:52-67`) signs a *request*
 (`method`,`path_qs`,…), not a response. Define one versioned signed envelope `{version, key_id,
 issued_at, request_digest, response_digest, response_bytes, signature}`, signature over the
@@ -224,8 +242,10 @@ linked decision is `published`. Ships as the shared query 7b-activation owns and
   `legacy`, both intermediate phases, and `active` with flag false/true — `active`+false fails
   readiness on every 7b process; the pre-armed uniform deployment passes.
 - **Bootstrap reconciliation:** seq2-then-seq1 revert; manual-current with an older accepted callback;
-  manual-only; send-before-stamp — each yields one deterministic `h` or a named block; a mutation using
-  the tool's local-delivered row as platform truth fails.
+  **manual-current with an older UNACCEPTED pending/dead callback (rev 2): the floor makes it a
+  sticky no-op — a mutation seeding `h(c)` from the ledger alone (dropping the allocated-sequence
+  floor) must fail**; manual-only; send-before-stamp — each yields one deterministic `h` or a named
+  block; a mutation using the tool's local-delivered row as platform truth fails.
 - **`integrity_mismatch`:** tuple tamper → exact terminal (zero HTTP, `dead`, `resolved_at`, no
   `published_at`, metric/alert) + UI **409**; a genuine lower row under a higher delivered decision →
   `superseded` only (7b-core).
@@ -251,3 +271,12 @@ reconciliation semantics), `.agents/ROADMAP.md` (the split + renumber + ADR-008,
 - No enforcement/scoring/`ENGINE_BUILD_ID` change; M2 untouched. `event_sequence` (D1, PR 2) keeps its
   `_callback_body` gate. PR 7a fences the **jobs** queue. PR 6b consumes this unit's ordering
   authority; it may build on 7b-core's primitive but not activate until `phase='active'`.
+
+## Revision note — rev 2 (2026-07-24)
+
+Acceptance strengthening from the 7b-core rev-5 complete-unit review (finding 4): §3 gains the
+**manual-current high-water floor** — when a case's current effective source is manual, the
+bootstrap seeds `h(c)` to at least the tool's greatest allocated `decision_sequence`, so an
+**unaccepted** pending/dead callback older than the manual-current source is a sticky no-op after
+activation and can never replace it. The §Testing reconciliation scenario is extended with the
+unaccepted-callback variant and a ledger-only-seed mutation witness. No other change.

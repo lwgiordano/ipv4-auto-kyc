@@ -2,13 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. The parent session is the SOLE committer; subagents implement + hand diffs back.
 
+> **Plan revision: rev 5 (2026-07-24)** — folds all 10 findings of the Codex complete-unit re-audit @ `eac3035` (`AGENT_BUS.md` PLAN-REVIEW 2026-07-24): restore acceptance contract (F1), composite decisions→runs case FK (F2), the four affected EXISTING test files claimed + adapted (F3), the third residual (manual-current vs late automatic callback) + its real test (F4), downgrade-TOCTOU autobegin fix (F5), same-stream FIFO-under-backoff proof (F6), retry-branch fencing proof (F7), `superseded` is decision-only (F8), ORM FK parity for `fk_outbox_case_id` (F9), required-keyword `decision_sequence` final signature (F10). See "Codex plan-review round 5" at the bottom.
+
 **Goal:** Separate the outbox claim into per-`(case_id, ordering_stream)` FIFO streams, add an internal per-case `decision_sequence`, fence every claim with a `claim_token`, add a best-effort local `superseded` guard, and lock all of it down with exhaustive relational integrity — shipped as migration `013` with a drained cutover and a reversible-before-first-supersession downgrade.
 
 **Architecture:** Migration `013` (`down_revision='012'`) adds `outbox.ordering_stream`/`case_id NOT NULL`, a fenced-claim column set (`claim_token`/`claim_lease_expires_at`/`claimed_by`), `decisions.decision_sequence` + `cases.last_decision_sequence`, a triple FK binding each callback to its automatic decision, and exhaustive per-status lifecycle CHECKs. The publisher claims the min-id pending row of one `(case, stream)` under a fresh `claim_token`; every terminal (`_record_delivered`/`_record_failure`/`_record_superseded`) is a single fenced `UPDATE … WHERE id AND status='pending' AND claim_token=:token RETURNING id` whose winner performs all dependent writes in-transaction and whose stale loser emits `outbox_stale_claim_completion` and does nothing. The decide transaction allocates `decision_sequence` from the locked `cases.last_decision_sequence` counter; a local guard suppresses an older requeued callback only when a higher-sequence decision already carries a locally-stamped `published_at`.
 
 **Tech Stack:** Python 3.11, FastAPI (sync + threadpool), SQLAlchemy 2 (sync psycopg), Postgres, Alembic, import-linter, pytest against ephemeral Postgres (`tests/pg.py`).
 
-**Spec:** `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md` (REVIEW-CLEAN rev 8). It is the authoritative contract — read the cited §sections for rationale; every CHECK, SQL, seam, and mutation witness below is drawn from it.
+**Spec:** `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md` (rev 9 — rev 8 REVIEW-CLEAN + the rev-5 re-audit amendments for findings 1, 2, 4, 8). It is the authoritative contract — read the cited §sections for rationale; every CHECK, SQL, seam, and mutation witness below is drawn from it.
 
 ## Global Constraints
 
@@ -33,9 +35,9 @@
 
 **Human plan-approval gate (required first).** PLAN-CLEAN / AUDIT-CLEAN on this plan is a *plan* gate, **not** implementation permission. Do **not** begin the sequence below until the human explicitly approves execution.
 
-- [ ] **Step 0 (parent-only, BEFORE Task 1) — CLAIM.** `git pull`; read `AGENT_BUS.md` and `.agents/ROADMAP.md`; verify **no conflicting active Claude CLAIM** overlaps this work. Then post + push **one** bus CLAIM covering the final file set — the migration `alembic/versions/013_outbox_stream_separation.py`, `src/kyc_tool/migration_contracts/**`, `src/kyc_tool/{db/tables.py,outbox/publisher.py,orchestration/pipeline.py,workers/retention.py,api/routes_metrics.py,ops/verify_pr7b_core_backfill.py,ops/reset_interrupted_outbox_claims.py}`, the new/edited `tests/**`, `docs/{OVERVIEW,RUNBOOK,DEPLOYMENT}.md`, `AUDIT_FINDINGS.md`, `.agents/ROADMAP.md`, and the re-pinned `tests/policy_driven/test_engine_build_id_guard.py`. Only then begin Task 1.
+- [ ] **Step 0 (parent-only, BEFORE Task 1) — CLAIM.** `git pull`; read `AGENT_BUS.md` and `.agents/ROADMAP.md`; verify **no conflicting active Claude CLAIM** overlaps this work. Then post + push **one** bus CLAIM covering the final file set — the migration `alembic/versions/013_outbox_stream_separation.py`, `src/kyc_tool/migration_contracts/**`, `src/kyc_tool/{db/tables.py,outbox/publisher.py,orchestration/pipeline.py,workers/retention.py,api/routes_metrics.py,ops/verify_pr7b_core_backfill.py,ops/reset_interrupted_outbox_claims.py}`, the new/edited `tests/**` — **naming explicitly (re-audit F3) the four EXISTING files this unit adapts: `tests/integration/test_ui.py`, `tests/integration/test_phase4_platform.py`, `tests/integration/test_migrations.py`, `tests/integration/test_bundle_pinning_ops.py`, plus `tests/conftest.py` (shared valid-chain helper)** — `docs/{OVERVIEW,RUNBOOK,DEPLOYMENT}.md`, `AUDIT_FINDINGS.md`, `.agents/ROADMAP.md`, and the re-pinned `tests/policy_driven/test_engine_build_id_guard.py`. Only then begin Task 1.
 - The **parent session is the sole committer/pusher/bus-writer.** Subagents implement and hand diffs back; Tasks 1-6 accumulate one commit (end of Task 6); Tasks 7-9 commit normally (see each task).
-- [ ] **After Task 9 — RELEASE + audit hold.** Commit the code anchor first; rerun the exact **Final gate** commands on that SHA; then post a **separate** bus RELEASE that names: the literal anchor commit/range, the commands + results, the migration witnesses (single-`013`-commit finish gate; up/down/up; backfill order authority; downgrade race), the honest residual-risk boundary (send-before-stamp / cross-replica remain until 7b-activation), and "**M2 / `KYC_Tool_Build_Package/` untouched**"; set `turn: CODEX`. Push and **hold for `AUDIT-CLEAN`** before considering the work done.
+- [ ] **After Task 9 — RELEASE + audit hold.** Commit the code anchor first; rerun the exact **Final gate** commands on that SHA; then post a **separate** bus RELEASE that names: the literal anchor commit/range, the commands + results, the migration witnesses (single-`013`-commit finish gate; up/down/up; backfill order authority; downgrade race), the honest residual-risk boundary (send-before-stamp / cross-replica / manual-current-then-late-automatic-callback remain until 7b-activation), and "**M2 / `KYC_Tool_Build_Package/` untouched**"; set `turn: CODEX`. Push and **hold for `AUDIT-CLEAN`** before considering the work done.
 
 ## Test infrastructure (real, from `tests/conftest.py`)
 
@@ -87,12 +89,16 @@ Each checkpoint edits `alembic/versions/013_outbox_stream_separation.py` at clea
 - `tests/integration/test_reset_interrupted_outbox_claims.py` — the reset CLI + rollout order (Task 8).
 
 **Modify:**
-- `src/kyc_tool/db/tables.py` — `Outbox` (+`ordering_stream`, `decision_sequence`, `resolved_at`, `claim_lease_expires_at`, `claim_token`, `claimed_by`; `case_id` non-optional; `status` comment; `__table_args__`), `Case` (+`last_decision_sequence`), `DecisionRow` (+`decision_sequence`, `__table_args__` uniques). (Tasks 1, 4.)
+- `src/kyc_tool/db/tables.py` — `Outbox` (+`ordering_stream`, `decision_sequence`, `resolved_at`, `claim_lease_expires_at`, `claim_token`, `claimed_by`; `case_id` non-optional + named FK `fk_outbox_case_id` (F9); `status` comment; `__table_args__`), `Case` (+`last_decision_sequence`), `Run` (+`__table_args__` with `uq_runs_id_case_id` — F2), `DecisionRow` (+`decision_sequence`, `__table_args__` uniques + `fk_decisions_run_case` — F2). (Tasks 1, 4.)
 - `src/kyc_tool/outbox/publisher.py` — `_CLAIM_SQL` (fenced, per-stream, `RETURNING` token/stream/sequence), `enqueue_decision_callback`/`enqueue_poc_email` (set `ordering_stream`, `decision_sequence`), `process_once` (thread token + guard), `_record_delivered`/`_record_failure` (fenced winner/loser), `_record_superseded` (new), module docstring (A6). (Tasks 1, 3, 5.)
 - `src/kyc_tool/orchestration/pipeline.py` — `_decide_txn` allocates `decision_sequence` from `cases.last_decision_sequence` and passes it to `enqueue_decision_callback`. (Task 4.)
 - `src/kyc_tool/workers/retention.py` — `prune` deletes `superseded` alongside `delivered`. (Task 5.)
 - `src/kyc_tool/api/routes_metrics.py` — report `superseded` separately; keep it out of pending/dead alerting. (Task 5.)
-- `tests/integration/test_migrations.py` — all `013` migration up/down/negative/backfill/downgrade-race tests (Tasks 1, 2, 4, 6).
+- `tests/integration/test_migrations.py` — all `013` migration up/down/negative/backfill/downgrade-race tests + the schema-012 restore acceptance test (Tasks 1, 2, 4, 6, 7) + the F3 legacy-fixture flips (`manual=true`, named nonblank constraints) (Task 1).
+- `tests/integration/test_ui.py` — F3: the raw dead-POC fixture INSERT gains `ordering_stream='email'` (Task 1).
+- `tests/integration/test_phase4_platform.py` — F3: the redelivery test becomes the real send-before-stamp fault injection (interim legalization Task 1; final form Task 3).
+- `tests/conftest.py` — F3: shared `seed_automatic_decision` valid-chain helper (Task 4).
+- `tests/integration/test_bundle_pinning_ops.py` — F3: the three automatic-decision fixtures gain valid sequences + case counters via the shared helper (Task 4).
 - `tests/policy_driven/test_engine_build_id_guard.py` — re-pin `EXPECTED_ENGINE_SOURCE_HASH` (every src-touching task).
 - `docs/OVERVIEW.md`, `docs/RUNBOOK.md`, `docs/DEPLOYMENT.md`, `AUDIT_FINDINGS.md`, `.agents/ROADMAP.md` — docs + governance (Task 9).
 
@@ -108,7 +114,9 @@ Adds every `013` column, backfills `ordering_stream` from `kind`, makes `case_id
 - Create: `alembic/versions/013_outbox_stream_separation.py`
 - Modify: `src/kyc_tool/db/tables.py` (`Outbox` 261-279, `Case` 34-54, `DecisionRow` 211-227)
 - Modify: `src/kyc_tool/outbox/publisher.py` (`enqueue_decision_callback`/`enqueue_poc_email` 52-63)
-- Modify: `tests/integration/test_migrations.py`
+- Modify: `tests/integration/test_migrations.py` (013 tests + the F3 legacy-fixture flips, Step 8b)
+- Modify: `tests/integration/test_ui.py` (F3: `ordering_stream` on the raw dead-POC INSERT, Step 8b)
+- Modify: `tests/integration/test_phase4_platform.py` (F3: interim lifecycle-legal redelivery rewrite, Step 8b — replaced by the real fault injection in Task 3 Step 3b)
 - Re-pin: `tests/policy_driven/test_engine_build_id_guard.py`
 
 **Interfaces:**
@@ -238,6 +246,9 @@ down_revision = "012"
 branch_labels = None
 depends_on = None
 
+# superseded is a DECISION-ONLY terminal (re-audit F8): production supersedes only decision
+# callbacks; A6's zero-send exception and the ordering proof are callback-specific, so a
+# poc_email must never be able to enter 'superseded' (not even by operator UPDATE).
 _LIFECYCLE_CHECK = """
     status IN ('pending','delivered','dead','superseded')
     AND (status <> 'pending' OR (
@@ -253,6 +264,7 @@ _LIFECYCLE_CHECK = """
     AND (status <> 'superseded' OR (
           delivered_at IS NULL AND resolved_at IS NOT NULL
           AND claim_token IS NULL AND claim_lease_expires_at IS NULL AND claimed_by IS NULL))
+    AND (status <> 'superseded' OR kind = 'decision_callback')
 """
 
 
@@ -388,6 +400,7 @@ _OUTBOX_LIFECYCLE_BAD = {
         "VALUES ('poc_email','c1','email','pending','w1')",  # lifecycle: partial claim tuple
     "superseded_null_resolved": "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
         "VALUES ('poc_email','c1','email','superseded')",  # lifecycle: superseded⇒resolved_at NOT NULL
+        # (also trips the F8 decision-only conjunct; the dedicated F8 negatives below isolate it)
     "delivered_with_claim": "INSERT INTO outbox (kind, case_id, ordering_stream, status, delivered_at, "
         "claim_token, claim_lease_expires_at, claimed_by) VALUES ('poc_email','c1','email','delivered', "
         "now(), gen_random_uuid(), now(), 'w1')",  # lifecycle: delivered⇒claim all-NULL
@@ -429,14 +442,54 @@ def test_013_outbox_lifecycle_update_negative(pg):
     with pytest.raises(IntegrityError), engine.begin() as conn:
         conn.execute(text("UPDATE outbox SET status='superseded' WHERE case_id='c1'"))
     engine.dispose()
+
+
+def test_013_superseded_is_decision_only_insert_negative(pg):
+    """Re-audit F8: a poc_email cannot be INSERTed as 'superseded' even with an otherwise
+    VALID superseded shape (resolved_at set, claim tuple all-NULL) — only the decision-only
+    kind conjunct of ck_outbox_status_lifecycle rejects it, asserted by name."""
+    from sqlalchemy.exc import IntegrityError
+
+    url = _fresh_db(pg, "kyc_mig_013_sup_poc_ins")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
+        conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, resolved_at) "
+                          "VALUES ('poc_email','c1','email','superseded', now())"))
+    assert "ck_outbox_status_lifecycle" in str(exc.value)
+    engine.dispose()
+
+
+def test_013_superseded_is_decision_only_update_negative(pg):
+    """Re-audit F8 UPDATE variant: a live pending poc_email cannot be UPDATEd into
+    'superseded' even when resolved_at is set in the same statement (the future-bug /
+    operator-UPDATE path that would silently zero-send an email AND make downgrade refuse)."""
+    from sqlalchemy.exc import IntegrityError
+
+    url = _fresh_db(pg, "kyc_mig_013_sup_poc_upd")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
+        conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+                          "VALUES ('poc_email','c1','email','pending')"))
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
+        conn.execute(text("UPDATE outbox SET status='superseded', resolved_at=now() "
+                          "WHERE case_id='c1'"))
+    assert "ck_outbox_status_lifecycle" in str(exc.value)
+    engine.dispose()
 ```
 
 - [ ] **Step 6: Run the negatives**
 
-Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_up_down_up or 013_outbox_lifecycle" -v`
-Expected: PASS (all parametrizations).
+Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_up_down_up or 013_outbox_lifecycle or 013_superseded_is_decision_only" -v`
+Expected: PASS (all parametrizations + both F8 decision-only negatives).
 
-- [ ] **Step 7: Mutation check (manual, no commit)** — temporarily delete `op.create_check_constraint("ck_outbox_status_lifecycle", ...)` from the migration, rerun `.venv/bin/pytest tests/integration/test_migrations.py -k 013_outbox_lifecycle -v`; confirm the `pending_delivered_at`/`dead_with_claim`/`superseded_null_resolved`/`delivered_with_claim` cases now FAIL (no `IntegrityError`). Restore the line. Do the same for `ck_outbox_kind_vocab` (→ `unknown_kind` fails) and the `SET NOT NULL` on `ordering_stream` (→ `is_nullable` metadata assertion fails).
+- [ ] **Step 7: Mutation check (manual, no commit)** — temporarily delete `op.create_check_constraint("ck_outbox_status_lifecycle", ...)` from the migration, rerun `.venv/bin/pytest tests/integration/test_migrations.py -k "013_outbox_lifecycle or 013_superseded_is_decision_only" -v`; confirm the `pending_delivered_at`/`dead_with_claim`/`superseded_null_resolved`/`delivered_with_claim` cases AND both F8 decision-only negatives now FAIL (no `IntegrityError`). Restore the line. Do the same for `ck_outbox_kind_vocab` (→ `unknown_kind` fails) and the `SET NOT NULL` on `ordering_stream` (→ `is_nullable` metadata assertion fails). **F8 named witness:** remove ONLY the final `AND (status <> 'superseded' OR kind = 'decision_callback')` conjunct from `_LIFECYCLE_CHECK` (leave every other branch), rerun `.venv/bin/pytest tests/integration/test_migrations.py -k 013_superseded_is_decision_only -v` → BOTH negatives must FAIL (the shape-valid superseded email now passes) while every other lifecycle negative stays green. Restore.
 
 - [ ] **Step 8: Update the ORM + enqueue funcs** — in `src/kyc_tool/db/tables.py`, add to `Case` (after `event_sequence`, line 45):
 
@@ -461,7 +514,11 @@ Replace the `Outbox` class body columns + `__table_args__` (lines 267-279) with:
 ```python
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     kind: Mapped[str] = mapped_column(Text)  # decision_callback | poc_email
-    case_id: Mapped[str] = mapped_column(Text, index=True)  # NOT NULL (migration 013)
+    # NOT NULL + named FK (migration 013). The FK lives in ORM metadata too (re-audit F9):
+    # Base.metadata is Alembic's comparison target, so a live-only FK would report drift.
+    case_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("cases.id", name="fk_outbox_case_id"), index=True
+    )
     run_id: Mapped[str | None] = mapped_column(Text)
     # PR 7b-core: FIFO stream this row is claimed under (decision | email), NOT NULL.
     ordering_stream: Mapped[str] = mapped_column(Text)
@@ -518,6 +575,83 @@ def enqueue_poc_email(session: Session, *, case_id: str, to: str, subject: str, 
         )
     )
 ```
+
+- [ ] **Step 8b: Adapt the affected EXISTING fixtures (re-audit F3, part 1 — required for a green Step 11)** — three existing files carry fixtures that 013's new columns/CHECKs invalidate. Without these edits `./manage.sh test` cannot pass at this checkpoint (the advertised atomic gate would be false). Apply exactly:
+
+**(i) `tests/integration/test_ui.py` — `test_requeue_refuses_redacted_dead_poc_email` (~line 167):** the raw dead-POC INSERT omits the now-NOT-NULL stream. Replace the statement text with:
+
+```python
+                "INSERT INTO outbox (kind, case_id, ordering_stream, payload_json, status, attempts) "
+                "VALUES ('poc_email', 'ui-redacted', 'email', CAST(:p AS jsonb), 'dead', 8) "
+                "RETURNING id"
+```
+
+(`dead` + `delivered_at NULL` + claim all-NULL satisfies the lifecycle CHECK; `poc_email`+`email`+no run/sequence satisfies the Task-4 identity CHECK.)
+
+**(ii) `tests/integration/test_phase4_platform.py` — `test_redelivery_carries_identical_dedupe_key` (~84-97):** the raw `UPDATE outbox SET status='pending' …` retains `delivered_at`, which the lifecycle CHECK now rejects. **INTERIM form for this checkpoint only** (the fenced claim does not exist until Task 3; Task 3 Step 3b replaces this body with the REAL send-before-stamp fault injection, and the single atomic 013 commit ships ONLY that final form). Replace the raw UPDATE with the lifecycle-legal rewrite:
+
+```python
+    # simulate a crash after delivery but before the delivered-mark landed
+    # (INTERIM, Task 1: under ck_outbox_status_lifecycle a pending row must have
+    # delivered_at NULL, so the rewrite clears it. Task 3 Step 3b replaces this whole
+    # body with the real send-before-stamp fault injection — the committed unit ships
+    # only that form.)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE outbox SET status='pending', next_attempt_at=now(), delivered_at=NULL "
+                "WHERE case_id='case-redeliver'"
+            )
+        )
+```
+
+**(iii) `tests/integration/test_migrations.py` — legacy `manual=false` decision fixtures + named nonblank negatives:** three existing fixtures insert `manual=false` decisions with NO run/sequence; the Task-2 parity preflight (`auto_decision_null_run`) and the Task-4 `ck_decisions_manual_sequence` shape CHECK both reject that. They are genuinely manual-shaped rows — flip each to `manual=true` (`engine_build_id` semantics unchanged):
+
+- `test_011_downgrade_refuses_after_use`, the `decision_engine_id` parametrization (~124-127): change `'{}'::jsonb,false,'eng-1')` → `'{}'::jsonb,true,'eng-1')`.
+- `_NONBLANK_SURFACES["decision_engine"]` (~164-166): change `'{}'::jsonb,false,:blank)` → `'{}'::jsonb,true,:blank)`.
+- `test_011_checks_not_valid_then_012_validates`, the decision INSERT populated at revision 010 (~234-237): change `'{}'::jsonb,false)` → `'{}'::jsonb,true)` (this DB is later upgraded to head, so the 013 parity preflight must pass over it).
+
+**Named nonblank negatives (F3):** every nonblank negative must assert its intended constraint so 013's new shape CHECK can never produce a false green. Restructure `_NONBLANK_SURFACES` to map each surface to `(constraint_name, sql)` — the names are from `alembic/versions/011_policy_bundle_pinning.py` (validated by `012_validate_pinning_check_constraints.py`):
+
+```python
+_NONBLANK_SURFACES = {
+    "epoch_engine": ("ck_epoch_engine_nonblank", _VALID_BUNDLE + "; INSERT INTO bundle_pinning_epoch "
+        "(id, activated_at, bundle_hash, engine_build_id) VALUES (1, now(), 'h', :blank)"),
+    "run_engine": ("ck_runs_engine_build_id_nonblank", _VALID_CASE + "; " + _VALID_EVENT
+        + "; INSERT INTO runs (id, case_id, triggering_event_id, state, engine_build_id) "
+        "VALUES ('r','c','ev','QUEUED',:blank)"),
+    "decision_engine": ("ck_decisions_engine_build_id_nonblank", _VALID_CASE
+        + "; INSERT INTO decisions (id, case_id, decision, score, "
+        "gates_json, buy_enablement, policy_shas, manual, engine_build_id) VALUES ('d','c','x',0,"
+        "'{}'::jsonb,'buy_locked_org_id_required','{}'::jsonb,true,:blank)"),
+    "check_bundle": ("ck_checks_policy_bundle_hash_nonblank", _VALID_CASE
+        + "; INSERT INTO checks (id, case_id, check_type, status, "
+        "points_awarded, category, source, policy_bundle_hash) "
+        "VALUES ('k','c','verified_email','pass',10,'x','seed',:blank)"),
+}
+
+
+@pytest.mark.parametrize("surface", list(_NONBLANK_SURFACES))
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "ws"])
+def test_011_nonblank_checks_reject_blank(pg, surface, blank):
+    from sqlalchemy.exc import IntegrityError
+
+    constraint_name, sql = _NONBLANK_SURFACES[surface]
+    url = _fresh_db(pg, f"kyc_mig_011_nb_{surface}_{len(blank)}")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "head")
+    engine = create_engine(url)
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
+        for stmt in sql.split("; "):
+            conn.execute(text(stmt), {"blank": blank})  # extra param ignored where unused
+    assert constraint_name in str(exc.value)  # F3: the INTENDED btrim CHECK, not a 013 shape CHECK
+    engine.dispose()
+```
+
+Also make the inline nonblank negative at the end of `test_011_checks_not_valid_then_012_validates` (~257-264) assert its name — wrap it as `with pytest.raises(IntegrityError) as exc, engine.begin() as conn:` and add `assert "ck_checks_policy_bundle_hash_nonblank" in str(exc.value)` after the block.
+
+Run: `.venv/bin/pytest tests/integration/test_ui.py tests/integration/test_phase4_platform.py::test_redelivery_carries_identical_dedupe_key -v` and `.venv/bin/pytest tests/integration/test_migrations.py -k "011 or 010 or 012" -v`
+Expected: PASS (the adapted fixtures are valid under the accumulated 013 schema, and every nonblank negative pins its intended constraint).
 
 - [ ] **Step 9: RED drift-guard step (deliberately red)** — the src edits (ORM + enqueue) changed the source tree, so the whole-source guard now fails. Observe it:
 
@@ -1029,10 +1163,11 @@ Rewrites `_CLAIM_SQL` to claim the min-id pending row of one `(case_id, ordering
 **Files:**
 - Modify: `src/kyc_tool/outbox/publisher.py` (`_CLAIM_SQL` 29-49, `enqueue_decision_callback` 52-53, `OutboxPublisher.__init__` 67-78, `process_once` 143-158, `_record_delivered` 160-191, `_record_failure` 193-226)
 - Create: `tests/integration/test_outbox_fencing.py`
+- Modify: `tests/integration/test_phase4_platform.py` (Step 3b — the FINAL send-before-stamp redelivery form, re-audit F3)
 - Re-pin: `tests/policy_driven/test_engine_build_id_guard.py`
 
 **Interfaces:**
-- Consumes: `enqueue_decision_callback` from Task 1 (adds a `decision_sequence` kwarg here, default `None`).
+- Consumes: `enqueue_decision_callback` from Task 1 (adds a `decision_sequence` kwarg here, default `None` — a TEMPORARY staging form; Task 4 Step 8b tightens it to a REQUIRED keyword, and the single atomic 013 commit ships only the required form — re-audit F10).
 - Produces: `_CLAIM_SQL` `RETURNING id, kind, case_id, run_id, payload_json, attempts, ordering_stream, decision_sequence, claim_token`; `process_once()` passes `token = row.claim_token` to every terminal; `_record_delivered(self, row, token)`, `_record_failure(self, row, error, token)` each begin with the fenced `UPDATE … WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id` and branch on `applied`; stale losers log `outbox_stale_claim_completion` (fields: `outbox_id`, `attempted`).
 
 - [ ] **Step 1: Write the failing tests** — create `tests/integration/test_outbox_fencing.py`:
@@ -1220,12 +1355,140 @@ def test_stale_decision_loser_cannot_stamp_run_or_published_at(
     with session_factory() as s:
         assert s.execute(text("SELECT state FROM runs WHERE id='r1'")).scalar_one() == "COMPLETE"
         assert s.execute(text("SELECT published_at FROM decisions WHERE id='d1'")).scalar_one() is not None
+
+
+def _seed_decision_chain(session_factory, *, case_id, run_id, decision_id, seq, ev_seq):
+    """One valid case→event→run→automatic-decision chain (decision carries `seq`); the
+    caller enqueues its callback separately."""
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case_id})
+        s.execute(
+            text(
+                "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, actor_json, "
+                "payload_json, event_sequence) VALUES (:e,:c,:k,'h','x','{}'::jsonb,'{}'::jsonb,:s)"
+            ),
+            {"e": run_id + "-ev", "c": case_id, "k": run_id, "s": ev_seq},
+        )
+        s.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, "
+                       "state) VALUES (:r,:c,:e,'PUBLISH_DECISION')"),
+                  {"r": run_id, "c": case_id, "e": run_id + "-ev"})
+        s.execute(
+            text(
+                "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
+                "policy_shas, manual, decision_sequence) VALUES (:d,:c,:r,'approve',10,'{}'::jsonb,"
+                "'enabled','{}'::jsonb,false,:seq)"
+            ),
+            {"d": decision_id, "c": case_id, "r": run_id, "seq": seq},
+        )
+        s.commit()
+
+
+def test_same_stream_fifo_holds_under_backoff(
+    session_factory, settings, publisher, callback_capture, clean_db
+):
+    """Re-audit F6: strict same-stream FIFO survives retry backoff. One case, decision
+    stream: seq1 (older outbox id) sits in FUTURE backoff; seq2 (newer id) is due NOW.
+    The claim's inner min(o2.id) head-of-stream subquery deliberately ignores due-time/
+    lease eligibility, so the backed-off head BLOCKS its whole stream: process_once() is
+    idle (False), ZERO HTTP occurred, and seq2 is untouched (still pending, no claim).
+    Once seq1 is due again, delivery order is exactly [seq1, seq2].
+    MUTATION WITNESS (named, Step 5c): adding due/lease filtering (e.g.
+    `AND o2.next_attempt_at <= now()`) to the INNER `min(o2.id)` subquery of _CLAIM_SQL
+    lets seq2 leapfrog its backed-off elder — this test then FAILS."""
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    _seed_decision_chain(session_factory, case_id="cf", run_id="cf-r1", decision_id="cf-d1",
+                         seq=1, ev_seq=1)
+    _seed_decision_chain(session_factory, case_id="cf", run_id="cf-r2", decision_id="cf-d2",
+                         seq=2, ev_seq=2)
+    with session_factory() as s:  # enqueue seq1 FIRST (lower outbox.id), then seq2
+        enqueue_decision_callback(s, case_id="cf", run_id="cf-r1", body={"run_id": "cf-r1"},
+                                  decision_sequence=1)
+        s.commit()
+    with session_factory() as s:
+        enqueue_decision_callback(s, case_id="cf", run_id="cf-r2", body={"run_id": "cf-r2"},
+                                  decision_sequence=2)
+        s.commit()
+    with session_factory() as s:  # push ONLY seq1 into future backoff; seq2 stays due
+        s.execute(text("UPDATE outbox SET next_attempt_at = now() + interval '1 hour' "
+                       "WHERE case_id='cf' AND decision_sequence=1"))
+        s.commit()
+
+    assert publisher.process_once() is False       # idle: the stream head is backed off
+    assert callback_capture.requests == []         # ZERO HTTP — seq2 did NOT leapfrog
+    with session_factory() as s:
+        row2 = s.execute(text("SELECT status, claim_token, claim_lease_expires_at, claimed_by "
+                              "FROM outbox WHERE case_id='cf' AND decision_sequence=2")).one()
+    assert row2.status == "pending"                # seq2 untouched: pending, never claimed
+    assert row2.claim_token is None and row2.claim_lease_expires_at is None
+    assert row2.claimed_by is None
+
+    with session_factory() as s:                   # make seq1 due again
+        s.execute(text("UPDATE outbox SET next_attempt_at = now() "
+                       "WHERE case_id='cf' AND decision_sequence=1"))
+        s.commit()
+    assert publisher.process_pending() == 2
+    assert [r["body"]["run_id"] for r in callback_capture.requests] == ["cf-r1", "cf-r2"]
+
+
+def test_stale_retry_failure_cannot_touch_reclaimed_row(session_factory, settings, clean_db):
+    """Re-audit F7: the fenced NONTERMINAL (retry) failure branch, proven stale-winner/loser.
+    outbox_max_attempts=3 so a failure is a RETRY, not dead. A claims; A's lease expires;
+    B reclaims (and does NOT terminalize). A's stale _record_failure must leave B's ENTIRE
+    claim tuple (claim_token, claim_lease_expires_at, claimed_by), attempts, next_attempt_at,
+    and last_error byte-for-byte unchanged, emitting outbox_stale_claim_completion with
+    attempted="retry" (the nonterminal branch). Then B's OWN _record_failure increments
+    attempts to rowB.attempts+1 (its claim snapshot), schedules backoff per the
+    base*2^(attempts-1) formula, and clears ONLY B's claim tuple — status stays pending.
+    MUTATION WITNESS (named, Step 5d): removing `claim_token=:token` from ONLY the
+    nonterminal retry UPDATE in _record_failure lets stale A rewrite B's attempts/backoff/
+    claim — this test then FAILS at the byte-for-byte assertion."""
+    _seed_case(session_factory, "c1")
+    _enqueue_email(session_factory, case_id="c1", to="keep@x")
+    retry_settings = settings.model_copy(
+        update={"outbox_max_attempts": 3, "outbox_backoff_base_seconds": 100}
+    )
+    pub = _pub_for(session_factory, retry_settings)
+
+    rowA = _claim(session_factory, "A")
+    assert rowA is not None
+    _expire_lease(session_factory, rowA.id)
+    rowB = _claim(session_factory, "B")             # B reclaims; does NOT terminalize
+    assert rowB is not None and rowB.claim_token != rowA.claim_token
+
+    with session_factory() as s:
+        before = s.execute(text("SELECT status, claim_token, claim_lease_expires_at, claimed_by, "
+                                "attempts, next_attempt_at, last_error "
+                                "FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
+    with structlog.testing.capture_logs() as logs:
+        pub._record_failure(rowA, "boom", rowA.claim_token)   # stale RETRY-branch loser
+    stale = [e for e in logs if e["event"] == "outbox_stale_claim_completion"]
+    assert stale and stale[0]["attempted"] == "retry"          # the nonterminal branch ran
+    with session_factory() as s:
+        after = s.execute(text("SELECT status, claim_token, claim_lease_expires_at, claimed_by, "
+                               "attempts, next_attempt_at, last_error "
+                               "FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
+    assert after == before  # B's ENTIRE claim tuple + attempts + retry clock: untouched
+
+    pub._record_failure(rowB, "boom", rowB.claim_token)        # B's OWN retry failure
+    with session_factory() as s:
+        final = s.execute(text("SELECT status, claim_token, claim_lease_expires_at, claimed_by, "
+                               "attempts FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
+        backoff_ok = s.execute(text(
+            "SELECT next_attempt_at > now() + interval '50 seconds' "
+            "AND next_attempt_at <= now() + interval '150 seconds' "
+            "FROM outbox WHERE id=:i"), {"i": rowA.id}).scalar_one()
+    assert final.status == "pending"                # nonterminal: NOT dead, NOT delivered
+    assert final.attempts == rowB.attempts + 1      # == 1 — relative to B's claim snapshot
+    assert final.claim_token is None                # only B's tuple cleared, under B's token
+    assert final.claim_lease_expires_at is None and final.claimed_by is None
+    assert backoff_ok  # rescheduled per the formula: 100 * 2**0 = 100s into the future
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `.venv/bin/pytest tests/integration/test_outbox_fencing.py -v`
-Expected: FAIL — `_CLAIM_SQL` binds `:claimed_by` which the current SQL does not accept; `enqueue_decision_callback` has no `decision_sequence` kwarg; `_record_delivered`/`_record_failure` take no `token`.
+Expected: FAIL — `_CLAIM_SQL` binds `:claimed_by` which the current SQL does not accept; `enqueue_decision_callback` has no `decision_sequence` kwarg; `_record_delivered`/`_record_failure` take no `token`. The F6 FIFO-under-backoff and F7 retry-fencing tests fail on the same missing seams.
 
 - [ ] **Step 3: Rewrite the claim + enqueue + terminals** — in `src/kyc_tool/outbox/publisher.py`:
 
@@ -1261,7 +1524,7 @@ _CLAIM_SQL = text(
 )
 ```
 
-Change `enqueue_decision_callback` (lines 52-53) to accept `decision_sequence`:
+Change `enqueue_decision_callback` (lines 52-53) to accept `decision_sequence` (**TEMPORARY optional form** — this checkpoint stages it as `int | None = None` so the pipeline caller can be updated in Task 4; Task 4 Step 8b tightens it to a REQUIRED keyword `decision_sequence: int` after every caller passes it, and the single atomic 013 commit ships only the required form — re-audit F10):
 
 ```python
 def enqueue_decision_callback(
@@ -1397,16 +1660,78 @@ Replace `_record_failure` (lines 193-226) with:
             log.warning("outbox_retry", outbox_id=row.id, kind=row.kind, attempts=attempts)
 ```
 
+- [ ] **Step 3b: Replace the phase-4 redelivery test with the REAL send-before-stamp fault (re-audit F3, final form)** — in `tests/integration/test_phase4_platform.py`, replace the ENTIRE body of `test_redelivery_carries_identical_dedupe_key` (including the Task-1 interim rewrite) with this final form. `process_once` calls `_record_delivered` OUTSIDE its delivery `try/except` (see the Step-3 `process_once` block), so an injected stamp fault propagates out of `process_pending` and the test catches it at that boundary. The name and dedupe-key intent are unchanged:
+
+```python
+def test_redelivery_carries_identical_dedupe_key(
+    client, engine, post_event, worker, publisher, callback_capture, monkeypatch
+):
+    """At-least-once means duplicates happen; the platform dedupes on
+    (case_id, run_id) — both fields must be identical across redeliveries.
+    PR 7b-core (re-audit F3): the old raw delivered→pending rewrite is impossible under
+    ck_outbox_status_lifecycle (it retained delivered_at), so this drives the REAL
+    send-before-stamp gap: HTTP #1 succeeds, the delivered-stamp raises BEFORE its
+    transaction, the row stays pending under its claim; the lease is expired; a reclaim
+    under a NEW token resends the identical dedupe body (HTTP #2) and stamps for real."""
+    from kyc_tool.outbox.publisher import OutboxPublisher
+
+    post_event("case-redeliver", "recalculate.requested", {})
+    worker.run_until_idle()
+
+    real_record_delivered = OutboxPublisher._record_delivered
+    calls: list[int] = []
+
+    class _StampFault(RuntimeError):
+        pass
+
+    def _fail_first(self, row, token):
+        calls.append(1)
+        if len(calls) == 1:  # the HTTP send already happened; the terminal stamp fails ONCE
+            raise _StampFault("send-before-stamp: HTTP sent, delivered-stamp not committed")
+        return real_record_delivered(self, row, token)
+
+    monkeypatch.setattr(OutboxPublisher, "_record_delivered", _fail_first)
+    # process_once invokes _record_delivered outside its delivery try/except, so the
+    # injected fault escapes process_pending — the honest crash boundary.
+    with pytest.raises(_StampFault):
+        publisher.process_pending()
+    assert len(callback_capture.requests) == 1  # HTTP #1 really happened
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT status, claim_token FROM outbox "
+                                "WHERE case_id='case-redeliver'")).one()
+    assert row.status == "pending" and row.claim_token is not None  # claim survived the crash
+
+    with engine.begin() as conn:  # expire ONLY the lease — the reclaim path, not a raw rewrite
+        conn.execute(text("UPDATE outbox SET claim_lease_expires_at = now() - interval '1 second' "
+                          "WHERE case_id='case-redeliver'"))
+    publisher.process_pending()  # reclaim under a NEW token → HTTP #2 → real stamp (call #2)
+
+    bodies = [r["body"] for r in callback_capture.requests]
+    assert len(bodies) == 2
+    assert bodies[0]["case_id"] == bodies[1]["case_id"]
+    assert bodies[0]["run_id"] == bodies[1]["run_id"]
+    assert bodies[0]["decision"] == bodies[1]["decision"]
+    with engine.connect() as conn:
+        status = conn.execute(text("SELECT status FROM outbox "
+                                   "WHERE case_id='case-redeliver'")).scalar_one()
+    assert status == "delivered"
+```
+
+Run: `.venv/bin/pytest tests/integration/test_phase4_platform.py::test_redelivery_carries_identical_dedupe_key -v`
+Expected: PASS (HTTP #1, stamp fault, lease expiry, fenced reclaim, HTTP #2, identical dedupe key, final `delivered`).
+
 - [ ] **Step 4: Run the fencing tests**
 
 Run: `.venv/bin/pytest tests/integration/test_outbox_fencing.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Run all fencing tests + the two NAMED mutation witnesses (manual, no commit)**
+- [ ] **Step 5: Run all fencing tests + the four NAMED mutation witnesses (manual, no commit)**
 
-Run: `.venv/bin/pytest tests/integration/test_outbox_fencing.py -v` → PASS (stuck-email + both stale POC/decision A/B tests).
+Run: `.venv/bin/pytest tests/integration/test_outbox_fencing.py -v` → PASS (stuck-email + both stale POC/decision A/B tests + FIFO-under-backoff + retry-branch fencing).
 **Mutation (a) — remove the loser early-return:** in `_record_delivered` delete the `if applied is None: … return` branch; rerun `.venv/bin/pytest tests/integration/test_outbox_fencing.py::test_stale_poc_loser_touches_nothing_before_reclaimer_sends -v` → it must FAIL (stale A's delivered UPDATE with a non-matching token now writes / raises on the `RETURNING`-less path). Restore.
 **Mutation (b) — raise on zero rows:** change every terminal's `if applied is None: log.warning(...); return` to `if applied is None: raise RuntimeError("stale")`; rerun `test_stale_decision_loser_cannot_stamp_run_or_published_at` → it must FAIL (the raise escapes `_record_failure`/`_record_delivered` instead of a non-raising audited no-op). Restore.
+**Mutation (c) — inner-min due/lease filter (re-audit F6):** in `_CLAIM_SQL`, add `AND o2.next_attempt_at <= now()` (or any due/lease eligibility predicate) to the INNER `SELECT min(o2.id) FROM outbox o2 …` head-of-stream subquery ONLY (leave the outer eligibility untouched); rerun `.venv/bin/pytest tests/integration/test_outbox_fencing.py::test_same_stream_fifo_holds_under_backoff -v` → it must FAIL (seq2 leapfrogs its backed-off elder: `process_once()` returns True and HTTP occurs while seq1 is still backed off). Restore.
+**Mutation (d) — unfence ONLY the retry branch (re-audit F7):** in `_record_failure`, remove `AND claim_token=:token` from the NONTERMINAL (else/retry) `UPDATE` only — leave the dead-branch fence intact; rerun `.venv/bin/pytest tests/integration/test_outbox_fencing.py::test_stale_retry_failure_cannot_touch_reclaimed_row -v` → it must FAIL at the byte-for-byte assertion (stale A's retry UPDATE now matches B's row and rewrites attempts/backoff/claim). Restore.
 
 - [ ] **Step 6: RED drift-guard step** — publisher.py changed:
 
@@ -1427,19 +1752,22 @@ git status                # review the accumulated worktree diff — do NOT comm
 
 ## Task 4: Decision-sequence allocation + decision-identity constraints
 
-Makes `_decide_txn` increment `cases.last_decision_sequence` under the already-held Case `FOR UPDATE`, stamp `DecisionRow.decision_sequence`, and pass it to `enqueue_decision_callback`. In the **same** checkpoint, adds `013`'s decision-identity constraints (the kind/stream identity CHECK, the `manual`/`automatic` CHECK, the three decisions uniques, the triple FK, the partial callback unique) — now both legacy (backfilled) and live (allocated) rows satisfy them, so the suite stays green.
+Makes `_decide_txn` increment `cases.last_decision_sequence` under the already-held Case `FOR UPDATE`, stamp `DecisionRow.decision_sequence`, and pass it to `enqueue_decision_callback`. In the **same** checkpoint, adds `013`'s decision-identity constraints (the kind/stream identity CHECK, the `manual`/`automatic` CHECK, the three decisions uniques, the triple FK, the partial callback unique, **and — re-audit F2 — the composite `decisions(run_id, case_id) → runs(id, case_id)` FK over a new named `runs(id, case_id)` unique**, so a post-migration decision can never cite a run under the wrong case) — now both legacy (backfilled) and live (allocated) rows satisfy them, so the suite stays green. Adapts the bundle-pinning fixtures via a shared valid-chain helper (F3, part 2), and ends by tightening `enqueue_decision_callback` to its FINAL required-keyword signature (F10).
 
 **Files:**
 - Modify: `src/kyc_tool/orchestration/pipeline.py` (`_decide_txn` 485-506; the Case is FOR UPDATE from `_load` at 362)
-- Modify: `src/kyc_tool/db/tables.py` (`DecisionRow` — add `__table_args__`; `Outbox.__table_args__`)
+- Modify: `src/kyc_tool/db/tables.py` (`Run` — add `__table_args__`; `DecisionRow` — add `__table_args__`; `Outbox.__table_args__`)
+- Modify: `src/kyc_tool/outbox/publisher.py` (Step 8b — `enqueue_decision_callback` FINAL required signature, re-audit F10)
 - Modify: `alembic/versions/013_outbox_stream_separation.py` (Task 4 insertion points in `upgrade` + `downgrade`)
-- Modify: `tests/integration/test_migrations.py` (identity negatives)
+- Modify: `tests/integration/test_migrations.py` (identity negatives + composite-FK negatives + ORM/live FK parity)
+- Modify: `tests/conftest.py` (Step 7b — `seed_automatic_decision` shared valid-chain helper, re-audit F3)
+- Modify: `tests/integration/test_bundle_pinning_ops.py` (Step 7b — the three automatic-decision fixtures, re-audit F3)
 - Create: `tests/integration/test_decision_sequence.py`
 - Re-pin: `tests/policy_driven/test_engine_build_id_guard.py`
 
 **Interfaces:**
 - Consumes: `enqueue_decision_callback(..., decision_sequence=)` (Task 3); `cases.last_decision_sequence` (Task 1).
-- Produces: constraints `uq_decisions_run_id`, `uq_decisions_case_decision_sequence`, `uq_decisions_run_case_sequence`, `ck_decisions_manual_sequence`, `ck_outbox_kind_stream_identity`, `fk_outbox_decision_triple`, `uq_outbox_decision_callback_run`; every automatic decide stamps a strictly-increasing per-case `decision_sequence`; manual approve allocates none.
+- Produces: constraints `uq_runs_id_case_id`, `fk_decisions_run_case`, `uq_decisions_run_id`, `uq_decisions_case_decision_sequence`, `uq_decisions_run_case_sequence`, `ck_decisions_manual_sequence`, `ck_outbox_kind_stream_identity`, `fk_outbox_decision_triple`, `uq_outbox_decision_callback_run`; every automatic decide stamps a strictly-increasing per-case `decision_sequence`; manual approve allocates none; the FINAL `enqueue_decision_callback(session, *, case_id, run_id, body, decision_sequence: int)` (required keyword — F10).
 
 - [ ] **Step 1: Write the failing allocation/concurrency tests** — create `tests/integration/test_decision_sequence.py`:
 
@@ -1594,6 +1922,18 @@ Change the `enqueue_decision_callback` call (line 506) to pass the sequence:
 - [ ] **Step 4: Add the identity constraints to the migration** — in `alembic/versions/013_outbox_stream_separation.py`, replace the `# === Task 4 insertion point: decision-identity constraints ===` line in `upgrade()` with:
 
 ```python
+    # --- runs relational identity target + composite decisions→runs FK (re-audit F2) ---
+    # The single-column FKs bind decisions.case_id and decisions.run_id INDEPENDENTLY, so a
+    # post-migration INSERT/UPDATE could still pair run r1 (case c1) with case c2 — the exact
+    # tuple the parity preflight classifies as decision_case_ne_run_case. The named unique
+    # target MUST exist before the composite FK that references it.
+    op.create_unique_constraint("uq_runs_id_case_id", "runs", ["id", "case_id"])
+    # run_id is nullable → MATCH SIMPLE semantics: a manual decision (run_id NULL) is exempt
+    # by design, while every automatic decision (run_id NOT NULL) is fully bound to its run's
+    # OWN case. This is the intended semantics, not an accident.
+    op.create_foreign_key(
+        "fk_decisions_run_case", "decisions", "runs", ["run_id", "case_id"], ["id", "case_id"]
+    )
     # --- decisions identity + per-case ordering (F1) ---
     # UNIQUE(run_id): one automatic decision per run (multiple NULL manual rows stay legal).
     op.create_unique_constraint("uq_decisions_run_id", "decisions", ["run_id"])
@@ -1633,7 +1973,7 @@ Change the `enqueue_decision_callback` call (line 506) to pass the sequence:
     )
 ```
 
-Replace the `# === Task 4 insertion point: drop decision-identity constraints (reverse order) ===` line in `downgrade()` with:
+Replace the `# === Task 4 insertion point: drop decision-identity constraints (reverse order) ===` line in `downgrade()` with (dependency-safe: the composite FK drops BEFORE the unique target it references — re-audit F2):
 
 ```python
     op.drop_index("uq_outbox_decision_callback_run", table_name="outbox")
@@ -1643,6 +1983,8 @@ Replace the `# === Task 4 insertion point: drop decision-identity constraints (r
     op.drop_constraint("uq_decisions_run_case_sequence", "decisions", type_="unique")
     op.drop_constraint("uq_decisions_case_decision_sequence", "decisions", type_="unique")
     op.drop_constraint("uq_decisions_run_id", "decisions", type_="unique")
+    op.drop_constraint("fk_decisions_run_case", "decisions", type_="foreignkey")
+    op.drop_constraint("uq_runs_id_case_id", "runs", type_="unique")
 ```
 
 - [ ] **Step 5: Update the ORM `__table_args__`** — in `src/kyc_tool/db/tables.py`, add the `ForeignKeyConstraint` import (line 10-21 import block):
@@ -1651,13 +1993,24 @@ Replace the `# === Task 4 insertion point: drop decision-identity constraints (r
     ForeignKeyConstraint,
 ```
 
-Add a `__table_args__` to `DecisionRow` (after `reviewer_id`, line 227):
+Add a `__table_args__` to `Run` (after `error`, line 99 — `Run` currently has NO `__table_args__`; this creates it — re-audit F2):
+
+```python
+    # PR 7b-core (migration 013): named composite target for fk_decisions_run_case —
+    # decisions(run_id, case_id) must cite a run under its OWN case.
+    __table_args__ = (UniqueConstraint("id", "case_id", name="uq_runs_id_case_id"),)
+```
+
+Add a `__table_args__` to `DecisionRow` (after `reviewer_id`, line 227). The composite FK mirrors the migration exactly; `run_id` is nullable → MATCH SIMPLE, so manual rows (`run_id NULL`) are exempt and automatic rows are fully bound (intended — re-audit F2):
 
 ```python
     __table_args__ = (
         UniqueConstraint("run_id", name="uq_decisions_run_id"),
         UniqueConstraint("case_id", "decision_sequence", name="uq_decisions_case_decision_sequence"),
         UniqueConstraint("run_id", "case_id", "decision_sequence", name="uq_decisions_run_case_sequence"),
+        ForeignKeyConstraint(
+            ["run_id", "case_id"], ["runs.id", "runs.case_id"], name="fk_decisions_run_case"
+        ),
     )
 ```
 
@@ -1918,11 +2271,135 @@ def test_013_outbox_callback_null_sequence_update_negative(pg):
     with pytest.raises(IntegrityError), engine.begin() as conn:
         conn.execute(text("UPDATE outbox SET decision_sequence=NULL WHERE run_id='rA'"))
     engine.dispose()
+
+
+def _seed_two_cases_two_runs(conn):
+    """Re-audit F2 seed: two REAL cases with valid runs/decisions, plus a third run (rX,
+    under c1) that carries NO decision yet — so the composite-FK negatives below are
+    otherwise valid (no uq_decisions_run_id / per-case-sequence collision can mask the FK)."""
+    _mk_case(conn, "c1")
+    _mk_case(conn, "c2")
+    _mk_auto_decision(conn, d="d1", c="c1", r="r1", seq=1, ev_seq=1)   # r1 belongs to c1
+    _mk_auto_decision(conn, d="d2", c="c2", r="r2", seq=2, ev_seq=1)   # r2 belongs to c2
+    conn.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                      "actor_json, payload_json, event_sequence) VALUES ('rX-ev','c1','rX','h','x',"
+                      "'{}'::jsonb,'{}'::jsonb,2)"))
+    conn.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                      "VALUES ('rX','c1','rX-ev','PUBLISH_DECISION')"))  # rX belongs to c1
+
+
+def test_013_decision_case_must_match_run_case_insert_negative(pg):
+    """Re-audit F2: fk_decisions_run_case binds decisions(run_id, case_id) → runs(id, case_id).
+    A decision citing run rX (which belongs to c1) under case c2 passes BOTH single-column FKs
+    and every uniqueness constraint — only the composite FK rejects it, asserted BY NAME."""
+    from sqlalchemy.exc import IntegrityError
+
+    url = _fresh_db(pg, "kyc_mig_013_runcase_ins")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        _seed_two_cases_two_runs(conn)
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+            "buy_enablement, policy_shas, manual, decision_sequence) VALUES "
+            "('dx','c2','rX','approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false,3)"))
+    assert "fk_decisions_run_case" in str(exc.value)
+    engine.dispose()
+
+
+def test_013_decision_case_must_match_run_case_update_negative(pg):
+    """Re-audit F2 UPDATE variant: re-pointing a valid automatic decision at the OTHER real
+    case (its run stays r1, which belongs to c1) must fail on fk_decisions_run_case — the
+    seeds' distinct sequences guarantee no unique constraint can mask it."""
+    from sqlalchemy.exc import IntegrityError
+
+    url = _fresh_db(pg, "kyc_mig_013_runcase_upd")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        _seed_two_cases_two_runs(conn)
+    with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
+        conn.execute(text("UPDATE decisions SET case_id='c2' WHERE id='d1'"))
+    assert "fk_decisions_run_case" in str(exc.value)
+    engine.dispose()
+
+
+def test_013_orm_and_live_fk_parity(pg):
+    """Re-audit F2+F9: the named relational constraints exist BOTH in ORM metadata
+    (Base.metadata is Alembic's comparison target — a live-only FK reports drift and hides
+    dependency ordering) AND in the live migrated DB: fk_outbox_case_id,
+    fk_outbox_decision_triple, fk_decisions_run_case, uq_runs_id_case_id."""
+    from kyc_tool.db.tables import DecisionRow, Outbox, Run
+
+    orm_outbox_fks = {fk.constraint.name for fk in Outbox.__table__.foreign_keys}
+    assert {"fk_outbox_case_id", "fk_outbox_decision_triple"} <= orm_outbox_fks
+    orm_decision_fks = {fk.constraint.name for fk in DecisionRow.__table__.foreign_keys}
+    assert "fk_decisions_run_case" in orm_decision_fks
+    assert any(c.name == "uq_runs_id_case_id" for c in Run.__table__.constraints)
+
+    url = _fresh_db(pg, "kyc_mig_013_fk_parity")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+    engine = create_engine(url)
+    insp = inspect(engine)
+    live_outbox = {fk["name"] for fk in insp.get_foreign_keys("outbox")}
+    assert {"fk_outbox_case_id", "fk_outbox_decision_triple"} <= live_outbox
+    live_decisions = {fk["name"] for fk in insp.get_foreign_keys("decisions")}
+    assert "fk_decisions_run_case" in live_decisions
+    live_runs_uniques = {u["name"] for u in insp.get_unique_constraints("runs")}
+    assert "uq_runs_id_case_id" in live_runs_uniques
+    engine.dispose()
 ```
+
+- [ ] **Step 7b: Shared valid-chain helper + bundle-pinning fixture adaptation (re-audit F3, part 2)** — the three automatic decisions in `tests/integration/test_bundle_pinning_ops.py::test_post_epoch_null_alert` (`d-a` ~225-229, `d-b` ~249-253, `d-c` ~273-277) insert `manual=false` with NO `decision_sequence`, which `ck_decisions_manual_sequence` now rejects. Add ONE shared valid-chain helper to `tests/conftest.py` (module level, near `sign_headers`) and use it at all three sites — the pinning tests need no callbacks, so the helper seeds only the decision + the matching case counter:
+
+```python
+def seed_automatic_decision(conn, *, case_id, run_id, decision_id, seq, engine_build_id=None):
+    """PR 7b-core (re-audit F3): insert an automatic decision valid under 013's NULL-explicit
+    shape CHECK — a positive per-case decision_sequence plus the matching
+    cases.last_decision_sequence counter bump. The caller must already have seeded the case
+    and the run. No callback row is created (tests that exercise delivery enqueue their own)."""
+    conn.execute(
+        text(
+            "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+            "buy_enablement, policy_shas, manual, engine_build_id, decision_sequence) VALUES "
+            "(:d,:c,:r,'x',0,'{}'::jsonb,'buy_locked_org_id_required','{}'::jsonb,false,:e,:s)"
+        ),
+        {"d": decision_id, "c": case_id, "r": run_id, "e": engine_build_id, "s": seq},
+    )
+    conn.execute(
+        text("UPDATE cases SET last_decision_sequence = GREATEST(last_decision_sequence, :s) "
+             "WHERE id = :c"),
+        {"c": case_id, "s": seq},
+    )
+```
+
+In `tests/integration/test_bundle_pinning_ops.py`, add the import (top of file): `from tests.conftest import seed_automatic_decision`, then replace each of the three raw decision INSERT `c.execute(text("INSERT INTO decisions …"))` calls with the helper (each case is distinct, so `seq=1` is a valid unique per-case sequence with a matching counter):
+
+```python
+        seed_automatic_decision(c, case_id="c-a", run_id="r-a", decision_id="d-a", seq=1,
+                                engine_build_id="eng-1")   # (a) decision stamped / run NULL
+```
+```python
+        seed_automatic_decision(c, case_id="c-b", run_id="r-b", decision_id="d-b", seq=1)
+        # (b) decision engine NULL (helper default) / run stamped eng-1
+```
+```python
+        seed_automatic_decision(c, case_id="c-c", run_id="r-c", decision_id="d-c", seq=1,
+                                engine_build_id="eng-1")   # (c) both stamped
+```
+
+(The flagged/not-flagged expectations are unchanged — the helper preserves each site's `engine_build_id` value exactly; only the now-required sequence/counter shape is added.)
+
+Run: `.venv/bin/pytest tests/integration/test_bundle_pinning_ops.py -v`
+Expected: PASS (all fixtures valid under `ck_decisions_manual_sequence`; assertions unchanged).
 
 - [ ] **Step 8: Run negatives + per-constraint INDEPENDENT mutation witnesses (manual, no commit)**
 
-Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_two_runs or 013_two_decisions or 013_decision_identity or 013_outbox_binding" -v` → PASS.
+Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_two_runs or 013_two_decisions or 013_decision_identity or 013_outbox_binding or 013_decision_case_must_match_run_case or 013_orm_and_live_fk_parity" -v` → PASS.
 Mutate each constraint away INDEPENDENTLY and confirm the NAMED test fails, then restore:
 - drop `uq_decisions_case_decision_sequence` → `test_013_two_runs_same_case_sequence_rejected` FAILS (proving the outbox partial index is NOT the backstop).
 - drop `uq_decisions_run_id` → `test_013_two_decisions_same_run_rejected` FAILS.
@@ -1932,8 +2409,36 @@ Mutate each constraint away INDEPENDENTLY and confirm the NAMED test fails, then
 - remove **only** `AND decision_sequence IS NOT NULL` from `ck_outbox_kind_stream_identity` (the F2 NULL hole) → `test_013_outbox_binding_insert_negatives[callback_null_sequence]` + `test_013_outbox_callback_null_sequence_update_negative` FAIL.
 - drop `fk_outbox_decision_triple` → `test_013_outbox_binding_insert_negatives[callback_wrong_case]` + `test_013_outbox_binding_update_negative` FAIL.
 - drop `uq_outbox_decision_callback_run` → `test_013_outbox_binding_insert_negatives[dup_callback]` FAILS.
+- **(re-audit F2) remove ONLY `fk_decisions_run_case` from the migration** (keep `uq_runs_id_case_id` and every other constraint) → `test_013_decision_case_must_match_run_case_insert_negative` AND `test_013_decision_case_must_match_run_case_update_negative` BOTH FAIL (the cross-case decision commits — every remaining constraint passes it). Restore.
 
-- [ ] **Step 9: RED drift-guard step** — pipeline.py + tables.py changed:
+- [ ] **Step 8b: Tighten `enqueue_decision_callback` to the FINAL required-keyword signature (re-audit F10)** — every caller now passes `decision_sequence` (the pipeline from Step 3; every plan-block test/helper — `test_outbox_fencing.py` passes it everywhere, Task 5's `test_outbox_supersession.py` `_enqueue_cb` is authored passing it, the Task-2 backfill test uses raw SQL; the existing `test_review_completed_event.py` seam wraps with `*args, **kwargs` and is unaffected). The Task-3 optional default was a staging convenience only. First the failing test — append to `tests/integration/test_decision_sequence.py`:
+
+```python
+def test_enqueue_decision_callback_requires_sequence_kwarg():
+    """Re-audit F10: the FINAL 013 signature makes decision_sequence a REQUIRED keyword —
+    omitting it fails at the Python boundary (TypeError), not late at commit on the
+    ck_outbox_kind_stream_identity CHECK. (TypeError is raised at bind time, before the
+    session argument is ever touched.)"""
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    with pytest.raises(TypeError, match="decision_sequence"):
+        enqueue_decision_callback(None, case_id="c1", run_id="r1", body={})
+```
+
+Run: `.venv/bin/pytest tests/integration/test_decision_sequence.py::test_enqueue_decision_callback_requires_sequence_kwarg -v`
+Expected: FAIL — the Task-3 staging signature still defaults `decision_sequence=None`, so no `TypeError` is raised.
+
+Then, in `src/kyc_tool/outbox/publisher.py`, change the signature to its FINAL form (this is the form the single atomic 013 commit ships — the optional staging form must NOT survive to the commit):
+
+```python
+def enqueue_decision_callback(
+    session: Session, *, case_id: str, run_id: str, body: dict, decision_sequence: int
+) -> None:
+```
+
+(body unchanged). Run: `.venv/bin/pytest tests/integration/test_decision_sequence.py tests/integration/test_outbox_fencing.py -v` → PASS (the TypeError test goes green; every other caller already passes the keyword; Task 5's `test_outbox_supersession.py` is authored against this final form).
+
+- [ ] **Step 9: RED drift-guard step** — pipeline.py + tables.py + publisher.py (Step 8b) changed:
 
 Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` → **FAIL** (RED step).
 
@@ -1952,7 +2457,7 @@ git status                # review the accumulated worktree diff — do NOT comm
 
 ## Task 5: Best-effort local `superseded` guard + lifecycle wiring (retention, metrics, UI-409, A6)
 
-Adds the local guard to `process_once` (suppress an older decision-stream callback only when a higher-sequence decision already has a locally-stamped `published_at`), the fenced `_record_superseded` terminal, retention pruning of `superseded` alongside `delivered`, separate metrics reporting, a UI-409 confirmation, the honest residual-risk (send-before-stamp) test, and the AUDIT:A6 amendment. The guard is explicitly a best-effort optimization — send-before-stamp and cross-replica reverts remain until 7b-activation.
+Adds the local guard to `process_once` (suppress an older decision-stream callback only when a higher-sequence decision already has a locally-stamped `published_at`), the fenced `_record_superseded` terminal, retention pruning of `superseded` alongside `delivered`, separate metrics reporting, a UI-409 confirmation, the honest residual-risk tests (send-before-stamp AND — re-audit F4 — manual-current-then-late-automatic-callback), and the AUDIT:A6 amendment. The guard is explicitly a best-effort optimization — THREE residual reverts remain until 7b-activation: (1) send-before-stamp, (2) cross-replica, (3) a queued automatic callback delivered AFTER a later manual approval (manual rows have `run_id NULL`, no callback, and no sequence, so the local guard sees no higher locally-published automatic sequence).
 
 **Files:**
 - Modify: `src/kyc_tool/outbox/publisher.py` (`process_once` guard insertion point; add `_record_superseded`; module docstring 1-7)
@@ -1970,6 +2475,8 @@ Adds the local guard to `process_once` (suppress an older decision-stream callba
 
 ```python
 """PR 7b-core: best-effort local superseded guard + A6 + honest residual risk."""
+
+import json
 
 import pytest
 from sqlalchemy import text
@@ -2059,8 +2566,10 @@ Expected: FAIL — with no guard, seq 1 is delivered too (2 captured HTTP reques
         # decision-stream callback only when a HIGHER-sequence decision for the case already
         # has a locally-stamped published_at. If the higher callback was sent but its
         # _record_delivered had not committed (send-before-stamp), or a concurrent replica
-        # sent it, this predicate is false and the older callback IS sent — a revert that
-        # remains expected until 7b-activation's platform high-water (§5).
+        # sent it, or the case's current state is a MANUAL approval (run_id NULL, no
+        # callback, no sequence — nothing here compares higher), this predicate is false
+        # and the older callback IS sent — reverts that remain expected until
+        # 7b-activation's platform high-water (§5).
         if row.ordering_stream == "decision" and row.decision_sequence is not None:
             with uow(self.session_factory) as session:
                 superseded = session.execute(
@@ -2213,14 +2722,30 @@ def test_guard_predicate_only_unit(session_factory, settings, publisher, callbac
     assert len(callback_capture.requests) == 1  # seq 1 sent (no higher stamped delivery)
 
 
+def _superseded_callback(session_factory, case_id, *, resolved_at="now()"):
+    """Re-audit F8: 'superseded' is decision-only (lifecycle CHECK kind conjunct), so every
+    fixture that needs a superseded row must build a VALID automatic decision+callback chain
+    first — seq 1 on `case_id` via _seed_decisions — then insert its callback already
+    superseded. Returns the outbox id."""
+    _seed_decisions(session_factory, case_id, [1])
+    r = f"{case_id}-r1"
+    with session_factory() as s:
+        oid = s.execute(
+            text(
+                "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+                "status, resolved_at) VALUES ('decision_callback',:c,:r,'decision',1,"
+                f"'superseded', {resolved_at}) RETURNING id"
+            ),
+            {"c": case_id, "r": r},
+        ).scalar_one()
+        s.commit()
+    return oid
+
+
 def test_retention_prunes_superseded(session_factory):
     from kyc_tool.workers.retention import prune
 
-    with session_factory() as s:
-        s.execute(text("INSERT INTO cases (id) VALUES ('c4')"))
-        s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, resolved_at) "
-                       "VALUES ('poc_email','c4','email','superseded', now() - interval '3000 days')"))
-        s.commit()
+    _superseded_callback(session_factory, "c4", resolved_at="now() - interval '3000 days'")
     counts = prune(session_factory, 7 * 365)
     assert counts["outbox_superseded"] == 1
     with session_factory() as s:
@@ -2231,31 +2756,60 @@ def test_ui_requeue_409s_superseded(client, session_factory):
     # conftest `settings` leaves ui_admin_token empty → the console is open in tests
     # (dev/test trust model; see tests/unit/test_ops_auth.py + tests/integration/test_ui.py),
     # so no auth header is sent and a non-dead row must 409 (never requeued).
-    with session_factory() as s:
-        s.execute(text("INSERT INTO cases (id) VALUES ('c5')"))
-        oid = s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, resolved_at) "
-                             "VALUES ('poc_email','c5','email','superseded', "
-                             "now()) RETURNING id")).scalar_one()
-        s.commit()
+    oid = _superseded_callback(session_factory, "c5")
     resp = client.post(f"/ui/api/requeue/outbox/{oid}")
     assert resp.status_code == 409  # superseded is not 'dead' → requeue_outbox rejects it
 
 
 def test_metrics_reports_superseded_out_of_the_alert_set(client, session_factory):
     """superseded shows in outbox_by_status but is EXCLUDED from the pending/dead alert set."""
+    _superseded_callback(session_factory, "cm")  # a VALID superseded decision callback (F8)
     with session_factory() as s:
-        s.execute(text("INSERT INTO cases (id) VALUES ('cm')"))
         s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, "
                        "status) VALUES ('poc_email','cm','email','pending')"))
         s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, "
                        "status) VALUES ('poc_email','cm','email','dead')"))
-        s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, resolved_at) "
-                       "VALUES ('poc_email','cm','email','superseded', now())"))
         s.commit()
     body = client.get("/v1/metrics").json()
     assert {"pending", "dead", "superseded"} <= set(body["outbox_by_status"])
     assert "superseded" not in body["outbox_alerting"]  # governed terminal, not an alert
     assert set(body["outbox_alerting"]) <= {"pending", "dead"}
+
+
+def test_manual_current_then_late_automatic_callback_sent_expected_pre_activation(
+    client, session_factory, post_event, worker, publisher, callback_capture, sign
+):
+    """Re-audit F4 — the THIRD honest residual, real end-to-end: ingest → worker drives an
+    automatic decision whose callback is ENQUEUED but NOT yet processed; a reviewer manual
+    approval then becomes the case's current state (manual rows: run_id NULL, no callback,
+    no decision_sequence); the publisher then runs. The local guard sees NO higher
+    locally-published automatic sequence (manual allocates none), so the OLD automatic
+    callback IS sent AFTER the manual approval — EXPECTED pre-activation behavior, closed
+    only by 7b-activation's platform high-water (the strengthened 014 acceptance makes an
+    unaccepted older callback a sticky no-op against a manual-current source)."""
+    post_event("case-mc", "kyb.run_requested", {"company_legal_name": "A", "jurisdiction": "GB"})
+    worker.run_until_idle()          # automatic decision made; callback enqueued, NOT processed
+    with session_factory() as s:
+        queued = s.execute(text("SELECT status, run_id FROM outbox "
+                                "WHERE case_id='case-mc' AND kind='decision_callback'")).one()
+    assert queued.status == "pending"  # the automatic callback is still queued
+
+    body = json.dumps({
+        "event_type": "reviewer.manual_approve",
+        "occurred_at": "2026-07-24T00:00:00Z",
+        "actor": {"type": "reviewer", "id": "rev-1"},
+        "payload": {"reviewer_id": "rev-1", "note": "manual current"},
+    }).encode()
+    resp = client.post("/v1/cases/case-mc/events", content=body, headers=sign(body))
+    assert resp.status_code == 200   # manual approval recorded — the case's CURRENT state
+
+    assert publisher.process_pending() == 1          # the old automatic callback is claimed
+    assert len(callback_capture.requests) == 1       # ... and the HTTP send REALLY happened
+    assert callback_capture.requests[0]["body"]["run_id"] == queued.run_id
+    with session_factory() as s:
+        status = s.execute(text("SELECT status FROM outbox WHERE case_id='case-mc' "
+                                "AND kind='decision_callback'")).scalar_one()
+    assert status == "delivered"     # delivered AFTER manual approval — the documented residual
 ```
 
 - [ ] **Step 6: Amend AUDIT:A6 + docstring** — in `AUDIT_FINDINGS.md`, replace the A6 **Resolution** (lines 65-66) with:
@@ -2265,9 +2819,13 @@ def test_metrics_reports_superseded_out_of_the_alert_set(client, session_factory
   No component claims exactly-once. **PR 7b-core exception:** eligible non-superseded
   callbacks remain at-least-once and platform-deduped; a callback proven obsolete by a
   higher **locally-stamped** delivery is terminally suppressed (zero sends), audited, and
-  retained under the governed `superseded` lifecycle. This is a **best-effort local
-  suppression** — NOT exactly-once and NOT platform-authoritative (send-before-stamp and
-  cross-replica reverts remain until 7b-activation).
+  retained under the governed `superseded` lifecycle (decision callbacks ONLY — a
+  `poc_email` can never enter `superseded`; DB-enforced). This is a **best-effort local
+  suppression** — NOT exactly-once and NOT platform-authoritative. THREE residual reverts
+  remain until 7b-activation: send-before-stamp; cross-replica; and a queued automatic
+  callback delivered AFTER a later manual approval (manual rows carry `run_id NULL`, no
+  callback, and no sequence, so the local guard sees no higher locally-published
+  automatic sequence).
 ```
 
 In `src/kyc_tool/outbox/publisher.py`, insert these lines into the existing module docstring, immediately before its closing `"""` (line 7):
@@ -2275,8 +2833,12 @@ In `src/kyc_tool/outbox/publisher.py`, insert these lines into the existing modu
 ```python
     PR 7b-core: rows are claimed per (case_id, ordering_stream) under a fenced claim_token;
     a decision callback proven obsolete by a higher locally-stamped delivery is terminally
-    `superseded` (zero sends) — a best-effort LOCAL suppression, not exactly-once and not
-    platform-authoritative (send-before-stamp / cross-replica reverts remain for 7b-activation).
+    `superseded` (zero sends; decision callbacks only — DB-enforced) — a best-effort LOCAL
+    suppression, not exactly-once and not platform-authoritative. Three residual reverts
+    remain for 7b-activation: (1) send-before-stamp; (2) cross-replica; (3) a queued
+    automatic callback may be delivered AFTER a later manual approval — manual rows have
+    run_id NULL, no callback, and no sequence, so the guard sees no higher locally-
+    published automatic sequence. All three are expected pre-activation.
 ```
 
 - [ ] **Step 7: CHECKPOINT — RED guard → re-pin → full gate green, NO git commit (F1)**
@@ -2311,15 +2873,19 @@ Hardens `013`'s `downgrade()`: the **first** statement is `LOCK TABLE outbox IN 
 ```python
 def test_013_downgrade_refuses_with_superseded_row(pg):
     """Separate real refusal test: a seeded superseded row makes the real alembic downgrade
-    refuse byte-stably (RuntimeError with the stable message)."""
+    refuse byte-stably (RuntimeError with the stable message). Re-audit F8: superseded is
+    decision-only, so the seed is a VALID automatic decision+callback chain whose callback
+    is superseded — a superseded poc_email is impossible by CHECK."""
     url = _fresh_db(pg, "kyc_mig_013_down_refuse")
     cfg = _config(url)
     alembic_command.upgrade(cfg, "013")
     engine = create_engine(url)
     with engine.begin() as conn:
-        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
-        conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, resolved_at) "
-                          "VALUES ('poc_email','c1','email','superseded', now())"))
+        _mk_case(conn)
+        _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
+        conn.execute(text("INSERT INTO outbox (kind, case_id, run_id, ordering_stream, "
+                          "decision_sequence, status, resolved_at) VALUES "
+                          "('decision_callback','c1','rA','decision',1,'superseded', now())"))
     engine.dispose()
     with pytest.raises(RuntimeError) as exc:  # migration raises RuntimeError; alembic propagates it
         alembic_command.downgrade(cfg, "012")
@@ -2331,8 +2897,11 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
     after_cursor_execute barrier fired at its superseded preflight — which runs AFTER the
     production LOCK TABLE ... ACCESS EXCLUSIVE. A concurrent pending→superseded UPDATE must
     then FAIL with a lock timeout (SQLSTATE 55P03): it cannot slip between the preflight and
-    the DDL. MUTATION: moving/removing the LOCK (so the preflight holds only ACCESS SHARE)
-    lets that UPDATE commit — the pytest.raises(OperationalError) then fails."""
+    the DDL. The seed is a VALID pending decision callback (re-audit F8 — the concurrent
+    supersession must be lifecycle-legal, or the mutation witness would be masked by the
+    kind conjunct instead of proving the race). MUTATION: moving/removing the LOCK (so the
+    preflight holds only ACCESS SHARE) lets that UPDATE COMMIT — the except-OperationalError
+    branch is never entered and the explicit pytest.fail fires."""
     import threading
 
     from sqlalchemy import event
@@ -2344,9 +2913,11 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
     alembic_command.upgrade(cfg, "013")
     engine = create_engine(url)
     with engine.begin() as conn:
-        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
-        conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, next_attempt_at) "
-                          "VALUES ('poc_email','c1','email','pending', now())"))
+        _mk_case(conn)
+        _mk_auto_decision(conn, d="dA", c="c1", r="rA", seq=1, ev_seq=1)
+        conn.execute(text("INSERT INTO outbox (kind, case_id, run_id, ordering_stream, "
+                          "decision_sequence, status, next_attempt_at) VALUES "
+                          "('decision_callback','c1','rA','decision',1,'pending', now())"))
 
     at_preflight = threading.Event()
     release = threading.Event()
@@ -2372,8 +2943,12 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
     try:
         assert at_preflight.wait(timeout=15)  # paused right after the preflight
         connB = engineB.connect()
-        connB.execute(text("SET lock_timeout='2s'"))
+        # Re-audit F5: begin B's transaction BEFORE any execute — SQLAlchemy 2 autobegin
+        # would otherwise already own the transaction and connB.begin() would raise
+        # InvalidRequestError before the test ever reached the lock. SET LOCAL is used
+        # because the setting is now transaction-scoped by design.
         txB = connB.begin()  # manage B's txn EXPLICITLY so an unexpected success is COMMITTED
+        connB.execute(text("SET LOCAL lock_timeout='2s'"))
         try:
             connB.execute(text("UPDATE outbox SET status='superseded', resolved_at=now() "
                                "WHERE case_id='c1'"))
@@ -2401,7 +2976,7 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
 - [ ] **Step 2: Run to verify failure**
 
 Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_downgrade_refuses_with_superseded or 013_downgrade_lock" -v`
-Expected: `test_013_downgrade_refuses_with_superseded_row` FAILS — the current (Task-1/4) downgrade has no preflight, so it does NOT raise. `test_013_downgrade_lock_prevents_concurrent_supersede` also FAILS — with no `LOCK TABLE` yet, the preflight holds only ACCESS SHARE, the concurrent UPDATE commits (no 55P03), and `pytest.raises(OperationalError)` is unsatisfied.
+Expected: `test_013_downgrade_refuses_with_superseded_row` FAILS — the current (Task-1/4) downgrade has no preflight, so it does NOT raise. `test_013_downgrade_lock_prevents_concurrent_supersede` also FAILS — the current downgrade never executes the preflight statement, so the barrier never fires and `assert at_preflight.wait(timeout=15)` fails.
 
 - [ ] **Step 3: Harden the downgrade** — in `alembic/versions/013_outbox_stream_separation.py`, replace the entire `downgrade()` function (the Task-1 body, into which Task 4 inserted the identity-constraint drops) with this complete final body — the only change is the new `LOCK TABLE` + `superseded` preflight prepended before the (unchanged) drops:
 
@@ -2429,6 +3004,9 @@ def downgrade() -> None:
     op.drop_constraint("uq_decisions_run_case_sequence", "decisions", type_="unique")
     op.drop_constraint("uq_decisions_case_decision_sequence", "decisions", type_="unique")
     op.drop_constraint("uq_decisions_run_id", "decisions", type_="unique")
+    # composite decisions→runs case FK (re-audit F2): FK before its unique target
+    op.drop_constraint("fk_decisions_run_case", "decisions", type_="foreignkey")
+    op.drop_constraint("uq_runs_id_case_id", "runs", type_="unique")
     # outbox stream / case_id / lifecycle (Task 1)
     op.drop_constraint("ck_outbox_status_lifecycle", "outbox", type_="check")
     op.drop_constraint("ck_outbox_kind_vocab", "outbox", type_="check")
@@ -2449,13 +3027,15 @@ def downgrade() -> None:
 
 Run: `.venv/bin/pytest tests/integration/test_migrations.py -k "013_downgrade or 013_up_down_up" -v` → PASS (refuse test raises the stable `RuntimeError`; the lock test's concurrent UPDATE now hits 55P03; up/down/up clean still passes on a no-superseded DB).
 
-- [ ] **Step 5: Mutation check (manual, no commit)** — move `op.execute("LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE")` to AFTER the `EXISTS` preflight (or delete it); rerun `.venv/bin/pytest tests/integration/test_migrations.py::test_013_downgrade_lock_prevents_concurrent_supersede -v` → it must FAIL (the preflight now holds only ACCESS SHARE, so the concurrent `pending→superseded` UPDATE commits — no 55P03 — and `pytest.raises(OperationalError)` is unsatisfied). Restore.
+- [ ] **Step 5: Mutation check (manual, no commit — re-audit F5)** — first run the exact test green: `.venv/bin/pytest tests/integration/test_migrations.py::test_013_downgrade_lock_prevents_concurrent_supersede -v`. Then, as the mutation witness, move `op.execute("LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE")` to AFTER the `count(*)` preflight (or delete it) and rerun the same selector → it must FAIL **because the concurrent supersession actually COMMITS**: the preflight now holds only ACCESS SHARE, B's `pending→superseded` UPDATE succeeds (no 55P03), the test COMMITS the stranded row, and the explicit `pytest.fail(...)` fires. Restore.
 
 - [ ] **Step 6: THE single atomic `013` commit (everything from Tasks 1-6)**
 
-The downgrade harden is migration-only, but the drift guard is already green from the Task-5 re-pin (kept green across this checkpoint). Confirm the full gate, then make the ONE commit of the entire accumulated worktree (migration + all runtime + the frozen contract + all tests + the final re-pinned hash):
+The downgrade harden is migration-only, but the drift guard is already green from the Task-5 re-pin (kept green across this checkpoint). **Verification order (re-audit F3): run the four adapted EXISTING files' targeted selectors FIRST, then the whole suite** — a regression in an adapted fixture must surface by name, not inside the bulk run. Then make the ONE commit of the entire accumulated worktree (migration + all runtime + the frozen contract + all tests, including the four adapted existing files + the conftest helper + the final re-pinned hash):
 
 ```bash
+.venv/bin/pytest tests/integration/test_ui.py tests/integration/test_phase4_platform.py \
+                 tests/integration/test_migrations.py tests/integration/test_bundle_pinning_ops.py -v
 ./manage.sh test
 .venv/bin/ruff check .
 .venv/bin/lint-imports
@@ -2465,6 +3045,8 @@ git add alembic/versions/013_outbox_stream_separation.py \
         src/kyc_tool/workers/retention.py src/kyc_tool/api/routes_metrics.py AUDIT_FINDINGS.md \
         tests/integration/test_migrations.py tests/integration/test_outbox_fencing.py \
         tests/integration/test_decision_sequence.py tests/integration/test_outbox_supersession.py \
+        tests/integration/test_ui.py tests/integration/test_phase4_platform.py \
+        tests/integration/test_bundle_pinning_ops.py tests/conftest.py \
         tests/unit/test_migration_contract_v013.py tests/policy_driven/test_engine_build_id_guard.py
 git commit -m "feat(013): outbox stream separation + local decision ordering (schema + runtime, atomic)
 
@@ -2495,6 +3077,7 @@ Ships the pre-window diagnostic: raw parameterized SQL that imports **no** 013-o
 **Files:**
 - Create: `src/kyc_tool/ops/verify_pr7b_core_backfill.py`
 - Create: `tests/integration/test_verify_pr7b_core_backfill.py`
+- Modify: `tests/integration/test_migrations.py` (Step 4b — the schema-012 restore acceptance test, re-audit F1; it lives with the migration tests but lands HERE because it drives the real diagnostic CLI this task creates)
 - Re-pin: `tests/policy_driven/test_engine_build_id_guard.py`
 
 **Interfaces:**
@@ -2755,6 +3338,108 @@ if __name__ == "__main__":
 
 Run: `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py -v` → PASS.
 
+- [ ] **Step 4b: The schema-012 restore acceptance test (re-audit F1)** — the runbook's restore-or-block recovery (Task 9 Step 5, step 0.5) is now an EXECUTABLE identity contract: a restore must re-insert the ORIGINAL `outbox.id` with the recorded evidence tuple `(decision_id, run_id, case_id, original_outbox_id, body digest)`; a default-id INSERT is prohibited (it silently reverses the legacy order authority: the pruned OLDER callback would be re-ranked NEWER). This test executes that exact contract end-to-end on schema 012 — append to `tests/integration/test_migrations.py`:
+
+```python
+# The runbook's executable restore acceptance predicate (Task 9 Step 5, step 0.5): compares
+# the restored row's identity + body digest against the evidence recorded from backup.
+# ZERO returned rows = accepted; any row = a mismatch that MUST block the migration window.
+_RESTORE_ACCEPTANCE_SQL = text(
+    "SELECT o.id, o.run_id FROM outbox o "
+    "WHERE o.run_id = :run_id AND o.kind = 'decision_callback' "
+    "AND (o.id <> :original_outbox_id OR o.case_id <> :case_id "
+    "OR md5(o.payload_json::text) <> :payload_digest)"
+)
+
+
+def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
+    """Re-audit F1 — the restore acceptance contract, on schema 012 with the REAL
+    diagnostic CLI and the REAL 013 upgrade:
+    (1) two callbacks (ids captured), evidence tuples recorded (simulating the backup);
+    (2) the OLDER callback is deleted (simulating a retention prune);
+    (3) a DEFAULT-id INSERT restore is REJECTED by the runbook acceptance predicate
+        (its id differs — the exact silent-order-reversal Codex identified);
+    (4) restored with the EXACT original id → predicate passes, the id sequence is
+        advanced per the runbook, the real diagnostic CLI runs clean, 013 upgrades,
+        and old/new map to decision_sequence 1/2 (order authority preserved)."""
+    import os
+    import subprocess
+    import sys
+
+    url = _fresh_db(pg, "kyc_mig_012_restore_acceptance")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "012")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        oid_a = _seed_legacy_callback(conn, case_id="c1", run_id="rA", decision_id="dA",
+                                      ev_seq=1, status="delivered")
+        oid_b = _seed_legacy_callback(conn, case_id="c1", run_id="rB", decision_id="dB",
+                                      ev_seq=2, status="pending")
+        assert oid_a < oid_b  # A is the authoritative OLDER callback
+        # record the evidence tuples (what the operator captures FROM BACKUP before restoring)
+        evidence = {
+            r.run_id: {"decision_id": d, "run_id": r.run_id, "case_id": r.case_id,
+                       "original_outbox_id": r.id, "payload_digest": r.digest}
+            for r, d in zip(
+                conn.execute(text("SELECT id, run_id, case_id, md5(payload_json::text) AS digest "
+                                  "FROM outbox ORDER BY id")).all(),
+                ["dA", "dB"], strict=True,
+            )
+        }
+    with engine.begin() as conn:  # simulate the retention prune of the OLD delivered callback
+        conn.execute(text("DELETE FROM outbox WHERE id=:i"), {"i": oid_a})
+
+    with engine.begin() as conn:  # (3) the PROHIBITED default-id restore
+        bad_id = conn.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, payload_json, status, delivered_at) "
+            "VALUES ('decision_callback','c1','rA','{}'::jsonb,'delivered', now()) RETURNING id"
+        )).scalar_one()
+        assert bad_id > oid_b  # a fresh id — the restored row would rank NEWER than rB
+        ev = evidence["rA"]
+        mismatches = conn.execute(_RESTORE_ACCEPTANCE_SQL, {
+            "run_id": ev["run_id"], "original_outbox_id": ev["original_outbox_id"],
+            "case_id": ev["case_id"], "payload_digest": ev["payload_digest"],
+        }).fetchall()
+        assert mismatches  # REJECTED: the acceptance predicate reports the id mismatch
+        conn.execute(text("DELETE FROM outbox WHERE id=:i"), {"i": bad_id})  # operator undoes it
+
+    with engine.begin() as conn:  # (4) the governed restore: EXACT original primary key
+        conn.execute(text(
+            "INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, delivered_at) "
+            "VALUES (:i,'decision_callback','c1','rA','{}'::jsonb,'delivered', now())"
+        ), {"i": oid_a})
+        ev = evidence["rA"]
+        mismatches = conn.execute(_RESTORE_ACCEPTANCE_SQL, {
+            "run_id": ev["run_id"], "original_outbox_id": ev["original_outbox_id"],
+            "case_id": ev["case_id"], "payload_digest": ev["payload_digest"],
+        }).fetchall()
+        assert mismatches == []  # ACCEPTED: identity + digest match the recorded evidence
+        # runbook: advance/verify the id sequence after any explicit-id INSERT
+        new_last = conn.execute(text(
+            "SELECT setval(pg_get_serial_sequence('outbox','id'), GREATEST("
+            "(SELECT COALESCE(max(id),1) FROM outbox), (SELECT last_value FROM outbox_id_seq)))"
+        )).scalar_one()
+        max_id = conn.execute(text("SELECT max(id) FROM outbox")).scalar_one()
+    assert new_last >= max_id  # future writers cannot collide with the restored id
+
+    proc = subprocess.run(  # the REAL diagnostic must now be clean
+        [sys.executable, "-m", "kyc_tool.ops.verify_pr7b_core_backfill"],
+        env={**os.environ, "KYC_DATABASE_URL": url},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    alembic_command.upgrade(cfg, "013")  # the real migration ranks by outbox.id
+    with engine.connect() as conn:
+        seqs = {r.id: r.decision_sequence for r in conn.execute(
+            text("SELECT id, decision_sequence FROM decisions WHERE case_id='c1'"))}
+    assert seqs == {"dA": 1, "dB": 2}  # the restored OLD callback keeps sequence 1
+    engine.dispose()
+```
+
+Run: `.venv/bin/pytest tests/integration/test_migrations.py::test_012_restore_acceptance_rejects_default_id_then_accepts_original -v`
+Expected: PASS. **Mutation witness (manual):** change the governed restore INSERT to omit the explicit `id` (making it a second default-id INSERT) → the `mismatches == []` assertion must FAIL (the predicate rejects it), and — if the predicate were also skipped — the final assertion would fail with `{"dA": 2, "dB": 1}` (the silent order reversal this contract exists to block). Restore.
+
 - [ ] **Step 5: Mutation check (manual, no commit)** — remove `s.execute(text("LOCK TABLE outbox IN SHARE MODE"))`; rerun `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py::test_cli_share_lock_blocks_until_retention_resolves -v` → BOTH params must FAIL the `assert proc.poll() is None` blocked check (the CLI no longer waits on prune), and the `[commit]` param additionally fails its nonzero-outcome assertion (it reads the still-visible callback before the delete commits). Restore.
 
 - [ ] **Step 6: RED drift-guard step** — the new CLI changed `src/`:
@@ -2770,6 +3455,7 @@ Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` →
 .venv/bin/ruff check .
 .venv/bin/lint-imports
 git add src/kyc_tool/ops/verify_pr7b_core_backfill.py tests/integration/test_verify_pr7b_core_backfill.py \
+        tests/integration/test_migrations.py \
         tests/policy_driven/test_engine_build_id_guard.py
 git commit -m "feat(ops): verify_pr7b_core_backfill pre-window diagnostic (SHARE-locked, shared parity)
 
@@ -3053,7 +3739,7 @@ Expected: FAIL — `AssertionError: live Alembic head 013 is not a shipped reser
 - [ ] **Step 2: Flip the ROADMAP State** — in `.agents/ROADMAP.md §C`, change the PR 7b-core row (line 74) State cell from `pending` to `shipped`:
 
 ```markdown
-| PR 7b-core | 8 | shipped | 013 | `outbox.ordering_stream` (NOT NULL) + `case_id` NOT NULL + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + a **best-effort** local `superseded` guard (higher *locally-stamped* delivery only; send-before-stamp/cross-replica reverts remain for 7b-activation); identity + ordering (`UNIQUE decisions(case_id, decision_sequence)` [per-case namespace] + `UNIQUE(run_id)` + triple FK + partial callback index); fenced claim (`claim_token`); exhaustive per-status lifecycle CHECKs; `ordering_stream`/`case_id` real `SET NOT NULL` (drained cutover, **reversible-before-first-supersession** downgrade) |
+| PR 7b-core | 8 | shipped | 013 | `outbox.ordering_stream` (NOT NULL) + `case_id` NOT NULL + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + a **best-effort** local `superseded` guard (higher *locally-stamped* delivery only; send-before-stamp / cross-replica / manual-current-then-late-automatic-callback reverts remain for 7b-activation); identity + ordering (`UNIQUE decisions(case_id, decision_sequence)` [per-case namespace] + `UNIQUE(run_id)` + triple FK + composite `decisions(run_id,case_id)→runs(id,case_id)` FK + partial callback index); fenced claim (`claim_token`); exhaustive per-status lifecycle CHECKs (`superseded` decision-only); `ordering_stream`/`case_id` real `SET NOT NULL` (drained cutover, **reversible-before-first-supersession** downgrade) |
 ```
 
 (Leave 7b-activation `014` and every other row unchanged. Also update the prose note near line 12-14 if it says "7b-core is next" — change to "7b-core shipped (`013`); 7b-activation (`014`) is next".)
@@ -3075,9 +3761,12 @@ gets an internal per-case `decision_sequence`, allocated under the case's `FOR U
 **not on the wire** (the callback body is byte-identical to pre-7b) and drives a **best-effort local
 `superseded` guard**: an older requeued callback is suppressed only when a higher-sequence decision
 already carries a locally-stamped `published_at`. Each claim is fenced by a `claim_token` so a stale
-publisher cannot overwrite a reclaimer's terminal. **Boundary:** send-before-stamp and cross-replica
-reverts are NOT closed here — they remain expected until 7b-activation (`014`) adds the platform
-high-water mark. 7b-core does not claim exactly-once (see `AUDIT_FINDINGS.md` A6).
+publisher cannot overwrite a reclaimer's terminal. **Boundary:** THREE residual reverts are NOT
+closed here and remain expected until 7b-activation (`014`) adds the platform high-water mark:
+send-before-stamp; cross-replica; and a queued automatic callback delivered AFTER a later manual
+approval (manual approvals carry no run, no callback, and no sequence, so the local guard has no
+higher locally-published automatic sequence to compare). 7b-core does not claim exactly-once (see
+`AUDIT_FINDINGS.md` A6).
 ```
 
 - [ ] **Step 5: Write the canonical cutover/rollback procedure into BOTH `docs/RUNBOOK.md` and `docs/DEPLOYMENT.md`** — paste the **identical** block below. In `docs/RUNBOOK.md` add it as a new top-level section immediately before `## Retention & compliance` (line 173). In `docs/DEPLOYMENT.md` add it as `## 11. PR 7b-core cutover — drained maintenance window` immediately after section 10 (before `## 7. Monitoring` if ordering differs, else at end of the cutover sections). Use the SAME numbered body in both (only the section header differs):
@@ -3096,10 +3785,31 @@ high-water mark. 7b-core does not claim exactly-once (see `AUDIT_FINDINGS.md` A6
     `python -m kyc_tool.ops.verify_pr7b_core_backfill`. The result is valid ONLY while retention stays
     suspended AND the 0.3 attestation holds.
 0.5 On failure, ABORT here — before stopping service (no outage begun). Recovery is restore-or-block:
-    restore the exact callback from authoritative backup and rerun 0.4 clean, OR remain on 012 in
+    restore from authoritative backup the EXACT callback row, OR remain on 012 in
     `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. 014 is
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
+0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
+    advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
+    (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
+        callback: `(decision_id, run_id, case_id, original_outbox_id, body_digest)` where
+        `body_digest = md5(payload_json::text)` computed on the backup row.
+    (b) The restore MUST re-insert the ORIGINAL primary key:
+        `INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, delivered_at, ...)
+         VALUES (<original_outbox_id>, ...)` — a default-id INSERT is prohibited (it allocates a
+        fresh id and re-ranks the restored older callback as newer). If the original id is
+        unavailable, do NOT restore: remain `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012.
+    (c) ACCEPTANCE PREDICATE — run per restored callback; it MUST return ZERO rows before
+        proceeding (any row = mismatch = still blocked):
+        `SELECT o.id, o.run_id FROM outbox o
+         WHERE o.run_id = :run_id AND o.kind = 'decision_callback'
+           AND (o.id <> :original_outbox_id OR o.case_id <> :case_id
+                OR md5(o.payload_json::text) <> :body_digest);`
+    (d) After ANY explicit-id restore, advance/verify the outbox id sequence BEFORE writers resume:
+        `SELECT setval(pg_get_serial_sequence('outbox','id'), GREATEST(
+            (SELECT COALESCE(max(id),1) FROM outbox),
+            (SELECT last_value FROM outbox_id_seq)));`
+    (e) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
 
 **Cutover (only after 0.4 is green):**
 1. Pause submission, edge-block the composer, disable autoscaling/restarts.
@@ -3150,9 +3860,16 @@ R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image 
   order, so it is never used.
 - A legacy automatic decision without a surviving `decision_callback` is a **fail-closed migration
   refusal** (`BLOCKED_NO_AUTHORITATIVE_MAPPING`): restore from authoritative backup or remain on 012.
+  A restore is an **executable identity contract** (RUNBOOK step 0.6): re-insert the EXACT original
+  `outbox.id` with the recorded `(decision_id, run_id, case_id, original_outbox_id, body_digest)`
+  evidence and pass the acceptance predicate — a default-id INSERT is prohibited (it silently
+  reverses the legacy order). If the original id is unavailable, remain blocked.
 - The local `superseded` guard is **best-effort and single-replica**: it fires only on a higher
-  *locally-stamped* `published_at`. Send-before-stamp and cross-replica reverts remain expected until
-  7b-activation's platform high-water mark. 7b-core is not exactly-once and not platform-authoritative.
+  *locally-stamped* `published_at` (and `superseded` is a decision-callback-only terminal —
+  DB-enforced). THREE reverts remain expected until 7b-activation's platform high-water mark:
+  send-before-stamp; cross-replica; and a queued automatic callback delivered AFTER a later manual
+  approval (manual rows have `run_id NULL`, no callback, no sequence — the guard sees no higher
+  locally-published automatic sequence). 7b-core is not exactly-once and not platform-authoritative.
 ```
 
 - [ ] **Step 7: Add the docs-contract test + the exact-rollback-command acceptance test** — create `tests/unit/test_docs_cutover_parity.py`:
@@ -3194,6 +3911,10 @@ def test_runbook_and_deployment_cutover_bodies_identical():
         "ROLLBACK OUTCOME A", "ROLLBACK OUTCOME B", "PROHIBIT the pre-7b image",
         "re-enable retention, autoscaling/restarts, and submissions",
         "remove the composer edge block",
+        # re-audit F1 — the restore acceptance contract is executable, not advisory:
+        "RESTORE ACCEPTANCE CONTRACT", "original_outbox_id",
+        "default-id INSERT is prohibited", "ACCEPTANCE PREDICATE",
+        "pg_get_serial_sequence('outbox','id')",
     ):
         assert token in rb  # safety-critical details survive, not just the numbered leaders
     assert rb.count("edge-block the composer") == 2  # forward + rollback both establish the fence
@@ -3332,3 +4053,105 @@ Every spec section maps to a task: §1 Migration 013 → Tasks 1 (columns/stream
    because it built JSON with percent formatting. It now uses `json.dumps`, and every complete
    create-file block is compiled and checked under its advertised path against the full project
    selector set. The exact frozen-contract SHA remains unchanged and verified.
+
+## Codex plan-review round 5 — complete-unit re-audit @ `eac3035`, 10 findings folded (rev 5, 2026-07-24)
+
+1. **(P1 F1) Restore acceptance contract.** RUNBOOK/DEPLOYMENT step 0.5 gains an executable step 0.6:
+   the restore must re-insert the ORIGINAL `outbox.id` plus the recorded
+   `(decision_id, run_id, case_id, original_outbox_id, body_digest)` evidence; a default-id INSERT is
+   prohibited; original id unavailable → remain `BLOCKED_NO_AUTHORITATIVE_MAPPING`; an acceptance
+   predicate (SQL, zero mismatches) gates proceeding; after any explicit-id restore the outbox id
+   sequence is advanced via `setval(pg_get_serial_sequence('outbox','id'), GREATEST(max(id),
+   last_value))` before writers resume. Task 7 Step 4b adds the full schema-012 recovery acceptance
+   test (prune old id, prove the default-id restore is REJECTED by the predicate, restore the exact
+   id, predicate passes, real diagnostic CLI clean, real 013 upgrade maps old/new to sequences 1/2).
+   The frozen contract module `v013_backfill.py` is UNCHANGED (the contract stays historical; the
+   acceptance predicate lives in the runbook + test), so `V013_BACKFILL_SHA` is unchanged. The docs
+   parity test pins the new tokens. D-7bcore records the identity-restore rule.
+2. **(P1 F2) Composite decisions→runs case FK.** Migration 013 (Task 4) creates the named unique
+   `uq_runs_id_case_id` on `runs(id, case_id)` BEFORE the composite
+   `fk_decisions_run_case FOREIGN KEY (run_id, case_id) REFERENCES runs(id, case_id)`; downgrade
+   drops FK before unique (both downgrade texts agree). `run_id` nullable → MATCH SIMPLE: manual
+   rows exempt, automatic rows fully bound (stated as intended in a migration comment). ORM mirror:
+   `Run.__table_args__` (created — Run had none) + `ForeignKeyConstraint` in
+   `DecisionRow.__table_args__`. INSERT and UPDATE negatives use two real cases/runs with
+   otherwise-valid rows (a third run under c1 avoids masking by `uq_decisions_run_id`; distinct
+   sequences avoid masking by the per-case unique) and assert the exact string
+   `fk_decisions_run_case`; the named mutation removes ONLY this FK → both negatives fail.
+3. **(P1 F3) The four affected existing files are in the unit.** `test_ui.py`,
+   `test_phase4_platform.py`, `test_migrations.py`, `test_bundle_pinning_ops.py` (+
+   `tests/conftest.py`) are now named in the Step-0 CLAIM, File Structure, the responsible tasks
+   (Task 1 Step 8b, Task 3 Step 3b, Task 4 Step 7b), and the Task-6 staged set. The UI fixture gains
+   `ordering_stream='email'`. The impossible raw `delivered→pending` rewrite becomes the REAL
+   send-before-stamp fault injection (first-call-only `_record_delivered` fault, caught at the
+   `process_pending` boundary since `process_once` calls it outside its try/except; lease expired by
+   a raw `claim_lease_expires_at` UPDATE; fenced reclaim resends the identical dedupe body) — an
+   interim lifecycle-legal rewrite exists only inside the Task 1-2 checkpoint window; the committed
+   unit ships the fault-injection form. The three `manual=false` no-run migration fixtures flip to
+   `manual=true`; EVERY nonblank negative asserts its intended 011 constraint name
+   (`ck_epoch_engine_nonblank`, `ck_runs_engine_build_id_nonblank`,
+   `ck_decisions_engine_build_id_nonblank`, `ck_checks_policy_bundle_hash_nonblank`). The three
+   bundle-pinning automatic decisions go through ONE shared `tests/conftest.py`
+   `seed_automatic_decision` helper (valid sequence + counter bump). Task 6 runs the four files'
+   selectors FIRST, then `./manage.sh test`. (Adjacent fix while editing that block: the docs-parity
+   token `restore from authoritative backup` did not literally occur in the rev-4 runbook body —
+   the reworded 0.5 now contains it verbatim.)
+4. **(P2 F4) Third residual: manual-current vs late automatic callback.** The Task-5 module
+   docstring, A6 Resolution, D-7bcore, OVERVIEW boundary, ROADMAP row, task intro, guard comment,
+   and the RELEASE bus entry all enumerate THREE residuals (send-before-stamp; cross-replica; a
+   queued automatic callback delivered AFTER a later manual approval — manual rows have `run_id
+   NULL`, no callback, no sequence, so the guard sees no higher locally-published automatic
+   sequence). Task 5 adds the REAL ingest→worker→manual-approve→publisher test
+   `test_manual_current_then_late_automatic_callback_sent_expected_pre_activation` (callback
+   enqueued, NOT processed; `reviewer.manual_approve` ingested; `process_pending()` really sends the
+   old callback). 013 does NOT sequence manual rows. Core spec §5 gains the same residual with its
+   trigger sequence (rev 9); the activation spec's reconciliation/acceptance section is strengthened
+   so an unaccepted pending/dead callback older than a manual-current source cannot replace it.
+5. **(P2 F5) Downgrade-TOCTOU autobegin.** `txB = connB.begin()` now precedes ANY execute on connB,
+   and the timeout is set with `SET LOCAL lock_timeout='2s'` INSIDE that transaction (SQLAlchemy 2
+   autobegin otherwise owns the txn and `connB.begin()` raises `InvalidRequestError` before the lock
+   is ever exercised). Rollback-on-55P03, commit-before-fail on an unexpected UPDATE success, thread
+   liveness assertions, and listener cleanup are preserved. Step 5 now runs the exact test first,
+   then the move/delete-the-lock mutation and requires the failure mode "the concurrent supersession
+   actually COMMITS".
+6. **(P2 F6) Same-stream FIFO under backoff.** New `test_same_stream_fifo_holds_under_backoff`
+   (Task 3): one case, decision stream, seq1 in future backoff, seq2 due → `process_once()` idle,
+   ZERO HTTP, seq2 untouched (pending, unclaimed); seq1 made due → order `[seq1, seq2]`. Named
+   mutation (Step 5c): adding due/lease eligibility to the INNER `min(o2.id)` subquery of
+   `_CLAIM_SQL` → the test fails (leapfrog).
+7. **(P2 F7) Retry-branch fencing proof.** New `test_stale_retry_failure_cannot_touch_reclaimed_row`
+   (Task 3) with `outbox_max_attempts=3`: A claims, lease expires, B reclaims (no terminalize); A's
+   stale `_record_failure` leaves B's ENTIRE claim tuple + attempts + `next_attempt_at` +
+   `last_error` byte-for-byte unchanged and logs `outbox_stale_claim_completion` with
+   `attempted="retry"`; B's own failure increments attempts to `rowB.attempts+1` (claim snapshot),
+   schedules backoff per `base*2^(attempts-1)` (window-asserted), clears only B's tuple, status
+   stays pending. Named mutation (Step 5d): remove `claim_token=:token` from ONLY the nonterminal
+   retry UPDATE → the test fails.
+8. **(P2 F8) `superseded` is decision-only.** `_LIFECYCLE_CHECK` gains the conjunct
+   `AND (status <> 'superseded' OR kind = 'decision_callback')` (same constraint name
+   `ck_outbox_status_lifecycle`; the schema-012 parity projection is unaffected — `superseded`
+   already fails its status vocabulary). Every fixture that seeded a superseded `poc_email`
+   (Task 5 retention/UI-409/metrics via the new `_superseded_callback` valid-chain helper; Task 6
+   downgrade refuse + lock tests via `_mk_auto_decision`) now builds a valid automatic
+   decision+callback chain — the downgrade tests keep real superseded/pending DECISION rows, so
+   both the refusal and the mutation-path commit stay reachable. Dedicated INSERT and UPDATE
+   negatives (`test_013_superseded_is_decision_only_*`) use an otherwise-valid superseded shape and
+   assert the constraint name; the named mutation removes ONLY the conjunct → both fail.
+9. **(P3 F9) ORM FK parity.** `Outbox.case_id` gains `ForeignKey("cases.id",
+   name="fk_outbox_case_id")` in the Task-1 `tables.py` block (column stays non-optional, matching
+   013's SET NOT NULL). New `test_013_orm_and_live_fk_parity` asserts `fk_outbox_case_id` +
+   `fk_outbox_decision_triple` via BOTH `Outbox.__table__.foreign_keys` AND the live inspector
+   (plus `fk_decisions_run_case` and `uq_runs_id_case_id` for F2).
+10. **(P3 F10) Required-keyword sequence.** Task 4 Step 8b — AFTER every caller passes it — changes
+    `enqueue_decision_callback` to the FINAL `decision_sequence: int` (required keyword, no
+    default), with a `TypeError` assertion test; the Task-3 checkpoint explicitly keeps the optional
+    form as staging only, and the single atomic 013 commit ships the required form. All plan-block
+    callers pass the keyword; the `test_review_completed_event.py` seam forwards `*args, **kwargs`.
+
+**Response-order note (Codex's required rev-5 order):** (a) the CLAIM/File-Structure extension, (b)
+the spec amendments (core rev 9: findings 1, 2, 4, 8; activation spec: the manual-current acceptance
+strengthening), and (c) the plan block revisions for all ten findings are ALL contained in this
+revision; the verification matrix (full-selector Ruff + compile on every complete create-file block,
+`bash -n` on shell blocks, frozen-SHA verification, docs parity/lineage, targeted selectors) was
+rerun over the revised blocks. **Not executed here:** the named `.venv/bin/pytest`/subprocess
+selectors remain build-cycle steps (no local Postgres at plan time).

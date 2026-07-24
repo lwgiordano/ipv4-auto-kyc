@@ -1,4 +1,4 @@
-# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 8)
+# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 9)
 
 ## Context
 
@@ -89,13 +89,31 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   HAVING count(*) > 1` and **refuse with actionable identifiers** if any survive. CHECK on `decisions`:
   `(manual=false → run_id NOT NULL AND decision_sequence > 0) AND (manual=true → run_id NULL AND
   decision_sequence NULL)`.
+- **Composite decisions→runs case binding (rev 9, re-audit F2):** the shipped single-column FKs bind
+  `decisions.case_id` and `decisions.run_id` **independently**, so after 013 a decision could still
+  pair run `r1` (case `c1`) with case `c2` — the exact tuple the parity preflight classifies as
+  `decision_case_ne_run_case`, silently recreatable post-migration. Therefore 013 also creates a
+  **named unique target `uq_runs_id_case_id` on `runs(id, case_id)`** (before the FK that references
+  it) and the **composite FK `fk_decisions_run_case`:
+  `decisions(run_id, case_id) → runs(id, case_id)`**. `run_id` is nullable → MATCH SIMPLE semantics:
+  a manual decision (`run_id NULL`) is exempt **by design**; every automatic decision is fully bound
+  to its run's own case. Both are mirrored in `Run`/`DecisionRow` ORM metadata (`Run` gains its first
+  `__table_args__`) and dropped in dependency-safe order on downgrade (FK before unique).
 - **Exhaustive per-status XOR lifecycle CHECK (F4)** — not one-way fragments. With
   `claim := (claim_token, claim_lease_expires_at, claimed_by)`:
   - `status='pending'` ⇒ `delivered_at NULL AND resolved_at NULL` AND `claim` is **all-NULL or
     all-non-NULL** (a claimed pending row).
   - `status='delivered'` ⇒ `delivered_at NOT NULL AND resolved_at NULL` AND `claim` all-NULL.
   - `status='dead'` ⇒ `delivered_at NULL AND resolved_at NULL` AND `claim` all-NULL.
-  - `status='superseded'` ⇒ `delivered_at NULL AND resolved_at NOT NULL` AND `claim` all-NULL.
+  - `status='superseded'` ⇒ `delivered_at NULL AND resolved_at NOT NULL` AND `claim` all-NULL
+    **AND `kind='decision_callback'` (rev 9, re-audit F8): `superseded` is a DECISION-ONLY
+    terminal** — production supersedes only decision callbacks, and A6's zero-send exception and
+    the ordering proof are callback-specific, so a `poc_email` must never be able to enter
+    `superseded` (not even by operator UPDATE; a superseded email would silently zero-send AND
+    make the downgrade refuse). Spelled as the extra conjunct
+    `AND (status <> 'superseded' OR kind = 'decision_callback')` in the same
+    `ck_outbox_status_lifecycle` constraint. The schema-012 parity projection is unaffected
+    (`superseded` already fails its pre-013 status vocabulary).
   - `status IN ('pending','delivered','dead','superseded')`.
   (7b-activation may replace the `dead` branch when it adds `integrity_mismatch`/`failure_class`.)
 - **`kind`/`stream`/identity as an exhaustive OR of the two complete row shapes** (not implications):
@@ -201,8 +219,17 @@ rows (`ui/routes.py:459`).
 platform high-water bootstrap / signed envelope; add the phase machine or the `integrity_mismatch`
 terminal. **Residual reverts that remain until 7b-activation:** (a) **send-before-stamp** — a higher
 callback accepted by the platform but not yet locally `published_at`; (b) **cross-replica** — the
-claim/HTTP/stamp gap across publishers. Both are documented as expected pre-activation and are turned
-into platform-high-water no-ops only in 014. PR 6b may **build** on 7b-core's sequence primitive but
+claim/HTTP/stamp gap across publishers; (c) **manual-current vs late automatic callback (rev 9,
+re-audit F4)** — manual approval is platform-enforced inline (`ingest._handle_manual_approve`:
+`run_id=NULL`, emits **no** callback, and **intentionally allocates no sequence** — do not distort
+013 by sequencing manual rows), so a previously queued automatic callback can be delivered **after**
+that manual approval: trigger = automatic decide enqueues its callback → the callback is not yet
+processed → `reviewer.manual_approve` becomes the case's current state → the publisher claims the
+queued callback and the local guard sees **no higher locally-published automatic sequence**
+(manual has none) → the old automatic callback IS sent. All three are documented as expected
+pre-activation and are turned into platform-high-water no-ops only in 014 (whose acceptance is
+strengthened so an unaccepted pending/dead callback older than a manual-current platform source
+cannot replace it). PR 6b may **build** on 7b-core's sequence primitive but
 not activate until 7b-activation is `active`.
 
 ## AUDIT:A6 amendment (F6)
@@ -245,7 +272,21 @@ approved core design (the user considered and declined it). Backup availability 
 prerequisite**, not a consequence of the retention setting. Never fabricate a callback, delete an
 immutable decision, or fall back to `decided_at`. The CLI contract on this path: **nonzero exit, the
 exact stable `BLOCKED_NO_AUTHORITATIVE_MAPPING` sentinel plus actionable decision/run ids, and no
-writes**. Either abort branch must **explicitly
+writes**. **Restore acceptance contract (rev 9, re-audit F1)** — "restore the exact callback" is an
+**executable identity requirement**, because the backfill's order authority is `outbox.id` and a
+default-id INSERT silently re-ranks a pruned older callback as newer (the guard would then suppress
+the actually-newer decision): (a) record from the backup, per missing callback, the authoritative
+evidence tuple `(decision_id, run_id, case_id, original_outbox_id, body_digest)` with
+`body_digest = md5(payload_json::text)`; (b) the restore MUST `INSERT … (id, …) VALUES
+(<original_outbox_id>, …)` — a default-id INSERT is prohibited; if the original id is unavailable,
+remain `BLOCKED_NO_AUTHORITATIVE_MAPPING`; (c) an **acceptance predicate** (a SQL SELECT comparing
+the restored row's id/case/digest against the recorded evidence) must return **zero mismatches**
+before proceeding; (d) after any explicit-id restore, advance/verify the backing sequence to at
+least `max(outbox.id)` — `setval(pg_get_serial_sequence('outbox','id'),
+GREATEST((SELECT COALESCE(max(id),1) FROM outbox), (SELECT last_value FROM outbox_id_seq)))` —
+before writers resume; (e) only then rerun the diagnostic clean. The exact runbook text + SQL and
+the schema-012 recovery acceptance test live in the build plan (Task 9 Step 5 / Task 7 Step 4b); the
+frozen `v013_backfill.py` contract itself is unchanged. Either abort branch must **explicitly
 re-settle retention** (keep it frozen while restoring/rerunning, or re-enable it if the cutover is
 deferred) — never leave a compliance process silently disabled. On success proceed. (1) pause submission, edge-block
 composer, disable autoscaling/restarts; (2) hard-stop API/pipeline/outbox/`dev_worker` (queue **and**
@@ -288,7 +329,9 @@ rely on the operator remembering that the forward drain also applies backward.
   stamps nothing — **never** an assertion (it would kill the worker). The claim lease is separate from
   the retry schedule.
 - The local `superseded` guard is a **best-effort optimization** — it fires only on a higher
-  **locally-stamped** delivery; send-before-stamp and cross-replica reverts remain until 7b-activation.
+  **locally-stamped** delivery; send-before-stamp, cross-replica, and manual-current-then-late-
+  automatic-callback reverts (§5) remain until 7b-activation. `superseded` is a decision-callback-
+  only terminal (DB-enforced).
 - Every outbox status/lifecycle tuple is an **exhaustive per-status** DB CHECK. Delivery still stamps
   `published_at` + run `COMPLETE`; the callback body is byte-identical to pre-7b. At-least-once holds
   for eligible non-superseded rows; `superseded` is a documented A6 exception (best-effort local
@@ -320,6 +363,26 @@ rely on the operator remembering that the forward drain also applies backward.
   superseded. Mutation: ordering the backfill by `decided_at,id` reproduces B's erroneous suppression
   and **must fail**. Separately, seed a valid `manual=false` decision with **no** surviving callback
   row on 012 and prove the migration **refuses byte-stably** (no `decided_at` fallback).
+- **Restore acceptance (rev 9, F1) — schema 012, real CLI + real migration:** seed two callbacks
+  (ids captured), record the evidence tuples, retention-prune the OLDER id; prove a **default-id
+  INSERT restore is rejected by the acceptance predicate** (id mismatch); restore the **exact
+  original id** → predicate passes (zero mismatches), the id sequence is advanced per the runbook,
+  the real diagnostic exits 0, the real 013 upgrade maps old/new to sequences **1/2**. Mutation:
+  the default-id restore accepted anywhere reverses the mapping to 2/1 and **must fail**.
+- **Composite case binding (rev 9, F2):** direct INSERT **and** UPDATE negatives with two real
+  cases/runs and otherwise-valid rows (no other constraint can mask the check) must fail at commit
+  with the exact name `fk_decisions_run_case`; mutation-removing **only** that FK makes both pass
+  (test fails). ORM/live parity: `fk_outbox_case_id`, `fk_outbox_decision_triple`,
+  `fk_decisions_run_case`, `uq_runs_id_case_id` asserted in BOTH `__table__` metadata and the live
+  inspector.
+- **Superseded is decision-only (rev 9, F8):** INSERT and UPDATE negatives prove a `poc_email`
+  cannot enter `superseded` even with an otherwise-valid superseded shape (assert
+  `ck_outbox_status_lifecycle` by name); every fixture needing a superseded row builds a valid
+  automatic decision+callback chain; mutation-removing only the kind conjunct **must fail** both.
+- **Manual-current residual (rev 9, F4):** a REAL ingest → worker → manual-approve → publisher test
+  (`…_expected_pre_activation` in its name) drives an automatic decision whose callback is enqueued
+  but unprocessed, ingests `reviewer.manual_approve`, then runs the publisher and asserts the old
+  automatic callback **IS sent** (HTTP happened) — pinning residual (c) of §5 as expected behavior.
 - **Pre-window diagnostic (rev-5 F2):** on real Postgres/**schema 012**, seed a decision + delivered
   callback, run the **real retention function** until the callback is pruned (decision survives), and
   assert `verify_pr7b_core_backfill` exits **nonzero with both ids** while the service can stay on 012
@@ -401,3 +464,21 @@ core; ADR-008 covers 7b-activation.
   `integrity_mismatch` terminal (all 7b-activation). No email-semantics change beyond stream
   separation. No enforcement/scoring/`ENGINE_BUILD_ID` change; M2 untouched. PR 7a fences the **jobs**
   queue separately; 7b-core fences its own **outbox** claim.
+
+## Revision note — rev 9 (2026-07-24)
+
+Amendments folding the four spec-affecting findings of the Codex complete-unit re-audit @ `eac3035`
+(`AGENT_BUS.md` PLAN-REVIEW 2026-07-24); the plan (rev 5) carries the executable blocks:
+
+- **F1 — Restore acceptance contract (§Rollout):** the restore-or-block recovery is now an
+  executable identity requirement — original `outbox.id` + recorded evidence tuple + acceptance
+  predicate (zero mismatches) + sequence advance; default-id INSERT prohibited; original id
+  unavailable ⇒ remain `BLOCKED_NO_AUTHORITATIVE_MAPPING`. The frozen `v013_backfill.py` contract
+  is unchanged.
+- **F2 — Composite decisions→runs case FK (§1):** `uq_runs_id_case_id` + `fk_decisions_run_case`
+  (MATCH SIMPLE — manual rows exempt by design), ORM-mirrored, dependency-safe downgrade order.
+- **F4 — Third residual (§5, §Invariants):** manual-current vs late automatic callback documented
+  with its trigger sequence + a real end-to-end expected-pre-activation test; 013 still allocates
+  no sequence for manual rows; 014's acceptance is strengthened against it (activation spec rev 2).
+- **F8 — `superseded` is decision-only (§1):** the lifecycle CHECK's superseded branch additionally
+  requires `kind='decision_callback'`; negatives + fixtures updated accordingly.
