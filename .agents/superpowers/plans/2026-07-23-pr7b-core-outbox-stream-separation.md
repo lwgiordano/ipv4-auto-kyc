@@ -3129,7 +3129,6 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
             at_preflight.set()          # downgrade holds ACCESS EXCLUSIVE here
             release.wait(timeout=15)    # hold the downgrade txn BETWEEN preflight and DDL
 
-    event.listen(Engine, "after_cursor_execute", _barrier)
     down_err: list[Exception] = []
 
     def run_downgrade():
@@ -3139,9 +3138,13 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
             down_err.append(e)
 
     t = threading.Thread(target=run_downgrade)
-    t.start()
     engineB = create_engine(url)
+    # `event.listen` is process-wide, so register it INSIDE the try whose finally removes
+    # it: a raise from Thread.start() would otherwise leak the barrier into every later
+    # test in the session.
+    event.listen(Engine, "after_cursor_execute", _barrier)
     try:
+        t.start()
         assert at_preflight.wait(timeout=15)  # paused right after the preflight
         connB = engineB.connect()
         # Re-audit F5: begin B's transaction BEFORE any execute — SQLAlchemy 2 autobegin
