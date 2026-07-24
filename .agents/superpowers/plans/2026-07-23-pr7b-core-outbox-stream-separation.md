@@ -1527,6 +1527,70 @@ def test_stale_retry_failure_cannot_touch_reclaimed_row(session_factory, setting
     assert final.claim_token is None                # only B's tuple cleared, under B's token
     assert final.claim_lease_expires_at is None and final.claimed_by is None
     assert backoff_ok  # rescheduled per the formula: 100 * 2**0 = 100s into the future
+
+
+def test_stale_loser_cannot_supersede_reclaimed_row(session_factory, settings, publisher, clean_db):
+    """Sibling of the delivered/retry-failure fencing tests, for the SUPERSEDED terminal: same
+    A/B ordering. A claims; A's lease expires; B reclaims (and does NOT terminalize). Stale A's
+    _record_superseded must be a complete no-op: the outbox row's status/resolved_at/claim tuple
+    stay exactly as B left them (still pending, still B's claim), runs.state stays
+    PUBLISH_DECISION, decisions.published_at stays NULL, and no audit_log row is written — only
+    outbox_stale_claim_completion (attempted="superseded") is logged. Then B alone legitimately
+    supersedes: status->superseded, resolved_at set, claim tuple cleared, run reaches COMPLETE,
+    and exactly one audit_log row is written.
+    MUTATION WITNESS: removing `claim_token=:token` from the leading UPDATE in _record_superseded
+    (or its early return on no-match) lets stale A supersede the row out from under B — this test
+    then FAILS."""
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    _seed_decision_chain(session_factory, case_id="c1", run_id="r1", decision_id="d1", seq=1, ev_seq=1)
+    with session_factory() as s:
+        enqueue_decision_callback(s, case_id="c1", run_id="r1", body={"run_id": "r1"},
+                                  decision_sequence=1)
+        s.commit()
+
+    rowA = _claim(session_factory, "A")
+    assert rowA is not None
+    _expire_lease(session_factory, rowA.id)
+    rowB = _claim(session_factory, "B")  # B reclaims; does NOT terminalize
+    assert rowB is not None and rowB.claim_token != rowA.claim_token
+
+    stale_pub = _pub_for(session_factory, settings)
+    with session_factory() as s:
+        before_ob = s.execute(text("SELECT status, resolved_at, claim_token, claim_lease_expires_at, "
+                                   "claimed_by FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
+        before_run = s.execute(text("SELECT state FROM runs WHERE id='r1'")).scalar_one()
+        before_pub_at = s.execute(text("SELECT published_at FROM decisions WHERE id='d1'")).scalar_one()
+        before_audit = s.execute(text("SELECT count(*) FROM audit_log WHERE case_id='c1'")).scalar_one()
+
+    with structlog.testing.capture_logs() as logs:
+        stale_pub._record_superseded(rowA, rowA.claim_token)  # stale loser: fenced no-op
+    stale = [e for e in logs if e["event"] == "outbox_stale_claim_completion"]
+    assert stale and stale[0]["attempted"] == "superseded"
+
+    with session_factory() as s:
+        after_ob = s.execute(text("SELECT status, resolved_at, claim_token, claim_lease_expires_at, "
+                                  "claimed_by FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
+        after_run = s.execute(text("SELECT state FROM runs WHERE id='r1'")).scalar_one()
+        after_pub_at = s.execute(text("SELECT published_at FROM decisions WHERE id='d1'")).scalar_one()
+        after_audit = s.execute(text("SELECT count(*) FROM audit_log WHERE case_id='c1'")).scalar_one()
+    assert after_ob == before_ob  # status, resolved_at, and B's WHOLE claim tuple: untouched
+    assert after_ob.status == "pending" and after_ob.claim_token == rowB.claim_token  # still B's
+    assert before_run == "PUBLISH_DECISION" and after_run == "PUBLISH_DECISION"
+    assert before_pub_at is None and after_pub_at is None
+    assert after_audit == before_audit  # no audit_log row written
+
+    publisher._record_superseded(rowB, rowB.claim_token)  # B (the rightful claimant) supersedes
+    with session_factory() as s:
+        final_ob = s.execute(text("SELECT status, resolved_at, claim_token, claim_lease_expires_at, "
+                                  "claimed_by FROM outbox WHERE id=:i"), {"i": rowA.id}).one()
+        final_run = s.execute(text("SELECT state FROM runs WHERE id='r1'")).scalar_one()
+        final_audit = s.execute(text("SELECT count(*) FROM audit_log WHERE case_id='c1'")).scalar_one()
+    assert final_ob.status == "superseded" and final_ob.resolved_at is not None
+    assert final_ob.claim_token is None and final_ob.claim_lease_expires_at is None
+    assert final_ob.claimed_by is None
+    assert final_run == "COMPLETE"
+    assert final_audit == before_audit + 1  # exactly one audit_log row written
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -2581,7 +2645,9 @@ def _enqueue_cb(session_factory, case_id, seq):
         s.commit()
 
 
-def test_higher_delivered_then_older_superseded_a6(session_factory, settings, publisher, callback_capture):
+def test_higher_delivered_then_older_superseded_a6(
+    session_factory, settings, publisher, callback_capture, clean_db
+):
     """A6 (F6) + local guard: the HIGHER callback (seq 2) is really SENT (>=1 HTTP) and stamps
     published_at; the OLDER requeued callback (seq 1) is then claimed, SUPERSEDED with ZERO HTTP,
     its run reaches COMPLETE, published_at stays NULL, and an audit_log row records BOTH the
