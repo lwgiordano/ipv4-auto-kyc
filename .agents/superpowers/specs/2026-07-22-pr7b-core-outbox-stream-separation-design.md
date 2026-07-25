@@ -1,4 +1,4 @@
-# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 10)
+# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 11)
 
 ## Context
 
@@ -223,9 +223,11 @@ worker). The dependent writes are gated on `applied`, because the shipped code p
   transition; **no** payload or token), and return a non-raising no-op to `process_once`. Closing
   defect 3 — a stale A can neither dead-letter/redact B's POC row nor stamp B's run/decision.
 
-Retention prunes `superseded` with `delivered` (`retention.py:29-35`); metrics report it separately and
-exclude it from pending/dead alerts (`routes_metrics.py:60`); the UI requeue already 409s non-`dead`
-rows (`ui/routes.py:459`).
+Retention does **not** prune `superseded` — nor any other `decision_callback` terminal. 013 narrows
+the outbox prune to `kind='poc_email'` (see the durable-authority contract in §Rollout), and
+`superseded` is a decision-callback-only terminal, so a `superseded` prune would delete nothing and
+none is added. Metrics report `superseded` separately and exclude it from pending/dead alerts
+(`routes_metrics.py:60`); the UI requeue already 409s non-`dead` rows (`ui/routes.py:459`).
 
 ### 5. Scope boundary (what 7b-activation adds) — and the honest residual risk
 
@@ -374,17 +376,30 @@ authority for a decision callback's identity, order, body, and local status:
   A delivered `decision_callback` row survives indefinitely with `id` (the order authority),
   `case_id`, `run_id`, `decision_sequence`, `status` (= `local_status`), `delivered_at`, and
   `payload_json` intact. Every other retention target is unchanged.
-- **It retains nothing new.** The callback body is a *projection* of the `decisions` row (decision,
-  score, the five gate booleans, `buy_enablement`, checks summary), and `decisions`, `checks`, and
-  raw evidence are already deliberately never pruned — they *are* the decision record
-  (`retention.py` module docstring). The genuinely sensitive outbox body is the POC email's raw
-  token, which is destroyed twice over: redacted at delivery (`publisher.py:176-182`) and still
-  pruned on schedule. So no redaction of callbacks is warranted, and none is performed.
+- **It introduces no new data *category*, but it IS a new retained *representation* — say so.**
+  The callback body projects the `decisions` row (decision, score, the five gate booleans,
+  `buy_enablement`, checks summary) and `decisions`/`checks`/raw evidence are already deliberately
+  never pruned. But the projection is an **additional durable copy**, and it carries
+  `checks[].source`, which is reviewer-derived and reachable as `reviewer:<reviewer_id>`
+  (`validators/website.py:13-20`). Claiming it "retains nothing new" is too strong and must not be
+  used to skip governance. This is a deliberate **retention deviation** and is recorded as such in
+  `AUDIT_FINDINGS.md` + the ADR surface, naming the owner for backup, erasure, privacy, and
+  compliance review, and stating that an erasure request must reach the callback snapshot as well as
+  the decision record. The genuinely sensitive outbox body — the POC email's raw token — is still
+  destroyed twice over: redacted at delivery (`publisher.py:176-182`) and pruned on schedule.
 - **014's candidate manifest is built from this authority**, not from an undefined "agreed universe"
   and not from a row that may have been pruned. `local_status` is read directly from `outbox.status`
   and the digest from `payload_json` via §1's `callback_body_digest`; there is no second
   representation to drift against and no dual write to keep consistent.
-- Rows grow 1:1 with `decisions`, which is already unbounded by design.
+- **Rows grow 1:1 with `decisions` and are never reclaimed, so the capacity consequences are part
+  of the contract, not an afterthought.** Two follow from making `outbox` unbounded:
+  (i) the claim indexes must be **partial to the claimable set** — `WHERE status='pending'` — so an
+  ever-growing tail of `delivered`/`superseded` terminals never enters the claim path's index or its
+  plan; (ii) `/v1/metrics` must not `GROUP BY status` over the whole table on every request. Report
+  the live streams exactly and the terminal history as a bounded/aggregated figure, so the endpoint's
+  cost does not grow with retained history. Both are asserted: an index inspector pins the intended
+  partial predicates, and a large-terminal-cardinality fixture must not change the claim plan or make
+  the metrics endpoint unbounded.
 The alternatives were considered and rejected: a separate authority table duplicates
 identity/status into a second row and introduces exactly the drift class this PR exists to eliminate;
 a stored `body_sha256` column does the same for the body (see §1);

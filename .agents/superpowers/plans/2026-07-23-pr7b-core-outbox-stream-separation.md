@@ -389,6 +389,35 @@ def test_013_up_down_up_clean_no_supersession(pg):
     alembic_command.downgrade(cfg, "012")
     alembic_command.upgrade(cfg, "013")  # clean re-upgrade on a no-superseded DB
 
+def test_013_claim_indexes_are_partial_to_the_claimable_set(pg):
+    """re-review 0ca264b F3: 013 makes decision_callback rows non-prunable, so `outbox` grows
+    without bound. Both claim indexes must therefore be PARTIAL to `status='pending'` — otherwise
+    an ever-growing tail of delivered/superseded terminals enters the claim path's index and its
+    plan. Pins the predicates from pg_indexes so a full index cannot creep back, and asserts the
+    downgrade restores 006's full form."""
+    url = _fresh_db(pg, "kyc_mig_013_partial_idx")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        defs = {
+            r.indexname: r.indexdef
+            for r in conn.execute(text(
+                "SELECT indexname, indexdef FROM pg_indexes WHERE tablename='outbox'"))
+        }
+    for name in ("ix_outbox_claim", "ix_outbox_stream_claim"):
+        assert "WHERE (status = 'pending'::text)" in defs[name], defs[name]
+    # status is pinned by the predicate, so it must not also sit in the key
+    assert "status" not in defs["ix_outbox_stream_claim"].split(" WHERE ")[0]
+
+    alembic_command.downgrade(cfg, "012")
+    with engine.connect() as conn:
+        legacy = conn.execute(text(
+            "SELECT indexdef FROM pg_indexes WHERE tablename='outbox' "
+            "AND indexname='ix_outbox_claim'")).scalar_one()
+    assert "WHERE" not in legacy and "status" in legacy  # 006's full (status, next_attempt_at)
+    engine.dispose()
+
 
 # INSERT negatives: each row is otherwise valid; only the constrained column is bad. Each case
 # pins the constraint (or NOT NULL message) it is INTENDED to trip — same discipline as
@@ -2965,7 +2994,9 @@ def test_ui_requeue_409s_superseded(client, session_factory):
 
 
 def test_metrics_reports_superseded_out_of_the_alert_set(client, session_factory):
-    """superseded shows in outbox_by_status but is EXCLUDED from the pending/dead alert set."""
+    """superseded is counted as terminal history, never in the pending/dead alert set — and the
+    endpoint stays bounded: PR 7b-core never prunes decision callbacks, so `outbox` grows without
+    limit and a GROUP BY over the whole table would make this endpoint's cost grow with it."""
     _superseded_callback(session_factory, "cm")  # a VALID superseded decision callback (F8)
     with session_factory() as s:
         s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, "
@@ -2974,9 +3005,12 @@ def test_metrics_reports_superseded_out_of_the_alert_set(client, session_factory
                        "status) VALUES ('poc_email','cm','email','dead')"))
         s.commit()
     body = client.get("/v1/metrics").json()
-    assert {"pending", "dead", "superseded"} <= set(body["outbox_by_status"])
+    # live statuses reported exactly; terminals are NOT enumerated per-status
+    assert {"pending", "dead"} <= set(body["outbox_by_status"])
+    assert "superseded" not in body["outbox_by_status"]
+    assert "delivered" not in body["outbox_by_status"]
+    assert body["outbox_terminal_total"] >= 1          # the superseded row is counted here
     assert "superseded" not in body["outbox_alerting"]  # governed terminal, not an alert
-    assert set(body["outbox_alerting"]) <= {"pending", "dead"}
 
 
 def test_manual_current_then_late_automatic_callback_sent_expected_pre_activation(
@@ -4047,6 +4081,8 @@ higher locally-published automatic sequence to compare). 7b-core does not claim 
 `AUDIT_FINDINGS.md` A6).
 ```
 
+- [ ] **Step 4b: Correct `docs/RUNBOOK.md`'s existing `## Retention & compliance` section (re-review 0ca264b F3)** — it still promises that *all* delivered outbox rows prune, which 013 makes false. Replace the prune sentence with the `poc_email`-scoped one and add the `decision_callback` non-pruning paragraph naming it a recorded retention deviation whose erasure scope includes the callback snapshot. Do NOT merely append the cutover section below and leave the stale text in place — the docs-parity test pins the new wording.
+
 - [ ] **Step 5: Write the canonical cutover/rollback procedure into BOTH `docs/RUNBOOK.md` and `docs/DEPLOYMENT.md`** — paste the **identical** block below. In `docs/RUNBOOK.md` add it as a new top-level section immediately before `## Retention & compliance` (line 173). In `docs/DEPLOYMENT.md` add it as `## 11. PR 7b-core cutover — drained maintenance window` immediately after section 10 (before `## 7. Monitoring` if ordering differs, else at end of the cutover sections). Use the SAME numbered body in both (only the section header differs):
 
 ```markdown
@@ -4195,20 +4231,26 @@ R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image 
   would read as accepted). If the original id is unavailable, remain blocked. No sequence is written
   on this path: the precondition is a read-only check that the next id the sequence would allocate is
   already past the restored id, and a genuine sequence repair is a separate drained `ALTER SEQUENCE`.
-- **Retention no longer prunes `decision_callback` outbox rows** (its outbox delete is scoped to
-  `kind='poc_email'`). The row is the durable ordering authority — `id` is the order, `status` is the
-  local delivery outcome, `payload_json` is the body — which the 7b-activation reconciliation
-  manifest is built from, and which an exact restore would otherwise see re-pruned on the next
-  retention run. This retains no new personal data: the body is a projection of the `decisions` and
-  `checks` records, which are already deliberately never pruned. The POC-token body remains destroyed
-  twice over (redacted at delivery, then pruned on schedule).
-- The local `superseded` guard is **best-effort and single-replica**: it fires only on a higher
-  *locally-stamped* `published_at` (and `superseded` is a decision-callback-only terminal —
-  DB-enforced). THREE reverts remain expected until 7b-activation's platform high-water mark:
-  send-before-stamp; cross-replica; and a queued automatic callback delivered AFTER a later manual
-  approval (manual rows have `run_id NULL`, no callback, no sequence — the guard sees no higher
-  locally-published automatic sequence). 7b-core is not exactly-once and not platform-authoritative.
-```
+- **🔵 RETENTION DEVIATION (governed, requires an owner) — retention no longer prunes
+  `decision_callback` outbox rows.** The outbox delete is scoped to `kind='poc_email'`; every
+  decision callback is kept indefinitely because the row is the durable ordering authority
+  (`id` = order, `status` = local delivery outcome, `payload_json` = the body that was sent) that
+  7b-activation reconciles the platform against, and because an exact restore would otherwise be
+  re-pruned on the next retention run.
+  - It adds **no new data category** — the body projects the `decisions`/`checks` record, which is
+    already deliberately never pruned. It IS, however, an **additional durable representation**, and
+    it carries `checks[].source`, which is reviewer-derived and reachable as `reviewer:<reviewer_id>`
+    (`validators/website.py:13-20`). "Retains nothing new" is too strong and must not be used to
+    skip governance.
+  - **Consequences that need an owner named at sign-off:** backup scope and size, erasure — an
+    erasure request must reach the callback snapshot as well as the decision record — privacy
+    review, and the compliance decision itself. `KYC_RETENTION_DAYS` no longer bounds outbox growth.
+  - **Capacity is part of the contract, not an afterthought:** both claim indexes are **partial to
+    `status='pending'`** so the unbounded terminal tail never enters the claim path or its plan, and
+    `/v1/metrics` reports live statuses exactly plus terminal history as one bounded count rather
+    than grouping the whole table on every request.
+  - The POC token — the genuinely sensitive outbox body — is still destroyed twice over: redacted at
+    delivery (`publisher.py:176-182`) and pruned on schedule.
 
 - [ ] **Step 7: Add the docs-contract test + the exact-rollback-command acceptance test** — create `tests/unit/test_docs_cutover_parity.py`:
 
