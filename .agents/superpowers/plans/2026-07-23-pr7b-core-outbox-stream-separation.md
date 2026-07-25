@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. The parent session is the SOLE committer; subagents implement + hand diffs back.
 
-> **Plan revision: rev 5 (2026-07-24)** — folds all 10 findings of the Codex complete-unit re-audit @ `eac3035` (`AGENT_BUS.md` PLAN-REVIEW 2026-07-24): restore acceptance contract (F1), composite decisions→runs case FK (F2), the four affected EXISTING test files claimed + adapted (F3), the third residual (manual-current vs late automatic callback) + its real test (F4), downgrade-TOCTOU autobegin fix (F5), same-stream FIFO-under-backoff proof (F6), retry-branch fencing proof (F7), `superseded` is decision-only (F8), ORM FK parity for `fk_outbox_case_id` (F9), required-keyword `decision_sequence` final signature (F10). See "Codex plan-review round 5" at the bottom.
+> **Plan revision: rev 6 (2026-07-24)** — folds Codex's rev-5 complete-unit re-review @ `0ca264b`
+> (4 findings) plus 2 task-review items; see "Codex plan-review round 6" at the bottom. Rev 5
+> folded all 10 findings of the Codex complete-unit re-audit @ `eac3035` (`AGENT_BUS.md` PLAN-REVIEW 2026-07-24): restore acceptance contract (F1), composite decisions→runs case FK (F2), the four affected EXISTING test files claimed + adapted (F3), the third residual (manual-current vs late automatic callback) + its real test (F4), downgrade-TOCTOU autobegin fix (F5), same-stream FIFO-under-backoff proof (F6), retry-branch fencing proof (F7), `superseded` is decision-only (F8), ORM FK parity for `fk_outbox_case_id` (F9), required-keyword `decision_sequence` final signature (F10). See "Codex plan-review round 5" at the bottom.
 
 **Goal:** Separate the outbox claim into per-`(case_id, ordering_stream)` FIFO streams, add an internal per-case `decision_sequence`, fence every claim with a `claim_token`, add a best-effort local `superseded` guard, and lock all of it down with exhaustive relational integrity — shipped as migration `013` with a drained cutover and a reversible-before-first-supersession downgrade.
 
@@ -4067,8 +4069,22 @@ higher locally-published automatic sequence to compare). 7b-core does not claim 
         run it only after cutover step 2 has hard-stopped and attested every writer at zero, using a
         sequence-serializing statement (`ALTER SEQUENCE`, which excludes concurrent `nextval`, unlike
         `setval`), then read the value back before any writer restarts:
-        `ALTER SEQUENCE outbox_id_seq RESTART WITH <max(id)+1>;
-         SELECT last_value, is_called FROM outbox_id_seq;`
+        **Executable — `RESTART WITH` takes a literal, not an expression, so `<max(id)+1>` is
+        invalid SQL and must never be pasted mid-outage. Compute it into a psql variable first:**
+        ```
+        \set ON_ERROR_STOP on
+        BEGIN;
+        LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE;   -- writers are already stopped; this is the fence
+        SELECT COALESCE(max(id), 0) + 1 AS next_id FROM outbox \gset
+        ALTER SEQUENCE outbox_id_seq RESTART WITH :next_id;
+        SELECT last_value, is_called FROM outbox_id_seq;   -- expect (:next_id, f)
+        COMMIT;
+        -- read back BEFORE any writer restarts: the next allocation must be exactly :next_id
+        SELECT nextval('outbox_id_seq') = :next_id AS allocation_ok;
+        SELECT setval('outbox_id_seq', :next_id, false);   -- undo the probe's consumption
+        ```
+        Run it through the shipped ops entry point where one exists; the drain fence above is part
+        of the procedure, not advice — a run without it must fail.
     (e) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
 
 **Cutover (only after 0.4 is green):**
@@ -4190,11 +4206,13 @@ def test_runbook_and_deployment_cutover_bodies_identical():
         # re-review 0ca264b P1/P2 — the predicate is POSITIVE and the sequence is READ-ONLY:
         "MUST return", "EXACTLY ONE row", "ZERO rows = still blocked",
         "SEQUENCE PRECONDITION", "`setval(...)` is prohibited on this path",
-        "SEPARATE DRAINED action", "ALTER SEQUENCE outbox_id_seq RESTART WITH",
+        "SEPARATE DRAINED action", "ALTER SEQUENCE outbox_id_seq RESTART WITH :next_id",
+        "COALESCE(max(id), 0) + 1", "\\gset", "allocation_ok",
         "substituting `now()` for `delivered_at` is prohibited",
     ):
         assert token in rb  # safety-critical details survive, not just the numbered leaders
     assert "setval(pg_get_serial_sequence" not in rb  # the live sequence write must stay deleted
+    assert "RESTART WITH <" not in rb  # no pseudocode placeholder survives into the runbook
     assert rb.count("edge-block the composer") == 2  # forward + rollback both establish the fence
     assert rb.count("remove the composer edge block") == 3  # forward + both rollback outcomes clear it
 ```
@@ -4513,4 +4531,3 @@ The ruff/compile self-review WAS run against every fenced create-file block, und
 path and the full `E,F,I,UP,B,SIM` selector set. The frozen `V013_BACKFILL_SHA` is **unchanged** —
 none of these edits touch `v013_backfill.py` (the acceptance predicate and the retention narrowing
 both live outside the frozen contract).
-
