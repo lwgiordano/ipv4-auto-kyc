@@ -79,12 +79,22 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   enqueue-time write, and it forces one canonical encoder to be reproduced in **both** Python and SQL
   (`json.dumps` and `jsonb::text` do not agree on separators, so the two consumers could disagree
   silently). The digest is instead **one SQL expression, defined once** and used verbatim by the
-  §Rollout restore acceptance predicate and by 014's candidate manifest:
-  `callback_body_digest(o) = encode(sha256(convert_to(o.payload_json::text, 'UTF8')), 'hex')`
+  §Rollout restore acceptance predicate:
+  `stored_payload_jsonb_digest(o) = encode(sha256(convert_to(o.payload_json::text, 'UTF8')), 'hex')`
   (lowercase hex SHA-256; `sha256`/`convert_to`/`encode` are Postgres core — no `pgcrypto`).
   `payload_json` is `jsonb`, so `::text` is already key-normalized and whitespace-canonical, making
   the expression deterministic for equal values on both the backup and the restored database.
   `md5(...)` is **prohibited** — a weak digest with no offsetting benefit here.
+- **The name is load-bearing: this is NOT a digest of the callback body that was sent (rev 11,
+  re-review `0ca264b` P1/F1).** It hashes PostgreSQL's `jsonb::text` rendering; the sender transmits
+  `json.dumps(payload).encode()` (`publisher.py:114`). The two encoders disagree — Python's default
+  emits `\u00e9` where JSONB text emits UTF-8 `é`, and `checks[].source` is reachable as
+  `reviewer:<reviewer_id>` (`validators/website.py:13-20`), so this is a live difference and not a
+  theoretical one. Its **only** sanctioned use is backup→restore **semantic equality**, where both
+  sides are Postgres. It must never be exported as, compared against, or described as a
+  received-body witness: a platform that hashes the bytes it actually accepted would disagree, and
+  one that merely echoes our SQL value proves nothing. 014's wire digest is a separate, versioned
+  codec — see the activation spec's `callback_wire_sha256`.
 - **Fenced claim:** `outbox.{claim_lease_expires_at TIMESTAMPTZ NULL, claim_token UUID NULL,
   claimed_by TEXT NULL}`, claim tuple treated **all-three-together** (below).
 - **Triple identity + per-case sequence uniqueness (F1):** four constraints, each load-bearing —
@@ -306,7 +316,7 @@ identity+lifecycle is what made "exact" false: a **previously retried** callback
 reset `attempts` / `next_attempt_at` / `last_error`, or a fresh `created_at`, is not the row that
 was pruned, yet passed the rev-10 predicate. `body_digest` is computed **on the backup row** with the
 single
-`callback_body_digest` expression defined in §1 — the same expression the predicate below and 014's
+`stored_payload_jsonb_digest` expression defined in §1 — the same expression the predicate below and 014's
 manifest use. `md5(payload_json::text)` is **prohibited**: a weak digest, and not the repo's
 convention.
 
@@ -368,7 +378,7 @@ P1/F4).** The restore path above repairs *history*; this clause prevents *recurr
 storage/ownership decision 014 depends on. Before rev 10 an exact restore was self-defeating: it
 reinstates the original 7-year-old `delivered_at`, so `retention.py:29-35`
 (`status='delivered' AND delivered_at < now() - interval`) re-deleted the row on its very next run,
-and the tool then had no way to derive 014's per-callback `(body_digest, local_status)` from the
+and the tool then had no way to derive 014's per-callback `(wire digest, local_status)` from the
 immutable `decisions` row. 013 therefore establishes the **`outbox` row itself** as the durable
 authority for a decision callback's identity, order, body, and local status:
 - **Retention's outbox prune is narrowed to `kind='poc_email'`.** That is the whole change — one
@@ -389,7 +399,8 @@ authority for a decision callback's identity, order, body, and local status:
   destroyed twice over: redacted at delivery (`publisher.py:176-182`) and pruned on schedule.
 - **014's candidate manifest is built from this authority**, not from an undefined "agreed universe"
   and not from a row that may have been pruned. `local_status` is read directly from `outbox.status`
-  and the digest from `payload_json` via §1's `callback_body_digest`; there is no second
+  and the wire digest from `payload_json` via 014's versioned `encode_decision_callback` codec
+  (NOT §1's `stored_payload_jsonb_digest`, which hashes a different encoding); there is no second
   representation to drift against and no dual write to keep consistent.
 - **Rows grow 1:1 with `decisions` and are never reclaimed, so the capacity consequences are part
   of the contract, not an afterthought.** Two follow from making `outbox` unbounded:
@@ -539,7 +550,7 @@ rely on the operator remembering that the forward drain also applies backward.
   with its **original** `delivered_at` (not `now()`), then run the **real** retention job again.
   Assert the row **survives** with `id`/`case_id`/`run_id`/`status`/`delivered_at`/`payload_json`
   intact, and that 014's manifest entry
-  `(case_id, run_id, decision_sequence, callback_body_digest, local_status)` is still exactly
+  `(case_id, run_id, decision_sequence, callback_wire_sha256, local_status)` is still exactly
   derivable from it. Assert in the same run that an equally-old delivered **`poc_email`** row IS
   deleted, so the narrowing is proven to be a narrowing and not a disablement. **Mutation:** drop the
   `kind` predicate from the retention DELETE → the callback assertions must fail.
@@ -658,7 +669,7 @@ recovery path plus one new durable-storage contract. The fourth finding is activ
 - **P1 — The restore had no durable authority for 014 (§1, §Rollout).** An exact restore reinstates
   the original 7-year-old `delivered_at`, so `retention.py:29-35` re-deleted the row on its next run;
   the plan's `delivered_at=now()` hid this. 014's manifest then had no source for per-callback
-  `(body_digest, local_status)`. **Resolution — the `outbox` row *is* the durable authority:**
+  `(wire digest, local_status)`. **Resolution — the `outbox` row *is* the durable authority:**
   retention's outbox prune is narrowed to `kind='poc_email'`, so a delivered `decision_callback` row
   is never deleted and keeps id/case/run/sequence/status/body. Chosen over a separate authority table
   and over a stored `body_sha256` column (both duplicate an existing fact into a second

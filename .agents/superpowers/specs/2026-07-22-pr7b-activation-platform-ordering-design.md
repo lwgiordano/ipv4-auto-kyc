@@ -1,4 +1,4 @@
-# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 3)
+# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 4)
 
 ## Context
 
@@ -139,14 +139,11 @@ likewise for a *future* sequence created after the manual approval. A **mutation
 cases already manual when the window opens — but it is no longer the whole control.
 
 **Candidate manifest (tool-derivable):** the tool exports every immutable callback decision
-`(case_id, run_id, decision_sequence, callback_body_sha256, local_status)`. **Its universe and its
+`(case_id, run_id, decision_sequence, callback_wire_sha256, local_status)`. **Its universe and its
 source are now defined, not "agreed" (rev 3, `0ca264b` P1/F4):** the manifest is built from 7b-core's
 **durable ordering authority — the `outbox` row itself**, which 013 makes non-prunable (retention's
 outbox prune is narrowed to `kind='poc_email'`, so a delivered `decision_callback` row keeps its
-body indefinitely). `callback_body_sha256` is 7b-core §1's single `callback_body_digest` expression
-evaluated over `outbox.payload_json` — no stored digest column, deliberately (a second
-representation of the body would be one more thing to drift) — and `local_status` is
-`outbox.status`; neither is re-derived from the immutable
+body indefinitely). `local_status` is `outbox.status`; neither is re-derived from the immutable
 `decisions` row, which cannot carry them. The universe is therefore **every** `decision_callback`
 row, with no exclusion window — the pre-rev-3 formulation could not survive a restored row being
 re-pruned, which would let bootstrap block or silently omit platform history. Exact two-sided
@@ -296,7 +293,7 @@ linked decision is `published`. Ships as the shared query 7b-activation owns and
   must **fail** (a) and (b). The bootstrap-time pending/dead case above is retained, not replaced.
 - **Manifest durability (rev 3, `0ca264b` P1/F4):** a `decision_callback` row older than the retention
   period, with its **original** `delivered_at`, survives a real retention run intact; its manifest
-  entry `(case_id, run_id, decision_sequence, callback_body_sha256, local_status)` is still exactly
+  entry `(case_id, run_id, decision_sequence, callback_wire_sha256, local_status)` is still exactly
   derivable, and two-sided coverage holds. **Mutation:** widening retention's `DELETE` back over
   `decision_callback` rows must make bootstrap fail closed rather than silently omit history.
 - **`integrity_mismatch`:** tuple tamper → exact terminal (zero HTTP, `dead`, `resolved_at`, no
@@ -360,3 +357,28 @@ contract. Rev 2's controls are retained, not replaced.
   and its `status`. The pre-rev-3 "agreed universe" was undefined and could not survive a
   restored row being re-pruned; the universe is now every `decision_callback` row, with two-sided
   coverage still failing closed.
+
+**`callback_wire_sha256` is the digest of the bytes actually sent — one versioned codec, two callers
+(rev 4, `0ca264b` P1/F1).** The pre-rev-4 manifest hashed PostgreSQL `payload_json::text` while the
+sender transmits `json.dumps(payload).encode()` (`publisher.py:114`). Those encoders disagree —
+Python's default emits `\u00e9` where JSONB text emits UTF-8 `é`, and `checks[].source` is reachable
+as `reviewer:<reviewer_id>` (`validators/website.py:13-20`) — so an honest platform hashing the bytes
+it accepted would have disagreed with us, while a platform echoing our SQL value would have made the
+witness circular and proved nothing about what it received. Therefore:
+
+- 014 defines **one versioned codec**, `encode_decision_callback(payload) -> bytes`, and **both**
+  `_deliver_decision_callback` and the manifest exporter use its exact output. Neither may encode
+  independently. Changing the codec is a versioned change, because it changes the signed bytes.
+- `callback_wire_sha256` is the SHA-256 of those bytes.
+- The **platform ledger must retain the SHA-256 of the raw request bytes it actually accepted**, and
+  reconciliation compares that against `callback_wire_sha256`. Echoing the tool's supplied value is
+  explicitly not an acceptable implementation of the platform side.
+- 7b-core's `stored_payload_jsonb_digest` is a **different value for a different job** — backup→restore
+  semantic equality, both sides in Postgres. It is never exported in the manifest and never described
+  as a body digest.
+
+**Required proof:** capture the real `httpx.Request.content` and assert its SHA-256 equals the
+manifest's `callback_wire_sha256` for nested objects, alternate key-insertion order, and non-ASCII
+reviewer/source text; assert the SQL semantic digest **differs** for at least the non-ASCII case and
+is used only on the restore path. **Mutation:** switch either the sender or the exporter to an
+independent encoder — the equality test must fail.
