@@ -295,19 +295,25 @@ callback" is an **executable identity requirement**, because the backfill's orde
 `outbox.id` and a default-id INSERT silently re-ranks a pruned older callback as newer (the guard
 would then suppress the actually-newer decision):
 
-(a) record from the backup, per missing callback, the authoritative evidence tuple
-`(decision_id, run_id, case_id, original_outbox_id, body_digest, original_status,
-original_delivered_at)`. `body_digest` is computed **on the backup row** with the single
+(a) record from the backup, per missing callback, `decision_id` plus **every schema-012 `outbox`
+column**: `(id, kind, case_id, run_id, payload_json, status, attempts, next_attempt_at,
+delivered_at, last_error, created_at)`. This procedure runs **before 013**, so it must name **no**
+013-only column — `resolved_at`, `ordering_stream`, `decision_sequence` and the claim tuple do not
+exist yet (`alembic/versions/006_outbox.py:20-32` is the authoritative column list). Recording only
+identity+lifecycle is what made "exact" false: a **previously retried** callback restored with a
+reset `attempts` / `next_attempt_at` / `last_error`, or a fresh `created_at`, is not the row that
+was pruned, yet passed the rev-10 predicate. `body_digest` is computed **on the backup row** with the
+single
 `callback_body_digest` expression defined in §1 — the same expression the predicate below and 014's
 manifest use. `md5(payload_json::text)` is **prohibited**: a weak digest, and not the repo's
 convention.
 
 (b) the restore MUST `INSERT … (id, …) VALUES (<original_outbox_id>, …)` — a default-id INSERT is
-prohibited; if the original id is unavailable, remain `BLOCKED_NO_AUTHORITATIVE_MAPPING`. The restore
-MUST reinstate the **original lifecycle fields** (`status`, `delivered_at`, `resolved_at`, and the
-claim tuple as recorded) — substituting `now()` for `delivered_at` is **not** an exact restore and is
-prohibited (it both falsifies the audit record and, pre-rev-10, silently deferred re-pruning; see the
-durable-authority contract below).
+prohibited; if the original id is unavailable, remain `BLOCKED_NO_AUTHORITATIVE_MAPPING`. It MUST
+write **every recorded column** from (a), none defaulted. Substituting `now()` for `delivered_at`
+or `created_at`, or letting `attempts`/`next_attempt_at`/`last_error` fall back to their server
+defaults, is **not** an exact restore and is prohibited (it falsifies the audit record and, pre-rev-10,
+silently deferred re-pruning; see the durable-authority contract below).
 
 (c) **ACCEPTANCE PREDICATE — positive and fail-closed.** The pre-rev-10 formulation ("a SELECT of
 mismatching rows must return zero rows") was **fail-open**: an absent row, or a row restored under
@@ -316,7 +322,9 @@ recorded `decision_id` was never used at all. The predicate is now a **positive*
 **one** row must join `outbox` → `decisions` on the full recorded identity
 (`o.id = original_outbox_id`, `o.kind='decision_callback'`, `o.case_id`, `o.run_id`, `d.id =
 decision_id`, `d.case_id = o.case_id`, `d.run_id = o.run_id`) **and** match `body_digest` **and**
-match the recorded lifecycle fields (`status`, `delivered_at`).
+match **every** recorded schema-012 column (`status`, `attempts`, `next_attempt_at`,
+`delivered_at`, `last_error`, `created_at`), using `IS NOT DISTINCT FROM` for nullables so a NULL
+matches a NULL rather than yielding UNKNOWN.
 **Zero rows or more than one row BLOCKS** — there is no "no news is good news" path.
 Each identity component is separately load-bearing (dropping any one must fail the acceptance test).
 
@@ -504,8 +512,11 @@ rely on the operator remembering that the forward drain also applies backward.
   migration/CLI matrix, then the full suite.
 - **Restore acceptance is fail-closed (rev-10 P2):** the positive single-row join must **block** on
   each of — row absent, wrong `run_id`, wrong `decision_id`, wrong `case_id`, wrong
-  `original_outbox_id`, wrong body (digest mismatch), wrong lifecycle field
-  (`status`/`delivered_at`), and duplicate evidence rows (>1 match). The one exact row must pass.
+  `original_outbox_id`, wrong body (digest mismatch), wrong value for ANY recorded schema-012
+  column (`status`, `attempts`, `next_attempt_at`, `delivered_at`, `last_error`, `created_at`), and
+  duplicate evidence rows (>1 match). The seeded callback must be a **previously retried** one
+  (non-zero `attempts`, a past `next_attempt_at`, a recorded `last_error`) so the retry/audit
+  columns are load-bearing rather than incidentally equal. The one exact row must pass.
   **Mutation:** dropping each joined identity component **separately** must make a wrong-restore case
   pass. Exercised through the **real** diagnostic CLI and the **real** 013 upgrade, not a helper-only
   assertion.

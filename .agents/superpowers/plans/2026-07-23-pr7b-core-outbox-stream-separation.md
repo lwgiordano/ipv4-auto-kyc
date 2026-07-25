@@ -3556,14 +3556,22 @@ Run: `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py -v` �
 # return EXACTLY ONE row. A negative "select the mismatches, expect zero rows" formulation is
 # prohibited — an absent row, or one restored under the wrong run_id, matches nothing and is then
 # indistinguishable from an exact match (re-review 0ca264b P2).
+# EVERY schema-012 outbox column is recorded, restored and positively compared. The procedure runs
+# BEFORE 013, so it must not name a 013-only column: `resolved_at` and the claim tuple do not exist
+# yet, while `attempts`, `next_attempt_at`, `last_error` and `created_at` DO and are part of the row.
+# `IS NOT DISTINCT FROM` throughout so a NULL matches a NULL rather than yielding UNKNOWN.
 _RESTORE_ACCEPTANCE_SQL = text(
     "SELECT 1 AS accepted FROM outbox o JOIN decisions d ON d.id = :decision_id "
     "WHERE o.id = :original_outbox_id AND o.kind = 'decision_callback' "
-    "AND o.case_id = :case_id AND o.run_id = :run_id "
-    "AND d.case_id = o.case_id AND d.run_id = o.run_id "
+    "AND o.case_id = :case_id AND o.run_id IS NOT DISTINCT FROM :run_id "
+    "AND d.case_id = o.case_id AND d.run_id IS NOT DISTINCT FROM o.run_id "
     "AND encode(sha256(convert_to(o.payload_json::text,'UTF8')),'hex') = :body_digest "
     "AND o.status = :original_status "
-    "AND o.delivered_at IS NOT DISTINCT FROM :original_delivered_at"
+    "AND o.delivered_at IS NOT DISTINCT FROM :original_delivered_at "
+    "AND o.attempts = :original_attempts "
+    "AND o.next_attempt_at IS NOT DISTINCT FROM :original_next_attempt_at "
+    "AND o.last_error IS NOT DISTINCT FROM :original_last_error "
+    "AND o.created_at IS NOT DISTINCT FROM :original_created_at"
 )
 
 # Read-only, monotonic sequence precondition (step 0.6d). The id the sequence would hand the NEXT
@@ -3603,16 +3611,27 @@ def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
                                       ev_seq=1, status="delivered")
         oid_b = _seed_legacy_callback(conn, case_id="c1", run_id="rB", decision_id="dB",
                                       ev_seq=2, status="pending")
+        # A is a PREVIOUSLY RETRIED callback: without attempts/next_attempt_at/last_error/created_at
+        # in the evidence tuple, a restore that silently reset its retry clock and error history
+        # would still pass the predicate (re-review 0ca264b F4).
+        conn.execute(text(
+            "UPDATE outbox SET attempts=3, last_error='upstream 503', "
+            "next_attempt_at=now() - interval '2 days' WHERE id=:i"), {"i": oid_a})
         assert oid_a < oid_b  # A is the authoritative OLDER callback
         # the evidence tuple the operator captures FROM BACKUP before restoring — identity,
         # body digest, AND the original lifecycle fields (substituting now() is prohibited)
         evidence = {
             r.run_id: {"decision_id": d, "run_id": r.run_id, "case_id": r.case_id,
                        "original_outbox_id": r.id, "body_digest": r.digest,
-                       "original_status": r.status, "original_delivered_at": r.delivered_at}
+                       "original_status": r.status, "original_delivered_at": r.delivered_at,
+                       "original_attempts": r.attempts,
+                       "original_next_attempt_at": r.next_attempt_at,
+                       "original_last_error": r.last_error,
+                       "original_created_at": r.created_at}
             for r, d in zip(
                 conn.execute(text(
-                    "SELECT id, run_id, case_id, status, delivered_at, "
+                    "SELECT id, run_id, case_id, status, delivered_at, attempts, "
+                    "next_attempt_at, last_error, created_at, "
                     "encode(sha256(convert_to(payload_json::text,'UTF8')),'hex') AS digest "
                     "FROM outbox ORDER BY id")).all(),
                 ["dA", "dB"], strict=True,
@@ -3646,10 +3665,13 @@ def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
 
     with engine.begin() as conn:  # (7a) the governed restore: EXACT id AND exact lifecycle
         conn.execute(text(
-            "INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, delivered_at) "
-            "VALUES (:i,'decision_callback',:c,:r,'{}'::jsonb,:st,:da)"
+            "INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, delivered_at, "
+            "attempts, next_attempt_at, last_error, created_at) "
+            "VALUES (:i,'decision_callback',:c,:r,'{}'::jsonb,:st,:da,:at,:na,:le,:ca)"
         ), {"i": ev["original_outbox_id"], "c": ev["case_id"], "r": ev["run_id"],
-            "st": ev["original_status"], "da": ev["original_delivered_at"]})
+            "st": ev["original_status"], "da": ev["original_delivered_at"],
+            "at": ev["original_attempts"], "na": ev["original_next_attempt_at"],
+            "le": ev["original_last_error"], "ca": ev["original_created_at"]})
         assert _accepted(conn, ev) == [(1,)]  # ACCEPTED: exactly one row, every component matched
 
         # (6) every evidence component is separately load-bearing: mutate one at a time, and
@@ -3662,6 +3684,14 @@ def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
             "body_digest": "0" * 64,
             "original_status": "pending",
             "original_delivered_at": ev["original_delivered_at"] + _dt.timedelta(seconds=1),
+            "original_attempts": ev["original_attempts"] + 1,
+            "original_next_attempt_at": (
+                ev["original_next_attempt_at"] + _dt.timedelta(seconds=1)
+                if ev["original_next_attempt_at"] is not None
+                else _dt.datetime.now(_dt.UTC)
+            ),
+            "original_last_error": "not the recorded error",
+            "original_created_at": ev["original_created_at"] + _dt.timedelta(seconds=1),
         }
         for key, bad in mutations.items():
             assert _accepted(conn, {**ev, key: bad}) == [], f"{key} is not load-bearing"
@@ -4040,12 +4070,18 @@ higher locally-published automatic sequence to compare). 7b-core does not claim 
 0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
     advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
     (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
-        callback: `(decision_id, run_id, case_id, original_outbox_id, body_digest,
-        original_status, original_delivered_at)` where `body_digest` is computed ON THE BACKUP ROW
-        as `encode(sha256(convert_to(payload_json::text,'UTF8')),'hex')`. `md5(...)` is prohibited.
-    (b) The restore MUST re-insert the ORIGINAL primary key AND the ORIGINAL lifecycle fields:
-        `INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, delivered_at, ...)
-         VALUES (<original_outbox_id>, ..., <original_status>, <original_delivered_at>, ...)` — a
+        callback: `decision_id` plus **every schema-012 `outbox` column** —
+        `(id, kind, case_id, run_id, payload_json, status, attempts, next_attempt_at,
+        delivered_at, last_error, created_at)` — with `body_digest` computed ON THE BACKUP ROW as
+        `encode(sha256(convert_to(payload_json::text,'UTF8')),'hex')`. `md5(...)` is prohibited.
+        This procedure runs BEFORE 013, so it must name NO 013-only column: `resolved_at`,
+        `ordering_stream`, `decision_sequence` and the claim tuple do not exist yet. Omitting the
+        retry/audit columns is what makes "exact" false — a previously retried callback restored
+        with a reset `attempts`/`next_attempt_at`/`last_error` is NOT the row that was pruned.
+    (b) The restore MUST re-insert the ORIGINAL primary key AND every other recorded column:
+        `INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, attempts,
+         next_attempt_at, delivered_at, last_error, created_at) VALUES (<original_outbox_id>, ...)`
+         — every value from the evidence tuple, none defaulted. A
         default-id INSERT is prohibited (it allocates a fresh id and re-ranks the restored older
         callback as newer), and substituting `now()` for `delivered_at` is prohibited (it falsifies
         the audit record). If the original id is unavailable, do NOT restore: remain
@@ -4060,7 +4096,13 @@ higher locally-published automatic sequence to compare). 7b-core does not claim 
            AND d.case_id = o.case_id AND d.run_id = o.run_id
            AND encode(sha256(convert_to(o.payload_json::text,'UTF8')),'hex') = :body_digest
            AND o.status = :original_status
-           AND o.delivered_at IS NOT DISTINCT FROM :original_delivered_at;`
+           AND o.delivered_at IS NOT DISTINCT FROM :original_delivered_at
+           AND o.attempts = :original_attempts
+           AND o.next_attempt_at IS NOT DISTINCT FROM :original_next_attempt_at
+           AND o.last_error IS NOT DISTINCT FROM :original_last_error
+           AND o.created_at IS NOT DISTINCT FROM :original_created_at;`
+        Every schema-012 column is compared, so dropping any one of them from the restore fails
+        the predicate. `IS NOT DISTINCT FROM` is used for nullables so NULL matches NULL.
     (d) SEQUENCE PRECONDITION — READ-ONLY. Step 0 runs with API/pipeline/outbox writers LIVE (only
         retention is suspended; the first hard-stop is cutover step 2), so NO sequence write happens
         here. `setval(...)` is prohibited on this path: a sequence is a non-transactional object,
@@ -4210,6 +4252,8 @@ def test_runbook_and_deployment_cutover_bodies_identical():
         # re-audit F1 — the restore acceptance contract is executable, not advisory:
         "RESTORE ACCEPTANCE CONTRACT", "original_outbox_id",
         "default-id INSERT is prohibited", "ACCEPTANCE PREDICATE",
+        "every schema-012 `outbox` column", "o.attempts = :original_attempts",
+        "o.created_at IS NOT DISTINCT FROM :original_created_at",
         "pg_get_serial_sequence('outbox','id')",
         # re-review 0ca264b P1/P2 — the predicate is POSITIVE and the sequence is READ-ONLY:
         "MUST return", "EXACTLY ONE row", "ZERO rows = still blocked",
