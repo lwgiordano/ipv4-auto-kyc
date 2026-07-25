@@ -3411,45 +3411,45 @@ def test_cli_and_013_both_refuse_on_parity_state(pg, name):
     engine.dispose()
 
 
+# The schema-012 retention DELETE, frozen as a literal. The hazard is an OLD retention process
+# still in flight during cutover — its SQL is fixed by the already-deployed pre-013 image, so this
+# string must NOT track the current retention module. (Task 5 narrowed the live prune() to
+# kind='poc_email'; test_retention_keeps_decision_callbacks_and_prunes_poc_email covers that the
+# NEW worker never deletes a callback, which is why the new prune() cannot produce this state.)
+_LEGACY_012_RETENTION_DELETE = (
+    "DELETE FROM outbox WHERE status='delivered' "
+    "AND delivered_at < now() - make_interval(days => :d)"
+)
+
+
 @pytest.mark.parametrize("mode", ["commit", "rollback"])
-def test_cli_share_lock_blocks_until_retention_resolves(pg, mode):
-    """Retention-race DB-lock half (the automatable proof), for BOTH resolutions: the REAL
-    retention `prune` runs in a thread, paused by a global barrier fired AFTER its outbox DELETE
-    but BEFORE `uow()` resolves (holding ROW EXCLUSIVE). The CLI subprocess's `LOCK TABLE outbox
-    IN SHARE MODE` must BLOCK while prune holds — in BOTH modes. On **commit** the callback is
-    truly gone → CLI nonzero + ids. On **rollback** the barrier raises an injected fault so
-    `uow()` rolls the DELETE back → the callback survives → CLI exit 0. MUTATION removing the
-    SHARE lock fails the blocked assertion in both modes AND the commit-mode nonzero outcome.
+def test_cli_share_lock_blocks_until_legacy_retention_resolves(pg, mode):
+    """Retention-race DB-lock half (the automatable proof), for BOTH resolutions.
+
+    Connection A plays the pre-013 retention worker: it runs the FROZEN schema-012 delivered-outbox
+    DELETE and holds the transaction open (ROW EXCLUSIVE) without resolving. The CLI subprocess's
+    `LOCK TABLE outbox IN SHARE MODE` must BLOCK while A holds — in BOTH modes. On **commit** the
+    callback is truly gone -> CLI nonzero + offending ids. On **rollback** it survives -> CLI exit 0.
+
+    Driving A as an explicit second connection (rather than threading the real worker behind a
+    global `after_cursor_execute` barrier) is deliberate: it models the actual hazard, and it means
+    this test registers no process-wide listener and starts no thread, so it cannot leak either into
+    the rest of the session. MUTATION removing the SHARE lock fails the blocked assertion in both
+    modes AND the commit-mode nonzero outcome.
     (The external zero-retention-process attestation stays a runbook TODO(integration).)"""
     url = _fresh_db(pg, f"kyc_diag_race_{mode}")
     command.upgrade(_config(url), "012")
     engine = create_engine(url)
-    _seed_healthy(engine, delivered_at="now() - interval '3000 days'")  # old → prune deletes it
+    _seed_healthy(engine, delivered_at="now() - interval '3000 days'")  # old → legacy prune deletes it
 
-    at_delete = threading.Event()
-    release = threading.Event()
-
-    def _barrier(conn, cursor, statement, params, context, executemany):
-        if "delete from outbox where status='delivered'" in statement.lower():
-            at_delete.set()
-            release.wait(timeout=30)  # hold prune's txn (ROW EXCLUSIVE) open, uncommitted
-            if mode == "rollback":
-                raise RuntimeError("injected retention fault → uow rolls back the DELETE")
-
-    event.listen(Engine, "after_cursor_execute", _barrier)
-    prune_err: list[Exception] = []
-
-    def run_prune():
-        try:
-            prune(_sf(url), 7 * 365)  # the REAL retention seam; uow() commits or rolls back
-        except Exception as e:  # noqa: BLE001
-            prune_err.append(e)
-
-    t = threading.Thread(target=run_prune)
-    t.start()
     proc = None
+    engineA = create_engine(url)
+    connA = engineA.connect()
     try:
-        assert at_delete.wait(timeout=15)  # prune deleted the callback, holding ROW EXCLUSIVE
+        txA = connA.begin()                       # explicit: hold ROW EXCLUSIVE open, unresolved
+        deleted = connA.execute(text(_LEGACY_012_RETENTION_DELETE), {"d": 7 * 365}).rowcount
+        assert deleted == 1, "the legacy DELETE must actually remove the seeded callback"
+
         proc = subprocess.Popen(
             [sys.executable, "-m", "kyc_tool.ops.verify_pr7b_core_backfill"],
             env={**os.environ, "KYC_DATABASE_URL": url},
@@ -3457,21 +3457,24 @@ def test_cli_share_lock_blocks_until_retention_resolves(pg, mode):
         )
         time.sleep(3)
         assert proc.poll() is None  # STILL BLOCKED on the SHARE lock in BOTH modes
-        release.set()
-        t.join(timeout=15)
-        out, _ = proc.communicate(timeout=30)
+
         if mode == "commit":
-            assert proc.returncode != 0 and "'d'" in out  # callback gone → missing mapping
-            assert prune_err == []
+            txA.commit()
         else:
-            assert proc.returncode == 0, out              # callback restored → parity clean
-            assert prune_err and isinstance(prune_err[0], RuntimeError)
+            txA.rollback()
+
+        out, err = proc.communicate(timeout=30)
+        if mode == "commit":
+            assert proc.returncode != 0 and "'d'" in out, out + err   # callback gone → missing mapping
+        else:
+            assert proc.returncode == 0, out + err                    # callback restored → parity clean
     finally:
-        release.set()
         if proc is not None and proc.poll() is None:
             proc.kill()
-        t.join(timeout=15)
-        event.remove(Engine, "after_cursor_execute", _barrier)
+            proc.communicate(timeout=30)          # reap: kill alone leaves a zombie
+        assert proc is None or proc.poll() is not None, "CLI subprocess outlived the test"
+        connA.close()
+        engineA.dispose()
     engine.dispose()
 ```
 
@@ -3681,7 +3684,7 @@ def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
 Run: `.venv/bin/pytest tests/integration/test_migrations.py::test_012_restore_acceptance_rejects_default_id_then_accepts_original -v`
 Expected: PASS. **Mutation witnesses (manual):** (a) change the governed restore INSERT to omit the explicit `id` → the `== [(1,)]` assertion must FAIL (the predicate rejects it), and — if the predicate were also skipped — the final assertion would fail with `{"dA": 2, "dB": 1}` (the silent order reversal this contract exists to block). (b) Replace `_RESTORE_ACCEPTANCE_SQL` with the pre-rev-10 negative form (`SELECT ... WHERE ... AND (o.id <> :original_outbox_id OR ...)`, zero rows = accepted) → the absent-row assertion at (4) must FAIL, proving the fail-open hole is what the positive predicate closes. Restore both.
 
-- [ ] **Step 5: Mutation check (manual, no commit)** — remove `s.execute(text("LOCK TABLE outbox IN SHARE MODE"))`; rerun `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py::test_cli_share_lock_blocks_until_retention_resolves -v` → BOTH params must FAIL the `assert proc.poll() is None` blocked check (the CLI no longer waits on prune), and the `[commit]` param additionally fails its nonzero-outcome assertion (it reads the still-visible callback before the delete commits). Restore.
+- [ ] **Step 5: Mutation check (manual, no commit)** — remove `s.execute(text("LOCK TABLE outbox IN SHARE MODE"))`; rerun `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py::test_cli_share_lock_blocks_until_legacy_retention_resolves -v` → BOTH params must FAIL the `assert proc.poll() is None` blocked check (the CLI no longer waits on connection A's uncommitted legacy DELETE), and the `[commit]` param additionally fails its nonzero-outcome assertion (it reads the still-visible callback before A commits). Restore.
 
 - [ ] **Step 6: RED drift-guard step** — the new CLI changed `src/`:
 
@@ -3827,7 +3830,6 @@ def test_reset_atomic_rollback_when_tuple_appears_before_readback(pg):
             at_readback.set()
             go.wait(timeout=15)  # pause BEFORE the read-back executes
 
-    event.listen(Engine, "before_cursor_execute", _barrier)
     err: list[Exception] = []
 
     def run_reset():
@@ -3837,8 +3839,12 @@ def test_reset_atomic_rollback_when_tuple_appears_before_readback(pg):
             err.append(e)
 
     t = threading.Thread(target=run_reset)
-    t.start()
+    # `event.listen` is process-wide and `Thread.start()` can raise: register and start INSIDE the
+    # try whose finally releases the barrier, removes the listener, and joins — otherwise a raise
+    # between them leaks the hook (and possibly a live thread) into every later test.
     try:
+        event.listen(Engine, "before_cursor_execute", _barrier)
+        t.start()
         assert at_readback.wait(timeout=15)  # reset's UPDATE done, about to read back
         with engine.begin() as conn:          # concurrent writer commits a NEW claimed row
             conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, claim_token, "
@@ -3848,8 +3854,10 @@ def test_reset_atomic_rollback_when_tuple_appears_before_readback(pg):
         go.set()
         t.join(timeout=15)
     finally:
-        go.set()
+        go.set()                                   # always release, even on an early failure
+        t.join(timeout=15)
         event.remove(Engine, "before_cursor_execute", _barrier)
+        assert not t.is_alive(), "reset thread outlived the test"  # a hung thread must not pass
     assert err and isinstance(err[0], RuntimeError)  # reset raised
     with engine.connect() as conn:
         tuples = conn.execute(text("SELECT count(*) FROM outbox WHERE claim_token IS NOT NULL")).scalar_one()
