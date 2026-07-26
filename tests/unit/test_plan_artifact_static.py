@@ -145,3 +145,25 @@ def test_ruff_is_available():
         f"{result.stdout}{result.stderr}"
     )
     assert sys.version_info >= (3, 11)
+
+
+# The design artifacts this plan implements. Kept here rather than in a separate module because
+# they fail the same way: a stray blank line at EOF trips `git diff --check`, which is a CI gate.
+_ARTIFACTS = [
+    PLAN,
+    REPO_ROOT / ".agents" / "superpowers" / "specs" / (
+        "2026-07-22-pr7b-core-outbox-stream-separation-design.md"),
+    REPO_ROOT / ".agents" / "superpowers" / "specs" / (
+        "2026-07-22-pr7b-activation-platform-ordering-design.md"),
+]
+
+
+@pytest.mark.parametrize("path", _ARTIFACTS, ids=lambda p: p.name)
+def test_artifact_has_no_trailing_blank_line(path):
+    """`git diff --check` rejects a new blank line at EOF, so appending a revision note with a
+    string that already ends in a newline silently breaks a CI gate. Caught here instead."""
+    raw = path.read_text()
+    assert raw.endswith("\n"), f"{path.name} must end with exactly one newline"
+    assert not raw.endswith("\n\n"), (
+        f"{path.name} ends with a blank line — `git diff --check` fails on this"
+    )

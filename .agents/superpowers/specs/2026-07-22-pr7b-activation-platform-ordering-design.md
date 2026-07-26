@@ -1,4 +1,4 @@
-# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 4)
+# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 5)
 
 ## Context
 
@@ -62,6 +62,14 @@ Adds only what activation needs (7b-core's `013` already carries stream/sequence
   never hashed); a trigger **rejects UPDATE/DELETE** (immutable). The singleton's two FKs are
   **kind-typed** (`request_digest → (kind='request')`, `response_digest → (kind='response')`) so a
   request slot cannot be filled by a response artifact.
+- **`outbox_manual_release`** (re-review `6a408a3` F2) — the tool-owned half of the release saga:
+  `(case_id, release_id)` PK; `requested_manual_event_id` NOT NULL; `request_event_id` FK to the
+  signed `manual.release_requested` event; `principal` NOT NULL non-blank; `deadline` TIMESTAMPTZ
+  NOT NULL; `outcome TEXT NOT NULL CHECK (outcome IN ('pending','completed','expired','cancelled'))`;
+  `bound_run_id`/`bound_decision_sequence` NULL until the fresh run exists. Partial unique index
+  `WHERE outcome='pending'` on `case_id` — **one open release per case, enforced by the database**,
+  not by application check-then-act. Terminal outcomes are immutable (trigger rejects
+  `completed|expired|cancelled → anything`), so a replay cannot resurrect a closed release.
 - **Downgrade — forward-only-after-use:** raises if `phase != 'legacy'` (the sequence namespace +
   activation epoch are externally observed once emission starts); else drops cleanly. `up→down→up`
   green on a fresh (legacy) schema.
@@ -96,8 +104,11 @@ controls emission. Each process's startup validates its own `(phase, flag)`: **a
 DB `phase='active'` while its own flag is false fails readiness/startup.** `/readyz`
 (`app.py:93-125`) reports phase and applies this rule.
 
-**`integrity_mismatch`:** the pre-HTTP reader compares **`case_id`, `run_id`, and `decision_sequence`**
-across the decision row, outbox columns, and internal JSON. A mismatch → immediate **non-retryable**
+**`integrity_mismatch`:** the pre-HTTP reader compares **`case_id`, `run_id`, `decision_sequence`,
+and `release_id`** across the decision row, outbox columns, and internal JSON. `release_id` is in the
+tuple because a release callback's authority comes from that binding (§Manual-release state machine):
+ordinary callbacks must have it NULL on every surface, release callbacks non-NULL and equal on every
+surface, and any disagreement is a mismatch rather than a silent send. A mismatch → immediate **non-retryable**
 fenced terminal (7b-core's fencing): `status='dead'`, `failure_class='integrity_mismatch'`,
 `resolved_at`, **zero HTTP**, `published_at` NULL, audit with only identifiers + expected-vs-observed
 hashes, metric/alert. **Never `superseded`.** The generic UI requeue (`ui/routes.py:451-476`) returns
@@ -137,7 +148,7 @@ likewise for a *future* sequence created after the manual approval. A **mutation
 `s>h(c)` receiver must fail both. The bootstrap floor below is **retained** — it remains necessary for
 cases already manual when the window opens — but it is no longer the whole control.
 
-### Manual-release state machine (rev 4, 7b-core rev-6 re-review `99df3d2` P1/F2)
+### Manual-release state machine (rev 5, 7b-core re-review `6a408a3` P1/F2)
 
 Rev 3 said release was "carried in the signed response envelope below". **That was a dangling
 reference and is withdrawn**: that envelope is the one-time bootstrap response, accepted only while
@@ -152,7 +163,31 @@ automatic scoring. But every callback suppressed while manual was effective was 
 pre-manual state; promoting one would silently resurrect the decision the operator overrode. Release
 therefore completes **only** on a *fresh* recalculation bound to that release — never on history.
 
-**States** (persisted on the case; `manual_release_*` columns are 014-owned, not 013):
+**It is a two-system saga, and saying "persisted on the case" was the rev-4 mistake.** There is no
+shared transaction between the platform and the tool, so ownership must be split explicitly:
+
+| Owner | Owns |
+|---|---|
+| **Platform** | effective source, current `manual_event_id`, pending release id + deadline + operator, `h(c)`, and the **final atomic source swap** |
+| **Tool (014)** | a durable `outbox_manual_release` record keyed `(case_id, release_id)`: the signed request/event id, the requested `manual_event_id`, the authorized principal, the deadline, an immutable outcome `pending|completed|expired|cancelled`, and the bound `run_id`/`decision_sequence` |
+
+Neither side may infer the other's state. The tool's record is what makes the saga recoverable after
+a lost response; the platform's swap is what makes it authoritative.
+
+**Entry — a documented local-extension event.** Release arrives as `manual.release_requested` on the
+ordinary signed event path, so the release row, the fresh run, and its queue job all commit in **one
+tool transaction** (this repo's rule is that events start work; inventing a side-channel endpoint
+would be a deviation, and is recorded as one in `AUDIT_FINDINGS.md` if it is ever taken instead).
+Admission requires **all** of: HMAC-v2 over that exact path; `Idempotency-Key == release_id`;
+`actor.type == "system"`; and an actor id equal to a configured, non-blank platform principal.
+User, reviewer, and other-system actors are rejected — a valid signature is not authority.
+
+**`release_id` is bound end-to-end**: release record → run → decision → outbox row → callback JSON,
+and the pre-HTTP integrity tuple (§2) is extended to include it. Ordinary callbacks carry every
+release field NULL; release callbacks carry them all non-NULL and equal. A mismatch anywhere is an
+`integrity_mismatch` terminal, not a silent send.
+
+**States** (platform-side effective source; the tool mirrors outcome only):
 
 | State | Effective source | Meaning |
 |---|---|---|
@@ -162,42 +197,49 @@ therefore completes **only** on a *fresh* recalculation bound to that release �
 
 **Transitions — all fail-closed; manual stays effective until the final atomic swap:**
 
-1. **`release` command** — authenticated (HMAC v2, path-bound, same scheme as every other inbound
-   mutation) **and** actor-authorized: release is platform-owned, so a reviewer actor is rejected
-   even with a valid signature. Payload: `case_id`, `manual_event_id` (the manual approval being
-   released), `release_id` (client-generated, the idempotency key), `actor`, `issued_at`.
-2. **CAS on `manual_event_id`.** The transition applies only if the case's currently-effective
-   manual event equals the supplied `manual_event_id`. A stale id — the case was re-approved
-   manually since the operator read it — is **rejected with no state change**. This is what stops a
-   release from silently discarding an approval the operator never saw.
-3. `manual` → `manual_release_pending`, recording `release_id`, actor, and a
-   `release_deadline`. **Manual remains the effective source throughout.**
-4. **Fresh recalculation bound to `release_id`.** The release triggers a new run; the resulting
-   decision and its callback carry `release_id`. The receiver completes a release **only** for a
-   callback where `callback.release_id == case.pending_release_id` **and** `s > h(c)`; that single
-   transaction atomically advances `h(c)`, sets the effective source to automatic, and closes the
-   release. Any other callback — including one produced *before* the release and arriving during
-   `manual_release_pending`, however high its sequence — is acknowledged, deduped, advances `h(c)`,
-   and **does not complete the release**. The binding, not the sequence, is the authority.
-5. **Timeout / failure / abort → back to `manual`**, release recorded terminal-expired. A case can
-   never be wedged in `manual_release_pending`: the deadline is persisted, so expiry is decided by
-   stored state rather than by a live timer, and it survives restart.
+1. **Open.** CAS on `manual_event_id`: the transition applies only if the case's currently-effective
+   manual event equals the supplied one. A stale id — the case was re-approved since the operator
+   read it — is rejected with no state change.
+2. `manual` → `manual_release_pending`, recording `release_id`, principal, and a DB-time
+   `release_deadline`. **Manual remains effective.**
+3. **Completion re-CASes everything, not just the release id.** The rev-4 machine checked only
+   `release_id` and `s > h(c)`, which let this sequence through: M1 is effective; R1 opens against
+   M1; a reviewer records **M2**; R1's bound callback arrives and replaces M2 — an approval nobody
+   ever released. The completion transaction must therefore re-assert **all** of:
+   pending release id matches; the release's requested `manual_event_id` matches; **the case's
+   current manual event is still that same event**; the deadline is unexpired **by database time**;
+   and `s > h(c)`. Any one failing leaves manual effective and the release un-completed.
+4. **A new manual approval takes the same case lock and CANCELS the pending release** (outcome
+   `cancelled`). That is the other half of (3): the race is resolved by whichever transaction takes
+   the lock first, and both orders end with the newer manual approval effective.
+5. **Expiry is driven by stored time, not by traffic.** A pending release past its deadline is
+   expired by a concrete DB-time reaper (or a lock-protected lazy transition on next touch,
+   whichever the implementation picks — but one of them must exist and be named). A case must not
+   sit in `manual_release_pending` forever because no further callback ever arrives.
 6. **Idempotency + concurrency.** `release_id` is the key: replaying it returns the original
-   outcome and changes nothing. A *different* `release_id` while one is pending is **rejected** —
-   one release at a time per case.
-7. **Restart recovery.** All release state is persisted, so a crash mid-release resumes in
-   `manual_release_pending` with its original deadline and `release_id`. Nothing in the machine
-   lives in memory. `h(c)` is monotonic across every path above, including expiry and rejection.
+   outcome and changes nothing, including after `completed` or `expired`. A *different* `release_id`
+   while one is pending is rejected — one release at a time per case. The same `release_id` used on
+   a different case is rejected (the key is the pair).
+7. **Recovery.** All release state is persisted on both sides, so a lost response after the platform
+   commits `pending`, or a tool crash between the request and the run, both resume: the tool's record
+   is authoritative for "was this release ever admitted", and the deadline bounds it either way.
 
 **Required proof (each an executable test, not prose):** wrong signature; valid signature but
-non-platform actor; replayed `release_id`; stale `manual_event_id`; two concurrent releases; restart
-mid-release; deadline expiry returning to `manual`; a late pre-release callback (seq 7) arriving
-during `manual_release_pending` that must **not** complete the release; the fresh bound callback
-(seq 8) that must; and `h(c)` monotonic across all of them. **Mutations that must fail:** dropping
-the `release_id` binding (so any high-sequence callback completes the release), dropping the CAS,
-and dropping the deadline. The platform contract (§Platform integration), the convergence query
-(§6), and the recovery matrix (§4) are updated together with this machine — a release-aware state
-that only one of the three knows about is the defect this finding was.
+non-platform actor (user / reviewer / other system); `Idempotency-Key != release_id`; replayed
+`release_id` after `completed` and after `expired`; the same `release_id` on another case; stale
+`manual_event_id` at open; **M1 → R1 → M2 → R1-callback in BOTH lock orders, each leaving M2
+effective**; response loss after the platform's pending commit; tool crash between request and run;
+restart with no further traffic followed by deadline expiry; a late pre-release callback (seq 7)
+during `manual_release_pending` that must not complete the release; the fresh bound callback (seq 8)
+that must; field-by-field `release_id` tampering across record/run/decision/outbox/JSON; and `h(c)`
+monotonic across every path. **Mutations that must fail:** dropping the current-manual-event re-CAS
+at completion (this is finding F2 itself), dropping the open-time CAS, dropping the deadline, and
+dropping the `release_id` binding so any high-sequence callback completes the release.
+
+**Updated together with this machine**, because a release-aware state only one of them knows about
+is the defect this finding was: the platform contract (§Platform integration), the convergence query
+(§6), the recovery matrix (§4), `.agents/ROADMAP.md`, `docs/PLATFORM_INTEGRATION.md`, and
+`AUDIT_FINDINGS.md`.
 
 **Candidate manifest (tool-derivable):** the tool exports every immutable callback decision
 `(case_id, run_id, decision_sequence, callback_wire_sha256, local_status)`. **Its universe and its
@@ -491,3 +533,34 @@ instruction not to re-merge activation into core.
   deadline so a case can never wedge, and full restart recovery. The convergence query now returns
   `not_applicable_manual` as a third state rather than reporting a suppressed decision as converged,
   and the recovery matrix forbids clearing release state to "unstick" a case.
+
+## Revision note — rev 5 (2026-07-26)
+
+Folds the 014-owned finding F2 from Codex's post-rev-6 re-review (`6a408a3`). Rev 4's release
+machine was directionally right and mechanically unsafe; this replaces the mechanism, not the
+product decision (release exists; suppressed callbacks are discarded — unchanged, human-decided).
+
+- **The completion CAS could discard a newer manual approval.** Rev 4 checked only `release_id` and
+  `s > h(c)` at completion, so: M1 effective → R1 opens against M1 → a reviewer records **M2** →
+  R1's bound callback arrives and replaces M2, an approval nobody released. Completion now re-CASes
+  **all** of: pending release id, the release's requested `manual_event_id`, **the case's current
+  manual event still being that same event**, an unexpired **DB-time** deadline, and `s > h(c)`. A
+  new manual approval takes the same case lock and *cancels* the pending release, so both lock
+  orders end with M2 effective. The required proof runs that interleaving in both orders.
+- **"Persisted on the case" conflated two systems.** There is no shared transaction between platform
+  and tool, so ownership is now split explicitly: the platform owns effective source, current
+  `manual_event_id`, pending release/deadline/operator, `h(c)`, and the final atomic swap; 014 owns a
+  durable `outbox_manual_release` record keyed `(case_id, release_id)` with an immutable
+  `pending|completed|expired|cancelled` outcome. A partial unique index enforces **one open release
+  per case in the database** rather than by check-then-act, and terminal outcomes are trigger-immutable
+  so a replay cannot resurrect a closed release.
+- **Entry is a documented local-extension event** (`manual.release_requested`) so the release row,
+  the fresh run and its queue job commit in one tool transaction — preserving this repo's "events
+  start work" rule instead of inventing a side-channel endpoint. Admission requires HMAC-v2 on that
+  exact path, `Idempotency-Key == release_id`, `actor.type == "system"`, and a configured non-blank
+  platform principal; a valid signature alone is not authority.
+- **`release_id` is bound end-to-end** (record → run → decision → outbox → callback JSON) and joins
+  the pre-HTTP integrity tuple, so a tampered or absent binding is an `integrity_mismatch` terminal
+  rather than a silent send. Ordinary callbacks carry the release fields NULL on every surface.
+- **Expiry is driven by stored DB time**, via a named reaper or lock-protected lazy transition — a
+  stored deadline does not expire itself, and a case must not wedge because no further traffic arrives.
