@@ -3885,17 +3885,20 @@ Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
 
 ---
 
-## Task 8: `reset_interrupted_outbox_claims` ops CLI (post-013-only)
+## Task 8: ops CLIs — `reset_interrupted_outbox_claims` (post-013) + `repair_outbox_sequence` (drained)
 
 Ships the post-013 stop/rollback helper: it **refuses pre-013 schema** (no `claim_token` column), clears only rows with the **complete** claim tuple, **preserves `next_attempt_at`**, and read-back-asserts zero claim tuples. It is NOT used in the forward cutover (the pre-013 schema has no claim columns; an interrupted old claim is encoded only in `next_attempt_at` and simply waits until its recorded due time).
 
 **Files:**
 - Create: `src/kyc_tool/ops/reset_interrupted_outbox_claims.py`
 - Create: `tests/integration/test_reset_interrupted_outbox_claims.py`
+- Create: `src/kyc_tool/ops/repair_outbox_sequence.py` (re-review `6a408a3` F7)
+- Create: `tests/integration/test_repair_outbox_sequence.py`
 - Re-pin: `tests/policy_driven/test_engine_build_id_guard.py`
 
 **Interfaces:**
 - Produces: `reset_claims(session_factory) -> int` (count cleared; raises if any claim tuple remains, or if the schema is pre-013); `main() -> int`.
+- Produces: `repair_sequence(session_factory) -> int` (the value the next allocation will take; takes the ACCESS EXCLUSIVE fence, restarts the sequence, fail-closed read-back, raises on mismatch); `main() -> int`. NEVER calls `nextval`.
 - Consumes: `kyc_tool.config.get_settings`, `kyc_tool.db.session`.
 
 - [ ] **Step 1: Write the failing tests** — create `tests/integration/test_reset_interrupted_outbox_claims.py`:
@@ -4125,11 +4128,191 @@ if __name__ == "__main__":
 Run: `.venv/bin/pytest tests/integration/test_reset_interrupted_outbox_claims.py -v` → PASS.
 **Mutation:** move `session.commit()` BEFORE the `remaining`/rollback block (the pre-fix ordering); rerun `test_reset_atomic_rollback_when_tuple_appears_before_readback` → it must FAIL (`tuples == 1` — w1's clear was committed = a partial reset). Restore.
 
-- [ ] **Step 5: RED drift-guard step** — new CLI changed `src/`:
+- [ ] **Step 5: Ship `repair_outbox_sequence` (re-review `6a408a3` F7)** — create `src/kyc_tool/ops/repair_outbox_sequence.py`:
+
+```python
+"""Drained outbox-sequence repair (PR 7b-core RUNBOOK step 0.6d escape hatch).
+
+Run ONLY inside the drained maintenance window, after every writer is hard-stopped and attested
+at zero. It exists because the step-0 precondition can legitimately fail when a restored id is
+NOT below the sequence high-water (a restore from a divergent lineage rather than a prune).
+
+Two things make this a shipped CLI rather than pasted SQL. `ALTER SEQUENCE ... RESTART WITH`
+takes a LITERAL, not an expression, so the obvious one-liner is invalid SQL discovered mid-outage.
+And the check must be fail-closed: a psql script that SELECTs a boolean still exits 0 when that
+boolean is false, so a bad repair reports success. Here the exit status IS the result.
+
+It never calls nextval() to probe: consuming an id and setval-ing it back is itself a write to
+the object under repair. The read-back reads last_value/is_called from the sequence relation.
+
+    python -m kyc_tool.ops.repair_outbox_sequence
+"""
+
+import sys
+
+from sqlalchemy import text
+
+from kyc_tool.config import get_settings
+from kyc_tool.db.session import make_engine, make_session_factory, uow
+
+_SEQUENCE = "outbox_id_seq"
+
+
+def repair_sequence(session_factory) -> int:
+    """Restart the outbox id sequence at max(id)+1. Returns the value the NEXT allocation takes.
+
+    Raises RuntimeError (rolling the transaction back) if the post-restart read-back is not
+    exactly (next_id, is_called=false) — the caller must treat that as a failed repair.
+    """
+    with uow(session_factory) as session:
+        # The fence. Writers are already stopped by the runbook; this makes that a guarantee
+        # rather than an assumption, and ALTER SEQUENCE (unlike setval) excludes concurrent
+        # nextval for the duration of the transaction.
+        session.execute(text("LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE"))
+        next_id = session.execute(text("SELECT COALESCE(max(id), 0) + 1 FROM outbox")).scalar_one()
+        if not isinstance(next_id, int) or next_id < 1:  # never interpolate an untrusted value
+            raise RuntimeError(f"refusing to restart {_SEQUENCE}: computed next_id={next_id!r}")
+        session.execute(text(f"ALTER SEQUENCE {_SEQUENCE} RESTART WITH {next_id}"))
+        last_value, is_called = session.execute(
+            text(f"SELECT last_value, is_called FROM {_SEQUENCE}")
+        ).one()
+        if last_value != next_id or is_called:
+            raise RuntimeError(
+                f"{_SEQUENCE} repair FAILED read-back: expected ({next_id}, False), "
+                f"got ({last_value}, {is_called}) — transaction rolled back, sequence unchanged"
+            )
+        return next_id
+
+
+def main() -> int:
+    settings = get_settings()
+    try:
+        next_id = repair_sequence(make_session_factory(make_engine(settings.database_url)))
+    except RuntimeError as exc:
+        print(f"repair_outbox_sequence: FAILED — {exc}", file=sys.stderr)
+        return 1
+    print(f"repair_outbox_sequence: OK — next allocation will be {next_id}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 6: Its test** — create `tests/integration/test_repair_outbox_sequence.py`:
+
+```python
+"""PR 7b-core: the drained sequence repair, through its REAL entry point, on a divergent lineage."""
+
+import os
+import subprocess
+import sys
+import time
+
+import pytest
+from alembic import command
+from sqlalchemy import create_engine, text
+
+from kyc_tool.db.session import make_engine, make_session_factory
+from kyc_tool.ops import repair_outbox_sequence as repairer
+from tests.integration.test_migrations import _config, _fresh_db
+
+pytestmark = pytest.mark.postgres
+
+
+def _seed_rows(engine, n):
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
+        for _ in range(n):
+            conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+                              "VALUES ('poc_email','c1','email','pending')"))
+        return conn.execute(text("SELECT max(id) FROM outbox")).scalar_one()
+
+
+def test_repair_restarts_divergent_sequence_and_next_allocation_is_exact(pg):
+    """Divergent lineage: rows exist above the sequence's position (what a restore from another
+    lineage leaves behind). The REAL CLI must move the sequence past every existing id, and the
+    NEXT allocation must be exactly max(id)+1 — checked on this disposable DB by consuming one."""
+    url = _fresh_db(pg, "kyc_seq_repair")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    max_id = _seed_rows(engine, 5)
+    with engine.begin() as conn:      # rewind BELOW the data: the divergent-lineage state
+        conn.execute(text("ALTER SEQUENCE outbox_id_seq RESTART WITH 1"))
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "kyc_tool.ops.repair_outbox_sequence"],
+        env={**os.environ, "KYC_DATABASE_URL": url}, capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"next allocation will be {max_id + 1}" in proc.stdout
+
+    with engine.begin() as conn:      # disposable DB: consuming one id here is the proof
+        assert conn.execute(text("SELECT nextval('outbox_id_seq')")).scalar_one() == max_id + 1
+    engine.dispose()
+
+
+def test_repair_is_fail_closed_on_a_bad_readback(pg, monkeypatch):
+    """The read-back is the whole safety property: if the sequence is not exactly where the
+    repair intended, it must RAISE and roll back rather than report success. The earlier psql
+    block printed a boolean and exited 0, so a bad repair looked like a good one."""
+    url = _fresh_db(pg, "kyc_seq_repair_failclosed")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    _seed_rows(engine, 3)
+    sf = make_session_factory(make_engine(url))
+    real_text = repairer.text
+
+    def _poison(sql):  # make the ALTER a no-op so the read-back cannot match
+        return real_text("SELECT 1") if sql.startswith("ALTER SEQUENCE") else real_text(sql)
+
+    monkeypatch.setattr(repairer, "text", _poison)
+    with pytest.raises(RuntimeError, match="FAILED read-back"):
+        repairer.repair_sequence(sf)
+    engine.dispose()
+
+
+def test_repair_takes_the_access_exclusive_fence(pg):
+    """The drain fence is part of the procedure. A second connection holding ROW EXCLUSIVE must
+    block the repair — proving the LOCK is real and not decorative."""
+    url = _fresh_db(pg, "kyc_seq_repair_fence")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    _seed_rows(engine, 2)
+    blocker = create_engine(url)
+    conn = blocker.connect()
+    proc = None
+    try:
+        tx = conn.begin()
+        conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+                          "VALUES ('poc_email','c1','email','pending')"))  # holds ROW EXCLUSIVE
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "kyc_tool.ops.repair_outbox_sequence"],
+            env={**os.environ, "KYC_DATABASE_URL": url},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        time.sleep(3)
+        assert proc.poll() is None      # BLOCKED on ACCESS EXCLUSIVE
+        tx.rollback()
+        out, err = proc.communicate(timeout=30)
+        assert proc.returncode == 0, out + err
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.communicate(timeout=30)
+        conn.close()
+        blocker.dispose()
+        engine.dispose()
+```
+
+Run: `.venv/bin/pytest tests/integration/test_repair_outbox_sequence.py -v` → PASS (3 tests).
+**Mutations (manual, verify-then-restore):** (a) delete the `LOCK TABLE ... ACCESS EXCLUSIVE` line → the fence test's `assert proc.poll() is None` must FAIL (the repair no longer waits). (b) delete the read-back `raise` → `test_repair_is_fail_closed_on_a_bad_readback` must FAIL (a poisoned ALTER now reports success). (c) replace the read-back with `SELECT nextval(...)` → the divergent-lineage test's exact-allocation assertion must FAIL, because probing consumed the id the next writer was owed.
+
+- [ ] **Step 7: RED drift-guard step** — new CLI changed `src/`:
 
 Run: `.venv/bin/pytest tests/policy_driven/test_engine_build_id_guard.py -v` → **FAIL** (RED step).
 
-- [ ] **Step 6: Re-pin → GREEN, full gate + commit** (canonical close-out order)
+- [ ] **Step 8: Re-pin → GREEN, full gate + commit** (canonical close-out order)
 
 ```bash
 # re-pin EXPECTED_ENGINE_SOURCE_HASH (one-liner), then:
@@ -4274,22 +4457,17 @@ higher locally-published automatic sequence to compare). 7b-core does not claim 
         run it only after cutover step 2 has hard-stopped and attested every writer at zero, using a
         sequence-serializing statement (`ALTER SEQUENCE`, which excludes concurrent `nextval`, unlike
         `setval`), then read the value back before any writer restarts:
-        **Executable — `RESTART WITH` takes a literal, not an expression, so `<max(id)+1>` is
-        invalid SQL and must never be pasted mid-outage. Compute it into a psql variable first:**
-        ```
-        \set ON_ERROR_STOP on
-        BEGIN;
-        LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE;   -- writers are already stopped; this is the fence
-        SELECT COALESCE(max(id), 0) + 1 AS next_id FROM outbox \gset
-        ALTER SEQUENCE outbox_id_seq RESTART WITH :next_id;
-        SELECT last_value, is_called FROM outbox_id_seq;   -- expect (:next_id, f)
-        COMMIT;
-        -- read back BEFORE any writer restarts: the next allocation must be exactly :next_id
-        SELECT nextval('outbox_id_seq') = :next_id AS allocation_ok;
-        SELECT setval('outbox_id_seq', :next_id, false);   -- undo the probe's consumption
-        ```
-        Run it through the shipped ops entry point where one exists; the drain fence above is part
-        of the procedure, not advice — a run without it must fail.
+        **Run the SHIPPED, TESTED ops CLI — do not paste SQL mid-outage:**
+        `python -m kyc_tool.ops.repair_outbox_sequence`
+        It takes `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` inside one transaction (the drain
+        fence is part of the procedure, not advice), computes `COALESCE(max(id),0)+1`, performs
+        the `ALTER SEQUENCE … RESTART WITH <literal>` (`RESTART WITH` takes a literal, never an
+        expression), and then **fail-closed reads back** `last_value`/`is_called` from the sequence
+        relation, rolling back and exiting **nonzero** unless they are exactly `(next_id, false)`.
+        It never calls `nextval` to probe: consuming an id to check the sequence, then `setval`-ing
+        it back, is itself a write to the object being repaired. Its exit status is the result —
+        a printed boolean is not, which is why the earlier psql block could report success after a
+        bad repair.
     (e) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
 
 **Cutover (only after 0.4 is green):**
@@ -4420,7 +4598,8 @@ def test_runbook_and_deployment_cutover_bodies_identical():
         # re-review 0ca264b P1/P2 — the predicate is POSITIVE and the sequence is READ-ONLY:
         "MUST return", "EXACTLY ONE row", "ZERO rows = still blocked",
         "SEQUENCE PRECONDITION", "`setval(...)` is prohibited on this path",
-        "SEPARATE DRAINED action", "ALTER SEQUENCE outbox_id_seq RESTART WITH :next_id",
+        "SEPARATE DRAINED action", "python -m kyc_tool.ops.repair_outbox_sequence",
+        "LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE",
         "COALESCE(max(id), 0) + 1", "\\gset", "allocation_ok",
         "substituting `now()` for `delivered_at` is prohibited",
     ):
