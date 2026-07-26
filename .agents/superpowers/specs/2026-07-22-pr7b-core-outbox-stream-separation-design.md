@@ -316,7 +316,7 @@ identity+lifecycle is what made "exact" false: a **previously retried** callback
 reset `attempts` / `next_attempt_at` / `last_error`, or a fresh `created_at`, is not the row that
 was pruned, yet passed the rev-10 predicate. `body_digest` is computed **on the backup row** with the
 single
-`stored_payload_jsonb_digest` expression defined in §1 — the same expression the predicate below and 014's
+`stored_payload_jsonb_digest` expression defined in §1 — the same expression the predicate below
 manifest use. `md5(payload_json::text)` is **prohibited**: a weak digest, and not the repo's
 convention.
 

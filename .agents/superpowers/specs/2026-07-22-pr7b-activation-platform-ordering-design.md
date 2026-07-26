@@ -1,4 +1,4 @@
-# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 5)
+# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 6)
 
 ## Context
 
@@ -489,9 +489,33 @@ as `reviewer:<reviewer_id>` (`validators/website.py:13-20`) — so an honest pla
 it accepted would have disagreed with us, while a platform echoing our SQL value would have made the
 witness circular and proved nothing about what it received. Therefore:
 
-- 014 defines **one versioned codec**, `encode_decision_callback(payload) -> bytes`, and **both**
-  `_deliver_decision_callback` and the manifest exporter use its exact output. Neither may encode
-  independently. Changing the codec is a versioned change, because it changes the signed bytes.
+- 014 defines **one codec with an explicit wire schema**,
+  `encode_decision_callback(payload, wire_version) -> bytes`, where `wire_version` is `"legacy"` or
+  `"sequenced"`, and **both** `_deliver_decision_callback` and the manifest exporter use its exact
+  output. Neither may encode independently. Changing either encoding is a versioned change, because
+  it changes the signed bytes.
+- **`wire_version` is not decoration — without it the historical manifest is simply wrong
+  (re-review `6a408a3` P1/F1).** 014 backfills `decision_sequence` into every surviving legacy
+  `decision_callback.payload_json` (§2), but pre-activation HTTP sent a body **without** that field.
+  Hash the backfilled payload and the exporter produces a digest the platform never saw. The trigger
+  is reachable, not theoretical: a legacy callback gets a 2xx, the local delivered stamp faults
+  (send-before-stamp, the residual 7b-core documents), the row stays `pending`, and after 014 the
+  platform ledger holds the legacy-body digest while the exporter hashes the sequenced body —
+  bootstrap fails on honest history with neither side corrupt.
+  Therefore: **the bootstrap manifest labels and hashes every pre-`active` callback as `legacy`**,
+  even after the internal backfill, and the `legacy` encoding **deterministically omits
+  `decision_sequence`** rather than relying on it being absent. `wire_version` travels in the
+  manifest entry and is persisted in the **signed, immutable bootstrap response artifact**, so the
+  accepted version is evidence rather than an assumption on either side.
+- **No sequenced HTTP emission may occur before `phase='active'`** — that is what makes the blanket
+  `legacy` label sound. §2's phase matrix already enforces it (`legacy` strips the field;
+  `bootstrap_in_progress`/`bootstrapped` refuse to claim or send; only `active`+flag emits), and it
+  is now stated as a contract, with a test that a pre-`active` send is byte-identical to 7b-core.
+  **If any future phase can emit both encodings, that blanket label becomes unsound** and the design
+  must add an immutable pre-HTTP delivery-attempt record
+  `(outbox_id, attempt_id, wire_version, request_sha256)`, reconciling the platform's accepted digest
+  against those attempts — local terminal status is not sufficient evidence of what was sent, because
+  send-before-stamp is reachable.
 - `callback_wire_sha256` is the SHA-256 of those bytes.
 - The **platform ledger must retain the SHA-256 of the raw request bytes it actually accepted**, and
   reconciliation compares that against `callback_wire_sha256`. Echoing the tool's supplied value is
@@ -500,8 +524,13 @@ witness circular and proved nothing about what it received. Therefore:
   semantic equality, both sides in Postgres. It is never exported in the manifest and never described
   as a body digest.
 
-**Required proof:** capture the real `httpx.Request.content` and assert its SHA-256 equals the
-manifest's `callback_wire_sha256` for nested objects, alternate key-insertion order, and non-ASCII
+**Required proof:** a legacy-delivered callback still matches its legacy digest **after** 014's
+backfill has added `decision_sequence` to its stored payload; a legacy HTTP-success whose local
+stamp faulted still reconciles; the first post-`active` delivery uses only sequenced bytes; and a
+pre-`active` send is byte-identical to 7b-core. **Mutation:** make the exporter always use the
+sequenced encoding — the backfilled-legacy case must fail. Then: capture the real
+`httpx.Request.content` and assert its SHA-256 equals the manifest's `callback_wire_sha256` for
+nested objects, alternate key-insertion order, and non-ASCII
 reviewer/source text; assert the SQL semantic digest **differs** for at least the non-ASCII case and
 is used only on the restore path. **Mutation:** switch either the sender or the exporter to an
 independent encoder — the equality test must fail.
@@ -564,3 +593,29 @@ product decision (release exists; suppressed callbacks are discarded — unchang
   rather than a silent send. Ordinary callbacks carry the release fields NULL on every surface.
 - **Expiry is driven by stored DB time**, via a named reaper or lock-protected lazy transition — a
   stored deadline does not expire itself, and a case must not wedge because no further traffic arrives.
+
+## Revision note — rev 6 (2026-07-26)
+
+Folds the remaining 014-owned finding F1 from Codex's post-rev-6 re-review (`6a408a3`).
+
+- **The historical manifest could not reproduce the bytes the platform accepted.** Rev 5 defined one
+  codec, `encode_decision_callback(payload)`, and pointed both the sender and the exporter at it —
+  which fixed the *encoder* disagreement but not the *payload* disagreement. 014 backfills
+  `decision_sequence` into every surviving legacy `decision_callback.payload_json`, while
+  pre-activation HTTP sent a body without that field, so the exporter hashed a body that was never
+  sent. The trigger is reachable: a legacy callback takes a 2xx, its local delivered stamp faults
+  (the send-before-stamp residual 7b-core documents), the row stays `pending`, and after 014 the
+  platform ledger holds the legacy digest while the exporter produces the sequenced one — bootstrap
+  fails on honest history with neither side corrupt.
+  **Resolution:** the codec takes an explicit wire schema,
+  `encode_decision_callback(payload, wire_version)` with `"legacy"`/`"sequenced"`; the `legacy`
+  encoding deterministically **omits** `decision_sequence` rather than assuming it is absent; the
+  bootstrap manifest labels and hashes every pre-`active` callback as `legacy` even after the
+  backfill; and `wire_version` is persisted in the signed immutable bootstrap response, so the
+  accepted encoding is evidence rather than an assumption. "No sequenced emission before
+  `phase='active'`" is now a stated contract with a test, since that is what makes the blanket
+  `legacy` label sound — and the spec names the delivery-attempt record that would become mandatory
+  if any future phase could emit both encodings.
+- **The core spec's stale cross-reference is removed.** It still described
+  `stored_payload_jsonb_digest` as the expression "014's manifest" uses, contradicting its own later
+  correction that the SQL digest is restore-only and never a received-body witness.
