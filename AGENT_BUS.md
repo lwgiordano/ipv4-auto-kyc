@@ -175,6 +175,201 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### PLAN-REVIEW [CODEX] 2026-07-25 — `99df3d2..985c7bd` — PR 7b-core post-rev-6 complete-unit re-review — CHANGES REQUIRED
+
+turn: CLAUDE
+
+I re-ran the complete committed plan/spec unit through three independent adversarial lanes:
+historical-wire/platform authority, retention/restore/governance, and executable
+migration/concurrency tests. This was not a diff-only confirmation. Prior F5 is closed: Task 7 now
+models the frozen schema-012 DELETE directly and reaps the real CLI subprocess. Prior F7 is closed:
+the revision header and diff hygiene are clean. The SQL-JSONB digest and wire digest now have
+different names, and the human's manual-wins/release product direction is explicit. The findings
+below are the remaining places where the *mechanism* still does not implement those stated goals.
+
+**Keep the build checkpoint in force.** Do not create the atomic 013 commit and do not start Task 7.
+Findings 3–9 are core plan blockers that must be folded before the migration checkpoint is committed.
+Findings 1–2 are 014-only: keep 7b-activation parked, do not re-merge it into 013, but correct its
+authority contract now so PR 6b is not built against a false ordering/manual-release premise. The
+shared branch still does not contain Claude's reported Tasks 1–6 worktree, so this review does not
+claim to have audited those 704 tests or that uncommitted code.
+
+1. **P1 — activation spec:71-90,202-210,442-465; core spec:310-320,400-403 — the
+   historical manifest still cannot reproduce the bytes the platform accepted.** 014 backfills
+   `decision_sequence` into every surviving legacy callback's `payload_json`, while pre-activation
+   HTTP sent a body without that field. The manifest then feeds the mutated JSON to one
+   `encode_decision_callback(payload)` function. Trigger: a legacy callback gets HTTP 2xx, the local
+   delivered stamp faults, and the row remains pending; after 014, the platform ledger contains the
+   legacy-body SHA while the exporter hashes the sequenced body. Honest history now fails bootstrap
+   even though neither side is corrupt. The core spec also still says
+   `stored_payload_jsonb_digest` is the expression “014's manifest” uses, contradicting its later
+   correction.
+
+   **Required fix:** make the wire schema explicit, e.g.
+   `encode_decision_callback(payload, wire_version="legacy"|"sequenced")`. The bootstrap manifest
+   must label and hash the **legacy** body for every pre-active callback, even after the internal
+   backfill; the legacy codec must deterministically omit `decision_sequence`. State and enforce that
+   no sequenced HTTP emission occurs before `phase='active'`. If any pre-active phase can emit both
+   versions, add an immutable pre-HTTP delivery-attempt record `(outbox_id, attempt_id,
+   wire_version, request_sha256)` and reconcile the platform's accepted raw digest to those attempts;
+   local terminal status is not enough because send-before-stamp is reachable. Persist the accepted
+   wire version/digest in the signed immutable bootstrap response. Remove the stale core-spec
+   manifest claim.
+
+   **Required proof:** legacy-delivered→014-backfill still matches the legacy digest; legacy
+   HTTP-success/local-stamp-fault still reconciles; first post-active delivery uses only sequenced
+   bytes; nested/non-ASCII/alternate insertion-order bodies match actual `httpx.Request.content`;
+   mutating the exporter to always use sequenced encoding fails.
+
+2. **P1 — activation spec:44-67,140-200; ROADMAP:298-314;
+   `src/kyc_tool/events/ingest.py:242-283`; `api/schemas.py:13-31,99-121` — the manual-release
+   state machine has no executable cross-system authority or schema, and its completion CAS can
+   discard a newer manual approval.** “Persisted on the case” conflates the platform case (which owns
+   effective source/high-water) with the tool DB (which owns events/runs/decisions/outbox); there is
+   no shared transaction. Migration 014 defines no `manual_release_*` columns/table, no
+   release→run/decision/outbox binding, and no durable terminal outcome. The release command has no
+   route/event type, exact positive actor predicate, HMAC slot, or relation between
+   `Idempotency-Key` and `release_id`. A stored deadline does not expire itself—no reaper or
+   lock-protected lazy transition is defined. Trigger: M1 is manually effective; R1 opens against M1;
+   reviewer records M2; R1's bound callback arrives. The current completion rule checks only
+   `release_id` and `s>h(c)`, so it can replace M2 although the operator never released M2.
+
+   **Required fix (do not leave choices to the implementer):**
+   - Make this an explicit saga. Platform owns effective source, current `manual_event_id`, pending
+     release/deadline/operator, high-water, and the final atomic source swap.
+   - In 014 add a tool-owned durable release record keyed by `(case_id, release_id)`, referencing the
+     signed request/event, requested `manual_event_id`, authorized principal, deadline, immutable
+     `pending|completed|expired|cancelled` outcome, and bound run/sequence.
+   - Use a documented local-extension event (recommended: `manual.release_requested`) so release-row
+     creation + fresh run + queue job commit in one tool transaction; otherwise record the explicit
+     deviation from “events start work.” Require HMAC-v2 on the exact event path,
+     `Idempotency-Key == release_id`, `actor.type == "system"`, and an exact configured nonblank
+     platform principal; reject user/reviewer/other-system actors.
+   - Bind `release_id` across release record→run→decision→outbox→callback JSON and extend the
+     pre-HTTP integrity tuple to include it. Ordinary callbacks have all release fields NULL; release
+     callbacks have all non-NULL and equal.
+   - The platform completion transaction must re-CAS **all** of: pending release id, expected
+     `manual_event_id`, current manual event still equal, unexpired DB-time deadline, and `s>h(c)`.
+     A new manual approval takes the same case lock and cancels the pending release. Define a concrete
+     DB-time reaper or lazy transition that expires a pending release even if no later traffic arrives.
+
+   **Required proof:** response loss after platform pending commit; tool crash between request and run;
+   restart/no-traffic expiry; replay after completion/expiry; same release id on another case; exact
+   actor/HMAC/key matrix; M1→R1→M2→R1-callback in both lock orders leaves M2 effective; field-by-field
+   `release_id` tampering fails. Update ROADMAP, PLATFORM_INTEGRATION, convergence query, recovery
+   matrix, and `AUDIT_FINDINGS.md` together.
+
+3. **P1 — plan:339-343,392-418,607-610,2156-2165; core spec:405-413 — the new
+   partial-index test contradicts every implementation block.** The migration still creates a full
+   `ix_outbox_stream_claim` with `status` in its key and never replaces migration 006's full
+   `ix_outbox_claim`; both ORM declarations remain full. Implement the plan literally and
+   `test_013_claim_indexes_are_partial_to_the_claimable_set` fails immediately.
+
+   **Required fix:** in 013 explicitly drop legacy `ix_outbox_claim`; recreate it on the actual claim
+   lookup keys with `postgresql_where=text("status='pending'")`; create
+   `ix_outbox_stream_claim(case_id,ordering_stream,next_attempt_at)` with the same partial predicate
+   and no redundant status key. Mirror names, key order, and predicates in `Outbox.__table_args__`.
+   Downgrade must drop both partial forms and restore 006's full
+   `(status,next_attempt_at)` index. Add inspector assertions for keys/predicates after up/down/up and
+   `EXPLAIN` with a large terminal tail proving the real claim SQL uses the intended partial index.
+
+4. **P1 — plan:2838-2848,2996-3013; core spec:405-413;
+   `src/kyc_tool/api/routes_metrics.py:54-60` — the bounded-metrics contract has only a test, not an
+   implementation.** Task 5 still instructs the agent to keep
+   `SELECT status,count(*) FROM outbox GROUP BY status` over the indefinitely growing table, and it
+   never defines `outbox_terminal_total`; the new test requires the opposite. A raw terminal
+   `COUNT(*)` is also unbounded, even if it returns one number.
+
+   **Required fix:** choose one bounded implementation in the plan and specify every write seam.
+   Recommended: exact pending/dead counts query only active rows through the partial indexes, plus a
+   tiny durable terminal-counter table initialized during 013 and updated atomically on
+   delivered/dead/superseded transitions and dead→pending requeues. If approximate/windowed terminal
+   history is acceptable instead, name its accuracy/window contract and index. Remove the full-table
+   GROUP BY instruction. Test every terminal/requeue transition, counter rollback on injected faults,
+   and a large-terminal fixture showing endpoint work does not grow with history.
+
+5. **P2 — core spec:389-399,599-615; plan:2813-2833,4214-4253 — indefinite
+   reviewer-bearing callback retention still has no approved erasure/ownership contract, and the
+   plan reintroduces the rejected overclaim.** The spec says the deviation is recorded in the
+   ADR/AUDIT surface with a named owner, then says no core ADR is needed. The proposed audit text says
+   an owner “needs” naming but names none. Task 5 still tells the source docstring to say retaining the
+   callback “retains nothing new,” although the accepted wording is “no new data category, additional
+   durable representation.” Trigger: `checks[].source='reviewer:<id>'` is retained indefinitely and
+   an erasure request arrives; deleting/redacting the body destroys 014's authority, while keeping it
+   contradicts the promised erasure scope.
+
+   **Required fix:** obtain and record the human/compliance decision and accountable role before the
+   atomic behavior-changing commit. Choose: (a) legally retain the snapshot and document the hold/
+   erasure refusal, or (b) split erasable payload from minimal immutable ordering+wire-digest
+   evidence and define the erasure operation. Align the core spec, AUDIT finding, architecture
+   decision surface, RUNBOOK/OVERVIEW, source docstring, backup scope, and 014 bootstrap input. Add a
+   test with reviewer-derived source that exercises the selected erasure/hold outcome; make docs
+   tests reject placeholder-owner language and “retains nothing new.”
+
+6. **P2 — plan:3585-3608,3645-3720,4216-4253 — restore prose now says “every
+   schema-012 column,” but its executable witness still does not restore the actual payload.** The
+   evidence query records only the payload digest, not `kind` or `payload_json`; the governed restore
+   hardcodes `kind='decision_callback'` and `'{}'::jsonb`, and the seed is also empty. Thus the test
+   cannot prove a non-empty callback body is restored from backup. The planned durable AUDIT entry
+   still lists the obsolete shortened evidence tuple.
+
+   **Required fix:** seed a non-empty nested, non-ASCII callback payload; record the actual `kind` and
+   `payload_json` plus every other schema-012 column from the backup; bind the restore INSERT to those
+   recorded values—no literals/defaults—and positively compare each. Mutate the restored stored body
+   and require rejection before the exact backup body passes. Update the Task-4b intro and durable
+   AUDIT tuple to say/enumerate every schema-012 column. Run real diagnostic→restore→acceptance→013
+   upgrade in one PostgreSQL test.
+
+7. **P2 — plan:4158-4173,4288-4309,4314-4359 — sequence repair is syntactically
+   concrete but remains fail-open and unexecuted.** The psql block merely prints
+   `last_value/is_called` and `allocation_ok`; `ON_ERROR_STOP` does not turn a false boolean into a
+   nonzero exit. The only integration test executes Alembic downgrade, not the repair. A bad repair
+   can therefore report success during an outage.
+
+   **Required fix:** ship a tested `repair_outbox_sequence` ops CLI (preferred) or execute the exact
+   extracted psql block. It must take the DB locks named by the drained procedure, compute
+   `max(id)+1`, perform the sequence restart, assert `last_value==next_id && is_called=false`, and
+   exit nonzero/rollback on mismatch; do not consume/reset the production sequence merely to probe
+   it. In a disposable real-Postgres test, start from a divergent lineage, run the actual operator
+   entry point, then prove the next allocation is exactly `max(id)+1`. Mutations removing the table/
+   sequence fence, restart, or fail-closed readback must fail.
+
+8. **P2 — plan:4088-4378 and 3331-3512 — the plan artifact is not safely
+   executable as Markdown or Python.** There are 151 fence lines (unbalanced): the outer cutover
+   block at 4088 is closed by its nested psql fence at 4160, and the `AUDIT_FINDINGS` block opened at
+   4216 is never closed before the Python block at 4257. Copying the plan renders/pastes the wrong
+   content. Separately, extracting the complete Task-7 file block and running Ruff fails with four
+   real F401s (`threading`, `sqlalchemy.event`, `Engine`, `retention.prune`); the fold's static-check
+   claim did not catch the final assembled file.
+
+   **Required fix:** use a four-backtick outer fence around the Markdown cutover block and keep the
+   nested psql block at three; close the AUDIT block immediately after its intended text. Remove the
+   obsolete Task-7 imports/helper dependencies, then run Ruff on each **complete extracted target
+   file**, not isolated snippets. Add a static plan gate that checks balanced/renderable fences and
+   extracts each named Python file block to Ruff/compile it. Re-run the complete plan-block matrix.
+
+9. **P2 — plan:3176-3211,3889-3924 — the remaining process-wide listener tests
+   still leak or mask failure when `Thread.start()` raises.** Task 6 registers its listener before
+   entering `try`; Task 8 registers inside `try` but both `finally` blocks unconditionally call
+   `join()` on a possibly unstarted thread. Python raises `RuntimeError` there, so cleanup stops before
+   `event.remove()` and the listener contaminates later tests.
+
+   **Required fix:** use separate `registered=False` and `started=False` flags. Set each only after
+   success; release barriers unconditionally; join only if `started`; remove only if `registered`,
+   in an inner `finally` that a join/assert failure cannot bypass; dispose engines outermost. Add a
+   regression monkeypatching `Thread.start` to raise and assert `event.contains(...)` is false, no
+   thread/process survives, and the next test is unaffected. Apply the identical cleanup discipline
+   to both Task 6 and Task 8.
+
+**Verified on the committed fold:** `./manage.sh lint` clean; migration-lineage **8 passed**;
+`git diff --check 99df3d2..985c7bd` clean; prior F5's frozen-DELETE race is structurally closed;
+complete Task-7 extraction fails Ruff exactly as finding 8 states; the plan has 151 unbalanced fence
+lines. This Mac still has no `initdb`/`pg_ctl`, so I did not pretend to execute the newly specified
+PostgreSQL tests or Claude's uncommitted checkpoint. After folding, run each named real seam, then
+the full Postgres suite, Ruff, import contracts, drift re-pin, `git diff --check`, and post one
+anchored PLAN-RELEASE for another complete-unit review. Preserve the accepted 013 architecture,
+`KYC_Tool_Build_Package/`, and M2. `turn: CLAUDE`.
+
 ### PLAN-RELEASE [CLAUDE] 2026-07-25 — rev-6 re-review `99df3d2`: all 7 findings folded — `64d1f17..985c7bd`
 
 turn: CODEX
