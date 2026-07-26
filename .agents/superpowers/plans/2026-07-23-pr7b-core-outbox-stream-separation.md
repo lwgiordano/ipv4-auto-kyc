@@ -241,9 +241,8 @@ would mislabel emails; the value is derived from kind in two explicit branches.
 """
 
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
-
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision = "013"
 down_revision = "012"
@@ -3379,9 +3378,9 @@ import sys
 import time
 
 import pytest
+from alembic import command
 from sqlalchemy import create_engine, text
 
-from alembic import command
 from kyc_tool.db.session import make_engine, make_session_factory
 from tests.integration.test_migrations import (
     _PARITY_BAD_SEEDS,
@@ -3885,10 +3884,10 @@ import sys
 import threading
 
 import pytest
+from alembic import command
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 
-from alembic import command
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.ops import reset_interrupted_outbox_claims as resetter
 from tests.integration.test_migrations import _config, _fresh_db

@@ -13,7 +13,6 @@ not be seen). This gate closes exactly those two holes.
 import re
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -26,8 +25,12 @@ PLAN = REPO_ROOT / ".agents" / "superpowers" / "plans" / (
 # the project with `pip install -e '.[dev]'` and has no .venv, so a hardcoded path fails there
 # while passing locally — which is exactly how this gate broke CI on its first commit.
 RUFF_CMD = [sys.executable, "-m", "ruff"]
-SELECTORS = "E,F,I,UP,B,SIM"  # the repository's own selector set
-LINE_LENGTH = "110"
+# Lint each block under the REPOSITORY'S OWN config, addressed by the path the plan says the
+# block becomes. `--isolated` was tried first and is wrong here: it discards `src = ["src",
+# "tests"]`, so Ruff has to GUESS whether `kyc_tool` is first-party from the working directory —
+# which made the same block pass locally and fail in CI, and flagged different blocks in each.
+# `--stdin-filename` makes the verdict identical to `ruff check .` on the real file, everywhere.
+RUFF_CONFIG = REPO_ROOT / "pyproject.toml"
 
 
 def _fenced_blocks(lines: list[str]) -> tuple[list[tuple[int, str, str]], list[int]]:
@@ -91,14 +94,17 @@ def test_plan_has_complete_file_blocks_to_check():
     _complete_file_blocks(PLAN.read_text().splitlines()),
     ids=lambda v: v if isinstance(v, str) and "/" in str(v) else "",
 )
-def test_plan_complete_file_blocks_lint_clean(tmp_path, start, path, body):
+def test_plan_complete_file_blocks_lint_clean(start, path, body):
     """Lint each COMPLETE file block as the file it claims to be."""
-    target = tmp_path / Path(path).name
-    target.write_text(body + "\n")
     result = subprocess.run(
-        [*RUFF_CMD, "check", "--select", SELECTORS, "--line-length", LINE_LENGTH,
-         "--isolated", "--output-format", "concise", str(target)],
-        capture_output=True, text=True,
+        [*RUFF_CMD, "check", "--config", str(RUFF_CONFIG),
+         "--stdin-filename", path, "--output-format", "concise", "-"],
+        input=body + "\n", capture_output=True, text=True,
+        # cwd pinned to the repo: Ruff resolves the `src = ["src", "tests"]` roots and the
+        # stdin-filename relative to the working directory, so without this the verdict depends
+        # on where pytest was invoked from — which is how the first version of this gate passed
+        # locally and failed in CI on a different block than it flagged by hand.
+        cwd=str(REPO_ROOT),
     )
     assert result.returncode == 0, (
         f"plan block at line {start} ({path}) does not lint as a complete file:\n{result.stdout}"
@@ -121,13 +127,14 @@ def test_plan_lines_within_line_length():
     """Every python block honours the repo's line length, so transcription never needs reflowing."""
     lines = PLAN.read_text().splitlines()
     blocks, _ = _fenced_blocks(lines)
+    limit = 110  # matches [tool.ruff] line-length
     over = [
         (start + offset, len(line))
         for start, tag, body in blocks if tag == "```python"
         for offset, line in enumerate(body.splitlines(), 1)
-        if len(line) > int(LINE_LENGTH)
+        if len(line) > limit
     ]
-    assert not over, f"python block lines exceeding {LINE_LENGTH} chars at {over}"
+    assert not over, f"python block lines exceeding {limit} chars at {over}"
 
 
 def test_ruff_is_available():
