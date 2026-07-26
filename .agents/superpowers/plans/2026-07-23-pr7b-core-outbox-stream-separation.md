@@ -1841,11 +1841,11 @@ def test_redelivery_carries_identical_dedupe_key(
     class _StampFault(RuntimeError):
         pass
 
-    def _fail_first(self, row, token):
+    def _fail_first(self, row, token, wire_sha256=None):
         calls.append(1)
         if len(calls) == 1:  # the HTTP send already happened; the terminal stamp fails ONCE
             raise _StampFault("send-before-stamp: HTTP sent, delivered-stamp not committed")
-        return real_record_delivered(self, row, token)
+        return real_record_delivered(self, row, token, wire_sha256)
 
     monkeypatch.setattr(OutboxPublisher, "_record_delivered", _fail_first)
     # process_once invokes _record_delivered outside its delivery try/except, so the
@@ -2904,7 +2904,9 @@ def test_residual_risk_send_before_stamp_reverts_expected(
         s.commit()
     _enqueue_cb(session_factory, "c3", 2)  # seq 2 pending, higher id
 
-    def _boom(self, row, token):  # raise BEFORE any terminal transaction starts
+    def _boom(self, row, token, wire_sha256=None):  # raise BEFORE any terminal txn starts
+        # signature mirrors _record_delivered, which now also carries the sent-bytes digest;
+        # the fault must land AFTER the HTTP and BEFORE the terminal, which is the whole point
         raise _InjectedFault("send-before-stamp: HTTP sent, terminal not committed")
 
     monkeypatch.setattr(type(publisher), "_record_delivered", _boom)
@@ -2955,27 +2957,24 @@ def _superseded_callback(session_factory, case_id, *, resolved_at="now()"):
     return oid
 
 
-def test_retention_keeps_decision_callbacks_and_prunes_poc_email(session_factory, clean_db):
-    """PR 7b-core durable ordering authority (re-review 0ca264b P1/F4): retention's outbox
-    prune is narrowed to kind='poc_email'. A retention-old delivered decision_callback — and
-    an equally-old superseded one — SURVIVE with every manifest field intact, while an
-    equally-old delivered poc_email is still deleted (proving a narrowing, not a disablement)."""
+def test_retention_redacts_callback_bodies_and_prunes_poc_email(session_factory, clean_db):
+    """PR 7b-core durable ordering authority (re-review 6a408a3 F5/F1): retention keeps the
+    decision_callback ROW but destroys its BODY past the window, deletes the poc_email outright,
+    and leaves every field 7b-activation reconciles against intact — including the recorded wire
+    digest, which is what makes discarding the body safe."""
     from kyc_tool.workers.retention import prune
 
     old = "now() - interval '3000 days'"
     _superseded_callback(session_factory, "c4", resolved_at=old)
-    # fk_outbox_decision_triple (013/Task 4) requires a matching decisions row for any
-    # outbox row carrying a non-NULL (run_id, case_id, decision_sequence) triple — seed the
-    # c4-r9/seq-9 decision the same way every other test in this file does before referencing
-    # it from outbox, brief defect (evidence: ForeignKeyViolation on fk_outbox_decision_triple,
-    # Key (run_id, case_id, decision_sequence)=(c4-r9, c4, 9) not present in "decisions").
     _seed_decisions(session_factory, "c4", [9])
     with session_factory() as s:
         s.execute(text("INSERT INTO cases (id) VALUES ('c4') ON CONFLICT DO NOTHING"))
         s.execute(text(
             f"INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-            f"status, delivered_at, payload_json) VALUES ('decision_callback','c4','c4-r9',"
-            f"'decision',9,'delivered',{old},'{{\"decision\":\"approve\"}}'::jsonb)"))
+            f"status, delivered_at, payload_json, callback_wire_sha256, wire_version) VALUES "
+            f"('decision_callback','c4','c4-r9','decision',9,'delivered',{old},"
+            f"'{{\"decision\":\"approve\",\"checks\":[{{\"source\":\"reviewer:r-42\"}}]}}'::jsonb,"
+            f"'{'a' * 64}','legacy')"))
         s.execute(text(
             f"INSERT INTO outbox (kind, case_id, ordering_stream, status, delivered_at) "
             f"VALUES ('poc_email','c4','email','delivered',{old})"))
@@ -2983,24 +2982,45 @@ def test_retention_keeps_decision_callbacks_and_prunes_poc_email(session_factory
 
     counts = prune(session_factory, 7 * 365)
 
-    assert counts["outbox_poc_email"] == 1  # the email IS pruned
-    assert "outbox_superseded" not in counts  # no superseded prune exists (decision-only terminal)
+    assert counts["outbox_poc_email"] == 1          # the email row is DELETED
+    assert counts["outbox_callback_redacted"] == 2  # delivered + superseded callbacks redacted
     with session_factory() as s:
         rows = s.execute(text(
-            "SELECT status, run_id, decision_sequence, delivered_at, payload_json "
-            "FROM outbox WHERE case_id='c4' ORDER BY id")).all()
-        assert [r.status for r in rows] == ["superseded", "delivered"]  # both callbacks survive
+            "SELECT status, run_id, decision_sequence, delivered_at, payload_json, "
+            "callback_wire_sha256, wire_version FROM outbox WHERE case_id='c4' ORDER BY id")).all()
+        assert [r.status for r in rows] == ["superseded", "delivered"]  # both rows survive
         assert s.execute(text(
             "SELECT count(*) FROM outbox WHERE case_id='c4' AND kind='poc_email'")).scalar_one() == 0
-        # every field 7b-activation's manifest reads is still derivable from the surviving row
         delivered = rows[1]
+        # every manifest field survives...
         assert delivered.run_id == "c4-r9" and delivered.decision_sequence == 9
-        assert delivered.delivered_at is not None  # the ORIGINAL timestamp, not now()
-        assert delivered.payload_json == {"decision": "approve"}  # body intact, never redacted
-        digest = s.execute(text(
-            "SELECT encode(sha256(convert_to(payload_json::text,'UTF8')),'hex') FROM outbox "
-            "WHERE case_id='c4' AND status='delivered'")).scalar_one()
-        assert len(digest) == 64  # callback_body_digest is computable on demand — no stored column
+        assert delivered.delivered_at is not None          # the ORIGINAL timestamp, not now()
+        assert delivered.callback_wire_sha256 == "a" * 64  # the recorded witness, untouched
+        assert delivered.wire_version == "legacy"
+        # ...but the reviewer-bearing body is GONE
+        assert delivered.payload_json == {"redacted": True}
+        assert "reviewer:r-42" not in str(rows)
+
+
+def test_retention_leaves_in_window_callback_bodies_alone(session_factory, clean_db):
+    """Redaction is bounded by the window: a RECENT delivered callback keeps its body, so the
+    prune cannot be mistaken for an unconditional scrub."""
+    from kyc_tool.workers.retention import prune
+
+    _seed_decisions(session_factory, "c4c", [3])
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('c4c') ON CONFLICT DO NOTHING"))
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+            "status, delivered_at, payload_json) VALUES ('decision_callback','c4c','c4c-r3',"
+            "'decision',3,'delivered', now(), '{\"decision\":\"approve\"}'::jsonb)"))
+        s.commit()
+    counts = prune(session_factory, 7 * 365)
+    assert counts["outbox_callback_redacted"] == 0
+    with session_factory() as s:
+        body = s.execute(text(
+            "SELECT payload_json FROM outbox WHERE case_id='c4c'")).scalar_one()
+    assert body == {"decision": "approve"}
 
 
 def test_retention_still_prunes_its_other_targets(session_factory, clean_db):

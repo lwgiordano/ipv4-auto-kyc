@@ -1,4 +1,4 @@
-# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 6)
+# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 7)
 
 ## Context
 
@@ -494,19 +494,31 @@ witness circular and proved nothing about what it received. Therefore:
   `"sequenced"`, and **both** `_deliver_decision_callback` and the manifest exporter use its exact
   output. Neither may encode independently. Changing either encoding is a versioned change, because
   it changes the signed bytes.
-- **`wire_version` is not decoration — without it the historical manifest is simply wrong
-  (re-review `6a408a3` P1/F1).** 014 backfills `decision_sequence` into every surviving legacy
-  `decision_callback.payload_json` (§2), but pre-activation HTTP sent a body **without** that field.
-  Hash the backfilled payload and the exporter produces a digest the platform never saw. The trigger
-  is reachable, not theoretical: a legacy callback gets a 2xx, the local delivered stamp faults
+- **The manifest READS the recorded digest; it does not re-derive one (rev 7, following 7b-core
+  rev 12).** 7b-core records `outbox.callback_wire_sha256` + `outbox.wire_version` in the transaction
+  that records delivery. The manifest exporter therefore **selects** those columns rather than
+  computing anything. Callbacks delivered **before** `013` carry NULL — `jsonb` normalized their key
+  order, so their sent bytes are unrecoverable and `013` deliberately does not fabricate a digest for
+  them (see 7b-core rev 12). Those rows are **un-witnessed by construction**: bootstrap seeds their
+  high-water from `decision_sequence` + `local_status` and performs no digest comparison, which is the
+  truthful treatment of history nobody recorded.
+  This is what makes the historical witness sound, and it closes F1 at the root rather than working
+  around it. Re-deriving was unsound because 014 backfills `decision_sequence` into every surviving
+  legacy `decision_callback.payload_json` (§2) while pre-activation HTTP sent a body **without** that
+  field — so hashing the stored payload produced a digest the platform never saw. The trigger was
+  reachable, not theoretical: a legacy callback gets a 2xx, the local delivered stamp faults
   (send-before-stamp, the residual 7b-core documents), the row stays `pending`, and after 014 the
-  platform ledger holds the legacy-body digest while the exporter hashes the sequenced body —
-  bootstrap fails on honest history with neither side corrupt.
-  Therefore: **the bootstrap manifest labels and hashes every pre-`active` callback as `legacy`**,
-  even after the internal backfill, and the `legacy` encoding **deterministically omits
-  `decision_sequence`** rather than relying on it being absent. `wire_version` travels in the
-  manifest entry and is persisted in the **signed, immutable bootstrap response artifact**, so the
-  accepted version is evidence rather than an assumption on either side.
+  ledger holds the legacy digest while the exporter produces the sequenced one — bootstrap failing on
+  honest history with neither side corrupt. Recording the digest when the bytes exist removes the
+  reconstruction step, and with it that entire failure mode: **014's payload backfill can no longer
+  change any digest, because no digest is computed from a payload.**
+  `wire_version` travels in the manifest entry and is persisted in the **signed, immutable bootstrap
+  response artifact**, so the accepted encoding is evidence on both sides. The `legacy` encoding still
+  **deterministically omits `decision_sequence`**, because the sender needs it when re-delivering a
+  pre-activation row and `013`'s backfill needs it to compute the historical digest at all.
+- **A NULL digest means "never delivered", and is honest rather than missing.** Callbacks that never
+  reached a 2xx have no sent bytes; the manifest carries them with a NULL digest and their
+  `local_status`, and reconciliation treats them as un-witnessed rather than mismatched.
 - **No sequenced HTTP emission may occur before `phase='active'`** — that is what makes the blanket
   `legacy` label sound. §2's phase matrix already enforces it (`legacy` strips the field;
   `bootstrap_in_progress`/`bootstrapped` refuse to claim or send; only `active`+flag emits), and it
@@ -619,3 +631,23 @@ Folds the remaining 014-owned finding F1 from Codex's post-rev-6 re-review (`6a4
 - **The core spec's stale cross-reference is removed.** It still described
   `stored_payload_jsonb_digest` as the expression "014's manifest" uses, contradicting its own later
   correction that the SQL digest is restore-only and never a received-body witness.
+
+## Revision note — rev 7 (2026-07-26)
+
+Follows 7b-core rev 12, which records the wire digest at send time. That reverses the direction of
+this spec's digest contract and is a simplification, not an addition.
+
+- **The manifest no longer re-derives `callback_wire_sha256` from a stored payload — it selects the
+  recorded value.** Rev 6 fixed F1 by labelling the encoding (`legacy`/`sequenced`) so the exporter
+  could reconstruct historical bytes correctly. Recording the digest in the delivery transaction
+  removes the reconstruction entirely: 014's `decision_sequence` payload backfill can no longer
+  change a digest, because no digest is computed from a payload. `wire_version` remains, as a
+  recorded fact and as the encoding the sender uses when re-delivering a pre-activation row.
+- **It also unblocks 7b-core's retention question.** Because the witness is a recorded hash rather
+  than the body, retention can destroy the callback body on the ordinary schedule — so the
+  reviewer-derived `checks[].source` no longer persists indefinitely, and the compliance position
+  that would have required (refusing erasure of reviewer identifiers, with a named owner to hold it)
+  is no longer needed. See 7b-core rev 12.
+- **NULL digest is defined**: a callback that never reached a 2xx has no sent bytes, so it appears in
+  the manifest with a NULL digest and its `local_status`, and reconciliation treats it as
+  un-witnessed rather than mismatched.

@@ -1,4 +1,4 @@
-# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 11)
+# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 12)
 
 ## Context
 
@@ -71,15 +71,28 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
 - **`outbox.{decision_sequence BIGINT NULL, resolved_at TIMESTAMPTZ NULL}`**,
   **`decisions.decision_sequence BIGINT NULL`**,
   **`cases.last_decision_sequence BIGINT NOT NULL DEFAULT 0`**.
-- **No stored body-digest column — deliberately (rev 10, re-audit P1/F4).** The durable-authority
-  contract in §Rollout keeps the `decision_callback` row *and its `payload_json`* forever, so the
-  body is never lost and a digest is always derivable on demand. A stored `body_sha256` was designed
-  and **rejected**: it must be kept in lockstep with `payload_json` (a second representation of the
-  same fact — precisely the drift class this PR exists to eliminate), it needs a backfill and an
-  enqueue-time write, and it forces one canonical encoder to be reproduced in **both** Python and SQL
-  (`json.dumps` and `jsonb::text` do not agree on separators, so the two consumers could disagree
-  silently). The digest is instead **one SQL expression, defined once** and used verbatim by the
-  §Rollout restore acceptance predicate:
+- **`outbox.{callback_wire_sha256 TEXT NULL, wire_version TEXT NULL}` — the recorded digest of the
+  bytes actually sent (rev 12, re-review `6a408a3` F5 + F1).** `CHECK (callback_wire_sha256 IS NULL OR
+  callback_wire_sha256 ~ '^[0-9a-f]{64}$')`; `CHECK (wire_version IS NULL OR wire_version IN
+  ('legacy','sequenced'))`; both NULL together or both set (`CHECK ((callback_wire_sha256 IS NULL) =
+  (wire_version IS NULL))`), and non-NULL only for `kind='decision_callback'`. The publisher writes
+  them in the **same transaction that records delivery**. They stay NULL in exactly two cases, both
+  honest: a callback that never reached a 2xx (no bytes were sent), and **any callback delivered
+  before `013`** — `payload_json` is `jsonb`, which normalizes key order, so the bytes that were
+  actually sent are **unrecoverable** for historical rows. `013` therefore does **NOT** backfill a
+  digest: computing one from the normalized payload would fabricate a witness for bytes nobody can
+  reconstruct, which is precisely the defect F1 identified. Pre-`013` deliveries are **un-witnessed by
+  construction**, and 014's bootstrap must seed their high-water from `decision_sequence` +
+  `local_status` without a digest comparison rather than pretend otherwise.
+  This is what lets retention destroy the body while 014 keeps a witness — see the durable-authority
+  contract in §Rollout — and it is why 014 never re-encodes a stored payload.
+  **Rev 10-11 rejected a stored digest column and this supersedes that**, without contradicting its
+  reasoning: the objection was that a column duplicating a fact still derivable from `payload_json`
+  creates a drift class. Once retention deliberately destroys the body, the digest is **no longer
+  derivable** — it is the record of an event, not a second copy of a live fact. The distinction is
+  whether the source of truth still exists.
+- **Separately, `stored_payload_jsonb_digest` remains a restore-only SQL expression, not a column.**
+  It is used verbatim by the §Rollout restore acceptance predicate:
   `stored_payload_jsonb_digest(o) = encode(sha256(convert_to(o.payload_json::text, 'UTF8')), 'hex')`
   (lowercase hex SHA-256; `sha256`/`convert_to`/`encode` are Postgres core — no `pgcrypto`).
   `payload_json` is `jsonb`, so `::text` is already key-normalized and whitespace-canonical, making
@@ -373,37 +386,46 @@ abort branch must **explicitly re-settle retention** (keep it frozen while resto
 re-enable it if the cutover is deferred) — never leave a compliance process silently disabled. On
 success proceed.
 
-**Durable ordering authority — retention no longer prunes decision callbacks (rev 10, re-audit
-P1/F4).** The restore path above repairs *history*; this clause prevents *recurrence*, and it is the
+**Durable ordering authority — retention destroys the callback BODY on schedule and keeps only
+non-personal ordering evidence (rev 12, re-review `6a408a3` F5 + F1).** The restore path above repairs *history*; this clause prevents *recurrence*, and it is the
 storage/ownership decision 014 depends on. Before rev 10 an exact restore was self-defeating: it
 reinstates the original 7-year-old `delivered_at`, so `retention.py:29-35`
 (`status='delivered' AND delivered_at < now() - interval`) re-deleted the row on its very next run,
 and the tool then had no way to derive 014's per-callback `(wire digest, local_status)` from the
 immutable `decisions` row. 013 therefore establishes the **`outbox` row itself** as the durable
 authority for a decision callback's identity, order, body, and local status:
-- **Retention's outbox prune is narrowed to `kind='poc_email'`.** That is the whole change — one
-  added predicate, no new column, no backfill, no second store, therefore no drift class to guard.
-  A delivered `decision_callback` row survives indefinitely with `id` (the order authority),
-  `case_id`, `run_id`, `decision_sequence`, `status` (= `local_status`), `delivered_at`, and
-  `payload_json` intact. Every other retention target is unchanged.
-- **It introduces no new data *category*, but it IS a new retained *representation* — say so.**
-  The callback body projects the `decisions` row (decision, score, the five gate booleans,
-  `buy_enablement`, checks summary) and `decisions`/`checks`/raw evidence are already deliberately
-  never pruned. But the projection is an **additional durable copy**, and it carries
-  `checks[].source`, which is reviewer-derived and reachable as `reviewer:<reviewer_id>`
-  (`validators/website.py:13-20`). Claiming it "retains nothing new" is too strong and must not be
-  used to skip governance. This is a deliberate **retention deviation** and is recorded as such in
-  `AUDIT_FINDINGS.md` + the ADR surface, naming the owner for backup, erasure, privacy, and
-  compliance review, and stating that an erasure request must reach the callback snapshot as well as
-  the decision record. The genuinely sensitive outbox body — the POC email's raw token — is still
-  destroyed twice over: redacted at delivery (`publisher.py:176-182`) and pruned on schedule.
-- **014's candidate manifest is built from this authority**, not from an undefined "agreed universe"
-  and not from a row that may have been pruned. `local_status` is read directly from `outbox.status`
-  and the wire digest from `payload_json` via 014's versioned `encode_decision_callback` codec
-  (NOT §1's `stored_payload_jsonb_digest`, which hashes a different encoding); there is no second
-  representation to drift against and no dual write to keep consistent.
-- **Rows grow 1:1 with `decisions` and are never reclaimed, so the capacity consequences are part
-  of the contract, not an afterthought.** Two follow from making `outbox` unbounded:
+- **What 014 actually consumes is the DIGEST, not the body.** Its manifest entry is
+  `(case_id, run_id, decision_sequence, callback_wire_sha256, local_status)`. Nothing downstream needs
+  `payload_json` itself. Rev 10-11 kept the whole body forever only because the manifest re-derived
+  the digest from it at bootstrap time — an implementation detail, not a requirement.
+- **So record the digest when the bytes exist, and let the body die on schedule.** The publisher
+  writes `outbox.callback_wire_sha256` and `outbox.wire_version` in the **same transaction that
+  records delivery** — facts about what was sent, captured at the only moment they are knowable.
+  Rows delivered **before** `013` stay NULL: `jsonb` normalized their key order, so their sent bytes
+  are unrecoverable and any digest computed now would be fabricated. They are un-witnessed by
+  construction, and the bootstrap says so.
+- **Retention then redacts the callback body** — `payload_json = '{"redacted": true}'` once past
+  `KYC_RETENTION_DAYS` — preserving `id` (the order authority), `case_id`, `run_id`,
+  `decision_sequence`, `status` (= `local_status`), `delivered_at`, and the digest. This is the repo's
+  existing idiom (`publisher.py:176-182` already redacts POC bodies in place) applied for the same
+  reason.
+- **This is what makes the retention story honest instead of argued.** The callback body carries
+  `checks[].source`, reachable as `reviewer:<reviewer_id>` (`validators/website.py:13-20`). Retaining
+  it indefinitely would have required a compliance position on refusing erasure of reviewer
+  identifiers, and a named owner to hold that position — a legal argument load-bearing in a regulated
+  system. Destroying it on the ordinary schedule removes the question: the surviving evidence is a
+  SHA-256 and a set of internal ordinals, which are not the identifier. **There is no retention
+  deviation left to govern**, and `KYC_RETENTION_DAYS` continues to bound what personal data persists.
+- **It also removes 014's ability to get history wrong.** Because the digest is recorded at send
+  time (and backfilled at 013, before 014 exists), 014 never re-encodes a stored payload — so
+  014's `decision_sequence` payload backfill cannot change a digest, which was the whole of F1's
+  reachable failure. `wire_version` is a recorded fact rather than a rule for reconstructing one.
+- **A stored digest is not the drift class rev 10 rejected.** That objection applied to a column
+  duplicating a fact still derivable from `payload_json`. Once the body is deliberately destroyed the
+  digest is **not derivable** — it becomes the record of an event, which is exactly what you store.
+  The distinction is whether the source of truth still exists.
+- **Rows still grow 1:1 with `decisions` and are never deleted (only their bodies shrink), so the
+  capacity consequences remain part of the contract, not an afterthought.** Two follow:
   (i) the claim indexes must be **partial to the claimable set** — `WHERE status='pending'` — so an
   ever-growing tail of `delivered`/`superseded` terminals never enters the claim path's index or its
   plan; (ii) `/v1/metrics` must not `GROUP BY status` over the whole table on every request. Report
