@@ -123,7 +123,7 @@ Adds every `013` column, backfills `ordering_stream` from `kind`, makes `case_id
 - Re-pin: `tests/policy_driven/test_engine_build_id_guard.py`
 
 **Interfaces:**
-- Produces: `alembic` revision `013` (`down_revision='012'`) with columns `outbox.{ordering_stream TEXT NOT NULL, decision_sequence BIGINT NULL, resolved_at TIMESTAMPTZ NULL, claim_lease_expires_at TIMESTAMPTZ NULL, claim_token UUID NULL, claimed_by TEXT NULL}`, `outbox.case_id` now `NOT NULL` + FK `fk_outbox_case_id`, `decisions.decision_sequence BIGINT NULL`, `cases.last_decision_sequence BIGINT NOT NULL DEFAULT 0`; constraints `ck_outbox_kind_vocab`, `ck_outbox_ordering_stream_vocab`, `ck_outbox_status_lifecycle`; index `ix_outbox_stream_claim`.
+- Produces: `alembic` revision `013` (`down_revision='012'`) with columns `outbox.{ordering_stream TEXT NOT NULL, decision_sequence BIGINT NULL, resolved_at TIMESTAMPTZ NULL, claim_lease_expires_at TIMESTAMPTZ NULL, claim_token UUID NULL, claimed_by TEXT NULL}`, `outbox.case_id` now `NOT NULL` + FK `fk_outbox_case_id`, `decisions.decision_sequence BIGINT NULL`, `cases.last_decision_sequence BIGINT NOT NULL DEFAULT 0`; constraints `ck_outbox_kind_vocab`, `ck_outbox_ordering_stream_vocab`, `ck_outbox_status_lifecycle`; claim indexes `ix_outbox_stream_claim` and (replacing 006's full form) `ix_outbox_claim`, both **partial** to `status='pending'`.
 - Produces: `enqueue_decision_callback(session, *, case_id, run_id, body)` and `enqueue_poc_email(session, *, case_id, to, subject, body)` now set `ordering_stream` (`'decision'`/`'email'`).
 - Consumes: `tests/integration/test_migrations.py` helpers `_fresh_db`, `_config`.
 
@@ -241,8 +241,9 @@ would mislabel emails; the value is derived from kind in two explicit branches.
 """
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "013"
 down_revision = "012"
@@ -336,16 +337,28 @@ def upgrade() -> None:
 
     # === Task 4 insertion point: decision-identity constraints ===
 
-    # --- stream claim index ---
+    # --- claim indexes: PARTIAL to the claimable set (re-review 99df3d2 F3) ---
+    # 013 makes decision_callback rows non-prunable (the durable ordering authority), so
+    # delivered/superseded terminals accumulate without bound. A full index would grow forever and
+    # drag that dead weight into every claim plan. `status` leaves the key because the predicate
+    # pins it. The legacy 006 index is replaced on the same reasoning.
     op.create_index(
         "ix_outbox_stream_claim", "outbox",
-        ["case_id", "ordering_stream", "status", "next_attempt_at"],
+        ["case_id", "ordering_stream", "next_attempt_at"],
+        postgresql_where=sa.text("status = 'pending'"),
+    )
+    op.drop_index("ix_outbox_claim", table_name="outbox")
+    op.create_index(
+        "ix_outbox_claim", "outbox", ["next_attempt_at"],
+        postgresql_where=sa.text("status = 'pending'"),
     )
 
 
 def downgrade() -> None:
     # Task 6 replaces this body with a LOCK TABLE + superseded preflight before the drops.
     op.drop_index("ix_outbox_stream_claim", table_name="outbox")
+    op.drop_index("ix_outbox_claim", table_name="outbox")   # restore 006's full form
+    op.create_index("ix_outbox_claim", "outbox", ["status", "next_attempt_at"])
     # === Task 4 insertion point: drop decision-identity constraints (reverse order) ===
     op.drop_constraint("ck_outbox_status_lifecycle", "outbox", type_="check")
     op.drop_constraint("ck_outbox_kind_vocab", "outbox", type_="check")
@@ -605,8 +618,13 @@ Replace the `Outbox` class body columns + `__table_args__` (lines 267-279) with:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     __table_args__ = (
-        Index("ix_outbox_claim", "status", "next_attempt_at"),
-        Index("ix_outbox_stream_claim", "case_id", "ordering_stream", "status", "next_attempt_at"),
+        # PR 7b-core (013): partial to the claimable set — decision_callback terminals are never
+        # pruned, so a full index would grow without bound and enter every claim plan.
+        Index("ix_outbox_claim", "next_attempt_at", postgresql_where=text("status = 'pending'")),
+        Index(
+            "ix_outbox_stream_claim", "case_id", "ordering_stream", "next_attempt_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
     )
 ```
 
@@ -2157,8 +2175,13 @@ Extend `Outbox.__table_args__` (from Task 1) to include the callback binding:
 
 ```python
     __table_args__ = (
-        Index("ix_outbox_claim", "status", "next_attempt_at"),
-        Index("ix_outbox_stream_claim", "case_id", "ordering_stream", "status", "next_attempt_at"),
+        # PR 7b-core (013): partial to the claimable set — decision_callback terminals are never
+        # pruned, so a full index would grow without bound and enter every claim plan.
+        Index("ix_outbox_claim", "next_attempt_at", postgresql_where=text("status = 'pending'")),
+        Index(
+            "ix_outbox_stream_claim", "case_id", "ordering_stream", "next_attempt_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
         Index(
             "uq_outbox_decision_callback_run", "run_id", unique=True,
             postgresql_where=text("kind='decision_callback'"),
@@ -2637,7 +2660,6 @@ Adds the local guard to `process_once` (suppress an older decision-stream callba
 ```python
 """PR 7b-core: best-effort local superseded guard + A6 + honest residual risk."""
 
-import json
 
 import pytest
 from sqlalchemy import text
@@ -2838,9 +2860,20 @@ statement below covers every prunable outbox terminal and no superseded prune is
 In `src/kyc_tool/api/routes_metrics.py`, keep the `outbox_by_status` grouping (line 60, it already surfaces every status incl. `superseded`) and add an explicit alert-set comment/derived field right after it:
 
 ```python
-            "outbox_by_status": _grouped(session, "SELECT status, count(*) FROM outbox GROUP BY status"),
-            # PR 7b-core: superseded is a governed terminal (best-effort local suppression,
-            # zero sends) — reported above but EXCLUDED from the pending/dead alert set below.
+            # PR 7b-core: decision_callback rows are never pruned, so `outbox` grows without
+            # bound. Report the LIVE statuses exactly — those are what an operator acts on, and
+            # they stay small — and the terminal history as one bounded count, so this endpoint's
+            # cost does not grow with retained history. A GROUP BY over the whole table would.
+            "outbox_by_status": _grouped(
+                session,
+                "SELECT status, count(*) FROM outbox "
+                "WHERE status IN ('pending','dead') GROUP BY status",
+            ),
+            "outbox_terminal_total": session.execute(
+                text("SELECT count(*) FROM outbox WHERE status IN ('delivered','superseded')")
+            ).scalar_one(),
+            # superseded is a governed terminal (best-effort local suppression, zero sends) — it is
+            # counted in outbox_terminal_total and EXCLUDED from the pending/dead alert set below.
             "outbox_alerting": _grouped(
                 session,
                 "SELECT status, count(*) FROM outbox WHERE status IN ('pending','dead') GROUP BY status",
@@ -3334,16 +3367,13 @@ the shared parity matrix (CLI + 013 both refuse), and the retention-race DB-lock
 import os
 import subprocess
 import sys
-import threading
 import time
 
 import pytest
-from alembic import command
-from sqlalchemy import create_engine, event, text
-from sqlalchemy.engine import Engine
+from sqlalchemy import create_engine, text
 
+from alembic import command
 from kyc_tool.db.session import make_engine, make_session_factory
-from kyc_tool.workers.retention import prune
 from tests.integration.test_migrations import (
     _PARITY_BAD_SEEDS,
     _PARITY_SEED_VIOLATION,
@@ -3798,10 +3828,10 @@ import sys
 import threading
 
 import pytest
-from alembic import command
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 
+from alembic import command
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.ops import reset_interrupted_outbox_claims as resetter
 from tests.integration.test_migrations import _config, _fresh_db
@@ -4251,6 +4281,7 @@ R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image 
     than grouping the whole table on every request.
   - The POC token — the genuinely sensitive outbox body — is still destroyed twice over: redacted at
     delivery (`publisher.py:176-182`) and pruned on schedule.
+```
 
 - [ ] **Step 7: Add the docs-contract test + the exact-rollback-command acceptance test** — create `tests/unit/test_docs_cutover_parity.py`:
 
