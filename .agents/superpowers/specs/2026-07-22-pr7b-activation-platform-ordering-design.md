@@ -123,10 +123,9 @@ manual-current source**. The rev-2 acceptance claim is thus false outside the ac
 
 The governing rule is therefore about **authority**, not about seeding an integer: **while a case's
 effective source is `manual:<event>`, a sequenced automatic callback is acknowledged (2xx), recorded
-for dedupe, and allowed to advance `h(c)` — but it MUST NOT become the effective source.** Only an
-explicit, authenticated, **platform-owned release/override transition** (the platform clearing the
-manual source for that case, carried in the signed response envelope below) returns automatic
-callbacks to effectiveness. Consequences: the tool still terminalizes such a callback locally as
+for dedupe, and allowed to advance `h(c)` — but it MUST NOT become the effective source.** Only the
+explicit, authenticated, platform-owned **manual-release state machine specified below** returns
+automatic callbacks to effectiveness. Consequences: the tool still terminalizes such a callback locally as
 `delivered` (receiver no-op success — no dead row, no retry storm); `h(c)` still moves so later
 callbacks dedupe correctly; and the platform's current-source field, not the sequence integer, is
 what the convergence query (§6) and the recovery matrix (§4) read. **This is deliberately the
@@ -137,6 +136,68 @@ approval's arrival point) delivered **after** a manual approval leaves the manua
 likewise for a *future* sequence created after the manual approval. A **mutation** restoring the bare
 `s>h(c)` receiver must fail both. The bootstrap floor below is **retained** — it remains necessary for
 cases already manual when the window opens — but it is no longer the whole control.
+
+### Manual-release state machine (rev 4, 7b-core rev-6 re-review `99df3d2` P1/F2)
+
+Rev 3 said release was "carried in the signed response envelope below". **That was a dangling
+reference and is withdrawn**: that envelope is the one-time bootstrap response, accepted only while
+`phase='bootstrap_in_progress'`. There was no post-activation endpoint, actor authority, payload,
+idempotency rule, persisted state, CAS, timeout, or recovery rule — so manual-wins depended on a
+transition that did not exist, and simply clearing the source could not have promoted anything
+(the suppressed callbacks are already `s ≤ h(c)`, so replaying them is a no-op).
+
+**Product decision (made explicitly, not inferred): release EXISTS, and suppressed callbacks are
+DISCARDED, never promoted.** An operator must be able to hand a manually-approved case back to
+automatic scoring. But every callback suppressed while manual was effective was computed against
+pre-manual state; promoting one would silently resurrect the decision the operator overrode. Release
+therefore completes **only** on a *fresh* recalculation bound to that release — never on history.
+
+**States** (persisted on the case; `manual_release_*` columns are 014-owned, not 013):
+
+| State | Effective source | Meaning |
+|---|---|---|
+| `manual` | manual | a manual approval is in force |
+| `manual_release_pending` | **still manual** | a release is open; manual has NOT been given up |
+| `automatic` | automatic | release completed, or the case was never manual |
+
+**Transitions — all fail-closed; manual stays effective until the final atomic swap:**
+
+1. **`release` command** — authenticated (HMAC v2, path-bound, same scheme as every other inbound
+   mutation) **and** actor-authorized: release is platform-owned, so a reviewer actor is rejected
+   even with a valid signature. Payload: `case_id`, `manual_event_id` (the manual approval being
+   released), `release_id` (client-generated, the idempotency key), `actor`, `issued_at`.
+2. **CAS on `manual_event_id`.** The transition applies only if the case's currently-effective
+   manual event equals the supplied `manual_event_id`. A stale id — the case was re-approved
+   manually since the operator read it — is **rejected with no state change**. This is what stops a
+   release from silently discarding an approval the operator never saw.
+3. `manual` → `manual_release_pending`, recording `release_id`, actor, and a
+   `release_deadline`. **Manual remains the effective source throughout.**
+4. **Fresh recalculation bound to `release_id`.** The release triggers a new run; the resulting
+   decision and its callback carry `release_id`. The receiver completes a release **only** for a
+   callback where `callback.release_id == case.pending_release_id` **and** `s > h(c)`; that single
+   transaction atomically advances `h(c)`, sets the effective source to automatic, and closes the
+   release. Any other callback — including one produced *before* the release and arriving during
+   `manual_release_pending`, however high its sequence — is acknowledged, deduped, advances `h(c)`,
+   and **does not complete the release**. The binding, not the sequence, is the authority.
+5. **Timeout / failure / abort → back to `manual`**, release recorded terminal-expired. A case can
+   never be wedged in `manual_release_pending`: the deadline is persisted, so expiry is decided by
+   stored state rather than by a live timer, and it survives restart.
+6. **Idempotency + concurrency.** `release_id` is the key: replaying it returns the original
+   outcome and changes nothing. A *different* `release_id` while one is pending is **rejected** —
+   one release at a time per case.
+7. **Restart recovery.** All release state is persisted, so a crash mid-release resumes in
+   `manual_release_pending` with its original deadline and `release_id`. Nothing in the machine
+   lives in memory. `h(c)` is monotonic across every path above, including expiry and rejection.
+
+**Required proof (each an executable test, not prose):** wrong signature; valid signature but
+non-platform actor; replayed `release_id`; stale `manual_event_id`; two concurrent releases; restart
+mid-release; deadline expiry returning to `manual`; a late pre-release callback (seq 7) arriving
+during `manual_release_pending` that must **not** complete the release; the fresh bound callback
+(seq 8) that must; and `h(c)` monotonic across all of them. **Mutations that must fail:** dropping
+the `release_id` binding (so any high-sequence callback completes the release), dropping the CAS,
+and dropping the deadline. The platform contract (§Platform integration), the convergence query
+(§6), and the recovery matrix (§4) are updated together with this machine — a release-aware state
+that only one of the three knows about is the defect this finding was.
 
 **Candidate manifest (tool-derivable):** the tool exports every immutable callback decision
 `(case_id, run_id, decision_sequence, callback_wire_sha256, local_status)`. **Its universe and its
@@ -207,6 +268,14 @@ or an approved platform undo + attested repair; on a lost response, `record_*` r
 `request_digest` and proceeds same-digest. `active` → forward-only (forward-fix or approved
 reconciliation).
 
+**Open manual releases across incidents (rev 4, F2).** A release is **per-case** state and is legal
+only in `phase='active'`; the phase CLIs neither read nor clear it. An open
+`manual_release_pending` resolves **only** by its own persisted deadline or its bound fresh callback
+— never by operator memory and never as a side effect of a phase operation — so an incident during
+a release leaves manual effective and the case self-heals at expiry. No recovery path may clear
+release state to "unstick" a case: that would discard a manual approval without the CAS that exists
+to prevent exactly that.
+
 ### 5. Rollout (drained activation window) + rollback
 
 **Activation cutover:** (1) pause platform KYC state changes **incl. manual approvals**; stop +
@@ -235,6 +304,18 @@ rows are safe only after `phase='active'`. A **superseded 6b coordinator** needs
 separately prove the higher delivered decision was under the **target validator pair** (7b proves
 order, not freshness). The shared invariant query also rejects a superseded/integrity row whose
 linked decision is `published`. Ships as the shared query 7b-activation owns and 6b imports.
+
+**Effective source gates convergence (rev 4, F2).** The predicate above answers "is the highest
+automatic decision in order and terminal-clean" — it does **not** answer "is an automatic decision in
+force". While a case's effective source is `manual` or `manual_release_pending`, its suppressed
+callbacks are terminal-clean and `h(c)` has advanced, so a sequence-only reading would report the
+case **converged on a decision that is not in effect** — exactly the confusion this finding is about.
+The shared query therefore returns a **third state**, not a boolean: `converged_automatic`,
+`blocked`, or **`not_applicable_manual`** (carrying the effective source and, when pending, the open
+`release_id` and deadline). 6b must handle `not_applicable_manual` explicitly — a manually-approved
+case is outside automatic convergence, never silently counted as converged and never counted as a
+blocker. When a release completes, the case re-enters the ordinary predicate against the **fresh**
+bound sequence; the discarded pre-release callbacks never satisfy it.
 
 ## Invariants
 
@@ -382,3 +463,31 @@ manifest's `callback_wire_sha256` for nested objects, alternate key-insertion or
 reviewer/source text; assert the SQL semantic digest **differs** for at least the non-ASCII case and
 is used only on the restore path. **Mutation:** switch either the sender or the exporter to an
 independent encoder — the equality test must fail.
+
+## Revision note — rev 4 (2026-07-25)
+
+Folds the two 014-owned findings from Codex's 7b-core rev-6 re-review (`99df3d2`). Rev 3's accepted
+controls are unchanged; core (`013`) gains nothing from this revision, per that review's explicit
+instruction not to re-merge activation into core.
+
+- **P1/F1 — the manifest digest did not hash what is sent.** `callback_body_sha256` was defined over
+  PostgreSQL `payload_json::text` while `_deliver_decision_callback` transmits
+  `json.dumps(payload).encode()` — `ensure_ascii=True` versus raw UTF-8. `checks[].source` is
+  reachable as `reviewer:<reviewer_id>` (`validators/website.py:13-20`), so a non-ASCII reviewer id
+  makes the two disagree; a platform hashing the bytes it accepted would dispute the manifest, and
+  one echoing our SQL digest would prove nothing. **Resolution:** two separately-named values that
+  cannot be conflated — `stored_payload_jsonb_digest` (restore-time semantic equality, both sides
+  Postgres) and `callback_wire_sha256`, one versioned `encode_decision_callback(payload) -> bytes`
+  codec used by **both** the sender and the manifest exporter, with the platform ledger required to
+  retain the SHA-256 of the raw request bytes it actually accepted.
+- **P1/F2 — manual-wins depended on a release transition that did not exist.** Rev 3 pointed at "the
+  signed response envelope below", which is the one-time *bootstrap* response, accepted only in
+  `bootstrap_in_progress`. **Resolution (user product decision, 2026-07-25): release EXISTS, as a
+  fail-closed state machine, and suppressed callbacks are DISCARDED rather than promoted** — they
+  were computed against pre-manual state, so promoting one would resurrect the decision the operator
+  overrode. Manual remains effective through `manual_release_pending`; only a *fresh* recalculation
+  bound to `release_id`, with `s > h(c)`, atomically completes the release. CAS on
+  `manual_event_id`, `release_id` as idempotency key, one release per case at a time, persisted
+  deadline so a case can never wedge, and full restart recovery. The convergence query now returns
+  `not_applicable_manual` as a third state rather than reporting a suppressed decision as converged,
+  and the recovery matrix forbids clearing release state to "unstick" a case.
