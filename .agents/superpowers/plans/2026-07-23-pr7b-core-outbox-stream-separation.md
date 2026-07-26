@@ -3208,12 +3208,17 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
 
     t = threading.Thread(target=run_downgrade)
     engineB = create_engine(url)
-    # `event.listen` is process-wide, so register it INSIDE the try whose finally removes
-    # it: a raise from Thread.start() would otherwise leak the barrier into every later
-    # test in the session.
-    event.listen(Engine, "after_cursor_execute", _barrier)
+    # `event.listen` is PROCESS-WIDE, so cleanup must be exact (re-review 6a408a3 F9). Track
+    # registration and start SEPARATELY: `Thread.join()` on a never-started thread raises
+    # RuntimeError, so an unconditional join in `finally` would abort cleanup BEFORE
+    # `event.remove()` and leak the barrier into every later test — the precise failure an
+    # earlier "fix" that only moved the listen() call still left open.
+    registered = started = False
     try:
+        event.listen(Engine, "after_cursor_execute", _barrier)
+        registered = True
         t.start()
+        started = True
         assert at_preflight.wait(timeout=15)  # paused right after the preflight
         connB = engineB.connect()
         # Re-audit F5: begin B's transaction BEFORE any execute — SQLAlchemy 2 autobegin
@@ -3237,11 +3242,15 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
         finally:
             connB.close()
     finally:
-        release.set()
-        t.join(timeout=15)
-        event.remove(Engine, "after_cursor_execute", _barrier)
-        engineB.dispose()
-    assert not t.is_alive()  # the downgrade thread terminated (a hung timeout must NOT pass)
+        release.set()                     # unconditional: never strand a waiting barrier
+        try:
+            if started:
+                t.join(timeout=15)
+        finally:                          # inner finally — a join failure cannot skip removal
+            if registered:
+                event.remove(Engine, "after_cursor_execute", _barrier)
+            engineB.dispose()             # engines disposed outermost
+    assert not started or not t.is_alive()  # a hung timeout must NOT pass
     assert down_err == []    # ... and completed cleanly on the no-superseded DB
     engine.dispose()
 ```
@@ -3778,6 +3787,54 @@ def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
 Run: `.venv/bin/pytest tests/integration/test_migrations.py::test_012_restore_acceptance_rejects_default_id_then_accepts_original -v`
 Expected: PASS. **Mutation witnesses (manual):** (a) change the governed restore INSERT to omit the explicit `id` → the `== [(1,)]` assertion must FAIL (the predicate rejects it), and — if the predicate were also skipped — the final assertion would fail with `{"dA": 2, "dB": 1}` (the silent order reversal this contract exists to block). (b) Replace `_RESTORE_ACCEPTANCE_SQL` with the pre-rev-10 negative form (`SELECT ... WHERE ... AND (o.id <> :original_outbox_id OR ...)`, zero rows = accepted) → the absent-row assertion at (4) must FAIL, proving the fail-open hole is what the positive predicate closes. Restore both.
 
+- [ ] **Step 4c: Listener-leak regression (re-review `6a408a3` F9)** — append to `tests/integration/test_migrations.py`. The two barrier tests register a PROCESS-WIDE hook; this proves a failure between registration and start cannot leak it:
+
+```python
+def test_barrier_listener_never_leaks_when_thread_start_raises(pg, monkeypatch):
+    """F9: `Thread.join()` on a never-started thread raises RuntimeError. If cleanup joined
+    unconditionally, that raise would abort the `finally` BEFORE `event.remove()` and the
+    process-wide barrier would contaminate every later test. Force the exact failure and prove
+    registration is still undone."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    def _boom(self):
+        raise RuntimeError("injected: Thread.start() failed after listener registration")
+
+    monkeypatch.setattr(threading.Thread, "start", _boom)
+    url = _fresh_db(pg, "kyc_mig_013_leak_guard")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "013")
+
+    def _barrier(conn, cursor, statement, params, context, executemany):  # pragma: no cover
+        pass
+
+    registered = started = False
+    t = threading.Thread(target=lambda: None)
+    with pytest.raises(RuntimeError, match="injected"):
+        try:
+            event.listen(Engine, "after_cursor_execute", _barrier)
+            registered = True
+            t.start()
+            started = True
+        finally:
+            try:
+                if started:
+                    t.join(timeout=5)
+            finally:
+                if registered:
+                    event.remove(Engine, "after_cursor_execute", _barrier)
+
+    # the whole point: the hook is gone despite the raise, and nothing was left running
+    assert not event.contains(Engine, "after_cursor_execute", _barrier)
+    assert not t.is_alive()
+```
+
+Run: `.venv/bin/pytest tests/integration/test_migrations.py -k barrier_listener_never_leaks -v` → PASS.
+**Mutation:** replace the inner `try/finally` with a bare unconditional `t.join(timeout=5)` → the
+test must FAIL, because `join()` raises before `event.remove()` runs and `event.contains(...)`
+is then still true. Restore.
+
 - [ ] **Step 5: Mutation check (manual, no commit)** — remove `s.execute(text("LOCK TABLE outbox IN SHARE MODE"))`; rerun `.venv/bin/pytest tests/integration/test_verify_pr7b_core_backfill.py::test_cli_share_lock_blocks_until_legacy_retention_resolves -v` → BOTH params must FAIL the `assert proc.poll() is None` blocked check (the CLI no longer waits on connection A's uncommitted legacy DELETE), and the `[commit]` param additionally fails its nonzero-outcome assertion (it reads the still-visible callback before A commits). Restore.
 
 - [ ] **Step 6: RED drift-guard step** — the new CLI changed `src/`:
@@ -3933,12 +3990,15 @@ def test_reset_atomic_rollback_when_tuple_appears_before_readback(pg):
             err.append(e)
 
     t = threading.Thread(target=run_reset)
-    # `event.listen` is process-wide and `Thread.start()` can raise: register and start INSIDE the
-    # try whose finally releases the barrier, removes the listener, and joins — otherwise a raise
-    # between them leaks the hook (and possibly a live thread) into every later test.
+    # Identical cleanup discipline to Task 6 (re-review 6a408a3 F9): registration and start are
+    # tracked separately, because join() on a never-started thread raises and would otherwise
+    # abort cleanup before event.remove() — leaking this process-wide hook into later tests.
+    registered = started = False
     try:
         event.listen(Engine, "before_cursor_execute", _barrier)
+        registered = True
         t.start()
+        started = True
         assert at_readback.wait(timeout=15)  # reset's UPDATE done, about to read back
         with engine.begin() as conn:          # concurrent writer commits a NEW claimed row
             conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, claim_token, "
@@ -3948,10 +4008,14 @@ def test_reset_atomic_rollback_when_tuple_appears_before_readback(pg):
         go.set()
         t.join(timeout=15)
     finally:
-        go.set()                                   # always release, even on an early failure
-        t.join(timeout=15)
-        event.remove(Engine, "before_cursor_execute", _barrier)
-        assert not t.is_alive(), "reset thread outlived the test"  # a hung thread must not pass
+        go.set()                                   # unconditional: never strand a waiting barrier
+        try:
+            if started:
+                t.join(timeout=15)
+                assert not t.is_alive(), "reset thread outlived the test"
+        finally:                                   # a join/assert failure cannot skip removal
+            if registered:
+                event.remove(Engine, "before_cursor_execute", _barrier)
     assert err and isinstance(err[0], RuntimeError)  # reset raised
     with engine.connect() as conn:
         tuples = conn.execute(text("SELECT count(*) FROM outbox WHERE claim_token IS NOT NULL")).scalar_one()

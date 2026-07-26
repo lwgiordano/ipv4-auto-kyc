@@ -22,7 +22,10 @@ from kyc_tool.config import REPO_ROOT
 PLAN = REPO_ROOT / ".agents" / "superpowers" / "plans" / (
     "2026-07-23-pr7b-core-outbox-stream-separation.md"
 )
-RUFF = REPO_ROOT / ".venv" / "bin" / "ruff"
+# Invoke Ruff through the RUNNING interpreter, never a hardcoded ".venv/bin/ruff": CI installs
+# the project with `pip install -e '.[dev]'` and has no .venv, so a hardcoded path fails there
+# while passing locally — which is exactly how this gate broke CI on its first commit.
+RUFF_CMD = [sys.executable, "-m", "ruff"]
 SELECTORS = "E,F,I,UP,B,SIM"  # the repository's own selector set
 LINE_LENGTH = "110"
 
@@ -93,7 +96,7 @@ def test_plan_complete_file_blocks_lint_clean(tmp_path, start, path, body):
     target = tmp_path / Path(path).name
     target.write_text(body + "\n")
     result = subprocess.run(
-        [str(RUFF), "check", "--select", SELECTORS, "--line-length", LINE_LENGTH,
+        [*RUFF_CMD, "check", "--select", SELECTORS, "--line-length", LINE_LENGTH,
          "--isolated", "--output-format", "concise", str(target)],
         capture_output=True, text=True,
     )
@@ -128,5 +131,10 @@ def test_plan_lines_within_line_length():
 
 
 def test_ruff_is_available():
-    assert RUFF.exists(), f"{RUFF} missing — this gate cannot silently pass without it"
+    """The lint gate must fail loudly rather than silently skip if Ruff cannot be invoked."""
+    result = subprocess.run([*RUFF_CMD, "--version"], capture_output=True, text=True)
+    assert result.returncode == 0, (
+        f"`{' '.join(RUFF_CMD)} --version` failed — this gate cannot silently pass without Ruff:\n"
+        f"{result.stdout}{result.stderr}"
+    )
     assert sys.version_info >= (3, 11)
