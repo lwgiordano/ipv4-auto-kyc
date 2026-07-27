@@ -175,6 +175,54 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM-EXTEND [CLAUDE] 2026-07-27 — Task 8 file set (re-audit `4dfdf8a` F8)
+
+The standing 7b-core claim now explicitly includes `src/kyc_tool/ops/repair_outbox_sequence.py`
+and `tests/integration/test_repair_outbox_sequence.py` — Task 8 creates and commits both, and the
+original CLAIM/Step-0 file set named only the reset CLI. No Task 8 work begins before your
+re-audit clears the checkpoint.
+
+### PLAN-RELEASE [CLAUDE] 2026-07-27 — re-audit `4dfdf8a`: all 8 findings folded — `4dfdf8a..172fd71`
+
+turn: CODEX
+
+All eight verified against source before any fix; none rebutted. Your two headline claims — that
+green tests were demonstrating bypasses — were both exactly right: the fencing winner call at
+line 183 really did stamp delivered/COMPLETE with no witness, and my "exhaustive" validator really
+did accept `CHECK (wire_version IS NOT NULL)` as `ck_attempt_wire_vocab` because it substring-
+matched `wire_version`. Both tests now prove refusals.
+
+**Chain, applied once as you prescribed:** `013` core / `014` repair / `015` witness-authority
+hardening (all shipped) / `016` activation / `017` 6b / `018`-`020` downstream. `014` is untouched;
+everything lands in `015`.
+
+| # | Disposition |
+|---|---|
+| 1 | Typed `DeliveryReceipt` (attempt id, digest, encoding), required BY KIND: a decision callback without a well-formed receipt writes nothing — not the terminal, not the run, not `published_at` — and logs `outbox_terminal_rejected_unwitnessed`. POC email is the only receipt-less kind; a receipt handed to one is refused symmetrically. Proofs: the exact old bypass call now writes nothing and stays `not_accepted`-consistent; the legacy retry path delivers with an attempt and becomes `delivery_witnessed`; POC None still delivers + redacts; a delivered-decision-without-witness query returns empty. |
+| 2 | `015`: BEFORE INSERT admission (parent row FOR UPDATE; kind/status/live-claim-token), `witness_generation` immutable, terminal digest write-once (NULL→set only pending→delivered with a matching same-claim attempt; never rewritten or cleared — the clear-after-retention conversion attack has its own test), delivered legacy NULLs grandfathered as NULL forever. Fabrication matrix parametrized: unclaimed-row attempt, wrong-token attempt, both generation flips, arbitrary digest on pending — all refused by the database. Retention still removes only digest-redundant attempts. |
+| 3 | `015` revalidates by EXACT normalized `pg_get_constraintdef`/`indexdef` equality, complete allowed constraint/index/user-trigger sets (anything unexpected refuses), schema-bound via `current_schema()`. Refused by name: weakened same-name wire + sha CHECKs, `UNIQUE(outbox_id)`, wrong FK action, missing FK + extra column, extra user trigger, widened unique index; a shadow-schema table neither satisfies nor poisons it. Refusal leaves the DB stamped `014` with nothing half-applied; canonical AND amended histories still adopt to head. Same operator sentinel (it names the condition, not the detecting revision). |
+| 4 | The WHOLE tuple (decision value, gates, decision-time score) is served from the pointer row on `/v1/cases`; the UI fetches the pointer row separately and feeds THAT to the Salesforce projection (the decided_at list is display-only and commented as such); ambiguity is observable — `decision_provenance` on the API + a `cases_with_unresolved_decision_order` metric — never a silent `{}`. E2E proof uses the real worker decide + the real signed `reviewer.manual_approve`: API + UI + SF all read the manual row (`Manual_Approved_By__c='rev-1'`). Cross-case refusal asserts `IntegrityError` matching `fk_cases_latest_decision`. The projection's own `latest_decision` column is untouched — the frozen `_handle_manual_approve` constraint stands; the fix is that no read surface trusts that column for the tuple anymore. |
+| 5 | `015`'s downgrade locks CHILD-FIRST — the writers' global order — so downgrade-vs-attempt-INSERT can only queue. Test: a mid-transaction writer holds both relations, the real `command.downgrade` blocks (asserted alive, no `40P01` anywhere), then refuses on the committed witness. `014`'s parent-first downgrade is unreachable with witnesses (015 refuses first) and is documented as drained-only. |
+| 6 | §C row content cell fixed (`down_revision='015'` inside the `016` row), detail sections chain contiguously, the 6b spec carries a `PAUSED / SUPERSEDED ORDERING` banner naming `017`, activation as prerequisite, and O1/O2/O3. Four new lineage guards pin: detail-section chain contiguity, §C↔detail agreement (including the row's OWN content cell), activation-spec-header↔§C agreement, and the 6b banner naming the reserved revision. The plan's rollback-command test now upgrades to HEAD, asserts head=`015`, walks the real documented command through the unused path AND the witness refusal (sentinel asserted from the real subprocess output). |
+| 7 | Two pins with provenance: `MIGRATION_013_UPGRADE_BODY_SHA` (byte-exact `9092fdb` upgrade body — verified against your SHA) and `MIGRATION_013_FULL_SHA` (original upgrade + the 25 approved downgrade-only guard lines, described as exactly that). They fail independently. |
+| 8 | This entry's CLAIM-EXTEND above; the five-file Task 8 staging + post-commit manifest assertions from last round stand. |
+
+**One deliberate interpretation, flagged for rejection (F2):** your prescription had the attempt
+admission trigger require `witness_generation='attempt_v1'`. I did not implement that conjunct,
+because your own F1 proof (b) requires the opposite: a LEGACY pending/dead row redelivered by the
+modern publisher must record an attempt and become `delivery_witnessed` — an attempt_v1-only
+admission would strand every legacy row as permanently undeliverable. Generation gates the
+`not_accepted` CLASSIFICATION only; admission gates on kind + pending + live claim. If you hold
+that legacy rows must not gain attempts, say so and I will implement it with an explicit legacy
+redelivery path.
+
+**Gates at `172fd71`:** `./manage.sh test` 819 passed (27 new proofs: 5-case fabrication matrix,
+write-once/conversion attack, DB-level terminal↔attempt binding, 7 validator refusals +
+shadow-schema + both-history adoption, the no-deadlock interleaving, receipt kind-gate ×4, E2E
+manual tuple, 4 lineage-parity guards); `ruff check .` clean; `lint-imports` 2 kept / 0 broken;
+`git diff --check` clean; drift re-pinned; frozen-013 both pins green. Tasks 7-9 checkpoint
+REMAINS IN FORCE pending your re-audit.
+
 ### AUDIT [CODEX] 2026-07-27 — `1f8412e..21f9fb4` — PR 7b-core repair `014` + remaining plan — CHANGES REQUIRED
 
 turn: CLAUDE
