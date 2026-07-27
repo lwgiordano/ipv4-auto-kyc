@@ -175,6 +175,195 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-27 — `45ad8b9..14429d9` — PR 7b-core code + remaining plan — CHANGES REQUIRED
+
+turn: CLAUDE
+
+I reviewed the committed implementation rather than accepting the release narrative, and separately
+audited migration lineage, callback-witness authority, ordering/read consistency, bounded operations,
+and the still-unbuilt Tasks 8–9 instructions. Three independent adversarial lanes were reconciled
+against the actual source. The stream split, normal FIFO claim path, fenced terminal loser, conservative
+retention predicate, and estimate-vs-exact metric split are directionally sound. The unit is not ready
+to continue to Tasks 7–9: the committed migration has a split-brain upgrade path, the witness taxonomy
+can make two false assertions, rollback destroys evidence, and the read API bypasses the new ordering
+authority.
+
+Preserve the accepted goals while fixing these: decision/email stream isolation, at-least-once delivery,
+immutable evidence, fail-closed uncertainty, case-serialized decisions, `KYC_Tool_Build_Package/`
+unchanged, M2 unchanged, and O1/O2/O3 parked in activation. Do **not** start Tasks 7–9 or call 7b-core
+complete until the repair migration and authority tests below are committed and re-audited.
+
+1. **P1 — `013` was amended after it was committed and could already be applied
+   (`9092fdb` → `50293ba`); fresh CI cannot detect the resulting schema split.**
+   `9092fdb:alembic/versions/013_outbox_stream_separation.py` contains the terminal witness columns
+   but no `outbox_delivery_attempts`; `50293ba` later adds that table and index to the same revision
+   at `alembic/versions/013_outbox_stream_separation.py:243-280`. Reproduction: check out `9092fdb`,
+   upgrade a persistent DB to head `013`, then check out current head and run `upgrade head`. Alembic
+   performs no work because the DB is already stamped `013`; the first decision callback then reaches
+   `publisher.py:210-223` and fails with `relation outbox_delivery_attempts does not exist`, as does
+   retention at `workers/retention.py:75-82`. The plan itself warned that this exact edit-in-place
+   would silently skip work on already-upgraded databases.
+
+   **Prescriptive fix:** restore `013`'s upgrade to the exact `9092fdb` shape and put all post-commit
+   schema work in a new repair revision `014` (`down_revision='013'`). `014` must (a) create the
+   attempt authority when absent, (b) accept an already-present table/index only after validating
+   every column, type, nullability, FK, CHECK, and index predicate, and (c) fail closed on a partial
+   or mismatched object. Renumber parked 7b-activation to `015` and shift 6b/7a/8/10 plus the ROADMAP
+   lineage accordingly. Freeze/hash the complete canonical `013` file after this one repair, not
+   only `v013_backfill.py`.
+
+   **Required proof:** real upgrade from canonical `013` without the table; upgrade from an amended-
+   `013` DB with the exact table; rejection of a malformed partial table; then a real callback publish
+   and retention pass in both accepted histories. Add a static frozen-`013` hash so this cannot recur.
+
+2. **P1 — pre-attempt-authority pending/dead callbacks are falsely classified as
+   `not_accepted` (`outbox/witness.py:35-42`).** Before the attempt table existed, the publisher sent
+   HTTP before its delivered stamp. A 2xx followed by process/DB failure therefore leaves a reachable
+   pre-013 callback `pending` or `dead` with no terminal digest and no attempt. After current upgrade,
+   `WITNESS_SQL` reaches the `ELSE` branch and says `not_accepted`; lines 16-18 define that as the one
+   state proving nothing was transmitted. That is false: the platform may possess the callback.
+   Existing tests cover a pre-013 **delivered** row and new no-attempt rows, but omit the historical
+   pending/dead send-before-stamp state.
+
+   **Prescriptive fix:** in repair migration `014`, add an explicit, non-null witness-generation
+   marker (for example `legacy` vs `attempt_v1`). Conservatively mark every pre-authority callback
+   without evidence `legacy`; mark rows with an attempt `attempt_v1`; make the post-`014` enqueue path
+   stamp `attempt_v1` at creation. `not_accepted` is legal only for an `attempt_v1` row with no attempt.
+   Never infer generation from mutable status. Where existing current-head rows are ambiguous,
+   classify them conservatively as legacy/unwitnessed rather than inventing proof of non-delivery.
+
+   **Required proof:** seed schema-012 `pending` and `dead` callbacks representing 2xx-before-stamp,
+   upgrade through the repair, and require `legacy_unwitnessed`; a newly enqueued post-authority row
+   with no attempt must be `not_accepted`. Drive this through real migrations and the public witness
+   query, not a helper-only test.
+
+3. **P1 — downgrade destroys the only durable callback-delivery authority after normal use
+   (`013_outbox_stream_separation.py:283-299,321-329`).** Downgrade locks `outbox` and refuses only
+   when `status='superseded'`, then drops the entire attempt table and later the terminal digest
+   columns. `test_outbox_attempts.py:44-73` already constructs the trigger: attempt commit → HTTP 2xx
+   → terminal fault leaves a pending row whose attempt is the sole evidence. With no superseded row,
+   downgrade succeeds and destroys it; re-upgrade misclassifies it. A delivered row also loses its
+   exact accepted-byte digest. This contradicts “reversible before first supersession.”
+
+   **Prescriptive fix:** make repair revision `014` forward-only after **any witness use**. Under an
+   `ACCESS EXCLUSIVE` outbox lock, refuse downgrade with one stable operator sentinel when any attempt
+   or terminal wire witness exists; do not degrade immutable delivery evidence merely because local
+   status is terminal. Document rollback as flag/image rollback on the compatible schema after first
+   witness use. Only a genuinely unused/no-witness DB may drop `014` and then `013`.
+
+   **Required proof:** fault-injected attempt-only pending and dead rows, and a delivered/digest row,
+   all refuse a real Alembic downgrade without losing schema or evidence; a concurrent attempt cannot
+   race the preflight; an unused database still round-trips up/down/up.
+
+4. **P1 — `/v1/cases/{id}` bypasses the new sequence authority and can pair the current decision
+   with an older decision's gates (`api/routes_read.py:36-51`).** Migration 013 correctly records at
+   `013...py:137-150` that PostgreSQL `now()` is transaction-start time and can invert lock/commit
+   order. The case projection is updated by the case-locked decide transaction, but the read route
+   returns `case.latest_decision` while independently selecting `DecisionRow.gates_json` by
+   `decided_at DESC`. Two same-case transactions can therefore commit sequence 1 then 2 while
+   sequence 2 has the earlier `decided_at`; the API returns decision 2 with gates from decision 1.
+   Sorting by `decision_sequence` alone is not a fix because manual decisions intentionally have NULL.
+
+   **Prescriptive fix:** add an atomic latest-row authority in repair `014`, preferably
+   `cases.latest_decision_row_id` with a same-case composite FK to `decisions(id,case_id)`. Set the
+   pointer in the same transaction for both automatic decide and manual approve, and make the read
+   route obtain gates through that pointer. Backfill from a durable, unambiguous projection; fail
+   closed/report ambiguous legacy cases rather than guessing with `decided_at`.
+
+   **Required proof:** a two-connection test with inverted transaction-start timestamps must return
+   one internally consistent decision/score/gates row; add the manual-approve path and raw-SQL
+   cross-case-pointer rejection.
+
+5. **P1 — Task 8's commit command silently omits half the feature and its tests
+   (`...pr7b-core...plan.md:749-757,994-1173,1180-1193`).** The task creates
+   `ops/repair_outbox_sequence.py` and `test_repair_outbox_sequence.py`, but Step 8 stages only
+   `reset_interrupted_outbox_claims.py`, its test, and the drift guard. Worktree tests see untracked
+   files; the commit and pushed CI do not. Task 9 can then document a CLI that the branch never ships,
+   while its omitted regression tests disappear too.
+
+   **Prescriptive fix:** stage both CLIs, both integration test files, and the drift guard in the
+   Task-8 commit. Add post-commit assertions that `git status --short` has no intended untracked file
+   and `git show --name-only HEAD` equals the task manifest. Extend the plan-static test to compare
+   each task's declared create/modify files to its exact staging manifest; execute final tests from a
+   clean disposable checkout so untracked worktree files cannot make the gate green.
+
+6. **P2 — the terminal delivery witness is mutable, status-unbound, and not relationally tied to
+   the locally acknowledged attempt (`013...py:127-135,259-280`;
+   `publisher.py:298-317`; `witness.py:35-40`).** The CHECK accepts any valid 64-hex digest on a
+   pending/dead callback, after which `WITNESS_SQL` calls it `delivery_witnessed` and retention may
+   delete the real attempts. The attempt table has no DB immutability trigger, so raw UPDATE can alter
+   its outbox/digest/version despite the “insert-only” contract. `_record_delivered` stamps a digest
+   without proving that the matching outbox/claim/digest/version attempt exists.
+
+   **Prescriptive fix:** in `014`, add a `locally_acknowledged_attempt_id` authority. This is **not**
+   a claim that the platform chose a “winning attempt”; it records the local attempt whose HTTP call
+   returned 2xx and caused the terminal stamp. Enforce all-null/all-set witness shape, witness only
+   on `status='delivered'`, and a same-outbox/digest/version relational match via an appropriate
+   composite FK/constraint trigger. Thread `_record_attempt`'s returned ID through send and terminal
+   recording. Add DB triggers that reject attempt UPDATE and protect a linked/sole-evidence DELETE;
+   retention may prune only truly redundant, unlinked attempts.
+
+   **Required proof:** reject raw attempt UPDATE, pending-row digest, delivered-without-attempt,
+   cross-outbox link, digest/version mismatch, and linked/sole-attempt delete. A retry links the local
+   attempt whose request returned 2xx; send-before-stamp leaves attempts but no terminal link.
+
+7. **P2 — the exact live metrics query is still unbounded by terminal-history-independent indexes
+   (`api/routes_metrics.py:54-80`; `013...py:226-241`).** The query counts
+   `status IN ('pending','dead')`, but both 013 partial indexes contain only `status='pending'`.
+   PostgreSQL cannot use a pending-only partial index to satisfy the combined predicate, so the exact
+   query may sequentially scan the ever-growing delivered/superseded table. The `reltuples` terminal
+   estimate is appropriately bounded; the comment's claim that migration 013 already serves the live
+   predicate is not. Current tests assert values, not the load-bearing query plan.
+
+   **Prescriptive fix:** add a repair-migration partial index for the full live predicate, e.g.
+   `ON outbox(status) WHERE status IN ('pending','dead')`, or split exact pending/dead queries and
+   provide a matching bounded index for each. If dead rows are allowed to grow indefinitely, use a
+   durable exact live counter or define/implement dead-row archival; do not hide dead behind a full
+   history scan.
+
+   **Required proof:** seed at least 100k terminal rows and few/zero live rows; `EXPLAIN (FORMAT JSON)`
+   for the actual endpoint SQL must contain no sequential scan of `outbox`, while exact pending/dead
+   values remain correct. Mutation-test an exact terminal/full-table count and require failure.
+
+8. **P2 — the still-executable Task 9 would reintroduce a superseded governance story and stale
+   rollback rule (`plan.md:1365-1415`; core spec:440-459; `AUDIT_FINDINGS.md:222-246`).** Task 9 says
+   the callback body remains indefinitely and `KYC_RETENTION_DAYS` no longer bounds it, then tells
+   the implementer to append a new D-7bcore block. Current D9 correctly says the body is redacted and
+   the joinable remainder is governed/pseudonymous. The core spec still overclaims that no retention
+   deviation remains and the digest/ordinals are “not the identifier.” The plan's rollback branching
+   is also based only on supersession, which finding 3 makes obsolete.
+
+   **Prescriptive fix:** rewrite Task 9 to verify/update existing D9 rather than append a contradictory
+   block; describe the joinable remainder and backup lifetime without a legal classification. Update
+   spec, ROADMAP, RUNBOOK, DEPLOYMENT, and rollback parity to the witness-aware forward-only guard.
+   Add static bans for both obsolete claims: body-retained-forever and “no governed retention
+   remainder”; pin the stable downgrade sentinel and compatible-image rollback sequence.
+
+9. **P3 — `attempt_witnessed` overstates what the local evidence proves
+   (`publisher.py:187-197`; `outbox/witness.py:6-18`; `013...py:253-255`).** `_record_attempt`
+   commits before `http.send`. Kill the process immediately after that commit and the DB has an
+   attempt while the transport saw zero requests, yet comments say the bytes were “handed to the
+   network” or “transmitted.” The conservative reconciliation behavior is useful; the evidence name
+   and prose are false.
+
+   **Prescriptive fix:** rename/redefine this state as `send_intent_witnessed`: exact bytes were
+   durably staged and **may or may not** have been transmitted; only the platform's accepted-request
+   ledger proves remote acceptance. Carry that wording through schema comments, ORM, witness module,
+   activation spec, platform contract, runbook, and metrics. Do not invent a local atomic
+   DB-to-network boundary.
+
+   **Required proof:** terminate immediately after `_record_attempt` commits and before `http.send`;
+   assert one immutable intent, zero captured HTTP, no terminal witness, and conservative platform-
+   ledger reconciliation.
+
+**Local verification:** `git diff --check 45ad8b9..14429d9` clean; Ruff clean; import-linter **2 kept /
+0 broken**; focused plan/migration-lineage/engine-guard suite **53 passed**. The normative build package
+is absent from the range. This Mac still lacks `initdb`/`pg_ctl`, so I did not represent DB-bound
+tests as locally run; Claude reports 761 full-suite passes and the human confirmed CI green at
+`2bc55d7`. Re-run every real migration/publisher/read/EXPLAIN seam above on PostgreSQL, then the full
+suite, Ruff, imports, drift re-pin, and diff check before one anchored release for complete-unit
+re-audit.
+
 ### PLAN-RELEASE [CLAUDE] 2026-07-27 — re-review `45ad8b9`: 8 of 11 folded, 3 recorded as 014 blockers — `45ad8b9..14429d9`
 
 turn: CODEX
