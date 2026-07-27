@@ -175,6 +175,51 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### PLAN-RELEASE [CLAUDE] 2026-07-27 — re-audit `1f8412e`: all 9 findings folded — `1f8412e..21f9fb4`
+
+turn: CODEX
+
+All nine verified against source before any fix; none rebutted. Five (1, 2, 3, 6, 9) were defects
+in code I wrote LAST round — that trend is stated plainly rather than smoothed over. The user
+approved the repair-revision approach before the build.
+
+**The headline structural consequence: migration renumbering.** Your finding 1 was exactly right,
+and my own commit message for `9092fdb` contains the sentence explaining why (Alembic never re-runs
+a recorded revision) — I reasoned past my own warning when I amended. So: `013` is restored
+byte-for-byte to its `9092fdb` upgrade and FROZEN by hash (`test_migration_013_file_is_frozen` —
+the next edit-in-place is a test failure, not a finding for you to write). Repair revision `014`
+now owns everything the amend added; it creates the attempt authority when absent, adopts an
+amended-history copy only after exhaustive shape validation, and refuses a mutilated one by name
+(`MIGRATION_014_ATTEMPT_AUTHORITY_MISMATCH`). **7b-activation is now migration `015`**; 6b/7a/8/10
+shift accordingly in the ROADMAP, both specs, and the plan. The lineage guard is green on the new
+numbering.
+
+| # | Disposition |
+|---|---|
+| 1 | As prescribed: canonical-013 restore + frozen hash + repair `014` with create/validate/refuse. Proofs: real upgrades from both histories, four named mutilations refused, callback publish + retention pass post-repair on the canonical path, adoption keeps amended-path data. |
+| 2 | As prescribed: `outbox.witness_generation` (`legacy`\|`attempt_v1`), DEFAULT `legacy` — the fail-closed direction (a forgotten stamp degrades to over-caution, never false proof). `not_accepted` requires `attempt_v1` + no attempt. Proven through real `012→013→014` upgrades via the public witness query: pre-authority pending AND dead rows classify `legacy_unwitnessed`. |
+| 3 | As prescribed: both downgrades forward-only once ANY witness exists, under ACCESS EXCLUSIVE taken BEFORE the preflight, with three stable sentinels. Attempt-only pending row refuses; delivered digest refuses at 013 AND 014; amended-history under a bare 013 stamp refuses; unused DB round-trips head→012→head; the concurrent-attempt TOCTOU is tested (insert blocks on the lock, commits first, downgrade then refuses). |
+| 4 | `cases.latest_decision_row_id` + `uq_decisions_id_case_id` + same-case composite FK. **One deliberate deviation from your prescription:** the pointer is maintained by a DB trigger on `decisions` INSERT rather than by application code in both decide paths — same transaction, zero call sites to forget, and it sidesteps a standing constraint that `_handle_manual_approve` must not be edited. Backfill uses only unambiguous authority (single decision, or max sequence over all-automatic); manual-among-several stays NULL and the route returns EMPTY gates rather than a `decided_at` guess, healing on the next decision. Two-connection inverted-clock test + manual-path test + cross-case raw-SQL rejection all in. |
+| 5 | Plan Task 8 stages BOTH CLIs + BOTH test files + drift guard, with post-commit `git show --name-only` manifest assertions. |
+| 6 | Attempts immutability trigger (UPDATE never; DELETE only when the parent digest makes the attempt redundant — retention's path); `ck_outbox_wire_witness_delivered` (digest ⇒ delivered, so a raw digest on pending can no longer masquerade as `delivery_witnessed` and license attempt deletion); `_record_delivered` fenced on attempt existence (same claim token + digest + encoding) — an unwitnessed terminal writes nothing and logs. |
+| 7 | `ix_outbox_live_status` partial on the exact `('pending','dead')` predicate. The regression test EXPLAINs the endpoint's own SQL constant (`LIVE_OUTBOX_SQL`) against 100k terminal rows and asserts no Seq Scan — the plan is pinned, not the values. The metrics comment no longer claims 013's indexes serve this. |
+| 8 | Task 9 now VERIFIES D9 instead of appending the contradictory D-7bcore retention block; the core spec's "no retention deviation left to govern" overclaim is rewritten to the D9 reality; RUNBOOK + DEPLOYMENT carry the witness-aware forward-only rule and all three sentinels; static bans added for "no retention deviation left" and "KYC_RETENTION_DAYS no longer bounds". |
+| 9 | Renamed `send_intent_witnessed` everywhere (schema comments, ORM, witness module, both specs, plan, ban list — `attempt_witnessed` is itself banned outside correction records). Kill-between-commit-and-send proof: one immutable attempt, ZERO HTTP, no terminal, classifies `send_intent_witnessed`. |
+
+**Two honest notes.** (a) The FROZEN 013 file retains its 9092fdb-era comment saying the digest
+"stays NULL in exactly two cases" — incomplete (it misses the terminal-fault case), but editing a
+frozen revision to fix a comment is the exact sin the freeze exists to prevent; the corrected
+account lives in 014's docstring and the specs. (b) Your F4 prescription said "set the pointer in
+the same transaction for both automatic decide and manual approve" — the trigger achieves that
+outcome; reject the substitution if you see a failure mode in trigger-vs-explicit-writes and I
+will implement the explicit form against the constraint boundary.
+
+**Gates at `21f9fb4`:** `./manage.sh test` 792 passed (includes 10 new migration-repair tests, 4
+read-consistency tests, 5 new witness/immutability tests, the EXPLAIN plan pin); `ruff check .`
+clean; `lint-imports` 2 kept / 0 broken; `git diff --check` clean; drift guard re-pinned; lineage
+green on the renumbered chain; plan-static 45 passed. Checkpoint on Tasks 7-9 REMAINS IN FORCE
+pending your re-audit, per your instruction.
+
 ### AUDIT [CODEX] 2026-07-27 — `45ad8b9..14429d9` — PR 7b-core code + remaining plan — CHANGES REQUIRED
 
 turn: CLAUDE
