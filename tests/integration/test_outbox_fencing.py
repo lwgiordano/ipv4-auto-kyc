@@ -81,6 +81,23 @@ def test_stuck_email_does_not_block_decision_callback(
     assert statuses == {"decision_callback": "delivered", "poc_email": "pending"}
 
 
+def _receipt_for(session_factory, row, sha="a" * 64):
+    """Stage a real attempt under `row`'s live claim and return the matching receipt.
+
+    The hand-built winner deliveries in this suite predate the receipt requirement; the DB now
+    refuses a decision terminal whose attempt does not exist (admission + witness triggers), so
+    the fixture does what the real publisher does — attempt first, terminal second."""
+    from kyc_tool.outbox.publisher import DeliveryReceipt
+
+    with session_factory() as s:
+        attempt_id = s.execute(text(
+            "INSERT INTO outbox_delivery_attempts (attempt_id, outbox_id, claim_token, "
+            "wire_version, request_sha256) VALUES (gen_random_uuid(), :o, :t, 'legacy', :sha) "
+            "RETURNING attempt_id"), {"o": row.id, "t": row.claim_token, "sha": sha}).scalar_one()
+        s.commit()
+    return DeliveryReceipt(attempt_id=str(attempt_id), wire_sha256=sha, wire_version="legacy")
+
+
 def _claim(session_factory, claimed_by):
     """Claim ONE row via the real _CLAIM_SQL; return the returned Row (carries the token)."""
     from kyc_tool.outbox.publisher import _CLAIM_SQL
@@ -168,9 +185,19 @@ def test_stale_decision_loser_cannot_stamp_run_or_published_at(
     rowB = _claim(session_factory, "B")
 
     stale_pub = _pub_for(session_factory, settings.model_copy(update={"outbox_max_attempts": 1}))
+    from kyc_tool.outbox.publisher import DeliveryReceipt
+
+    # A "ghost" receipt: well-formed, so the call clears the kind gate and reaches the fenced
+    # SQL — where it must die on the claim fence + missing attempt. (A cannot stage a real
+    # attempt: the admission trigger refuses its dead claim, which is the point.)
+    ghost = DeliveryReceipt(attempt_id="00000000-0000-0000-0000-00000000dead",
+                            wire_sha256="e" * 64, wire_version="legacy")
     with structlog.testing.capture_logs() as logs:
-        stale_pub._record_delivered(rowA, rowA.claim_token)
+        stale_pub._record_delivered(rowA, rowA.claim_token, ghost)   # dies at the SQL fence
+        stale_pub._record_delivered(rowA, rowA.claim_token)          # dies at the kind gate
         stale_pub._record_failure(rowA, "boom", rowA.claim_token)
+    assert [e for e in logs if e["event"] == "outbox_stale_or_unwitnessed_completion"]
+    assert [e for e in logs if e["event"] == "outbox_terminal_rejected_unwitnessed"]
     assert [e for e in logs if e["event"] == "outbox_stale_claim_completion"]
 
     with session_factory() as s:
@@ -180,7 +207,7 @@ def test_stale_decision_loser_cannot_stamp_run_or_published_at(
     assert run_state == "PUBLISH_DECISION" and pub_at is None  # A stamped NOTHING
     assert ob.status == "pending" and ob.claim_token == rowB.claim_token  # still B's
 
-    publisher._record_delivered(rowB, rowB.claim_token)  # B alone stamps both
+    publisher._record_delivered(rowB, rowB.claim_token, _receipt_for(session_factory, rowB))
     with session_factory() as s:
         assert s.execute(text("SELECT state FROM runs WHERE id='r1'")).scalar_one() == "COMPLETE"
         assert s.execute(text("SELECT published_at FROM decisions WHERE id='d1'")).scalar_one() is not None

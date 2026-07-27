@@ -33,17 +33,28 @@ def get_case(case_id: str, request: Request) -> dict:
         if case is None:
             raise HTTPException(status_code=404, detail="case not found")
         live = checkstore.live_checks(session, case_id)
-        # Gates come through cases.latest_decision_row_id — the trigger-maintained pointer set in
-        # the same transaction as every decision insert — NEVER by decided_at: now() is
-        # transaction-start time, so two case-locked decides can commit in one order while their
-        # decided_at values sit in the other, and an ORDER BY decided_at read here once paired
-        # the current decision with the PREVIOUS decision's gates (re-audit 1f8412e F4). A NULL
-        # pointer with decisions present (an ambiguous pre-014 history) returns empty gates —
-        # honest ignorance over a guess — and heals on the case's next decision.
+        # The WHOLE decision tuple — value, gates, decision-time score — comes from the ONE row
+        # `cases.latest_decision_row_id` points at (trigger-maintained, same transaction as every
+        # decision insert), NEVER from decided_at ordering and never mixed with the projection:
+        # decided_at is transaction-start time and inverts against commit order, and the
+        # projection's `latest_decision` is not updated by the record-only manual-approve path —
+        # serving projection-value + pointer-gates returned reject/bypassed-gates hybrids
+        # (re-audit 4dfdf8a F4). `decision_provenance` makes the remaining ambiguity OBSERVABLE:
+        # a NULL pointer with decisions present is a pre-014 manual-among-several history whose
+        # write order has no durable record; it serves no decision tuple rather than a guess, is
+        # counted in /v1/metrics, and heals on the case's next decision.
         latest = (
             session.get(DecisionRow, case.latest_decision_row_id)
             if case.latest_decision_row_id else None
         )
+        if latest is not None:
+            provenance = "latest_decision_row"
+        elif session.execute(
+            select(DecisionRow.id).where(DecisionRow.case_id == case_id).limit(1)
+        ).first():
+            provenance = "unresolved_legacy_order"
+        else:
+            provenance = "no_decisions"
         return {
             "case_id": case.id,
             "status": case.status,
@@ -51,9 +62,12 @@ def get_case(case_id: str, request: Request) -> dict:
             "broker_status": case.broker_status,
             "company_name": case.company_name,
             "jurisdiction": case.jurisdiction,
+            # live case score (recomputed as checks land) — distinct from the decision-time score
             "score": case.current_score,
-            "latest_decision": case.latest_decision,
+            "latest_decision": (latest.decision if latest else None),
+            "decision_score": (latest.score if latest else None),
             "gates": (latest.gates_json if latest else {}),
+            "decision_provenance": provenance,
             "live_checks": [_check_json(c) for c in live],
         }
 

@@ -202,3 +202,75 @@ def test_validator_rejects_stateful_row_without_migration():
     # a row with no migration must be State '—'; a stray 'pending' on it fails closed.
     with pytest.raises(AssertionError):
         _validate_body([*_REAL_BODY, "| PR 5b | 11 | pending | — | x |"])
+
+
+# --- cross-artifact migration parity (re-audit `4dfdf8a` F6) ---
+# Number continuity in the §C table alone is insufficient: the §C row said `015` while its own
+# Content cell still read `down_revision='013'`, and the activation/6b specs each carried a third
+# opinion. One revision number must mean one thing across every artifact that names it.
+
+_SPECS = REPO_ROOT / ".agents" / "superpowers" / "specs"
+
+
+def _roadmap_text() -> str:
+    return (REPO_ROOT / ".agents" / "ROADMAP.md").read_text()
+
+
+def test_roadmap_detail_sections_chain_contiguously():
+    """Every detailed `Migration **NNN** (`down_revision='MMM'`)` section must chain M = N-1 —
+    a section claiming a down_revision that skips the repair revisions is exactly how the split
+    lineage read as consistent while bypassing 014/015."""
+    pairs = re.findall(r"Migration \*\*(\d{3})\*\* \(`down_revision='(\d{3})'`\)", _roadmap_text())
+    assert pairs, "no detailed migration sections found — the parser regressed"
+    for rev, down in pairs:
+        assert int(down) == int(rev) - 1, (
+            f"ROADMAP detail section: migration {rev} claims down_revision={down}; "
+            f"the chain is contiguous, so it must be {int(rev) - 1}"
+        )
+
+
+def test_roadmap_table_and_detail_sections_agree():
+    """A revision reserved in a §C row must appear as that unit's detailed section number too —
+    the table said 015 while the detail heading still said 014's content."""
+    text_ = _roadmap_text()
+    activation_row = re.search(r"\| PR 7b-activation \| 8 \| pending \| (\d{3}) \|", text_)
+    assert activation_row, "activation row missing from §C"
+    detail = re.search(
+        r"### PR 7b-activation[^\n]*\nMigration \*\*(\d{3})\*\*", text_
+    )
+    assert detail, "activation detail section missing"
+    assert activation_row.group(1) == detail.group(1), (
+        f"§C reserves {activation_row.group(1)} for 7b-activation but the detail section says "
+        f"{detail.group(1)}"
+    )
+    # and the row's own Content cell must not carry a contradicting down_revision
+    row_line = next(line for line in text_.splitlines() if line.startswith("| PR 7b-activation "))
+    inner = re.search(r"down_revision='(\d{3})'", row_line)
+    if inner:
+        assert int(inner.group(1)) == int(activation_row.group(1)) - 1, (
+            f"the activation ROW text says down_revision='{inner.group(1)}' but the reserved "
+            f"revision is {activation_row.group(1)} — the cell contradicts its own row"
+        )
+
+
+def test_activation_spec_agrees_with_roadmap():
+    spec = (_SPECS / "2026-07-22-pr7b-activation-platform-ordering-design.md").read_text()
+    m = re.search(r"this doc, migration `(\d{3})`, `down_revision='(\d{3})'`", spec)
+    assert m, "activation spec no longer declares its migration in the header"
+    row = re.search(r"\| PR 7b-activation \| 8 \| pending \| (\d{3}) \|", _roadmap_text())
+    assert m.group(1) == row.group(1), (
+        f"activation spec says migration {m.group(1)}; ROADMAP §C reserves {row.group(1)}"
+    )
+    assert int(m.group(2)) == int(m.group(1)) - 1
+
+
+def test_6b_spec_is_banner_superseded_not_silently_stale():
+    """The paused 6b spec self-assigned migration 013 and 'lands before 7b'. Until it is
+    re-planned, the superseding banner must be present and must name the current chain."""
+    spec = (_SPECS / "2026-07-22-pr6b-revalidation-design.md").read_text()
+    assert "PAUSED / SUPERSEDED ORDERING" in spec
+    row = re.search(r"\| PR 6b \| 7B \| pending \| (\d{3}) \|", _roadmap_text())
+    assert row, "6b row missing from §C"
+    assert f"migration `{row.group(1)}`" in spec, (
+        f"the 6b banner must name the currently reserved revision {row.group(1)}"
+    )

@@ -128,9 +128,10 @@ three things: does it include a **migration**, any **new env vars**, and any
   deliberately refuses (it will not delete immutable audit events to recreate
   the old global unique — see `docs/RUNBOOK.md` and ADR-003). If two cases have
   shared an idempotency key, roll forward with a fix; do not downgrade 010.
-  **Exception — migrations 013/014 (PR 7b-core) are forward-only after any wire
+  **Exception — migrations 013/014/015 (PR 7b-core) are forward-only after any wire
   witness exists.** Their downgrades refuse — with stable sentinels
-  (`MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+  (`MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+  `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`) — when an
   `outbox_delivery_attempts` row, a terminal `callback_wire_sha256`, or a

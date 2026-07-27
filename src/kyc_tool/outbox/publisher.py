@@ -18,9 +18,11 @@ published automatic sequence. All three are expected pre-activation.
 import hashlib
 import json
 import os
+import re
 import socket
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
@@ -53,6 +55,32 @@ class _StaleClaim(Exception):
     Not a delivery failure: nothing was sent, so the caller must not record an attempt against a
     row another claimant now owns.
     """
+
+
+@dataclass(frozen=True)
+class DeliveryReceipt:
+    """Proof-of-staging a decision-callback terminal must present (re-audit `4dfdf8a` F1).
+
+    The requirement is derived from the ROW'S KIND, never from whether a caller happened to pass
+    a digest: `_record_delivered(row, token)` with no receipt used to mark a decision callback
+    delivered — run COMPLETE, published_at stamped — while the witness taxonomy simultaneously
+    classified the same row `not_accepted`. A terminal for a decision callback now carries the
+    attempt identity it completes, or it writes nothing.
+    """
+
+    attempt_id: str
+    wire_sha256: str
+    wire_version: str
+
+    def malformed(self) -> str | None:
+        """Reason this receipt cannot witness a delivery, or None if well-formed."""
+        if not self.attempt_id:
+            return "empty attempt_id"
+        if not re.fullmatch(r"[0-9a-f]{64}", self.wire_sha256 or ""):
+            return f"wire_sha256 is not 64-hex: {self.wire_sha256!r}"
+        if self.wire_version not in ("legacy", "sequenced"):
+            return f"unknown wire_version: {self.wire_version!r}"
+        return None
 
 # Claim the min-id pending row of ONE (case_id, ordering_stream) FIFO stream, fencing it
 # with a fresh claim_token + lease. next_attempt_at is left as the retry due time (the
@@ -183,8 +211,10 @@ class OutboxPublisher:
             )
         return request, wire_sha256
 
-    def _deliver_decision_callback(self, payload: dict, *, outbox_id: int, token: str) -> str:
-        """Record the attempt, then POST it. Returns the digest of the bytes sent.
+    def _deliver_decision_callback(
+        self, payload: dict, *, outbox_id: int, token: str
+    ) -> DeliveryReceipt:
+        """Record the attempt, then POST it. Returns the receipt binding terminal to attempt.
 
         Raises `_StaleClaim` — before any network traffic — if the claim is no longer live.
         """
@@ -196,13 +226,15 @@ class OutboxPublisher:
         # gap is accepted and named: die between this commit and the send and the attempt row
         # records staged INTENT for bytes that never left — which is why the witness state it
         # yields is send_intent_witnessed, not proof of transmission.
-        self._record_attempt(
+        attempt_id = self._record_attempt(
             outbox_id=outbox_id, token=token, wire_version=_WIRE_VERSION,
             request_sha256=wire_sha256,
         )
         response = self.http.send(request)
         response.raise_for_status()
-        return wire_sha256
+        return DeliveryReceipt(
+            attempt_id=attempt_id, wire_sha256=wire_sha256, wire_version=_WIRE_VERSION
+        )
 
     def _record_attempt(self, *, outbox_id: int, token: str, wire_version: str,
                         request_sha256: str) -> str:
@@ -242,8 +274,10 @@ class OutboxPublisher:
             return False
         return dt is not None and datetime.now(UTC) >= dt
 
-    def _deliver(self, kind: str, payload: dict, *, outbox_id: int, token: str) -> str | None:
-        """Returns the sent-bytes digest for a decision callback; None for a POC email.
+    def _deliver(
+        self, kind: str, payload: dict, *, outbox_id: int, token: str
+    ) -> DeliveryReceipt | None:
+        """Returns the delivery receipt for a decision callback; None for a POC email.
 
         POC emails get no attempt row: they carry no wire digest, nothing reconciles them against
         a remote ledger, and their duplicate-on-retry behaviour is the documented at-least-once
@@ -291,7 +325,7 @@ class OutboxPublisher:
                 return True
 
         try:
-            wire_sha256 = self._deliver(row.kind, row.payload_json, outbox_id=row.id, token=token)
+            receipt = self._deliver(row.kind, row.payload_json, outbox_id=row.id, token=token)
         except _StaleClaim:
             # The lease expired and a reclaimer owns the row. Nothing was sent, so this is not a
             # delivery failure: recording one would burn an attempt and push back the backoff of
@@ -302,10 +336,26 @@ class OutboxPublisher:
             self._record_failure(row, str(exc), token)
             return True
 
-        self._record_delivered(row, token, wire_sha256)
+        self._record_delivered(row, token, receipt)
         return True
 
-    def _record_delivered(self, row, token, wire_sha256: str | None = None) -> None:
+    def _record_delivered(self, row, token, receipt: DeliveryReceipt | None = None) -> None:
+        # The requirement is the ROW'S, not the caller's (re-audit 4dfdf8a F1): a decision
+        # callback without a well-formed receipt writes NOTHING — not the terminal, not the run,
+        # not published_at. The row stays pending/claimed; the lease expires; a real delivery
+        # retries. A POC email is the only kind that completes without a wire receipt, and a
+        # receipt handed to one is the same caller bug in the other direction.
+        if row.kind == DECISION_CALLBACK:
+            reason = "missing receipt" if receipt is None else receipt.malformed()
+            if reason is not None:
+                log.error("outbox_terminal_rejected_unwitnessed",
+                          outbox_id=row.id, kind=row.kind, reason=reason)
+                return
+        elif receipt is not None:
+            log.error("outbox_terminal_rejected_unexpected_receipt",
+                      outbox_id=row.id, kind=row.kind)
+            return
+        wire_sha256 = receipt.wire_sha256 if receipt else None
         now = datetime.now(UTC)
         with uow(self.session_factory) as session:
             # The wire witness lands in the SAME fenced statement as the terminal: the digest is
@@ -333,10 +383,10 @@ class OutboxPublisher:
                 # psycopg, which rejects the statement outright. The *_probe copies exist for
                 # the same reason: one parameter, one role.
                 {"id": row.id, "now": now, "token": token, "sha": wire_sha256,
-                 "wire_version": None if wire_sha256 is None else _WIRE_VERSION,
-                 "needs_witness": wire_sha256 is not None,
+                 "wire_version": receipt.wire_version if receipt else None,
+                 "needs_witness": receipt is not None,
                  "sha_probe": wire_sha256,
-                 "wire_version_probe": None if wire_sha256 is None else _WIRE_VERSION},
+                 "wire_version_probe": receipt.wire_version if receipt else None},
             ).first()
             if applied is None:
                 # Two causes, both fail-closed no-ops: a stale loser (lease expired, a reclaimer

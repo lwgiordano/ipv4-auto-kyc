@@ -182,12 +182,17 @@ def test_attempt_constraints_reject_uninterpretable_witnesses(session_factory, b
     _seed_decisions(session_factory, "cg", [1])
     _enqueue_cb(session_factory, "cg", 1)
     with session_factory() as s:
-        outbox_id = s.execute(text("SELECT id FROM outbox WHERE run_id='cg-r1'")).scalar_one()
+        # claim the row first: the 015 admission trigger otherwise refuses before the CHECKs,
+        # and this test exists to prove the SHAPE constraints, not the admission gate
+        row = s.execute(text(
+            "UPDATE outbox SET claim_token = gen_random_uuid(), "
+            "claim_lease_expires_at = now() + interval '1 hour', claimed_by = 'w' "
+            "WHERE run_id='cg-r1' RETURNING id, claim_token")).one()
         with pytest.raises(Exception) as exc:
             s.execute(text(
                 "INSERT INTO outbox_delivery_attempts (attempt_id, outbox_id, claim_token, "
-                "wire_version, request_sha256) VALUES (gen_random_uuid(), :o, gen_random_uuid(), "
-                ":w, :s)"), {"o": outbox_id, "w": wire_version, "s": sha})
+                "wire_version, request_sha256) VALUES (gen_random_uuid(), :o, :t, "
+                ":w, :s)"), {"o": row.id, "t": row.claim_token, "w": wire_version, "s": sha})
         assert "ck_attempt_sha_shape" in str(exc.value) or "ck_attempt_wire_vocab" in str(exc.value)
         s.rollback()
 
@@ -199,23 +204,28 @@ def test_retention_never_prunes_the_only_evidence_a_row_was_sent(session_factory
     which is the tool asserting non-delivery on evidence it just destroyed."""
     _seed_decisions(session_factory, "ch", [1, 2])
     with session_factory() as s:
+        # 015's triggers make fabrication illegal, so the seeding takes the LEGAL road: insert
+        # pending, claim, stage the attempt under the live claim, and (for row 1 only) complete
+        # the pending->delivered transition with the digest its attempt matches.
         rows = {}
         for seq, sha in ((1, "a" * 64), (2, None)):
             rows[seq] = s.execute(text(
                 "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-                "status, delivered_at, callback_wire_sha256, wire_version) VALUES "
-                "('decision_callback','ch',:r,'decision',:seq,"
-                ":st, :dt, :sha, :wv) RETURNING id"),
-                {"r": f"ch-r{seq}", "seq": seq,
-                 "st": "delivered" if sha else "pending",
-                 "dt": "now()" if sha else None,
-                 "sha": sha, "wv": "legacy" if sha else None}).scalar_one()
-            # an attempt older than any retention window
+                "status, claim_token, claim_lease_expires_at, claimed_by) VALUES "
+                "('decision_callback','ch',:r,'decision',:seq,'pending',"
+                "gen_random_uuid(), now() + interval '1 hour', 'seeder') "
+                "RETURNING id, claim_token"),
+                {"r": f"ch-r{seq}", "seq": seq}).one()
             s.execute(text(
                 "INSERT INTO outbox_delivery_attempts (attempt_id, outbox_id, claim_token, "
                 "wire_version, request_sha256, attempted_at) VALUES (gen_random_uuid(), :o, "
-                "gen_random_uuid(), 'legacy', :s, now() - interval '9999 days')"),
-                {"o": rows[seq], "s": "b" * 64})
+                ":t, 'legacy', :s, now() - interval '9999 days')"),
+                {"o": rows[seq].id, "t": rows[seq].claim_token, "s": sha or "b" * 64})
+        s.execute(text(
+            "UPDATE outbox SET status='delivered', delivered_at=now(), "
+            "callback_wire_sha256=:sha, wire_version='legacy', "
+            "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL "
+            "WHERE id=:i"), {"sha": "a" * 64, "i": rows[1].id})
         s.commit()
 
     counts = prune(session_factory, retention_days=1)
@@ -260,7 +270,9 @@ def test_digest_cannot_land_on_an_undelivered_row(session_factory, clean_db):
     _seed_decisions(session_factory, "cj", [1])
     _enqueue_cb(session_factory, "cj", 1)
     with session_factory() as s:
-        with pytest.raises(Exception, match="ck_outbox_wire_witness_delivered"):
+        with pytest.raises(
+            Exception, match="pending->delivered|ck_outbox_wire_witness_delivered"
+        ):
             s.execute(text(
                 "UPDATE outbox SET callback_wire_sha256 = :sha, wire_version = 'legacy' "
                 "WHERE run_id = 'cj-r1'"), {"sha": "a" * 64})
@@ -280,7 +292,11 @@ def test_terminal_cannot_stamp_a_digest_no_attempt_recorded(session_factory, pub
             "WHERE run_id = 'ck-r1' RETURNING id, kind, claim_token")).one()
         s.commit()
 
-    publisher._record_delivered(row, row.claim_token, "b" * 64)
+    from kyc_tool.outbox.publisher import DeliveryReceipt
+
+    ghost = DeliveryReceipt(attempt_id="00000000-0000-0000-0000-000000000001",
+                            wire_sha256="b" * 64, wire_version="legacy")
+    publisher._record_delivered(row, row.claim_token, ghost)
 
     with session_factory() as s:
         status, sha = s.execute(text(
@@ -341,3 +357,79 @@ def test_live_metrics_query_never_scans_terminal_history(session_factory, clean_
     assert "'Node Type': 'Seq Scan'" not in flat.replace('"', "'"), (
         f"the live query seq-scanned outbox with 100k terminal rows present:\n{flat}"
     )
+
+
+def test_decision_terminal_without_receipt_writes_nothing(
+    session_factory, publisher, clean_db
+):
+    """Re-audit 4dfdf8a F1 — THE bypass, closed at the kind. `_record_delivered(row, token)` on a
+    live-claimed decision callback used to stamp delivered/COMPLETE/published_at with no witness,
+    while the taxonomy called the same row not_accepted. The requirement is now the ROW's: no
+    receipt, no write of any kind."""
+    _seed_decisions(session_factory, "cn", [1])
+    _enqueue_cb(session_factory, "cn", 1)
+    with session_factory() as s:
+        row = s.execute(text(
+            "UPDATE outbox SET claim_token = gen_random_uuid(), "
+            "claim_lease_expires_at = now() + interval '1 hour', claimed_by = 'w' "
+            "WHERE run_id = 'cn-r1' RETURNING id, kind, claim_token")).one()
+        s.commit()
+
+    publisher._record_delivered(row, row.claim_token)  # the exact call the old bypass used
+
+    with session_factory() as s:
+        status, sha, run_state, pub_at = s.execute(text(
+            "SELECT o.status, o.callback_wire_sha256, r.state, d.published_at FROM outbox o "
+            "JOIN runs r ON r.id = 'cn-r1' JOIN decisions d ON d.id = 'cn-r1-d' "
+            "WHERE o.run_id = 'cn-r1'")).one()
+    assert status == "pending" and sha is None
+    assert run_state == "PUBLISH_DECISION" and pub_at is None
+    assert _witness_of(session_factory, "cn-r1").witness == witness.NOT_ACCEPTED  # consistent
+
+
+def test_poc_email_still_delivers_with_no_receipt_and_rejects_one(
+    session_factory, publisher, email_sender, clean_db
+):
+    """POC email is the ONLY kind that completes without a wire receipt; handing it one is the
+    same caller bug in the other direction and also writes nothing."""
+    from kyc_tool.outbox.publisher import DeliveryReceipt, enqueue_poc_email
+
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('cp')"))
+        enqueue_poc_email(s, case_id="cp", to="a@x", subject="s", body="tok")
+        s.commit()
+    assert publisher.process_pending() == 1  # real path: claim → send → terminal, receipt None
+    with session_factory() as s:
+        assert s.execute(text(
+            "SELECT status FROM outbox WHERE case_id='cp'")).scalar_one() == "delivered"
+
+    with session_factory() as s:  # second email, then a direct call WITH a bogus receipt
+        enqueue_poc_email(s, case_id="cp", to="b@x", subject="s", body="tok2")
+        s.flush()  # the ORM INSERT must be visible to the raw claim UPDATE below
+        row = s.execute(text(
+            "UPDATE outbox SET claim_token = gen_random_uuid(), "
+            "claim_lease_expires_at = now() + interval '1 hour', claimed_by = 'w' "
+            "WHERE case_id='cp' AND status='pending' RETURNING id, kind, claim_token")).one()
+        s.commit()
+    publisher._record_delivered(row, row.claim_token, DeliveryReceipt(
+        attempt_id="00000000-0000-0000-0000-000000000002",
+        wire_sha256="c" * 64, wire_version="legacy"))
+    with session_factory() as s:
+        assert s.execute(text("SELECT status FROM outbox WHERE id=:i"),
+                         {"i": row.id}).scalar_one() == "pending"
+
+
+def test_every_delivered_decision_row_is_delivery_witnessed(
+    session_factory, publisher, callback_capture, clean_db
+):
+    """The invariant the taxonomy rests on, asserted as a query: a delivered decision callback
+    that is not delivery_witnessed cannot exist post-015 (the terminal requires the receipt, the
+    trigger requires the attempt, the CHECK binds digest to delivered)."""
+    _seed_decisions(session_factory, "cq", [1, 2])
+    _enqueue_cb(session_factory, "cq", 1)
+    _enqueue_cb(session_factory, "cq", 2)
+    assert publisher.process_pending() == 2
+    with session_factory() as s:
+        bad = s.execute(text(witness.WITNESS_SELECT +
+            " AND o.status = 'delivered' AND o.callback_wire_sha256 IS NULL")).all()
+    assert bad == [], f"delivered decision rows without a witness: {bad}"

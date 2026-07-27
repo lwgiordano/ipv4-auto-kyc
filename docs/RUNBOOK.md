@@ -23,9 +23,10 @@
 > readiness-verified, run the activation command above once to start the v1
 > observation clock.
 
-> **Migrations 013/014 (PR 7b-core) are forward-only after any wire witness.**
+> **Migrations 013/014/015 (PR 7b-core) are forward-only after any wire witness.**
 > Their downgrades refuse with stable sentinels
-> (`MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> (`MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`) once an attempt row, a
 > terminal `callback_wire_sha256`, or a `superseded` row exists — immutable

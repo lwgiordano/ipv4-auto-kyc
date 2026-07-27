@@ -11,6 +11,7 @@ insert, so what these tests pin is: commit order wins, timestamps never do.
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 pytestmark = pytest.mark.postgres
 
@@ -64,9 +65,12 @@ def test_inverted_decided_at_cannot_cross_pair_gates(client, session_factory, cl
     assert pointer == "cin-r2-d", "the trigger tracks commit order, not timestamps"
 
     body = client.get("/v1/cases/cin").json()
-    assert body["gates"] == {"marker": "two"}, (
-        "gates must come from the pointer row (last commit), never from ORDER BY decided_at"
-    )
+    # the COMPLETE tuple from the one pointer row — value, gates, decision-time score — so a
+    # cross-pair (one row's decision beside another row's gates) is structurally impossible
+    assert (body["latest_decision"], body["gates"], body["decision_score"]) == (
+        "approve", {"marker": "two"}, 10,
+    ), "the whole decision tuple must come from the pointer row (last commit), never decided_at"
+    assert body["decision_provenance"] == "latest_decision_row"
 
 
 def test_manual_decision_moves_the_pointer_too(client, session_factory, clean_db):
@@ -88,7 +92,9 @@ def test_manual_decision_moves_the_pointer_too(client, session_factory, clean_db
         pointer = s.execute(
             text("SELECT latest_decision_row_id FROM cases WHERE id='cman'")).scalar_one()
     assert pointer == "cman-manual"
-    assert client.get("/v1/cases/cman").json()["gates"] == {}
+    body = client.get("/v1/cases/cman").json()
+    assert (body["latest_decision"], body["gates"]) == ("approved_manual", {})
+    assert body["decision_provenance"] == "latest_decision_row"
 
 
 def test_pointer_rejects_a_decision_of_another_case(session_factory, clean_db):
@@ -99,7 +105,7 @@ def test_pointer_rejects_a_decision_of_another_case(session_factory, clean_db):
         conn.execute(text("INSERT INTO cases (id, last_decision_sequence) VALUES ('cx2', 0)"))
         _insert_chain(conn, "cx1", "cx1-r1", 1, "x")
     with (
-        pytest.raises(Exception, match="fk_cases_latest_decision"),
+        pytest.raises(IntegrityError, match="fk_cases_latest_decision"),
         session_factory.kw["bind"].begin() as conn,
     ):
         conn.execute(text(
@@ -120,5 +126,39 @@ def test_null_pointer_with_decisions_returns_empty_gates_not_a_guess(
         # simulate the ambiguous-legacy state 014 leaves behind: pointer cleared
         conn.execute(text("UPDATE cases SET latest_decision_row_id = NULL WHERE id='camb'"))
     body = client.get("/v1/cases/camb").json()
-    assert body["gates"] == {}
-    assert body["latest_decision"] == "approve"  # the projection itself is untouched
+    # NO decision tuple is served — and the state is OBSERVABLE, not a silent empty-gates value
+    assert body["gates"] == {} and body["latest_decision"] is None
+    assert body["decision_provenance"] == "unresolved_legacy_order"
+
+
+def test_manual_approve_end_to_end_serves_one_row_on_every_surface(
+    client, session_factory, post_event, worker, publisher, clean_db
+):
+    """Re-audit 4dfdf8a F4's real trigger, driven through the REAL paths: worker decide, then a
+    real signed reviewer.manual_approve. API, UI full view, and the Salesforce projection must
+    all read the SAME manual row — value, gates, reviewer attribution — with no decided_at sort
+    anywhere in the chain. (The old behavior returned the stale automatic decision value beside
+    the manual row's gates.)"""
+    post_event("cme", "kyb.run_requested", {"company_legal_name": "A", "jurisdiction": "GB"})
+    worker.run_until_idle()
+    publisher.process_pending()
+    auto = client.get("/v1/cases/cme").json()
+    assert auto["decision_provenance"] == "latest_decision_row"
+    assert auto["latest_decision"] == "manual_review_insufficient"  # sanity: the automatic value
+
+    post_event("cme", "reviewer.manual_approve", {"reviewer_id": "rev-1"},
+               actor={"type": "reviewer", "id": "rev-1"})
+
+    body = client.get("/v1/cases/cme").json()
+    assert body["status"] == "approved_manual"
+    assert body["latest_decision"] == "approve"        # the MANUAL row's value...
+    assert body["gates"] == {"bypassed": True}         # ...and the SAME row's gates
+    assert body["decision_provenance"] == "latest_decision_row"
+
+    full = client.get("/ui/api/cases/cme/full").json()
+    assert full["pointer_decision"]["manual"] is True
+    assert full["pointer_decision"]["reviewer_id"] == "rev-1"
+    sf = full["salesforce"]
+    assert sf["Platform_Action_Taken__c"] == "Manual Approve"
+    assert sf["Manual_Approved_By__c"] == "rev-1"      # attribution from the pointer row,
+    assert sf["Hard_Conflict__c"] is False             # gates from the pointer row too

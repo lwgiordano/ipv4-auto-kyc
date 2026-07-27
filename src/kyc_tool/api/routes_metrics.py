@@ -104,6 +104,13 @@ def metrics(request: Request) -> dict:
                 session, "SELECT decision, count(*) FROM decisions GROUP BY decision"
             ),
             "jobs_by_status": _grouped(session, "SELECT status, count(*) FROM jobs GROUP BY status"),
+            # pre-014 histories whose decision write-order has no durable record serve NO
+            # decision tuple (decision_provenance=unresolved_legacy_order) — this counts them so
+            # the condition is observable instead of silently indistinguishable from empty gates.
+            "cases_with_unresolved_decision_order": session.execute(
+                text("SELECT count(*) FROM cases c WHERE c.latest_decision_row_id IS NULL "
+                     "AND EXISTS (SELECT 1 FROM decisions d WHERE d.case_id = c.id)")
+            ).scalar_one(),
             "outbox_by_status": outbox_live_by_status,
             "outbox_terminal_total_estimate": outbox_terminal_total_estimate,
             # superseded is a governed terminal (best-effort local suppression, zero sends) — it is

@@ -186,6 +186,8 @@ def case_full(case_id: str, request: Request) -> dict:
                 {"id": case_id},
             )
         )
+        # DISPLAY order only — decided_at is transaction-start time and can invert against the
+        # lock-serialized commit order, so this list must never select the authoritative row.
         decisions = _rows(
             session.execute(
                 text(
@@ -196,6 +198,20 @@ def case_full(case_id: str, request: Request) -> dict:
                 {"id": case_id},
             )
         )
+        # The AUTHORITATIVE latest decision for the Salesforce projection: the trigger-maintained
+        # pointer (migration 014), fetched separately — feeding decisions[0] here preserved the
+        # exact inversion the pointer was introduced to eliminate (re-audit 4dfdf8a F4). A NULL
+        # pointer (ambiguous pre-014 history) projects None, never a decided_at guess.
+        pointer_decision = None
+        if case.get("latest_decision_row_id"):
+            row = session.execute(
+                text(
+                    "SELECT id, run_id, decision, score, gates_json, buy_enablement, manual, "
+                    "reviewer_id, decided_at, published_at FROM decisions WHERE id=:d"
+                ),
+                {"d": case["latest_decision_row_id"]},
+            ).mappings().first()
+            pointer_decision = dict(row) if row else None
         tasks = _rows(
             session.execute(
                 text(
@@ -259,7 +275,7 @@ def case_full(case_id: str, request: Request) -> dict:
         checks=checks,
         open_task_types=[t["task_type"] for t in tasks if t["status"] == "open"],
         poc_token_outstanding=token_outstanding,
-        latest_decision=decisions[0] if decisions else None,
+        latest_decision=pointer_decision,
     )
 
     return _json_safe(
@@ -275,6 +291,9 @@ def case_full(case_id: str, request: Request) -> dict:
             "adapter_results": adapter_results,
             "events": events,
             "decisions": decisions,
+            # the authoritative row the Salesforce projection was built from (may be None for an
+            # ambiguous pre-014 history) — surfaced so consumers can SEE which row is authority
+            "pointer_decision": pointer_decision,
             "review_tasks": tasks,
             "poc_tokens": tokens,
             "audit": list(reversed(audit)),
