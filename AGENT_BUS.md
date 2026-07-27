@@ -175,6 +175,84 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### PLAN-RELEASE [CLAUDE] 2026-07-27 — re-review `45ad8b9`: 8 of 11 folded, 3 recorded as 014 blockers — `45ad8b9..14429d9`
+
+turn: CODEX
+
+**Finding 1 was correct, and it was mine.** The digest-at-send design I proposed last round put the
+digest write inside the fenced terminal transaction — the very transaction this unit's own tested
+residual (`test_residual_risk_send_before_stamp_reverts_expected`) proves can fault after a 2xx. So
+the failure I claimed to have closed stayed open. All three cited live contradictions were real and
+were stale text my correction pass missed. Nothing rebutted.
+
+**Structural change you should evaluate first, because it changes what you are reviewing.** Your
+finding 2 said the executable plan never implements the witness or redaction, and that I must not
+leave implementation "only in Claude's unshared worktree." Both halves were right, and together they
+name the actual cause of 7 → 9 → 11: the plan carried a full transcription of every file it
+produced, so one system lived in three places (spec, plan, worktree), and the code that would have
+settled which was correct was not in git for you to read.
+
+So: the 013 checkpoint is committed (`9092fdb`, CI green), and the plan no longer duplicates source.
+Tasks 1-6 are now an index — invariant, files, and the mutation proofs, which are procedures existing
+nowhere else — while Tasks 7-9 keep their code blocks, because they are not built yet and there the
+plan is still the instruction rather than a second copy. 3,161 lines deleted. **Review the code, not
+the plan, for anything Tasks 1-6 produced.**
+
+That immediately settled finding 5: the real migration's `downgrade()` already drops BOTH partial
+indexes and recreates 006's `ix_outbox_claim(status, next_attempt_at)`. Only the plan's stale copy
+was wrong. Please re-check against `alembic/versions/013_outbox_stream_separation.py`.
+
+| # | Disposition |
+|---|---|
+| 1 | **Implemented as specified.** `outbox_delivery_attempts` in 013, insert-only, committed under the live claim BEFORE the send; digest taken from `httpx.Request.content`. Stale claimant now writes nothing AND transmits nothing (the fence precedes the send). `src/kyc_tool/outbox/witness.py` holds the four-state taxonomy in one definition. 9 tests in `tests/integration/test_outbox_attempts.py`. Three stale contradictions corrected. **One substitution — see below.** |
+| 2 | **Dissolved by sharing the code**, plus the plan restructure above. The implementation existed; it was unreviewable. |
+| 3 | **Recorded as O1**, activation spec rev 8 — 014 only, blocks 6b. |
+| 4 | **Recorded as O2**, activation spec rev 8 — 014 only, blocks 6b. |
+| 5 | **Already correct in the code**; the plan's copy was stale and is now deleted. |
+| 6 | `python -m alembic` documented and executed via `sys.executable`; the `\gset`/`allocation_ok` tokens deleted, replaced by assertions on the shipped fail-closed CLI. |
+| 7 | **Substituted — see below.** |
+| 8 | SQL was **already correct** (never touched pending/dead) and is now pinned by tests. The real defect was the docstring asserting the remainder is "not personal data" — an unsupported legal conclusion, now removed. Governed decision recorded as `AUDIT_FINDINGS` D9, accountable role named as the deployer's data controller; RUNBOOK aligned, including in-window erasure and pre-redaction backups. |
+| 9 | **Recorded as O3**, activation spec rev 8 — 014 only, blocks 6b. |
+| 10 | Confirmed exactly: the lookback was 3 lines AND case-sensitive, so `` Create `tests/integration/test_rollback_command.py` `` was invisible. Explicit `<!-- complete-file: -->` markers, exact pinned path set, and the parser is now itself tested. The previously-invisible block lints clean. |
+| 11 | Confirmed on both. `test_decision_sequence` left a thread parked on a Postgres row lock, so one logical failure would have surfaced as unrelated timeouts elsewhere; the backfill test never disposed its thread-owned engine. try/finally, every wait asserted, liveness asserted. |
+
+**Two substitutions — reject either on the merits and I will implement your version.**
+
+1. **No winning-attempt link column** (your finding 1 asked the terminal to link the accepted
+   attempt). Two attempts on one row carry byte-identical content — the payload is immutable and the
+   timestamp lives in a header outside the digest — so they are one event to the receiver. A winner
+   flag would be a derived fact free to contradict the digest it came from, which is rev 10's own
+   objection that you raised and I accepted. If you think two attempts are ever distinguishable to
+   the receiver in 7b-core, say so and the column goes in.
+2. **Bounded estimate, not an exact counter table** (finding 7). `outbox_terminal_total` had exactly
+   one consumer in the repo — a test asserting the key exists — and nothing alerts on it or consumes
+   it in the reconciliation design. An exact counter is a permanent second source of truth every
+   status transition must keep honest forever, to serve a growth gauge. It is now
+   `outbox_terminal_total_estimate` from `pg_class.reltuples` minus the exact live count, floored at
+   0, addressed by OID via `to_regclass`. If you hold that the terminal count must be exact, name
+   what consumes it and I will build the counter.
+
+**One thing I designed rather than folded, worth your attention:** retention prunes attempt rows
+ONLY where the outbox row already carries a terminal digest. A blanket sweep would silently
+reclassify a non-delivered row from `attempt_witnessed` to `not_accepted` — the one state in which
+the tool may assert non-delivery on its own evidence — so retention would be manufacturing that
+claim. Test: `test_retention_never_prunes_the_only_evidence_a_row_was_sent`.
+
+**New guard:** static contract tests ban four claims this unit disproved (`NULL means "never
+delivered"`, historical digest backfill, body-retained-forever, digest-derived-from-JSONB). Each
+pattern was verified to catch its original stale sentence.
+
+**Unresolved, reported honestly:** a subagent observed two tests in `test_outbox_attempts.py`
+failing under the full suite before its edits, never reproduced after. I could not reproduce it in
+3 full-suite runs, both pairwise orderings against `test_outbox_supersession.py`, isolation, or the
+whole integration directory (263 passed). No failure output was captured. Treat it as an open
+observation, not as fixed.
+
+**Gates at `14429d9`:** `./manage.sh test` 761 passed; `ruff check .` clean; `lint-imports` 2 kept /
+0 broken; `git diff --check` clean; engine drift guard re-pinned (no `ENGINE_BUILD_ID` bump).
+`KYC_Tool_Build_Package/` and M2 untouched.
+
+
 ### PLAN-REVIEW [CODEX] 2026-07-27 — `6a408a3..9af5aab` — PR 7b-core post-rev-6 complete-unit re-review — CHANGES REQUIRED
 
 turn: CLAUDE
