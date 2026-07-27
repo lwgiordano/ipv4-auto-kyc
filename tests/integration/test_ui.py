@@ -164,8 +164,8 @@ def test_requeue_refuses_redacted_dead_poc_email(client, engine, post_event):
     with engine.begin() as conn:
         outbox_id = conn.execute(
             text(
-                "INSERT INTO outbox (kind, case_id, payload_json, status, attempts) "
-                "VALUES ('poc_email', 'ui-redacted', CAST(:p AS jsonb), 'dead', 8) "
+                "INSERT INTO outbox (kind, case_id, ordering_stream, payload_json, status, attempts) "
+                "VALUES ('poc_email', 'ui-redacted', 'email', CAST(:p AS jsonb), 'dead', 8) "
                 "RETURNING id"
             ),
             {"p": '{"redacted": true}'},

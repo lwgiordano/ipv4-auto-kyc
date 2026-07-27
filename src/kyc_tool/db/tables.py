@@ -13,13 +13,14 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Text,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -43,6 +44,11 @@ class Case(Base):
     # Per-case event counter (last assigned event_sequence). Incremented under a
     # FOR UPDATE lock in ingest so sequence allocation is race-free.
     event_sequence: Mapped[int] = mapped_column(BigInteger, server_default=text("0"), default=0)
+    # PR 7b-core (migration 013): per-case decision-callback sequence counter,
+    # incremented under the Case FOR UPDATE lock in _decide_txn (never max()+1).
+    last_decision_sequence: Mapped[int] = mapped_column(
+        BigInteger, server_default=text("0"), default=0
+    )
     status: Mapped[str] = mapped_column(Text, default="kyc_pending")
     buy_status: Mapped[str] = mapped_column(Text, default="not_applicable")
     broker_status: Mapped[str] = mapped_column(Text, default="clear")
@@ -97,6 +103,10 @@ class Run(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
+
+    # PR 7b-core (migration 013): named composite target for fk_decisions_run_case —
+    # decisions(run_id, case_id) must cite a run under its OWN case.
+    __table_args__ = (UniqueConstraint("id", "case_id", name="uq_runs_id_case_id"),)
 
 
 class Job(Base):
@@ -223,8 +233,20 @@ class DecisionRow(Base):
     engine_build_id: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # PR 7b-core (migration 013): internal per-case ordinal for callback-emitting
+    # (automatic) decisions; NULL for manual approvals. NOT on the wire.
+    decision_sequence: Mapped[int | None] = mapped_column(BigInteger)
     manual: Mapped[bool] = mapped_column(Boolean, default=False)
     reviewer_id: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_decisions_run_id"),
+        UniqueConstraint("case_id", "decision_sequence", name="uq_decisions_case_decision_sequence"),
+        UniqueConstraint("run_id", "case_id", "decision_sequence", name="uq_decisions_run_case_sequence"),
+        ForeignKeyConstraint(
+            ["run_id", "case_id"], ["runs.id", "runs.case_id"], name="fk_decisions_run_case"
+        ),
+    )
 
 
 class AuditLog(Base):
@@ -266,17 +288,53 @@ class Outbox(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     kind: Mapped[str] = mapped_column(Text)  # decision_callback | poc_email
-    case_id: Mapped[str | None] = mapped_column(Text, index=True)
+    # NOT NULL + named FK (migration 013). The FK lives in ORM metadata too (re-audit F9):
+    # Base.metadata is Alembic's comparison target, so a live-only FK would report drift.
+    case_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("cases.id", name="fk_outbox_case_id"), index=True
+    )
     run_id: Mapped[str | None] = mapped_column(Text)
+    # PR 7b-core: FIFO stream this row is claimed under (decision | email), NOT NULL.
+    ordering_stream: Mapped[str] = mapped_column(Text)
+    # Internal per-case ordinal for decision_callback rows (NULL for poc_email).
+    decision_sequence: Mapped[int | None] = mapped_column(BigInteger)
     payload_json: Mapped[dict] = mapped_column(JSONB, default=dict)
-    status: Mapped[str] = mapped_column(Text, default="pending")  # pending|delivered|dead
+    status: Mapped[str] = mapped_column(Text, default="pending")  # pending|delivered|dead|superseded
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # superseded terminal timestamp (never sent); mutually exclusive with delivered_at.
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Per-claim fence: the three move together (all-NULL or all-non-NULL).
+    claim_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_token: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
+    claimed_by: Mapped[str | None] = mapped_column(Text)
+    # PR 7b-core (013): the recorded digest of the bytes actually sent + which encoding was
+    # used. Written in the delivery transaction; NULL for undelivered rows and for anything
+    # delivered before 013 (jsonb normalizes key order, so those sent bytes are unrecoverable).
+    callback_wire_sha256: Mapped[str | None] = mapped_column(Text)
+    wire_version: Mapped[str | None] = mapped_column(Text)
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
-    __table_args__ = (Index("ix_outbox_claim", "status", "next_attempt_at"),)
+    __table_args__ = (
+        # PR 7b-core (013): partial to the claimable set — decision_callback terminals are never
+        # pruned, so a full index would grow without bound and enter every claim plan.
+        Index("ix_outbox_claim", "next_attempt_at", postgresql_where=text("status = 'pending'")),
+        Index(
+            "ix_outbox_stream_claim", "case_id", "ordering_stream", "next_attempt_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "uq_outbox_decision_callback_run", "run_id", unique=True,
+            postgresql_where=text("kind='decision_callback'"),
+        ),
+        ForeignKeyConstraint(
+            ["run_id", "case_id", "decision_sequence"],
+            ["decisions.run_id", "decisions.case_id", "decisions.decision_sequence"],
+            name="fk_outbox_decision_triple",
+        ),
+    )
 
 
 class HmacV1Observation(Base):

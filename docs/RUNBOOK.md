@@ -172,10 +172,20 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
 
 ## Retention & compliance
 
-`workers.retention` prunes audit rows, delivered outbox rows, and expired
-unverified POC tokens past `KYC_RETENTION_DAYS` (default 7y). Checks,
-decisions, and raw evidence are NOT auto-pruned — deleting the decision
-record requires compliance sign-off; do it as a supervised one-off.
+`workers.retention` prunes audit rows, delivered **`poc_email`** outbox rows,
+and expired unverified POC tokens past `KYC_RETENTION_DAYS` (default 7y).
+Checks, decisions, and raw evidence are NOT auto-pruned — deleting the
+decision record requires compliance sign-off; do it as a supervised one-off.
+
+**`decision_callback` outbox rows are NOT pruned either (PR 7b-core).** The row
+is the durable ordering authority the platform reconciliation is built from:
+`id` is the order, `status` the local delivery outcome, `payload_json` the body
+that was sent. This is a deliberate retention deviation recorded in
+`AUDIT_FINDINGS.md` — it adds no new data *category* (the body projects the
+never-pruned decision record) but it IS an additional durable copy, and it
+carries `checks[].source`, which can be reviewer-derived. An erasure request
+must therefore reach the callback snapshot as well as the decision record.
+Treat it as in scope for backup, erasure, privacy, and compliance review.
 
 ## Policy changes
 

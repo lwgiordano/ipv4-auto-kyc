@@ -134,6 +134,26 @@ def sign_headers(body: bytes, *, key: str | None = None) -> dict[str, str]:
     }
 
 
+def seed_automatic_decision(conn, *, case_id, run_id, decision_id, seq, engine_build_id=None):
+    """PR 7b-core (re-audit F3): insert an automatic decision valid under 013's NULL-explicit
+    shape CHECK — a positive per-case decision_sequence plus the matching
+    cases.last_decision_sequence counter bump. The caller must already have seeded the case
+    and the run. No callback row is created (tests that exercise delivery enqueue their own)."""
+    conn.execute(
+        text(
+            "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+            "buy_enablement, policy_shas, manual, engine_build_id, decision_sequence) VALUES "
+            "(:d,:c,:r,'x',0,'{}'::jsonb,'buy_locked_org_id_required','{}'::jsonb,false,:e,:s)"
+        ),
+        {"d": decision_id, "c": case_id, "r": run_id, "e": engine_build_id, "s": seq},
+    )
+    conn.execute(
+        text("UPDATE cases SET last_decision_sequence = GREATEST(last_decision_sequence, :s) "
+             "WHERE id = :c"),
+        {"c": case_id, "s": seq},
+    )
+
+
 def sign_headers_v2(
     body: bytes,
     *,

@@ -18,6 +18,7 @@ from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.policy_store import repo as store
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
+from tests.conftest import seed_automatic_decision
 from tests.integration._bundle_helpers import bundle_x, raw_x
 
 
@@ -220,14 +221,8 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
                 "VALUES ('r-a','c-a','e-a','QUEUED')"
             )
         )  # engine_build_id omitted ⇒ NULL
-        c.execute(
-            text(
-                "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                "buy_enablement, policy_shas, manual, engine_build_id) VALUES "
-                "('d-a','c-a','r-a','x',0,'{}'::jsonb,'buy_locked_org_id_required',"
-                "'{}'::jsonb,false,'eng-1')"
-            )
-        )  # decided_at=now()>epoch, engine stamped eng-1
+        seed_automatic_decision(c, case_id="c-a", run_id="r-a", decision_id="d-a", seq=1,
+                                engine_build_id="eng-1")   # (a) decision stamped / run NULL
 
         # (b) decision engine NULL / run stamped eng-1 ⇒ decision flagged, run NOT
         c.execute(text("INSERT INTO cases (id) VALUES ('c-b')"))
@@ -244,14 +239,8 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
                 "VALUES ('r-b','c-b','e-b','QUEUED','eng-1')"
             )
         )
-        c.execute(
-            text(
-                "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                "buy_enablement, policy_shas, manual) VALUES "
-                "('d-b','c-b','r-b','x',0,'{}'::jsonb,'buy_locked_org_id_required',"
-                "'{}'::jsonb,false)"
-            )
-        )  # engine_build_id omitted ⇒ NULL
+        seed_automatic_decision(c, case_id="c-b", run_id="r-b", decision_id="d-b", seq=1)
+        # (b) decision engine NULL (helper default) / run stamped eng-1
 
         # (c) both stamped eng-1 ⇒ neither flagged
         c.execute(text("INSERT INTO cases (id) VALUES ('c-c')"))
@@ -268,14 +257,8 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
                 "VALUES ('r-c','c-c','e-c','QUEUED','eng-1')"
             )
         )
-        c.execute(
-            text(
-                "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                "buy_enablement, policy_shas, manual, engine_build_id) VALUES "
-                "('d-c','c-c','r-c','x',0,'{}'::jsonb,'buy_locked_org_id_required',"
-                "'{}'::jsonb,false,'eng-1')"
-            )
-        )
+        seed_automatic_decision(c, case_id="c-c", run_id="r-c", decision_id="d-c", seq=1,
+                                engine_build_id="eng-1")   # (c) both stamped
 
         # (d) queued run, NO decision ⇒ neither (the join with decisions excludes it)
         c.execute(text("INSERT INTO cases (id) VALUES ('c-d')"))

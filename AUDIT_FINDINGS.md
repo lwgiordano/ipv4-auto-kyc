@@ -63,7 +63,16 @@ documented choice · 🔵 hygiene/wording.
   `04_API_AND_DATA_MODEL.md §2` says at-least-once with platform dedupe on
   (`case_id`, `run_id`).
 - **Resolution**: at-least-once delivery from a transactional outbox; consumers dedupe.
-  No component claims exactly-once.
+  No component claims exactly-once. **PR 7b-core exception:** eligible non-superseded
+  callbacks remain at-least-once and platform-deduped; a callback proven obsolete by a
+  higher **locally-stamped** delivery is terminally suppressed (zero sends), audited, and
+  retained under the governed `superseded` lifecycle (decision callbacks ONLY — a
+  `poc_email` can never enter `superseded`; DB-enforced). This is a **best-effort local
+  suppression** — NOT exactly-once and NOT platform-authoritative. THREE residual reverts
+  remain until 7b-activation: send-before-stamp; cross-replica; and a queued automatic
+  callback delivered AFTER a later manual approval (manual rows carry `run_id NULL`, no
+  callback, and no sequence, so the local guard sees no higher locally-published
+  automatic sequence).
 
 ## B. Spec bugs
 

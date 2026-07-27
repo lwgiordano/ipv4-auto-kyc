@@ -482,6 +482,11 @@ class Pipeline:
                 else hold_positive_for_manual_review(computed)
             )
             enforcement_held = result.decision is not computed.decision
+            # PR 7b-core: allocate this callback-emitting decision's per-case ordinal from
+            # the LOCKED counter (never max()+1). The Case is FOR UPDATE from _load above,
+            # so this single writer of the counter is race-free.
+            case.last_decision_sequence = (case.last_decision_sequence or 0) + 1
+            decision_sequence = case.last_decision_sequence
             decision_row = DecisionRow(
                 case_id=case.id,
                 run_id=run_id,
@@ -491,6 +496,7 @@ class Pipeline:
                 buy_enablement=result.buy_enablement.value,
                 policy_shas=bundle.shas,
                 engine_build_id=ENGINE_BUILD_ID,
+                decision_sequence=decision_sequence,
             )
             session.add(decision_row)
 
@@ -503,7 +509,9 @@ class Pipeline:
                     "computed_decision": computed.decision.value,
                     "reason": "positive_enforcement_disabled",
                 }
-            enqueue_decision_callback(session, case_id=case.id, run_id=run_id, body=body)
+            enqueue_decision_callback(
+                session, case_id=case.id, run_id=run_id, body=body, decision_sequence=decision_sequence
+            )
             # job completion is atomic with the decision commit
             jobs.complete(session, job_id)
             audit(

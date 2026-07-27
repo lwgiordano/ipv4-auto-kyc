@@ -57,7 +57,24 @@ def metrics(request: Request) -> dict:
                 session, "SELECT decision, count(*) FROM decisions GROUP BY decision"
             ),
             "jobs_by_status": _grouped(session, "SELECT status, count(*) FROM jobs GROUP BY status"),
-            "outbox_by_status": _grouped(session, "SELECT status, count(*) FROM outbox GROUP BY status"),
+            # PR 7b-core: decision_callback rows are never pruned, so `outbox` grows without
+            # bound. Report the LIVE statuses exactly — those are what an operator acts on, and
+            # they stay small — and the terminal history as one bounded count, so this endpoint's
+            # cost does not grow with retained history. A GROUP BY over the whole table would.
+            "outbox_by_status": _grouped(
+                session,
+                "SELECT status, count(*) FROM outbox "
+                "WHERE status IN ('pending','dead') GROUP BY status",
+            ),
+            "outbox_terminal_total": session.execute(
+                text("SELECT count(*) FROM outbox WHERE status IN ('delivered','superseded')")
+            ).scalar_one(),
+            # superseded is a governed terminal (best-effort local suppression, zero sends) — it is
+            # counted in outbox_terminal_total and EXCLUDED from the pending/dead alert set below.
+            "outbox_alerting": _grouped(
+                session,
+                "SELECT status, count(*) FROM outbox WHERE status IN ('pending','dead') GROUP BY status",
+            ),
             "review_tasks_open_by_type": _grouped(
                 session,
                 "SELECT task_type, count(*) FROM review_tasks WHERE status='open' GROUP BY task_type",

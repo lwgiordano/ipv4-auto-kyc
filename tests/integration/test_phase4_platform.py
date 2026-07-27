@@ -82,25 +82,57 @@ def test_callback_dead_letters_after_max_attempts(
 
 
 def test_redelivery_carries_identical_dedupe_key(
-    client, engine, post_event, worker, publisher, callback_capture
+    client, engine, post_event, worker, publisher, callback_capture, monkeypatch
 ):
     """At-least-once means duplicates happen; the platform dedupes on
-    (case_id, run_id) — both fields must be identical across redeliveries."""
+    (case_id, run_id) — both fields must be identical across redeliveries.
+    PR 7b-core (re-audit F3): the old raw delivered→pending rewrite is impossible under
+    ck_outbox_status_lifecycle (it retained delivered_at), so this drives the REAL
+    send-before-stamp gap: HTTP #1 succeeds, the delivered-stamp raises BEFORE its
+    transaction, the row stays pending under its claim; the lease is expired; a reclaim
+    under a NEW token resends the identical dedupe body (HTTP #2) and stamps for real."""
+    from kyc_tool.outbox.publisher import OutboxPublisher
+
     post_event("case-redeliver", "recalculate.requested", {})
     worker.run_until_idle()
-    publisher.process_pending()
-    # simulate a crash after delivery but before the delivered-mark landed
-    with engine.begin() as conn:
-        conn.execute(
-            text("UPDATE outbox SET status='pending', next_attempt_at=now() WHERE case_id='case-redeliver'")
-        )
-    publisher.process_pending()
+
+    real_record_delivered = OutboxPublisher._record_delivered
+    calls: list[int] = []
+
+    class _StampFault(RuntimeError):
+        pass
+
+    def _fail_first(self, row, token, wire_sha256=None):
+        calls.append(1)
+        if len(calls) == 1:  # the HTTP send already happened; the terminal stamp fails ONCE
+            raise _StampFault("send-before-stamp: HTTP sent, delivered-stamp not committed")
+        return real_record_delivered(self, row, token, wire_sha256)
+
+    monkeypatch.setattr(OutboxPublisher, "_record_delivered", _fail_first)
+    # process_once invokes _record_delivered outside its delivery try/except, so the
+    # injected fault escapes process_pending — the honest crash boundary.
+    with pytest.raises(_StampFault):
+        publisher.process_pending()
+    assert len(callback_capture.requests) == 1  # HTTP #1 really happened
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT status, claim_token FROM outbox "
+                                "WHERE case_id='case-redeliver'")).one()
+    assert row.status == "pending" and row.claim_token is not None  # claim survived the crash
+
+    with engine.begin() as conn:  # expire ONLY the lease — the reclaim path, not a raw rewrite
+        conn.execute(text("UPDATE outbox SET claim_lease_expires_at = now() - interval '1 second' "
+                          "WHERE case_id='case-redeliver'"))
+    publisher.process_pending()  # reclaim under a NEW token → HTTP #2 → real stamp (call #2)
 
     bodies = [r["body"] for r in callback_capture.requests]
     assert len(bodies) == 2
     assert bodies[0]["case_id"] == bodies[1]["case_id"]
     assert bodies[0]["run_id"] == bodies[1]["run_id"]
     assert bodies[0]["decision"] == bodies[1]["decision"]
+    with engine.connect() as conn:
+        status = conn.execute(text("SELECT status FROM outbox "
+                                   "WHERE case_id='case-redeliver'")).scalar_one()
+    assert status == "delivered"
 
 
 def test_full_staging_scenario_g3_to_approval(
