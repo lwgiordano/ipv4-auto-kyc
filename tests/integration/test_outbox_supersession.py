@@ -234,6 +234,90 @@ def test_retention_still_prunes_its_other_targets(session_factory, clean_db):
     assert counts["audit_log"] == 1
 
 
+def test_retention_leaves_pending_callback_body_alone(session_factory, clean_db):
+    """F8 requeue-safety property: an old PENDING decision_callback keeps its exact original body.
+    Redaction is scoped to status IN ('delivered','superseded') only — a still-requeueable row is
+    never touched regardless of age, because a redacted body would make a legal requeue send
+    `{"redacted": true}` to the platform instead of the real decision."""
+    from kyc_tool.workers.retention import prune
+
+    _seed_decisions(session_factory, "cpend", [1])
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('cpend') ON CONFLICT DO NOTHING"))
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+            "status, payload_json, created_at) VALUES ('decision_callback','cpend','cpend-r1',"
+            "'decision',1,'pending',"
+            "'{\"decision\":\"approve\",\"checks\":[{\"source\":\"reviewer:pend-1\"}]}'::jsonb,"
+            "now() - interval '3000 days')"))
+        s.commit()
+
+    counts = prune(session_factory, 7 * 365)
+
+    assert counts["outbox_callback_redacted"] == 0
+    with session_factory() as s:
+        row = s.execute(text(
+            "SELECT status, payload_json FROM outbox WHERE case_id='cpend'")).one()
+    assert row.status == "pending"
+    assert row.payload_json == {"decision": "approve", "checks": [{"source": "reviewer:pend-1"}]}
+    assert "reviewer:pend-1" in str(row.payload_json)
+
+
+def test_retention_leaves_dead_callback_body_alone(session_factory, clean_db):
+    """F8 requeue-safety property, dead-row half: an old DEAD decision_callback is just as
+    requeueable as a pending one (`POST /ui/api/requeue/outbox/{id}`, see docs/RUNBOOK.md), so
+    retention must never redact it either."""
+    from kyc_tool.workers.retention import prune
+
+    _seed_decisions(session_factory, "cdead", [1])
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('cdead') ON CONFLICT DO NOTHING"))
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+            "status, payload_json, created_at) VALUES ('decision_callback','cdead','cdead-r1',"
+            "'decision',1,'dead',"
+            "'{\"decision\":\"approve\",\"checks\":[{\"source\":\"reviewer:dead-1\"}]}'::jsonb,"
+            "now() - interval '3000 days')"))
+        s.commit()
+
+    counts = prune(session_factory, 7 * 365)
+
+    assert counts["outbox_callback_redacted"] == 0
+    with session_factory() as s:
+        row = s.execute(text(
+            "SELECT status, payload_json FROM outbox WHERE case_id='cdead'")).one()
+    assert row.status == "dead"
+    assert row.payload_json == {"decision": "approve", "checks": [{"source": "reviewer:dead-1"}]}
+
+
+def test_retention_redaction_is_idempotent(session_factory, clean_db):
+    """F8: a second prune reports 0 for outbox_callback_redacted. Once a body is redacted, the
+    predicate's `payload_json <> '{"redacted": true}'::jsonb` guard excludes the row from being
+    counted (or touched) again — the job is safe to run on every cron tick forever."""
+    from kyc_tool.workers.retention import prune
+
+    old = "now() - interval '3000 days'"
+    _seed_decisions(session_factory, "cidem", [1])
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('cidem') ON CONFLICT DO NOTHING"))
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+            "status, delivered_at, payload_json) VALUES ('decision_callback','cidem','cidem-r1',"
+            f"'decision',1,'delivered',{old},'{{\"decision\":\"approve\"}}'::jsonb)"))
+        s.commit()
+
+    first = prune(session_factory, 7 * 365)
+    assert first["outbox_callback_redacted"] == 1
+
+    second = prune(session_factory, 7 * 365)
+    assert second["outbox_callback_redacted"] == 0
+
+    with session_factory() as s:
+        body = s.execute(text(
+            "SELECT payload_json FROM outbox WHERE case_id='cidem'")).scalar_one()
+    assert body == {"redacted": True}
+
+
 def test_ui_requeue_409s_superseded(client, session_factory):
     # conftest `settings` leaves ui_admin_token empty → the console is open in tests
     # (dev/test trust model; see tests/unit/test_ops_auth.py + tests/integration/test_ui.py),
@@ -245,8 +329,13 @@ def test_ui_requeue_409s_superseded(client, session_factory):
 
 def test_metrics_reports_superseded_out_of_the_alert_set(client, session_factory):
     """superseded is counted as terminal history, never in the pending/dead alert set — and the
-    endpoint stays bounded: PR 7b-core never prunes decision callbacks, so `outbox` grows without
-    limit and a GROUP BY over the whole table would make this endpoint's cost grow with it."""
+    endpoint stays bounded (F7): PR 7b-core never prunes decision callbacks, so `outbox` grows
+    without limit and a scan over the whole table would make this endpoint's cost grow with it.
+    `outbox_terminal_total_estimate` is derived from planner statistics (pg_class.reltuples),
+    which reset to -1 on every TRUNCATE (including `clean_db`'s per-test reset) and only reflect
+    just-inserted rows after an ANALYZE — so this test runs one explicitly, the way a real
+    deployment's autovacuum eventually would, rather than asserting on a pre-ANALYZE value that
+    is legitimately allowed to be 0."""
     _superseded_callback(session_factory, "cm")  # a VALID superseded decision callback (F8)
     with session_factory() as s:
         s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, "
@@ -254,13 +343,84 @@ def test_metrics_reports_superseded_out_of_the_alert_set(client, session_factory
         s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, "
                        "status) VALUES ('poc_email','cm','email','dead')"))
         s.commit()
+    with session_factory() as s:
+        s.execute(text("ANALYZE outbox"))
+        s.commit()
     body = client.get("/v1/metrics").json()
     # live statuses reported exactly; terminals are NOT enumerated per-status
     assert {"pending", "dead"} <= set(body["outbox_by_status"])
     assert "superseded" not in body["outbox_by_status"]
     assert "delivered" not in body["outbox_by_status"]
-    assert body["outbox_terminal_total"] >= 1          # the superseded row is counted here
+    assert body["outbox_terminal_total_estimate"] >= 1  # the superseded row is counted here
     assert "superseded" not in body["outbox_alerting"]  # governed terminal, not an alert
+
+
+def test_outbox_terminal_estimate_within_tolerance_after_analyze(client, session_factory):
+    """F7: after ANALYZE, outbox_terminal_total_estimate (planner statistics minus the exact
+    live count) lands within a sane tolerance of the true terminal count on a small seeded set
+    — it is an ESTIMATE, not the exact count(*) the endpoint used to run. The cheapest honest
+    proof that the endpoint issues no scan over the unfiltered/terminal outbox (short of a query
+    interceptor) is that the estimate key exists and outbox_by_status/outbox_alerting — computed
+    from the SAME single query — agree exactly."""
+    _seed_decisions(session_factory, "cest", [1, 2, 3, 4])
+    with session_factory() as s:
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+            "status, delivered_at) VALUES ('decision_callback','cest','cest-r1','decision',1,"
+            "'delivered', now())"))
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+            "status, resolved_at) VALUES ('decision_callback','cest','cest-r2','decision',2,"
+            "'superseded', now())"))
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+            "status) VALUES ('decision_callback','cest','cest-r3','decision',3,'pending')"))
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+            "status) VALUES ('decision_callback','cest','cest-r4','decision',4,'dead')"))
+        s.commit()
+    with session_factory() as s:
+        s.execute(text("ANALYZE outbox"))  # planner stats now reflect the 4 rows just inserted
+        s.commit()
+
+    body = client.get("/v1/metrics").json()
+    true_terminal = 2  # delivered (r1) + superseded (r2); r3 pending and r4 dead are live
+    assert "outbox_terminal_total_estimate" in body
+    assert isinstance(body["outbox_terminal_total_estimate"], int)
+    # a small freshly-ANALYZEd table is normally exact, but this is an estimate by design —
+    # tolerance stays tight enough to catch a gross error (e.g. forgetting the live subtraction,
+    # which would report the full 4 instead of 2), not tight enough to demand exactness.
+    assert abs(body["outbox_terminal_total_estimate"] - true_terminal) <= 1
+    assert body["outbox_by_status"] == body["outbox_alerting"]  # same query, reused, agrees exactly
+    assert body["outbox_by_status"].get("pending") == 1
+    assert body["outbox_by_status"].get("dead") == 1
+
+
+def test_outbox_terminal_estimate_clamped_when_never_analyzed(client, session_factory):
+    """F7: reltuples is -1 on a relation that has never been ANALYZEd (true right after
+    `clean_db`'s TRUNCATE, verified empirically — TRUNCATE resets reltuples to -1, not 0, and a
+    plain INSERT never updates it). The estimate must clamp at 0, never report a negative number.
+    Stamping pg_class directly makes this deterministic instead of racing a shared cluster's
+    autovacuum/autoanalyze timing."""
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('cclamp') ON CONFLICT DO NOTHING"))
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+            "VALUES ('poc_email','cclamp','email','pending')"))
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+            "VALUES ('poc_email','cclamp','email','dead')"))
+        # simulate the never-analyzed sentinel deterministically (this IS what TRUNCATE leaves
+        # behind — see the docstring above); do this AFTER the inserts so it isn't overwritten.
+        s.execute(text("UPDATE pg_class SET reltuples = -1 WHERE relname = 'outbox'"))
+        s.commit()
+
+    body = client.get("/v1/metrics").json()
+    # without the clamp: raw total 0 (from -1) minus live count 2 would be -2.
+    assert body["outbox_by_status"].get("pending") == 1
+    assert body["outbox_by_status"].get("dead") == 1
+    assert body["outbox_terminal_total_estimate"] == 0
+    assert body["outbox_terminal_total_estimate"] >= 0
 
 
 def test_manual_current_then_late_automatic_callback_sent_expected_pre_activation(

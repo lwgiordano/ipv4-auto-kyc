@@ -43,14 +43,18 @@ END
 """
 
 
-def witness_query(where: str = "o.kind = 'decision_callback'") -> str:
-    """`SELECT` of every decision callback with its witness state, newest first.
-
-    Ordering is by `id` — enqueue order, which 013 established as the local ordering authority —
-    not by any timestamp, because timestamps across replicas do not order these rows.
-    """
-    return (
-        f"SELECT o.id, o.case_id, o.run_id, o.decision_sequence, o.status, "
-        f"o.callback_wire_sha256, o.wire_version, ({WITNESS_SQL}) AS witness "
-        f"FROM outbox o WHERE {where} ORDER BY o.id DESC"
-    )
+# Every decision callback with its witness state. Deliberately a CONSTANT rather than a
+# `witness_query(where=...)` helper: a function taking a SQL fragment invites callers to
+# interpolate, and this repo does not need a second way to build a WHERE clause. Callers append
+# their own BOUND predicate and ordering, e.g.
+#
+#     text(WITNESS_SELECT + " AND o.case_id = :c ORDER BY o.id DESC"), {"c": case_id}
+#
+# Order by `id` — enqueue order, which 013 established as the local ordering authority — never by
+# a timestamp, which does not order these rows across replicas.
+WITNESS_SELECT = f"""
+SELECT o.id, o.case_id, o.run_id, o.decision_sequence, o.status,
+       o.callback_wire_sha256, o.wire_version, ({WITNESS_SQL}) AS witness
+FROM outbox o
+WHERE o.kind = 'decision_callback'
+"""

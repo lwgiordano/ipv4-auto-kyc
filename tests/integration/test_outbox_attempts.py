@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from kyc_tool.outbox import witness
 from kyc_tool.outbox.publisher import _StaleClaim
+from kyc_tool.workers.retention import prune
 from tests.integration.test_outbox_supersession import _enqueue_cb, _seed_decisions
 
 pytestmark = pytest.mark.postgres
@@ -27,7 +28,7 @@ class _InjectedFault(RuntimeError):
 def _witness_of(session_factory, run_id):
     with session_factory() as s:
         return s.execute(
-            text(witness.witness_query(f"o.run_id = '{run_id}'"))
+            text(witness.WITNESS_SELECT + " AND o.run_id = :r ORDER BY o.id DESC"), {"r": run_id}
         ).one()
 
 
@@ -189,3 +190,38 @@ def test_attempt_constraints_reject_uninterpretable_witnesses(session_factory, b
                 ":w, :s)"), {"o": outbox_id, "w": wire_version, "s": sha})
         assert "ck_attempt_sha_shape" in str(exc.value) or "ck_attempt_wire_vocab" in str(exc.value)
         s.rollback()
+
+
+def test_retention_never_prunes_the_only_evidence_a_row_was_sent(session_factory, clean_db):
+    """Retention may delete attempts for a row that already has a terminal digest, and must NOT
+    delete them for one that does not — for a non-delivered row the attempt is the only proof
+    bytes went out, and removing it would reclassify `attempt_witnessed` into `not_accepted`,
+    which is the tool asserting non-delivery on evidence it just destroyed."""
+    _seed_decisions(session_factory, "ch", [1, 2])
+    with session_factory() as s:
+        rows = {}
+        for seq, sha in ((1, "a" * 64), (2, None)):
+            rows[seq] = s.execute(text(
+                "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+                "status, delivered_at, callback_wire_sha256, wire_version) VALUES "
+                "('decision_callback','ch',:r,'decision',:seq,"
+                ":st, :dt, :sha, :wv) RETURNING id"),
+                {"r": f"ch-r{seq}", "seq": seq,
+                 "st": "delivered" if sha else "pending",
+                 "dt": "now()" if sha else None,
+                 "sha": sha, "wv": "legacy" if sha else None}).scalar_one()
+            # an attempt older than any retention window
+            s.execute(text(
+                "INSERT INTO outbox_delivery_attempts (attempt_id, outbox_id, claim_token, "
+                "wire_version, request_sha256, attempted_at) VALUES (gen_random_uuid(), :o, "
+                "gen_random_uuid(), 'legacy', :s, now() - interval '9999 days')"),
+                {"o": rows[seq], "s": "b" * 64})
+        s.commit()
+
+    counts = prune(session_factory, retention_days=1)
+    assert counts["outbox_attempts_pruned"] == 1  # only the delivery-witnessed one
+
+    assert _attempts(session_factory, "ch-r1") == []                      # redundant, removed
+    assert len(_attempts(session_factory, "ch-r2")) == 1                  # sole evidence, kept
+    assert _witness_of(session_factory, "ch-r1").witness == witness.DELIVERY_WITNESSED
+    assert _witness_of(session_factory, "ch-r2").witness == witness.ATTEMPT_WITNESSED

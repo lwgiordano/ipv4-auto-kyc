@@ -177,15 +177,32 @@ and expired unverified POC tokens past `KYC_RETENTION_DAYS` (default 7y).
 Checks, decisions, and raw evidence are NOT auto-pruned — deleting the
 decision record requires compliance sign-off; do it as a supervised one-off.
 
-**`decision_callback` outbox rows are NOT pruned either (PR 7b-core).** The row
-is the durable ordering authority the platform reconciliation is built from:
-`id` is the order, `status` the local delivery outcome, `payload_json` the body
-that was sent. This is a deliberate retention deviation recorded in
-`AUDIT_FINDINGS.md` — it adds no new data *category* (the body projects the
-never-pruned decision record) but it IS an additional durable copy, and it
-carries `checks[].source`, which can be reviewer-derived. An erasure request
-must therefore reach the callback snapshot as well as the decision record.
-Treat it as in scope for backup, erasure, privacy, and compliance review.
+**`decision_callback` outbox ROWS are NOT pruned either (PR 7b-core), but their
+BODIES are destroyed past the window.** The row is the durable ordering
+authority the platform reconciliation is built from — `id` the order, `status`
+the local delivery outcome — so it is kept indefinitely. `payload_json`, which
+carries `checks[].source` (can be reviewer-derived), is a different matter:
+`workers.retention` redacts it to `{"redacted": true}` once
+`COALESCE(delivered_at, resolved_at)` is past `KYC_RETENTION_DAYS`, for any row
+whose `status` is `delivered` or `superseded`. Redaction never touches a
+`pending` or `dead` row — those are still requeueable, and a redacted body
+would send `{"redacted": true}` to the platform on a legal requeue.
+
+What survives redaction — `case_id`, `run_id`, `decision_sequence`, `status`,
+`delivered_at`/`resolved_at`, and the recorded wire digest
+(`callback_wire_sha256`, `wire_version`) — is pseudonymous, not out of scope: a
+hash plus internal ordinals, still joinable back to a case. Retaining that
+remainder past the window is a governed decision recorded in
+`AUDIT_FINDINGS.md` (D9), not a claim that it falls outside backup, erasure,
+privacy, or compliance review; accountability for it is the **deployer's data
+controller's** — this repo cannot name that owner and does not discharge the
+controller's obligations, it only bounds what it keeps and documents the
+bound. Two things this repo does NOT reach: (1) an erasure request landing
+**inside** the window must still reach the live callback snapshot (its body is
+not yet redacted) as well as the decision record; (2) **backups taken before
+redaction** are a separate durable copy and still contain the pre-redaction
+body until they age out on the backup retention schedule, independent of
+`KYC_RETENTION_DAYS`.
 
 ## Policy changes
 

@@ -219,3 +219,28 @@ documented choice · 🔵 hygiene/wording.
   op, so a nonce table would be an unused security mechanism (YAGNI); revisit only
   if a future keyless HMAC op appears. `KYC_Tool_Build_Package/` is unmodified; the
   M2 hard stop is untouched.
+- **D9 — Redacted decision-callback remainder is a governed, pseudonymous ordering
+  record, not a personal-data-scope determination (remediation PR 7b-core).** Past
+  `KYC_RETENTION_DAYS`, `workers.retention` destroys a decision_callback's BODY —
+  it carried `checks[].source`, which can be reviewer-derived (`reviewer:<id>`) —
+  but keeps the ROW: `case_id`, `run_id`, `decision_sequence`, `status`,
+  `delivered_at`/`resolved_at`, and the recorded wire digest
+  (`callback_wire_sha256`, `wire_version`) survive because the row is the durable
+  ordering authority 7b-activation reconciles the platform against; deleting it
+  would break that reconciliation. Redaction is scoped to `status IN
+  ('delivered','superseded')` only — a `pending` or requeueable `dead` row is never
+  touched, because a redacted body would make a legal requeue send
+  `{"redacted": true}` to the platform. The surviving remainder is pseudonymous —
+  a hash plus internal ordinals, still joinable back to a case and, through it, to
+  the natural person it concerns — and retaining it past the window is a
+  deliberate, governed choice, not a claim that it falls outside any regulation's
+  scope: this repo makes no determination of what is or is not personal data under
+  any law. Accountability for that choice rests with the **deployer's data
+  controller** — a named accountable owner is a deployment-time input this repo
+  has no way to supply — and this repo does not, and cannot, discharge that
+  controller's obligations (erasure, lawful basis, DPIA, breach notification,
+  etc.); it only bounds what it keeps past the window and documents the bound.
+  **Backups are a separate durable copy:** any backup taken before redaction still
+  contains the pre-redaction body, independent of `KYC_RETENTION_DAYS`, until it
+  ages out on its own backup retention schedule — see `docs/RUNBOOK.md`
+  ("Retention & compliance").

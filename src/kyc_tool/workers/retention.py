@@ -11,12 +11,16 @@ decision record. PR 7b-core keeps the decision_callback ROW for the same reason 
 durable ordering authority (id = order, status = local_status, plus the recorded wire digest)
 that 7b-activation reconciles the platform against, and deleting it would break that
 reconciliation. Its BODY is a different matter: it carries checks[].source, which can be
-reviewer-derived (reviewer:<id>), so it is redacted in place past the window rather than kept
-indefinitely. Keeping the body would have required a compliance position on refusing erasure of
-reviewer identifiers; recording the digest at delivery instead means the surviving evidence is a
-hash and a set of internal ordinals, and KYC_RETENTION_DAYS still bounds what personal data
-persists. poc_email rows are deleted outright — their sensitive body (the raw POC token) is
-already destroyed at delivery by publisher._record_delivered.
+reviewer-derived (reviewer:<id>), so the body is destroyed (redacted in place) past the window
+rather than kept indefinitely. What survives is pseudonymous, not out of scope: case_id, run_id,
+decision_sequence, status, delivered_at/resolved_at and the recorded wire digest are internal
+ordinals plus a hash — still joinable back to the case (and, through it, the natural person it
+concerns) — kept because that is exactly what 7b-activation's reconciliation needs. Retaining
+that pseudonymous remainder past the window is a governed decision recorded in
+`AUDIT_FINDINGS.md` (D9), not a determination that it falls outside any regulation's scope —
+this module does not decide what is or is not personal data; it only bounds what it keeps and
+documents the bound. poc_email rows are deleted outright — their sensitive body (the raw POC
+token) is already destroyed at delivery by publisher._record_delivered.
 """
 
 import structlog
@@ -43,16 +47,36 @@ def prune(session_factory, retention_days: int) -> dict[str, int]:
             {"d": retention_days},
         ).rowcount
         # A decision_callback row is the durable ordering authority, so the ROW survives — but its
-        # BODY does not. Redact it past the window, keeping id (the order), case_id, run_id,
-        # decision_sequence, status, delivered_at and the recorded wire digest. That is everything
-        # 7b-activation reconciles against, and none of it is personal data; the body is what
-        # carried checks[].source, which can be reviewer-derived.
+        # BODY does not. The body carried checks[].source, which can be reviewer-derived
+        # (reviewer:<id>), so it is destroyed (redacted in place) past the window. What survives —
+        # id (the order), case_id, run_id, decision_sequence, status, delivered_at and the recorded
+        # wire digest — is everything 7b-activation reconciles against. It is pseudonymous, not
+        # out of scope: a hash plus internal ordinals still joinable to a case. Retaining it past
+        # the window is a governed decision (AUDIT_FINDINGS.md D9), not a personal-data
+        # determination — this repo bounds what it keeps; it does not decide what the law calls it.
         counts["outbox_callback_redacted"] = session.execute(
             text(
                 "UPDATE outbox SET payload_json = '{\"redacted\": true}'::jsonb "
                 "WHERE kind='decision_callback' AND status IN ('delivered','superseded') "
                 "AND payload_json <> '{\"redacted\": true}'::jsonb "
                 "AND COALESCE(delivered_at, resolved_at) < now() - make_interval(days => :d)"
+            ),
+            {"d": retention_days},
+        ).rowcount
+        # Attempt rows are pruned ONLY for callbacks that already carry a terminal digest. That
+        # restriction is load-bearing, not tidiness: for any non-delivered row the attempt IS the
+        # only evidence that bytes were transmitted, and deleting it would silently reclassify the
+        # row from `attempt_witnessed` ("sent; the platform must say whether it accepted") to
+        # `not_accepted` ("nothing was ever transmitted") — the one state in which this tool is
+        # entitled to assert non-delivery on its own evidence. A retention job must never
+        # manufacture that claim. Once `callback_wire_sha256` is set the row is
+        # `delivery_witnessed` on the outbox row alone, so its attempts are genuinely redundant
+        # and their unbounded growth is not worth keeping.
+        counts["outbox_attempts_pruned"] = session.execute(
+            text(
+                "DELETE FROM outbox_delivery_attempts a USING outbox o "
+                "WHERE o.id = a.outbox_id AND o.callback_wire_sha256 IS NOT NULL "
+                "AND a.attempted_at < now() - make_interval(days => :d)"
             ),
             {"d": retention_days},
         ).rowcount

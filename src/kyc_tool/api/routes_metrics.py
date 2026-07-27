@@ -51,30 +51,56 @@ def metrics(request: Request) -> dict:
                 """
             )
         ).one()
+        # PR 7b-core: decision_callback rows are never pruned — retention redacts the body past
+        # the window but keeps the row itself, because the row is the durable ordering authority
+        # a later unit (7b-activation) reconciles the platform against. So `outbox` grows without
+        # bound for the life of the system.
+        #
+        # Live statuses (pending, dead) stay EXACT: they are what an operator acts on, they stay
+        # small, and migration 013's partial indexes already serve exactly this predicate.
+        # `outbox_by_status` and `outbox_alerting` used to each run this identical query — two
+        # round-trips for one result — so it is computed once here and shared; both keys stay
+        # published (each is part of the metrics surface).
+        #
+        # Terminal history (delivered, superseded) is NOT exactly counted. It has exactly one
+        # consumer in this repo (a test asserting the key is present) and nothing alerts on it or
+        # consumes it in the reconciliation design — it is a growth gauge, not a control signal.
+        # An exact counter would need a trigger-maintained second source of truth that every
+        # status transition anywhere in the codebase must keep honest forever, to serve a number
+        # nobody acts on. So it is instead *estimated* in bounded time from the planner's own
+        # statistics — pg_class.reltuples for the whole relation, minus the exact live count above
+        # — rather than scanned. reltuples is -1 on a relation that has never been ANALYZEd (or
+        # since its last TRUNCATE), and is in general only an estimate that can legitimately sit
+        # below the true live count, so both the raw statistic and the final subtraction are
+        # floored at 0 — the estimate can never be reported as negative. This endpoint's cost is
+        # therefore independent of how much terminal history retention has accumulated.
+        outbox_live_by_status = _grouped(
+            session,
+            "SELECT status, count(*) FROM outbox WHERE status IN ('pending','dead') GROUP BY status",
+        )
+        # Addressed by OID via to_regclass, not by `relname = 'outbox'`: relname ignores schema, so
+        # a same-named table in any other schema on the search path could supply the statistic for
+        # a relation this session never queries. to_regclass resolves the SAME name the ORM does,
+        # and yields NULL (no row, estimate 0) rather than raising if the table is absent.
+        outbox_reltuples = session.execute(
+            text("SELECT reltuples::bigint FROM pg_class WHERE oid = to_regclass(:relname)"),
+            {"relname": "outbox"},
+        ).scalar()
+        outbox_total_estimate = max(outbox_reltuples, 0) if outbox_reltuples is not None else 0
+        outbox_terminal_total_estimate = max(
+            outbox_total_estimate - sum(outbox_live_by_status.values()), 0
+        )
         return {
             "runs_by_state": _grouped(session, "SELECT state, count(*) FROM runs GROUP BY state"),
             "decisions_by_type": _grouped(
                 session, "SELECT decision, count(*) FROM decisions GROUP BY decision"
             ),
             "jobs_by_status": _grouped(session, "SELECT status, count(*) FROM jobs GROUP BY status"),
-            # PR 7b-core: decision_callback rows are never pruned, so `outbox` grows without
-            # bound. Report the LIVE statuses exactly — those are what an operator acts on, and
-            # they stay small — and the terminal history as one bounded count, so this endpoint's
-            # cost does not grow with retained history. A GROUP BY over the whole table would.
-            "outbox_by_status": _grouped(
-                session,
-                "SELECT status, count(*) FROM outbox "
-                "WHERE status IN ('pending','dead') GROUP BY status",
-            ),
-            "outbox_terminal_total": session.execute(
-                text("SELECT count(*) FROM outbox WHERE status IN ('delivered','superseded')")
-            ).scalar_one(),
+            "outbox_by_status": outbox_live_by_status,
+            "outbox_terminal_total_estimate": outbox_terminal_total_estimate,
             # superseded is a governed terminal (best-effort local suppression, zero sends) — it is
-            # counted in outbox_terminal_total and EXCLUDED from the pending/dead alert set below.
-            "outbox_alerting": _grouped(
-                session,
-                "SELECT status, count(*) FROM outbox WHERE status IN ('pending','dead') GROUP BY status",
-            ),
+            # counted in outbox_terminal_total_estimate and EXCLUDED from the alert set below.
+            "outbox_alerting": outbox_live_by_status,
             "review_tasks_open_by_type": _grouped(
                 session,
                 "SELECT task_type, count(*) FROM review_tasks WHERE status='open' GROUP BY task_type",
