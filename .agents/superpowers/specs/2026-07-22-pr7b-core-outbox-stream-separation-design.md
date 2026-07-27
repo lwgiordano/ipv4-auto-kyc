@@ -76,8 +76,10 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   callback_wire_sha256 ~ '^[0-9a-f]{64}$')`; `CHECK (wire_version IS NULL OR wire_version IN
   ('legacy','sequenced'))`; both NULL together or both set (`CHECK ((callback_wire_sha256 IS NULL) =
   (wire_version IS NULL))`), and non-NULL only for `kind='decision_callback'`. The publisher writes
-  them in the **same transaction that records delivery**. They stay NULL in exactly two cases, both
-  honest: a callback that never reached a 2xx (no bytes were sent), and **any callback delivered
+  them in the **same transaction that records delivery**. They stay NULL in three cases — and the
+  first of them is why the terminal digest is **not sufficient on its own** (see the attempt
+  authority below): a delivery whose 2xx arrived but whose terminal transaction then faulted, a
+  callback that never reached a 2xx (no bytes were sent), and **any callback delivered
   before `013`** — `payload_json` is `jsonb`, which normalizes key order, so the bytes that were
   actually sent are **unrecoverable** for historical rows. `013` therefore does **NOT** backfill a
   digest: computing one from the normalized payload would fabricate a witness for bytes nobody can
@@ -91,6 +93,45 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   creates a drift class. Once retention deliberately destroys the body, the digest is **no longer
   derivable** — it is the record of an event, not a second copy of a live fact. The distinction is
   whether the source of truth still exists.
+
+- **`outbox_delivery_attempts` — the pre-HTTP attempt authority (rev 13, re-review `45ad8b9` F1).**
+  `(attempt_id UUID PK, outbox_id BIGINT NOT NULL REFERENCES outbox(id) ON DELETE CASCADE,
+  claim_token UUID NOT NULL, wire_version TEXT NOT NULL, request_sha256 TEXT NOT NULL,
+  attempted_at TIMESTAMPTZ NOT NULL DEFAULT now())`, with `ck_attempt_sha_shape`
+  (`request_sha256 ~ '^[0-9a-f]{64}$'`) and `ck_attempt_wire_vocab` (`legacy|sequenced`) — a
+  malformed digest or unknown encoding is worse than no witness, because it *looks* like evidence.
+
+  **Why the terminal digest alone was wrong.** Recording the digest in the fenced terminal
+  transaction is one transaction too late. 7b-core's own documented residual is reachable and
+  tested (`tests/integration/test_outbox_supersession.py`): the receiver returns 2xx, the terminal
+  transaction faults, the row stays `pending` with a NULL digest — and at that instant the
+  platform holds bytes the tool has no record of ever sending. No ordering of writes *inside* the
+  terminal repairs this: a database commit and a network call cannot be made atomic. That is the
+  same constraint the outbox itself exists to answer, and it takes the same answer one level down
+  — **record the intent before the side effect**.
+
+  So the publisher builds the request, hashes the exact bytes of `httpx.Request.content`, commits
+  an attempt row **under the live claim**, and only then sends. Fenced on the same
+  `(status='pending', claim_token)` predicate as every terminal, so a claimant whose lease expired
+  writes nothing here either — and, because the fence precedes the send, transmits nothing.
+
+  Rows are **insert-only**: never updated, never deleted except by retention and the outbox row's
+  own cascade. There is deliberately **no "winning attempt" link column**. Two attempts for one
+  row carry identical bytes (the payload is immutable and the timestamp lives in a header, outside
+  the digest), so they are one event to the receiver; a winner flag would be a derived fact free
+  to contradict the digest it was derived from — the exact drift class rev 10 rejected.
+
+  **Wire witness taxonomy.** These two facts together yield exactly four states, defined once in
+  `src/kyc_tool/outbox/witness.py` and selected — never restated — by everything that classifies a
+  row: `delivery_witnessed` (terminal digest present), `attempt_witnessed` (attempt committed, no
+  terminal digest — only the platform's ledger settles it), `legacy_unwitnessed` (delivered before
+  013; unrecoverable by construction), `not_accepted` (no attempt, so nothing was transmitted —
+  the only state in which the tool may assert non-delivery on its own evidence).
+
+  POC emails get no attempt row: they carry no wire digest, nothing reconciles them against a
+  remote ledger, and their duplicate-on-retry behaviour is the documented at-least-once property
+  (A6), not a gap in evidence.
+
 - **Separately, `stored_payload_jsonb_digest` remains a restore-only SQL expression, not a column.**
   It is used verbatim by the §Rollout restore acceptance predicate:
   `stored_payload_jsonb_digest(o) = encode(sha256(convert_to(o.payload_json::text, 'UTF8')), 'hex')`
@@ -417,9 +458,12 @@ authority for a decision callback's identity, order, body, and local status:
   SHA-256 and a set of internal ordinals, which are not the identifier. **There is no retention
   deviation left to govern**, and `KYC_RETENTION_DAYS` continues to bound what personal data persists.
 - **It also removes 014's ability to get history wrong.** Because the digest is recorded at send
-  time (and backfilled at 013, before 014 exists), 014 never re-encodes a stored payload — so
-  014's `decision_sequence` payload backfill cannot change a digest, which was the whole of F1's
-  reachable failure. `wire_version` is a recorded fact rather than a rule for reconstructing one.
+  time, 014 never re-encodes a stored payload — so 014's `decision_sequence` payload backfill
+  cannot change a digest, which was the whole of F1's reachable failure. `wire_version` is a
+  recorded fact rather than a rule for reconstructing one. `013` backfills **no** historical
+  digest and must not: `payload_json` is jsonb and normalizes key order, so a pre-013 row's sent
+  bytes are unrecoverable and any digest computed from them now would be a fabricated witness.
+  Pre-013 deliveries are `legacy_unwitnessed` **by construction** (§Wire witness taxonomy).
 - **A stored digest is not the drift class rev 10 rejected.** That objection applied to a column
   duplicating a fact still derivable from `payload_json`. Once the body is deliberately destroyed the
   digest is **not derivable** — it becomes the record of an event, which is exactly what you store.

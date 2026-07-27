@@ -240,6 +240,45 @@ def upgrade() -> None:
         postgresql_where=sa.text("status = 'pending'"),
     )
 
+    # --- pre-HTTP attempt authority ---
+    # `outbox.callback_wire_sha256` is written in the fenced TERMINAL transaction, which is one
+    # transaction too late to be evidence. The publisher's own proven residual is: HTTP returns
+    # 2xx, the terminal transaction then faults, and the row stays `pending`. At that instant the
+    # platform holds bytes the tool has no record of ever sending — so a NULL digest cannot mean
+    # "never delivered", and reconciliation built on that reading would be wrong exactly when it
+    # matters. No ordering of writes inside the terminal fixes this: a DB commit and a network
+    # call cannot be made atomic, which is why the outbox exists at all. The same answer applies
+    # one level down — record the INTENT before the side effect.
+    #
+    # So: build the request, hash the exact bytes, commit an immutable attempt row under the live
+    # claim, and only then send. A row here means "these bytes were handed to the network"; its
+    # absence means they were not. Rows are insert-only — never updated, never linked back to a
+    # winner — because two attempts carrying identical bytes are the same event to the receiver,
+    # and a "winning attempt" column would be a derived fact that could disagree with the digest
+    # it was derived from.
+    op.create_table(
+        "outbox_delivery_attempts",
+        sa.Column("attempt_id", postgresql.UUID(), primary_key=True),
+        sa.Column("outbox_id", sa.BigInteger(), nullable=False),
+        # the claim the attempt was made under: proves a stale claimant wrote nothing, and lets a
+        # reconciler tell "one claimant retried" from "two claimants both sent".
+        sa.Column("claim_token", postgresql.UUID(), nullable=False),
+        sa.Column("wire_version", sa.Text(), nullable=False),
+        sa.Column("request_sha256", sa.Text(), nullable=False),
+        sa.Column("attempted_at", sa.DateTime(timezone=True),
+                  server_default=sa.text("now()"), nullable=False),
+        sa.ForeignKeyConstraint(["outbox_id"], ["outbox.id"], name="fk_attempt_outbox",
+                                ondelete="CASCADE"),
+        sa.CheckConstraint("request_sha256 ~ '^[0-9a-f]{64}$'", name="ck_attempt_sha_shape"),
+        sa.CheckConstraint("wire_version IN ('legacy','sequenced')", name="ck_attempt_wire_vocab"),
+    )
+    # Reconciliation reads "every attempt for this row, newest first"; nothing reads attempts
+    # globally, so the index is deliberately narrow.
+    op.create_index(
+        "ix_attempt_outbox", "outbox_delivery_attempts",
+        ["outbox_id", sa.text("attempted_at DESC")],
+    )
+
 
 def downgrade() -> None:
     # Reversible only BEFORE the first local supersession. Lock FIRST: a bare
@@ -255,6 +294,9 @@ def downgrade() -> None:
             "migration 013 downgrade refused: superseded outbox row(s) exist — a pre-7b "
             "image cannot interpret or prune them (roll forward instead)"
         )
+    # the attempt authority goes first: its FK to outbox must not outlive the columns below.
+    op.drop_index("ix_attempt_outbox", table_name="outbox_delivery_attempts")
+    op.drop_table("outbox_delivery_attempts")
     op.drop_index("ix_outbox_stream_claim", table_name="outbox")
     op.drop_index("ix_outbox_claim", table_name="outbox")   # restore 006's full form
     op.create_index("ix_outbox_claim", "outbox", ["status", "next_attempt_at"])

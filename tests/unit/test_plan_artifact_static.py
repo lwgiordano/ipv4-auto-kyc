@@ -31,6 +31,22 @@ RUFF_CMD = [sys.executable, "-m", "ruff"]
 # which made the same block pass locally and fail in CI, and flagged different blocks in each.
 # `--stdin-filename` makes the verdict identical to `ruff check .` on the real file, everywhere.
 RUFF_CONFIG = REPO_ROOT / "pyproject.toml"
+_MARKER = re.compile(r"^<!--\s*complete-file:\s*(\S+\.py)\s*-->$")
+
+# The exact set of whole-file blocks the plan is expected to carry, in order. Pinned rather than
+# counted: a `>= 8` floor passed while three real blocks were undiscovered, because the ones it
+# did find outnumbered the threshold. An exact list makes a missing marker, a duplicated block,
+# and an unexpected new one all fail — and names which.
+EXPECTED_COMPLETE_FILES = [
+    "tests/integration/test_verify_pr7b_core_backfill.py",
+    "src/kyc_tool/ops/verify_pr7b_core_backfill.py",
+    "tests/integration/test_reset_interrupted_outbox_claims.py",
+    "src/kyc_tool/ops/reset_interrupted_outbox_claims.py",
+    "src/kyc_tool/ops/repair_outbox_sequence.py",
+    "tests/integration/test_repair_outbox_sequence.py",
+    "tests/unit/test_docs_cutover_parity.py",
+    "tests/integration/test_rollback_command.py",
+]
 
 
 def _fenced_blocks(lines: list[str]) -> tuple[list[tuple[int, str, str]], list[int]]:
@@ -57,18 +73,25 @@ def _fenced_blocks(lines: list[str]) -> tuple[list[tuple[int, str, str]], list[i
 
 
 def _complete_file_blocks(lines: list[str]) -> list[tuple[int, str, str]]:
-    """Python blocks the plan introduces as `create <path>` — i.e. a whole file, not a fragment.
+    """Python blocks the plan introduces as whole files, found by an explicit marker.
 
     Only these can be linted as files; append/insertion fragments legitimately reference names
     defined in the target file and would report spurious F821.
+
+    Discovery is by an explicit `<!-- complete-file: <path> -->` line immediately above the fence,
+    NOT by matching prose. The prose heuristic this replaced looked back three lines for
+    "create `<path>`" and was case-sensitive, so a block introduced as "Create
+    `tests/integration/test_rollback_command.py`:" was invisible to it — and a block the gate
+    skips is a block whose syntax errors ship. A marker cannot be missed by accident, and
+    `test_plan_complete_file_paths_are_exactly_expected` pins the resulting set, so a marker that
+    goes missing fails loudly instead of silently shrinking this suite.
     """
     blocks, _ = _fenced_blocks(lines)
     out = []
     for start, tag, body in blocks:
-        if tag != "```python":
+        if tag != "```python" or start < 2:
             continue
-        context = "\n".join(lines[max(0, start - 4):start - 1])
-        match = re.search(r"create `([^`]+\.py)`", context)
+        match = _MARKER.match(lines[start - 2].strip())
         if match:
             out.append((start, match.group(1), body))
     return out
@@ -83,10 +106,57 @@ def test_plan_fences_are_balanced():
     )
 
 
-def test_plan_has_complete_file_blocks_to_check():
-    # guards the gate itself: a refactor that broke the `create <path>` convention would silently
-    # reduce this suite to a no-op.
-    assert len(_complete_file_blocks(PLAN.read_text().splitlines())) >= 8
+def test_plan_complete_file_paths_are_exactly_expected():
+    """Guards the gate itself: the discovered set must match `EXPECTED_COMPLETE_FILES` exactly.
+
+    A missing marker silently shrinks every parametrized test below it, so this must be an exact
+    comparison, not a floor. Adding a genuinely new whole-file block to the plan is expected to
+    fail here once — update the list deliberately.
+    """
+    found = [path for _, path, _ in _complete_file_blocks(PLAN.read_text().splitlines())]
+    assert found == EXPECTED_COMPLETE_FILES, (
+        f"complete-file blocks drifted.\n  missing: {sorted(set(EXPECTED_COMPLETE_FILES) - set(found))}"
+        f"\n  unexpected: {sorted(set(found) - set(EXPECTED_COMPLETE_FILES))}"
+        f"\n  found order: {found}"
+    )
+
+
+def test_plan_complete_file_paths_are_unique():
+    """Two blocks claiming one path means one of them is not the file it says it is."""
+    found = [path for _, path, _ in _complete_file_blocks(PLAN.read_text().splitlines())]
+    assert len(found) == len(set(found)), f"duplicate complete-file paths: {found}"
+
+
+def test_every_marker_is_followed_by_a_python_fence():
+    """A marker whose fence is missing (or is not ```python) discovers nothing and would be
+    invisible to the exact-set test only if the path also vanished from the list. Catch the
+    orphan directly, so a mis-typed fence tag cannot quietly drop a block from the suite."""
+    lines = PLAN.read_text().splitlines()
+    orphans = [
+        (i, line.strip())
+        for i, line in enumerate(lines, 1)
+        if _MARKER.match(line.strip()) and (i >= len(lines) or lines[i].strip() != "```python")
+    ]
+    assert not orphans, f"complete-file marker(s) not followed by a ```python fence: {orphans}"
+
+
+@pytest.mark.parametrize(
+    "markdown,expected",
+    [
+        pytest.param(["<!-- complete-file: a/b.py -->", "```python", "x = 1", "```"],
+                     ["a/b.py"], id="marker-discovers-block"),
+        pytest.param(["Create `a/b.py`:", "```python", "x = 1", "```"],
+                     [], id="prose-alone-discovers-nothing"),
+        pytest.param(["<!-- complete-file: a/b.py -->", "```", "x = 1", "```"],
+                     [], id="non-python-fence-ignored"),
+        pytest.param(["<!-- complete-file: a/b.py -->", "", "```python", "x = 1", "```"],
+                     [], id="marker-must-be-adjacent"),
+    ],
+)
+def test_marker_parser_behaviour(markdown, expected):
+    """The discovery rule itself, pinned. The heuristic this replaced was never tested, which is
+    why its case-sensitivity bug survived a full review round."""
+    assert [p for _, p, _ in _complete_file_blocks(markdown)] == expected
 
 
 @pytest.mark.parametrize(
@@ -156,6 +226,49 @@ _ARTIFACTS = [
     REPO_ROOT / ".agents" / "superpowers" / "specs" / (
         "2026-07-22-pr7b-activation-platform-ordering-design.md"),
 ]
+
+
+# Claims that were asserted in an earlier revision, disproven by review, and corrected. Each is
+# banned by regex so it cannot be reasserted — every one of these survived at least one full
+# review round as live text contradicting the code, because prose has no compiler and a corrected
+# design leaves stale sentences behind in exactly the places nobody re-reads.
+_DISPROVEN_CLAIMS = [
+    (
+        r"NULL digest means\s+\"never delivered\"",
+        "the terminal digest is written in the fenced terminal transaction, so a 2xx followed by a "
+        "terminal fault leaves NULL while the platform holds the bytes. Use the four-state witness "
+        "taxonomy (delivery_witnessed / attempt_witnessed / legacy_unwitnessed / not_accepted).",
+    ),
+    (
+        r"backfill(?:ed|s)? (?:a )?(?:the )?historical digest|backfilled at 013",
+        "013 backfills no historical digest: payload_json is jsonb and normalizes key order, so "
+        "pre-013 sent bytes are unrecoverable and a computed digest would fabricate a witness.",
+    ),
+    (
+        r"keeps its\s+body indefinitely|body (?:is )?retained forever",
+        "retention redacts delivered and superseded decision-callback bodies past "
+        "KYC_RETENTION_DAYS; only the ROW survives indefinitely.",
+    ),
+    (
+        r"derive the (?:wire )?digest from `?payload_json|re-derive[sd]? the digest from",
+        "a wire digest may never be derived from stored JSONB — jsonb key order is not wire order.",
+    ),
+]
+
+
+@pytest.mark.parametrize("pattern,why", _DISPROVEN_CLAIMS, ids=lambda v: "" if " " in str(v) else v)
+@pytest.mark.parametrize("path", _ARTIFACTS, ids=lambda p: p.name)
+def test_artifact_does_not_reassert_a_disproven_claim(path, pattern, why):
+    """A design artifact must not contain a claim its own unit already disproved."""
+    text = path.read_text()
+    hits = [
+        f"line {i}: {line.strip()}"
+        for i, line in enumerate(text.splitlines(), 1)
+        if re.search(pattern, line, re.IGNORECASE)
+        # the ban list itself, and text explicitly recording the correction, are not violations
+        and "must not" not in line.lower() and "does NOT" not in line
+    ]
+    assert not hits, f"{path.name} reasserts a disproven claim — {why}\n" + "\n".join(hits)
 
 
 @pytest.mark.parametrize("path", _ARTIFACTS, ids=lambda p: p.name)

@@ -590,8 +590,10 @@ def test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersessio
     clock_fixed = threading.Event()
     a_done = threading.Event()
 
+    b_engine = create_engine(url)  # owned by the test, disposed in the finally below
+
     def run_b():
-        cb = create_engine(url).connect()
+        cb = b_engine.connect()
         tx = cb.begin()
         cb.execute(text("SELECT now()"))  # fixes B's txn-start now() (B.decided_at) EARLY
         clock_fixed.set()
@@ -610,24 +612,33 @@ def test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersessio
         tx.commit()
         cb.close()
 
-    tb = threading.Thread(target=run_b)
+    tb = threading.Thread(target=run_b, name="inversion-B")
     tb.start()
-    clock_fixed.wait(timeout=10)
-    time.sleep(0.1)  # ensure A's txn-start now() is strictly LATER than B's fixed clock
-    with eng.begin() as connA:  # A runs fully + commits → lower outbox.id, later decided_at
-        connA.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                           "actor_json, payload_json, event_sequence) VALUES ('evA','c1','rA','h','x',"
-                           "'{}'::jsonb,'{}'::jsonb,1)"))
-        connA.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
-                           "VALUES ('rA','c1','evA','PUBLISH_DECISION')"))
-        connA.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
-                           "buy_enablement, policy_shas, manual) VALUES ('dA','c1','rA','approve',10,"
-                           "'{}'::jsonb,'enabled','{}'::jsonb,false)"))
-        connA.execute(text("INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
-                           "VALUES ('decision_callback','c1','rA', "
-                           "CAST('{\"run_id\":\"rA\"}' AS jsonb),'pending')"))
-    a_done.set()
-    tb.join(timeout=10)
+    # B parks inside `a_done.wait()` holding an OPEN transaction. If anything below raises before
+    # `a_done.set()`, B blocks for its full timeout on a connection nobody closes, and the engine
+    # it borrowed from is never disposed — so the release, the join and the dispose all belong in
+    # a finally, and each wait must be ASSERTED: a silent `wait()` timeout here would let the test
+    # proceed with B's clock unfixed and quietly stop proving the inversion it exists to prove.
+    try:
+        assert clock_fixed.wait(timeout=10), "B never fixed its transaction clock"
+        time.sleep(0.1)  # ensure A's txn-start now() is strictly LATER than B's fixed clock
+        with eng.begin() as connA:  # A runs fully + commits → lower outbox.id, later decided_at
+            connA.execute(text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, "
+                               "event_type, actor_json, payload_json, event_sequence) VALUES "
+                               "('evA','c1','rA','h','x','{}'::jsonb,'{}'::jsonb,1)"))
+            connA.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                               "VALUES ('rA','c1','evA','PUBLISH_DECISION')"))
+            connA.execute(text("INSERT INTO decisions (id, case_id, run_id, decision, score, "
+                               "gates_json, buy_enablement, policy_shas, manual) VALUES "
+                               "('dA','c1','rA','approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false)"))
+            connA.execute(text("INSERT INTO outbox (kind, case_id, run_id, payload_json, status) "
+                               "VALUES ('decision_callback','c1','rA', "
+                               "CAST('{\"run_id\":\"rA\"}' AS jsonb),'pending')"))
+    finally:
+        a_done.set()
+        tb.join(timeout=15)
+        b_engine.dispose()
+    assert not tb.is_alive(), "thread B still running after join — its transaction is still open"
 
     with eng.connect() as conn:
         a_dt, a_oid = conn.execute(text("SELECT d.decided_at, o.id FROM decisions d "

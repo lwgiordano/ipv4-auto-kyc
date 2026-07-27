@@ -31,6 +31,9 @@ from tests.pg import EphemeralPostgres
 TEST_SECRET = "test-hmac-secret"
 
 _ALL_TABLES = (
+    # listed explicitly rather than relying on the outbox FK's TRUNCATE ... CASCADE, so the
+    # per-test reset does not silently stop clearing attempts if that FK ever changes.
+    "outbox_delivery_attempts",
     "outbox",
     "poc_tokens",
     "review_tasks",
@@ -270,6 +273,9 @@ class CallbackCapture:
                 "url": str(request.url),
                 "headers": dict(request.headers),
                 "body": json.loads(request.content),
+                # the UNPARSED bytes: the wire-digest tests must compare against what was actually
+                # transmitted, and re-encoding `body` would not reproduce it.
+                "raw": request.content,
             }
         )
         return httpx.Response(self.status_code)

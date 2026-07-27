@@ -71,17 +71,32 @@ def test_concurrent_decides_serialize_via_case_lock(session_factory, pipeline, p
         except Exception as e:  # noqa: BLE001 — capture a uniqueness race for the assertion
             errors.append(e)
 
-    ta = threading.Thread(target=decide, args=("ra", jid_a))
-    ta.start()
-    assert a_has_case_lock.wait(timeout=15)                 # A holds the case lock
-    tb = threading.Thread(target=decide, args=("rb", jid_b))
-    tb.start()
-    assert b_entered_load.wait(timeout=15)                  # B has entered _load
-    assert not b_returned_from_load.wait(timeout=2)         # ... and is BLOCKED on the FOR UPDATE
-    release_a.set()
-    ta.join(timeout=15)
-    tb.join(timeout=15)
-    assert not ta.is_alive() and not tb.is_alive()         # both terminated (no timeout-as-success)
+    # Every assertion below runs while thread A is parked inside `release_a.wait()` STILL HOLDING
+    # the Case row lock. If one fails outside a finally, A is never released and never joined: it
+    # sits on that lock for the full 20s wait, and every later test touching case 'cc' blocks
+    # behind it — so a single logical failure here would surface as unrelated timeouts elsewhere.
+    # The mutation witness (`not b_returned_from_load.wait`) is exactly the assertion designed to
+    # fail, which makes unconditional release load-bearing rather than defensive.
+    threads: list[threading.Thread] = []
+    try:
+        ta = threading.Thread(target=decide, args=("ra", jid_a), name="decide-A")
+        threads.append(ta)
+        ta.start()
+        assert a_has_case_lock.wait(timeout=15), "A never acquired the case lock"
+        tb = threading.Thread(target=decide, args=("rb", jid_b), name="decide-B")
+        threads.append(tb)
+        tb.start()
+        assert b_entered_load.wait(timeout=15), "B never entered _load"
+        assert not b_returned_from_load.wait(timeout=2), (
+            "B returned from _load while A held the case lock — the FOR UPDATE is not serializing"
+        )
+    finally:
+        release_a.set()
+        for t in threads:
+            t.join(timeout=20)
+    assert not [t.name for t in threads if t.is_alive()], (
+        f"worker thread(s) still running after join: {[t.name for t in threads if t.is_alive()]}"
+    )
 
     assert errors == []  # no uq_decisions_case_decision_sequence violation
     with session_factory() as s:

@@ -20,6 +20,7 @@ import json
 import os
 import socket
 import time
+import uuid
 from datetime import UTC, datetime
 
 import httpx
@@ -38,6 +39,20 @@ log = structlog.get_logger(__name__)
 
 DECISION_CALLBACK = "decision_callback"
 POC_EMAIL = "poc_email"
+
+# How the callback body is encoded on the wire. 7b-core never puts decision_sequence on the wire,
+# so every attempt it records is 'legacy'; 7b-activation introduces 'sequenced'. The vocabulary is
+# pinned by ck_attempt_wire_vocab, so an unknown value fails at the database rather than silently
+# becoming an uninterpretable witness.
+_WIRE_VERSION = "legacy"
+
+
+class _StaleClaim(Exception):
+    """Raised BEFORE any network traffic when the claim is no longer live.
+
+    Not a delivery failure: nothing was sent, so the caller must not record an attempt against a
+    row another claimant now owns.
+    """
 
 # Claim the min-id pending row of ONE (case_id, ordering_stream) FIFO stream, fencing it
 # with a fresh claim_token + lease. next_attempt_at is left as the retry due time (the
@@ -111,15 +126,16 @@ class OutboxPublisher:
 
     # -- delivery -----------------------------------------------------------
 
-    def _deliver_decision_callback(self, payload: dict) -> str:
-        """POST the callback. Returns the SHA-256 of the bytes actually sent.
+    def _build_callback_request(self, payload: dict) -> tuple[httpx.Request, str]:
+        """Build the signed callback request and the digest of the bytes it will put on the wire.
 
-        The digest is computed HERE, from the exact `body` handed to httpx, because this is the
-        only place those bytes exist. Re-deriving it later from `payload_json` would be wrong:
-        jsonb normalizes key order, so a stored payload cannot reproduce the sent bytes.
+        Returns `(request, wire_sha256)`. Split from the send so the digest is taken from
+        `request.content` — the bytes httpx will actually transmit — rather than from a
+        separately-encoded copy that merely happens to be equal today. Re-deriving the digest
+        later from `payload_json` would be wrong outright: jsonb normalizes key order, so a
+        stored payload cannot reproduce the sent bytes.
         """
         body = json.dumps(payload).encode()
-        wire_sha256 = hashlib.sha256(body).hexdigest()
         timestamp = str(time.time())
         url = f"{self.settings.platform_callback_url.rstrip('/')}/kyc/decision"
 
@@ -137,6 +153,11 @@ class OutboxPublisher:
             headers={"Content-Type": "application/json", "X-KYC-Timestamp": timestamp},
         )
         path_qs = request.url.raw_path.decode("ascii")
+        # Read the wire bytes back off the request rather than reusing `body`: this makes the
+        # digest structurally the thing that is sent, so a future change to how the body reaches
+        # httpx cannot silently decouple the witness from the wire.
+        wire = request.content
+        wire_sha256 = hashlib.sha256(wire).hexdigest()
 
         # v2 (path-bound) is always emitted; v1 is dual-emitted until the OUTBOUND
         # sunset so the platform can migrate its receiver on its own schedule
@@ -150,16 +171,57 @@ class OutboxPublisher:
             path_qs=path_qs,
             timestamp=timestamp,
             slot="",
-            body=body,
+            body=wire,
         )
         if not self._outbound_v1_sunset_passed():
             request.headers["X-KYC-Signature"] = security.sign(
-                self.settings.platform_hmac_secret, timestamp, body
+                self.settings.platform_hmac_secret, timestamp, wire
             )
+        return request, wire_sha256
 
+    def _deliver_decision_callback(self, payload: dict, *, outbox_id: int, token: str) -> str:
+        """Record the attempt, then POST it. Returns the digest of the bytes sent.
+
+        Raises `_StaleClaim` — before any network traffic — if the claim is no longer live.
+        """
+        request, wire_sha256 = self._build_callback_request(payload)
+        # COMMIT the attempt BEFORE the send. Everything about this ordering is the point: if the
+        # attempt were recorded after, or in the same transaction as the terminal, then the
+        # publisher's own proven residual (2xx received, terminal transaction faults, row stays
+        # pending) would leave the platform holding bytes the tool has no record of.
+        self._record_attempt(
+            outbox_id=outbox_id, token=token, wire_version=_WIRE_VERSION,
+            request_sha256=wire_sha256,
+        )
         response = self.http.send(request)
         response.raise_for_status()
         return wire_sha256
+
+    def _record_attempt(self, *, outbox_id: int, token: str, wire_version: str,
+                        request_sha256: str) -> str:
+        """Commit one immutable attempt row under the live claim. Returns its `attempt_id`.
+
+        Fenced on the same `(status, claim_token)` predicate as every terminal: a claimant whose
+        lease expired writes nothing here either, and — because this runs before the send — it
+        does not transmit at all. Raises `_StaleClaim` in that case.
+        """
+        attempt_id = str(uuid.uuid4())
+        with uow(self.session_factory) as session:
+            applied = session.execute(
+                text(
+                    "INSERT INTO outbox_delivery_attempts "
+                    "(attempt_id, outbox_id, claim_token, wire_version, request_sha256) "
+                    "SELECT :attempt_id, :outbox_id, :token, :wire_version, :sha "
+                    "WHERE EXISTS (SELECT 1 FROM outbox WHERE id=:outbox_id "
+                    "AND status='pending' AND claim_token=:token) "
+                    "RETURNING attempt_id"
+                ),
+                {"attempt_id": attempt_id, "outbox_id": outbox_id, "token": token,
+                 "wire_version": wire_version, "sha": request_sha256},
+            ).first()
+        if applied is None:
+            raise _StaleClaim(outbox_id)
+        return attempt_id
 
     def _outbound_v1_sunset_passed(self) -> bool:
         try:
@@ -170,10 +232,15 @@ class OutboxPublisher:
             return False
         return dt is not None and datetime.now(UTC) >= dt
 
-    def _deliver(self, kind: str, payload: dict) -> str | None:
-        """Returns the sent-bytes digest for a decision callback; None for a POC email."""
+    def _deliver(self, kind: str, payload: dict, *, outbox_id: int, token: str) -> str | None:
+        """Returns the sent-bytes digest for a decision callback; None for a POC email.
+
+        POC emails get no attempt row: they carry no wire digest, nothing reconciles them against
+        a remote ledger, and their duplicate-on-retry behaviour is the documented at-least-once
+        property (A6) rather than a gap in evidence.
+        """
         if kind == DECISION_CALLBACK:
-            return self._deliver_decision_callback(payload)
+            return self._deliver_decision_callback(payload, outbox_id=outbox_id, token=token)
         if kind == POC_EMAIL:
             self.email_sender.send(payload["to"], payload["subject"], payload["body"])
             return None
@@ -214,7 +281,13 @@ class OutboxPublisher:
                 return True
 
         try:
-            wire_sha256 = self._deliver(row.kind, row.payload_json)
+            wire_sha256 = self._deliver(row.kind, row.payload_json, outbox_id=row.id, token=token)
+        except _StaleClaim:
+            # The lease expired and a reclaimer owns the row. Nothing was sent, so this is not a
+            # delivery failure: recording one would burn an attempt and push back the backoff of
+            # a row this publisher no longer owns.
+            log.warning("outbox_stale_claim_presend", outbox_id=row.id)
+            return True
         except Exception as exc:  # noqa: BLE001 — a failed delivery must never kill the loop
             self._record_failure(row, str(exc), token)
             return True
@@ -240,7 +313,7 @@ class OutboxPublisher:
                 # parameter as both a value and a NULL test leaves its type indeterminate to
                 # psycopg, which rejects the statement outright.
                 {"id": row.id, "now": now, "token": token, "sha": wire_sha256,
-                 "wire_version": None if wire_sha256 is None else "legacy"},
+                 "wire_version": None if wire_sha256 is None else _WIRE_VERSION},
             ).first()
             if applied is None:
                 # stale loser: its lease expired and a reclaimer already finished this row.

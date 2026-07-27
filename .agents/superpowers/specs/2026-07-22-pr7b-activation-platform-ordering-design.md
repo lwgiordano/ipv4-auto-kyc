@@ -245,8 +245,12 @@ is the defect this finding was: the platform contract (§Platform integration), 
 `(case_id, run_id, decision_sequence, callback_wire_sha256, local_status)`. **Its universe and its
 source are now defined, not "agreed" (rev 3, `0ca264b` P1/F4):** the manifest is built from 7b-core's
 **durable ordering authority — the `outbox` row itself**, which 013 makes non-prunable (retention's
-outbox prune is narrowed to `kind='poc_email'`, so a delivered `decision_callback` row keeps its
-body indefinitely). `local_status` is `outbox.status`; neither is re-derived from the immutable
+outbox *delete* is narrowed to `kind='poc_email'`, so a `decision_callback` ROW survives
+indefinitely). Its **body does not**: past `KYC_RETENTION_DAYS` retention redacts `payload_json` on
+delivered and superseded callbacks, because the body carries `checks[].source`, which can be
+reviewer-derived. Everything the manifest consumes — ids, ordinals, status, the recorded digest —
+survives that redaction, so the manifest is unaffected; anything that needed the *body* would not
+be, and nothing does. `local_status` is `outbox.status`; neither is re-derived from the immutable
 `decisions` row, which cannot carry them. The universe is therefore **every** `decision_callback`
 row, with no exclusion window — the pre-rev-3 formulation could not survive a restored row being
 re-pruned, which would let bootstrap block or silently omit platform history. Exact two-sided
@@ -515,10 +519,27 @@ witness circular and proved nothing about what it received. Therefore:
   `wire_version` travels in the manifest entry and is persisted in the **signed, immutable bootstrap
   response artifact**, so the accepted encoding is evidence on both sides. The `legacy` encoding still
   **deterministically omits `decision_sequence`**, because the sender needs it when re-delivering a
-  pre-activation row and `013`'s backfill needs it to compute the historical digest at all.
-- **A NULL digest means "never delivered", and is honest rather than missing.** Callbacks that never
-  reached a 2xx have no sent bytes; the manifest carries them with a NULL digest and their
-  `local_status`, and reconciliation treats them as un-witnessed rather than mismatched.
+  pre-activation row. `013` computes **no** historical digest: `payload_json` is jsonb and
+  normalizes key order, so pre-013 sent bytes are unrecoverable and any digest derived from them
+  would be a fabricated witness.
+- **A NULL digest does NOT mean "never delivered".** An earlier revision of this spec said it did.
+  That was wrong, and reachably so: `outbox.callback_wire_sha256` is written in the fenced terminal
+  transaction, and 7b-core's own proven residual is that the receiver returns 2xx and that
+  transaction then faults, leaving the row `pending` with a NULL digest while the platform holds
+  the bytes. Reading NULL as "never delivered" would therefore be wrong in exactly the rows an
+  operator is reconciling. 013 closes the evidence gap with an immutable **pre-HTTP attempt
+  authority** (`outbox_delivery_attempts`), and the manifest carries one of four states — not a
+  nullable digest:
+  - `delivery_witnessed` — terminal committed with a digest; nothing to reconcile.
+  - `attempt_witnessed` — bytes were committed and transmitted, but no terminal digest exists.
+    Only the platform's accepted-request ledger settles it; the tool must not guess.
+  - `legacy_unwitnessed` — delivered before 013; no digest and none reconstructible. Reconciled on
+    `(case_id, run_id, decision_sequence)` and `local_status` alone.
+  - `not_accepted` — no attempt was ever committed, so nothing was transmitted. The only state in
+    which the tool may assert on its own evidence that the platform does not hold the callback.
+
+  The single definition of these states lives in `src/kyc_tool/outbox/witness.py`; the manifest
+  selects it rather than restating it.
 - **No sequenced HTTP emission may occur before `phase='active'`** — that is what makes the blanket
   `legacy` label sound. §2's phase matrix already enforces it (`legacy` strips the field;
   `bootstrap_in_progress`/`bootstrapped` refuse to claim or send; only `active`+flag emits), and it
@@ -651,3 +672,54 @@ this spec's digest contract and is a simplification, not an addition.
 - **NULL digest is defined**: a callback that never reached a 2xx has no sent bytes, so it appears in
   the manifest with a NULL digest and its `local_status`, and reconciliation treats it as
   un-witnessed rather than mismatched.
+
+## Revision note — rev 8 (2026-07-27): three contract items are OPEN and BLOCK PR 6b
+
+Re-review `45ad8b9` findings 3, 4 and 9 are 014-only. They are recorded here rather than folded,
+because each is a design decision rather than a correction, and 014 is not being built yet. **PR 6b
+must not be built against this contract until they are resolved** — 6b's coordinator-callback
+ordering depends on the release identity and the outcome authority defined below.
+
+The earlier NULL-digest correction above (rev 7 → this revision) already removed the reading these
+items were partly built on; they are restated here as requirements, not as settled design.
+
+- **O1 (was F3) — the manual-release authority is not yet executable or relationally bound.** This
+  spec defines a release row but no `release_id` columns, FKs or CHECKs across run → decision →
+  outbox, while requiring equality across exactly those surfaces and in JSON.
+  `manual.release_requested` has no payload model, no `EventType`, and no run plan; the current
+  dispatcher (`orchestration/triggers.py`) rejects it, and `api/auth.py` still accepts v1 when v2
+  headers are absent, with no mechanical requirement that the ordering phase be `active`.
+  **Required before 6b:** the exact request model (release id, requested manual event, an
+  authoritative deadline/TTL); a production-required non-blank platform principal; a verified-HMAC
+  *version* in the auth result, not just a verified/not verdict; an active-phase admission gate;
+  and a named recalculation plan. Add nullable release identity to run/decision/outbox with
+  all-NULL/all-non-NULL CHECKs and deferrable `MATCH FULL` same-case FKs through the existing
+  run/case/sequence chain, binding `(request_event_id, case_id, idempotency_key)` to an exact
+  `manual.release_requested` event. Prove every INSERT/UPDATE mismatch, a pre-HTTP field tamper
+  with zero HTTP, crash rollback, and same-key replay.
+
+- **O2 (was F4) — the two-system release outcome cannot converge, and no-traffic expiry is
+  unproven.** The platform owns the final CAS while the tool owns an immutable
+  `completed|cancelled|expired` outcome; those cannot both be authoritative under one DB lock. The
+  publisher treats every 2xx alike and ignores response content, so a platform-side no-op or cancel
+  is unlearnable by the tool. "Reaper or lazy transition, whichever implementation picks" is not a
+  decision, and lazy next-touch provably cannot satisfy a restart-with-no-traffic expiry.
+  **Required before 6b:** make the platform the sole terminal and expiry authority. Its CAS/reaper
+  transaction writes the result and enqueues a signed, retried
+  `manual.release_outcome(case_id, release_id, manual_event_id, accepted_sequence,
+  applied|cancelled|expired)`. The tool mirrors only that event — idempotent on same-state,
+  fail-closed on a conflicting terminal — and may alert on an overdue mirror but must never choose
+  expiry itself. Name the DB-time reaper, its cadence, its lock query and lock order, the deadline
+  authority, and commit-before-publish recovery. Prove response loss, event loss, duplicate and
+  out-of-order outcomes, no-traffic restart expiry, callback-vs-expiry and M2-vs-expiry in **both**
+  lock orders, and that a platform 2xx no-op never becomes a local `completed`.
+
+- **O3 (was F9) — release-id scope contradicts its own text, and governance is unwritten.**
+  `(case_id, release_id)` permits one release id on two cases while the prose requires the second to
+  be rejected. **Required before 6b:** a global `UNIQUE(release_id)` returning 409 and rolling back
+  the losing event/run/job; a test with two concurrent cases proving exactly one admitted and zero
+  loser orphans. Expand the canonical 014 ROADMAP row; record the local-extension / two-system
+  authority decision in `AUDIT_FINDINGS.md`; define request, outcome, reaper and recovery in
+  `PLATFORM_INTEGRATION`, `DEPLOYMENT` and `RUNBOOK`; and add static parity assertions pinning the
+  exact event, state and setting names — none of `manual.release_requested`,
+  `outbox_manual_release`, or the outcome/reaper contract currently appears in any of them.

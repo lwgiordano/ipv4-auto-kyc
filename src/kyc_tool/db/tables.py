@@ -10,6 +10,7 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -334,6 +335,41 @@ class Outbox(Base):
             ["decisions.run_id", "decisions.case_id", "decisions.decision_sequence"],
             name="fk_outbox_decision_triple",
         ),
+    )
+
+
+class OutboxDeliveryAttempt(Base):
+    """Immutable record that specific bytes were handed to the network (PR 7b-core, 013).
+
+    Written and COMMITTED before the HTTP send, under the claim that authorized it. This is the
+    only witness that survives the send-before-stamp gap — the publisher's documented residual
+    where the receiver returns 2xx and the terminal transaction then faults, leaving the row
+    `pending`. `outbox.callback_wire_sha256` is written in that terminal, so on its own a NULL
+    digest cannot distinguish "never sent" from "sent, and we lost the record" — and treating it
+    as "never sent" would be wrong precisely in the case that needs reconciling.
+
+    Insert-only. Never updated, never deleted except by retention and by the outbox row's own
+    cascade. There is deliberately no "this attempt won" column: identical bytes are one event to
+    the receiver, so a winner flag would be a derived fact free to contradict its own source.
+    """
+
+    __tablename__ = "outbox_delivery_attempts"
+
+    attempt_id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    outbox_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("outbox.id", name="fk_attempt_outbox", ondelete="CASCADE")
+    )
+    claim_token: Mapped[str] = mapped_column(UUID(as_uuid=False))
+    wire_version: Mapped[str] = mapped_column(Text)  # legacy | sequenced
+    request_sha256: Mapped[str] = mapped_column(Text)
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
+    )
+
+    __table_args__ = (
+        Index("ix_attempt_outbox", "outbox_id", text("attempted_at DESC")),
+        CheckConstraint("request_sha256 ~ '^[0-9a-f]{64}$'", name="ck_attempt_sha_shape"),
+        CheckConstraint("wire_version IN ('legacy','sequenced')", name="ck_attempt_wire_vocab"),
     )
 
 

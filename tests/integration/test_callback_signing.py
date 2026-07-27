@@ -28,7 +28,12 @@ def _deliver(session_factory, settings):
     pub = OutboxPublisher(
         session_factory, settings, http_client=httpx.Client(transport=httpx.MockTransport(handler))
     )
-    pub._deliver_decision_callback(PAYLOAD)
+    # Build-and-send only: this suite is about what goes on the wire, so it deliberately does NOT
+    # go through `_deliver_decision_callback`, which additionally commits an attempt row and
+    # therefore needs a real claimed outbox row. The attempt authority is proven in
+    # tests/integration/test_outbox_attempts.py.
+    request, _ = pub._build_callback_request(PAYLOAD)
+    pub.http.send(request).raise_for_status()
     return captured
 
 
