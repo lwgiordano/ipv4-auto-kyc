@@ -5,7 +5,7 @@
 PR 7b was split (user decision, 2026-07-22) into **7b-core** (migration `013`, **pending/planned** —
 not yet shipped: stream separation, an internal per-case `decision_sequence` + locked counter, a
 **best-effort local** `superseded` guard, a **fenced** claim, per-case + triple-identity constraints,
-status/lifecycle CHECKs) and **7b-activation** (this doc, migration `014`, `down_revision='013'`).
+status/lifecycle CHECKs) and **7b-activation** (this doc, migration `015`, `down_revision='014'`).
 7b-core closes the mixed-FIFO defect locally and **mitigates** the requeue revert with a best-effort
 guard that fires **only when a higher delivery was locally stamped** — the **single-publisher
 send-before-stamp revert AND the cross-replica revert both remain open** for this unit's platform
@@ -41,7 +41,7 @@ closed; PR 6b gets a truthful convergence witness.** PR 6b's *activation* consum
 
 ## Architecture
 
-### 1. Migration 014 (`down_revision='013'`)
+### 1. Migration 015 (`down_revision='014'`)
 
 Adds only what activation needs (7b-core's `013` already carries stream/sequence/claim/identity):
 
@@ -78,7 +78,7 @@ Adds only what activation needs (7b-core's `013` already carries stream/sequence
 
 **Payload ownership boundary (rev-6 P3):** 013 (7b-core) writes `decision_sequence` **only to the
 `decisions`/`outbox` columns** and keeps `payload_json` **and the HTTP body byte-identical** to pre-7b
-— it puts nothing on the wire and owns no phase reader. **014 owns the callback-JSON field**: it
+— it puts nothing on the wire and owns no phase reader. **015 owns the callback-JSON field**: it
 (a) **backfills** the internal field into every surviving legacy `decision_callback.payload_json` from
 the FK-bound column, and (b) **adds** it to newly-enqueued callback payloads. Neither the pipeline nor
 013 flag-gates anything. All emission lives at `_deliver_decision_callback` (`publisher.py:82-122`),
@@ -93,7 +93,7 @@ governed by `read_ordering_phase(session) → (phase, flag)`:
 
 Checked **before claim** and **again immediately before HTTP** (phase can advance between). Config
 (`config.py:77-79`): `callback_include_decision_sequence: bool = False`; schema
-(`api/schemas.py:144-164`): `decision_sequence: int | None = None`. (014's payload backfill, defined
+(`api/schemas.py:144-164`): `decision_sequence: int | None = None`. (015's payload backfill, defined
 in the ownership boundary above, is what lets a pre-flag pending/dead callback emit correctly after
 activation and never strand.)
 
@@ -169,7 +169,7 @@ shared transaction between the platform and the tool, so ownership must be split
 | Owner | Owns |
 |---|---|
 | **Platform** | effective source, current `manual_event_id`, pending release id + deadline + operator, `h(c)`, and the **final atomic source swap** |
-| **Tool (014)** | a durable `outbox_manual_release` record keyed `(case_id, release_id)`: the signed request/event id, the requested `manual_event_id`, the authorized principal, the deadline, an immutable outcome `pending|completed|expired|cancelled`, and the bound `run_id`/`decision_sequence` |
+| **Tool (015)** | a durable `outbox_manual_release` record keyed `(case_id, release_id)`: the signed request/event id, the requested `manual_event_id`, the authorized principal, the deadline, an immutable outcome `pending|completed|expired|cancelled`, and the bound `run_id`/`decision_sequence` |
 
 Neither side may infer the other's state. The tool's record is what makes the saga recoverable after
 a lost response; the platform's swap is what makes it authoritative.
@@ -380,15 +380,15 @@ bound sequence; the discarded pre-release callbacks never satisfy it.
 
 ## Testing strategy (real Postgres, each with a mutation witness)
 
-- **Migration 014:** `failure_class` + activation singleton + artifacts; direct SQL for every illegal
+- **Migration 015:** `failure_class` + activation singleton + artifacts; direct SQL for every illegal
   phase tuple (`active`/`bootstrapped` without digests/artifacts, reverse transition, out-of-order
   timestamps) fails; `integrity_mismatch` lifecycle CHECK enforced; `up→down→up` clean on a legacy
   schema; downgrade **refuses** once `phase != 'legacy'`.
 - **Payload-ownership boundary (rev-6 P3):** after **013**, the DB `payload_json` **and** the wire body
-  contain **no** `decision_sequence`; after the **014** migration, existing pending/dead
-  `decision_callback.payload_json` contains the FK-bound value and a newly-enqueued 014 callback
+  contain **no** `decision_sequence`; after the **015** migration, existing pending/dead
+  `decision_callback.payload_json` contains the FK-bound value and a newly-enqueued 015 callback
   contains it internally; `legacy` still emits the pre-7b bytes; `active` emits it. Mutations —
-  adding the JSON field in 013, or omitting either the 014 legacy-backfill or the 014 new-enqueue
+  adding the JSON field in 013, or omitting either the 015 legacy-backfill or the 015 new-enqueue
   writer — must fail.
 - **Wire emission + silent-loss window:** create pending **and** dead callbacks while `legacy`; enter
   `bootstrap_in_progress`; barrier an old `legacy`/false-flag publisher immediately before HTTP and
@@ -493,7 +493,7 @@ as `reviewer:<reviewer_id>` (`validators/website.py:13-20`) — so an honest pla
 it accepted would have disagreed with us, while a platform echoing our SQL value would have made the
 witness circular and proved nothing about what it received. Therefore:
 
-- 014 defines **one codec with an explicit wire schema**,
+- 015 defines **one codec with an explicit wire schema**,
   `encode_decision_callback(payload, wire_version) -> bytes`, where `wire_version` is `"legacy"` or
   `"sequenced"`, and **both** `_deliver_decision_callback` and the manifest exporter use its exact
   output. Neither may encode independently. Changing either encoding is a versioned change, because
@@ -507,14 +507,14 @@ witness circular and proved nothing about what it received. Therefore:
   high-water from `decision_sequence` + `local_status` and performs no digest comparison, which is the
   truthful treatment of history nobody recorded.
   This is what makes the historical witness sound, and it closes F1 at the root rather than working
-  around it. Re-deriving was unsound because 014 backfills `decision_sequence` into every surviving
+  around it. Re-deriving was unsound because 015 backfills `decision_sequence` into every surviving
   legacy `decision_callback.payload_json` (§2) while pre-activation HTTP sent a body **without** that
   field — so hashing the stored payload produced a digest the platform never saw. The trigger was
   reachable, not theoretical: a legacy callback gets a 2xx, the local delivered stamp faults
-  (send-before-stamp, the residual 7b-core documents), the row stays `pending`, and after 014 the
+  (send-before-stamp, the residual 7b-core documents), the row stays `pending`, and after 015 the
   ledger holds the legacy digest while the exporter produces the sequenced one — bootstrap failing on
   honest history with neither side corrupt. Recording the digest when the bytes exist removes the
-  reconstruction step, and with it that entire failure mode: **014's payload backfill can no longer
+  reconstruction step, and with it that entire failure mode: **015's payload backfill can no longer
   change any digest, because no digest is computed from a payload.**
   `wire_version` travels in the manifest entry and is persisted in the **signed, immutable bootstrap
   response artifact**, so the accepted encoding is evidence on both sides. The `legacy` encoding still
@@ -527,16 +527,21 @@ witness circular and proved nothing about what it received. Therefore:
   transaction, and 7b-core's own proven residual is that the receiver returns 2xx and that
   transaction then faults, leaving the row `pending` with a NULL digest while the platform holds
   the bytes. Reading NULL as "never delivered" would therefore be wrong in exactly the rows an
-  operator is reconciling. 013 closes the evidence gap with an immutable **pre-HTTP attempt
-  authority** (`outbox_delivery_attempts`), and the manifest carries one of four states — not a
-  nullable digest:
+  operator is reconciling. Repair revision `014` closes the evidence gap with an immutable
+  **pre-HTTP attempt authority** (`outbox_delivery_attempts`) plus a `witness_generation` marker
+  (`legacy` | `attempt_v1`), and the manifest carries one of four states — not a nullable digest:
   - `delivery_witnessed` — terminal committed with a digest; nothing to reconcile.
-  - `attempt_witnessed` — bytes were committed and transmitted, but no terminal digest exists.
+  - `send_intent_witnessed` — the exact bytes were durably committed BEFORE any transmission was
+    tried; the send may or may not have followed (renamed from `attempt_witnessed`, which
+    overclaimed transmission — there is no atomic boundary between a DB commit and a socket).
     Only the platform's accepted-request ledger settles it; the tool must not guess.
-  - `legacy_unwitnessed` — delivered before 013; no digest and none reconstructible. Reconciled on
-    `(case_id, run_id, decision_sequence)` and `local_status` alone.
-  - `not_accepted` — no attempt was ever committed, so nothing was transmitted. The only state in
-    which the tool may assert on its own evidence that the platform does not hold the callback.
+  - `legacy_unwitnessed` — any `witness_generation='legacy'` row without a digest, in ANY status:
+    the pre-authority publisher sent HTTP before any durable record, so a legacy `pending`/`dead`
+    row may well have reached the platform and must never be read as never-transmitted (re-audit
+    `1f8412e` F2). Reconciled on `(case_id, run_id, decision_sequence)` and `local_status` alone.
+  - `not_accepted` — an `attempt_v1` row with no attempt: the record-intent-first rule held for
+    the row's whole life, so nothing was ever staged. The only state in which the tool may assert
+    on its own evidence that the platform does not hold the callback.
 
   The single definition of these states lives in `src/kyc_tool/outbox/witness.py`; the manifest
   selects it rather than restating it.
@@ -557,7 +562,7 @@ witness circular and proved nothing about what it received. Therefore:
   semantic equality, both sides in Postgres. It is never exported in the manifest and never described
   as a body digest.
 
-**Required proof:** a legacy-delivered callback still matches its legacy digest **after** 014's
+**Required proof:** a legacy-delivered callback still matches its legacy digest **after** 015's
 backfill has added `decision_sequence` to its stored payload; a legacy HTTP-success whose local
 stamp faulted still reconciles; the first post-`active` delivery uses only sequenced bytes; and a
 pre-`active` send is byte-identical to 7b-core. **Mutation:** make the exporter always use the
@@ -570,7 +575,7 @@ independent encoder — the equality test must fail.
 
 ## Revision note — rev 4 (2026-07-25)
 
-Folds the two 014-owned findings from Codex's 7b-core rev-6 re-review (`99df3d2`). Rev 3's accepted
+Folds the two 015-owned findings from Codex's 7b-core rev-6 re-review (`99df3d2`). Rev 3's accepted
 controls are unchanged; core (`013`) gains nothing from this revision, per that review's explicit
 instruction not to re-merge activation into core.
 
@@ -598,7 +603,7 @@ instruction not to re-merge activation into core.
 
 ## Revision note — rev 5 (2026-07-26)
 
-Folds the 014-owned finding F2 from Codex's post-rev-6 re-review (`6a408a3`). Rev 4's release
+Folds the 015-owned finding F2 from Codex's post-rev-6 re-review (`6a408a3`). Rev 4's release
 machine was directionally right and mechanically unsafe; this replaces the mechanism, not the
 product decision (release exists; suppressed callbacks are discarded — unchanged, human-decided).
 
@@ -611,7 +616,7 @@ product decision (release exists; suppressed callbacks are discarded — unchang
   orders end with M2 effective. The required proof runs that interleaving in both orders.
 - **"Persisted on the case" conflated two systems.** There is no shared transaction between platform
   and tool, so ownership is now split explicitly: the platform owns effective source, current
-  `manual_event_id`, pending release/deadline/operator, `h(c)`, and the final atomic swap; 014 owns a
+  `manual_event_id`, pending release/deadline/operator, `h(c)`, and the final atomic swap; 015 owns a
   durable `outbox_manual_release` record keyed `(case_id, release_id)` with an immutable
   `pending|completed|expired|cancelled` outcome. A partial unique index enforces **one open release
   per case in the database** rather than by check-then-act, and terminal outcomes are trigger-immutable
@@ -629,15 +634,15 @@ product decision (release exists; suppressed callbacks are discarded — unchang
 
 ## Revision note — rev 6 (2026-07-26)
 
-Folds the remaining 014-owned finding F1 from Codex's post-rev-6 re-review (`6a408a3`).
+Folds the remaining 015-owned finding F1 from Codex's post-rev-6 re-review (`6a408a3`).
 
 - **The historical manifest could not reproduce the bytes the platform accepted.** Rev 5 defined one
   codec, `encode_decision_callback(payload)`, and pointed both the sender and the exporter at it —
-  which fixed the *encoder* disagreement but not the *payload* disagreement. 014 backfills
+  which fixed the *encoder* disagreement but not the *payload* disagreement. 015 backfills
   `decision_sequence` into every surviving legacy `decision_callback.payload_json`, while
   pre-activation HTTP sent a body without that field, so the exporter hashed a body that was never
   sent. The trigger is reachable: a legacy callback takes a 2xx, its local delivered stamp faults
-  (the send-before-stamp residual 7b-core documents), the row stays `pending`, and after 014 the
+  (the send-before-stamp residual 7b-core documents), the row stays `pending`, and after 015 the
   platform ledger holds the legacy digest while the exporter produces the sequenced one — bootstrap
   fails on honest history with neither side corrupt.
   **Resolution:** the codec takes an explicit wire schema,
@@ -650,7 +655,7 @@ Folds the remaining 014-owned finding F1 from Codex's post-rev-6 re-review (`6a4
   `legacy` label sound — and the spec names the delivery-attempt record that would become mandatory
   if any future phase could emit both encodings.
 - **The core spec's stale cross-reference is removed.** It still described
-  `stored_payload_jsonb_digest` as the expression "014's manifest" uses, contradicting its own later
+  `stored_payload_jsonb_digest` as the expression "015's manifest" uses, contradicting its own later
   correction that the SQL digest is restore-only and never a received-body witness.
 
 ## Revision note — rev 7 (2026-07-26)
@@ -661,7 +666,7 @@ this spec's digest contract and is a simplification, not an addition.
 - **The manifest no longer re-derives `callback_wire_sha256` from a stored payload — it selects the
   recorded value.** Rev 6 fixed F1 by labelling the encoding (`legacy`/`sequenced`) so the exporter
   could reconstruct historical bytes correctly. Recording the digest in the delivery transaction
-  removes the reconstruction entirely: 014's `decision_sequence` payload backfill can no longer
+  removes the reconstruction entirely: 015's `decision_sequence` payload backfill can no longer
   change a digest, because no digest is computed from a payload. `wire_version` remains, as a
   recorded fact and as the encoding the sender uses when re-delivering a pre-activation row.
 - **It also unblocks 7b-core's retention question.** Because the witness is a recorded hash rather
@@ -675,8 +680,8 @@ this spec's digest contract and is a simplification, not an addition.
 
 ## Revision note — rev 8 (2026-07-27): three contract items are OPEN and BLOCK PR 6b
 
-Re-review `45ad8b9` findings 3, 4 and 9 are 014-only. They are recorded here rather than folded,
-because each is a design decision rather than a correction, and 014 is not being built yet. **PR 6b
+Re-review `45ad8b9` findings 3, 4 and 9 are 015-only. They are recorded here rather than folded,
+because each is a design decision rather than a correction, and 015 is not being built yet. **PR 6b
 must not be built against this contract until they are resolved** — 6b's coordinator-callback
 ordering depends on the release identity and the outcome authority defined below.
 
@@ -718,7 +723,7 @@ items were partly built on; they are restated here as requirements, not as settl
   `(case_id, release_id)` permits one release id on two cases while the prose requires the second to
   be rejected. **Required before 6b:** a global `UNIQUE(release_id)` returning 409 and rolling back
   the losing event/run/job; a test with two concurrent cases proving exactly one admitted and zero
-  loser orphans. Expand the canonical 014 ROADMAP row; record the local-extension / two-system
+  loser orphans. Expand the canonical 015 ROADMAP row; record the local-extension / two-system
   authority decision in `AUDIT_FINDINGS.md`; define request, outcome, reaper and recovery in
   `PLATFORM_INTEGRATION`, `DEPLOYMENT` and `RUNBOOK`; and add static parity assertions pinning the
   exact event, state and setting names — none of `manual.release_requested`,

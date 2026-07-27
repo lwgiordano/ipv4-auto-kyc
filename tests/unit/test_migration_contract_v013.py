@@ -18,3 +18,23 @@ def test_v013_backfill_contract_is_frozen():
         "v013_backfill.py is a FROZEN historical migration contract — do NOT re-pin this hash; "
         "create migration_contracts/v014_*.py for any later semantics."
     )
+
+
+# --- the migration FILE itself is frozen too (re-audit 1f8412e F1) ---
+# 013 was once amended in place after being committed: the attempt-authority table was added to
+# the already-published revision, so a database stamped '013' by the original file would never
+# receive it — Alembic performs no work for a recorded revision, and fresh-database CI passes on
+# both shapes, so nothing structural catches the split. Repair revision 014 exists because of
+# that mistake. This hash makes the failure mode a test failure instead of a re-audit finding:
+# ANY change to 013 must ship as a NEW revision. NEVER re-pin.
+_MIGRATION_013 = REPO_ROOT / "alembic" / "versions" / "013_outbox_stream_separation.py"
+MIGRATION_013_SHA = "4c0ead28c1a57a7ed1d726ea204c54ca41390d0cb4d8477a96c409376b9580aa"
+
+
+def test_migration_013_file_is_frozen():
+    got = hashlib.sha256(_MIGRATION_013.read_bytes()).hexdigest()
+    assert got == MIGRATION_013_SHA, (
+        "alembic/versions/013_outbox_stream_separation.py is FROZEN — editing a committed "
+        "revision in place silently skips the edit on every database already stamped '013'. "
+        "Ship the change as a NEW revision (015+); do NOT re-pin this hash."
+    )

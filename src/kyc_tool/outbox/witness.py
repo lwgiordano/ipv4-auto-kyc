@@ -5,29 +5,37 @@ any two produces a reconciliation that is confidently wrong rather than usefully
 
 - ``delivery_witnessed`` — the terminal transaction committed with a digest. The tool sent these
   exact bytes and the receiver returned 2xx. Nothing to reconcile.
-- ``attempt_witnessed`` — bytes were committed to an attempt row and handed to the network, but no
-  terminal digest exists. This is the send-before-stamp gap: the receiver may well hold these
-  bytes. Only the platform's own accepted-request ledger can settle it. The tool must not guess.
-- ``legacy_unwitnessed`` — delivered before migration 013, so there is no digest and no attempt.
-  The sent bytes are unrecoverable **by construction**: ``payload_json`` is jsonb and normalizes
-  key order, so any digest computed from it now would be a fabricated witness for bytes nobody can
-  reproduce. These rows are reconciled on ``(case_id, run_id, decision_sequence)`` and local
-  status alone.
-- ``not_accepted`` — no attempt was ever recorded, so nothing was transmitted. This is the only
+- ``send_intent_witnessed`` — the exact bytes were durably committed to an attempt row under a
+  live claim, before any transmission was tried. The send may then have happened (and even been
+  accepted — the send-before-stamp residual) or the process may have died before the socket ever
+  opened. Local evidence CANNOT tell those apart, which is why this state is named for what it
+  proves — staged intent — and not "attempt_witnessed" or "transmitted": there is no atomic
+  boundary between a database commit and the network, and pretending one exists is how the
+  previous two designs went wrong. Only the platform's accepted-request ledger settles this row.
+- ``legacy_unwitnessed`` — created before the attempt authority existed (``witness_generation =
+  'legacy'``), in ANY status. A legacy `delivered` row's digest is unrecoverable by construction
+  (``payload_json`` is jsonb and normalizes key order — a digest computed now would be a
+  fabricated witness). A legacy `pending`/`dead` row is just as opaque: the pre-authority
+  publisher sent HTTP before any durable record, so such a row may well have reached the
+  platform. The absence of an attempt proves NOTHING about a legacy row. These reconcile on
+  ``(case_id, run_id, decision_sequence)`` and local status alone.
+- ``not_accepted`` — created under the attempt regime (``witness_generation = 'attempt_v1'``)
+  with no attempt row: nothing was ever staged, so nothing was transmitted. This is the ONLY
   state in which "the platform does not have this callback" is a claim the tool can make on its
-  own evidence.
+  own evidence — and it is only sound because the generation marker says the record-intent-first
+  rule was in force for this row's whole life.
 
 The reading a NULL digest USED to invite — "NULL means never delivered" — is exactly the error
-this taxonomy exists to prevent. It is false for both ``attempt_witnessed`` and
-``legacy_unwitnessed``, and those are precisely the rows an operator would be reconciling.
+this taxonomy exists to prevent. It is false for ``send_intent_witnessed`` and for every
+``legacy_unwitnessed`` row, and those are precisely the rows an operator would be reconciling.
 """
 
 DELIVERY_WITNESSED = "delivery_witnessed"
-ATTEMPT_WITNESSED = "attempt_witnessed"
+SEND_INTENT_WITNESSED = "send_intent_witnessed"
 LEGACY_UNWITNESSED = "legacy_unwitnessed"
 NOT_ACCEPTED = "not_accepted"
 
-WITNESS_STATES = (DELIVERY_WITNESSED, ATTEMPT_WITNESSED, LEGACY_UNWITNESSED, NOT_ACCEPTED)
+WITNESS_STATES = (DELIVERY_WITNESSED, SEND_INTENT_WITNESSED, LEGACY_UNWITNESSED, NOT_ACCEPTED)
 
 # The single definition. Anything that classifies a row — reconciliation, ops tooling, tests —
 # selects this expression rather than reimplementing the CASE, so there is no second copy to
@@ -36,9 +44,9 @@ WITNESS_SQL = f"""
 CASE
     WHEN o.callback_wire_sha256 IS NOT NULL THEN '{DELIVERY_WITNESSED}'
     WHEN EXISTS (SELECT 1 FROM outbox_delivery_attempts a WHERE a.outbox_id = o.id)
-        THEN '{ATTEMPT_WITNESSED}'
-    WHEN o.status = 'delivered' THEN '{LEGACY_UNWITNESSED}'
-    ELSE '{NOT_ACCEPTED}'
+        THEN '{SEND_INTENT_WITNESSED}'
+    WHEN o.witness_generation = 'attempt_v1' THEN '{NOT_ACCEPTED}'
+    ELSE '{LEGACY_UNWITNESSED}'
 END
 """
 
@@ -53,7 +61,7 @@ END
 # Order by `id` — enqueue order, which 013 established as the local ordering authority — never by
 # a timestamp, which does not order these rows across replicas.
 WITNESS_SELECT = f"""
-SELECT o.id, o.case_id, o.run_id, o.decision_sequence, o.status,
+SELECT o.id, o.case_id, o.run_id, o.decision_sequence, o.status, o.witness_generation,
        o.callback_wire_sha256, o.wire_version, ({WITNESS_SQL}) AS witness
 FROM outbox o
 WHERE o.kind = 'decision_callback'

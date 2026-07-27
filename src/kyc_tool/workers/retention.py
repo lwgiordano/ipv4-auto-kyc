@@ -66,7 +66,7 @@ def prune(session_factory, retention_days: int) -> dict[str, int]:
         # Attempt rows are pruned ONLY for callbacks that already carry a terminal digest. That
         # restriction is load-bearing, not tidiness: for any non-delivered row the attempt IS the
         # only evidence that bytes were transmitted, and deleting it would silently reclassify the
-        # row from `attempt_witnessed` ("sent; the platform must say whether it accepted") to
+        # row from `send_intent_witnessed` ("staged for the wire; only the platform can say more") to
         # `not_accepted` ("nothing was ever transmitted") — the one state in which this tool is
         # entitled to assert non-delivery on its own evidence. A retention job must never
         # manufacture that claim. Once `callback_wire_sha256` is set the row is

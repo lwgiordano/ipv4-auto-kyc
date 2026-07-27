@@ -33,12 +33,17 @@ def get_case(case_id: str, request: Request) -> dict:
         if case is None:
             raise HTTPException(status_code=404, detail="case not found")
         live = checkstore.live_checks(session, case_id)
-        latest = session.execute(
-            select(DecisionRow)
-            .where(DecisionRow.case_id == case_id)
-            .order_by(DecisionRow.decided_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+        # Gates come through cases.latest_decision_row_id — the trigger-maintained pointer set in
+        # the same transaction as every decision insert — NEVER by decided_at: now() is
+        # transaction-start time, so two case-locked decides can commit in one order while their
+        # decided_at values sit in the other, and an ORDER BY decided_at read here once paired
+        # the current decision with the PREVIOUS decision's gates (re-audit 1f8412e F4). A NULL
+        # pointer with decisions present (an ambiguous pre-014 history) returns empty gates —
+        # honest ignorance over a guess — and heals on the case's next decision.
+        latest = (
+            session.get(DecisionRow, case.latest_decision_row_id)
+            if case.latest_decision_row_id else None
+        )
         return {
             "case_id": case.id,
             "status": case.status,

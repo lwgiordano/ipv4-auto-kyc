@@ -59,6 +59,21 @@ class Case(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
     )
+    # PR 7b-core (migration 014): the atomic latest-decision authority. Maintained by a DB
+    # trigger on decisions INSERT (same transaction, both decide paths), NEVER derived from
+    # decided_at — now() is transaction-start time and can invert against the lock-serialized
+    # commit order, which is exactly how the read API once paired a decision with the previous
+    # decision's gates. Composite FK pins it to a decision of THIS case.
+    latest_decision_row_id: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["latest_decision_row_id", "id"],
+            ["decisions.id", "decisions.case_id"],
+            name="fk_cases_latest_decision",
+            use_alter=True,  # cases↔decisions FKs are circular at the table level
+        ),
+    )
 
 
 class Event(Base):
@@ -244,6 +259,9 @@ class DecisionRow(Base):
         UniqueConstraint("run_id", name="uq_decisions_run_id"),
         UniqueConstraint("case_id", "decision_sequence", name="uq_decisions_case_decision_sequence"),
         UniqueConstraint("run_id", "case_id", "decision_sequence", name="uq_decisions_run_case_sequence"),
+        # target of cases.fk_cases_latest_decision (migration 014): PG requires the referenced
+        # column pair to carry its own unique constraint even though id alone is the PK.
+        UniqueConstraint("id", "case_id", name="uq_decisions_id_case_id"),
         ForeignKeyConstraint(
             ["run_id", "case_id"], ["runs.id", "runs.case_id"], name="fk_decisions_run_case"
         ),
@@ -315,6 +333,14 @@ class Outbox(Base):
     # delivered before 013 (jsonb normalizes key order, so those sent bytes are unrecoverable).
     callback_wire_sha256: Mapped[str | None] = mapped_column(Text)
     wire_version: Mapped[str | None] = mapped_column(Text)
+    # PR 7b-core (migration 014): which witness regime this row was created under. 'legacy'
+    # rows predate the pre-HTTP attempt authority, so an absent attempt proves nothing about
+    # them; only an 'attempt_v1' row with no attempt is provably never-transmitted. The DB
+    # default is 'legacy' — the fail-closed direction: a write path that forgets to stamp
+    # degrades to over-caution (legacy_unwitnessed), never to a false proof of non-delivery.
+    witness_generation: Mapped[str] = mapped_column(
+        Text, server_default=text("'legacy'"), default="legacy"
+    )
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
@@ -335,22 +361,40 @@ class Outbox(Base):
             ["decisions.run_id", "decisions.case_id", "decisions.decision_sequence"],
             name="fk_outbox_decision_triple",
         ),
+        # migration 014: the live alerting predicate is (pending, dead); 013's pending-only
+        # partial indexes cannot serve it, and terminal history grows for the life of the system.
+        Index(
+            "ix_outbox_live_status", "status",
+            postgresql_where=text("status IN ('pending','dead')"),
+        ),
+        CheckConstraint(
+            "witness_generation IN ('legacy','attempt_v1')", name="ck_outbox_witness_generation"
+        ),
+        # a terminal digest is only writable on a delivered row — otherwise a raw digest on a
+        # pending row reads as delivery_witnessed and licenses deleting its real attempts.
+        CheckConstraint(
+            "callback_wire_sha256 IS NULL OR status = 'delivered'",
+            name="ck_outbox_wire_witness_delivered",
+        ),
     )
 
 
 class OutboxDeliveryAttempt(Base):
-    """Immutable record that specific bytes were handed to the network (PR 7b-core, 013).
+    """Immutable record that specific bytes were durably STAGED for the wire (PR 7b-core, 014).
 
-    Written and COMMITTED before the HTTP send, under the claim that authorized it. This is the
-    only witness that survives the send-before-stamp gap — the publisher's documented residual
-    where the receiver returns 2xx and the terminal transaction then faults, leaving the row
-    `pending`. `outbox.callback_wire_sha256` is written in that terminal, so on its own a NULL
-    digest cannot distinguish "never sent" from "sent, and we lost the record" — and treating it
-    as "never sent" would be wrong precisely in the case that needs reconciling.
+    Written and COMMITTED before the HTTP send, under the claim that authorized it. Committed
+    intent is exactly what it proves — no more: the process can die between this commit and the
+    send, so a row here means the bytes MAY have reached the platform, and only the platform's
+    accepted-request ledger settles it. What it rules out is the opposite lie: without it, the
+    send-before-stamp residual (2xx received, terminal transaction faults, row stays `pending`)
+    leaves a NULL terminal digest that reads as "never sent" precisely when the platform holds
+    the bytes.
 
-    Insert-only. Never updated, never deleted except by retention and by the outbox row's own
-    cascade. There is deliberately no "this attempt won" column: identical bytes are one event to
-    the receiver, so a winner flag would be a derived fact free to contradict its own source.
+    Insert-only, enforced by a DB trigger (migration 014): UPDATE always refused; DELETE refused
+    unless the parent row carries a terminal digest, because for any other row this is the sole
+    evidence of staging. There is deliberately no "this attempt won" column: identical bytes are
+    one event to the receiver, so a winner flag would be a derived fact free to contradict its
+    own source.
     """
 
     __tablename__ = "outbox_delivery_attempts"

@@ -94,6 +94,10 @@ def enqueue_decision_callback(
             payload_json=body,
             ordering_stream="decision",
             decision_sequence=decision_sequence,
+            # created under the record-intent-first regime (014): with this stamp, "no attempt
+            # row" is PROOF nothing was transmitted. The DB default is 'legacy' precisely so a
+            # path that forgets this degrades to over-caution, never to false proof.
+            witness_generation="attempt_v1",
         )
     )
 
@@ -188,7 +192,10 @@ class OutboxPublisher:
         # COMMIT the attempt BEFORE the send. Everything about this ordering is the point: if the
         # attempt were recorded after, or in the same transaction as the terminal, then the
         # publisher's own proven residual (2xx received, terminal transaction faults, row stays
-        # pending) would leave the platform holding bytes the tool has no record of.
+        # pending) would leave the platform holding bytes the tool has no record of. The converse
+        # gap is accepted and named: die between this commit and the send and the attempt row
+        # records staged INTENT for bytes that never left — which is why the witness state it
+        # yields is send_intent_witnessed, not proof of transmission.
         self._record_attempt(
             outbox_id=outbox_id, token=token, wire_version=_WIRE_VERSION,
             request_sha256=wire_sha256,
@@ -200,6 +207,9 @@ class OutboxPublisher:
     def _record_attempt(self, *, outbox_id: int, token: str, wire_version: str,
                         request_sha256: str) -> str:
         """Commit one immutable attempt row under the live claim. Returns its `attempt_id`.
+
+        This records staged INTENT — the exact bytes, durably, before any transmission is
+        tried — not transmission itself: the process can die between this commit and the send.
 
         Fenced on the same `(status, claim_token)` predicate as every terminal: a claimant whose
         lease expired writes nothing here either, and — because this runs before the send — it
@@ -307,17 +317,34 @@ class OutboxPublisher:
                     "UPDATE outbox SET status='delivered', delivered_at=:now, "
                     "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL, "
                     "callback_wire_sha256=:sha, wire_version=:wire_version "
-                    "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
+                    "WHERE id=:id AND status='pending' AND claim_token=:token "
+                    # A terminal digest asserts "these exact bytes were staged and accepted", so
+                    # it may only land when the matching attempt row — same claim, same digest,
+                    # same encoding — actually exists (re-audit 1f8412e F6). Without this, a
+                    # digest could be stamped for bytes no attempt ever recorded, and the
+                    # attempt-vs-terminal agreement the taxonomy rests on would be unverifiable.
+                    "AND (:needs_witness = false OR EXISTS ("
+                    "  SELECT 1 FROM outbox_delivery_attempts a WHERE a.outbox_id=:id "
+                    "  AND a.claim_token=:token AND a.request_sha256=:sha_probe "
+                    "  AND a.wire_version=:wire_version_probe)) RETURNING id"
                 ),
                 # wire_version is decided in Python, not by a SQL CASE over :sha — reusing one
                 # parameter as both a value and a NULL test leaves its type indeterminate to
-                # psycopg, which rejects the statement outright.
+                # psycopg, which rejects the statement outright. The *_probe copies exist for
+                # the same reason: one parameter, one role.
                 {"id": row.id, "now": now, "token": token, "sha": wire_sha256,
-                 "wire_version": None if wire_sha256 is None else _WIRE_VERSION},
+                 "wire_version": None if wire_sha256 is None else _WIRE_VERSION,
+                 "needs_witness": wire_sha256 is not None,
+                 "sha_probe": wire_sha256,
+                 "wire_version_probe": None if wire_sha256 is None else _WIRE_VERSION},
             ).first()
             if applied is None:
-                # stale loser: its lease expired and a reclaimer already finished this row.
-                log.warning("outbox_stale_claim_completion", outbox_id=row.id, attempted="delivered")
+                # Two causes, both fail-closed no-ops: a stale loser (lease expired, a reclaimer
+                # already finished the row), or — for a decision callback — no attempt row
+                # matching this claim+digest, meaning this terminal cannot prove the bytes it
+                # claims were ever staged. Either way this claimant writes nothing.
+                log.warning("outbox_stale_or_unwitnessed_completion",
+                            outbox_id=row.id, attempted="delivered")
                 return
             if row.kind == POC_EMAIL:
                 # the raw POC token existed only to be emailed; don't retain it at rest.

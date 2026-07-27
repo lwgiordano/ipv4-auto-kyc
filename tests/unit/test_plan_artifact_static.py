@@ -237,7 +237,7 @@ _DISPROVEN_CLAIMS = [
         r"NULL digest means\s+\"never delivered\"",
         "the terminal digest is written in the fenced terminal transaction, so a 2xx followed by a "
         "terminal fault leaves NULL while the platform holds the bytes. Use the four-state witness "
-        "taxonomy (delivery_witnessed / attempt_witnessed / legacy_unwitnessed / not_accepted).",
+        "taxonomy (delivery_witnessed / send_intent_witnessed / legacy_unwitnessed / not_accepted).",
     ),
     (
         r"backfill(?:ed|s)? (?:a )?(?:the )?historical digest|backfilled at 013",
@@ -252,6 +252,23 @@ _DISPROVEN_CLAIMS = [
     (
         r"derive the (?:wire )?digest from `?payload_json|re-derive[sd]? the digest from",
         "a wire digest may never be derived from stored JSONB — jsonb key order is not wire order.",
+    ),
+    (
+        r"no retention deviation left to govern|KYC_RETENTION_DAYS no longer bounds",
+        "the pseudonymous remainder (ids, ordinals, digest) IS a governed retention decision — "
+        "AUDIT_FINDINGS D9. Redaction discharged the reviewer-identifier problem, not governance.",
+    ),
+    (
+        # a line RECORDING the rename ("renamed from …", "the earlier name … retired") is the
+        # correction, not a reassertion — everything else using the old name is banned.
+        r"^(?!.*(?:renamed|retired)).*\battempt_witnessed\b",
+        "renamed send_intent_witnessed (re-audit 1f8412e F9): an attempt row proves durably staged "
+        "intent, not transmission — the process can die between the commit and the socket.",
+    ),
+    (
+        r"reversible-before-first-supersession downgrade",
+        "the downgrade rule is witness-aware (re-audit 1f8412e F3): supersession OR any attempt "
+        "row OR any terminal digest refuses; rollback after first witness use is flag/image only.",
     ),
 ]
 

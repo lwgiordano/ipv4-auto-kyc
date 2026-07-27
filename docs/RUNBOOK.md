@@ -23,6 +23,16 @@
 > readiness-verified, run the activation command above once to start the v1
 > observation clock.
 
+> **Migrations 013/014 (PR 7b-core) are forward-only after any wire witness.**
+> Their downgrades refuse with stable sentinels
+> (`MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> `MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> `MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`) once an attempt row, a
+> terminal `callback_wire_sha256`, or a `superseded` row exists — immutable
+> delivery evidence is never destroyed because local status looks terminal;
+> for a pending/dead callback the attempt row is the only proof bytes were
+> staged. Roll back by flag/image on the compatible schema instead.
+
 > **`enforce_bundle_pinning` (PR 6) is a drained, not rolling, flag flip.**
 > Off (default), every worker scores under its own process-loaded policy
 > bundle — today's behavior, unchanged. On, a worker resolves and scores each

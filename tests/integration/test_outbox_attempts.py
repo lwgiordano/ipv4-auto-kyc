@@ -46,7 +46,7 @@ def test_send_before_stamp_still_leaves_the_exact_request_digest(
 ):
     """THE finding. 2xx received, terminal transaction faults → row stays pending with a NULL
     terminal digest, but the attempt row holds the digest of the exact bytes that were sent, and
-    the row classifies as `attempt_witnessed` rather than as never-delivered."""
+    the row classifies as `send_intent_witnessed` rather than as never-delivered."""
     _seed_decisions(session_factory, "ca", [1])
     _enqueue_cb(session_factory, "ca", 1)
 
@@ -63,7 +63,7 @@ def test_send_before_stamp_still_leaves_the_exact_request_digest(
     row = _witness_of(session_factory, "ca-r1")
     assert row.status == "pending"                      # terminal never committed
     assert row.callback_wire_sha256 is None             # ... so the terminal digest is absent
-    assert row.witness == witness.ATTEMPT_WITNESSED     # ... but the tool is NOT blind
+    assert row.witness == witness.SEND_INTENT_WITNESSED     # ... but the tool is NOT blind
 
     attempts = _attempts(session_factory, "ca-r1")
     assert len(attempts) == 1
@@ -195,7 +195,7 @@ def test_attempt_constraints_reject_uninterpretable_witnesses(session_factory, b
 def test_retention_never_prunes_the_only_evidence_a_row_was_sent(session_factory, clean_db):
     """Retention may delete attempts for a row that already has a terminal digest, and must NOT
     delete them for one that does not — for a non-delivered row the attempt is the only proof
-    bytes went out, and removing it would reclassify `attempt_witnessed` into `not_accepted`,
+    bytes went out, and removing it would reclassify `send_intent_witnessed` into `not_accepted`,
     which is the tool asserting non-delivery on evidence it just destroyed."""
     _seed_decisions(session_factory, "ch", [1, 2])
     with session_factory() as s:
@@ -224,4 +224,120 @@ def test_retention_never_prunes_the_only_evidence_a_row_was_sent(session_factory
     assert _attempts(session_factory, "ch-r1") == []                      # redundant, removed
     assert len(_attempts(session_factory, "ch-r2")) == 1                  # sole evidence, kept
     assert _witness_of(session_factory, "ch-r1").witness == witness.DELIVERY_WITNESSED
-    assert _witness_of(session_factory, "ch-r2").witness == witness.ATTEMPT_WITNESSED
+    assert _witness_of(session_factory, "ch-r2").witness == witness.SEND_INTENT_WITNESSED
+
+
+def test_attempt_rows_are_immutable_at_the_database(
+    session_factory, publisher, monkeypatch, clean_db
+):
+    """Re-audit F6: "insert-only" was a code-comment contract; now it is a trigger. UPDATE is
+    always refused; DELETE is refused while the attempt is the row's sole evidence."""
+    _seed_decisions(session_factory, "ci", [1])
+    _enqueue_cb(session_factory, "ci", 1)
+
+    def _boom(self, row, token, wire_sha256=None):
+        raise _InjectedFault("terminal faulted")
+
+    monkeypatch.setattr(type(publisher), "_record_delivered", _boom)
+    with pytest.raises(_InjectedFault):
+        publisher.process_once()  # leaves: pending row + its sole-evidence attempt
+    monkeypatch.undo()
+
+    with session_factory() as s:
+        with pytest.raises(Exception, match="insert-only"):
+            s.execute(text("UPDATE outbox_delivery_attempts SET request_sha256 = :s"),
+                      {"s": "f" * 64})
+        s.rollback()
+        with pytest.raises(Exception, match="sole delivery evidence"):
+            s.execute(text("DELETE FROM outbox_delivery_attempts"))
+        s.rollback()
+    assert len(_attempts(session_factory, "ci-r1")) == 1  # evidence intact after both tampers
+
+
+def test_digest_cannot_land_on_an_undelivered_row(session_factory, clean_db):
+    """Re-audit F6: without the status binding, a raw digest on a pending row reads as
+    delivery_witnessed and licenses deleting its real attempts. The database now refuses."""
+    _seed_decisions(session_factory, "cj", [1])
+    _enqueue_cb(session_factory, "cj", 1)
+    with session_factory() as s:
+        with pytest.raises(Exception, match="ck_outbox_wire_witness_delivered"):
+            s.execute(text(
+                "UPDATE outbox SET callback_wire_sha256 = :sha, wire_version = 'legacy' "
+                "WHERE run_id = 'cj-r1'"), {"sha": "a" * 64})
+        s.rollback()
+
+
+def test_terminal_cannot_stamp_a_digest_no_attempt_recorded(session_factory, publisher, clean_db):
+    """Re-audit F6: `_record_delivered` must prove the matching attempt (same claim, same digest,
+    same encoding) exists before stamping a terminal digest. A terminal that cannot is a no-op —
+    the row stays pending rather than gaining a witness for bytes nothing ever staged."""
+    _seed_decisions(session_factory, "ck", [1])
+    _enqueue_cb(session_factory, "ck", 1)
+    with session_factory() as s:  # claim the row by hand: live claim, but NO attempt row
+        row = s.execute(text(
+            "UPDATE outbox SET claim_token = gen_random_uuid(), "
+            "claim_lease_expires_at = now() + interval '1 hour', claimed_by = 'w' "
+            "WHERE run_id = 'ck-r1' RETURNING id, kind, claim_token")).one()
+        s.commit()
+
+    publisher._record_delivered(row, row.claim_token, "b" * 64)
+
+    with session_factory() as s:
+        status, sha = s.execute(text(
+            "SELECT status, callback_wire_sha256 FROM outbox WHERE run_id='ck-r1'")).one()
+    assert status == "pending" and sha is None, (
+        "an unwitnessed terminal must write NOTHING — not status, not a digest"
+    )
+
+
+def test_death_after_attempt_commit_before_send_is_intent_not_transmission(
+    session_factory, publisher, callback_capture, monkeypatch, clean_db
+):
+    """Re-audit F9: kill the process after `_record_attempt` commits and before `http.send`
+    opens a socket. The attempt row exists, ZERO bytes moved — which is why the state is named
+    send_intent_witnessed and the reconciliation treats it as "ask the platform", never as
+    proof of transmission."""
+    _seed_decisions(session_factory, "cl", [1])
+    _enqueue_cb(session_factory, "cl", 1)
+
+    def _die(request):
+        raise _InjectedFault("process died between attempt commit and socket open")
+
+    monkeypatch.setattr(publisher.http, "send", _die)
+    assert publisher.process_once() is True  # the failure is recorded, the loop survives
+
+    assert callback_capture.requests == []                      # zero HTTP
+    attempts = _attempts(session_factory, "cl-r1")
+    assert len(attempts) == 1                                   # one immutable intent
+    row = _witness_of(session_factory, "cl-r1")
+    assert row.callback_wire_sha256 is None                     # no terminal witness
+    assert row.witness == witness.SEND_INTENT_WITNESSED
+
+
+def test_live_metrics_query_never_scans_terminal_history(session_factory, clean_db):
+    """Re-audit F7: the exact endpoint SQL against 100k terminal rows must use 014's partial
+    live-status index, not a sequential scan of history that grows for the life of the system.
+    Pins the PLAN, not the values — the values were always right; the cost was the defect."""
+    from kyc_tool.api.routes_metrics import LIVE_OUTBOX_SQL
+
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('cm')"))
+        # poc_email terminals: no decision-chain FKs needed, lifecycle-legal when delivered
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, ordering_stream, status, delivered_at, "
+            "payload_json) SELECT 'poc_email','cm','email','delivered',now(),'{}'::jsonb "
+            "FROM generate_series(1, 100000)"))
+        s.execute(text(
+            "INSERT INTO outbox (kind, case_id, ordering_stream, status, payload_json) "
+            "SELECT 'poc_email','cm','email','pending','{}'::jsonb FROM generate_series(1, 3)"))
+        s.commit()
+        s.execute(text("ANALYZE outbox"))
+        plan = s.execute(text(f"EXPLAIN (FORMAT JSON) {LIVE_OUTBOX_SQL}")).scalar_one()
+        counts = {r[0]: r[1] for r in s.execute(text(LIVE_OUTBOX_SQL))}
+
+    assert counts == {"pending": 3}                             # exactness is untouched
+    flat = str(plan)
+    assert "ix_outbox_live_status" in flat, f"live index unused:\n{flat}"
+    assert "'Node Type': 'Seq Scan'" not in flat.replace('"', "'"), (
+        f"the live query seq-scanned outbox with 100k terminal rows present:\n{flat}"
+    )

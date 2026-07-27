@@ -655,7 +655,10 @@ def test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersessio
         assert seqs == {"dA": 1, "dB": 2}  # by outbox.id, NOT decided_at
         assert conn.execute(text("SELECT last_decision_sequence FROM cases WHERE id='c1'")).scalar_one() == 2
 
-    # deliver both via the REAL publisher against this dedicated DB; assert order + terminals
+    # deliver both via the REAL publisher against this dedicated DB; assert order + terminals.
+    # The publisher is head-schema code — it commits a pre-HTTP attempt row (014) before every
+    # send — so bring the DB to head first, exactly as production would before publishers start.
+    alembic_command.upgrade(cfg, "head")
     order: list[str] = []
 
     def handler(request):

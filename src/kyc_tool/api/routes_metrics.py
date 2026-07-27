@@ -15,6 +15,13 @@ def _grouped(session, sql: str) -> dict:
     return {row[0]: row[1] for row in session.execute(text(sql))}
 
 
+# Module-level constant so the EXPLAIN regression test pins the plan of the EXACT statement the
+# endpoint runs — a test that EXPLAINs its own copy of the SQL proves nothing about this one.
+LIVE_OUTBOX_SQL = (
+    "SELECT status, count(*) FROM outbox WHERE status IN ('pending','dead') GROUP BY status"
+)
+
+
 @router.get("/v1/metrics")
 def metrics(request: Request) -> dict:
     with request.app.state.session_factory() as session:
@@ -56,8 +63,12 @@ def metrics(request: Request) -> dict:
         # a later unit (7b-activation) reconciles the platform against. So `outbox` grows without
         # bound for the life of the system.
         #
-        # Live statuses (pending, dead) stay EXACT: they are what an operator acts on, they stay
-        # small, and migration 013's partial indexes already serve exactly this predicate.
+        # Live statuses (pending, dead) stay EXACT: they are what an operator acts on, and they
+        # stay small. The predicate is served by migration 014's ix_outbox_live_status — 013's
+        # claim indexes are partial to status='pending' ALONE, and Postgres cannot use a
+        # pending-only partial index for an IN ('pending','dead') query, so without 014's index
+        # this exact count would seq-scan the ever-growing terminal history (re-audit 1f8412e
+        # F7). The EXPLAIN regression test pins the plan, not just the values.
         # `outbox_by_status` and `outbox_alerting` used to each run this identical query — two
         # round-trips for one result — so it is computed once here and shared; both keys stay
         # published (each is part of the metrics surface).
@@ -74,10 +85,7 @@ def metrics(request: Request) -> dict:
         # below the true live count, so both the raw statistic and the final subtraction are
         # floored at 0 — the estimate can never be reported as negative. This endpoint's cost is
         # therefore independent of how much terminal history retention has accumulated.
-        outbox_live_by_status = _grouped(
-            session,
-            "SELECT status, count(*) FROM outbox WHERE status IN ('pending','dead') GROUP BY status",
-        )
+        outbox_live_by_status = _grouped(session, LIVE_OUTBOX_SQL)
         # Addressed by OID via to_regclass, not by `relname = 'outbox'`: relname ignores schema, so
         # a same-named table in any other schema on the search path could supply the statistic for
         # a relation this session never queries. to_regclass resolves the SAME name the ORM does,
