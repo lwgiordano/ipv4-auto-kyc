@@ -26,7 +26,7 @@ as making maintenance safe against arbitrary concurrent writers; it does not.
 
 from sqlalchemy import text
 
-# Keep in sync with the `_FENCE_KEY` constant in alembic/versions/017_* through 020_* (a migration
+# Keep in sync with the `_FENCE_KEY` constant in alembic/versions/017_* through 021_* (a migration
 # cannot import application code, so the value is asserted equal by test_outbox_fence.py).
 MAINTENANCE_FENCE_KEY = 720170001
 

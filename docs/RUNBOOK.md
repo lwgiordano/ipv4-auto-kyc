@@ -8,7 +8,7 @@
 | Pipeline worker | `python -m kyc_tool.workers.pipeline_worker` | N processes; per-case FIFO is queue-enforced |
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | delivers decision callbacks + POC emails |
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily); prunes per KYC_RETENTION_DAYS |
-| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-020 witness chain (see below). **018, 019 and 020 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
+| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-021 witness chain (see below). **018 through 021 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
 | v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, POST-cutover (PR 5a §6a); idempotent |
 | Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot; PRE-cutover for `enforce_bundle_pinning` (PR 6, `docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
 | Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot; stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
@@ -23,14 +23,15 @@
 > readiness-verified, run the activation command above once to start the v1
 > observation clock.
 
-> **Migrations 013-020 (PR 7b-core) are forward-only after any wire witness — positive OR
+> **Migrations 013-021 (PR 7b-core) are forward-only after any wire witness — positive OR
 > negative** (an `attempt_v1` decision callback with no attempt is durable proof nothing was
 > staged, and counts). **`018` and `019` go further: they refuse downgrade
-> unconditionally** (`MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY`,
+> unconditionally** (`MIGRATION_021_DOWNGRADE_REFUSED_FORWARD_ONLY`,
+> `MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY`,
 > `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY`,
 > `MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`) — walking below them would restore
 > search-path-vulnerable authority functions, so once `018` is on the schema the ONLY
-> rollback is redeploying the prior reviewed **020-compatible** image against it. Below
+> rollback is redeploying the prior reviewed **021-compatible** image against it. Below
 > `018` the walk still preflights with stable sentinels, in execution order
 > (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -41,7 +42,7 @@
 > terminal `callback_wire_sha256`, or a `superseded` row exists — immutable
 > delivery evidence is never destroyed because local status looks terminal;
 > for a pending/dead callback the attempt row is the only proof bytes were
-> staged. On refusal, KEEP or redeploy the reviewed **020-compatible** image — an older
+> staged. On refusal, KEEP or redeploy the reviewed **021-compatible** image — an older
 > publisher lacks the receipt/terminal contract and must not run against preserved evidence;
 > a pre-7b image is permitted only after the entire walk reaches 012.
 
@@ -168,10 +169,21 @@ endpoint + HMAC secret, then requeue via the console
 UPDATE outbox SET status='pending', attempts=0, next_attempt_at=now() WHERE id = :id;
 ```
 Redelivery of a decision callback is safe — the platform dedupes on
-(case_id, run_id). **A dead `poc_email` row is the exception:** its payload
-was redacted when it died (the raw token is never retained), so there is
-nothing deliverable and the console endpoint refuses it. Recovery is a fresh
-`poc.submitted`, which cancels old tokens and sends a new email.
+(case_id, run_id). **A row whose body has been REDACTED is the exception, for
+either kind** (migration 020+): a POC email's payload is scrubbed the moment it
+dies, because the raw token is never retained, and a decision callback's is
+scrubbed by retention once past `KYC_RETENTION_DAYS`. Either way there is
+nothing deliverable left, so the console endpoint returns 409 — and the raw SQL
+above is refused by the database with *"a redacted outbox row can never be MADE
+sendable again"*. Recovery is a fresh `poc.submitted` (which cancels old tokens
+and sends a new email) or, for a callback, `recalculate.requested`, which
+produces a NEW decision under a new `run_id` — it does not restore the old
+body. A pending row that somehow already carries a redacted body is unsendable
+and should be retired, not requeued:
+```sql
+UPDATE outbox SET status='dead', last_error='body redacted; unsendable'
+WHERE status='pending' AND payload_json = '{"redacted": true}'::jsonb;
+```
 
 ### RIR / registry outage
 Runs complete as `partial` (upstream_error recorded, prior checks stay live,
@@ -205,10 +217,17 @@ authority the platform reconciliation is built from — `id` the order, `status`
 the local delivery outcome — so it is kept indefinitely. `payload_json`, which
 carries `checks[].source` (can be reviewer-derived), is a different matter:
 `workers.retention` redacts it to `{"redacted": true}` once
-`COALESCE(delivered_at, resolved_at)` is past `KYC_RETENTION_DAYS`, for any row
-whose `status` is `delivered` or `superseded`. Redaction never touches a
-`pending` or `dead` row — those are still requeueable, and a redacted body
-would send `{"redacted": true}` to the platform on a legal requeue.
+`COALESCE(delivered_at, resolved_at, created_at)` is past
+`KYC_RETENTION_DAYS`, for any row whose `status` is `delivered`, `superseded`
+**or `dead`** (migration 020 — a callback that exhausted its attempts during a
+platform outage carries the same reviewer-derived body as any other, and
+keeping it forever inverted this policy; a dead row has neither `delivered_at`
+nor `resolved_at`, so it ages on `created_at`). Redaction **never** touches a
+`pending` row: that body is still sendable, and the database refuses the write.
+A redacted row can no longer be requeued — the console returns 409 and names
+the remedy per kind — which is the intended trade: the body is destroyed on
+schedule, and nothing is left able to transmit a `{"redacted": true}` payload
+to the platform.
 
 What survives redaction — `case_id`, `run_id`, `decision_sequence`, `status`,
 `delivered_at`/`resolved_at`, and the recorded wire digest

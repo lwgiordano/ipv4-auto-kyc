@@ -41,7 +41,7 @@ def test_a_redacted_row_can_never_be_made_sendable_again(pg):
         oid = _dead_poc(conn)
 
     # (a) the one-statement form
-    with pytest.raises(Exception, match="never be made sendable again"), eng.begin() as conn:
+    with pytest.raises(Exception, match="never be MADE sendable again"), eng.begin() as conn:
         conn.execute(text(
             f"UPDATE outbox SET status='pending', payload_json={_REDACT}, attempts=0 "
             "WHERE id=:i"), {"i": oid})
@@ -49,7 +49,7 @@ def test_a_redacted_row_can_never_be_made_sendable_again(pg):
     # (b) the two-statement form — the second never enters the payload branch at all
     with eng.begin() as conn:
         conn.execute(text(f"UPDATE outbox SET payload_json={_REDACT} WHERE id=:i"), {"i": oid})
-    with pytest.raises(Exception, match="never be made sendable again"), eng.begin() as conn:
+    with pytest.raises(Exception, match="never be MADE sendable again"), eng.begin() as conn:
         conn.execute(text(
             "UPDATE outbox SET status='pending', attempts=0 WHERE id=:i"), {"i": oid})
 
@@ -194,7 +194,13 @@ def test_020_validates_the_whole_code_surface(pg):
 
 def test_the_poisoned_row_scenario_is_unreachable_end_to_end(session_factory, settings, clean_db):
     """The review's measured impact, as a regression: a scrubbed POC email cannot re-enter the
-    claim path, so it cannot block its stream. Driven through the real publisher."""
+    claim path, so it cannot block its stream. Driven through the real publisher.
+
+    NOTE (revision 021): the closing `sent == [...]` assertion is NOT the discriminating part —
+    a dead row is invisible to `_CLAIM_SQL` on every revision. The `pytest.raises` in the middle
+    is what this test proves. The stronger end-to-end property — that a row ALREADY pending and
+    redacted no longer stops the whole outbox — is in `test_migration_021.py`, because 020's own
+    fix made that case fatal."""
     from kyc_tool.outbox.publisher import OutboxPublisher
 
     sent: list = []
@@ -218,7 +224,7 @@ def test_the_poisoned_row_scenario_is_unreachable_end_to_end(session_factory, se
         s.commit()
 
     # the poisoning UPDATE is refused at the database…
-    with session_factory() as s, pytest.raises(Exception, match="never be made sendable again"):
+    with session_factory() as s, pytest.raises(Exception, match="never be MADE sendable again"):
         s.execute(text("UPDATE outbox SET status='pending' WHERE id=:i"), {"i": first})
 
     # …so the stream's later email delivers normally

@@ -525,12 +525,22 @@ def requeue_outbox(outbox_id: int, request: Request) -> dict:
                 status_code=409,
                 detail=f"dead {row.kind} is redacted (body scrubbed); {remedy}",
             )
-        session.execute(
+        # The redaction predicate rides IN the UPDATE, not only in the check above: retention can
+        # commit between that SELECT and this statement, and losing that race used to surface as
+        # a 500 from the database guard rather than the honest 409 (the write is refused either
+        # way — this makes the refusal legible).
+        applied = session.execute(
             text(
                 "UPDATE outbox SET status='pending', attempts=0, next_attempt_at=now(), "
-                "last_error=NULL WHERE id=:id"
+                "last_error=NULL WHERE id=:id AND status='dead' "
+                "AND payload_json <> '{\"redacted\": true}'::jsonb"
             ),
             {"id": outbox_id},
-        )
+        ).rowcount
+        if not applied:
+            raise HTTPException(
+                status_code=409,
+                detail="outbox row changed while requeueing (redacted or no longer dead); retry",
+            )
         audit(session, "outbox.requeued", case_id=row.case_id, run_id=row.run_id, outbox_id=outbox_id)
     return {"requeued": outbox_id}

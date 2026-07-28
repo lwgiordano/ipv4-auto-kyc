@@ -30,7 +30,8 @@ def test_fence_key_matches_every_migration_that_takes_it():
     versions = Path(REPO_ROOT) / "alembic" / "versions"
     for name in ("017_outbox_authority_boundary.py", "018_outbox_transition_authority.py",
                  "019_outbox_dead_poc_redaction.py",
-                 "020_outbox_redaction_uniformity.py"):
+                 "020_outbox_redaction_uniformity.py",
+                 "021_outbox_poison_recovery.py"):
         src = (versions / name).read_text()
         assert f"_FENCE_KEY = {MAINTENANCE_FENCE_KEY}" in src, f"{name} does not share the fence"
 

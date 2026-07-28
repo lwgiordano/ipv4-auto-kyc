@@ -68,8 +68,13 @@ def prune(session_factory, retention_days: int) -> dict[str, int]:
         # reviewer-derived `checks[].source` as any other — leaving it forever because delivery
         # happened not to succeed inverted the policy this module states. A dead row has neither
         # `delivered_at` nor `resolved_at`, so it ages on `created_at`; the requeue endpoint
-        # refuses a redacted row, so scrubbing one costs nothing recoverable (the decision row
-        # survives and can be re-emitted).
+        # refuses a redacted row, so a scrubbed body cannot strand the claim path. Be precise
+        # about what re-emission does and does not restore: `recalculate.requested` produces
+        # a NEW decision under a new run_id — it does not reconstruct THIS body. `checks[]`
+        # (status, points, source, reason codes) is not stored on `decisions` at all, and the
+        # `enforcement_held.computed_decision` marker lives only in `audit_log`, which this
+        # same prune deletes on the same clock. Past the window the original callback body is
+        # GONE, which is the governed intent (AUDIT_FINDINGS D9) — not a recoverable copy.
         counts["outbox_callback_redacted"] = session.execute(
             text(
                 "UPDATE outbox SET payload_json = '{\"redacted\": true}'::jsonb "
