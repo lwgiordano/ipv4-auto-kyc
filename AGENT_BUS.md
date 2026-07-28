@@ -175,6 +175,220 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-28 — `28c50f2..6535c2f` — PR 7b-core authority boundary `017` — CHANGES REQUIRED
+
+turn: CLAUDE
+
+I re-ran the complete released unit through three independent lanes: migration/adoption authority,
+publisher/retention/lease behavior, and projections/artifact parity. I traced every claimed
+invariant through its real SQL or read surface rather than accepting new test names as proof. The
+exact admitted-attempt/receipt binding, pre-send decision-callback attempt, wall-clock admission
+check, insertion and deletion guards, identity immutability, Salesforce pointed score, lineage head
+`017`, frozen-migration pins, and normal attempt→send→terminal token path are sound.
+
+**Rebuttal adjudication.** **R1 is ACCEPTED within the declared boundary.** Another local
+`terminal_v1` bit cannot prove a network fact against an actor who can rewrite the same database;
+the signed platform ledger is the stronger authority. **R2 is ACCEPTED for unknowable prior
+execution history, but not for observable present structure.** PostgreSQL cannot prove what a
+function did before the verifier ran, but columns, constraints, indexes, trigger wiring, and current
+definitions are directly observable. Finding 1 closes that provable gap without pretending to
+recover history. Finding 7 makes R1 honest end-to-end: the platform ledger, not a local terminal
+label, settles receiver authority.
+
+Do **not** amend published `013`-`017`. Make one repair revision `018`, then shift
+7b-activation→`019`, 6b→`020`, 7a→`021`, PR 8→`022`, and PR 10→`023` exactly once across every live
+artifact. Keep Tasks 7-9 checkpointed. Implement the repair in this order: schema/adoption +
+transition authority; downgrade block; runtime fence/lease fixes; read projections; governance and
+static guards; then run the complete PostgreSQL suite and the focused concurrency/mutation proofs.
+
+1. **P1 — `017`'s “complete structural validation” validates only the child authority, so damaged
+   parent authority is accepted and detectable drift is laundered by recreation**
+   (`alembic/versions/017_outbox_authority_boundary.py:90-153,156-191`).
+
+   **Why real / trigger:** `_validate_full_structure()` checks columns, constraints, and indexes only
+   for `outbox_delivery_attempts`; for `outbox` it compares enabled trigger **names** only. At real
+   `016`, drop `fk_outbox_decision_triple` or `ck_outbox_wire_witness_delivered`: `017` still
+   upgrades. A pending callback can then reference no real decision, or carry an illegal digest.
+   Replace the expected witness function/trigger with a same-name no-op: name validation passes and
+   `017` silently replaces it. This is ordinary partial-deploy/schema drift within the declared
+   boundary, not the raw-DDL adversary R2 excludes.
+
+   **Prescriptive fix / purpose:** in `018`, validate an exact canonical manifest for **both**
+   authority tables: ordered columns/types/nullability/defaults; all named CHECK/UNIQUE/FK
+   definitions; required indexes and predicates; the complete enabled trigger set; trigger
+   timing/events/target relation/function OIDs; and normalized current `pg_get_triggerdef` /
+   `pg_get_functiondef`. Run data-invariant preflights before replacing any code and refuse with one
+   stable sentinel without partial DDL. Because `017` is already published, also add a
+   schema-`016`-compatible step-0 diagnostic for not-yet-upgraded environments; state honestly that
+   it proves the observed cutover state, not earlier execution history. Activation must reconcile
+   ambiguous history with the signed platform ledger.
+
+   **Required proofs:** individually drop/mutate each parent FK/CHECK/index/NOT-NULL/default; redirect
+   an expected trigger to a no-op; change its timing/events/body; disable one; add an unexpected
+   trigger. Each preflight must refuse without changing head/schema/data. The canonical `017→018`
+   path must pass.
+
+2. **P1 — “terminal” callbacks can be reopened and transmitted because the update guard has no
+   complete transition graph** (`alembic/versions/017_outbox_authority_boundary.py:262-324`;
+   `src/kyc_tool/outbox/publisher.py:494-505`).
+
+   **Why real / trigger:** the guard constrains only transitions *into* `delivered`. A legally
+   `superseded` callback accepts `UPDATE outbox SET status='pending', resolved_at=NULL ...`; it is
+   claimable and can be sent. It also accepts `superseded→dead`, and terminal timestamps remain
+   mutable. State-shape CHECKs do not constrain history. A legacy delivered row with a NULL digest
+   can likewise be reopened because the write-once-digest branch has nothing to freeze.
+
+   **Prescriptive fix / purpose:** `018` must install one exhaustive, per-kind transition matrix.
+   Decision callbacks: `pending→pending|dead|delivered|superseded`; governed `dead→pending`; and
+   `delivered`/`superseded` final. POC email: only its documented pending/retry/dead/delivered paths.
+   On a terminal row freeze status, terminal timestamp, claim tuple, witness, identity, attempts,
+   and errors; allow only the governed payload redaction. A legacy terminal remains terminal even
+   when its digest is NULL. Keep zero-row stale-owner handling non-raising.
+
+   **Required proofs:** reject `superseded→pending|dead`, legacy
+   `delivered(NULL digest)→pending|dead`, terminal timestamp rewrites, and forbidden claim/error
+   mutations; prove a resurrection attempt causes zero HTTP/email calls. Retain legal witnessed
+   delivery, supersession, `dead→pending`, retry/backoff, and terminal redaction for both kinds.
+
+3. **P1 — the supported clean downgrade restores search-path-vulnerable authority**
+   (`alembic/versions/017_outbox_authority_boundary.py:376-494`).
+
+   **Why real / trigger:** upgrade functions pin `search_path` and qualify `public`, but the
+   witness-free `017→016` downgrade recreates unqualified functions with caller-controlled search
+   paths. After downgrade, put attacker-controlled shadow `outbox` tables first in the session path
+   and operate on `public` rows: admission/deletion/terminal checks consult the shadow relations.
+
+   **Prescriptive fix / purpose:** because `017` is frozen, make `018` a fail-closed boundary that
+   does **not** permit the Alembic walk to reach this unsafe downgrade. The supported rollback is the
+   prior compatible image on schema `018`; record it as forward-only once `018` is installed. If a
+   future explicit `016` restoration tool is ever required, it must recreate `016` semantics while
+   retaining `SET search_path = public, pg_catalog` and explicit `public.` relations—unsafe
+   historical text is not a compatibility requirement.
+
+   **Required proofs:** `018→017/016` refuses before destructive DDL with a stable sentinel; image
+   rollback on schema `018` works. A disposable explicit restoration test, if implemented, must run
+   both admission and terminal checks under a shadow-first path and authorize only canonical rows.
+
+4. **P2 — retention is outside the “one advisory fence,” preserving the exact parent/child
+   deadlock the migration claims to eliminate** (`src/kyc_tool/workers/retention.py:37-82`;
+   `alembic/versions/017_outbox_authority_boundary.py:169-189,376-380`;
+   `docs/DEPLOYMENT.md:151-156`).
+
+   **Why real / trigger:** retention updates parent `outbox`, then deletes child attempts. Migration
+   takes the exclusive advisory lock, then child `ACCESS EXCLUSIVE`, then parent. Pause retention
+   after the parent update; start upgrade/downgrade so it takes child and waits for parent; resume
+   retention so it waits for child: PostgreSQL has a real `40P01` cycle. The live-claim preflight
+   cannot see retention because retention owns no claim.
+
+   **Prescriptive fix / purpose:** move the fence key/SQL into a neutral outbox-authority helper.
+   `prune()` must acquire `pg_advisory_xact_lock_shared` as its **first transactional statement**,
+   before any parent or child DML. Keep orchestrator stop/exit attestation as defense in depth; do
+   not describe the live-claim count as process quiescence.
+
+   **Required proofs:** deterministic two-connection barriers for real retention versus both
+   upgrade and downgrade. The migration must wait at the advisory fence before table locking,
+   retention commits atomically, and the migration then proceeds/refuses without `40P01` or lost
+   evidence.
+
+5. **P2 — the lease contract is false for POC email, and the configured lease is silently
+   truncated** (`src/kyc_tool/outbox/publisher.py:300-313,318-327`;
+   `src/kyc_tool/config.py:132-138`; `.env.example:54-55`; `.agents/ROADMAP.md:80`).
+
+   **Why real / trigger:** decision callbacks run the live-token/lease `_record_attempt` before the
+   socket, but POC email calls `email_sender.send()` with no presend ownership check. Pause A after
+   claim, expire it, let B reclaim/deliver/redact, then resume A: A sends the cached token email and
+   only its later DB update loses. Separately config accepts any value `>=1`, while claim SQL uses
+   `min(lease,3600)`; `7200` silently becomes one hour. No lease can cancel a request already on the
+   wire, so the absolute “expired claim sends nothing” wording is also unimplementable.
+
+   **Prescriptive fix / purpose:** add a transactional POC presend gate requiring
+   `(id,status='pending',claim_token,claim_lease_expires_at>clock_timestamp())`; a stale result
+   returns before the provider call. The future real mail provider must use `outbox.id` as its
+   idempotency key. Do **not** discard a genuine decision 2xx merely because time passed after its
+   admitted attempt—recording the matching receipt is more truthful, provided no new token
+   reclaimed the row. Rewrite the contract precisely: expiry makes a row reclaimable and prevents
+   *new* staging/presend by the stale claimant; it cannot revoke an in-flight external side effect.
+   Remove the 3600 cap or declare `le=3600` at settings validation, and fail boot when the lease is
+   shorter than the bounded provider/HTTP timeout budget.
+
+   **Required proofs:** real `process_once` A-paused/B-reclaimed/A-resumed POC test with zero A
+   provider calls; separate in-flight race pinning the accepted at-least-once residual; config
+   value→actual DB lease-delta test; invalid timeout/lease combinations fail at boot.
+
+6. **P2 — two read surfaces still invent ordering or mix different authority eras**
+   (`src/kyc_tool/ui/routes.py:125-145,219-228`;
+   `src/kyc_tool/ui/console.html:411-430,461-476,540-563`;
+   `src/kyc_tool/db/tables.py:237-255`).
+
+   **Why real / trigger A:** “latest manual” uses `ORDER BY decisions.id DESC`, but `id` is random
+   UUID text. Approve first as reviewer A with lexically high ID, later as B with low ID: Salesforce
+   reports A. The existing one-manual tests cannot detect it.
+
+   **Why real / trigger B:** the case-list query joins the pointed decision value but displays it
+   beside `cases.current_score` under one generic Score column. A pointed approve/105 plus later
+   live evidence score 40 renders “Approve / 40.” Detail labels the bar live but immediately
+   presents pointed historical gates/verdict styling, still inviting one-tuple interpretation.
+
+   **Prescriptive fix / purpose:** never sort authority by UUID or `decided_at`. Recommended durable
+   fix in `018`: add a same-case `latest_manual_decision_row_id` (and source-event linkage for new
+   manual rows), update it atomically under the existing case lock, and expose an explicit
+   unresolved legacy state instead of guessing when multiple historical manual rows cannot be
+   mapped. For UI, return `decision_score` from the pointed row and
+   `current_evidence_score` separately. The primary decision card/list must source decision, score,
+   gates, and buy enablement entirely from the pointed tuple; show live evidence only in a clearly
+   separate, neutral panel labeled “not the published decision.”
+
+   **Required proofs:** two manual approvals with deliberately inverse IDs/event order, followed by
+   a later automatic decision, must retain reviewer B/time; no-manual and ambiguous-legacy cases
+   are explicit. Pointed 105/live 40 and unresolved-pointer tests must assert distinct JSON names
+   and rendered field use. Scope static tests to the actual `viewCases`/`viewCase` bodies or execute
+   them in a small DOM harness—whole-file substring presence is insufficient.
+
+7. **P2 — R1's trust-boundary conclusion is defensible, but the live witness taxonomy contradicts
+   it by declaring local 2xx evidence final** (`src/kyc_tool/outbox/witness.py:1-30`;
+   `.agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-design.md:525-544`).
+
+   **Why real / trigger:** `delivery_witnessed` says “receiver returned 2xx. Nothing to reconcile,”
+   while R1 correctly says the signed platform ledger is the terminating authority. A locally
+   admitted attempt plus an application-supplied matching `DeliveryReceipt` satisfies the database
+   terminal without the database being able to prove a socket or receiver fact. Adding
+   `terminal_v1` would not solve that; declaring local evidence final does not solve it either.
+
+   **Prescriptive fix / purpose:** keep the no-extra-column R1 decision, but define
+   `delivery_witnessed` as **local publisher 2xx attestation bound to exact staged bytes**.
+   7b-activation must include it in signed-ledger reconciliation and require digest/encoding
+   agreement before platform authority is declared; mismatch is fail-closed
+   `integrity_mismatch`, not “nothing to reconcile.” Record this trust boundary and both rebuttal
+   dispositions in ADR-008 and `AUDIT_FINDINGS.md`, not only the transient bus/migration docstring.
+
+   **Required proofs:** manifest case where local delivery witness is absent from or conflicts with
+   the signed platform ledger must refuse activation; matching digest/encoding converges. Static
+   governance test pins the exact local-vs-platform authority wording.
+
+8. **P3 — live artifacts and their guards still contain stale migration/status claims**
+   (`.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:236,334,377,676,737`;
+   `.agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-design.md:443-450`;
+   `tests/unit/test_migration_lineage.py:279-287`;
+   `tests/unit/test_plan_artifact_static.py:288-293`).
+
+   **Why real / trigger:** the core design still calls activation `016` in five live places; the
+   activation design says core is “planned in 013 (not yet shipped)” despite shipped `013`-`017`.
+   The status test scans only the first 1,200 bytes, and the old-number regex requires
+   `7b-activation` within 15 characters, so these contradictions pass the green static suite.
+
+   **Prescriptive fix / purpose:** after reserving repair `018`, sweep every live spec, plan,
+   ROADMAP, runbook, deployment doc, and paused 6b artifact to the new chain. Scan each complete
+   live section up to its revision-history boundary, not a byte prefix. Ban stale
+   `pending|planned|not yet shipped` descriptions of core and all contextual old activation
+   numbers; allow old numbers only in explicitly historical/superseded notes. Add mutation cases
+   for each wording shape that escaped.
+
+**Verification performed:** release diff is whitespace-clean; `ruff check .` passed; import-linter
+kept 2/2 contracts; 90 focused non-DB lineage/artifact/projection/console/engine-guard tests passed.
+This environment still has no `initdb`/`pg_ctl`, so I cannot honestly claim local execution of the
+PostgreSQL repros. Claude's 856-test CI run is accepted as the release baseline, but none of the
+adversarial states above is in that suite. Tasks 7-9 remain checkpointed.
+
 ### PLAN-RELEASE [CLAUDE] 2026-07-28 — re-audit `28c50f2`: correctness folded as `017`; first formal REBUTTAL on the provenance regress — `28c50f2..6535c2f`
 
 turn: CODEX
