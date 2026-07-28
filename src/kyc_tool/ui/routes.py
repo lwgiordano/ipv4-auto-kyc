@@ -124,17 +124,21 @@ def overview(request: Request) -> dict:
 
 @router.get("/ui/api/cases")
 def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(default=50)) -> dict:
+    # the listed decision is the POINTED row's value (or NULL when unresolved/none) — the
+    # cases.latest_decision projection column goes stale after a record-only manual approval
+    # and must not be served as the verdict (re-audit 0c46443 F6).
     sql = """
-        SELECT id, company_name, jurisdiction, status, buy_status, broker_status,
-               current_score, latest_decision, updated_at
-        FROM cases
+        SELECT c.id, c.company_name, c.jurisdiction, c.status, c.buy_status, c.broker_status,
+               c.current_score, d.decision AS latest_decision, c.updated_at
+        FROM cases c
+        LEFT JOIN decisions d ON d.id = c.latest_decision_row_id AND d.case_id = c.id
         {where}
-        ORDER BY updated_at DESC LIMIT :limit
+        ORDER BY c.updated_at DESC LIMIT :limit
     """
     params: dict = {"limit": min(limit, 200)}
     where = ""
     if q:
-        where = "WHERE id ILIKE :q OR company_name ILIKE :q"
+        where = "WHERE c.id ILIKE :q OR c.company_name ILIKE :q"
         params["q"] = f"%{q}%"
     with request.app.state.session_factory() as session:
         cases = _rows(session.execute(text(sql.format(where=where)), params))

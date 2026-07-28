@@ -5,8 +5,12 @@ any two produces a reconciliation that is confidently wrong rather than usefully
 
 - ``delivery_witnessed`` — the terminal transaction committed with a digest. The tool sent these
   exact bytes and the receiver returned 2xx. Nothing to reconcile.
-- ``send_intent_witnessed`` — the exact bytes were durably committed to an attempt row under a
-  live claim, before any transmission was tried. The send may then have happened (and even been
+- ``send_intent_witnessed`` — the exact bytes were durably committed to an ADMITTED attempt
+  row (``admission = 'admission_v1'`` — stamped only by the database's admission trigger,
+  never by the writer) under a live claim, before any transmission was tried. An attempt
+  that predates the admission authority (``legacy_unverified``) proves nothing: any writer
+  could insert one with an arbitrary token, so its row classifies ``legacy_unwitnessed``,
+  never staged-intent and never not-accepted. The send may then have happened (and even been
   accepted — the send-before-stamp residual) or the process may have died before the socket ever
   opened. Local evidence CANNOT tell those apart, which is why this state is named for what it
   proves — staged intent — and not "attempt_witnessed" or "transmitted": there is no atomic
@@ -43,8 +47,11 @@ WITNESS_STATES = (DELIVERY_WITNESSED, SEND_INTENT_WITNESSED, LEGACY_UNWITNESSED,
 WITNESS_SQL = f"""
 CASE
     WHEN o.callback_wire_sha256 IS NOT NULL THEN '{DELIVERY_WITNESSED}'
-    WHEN EXISTS (SELECT 1 FROM outbox_delivery_attempts a WHERE a.outbox_id = o.id)
+    WHEN EXISTS (SELECT 1 FROM outbox_delivery_attempts a
+                 WHERE a.outbox_id = o.id AND a.admission = 'admission_v1')
         THEN '{SEND_INTENT_WITNESSED}'
+    WHEN EXISTS (SELECT 1 FROM outbox_delivery_attempts a WHERE a.outbox_id = o.id)
+        THEN '{LEGACY_UNWITNESSED}'
     WHEN o.witness_generation = 'attempt_v1' THEN '{NOT_ACCEPTED}'
     ELSE '{LEGACY_UNWITNESSED}'
 END

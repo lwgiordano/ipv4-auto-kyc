@@ -270,6 +270,20 @@ _DISPROVEN_CLAIMS = [
         "the downgrade rule is witness-aware (re-audit 1f8412e F3): supersession OR any attempt "
         "row OR any terminal digest refuses; rollback after first witness use is flag/image only.",
     ),
+    (
+        # a walk that STARTS at 014 or 015 omits the top of the real chain; the full walk
+        # `016 → 015 → 014 → 013 → 012` never matches this (its 014 is preceded by "015 → ").
+        r"(?<!→ )\b01[45] → 013 → 012",
+        "the documented rollback walk starts at the REAL head (016 → 015 → 014 → 013 → 012); a "
+        "walk starting mid-chain never executes the refusals production actually hits "
+        "(re-audit 0c46443 F5).",
+    ),
+    (
+        r"013/01[456]-COMPATIBLE image|compatible schema after first witness use",
+        "on refusal the operator keeps the reviewed 016-compatible image — naming an older "
+        "compatibility set restarts a publisher without the receipt/terminal contract against "
+        "preserved evidence (re-audit 0c46443 F5).",
+    ),
 ]
 
 

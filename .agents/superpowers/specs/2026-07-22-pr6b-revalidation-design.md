@@ -3,8 +3,8 @@
 > **PAUSED / SUPERSEDED ORDERING — re-audit `4dfdf8a` F6 (2026-07-27).** This spec predates the
 > PR-7b split and reordering. The user reordered PR 7b BEFORE PR 6b (7b-core supplies the
 > callback-ordering primitive 6b's revalidation coordinator rests on), and the migration chain has
-> since become: `013` 7b-core, `014` witness repair, `015` witness-authority hardening (all
-> shipped), `016` 7b-activation (pending). **PR 6b is now migration `017` (`down_revision='016'`)
+> since become: `013` 7b-core, `014` witness repair, `015` witness-authority hardening,
+> `016` witness admission (all shipped), `017` 7b-activation (pending). **PR 6b is now migration `018` (`down_revision='017'`)
 > and builds AFTER activation** — its coordinator consumes activation's convergence contract
 > (greatest per-case platform-acknowledged sequence), and activation itself carries three OPEN
 > blockers recorded as O1/O2/O3 in the activation spec (rev 8) that must be resolved before this

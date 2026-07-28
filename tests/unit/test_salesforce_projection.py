@@ -35,7 +35,10 @@ def project(**overrides):
         "checks": [],
         "open_task_types": [],
         "poc_token_outstanding": False,
-        "latest_decision": {"gates_json": {"no_hard_conflict": True}, "manual": False},
+        # the projection derives the non-manual action from the POINTED decision row's own
+        # value (re-audit 0c46443 F6) — the fixture carries it like the real pointer row does
+        "latest_decision": {"decision": "approve", "gates_json": {"no_hard_conflict": True},
+                            "manual": False},
     }
     kwargs.update(overrides)
     return project_salesforce_fields(**kwargs)

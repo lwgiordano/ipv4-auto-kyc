@@ -128,9 +128,12 @@ three things: does it include a **migration**, any **new env vars**, and any
   deliberately refuses (it will not delete immutable audit events to recreate
   the old global unique — see `docs/RUNBOOK.md` and ADR-003). If two cases have
   shared an idempotency key, roll forward with a fix; do not downgrade 010.
-  **Exception — migrations 013/014/015 (PR 7b-core) are forward-only after any wire
-  witness exists.** Their downgrades refuse — with stable sentinels
-  (`MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+  **Exception — migrations 013-016 (PR 7b-core) are forward-only after any wire
+  witness exists, positive OR negative** (an `attempt_v1` decision callback with no attempt
+  is durable proof nothing was staged, and counts). Their downgrades refuse — with stable
+  sentinels, in execution order
+  (`MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+  `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`) — when an
@@ -138,9 +141,12 @@ three things: does it include a **migration**, any **new env vars**, and any
   `superseded` outbox row exists: those are immutable delivery evidence (for a
   pending/dead callback, the attempt row is the ONLY record that bytes were
   staged), and a local terminal status is never a reason to destroy the record
-  of what the platform accepted. Rollback after first witness use is a
-  flag/image rollback on the 013/014-compatible schema, never a schema
-  downgrade.
+  of what the platform accepted. On refusal, KEEP or redeploy the reviewed
+  **016-compatible** image — an older publisher lacks the receipt/terminal
+  contract and must not run against preserved evidence. Rollback after first
+  witness use is a flag/image rollback on that compatible schema, never a
+  schema downgrade; a pre-7b image is permitted only after the entire walk
+  reaches 012.
 
 ## 7. Monitoring and incidents
 

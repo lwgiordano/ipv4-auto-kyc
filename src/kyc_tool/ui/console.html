@@ -461,9 +461,13 @@ const HOT=new Set(["run.decided","reviewer.manual_approve","check.superseded","r
 async function viewCase(id){
   const{status,body:d}=await j(`/ui/api/cases/${encodeURIComponent(id)}/full`);
   if(status===404){page.innerHTML=`<div class="empty card"><b>Case not found</b><code>${esc(id)}</code></div>`;return}
-  const c=d.case,latest=d.decisions[0]||{},gates=latest.gates_json||{};
+  const c=d.case;
+  // AUTHORITY: the trigger-maintained pointer row. decisions[] is decided_at-ordered for DISPLAY
+  // only — transaction-start timestamps invert against commit order, and c.latest_decision goes
+  // stale after a record-only manual approval, so neither may pick the verdict tuple.
+  const latest=d.pointer_decision||{},gates=latest.gates_json||{};
   const s=d.score,max=Math.max(s.threshold*1.3,s.total+10);
-  const decision=c.latest_decision;
+  const decision=latest.decision??null;
   const barColor=decision==="approve"||decision==="approve_buy_locked"?"var(--green)":
                  decision==="reject"?"var(--red)":"var(--amber)";
   const gap=s.threshold-s.total;

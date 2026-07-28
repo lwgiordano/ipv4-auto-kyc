@@ -433,3 +433,45 @@ def test_every_delivered_decision_row_is_delivery_witnessed(
         bad = s.execute(text(witness.WITNESS_SELECT +
             " AND o.status = 'delivered' AND o.callback_wire_sha256 IS NULL")).all()
     assert bad == [], f"delivered decision rows without a witness: {bad}"
+
+
+def test_receipt_naming_a_different_attempt_writes_nothing(
+    session_factory, publisher, callback_capture, monkeypatch, clean_db
+):
+    """Re-audit 0c46443 F1: attempt_id is an AUTHORITY input now — a well-formed receipt whose id
+    names some OTHER attempt (right claim, right digest, wrong identity) is a no-op terminal."""
+    from kyc_tool.outbox.publisher import DeliveryReceipt
+
+    _seed_decisions(session_factory, "cr2", [1])
+    _enqueue_cb(session_factory, "cr2", 1)
+
+    def _boom(self, row, token, receipt=None):
+        raise _InjectedFault("capture the claim, skip the terminal")
+
+    monkeypatch.setattr(type(publisher), "_record_delivered", _boom)
+    with pytest.raises(_InjectedFault):
+        publisher.process_once()          # stages the REAL attempt under the live claim
+    monkeypatch.undo()
+
+    with session_factory() as s:
+        row = s.execute(text(
+            "SELECT id, kind, case_id, run_id, attempts, claim_token "
+            "FROM outbox WHERE run_id='cr2-r1'")).one()
+        real = s.execute(text(
+            "SELECT attempt_id, request_sha256 FROM outbox_delivery_attempts "
+            "WHERE outbox_id=:o"), {"o": row.id}).one()
+
+    wrong_id = DeliveryReceipt(
+        attempt_id="00000000-0000-0000-0000-0000000000aa",   # NOT the staged attempt's id
+        wire_sha256=real.request_sha256, wire_version="legacy")
+    publisher._record_delivered(row, row.claim_token, wrong_id)
+    with session_factory() as s:
+        assert s.execute(text("SELECT status FROM outbox WHERE id=:i"),
+                         {"i": row.id}).scalar_one() == "pending"
+
+    exact = DeliveryReceipt(attempt_id=str(real.attempt_id),
+                            wire_sha256=real.request_sha256, wire_version="legacy")
+    publisher._record_delivered(row, row.claim_token, exact)
+    with session_factory() as s:
+        assert s.execute(text("SELECT status FROM outbox WHERE id=:i"),
+                         {"i": row.id}).scalar_one() == "delivered"

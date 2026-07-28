@@ -66,6 +66,13 @@ class DeliveryReceipt:
     delivered — run COMPLETE, published_at stamped — while the witness taxonomy simultaneously
     classified the same row `not_accepted`. A terminal for a decision callback now carries the
     attempt identity it completes, or it writes nothing.
+
+    `attempt_id` is VERIFIED, not persisted: the terminal's fenced EXISTS matches it against the
+    staged attempt (same id, claim, digest, encoding), so a receipt naming a different attempt is
+    a no-op — but no winning-attempt link column is stored, because identical bytes are one event
+    to the receiver and a stored winner would be a derived fact free to contradict its source.
+    The DB trigger independently enforces claim+digest+encoding agreement; the id check is the
+    application layer's contribution on top of it.
     """
 
     attempt_id: str
@@ -74,8 +81,11 @@ class DeliveryReceipt:
 
     def malformed(self) -> str | None:
         """Reason this receipt cannot witness a delivery, or None if well-formed."""
-        if not self.attempt_id:
-            return "empty attempt_id"
+        if not re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            (self.attempt_id or "").lower(),
+        ):
+            return f"attempt_id is not a UUID: {self.attempt_id!r}"
         if not re.fullmatch(r"[0-9a-f]{64}", self.wire_sha256 or ""):
             return f"wire_sha256 is not 64-hex: {self.wire_sha256!r}"
         if self.wire_version not in ("legacy", "sequenced"):
@@ -375,6 +385,7 @@ class OutboxPublisher:
                     # attempt-vs-terminal agreement the taxonomy rests on would be unverifiable.
                     "AND (:needs_witness = false OR EXISTS ("
                     "  SELECT 1 FROM outbox_delivery_attempts a WHERE a.outbox_id=:id "
+                    "  AND a.attempt_id=:attempt_id_probe "
                     "  AND a.claim_token=:token AND a.request_sha256=:sha_probe "
                     "  AND a.wire_version=:wire_version_probe)) RETURNING id"
                 ),
@@ -385,6 +396,7 @@ class OutboxPublisher:
                 {"id": row.id, "now": now, "token": token, "sha": wire_sha256,
                  "wire_version": receipt.wire_version if receipt else None,
                  "needs_witness": receipt is not None,
+                 "attempt_id_probe": receipt.attempt_id if receipt else None,
                  "sha_probe": wire_sha256,
                  "wire_version_probe": receipt.wire_version if receipt else None},
             ).first()

@@ -159,7 +159,7 @@ def test_pre_authority_pending_and_dead_rows_are_legacy_not_not_accepted(pg):
         _seed_callback(conn, "cf2", "cf2-r1", 1, "pending")
         _seed_callback(conn, "cf2", "cf2-r2", 2, "dead")
         _seed_callback(conn, "cf2", "cf2-r3", 3, "delivered", delivered=True)
-    command.upgrade(cfg, "014")
+    command.upgrade(cfg, "head")  # the witness query is head code; it needs the head schema
     with eng.begin() as conn:
         assert _witness(conn, "cf2-r1") == "legacy_unwitnessed"
         assert _witness(conn, "cf2-r2") == "legacy_unwitnessed"

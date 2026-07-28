@@ -518,7 +518,8 @@ retries) —
 **no outbox reset here** (F1): the pre-013 schema has no claim columns, and an old in-flight outbox
 claim is encoded only in `next_attempt_at` and cannot be distinguished from legitimate backoff.
 **Preserve every pending row's `next_attempt_at`**; an interrupted old claim simply waits until its
-already-recorded due time (bounded by the documented old lease); (4) `alembic upgrade head` (013) —
+already-recorded due time (bounded by the documented old lease); (4) `alembic upgrade head` (the
+chain `013`→`014`→`015`→`016`) —
 which **repeats the §0 preflights under the zero-writer boundary** and remains the authoritative
 fail-closed check (the pre-window diagnostic is an early detector, not a substitute);
 (5) start API only, probe `/readyz`, then start+attest the fenced workers — **no mutating prod smoke**;
@@ -531,10 +532,14 @@ read-back-asserts zero claims.
 drained as the forward cutover; the `LOCK TABLE` in §1 is defense-in-depth, not a substitute): (1)
 pause submissions, disable autoscaling/restarts; (2) hard-stop and orchestrator-attest **zero** API,
 pipeline, outbox, `dev_worker`, retention, and every writer; (3) **while 013 still exists**, run
-`reset_interrupted_outbox_claims` and verify zero claim tuples; (4) run `alembic downgrade` (its
-`LOCK TABLE` + preflight refuses byte-stably if any `superseded` row exists — then rollback stays on a
-7b-core-compatible image and is a forward fix); (5) deploy the pre-7b image **only after** the
-downgrade succeeds. Redeploying the pre-7b image *before* 013 is applied is also safe. (7b-activation
+`reset_interrupted_outbox_claims` and verify zero claim tuples; (4) run `alembic downgrade 012` —
+the walk is `016 → 015 → 014 → 013 → 012` and EACH revision preflights byte-stably: `016` on any
+attempt/digest/`attempt_v1` row (negative evidence included), `015`/`014` on any attempt or digest,
+`013` on `superseded`/digest/amended-history. On ANY refusal the DB stays on the witness-authority
+schema and rollback is KEEP-or-redeploy the reviewed **`016`-compatible** image — an older publisher
+lacks the receipt/terminal contract and must not run against preserved evidence; (5) deploy the
+pre-7b image **only after** the entire walk reaches `012`. Redeploying the pre-7b image *before*
+013 is applied is also safe. (7b-activation
 is separately forward-only-after-use.) Mirror this exact order in `DEPLOYMENT.md`/`RUNBOOK.md` — do not
 rely on the operator remembering that the forward drain also applies backward.
 

@@ -274,3 +274,14 @@ def test_6b_spec_is_banner_superseded_not_silently_stale():
     assert f"migration `{row.group(1)}`" in spec, (
         f"the 6b banner must name the currently reserved revision {row.group(1)}"
     )
+
+
+def test_activation_spec_status_matches_roadmap_state(re=None):
+    """Re-audit 0c46443 F7: the activation spec's own header/context must not describe 7b-core as
+    pending while the ROADMAP marks its revisions shipped — status is stated once, everywhere."""
+    spec = (_SPECS / "2026-07-22-pr7b-activation-platform-ordering-design.md").read_text()
+    head = spec[:1200]
+    assert "pending/planned" not in head and "not yet shipped" not in head, (
+        "the activation spec still describes 7b-core as pending; ROADMAP §C says shipped"
+    )
+    assert "SHIPPED" in head

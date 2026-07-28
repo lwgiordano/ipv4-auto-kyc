@@ -406,6 +406,12 @@ class OutboxDeliveryAttempt(Base):
     claim_token: Mapped[str] = mapped_column(UUID(as_uuid=False))
     wire_version: Mapped[str] = mapped_column(Text)  # legacy | sequenced
     request_sha256: Mapped[str] = mapped_column(Text)
+    # migration 016: which regime ADMITTED this attempt. 'admission_v1' is stamped only by the
+    # admission trigger (it overwrites whatever the INSERT carried); pre-authority rows are
+    # 'legacy_unverified' and the witness taxonomy refuses to treat them as staged-intent proof.
+    admission: Mapped[str] = mapped_column(
+        Text, server_default=text("'legacy_unverified'"), default="legacy_unverified"
+    )
     attempted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
     )
@@ -414,6 +420,10 @@ class OutboxDeliveryAttempt(Base):
         Index("ix_attempt_outbox", "outbox_id", text("attempted_at DESC")),
         CheckConstraint("request_sha256 ~ '^[0-9a-f]{64}$'", name="ck_attempt_sha_shape"),
         CheckConstraint("wire_version IN ('legacy','sequenced')", name="ck_attempt_wire_vocab"),
+        CheckConstraint(
+            "admission IN ('legacy_unverified','admission_v1')",
+            name="ck_attempt_admission_vocab",
+        ),
     )
 
 

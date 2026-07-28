@@ -124,11 +124,15 @@ def project_salesforce_fields(
     else:
         website_status = None
 
-    # Platform action: manual approval is sticky and platform-initiated
+    # Platform action: manual approval is sticky and platform-initiated. The non-manual action
+    # derives from the POINTED decision row (the caller passes it), never from the
+    # cases.latest_decision column — that projection goes stale after a record-only manual
+    # approval, and when the pointer is unresolved (ambiguous pre-014 order) the honest action
+    # is NONE, not a guess (re-audit 0c46443 F6).
     if case.get("status") == "approved_manual":
         action = "Manual Approve"
     else:
-        action = ACTION_MAP.get(case.get("latest_decision") or "")
+        action = ACTION_MAP.get((latest_decision or {}).get("decision") or "")
 
     reason_codes = sorted({code for c in live for code in (c.get("reason_codes") or [])})
 

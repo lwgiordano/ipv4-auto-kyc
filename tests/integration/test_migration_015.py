@@ -273,7 +273,8 @@ def test_015_downgrade_and_live_attempt_writer_never_deadlock(pg):
         writer.dispose()
     assert not t.is_alive()
     assert "40P01" not in result["outcome"] and "deadlock" not in result["outcome"].lower()
-    assert "MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE" in result["outcome"]
+    # the walk now starts at 016, whose (equally child-first) downgrade refuses first
+    assert "MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE" in result["outcome"]
     eng.dispose()
 
 
@@ -285,7 +286,7 @@ def test_unused_database_round_trips_through_015(pg):
     command.upgrade(cfg, "head")
     eng = create_engine(url)
     with eng.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "015"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "016"
     eng.dispose()
 
 

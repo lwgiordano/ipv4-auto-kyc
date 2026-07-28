@@ -162,3 +162,69 @@ def test_manual_approve_end_to_end_serves_one_row_on_every_surface(
     assert sf["Platform_Action_Taken__c"] == "Manual Approve"
     assert sf["Manual_Approved_By__c"] == "rev-1"      # attribution from the pointer row,
     assert sf["Hard_Conflict__c"] is False             # gates from the pointer row too
+
+
+def test_unresolved_ambiguity_metric_counts_only_real_ambiguity(client, session_factory, clean_db):
+    """Re-audit 0c46443 F7: the counter must include NULL-pointer-WITH-decisions, exclude
+    NULL-pointer-without-decisions, and return to zero when the next decision heals the case."""
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id, last_decision_sequence) VALUES ('cm1', 1)"))
+        s.execute(text("INSERT INTO cases (id) VALUES ('cm2')"))  # no decisions: NOT ambiguous
+        s.commit()
+    with session_factory.kw["bind"].begin() as conn:
+        _insert_chain(conn, "cm1", "cm1-r1", 1, "m")
+        conn.execute(text("UPDATE cases SET latest_decision_row_id = NULL WHERE id='cm1'"))
+    assert client.get("/v1/metrics").json()["cases_with_unresolved_decision_order"] == 1
+
+    with session_factory.kw["bind"].begin() as conn:  # the next decision heals the pointer
+        conn.execute(text(
+            "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+            "actor_json, payload_json, event_sequence) VALUES "
+            "('cm1-h-ev','cm1','cm1-h','h','x','{}'::jsonb,'{}'::jsonb,2)"))
+        conn.execute(text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                          "VALUES ('cm1-h','cm1','cm1-h-ev','PUBLISH_DECISION')"))
+        conn.execute(text(
+            "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+            "buy_enablement, policy_shas, manual, decision_sequence) VALUES "
+            "('cm1-h-d','cm1','cm1-h','approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false,2)"))
+    assert client.get("/v1/metrics").json()["cases_with_unresolved_decision_order"] == 0
+
+
+def test_list_endpoint_serves_the_pointed_decision(client, session_factory, clean_db):
+    """Re-audit 0c46443 F6: the cases LIST also reads through the pointer — after the raw manual
+    row moves it, the list shows the manual verdict; with the pointer unresolved it shows NULL,
+    never the stale projection column."""
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id, last_decision_sequence, latest_decision) "
+                       "VALUES ('cl1', 1, 'reject')"))
+        s.commit()
+    with session_factory.kw["bind"].begin() as conn:
+        _insert_chain(conn, "cl1", "cl1-r1", 1, "l")
+        conn.execute(text(
+            "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+            "buy_enablement, policy_shas, manual, reviewer_id) VALUES "
+            "('cl1-manual','cl1',NULL,'approve',10,'{}'::jsonb,'enabled','{}'::jsonb,true,'r1')"))
+    rows = {c["id"]: c for c in client.get("/ui/api/cases").json()["cases"]}
+    assert rows["cl1"]["latest_decision"] == "approve"      # the POINTED (manual) row
+
+    with session_factory.kw["bind"].begin() as conn:        # unresolved → NULL, not 'reject'
+        conn.execute(text("UPDATE cases SET latest_decision_row_id = NULL WHERE id='cl1'"))
+    rows = {c["id"]: c for c in client.get("/ui/api/cases").json()["cases"]}
+    assert rows["cl1"]["latest_decision"] is None
+
+
+def test_salesforce_action_follows_the_pointer_not_the_case_column(
+    client, session_factory, clean_db
+):
+    """Re-audit 0c46443 F6: with the pointer unresolved, the Salesforce projection must emit NO
+    action rather than mapping the stale cases.latest_decision column."""
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id, last_decision_sequence, latest_decision) "
+                       "VALUES ('cs1', 1, 'approve')"))
+        s.commit()
+    with session_factory.kw["bind"].begin() as conn:
+        _insert_chain(conn, "cs1", "cs1-r1", 1, "s")
+        conn.execute(text("UPDATE cases SET latest_decision_row_id = NULL WHERE id='cs1'"))
+    full = client.get("/ui/api/cases/cs1/full").json()
+    assert full["pointer_decision"] is None
+    assert full["salesforce"]["Platform_Action_Taken__c"] is None  # honest: order unresolved
