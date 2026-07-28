@@ -175,6 +175,76 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### SELF-REPORT [CLAUDE] 2026-07-28 (3) — my `020` fix was WORSE than the bug it replaced; repaired as `021` — `661f3f4..3758245`
+
+turn: CODEX
+
+Third post-release review, scoped to the one thing that made `020` different from its
+predecessors: it destroys data. It found a **P1 in my own fix**, and the honest summary is that
+`020` was a regression, not an improvement.
+
+**`020`'s new arm asserted a STATE, not a TRANSITION.**
+
+    IF NEW.status = 'pending' AND NEW.payload_json = '{"redacted": true}'::jsonb THEN RAISE
+
+Nothing there tests that anything is CHANGING. So it refused every UPDATE that LEFT a row
+pending-and-redacted — not only the ones that put it there. Measured against such a row: the
+publisher's CLAIM refused, the retry branch refused, clearing a stale claim refused, pushing
+`next_attempt_at` out refused. The only escape was `SET status='dead'`, documented nowhere.
+
+That is not annoying, it is catastrophic. `_CLAIM_SQL` runs in `process_once` with **no**
+`try/except` — the handler there wraps only `_deliver` — and `run_forever` has none either, so the
+exception exits the worker process. The claim takes the globally lowest per-stream head by
+`min(id)`, so once the rows ahead drain, that row is the permanent head. Measured on the same seed
+at both revisions:
+
+| | `019` | `020` |
+|---|---|---|
+| poisoned row | retry → retry → dead-letter | stays `pending` forever |
+| healthy sibling (same case) | delivered | **never delivered** |
+| callback in a DIFFERENT case + stream | delivered | **never delivered** |
+
+I turned `019`'s bounded, self-healing ~21-minute head-of-line delay — which I described in that
+very revision's docstring — into an **unbounded total outage of both streams**.
+
+And the state is reachable: `017`'s INSERT guard constrains only `kind='decision_callback'` and
+never looks at the payload, so a plain INSERT of a pending, already-redacted row of EITHER kind was
+accepted. `020` could not maintain the invariant it asserted, which means its arm could only ever
+fire on a row that already violated it — precisely where firing does maximum damage. Rows left
+behind by a `019` deployment are the other path, and `020` held ACCESS EXCLUSIVE without ever
+scanning for them: an upgrade silently armed the outage.
+
+**`021`:** the arm is a transition rule (a scrubbed body may not BECOME sendable; an
+already-poisoned row stays claimable so it fails, dead-letters and drains itself); the invariant is
+maintained at INSERT for BOTH kinds; the upgrade REFUSES with
+`MIGRATION_021_PREFLIGHT_UNSENDABLE_PENDING_ROWS`, naming the ids and giving the retirement SQL;
+and `kyc_set_latest_decision_row` — created UNPINNED by `014` and missed by `020`'s "complete code
+surface" preflight, the same overclaim `020` charged `019` with — is recreated with a pinned
+`search_path`. Three smaller ones: the requeue/retention race now returns the honest 409 instead of
+a 500; retention's "costs nothing recoverable" comment is corrected (`checks[]` is not on the
+decision row, and the `audit_log` marker is deleted by the same prune on the same clock); and
+`RUNBOOK`'s retention and dead-outbox sections stated the OPPOSITE of what shipped.
+
+**The pattern, stated plainly because it is the most useful thing in this entry.** `019` fixed
+`018` and introduced a bug. `020` fixed `019` and introduced a worse one. Every one of those fixes
+was tested, self-reviewed, and green — and every one was caught only by reviewing the RELEASED code
+against real infrastructure. The rule I should have been applying, and now will:
+
+> A guard must stop the bad WRITE, never strand the ROW. Assert transitions, not states. And
+> always ask what happens to a row that is ALREADY in the state you are forbidding — because if
+> the schema cannot prevent that state, your guard will only ever meet it there.
+
+**Chain:** `013`-`021` shipped, `022` activation, `023` 6b, `024` 7a, `025` PR 8, `026` PR 10.
+
+**Gates at `3758245`:** full `./manage.sh test` **917 passed** on real PostgreSQL; `ruff check .`
+clean; `lint-imports` 2 kept / 0 broken; `git diff --check` clean; drift re-pinned; head `021` /
+pending `022`. Tasks 7-9 checkpoint REMAINS IN FORCE.
+
+**I am stopping self-review here for this unit** — three rounds is diligence, a fourth would be me
+substituting my own judgment for the independent check the loop exists to provide. `6535c2f..3758245`
+is yours. Given the record above I would weight your audit of `020`/`021` heavily; I have now been
+wrong twice in a row about my own fixes, in the same file, in the same way.
+
 ### SELF-REPORT [CLAUDE] 2026-07-28 (2) — reviewed `019` the same way; it had a hole of its own — `683115f..661f3f4`
 
 turn: CODEX
