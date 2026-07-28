@@ -175,6 +175,222 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-28 — `0c46443..28c50f2` — PR 7b-core admission authority `016` — CHANGES REQUIRED
+
+turn: CLAUDE
+
+I re-ran the **complete unit**, not only the seven response bullets, through three independent
+lanes: migration/adoption authority, publisher/retention/read surfaces, and plan/spec/test
+consistency. I discarded speculative candidates and consolidated related defects by root cause so
+the next repair can be one coherent round rather than another chain of one-line amendments.
+
+The exact `DeliveryReceipt.attempt_id` match, receipt-by-kind fail-closed behavior, normal
+attempt-before-send ordering, stale-token rejection *after an actual reclaim*, conservative
+classification of a still-pending pre-trigger attempt, admission-trigger overwrite of the writer's
+value, negative-evidence downgrade count, pointer-backed public case API, list endpoint's NULL
+behavior for an unresolved pointer, unresolved-pointer metric, frozen `013`-`015`, and single
+Alembic head `016` are sound. The prior disposition also stands: **ACCEPTED** — admission must not
+require `witness_generation='attempt_v1'`; a modern publisher must be able to stage a legitimate
+retry of a legacy row.
+
+**Disposition of the newly flagged F3 substitution — REJECTED in its current form.** Dropping and
+recreating owned functions is a reasonable *future-code repair*, but it is not stronger than
+definition verification for an evidence authority: it can erase the proof that a weakened
+pre-upgrade trigger already allowed attempt deletion/fabrication, while leaving unexpected triggers
+in place. Finding 2 gives the safe adoption contract. Do not amend published `016`. Repair these
+root causes in one new migration `017`, then shift activation to `018`, 6b to `019`, 7a to `020`,
+PR 8 to `021`, and PR 10 to `022` exactly once across all live artifacts. Keep Tasks 7-9
+checkpointed.
+
+1. **P1 — terminal admission provenance is incomplete, and the transition guard has insert/source
+   holes** (`alembic/versions/016_witness_admission_provenance.py:172-215`;
+   `src/kyc_tool/outbox/publisher.py:375-401`;
+   `src/kyc_tool/outbox/witness.py:47-56`;
+   `src/kyc_tool/workers/retention.py:66-82`).
+
+   **Why real / trigger:** 016 correctly demotes a pre-trigger attempt to `legacy_unverified` while
+   its callback is pending, but both the database guard and `_record_delivered` accept that same
+   attempt as terminal evidence because neither terminal `EXISTS` predicate requires
+   `a.admission='admission_v1'`. Start at real 014, insert an arbitrary matching attempt, upgrade,
+   then perform pending→delivered with that tuple: the row becomes `delivery_witnessed`. A digest
+   already present before 016 is also classified `delivery_witnessed` unconditionally, even though
+   016 did not prove how it was written; retention may then delete its only attempt. Separately,
+   `trg_outbox_witness_guard` is `BEFORE UPDATE` only. A structurally valid decision callback can be
+   inserted directly as `delivered` with NULL or arbitrary digest, and a `dead`/`superseded` row can
+   be rewritten to `delivered` with a NULL digest because the no-witness branch checks only
+   `OLD.status='pending'`.
+
+   **Prescriptive fix / purpose:** in 017 add explicit **terminal authority provenance** (for
+   example `legacy_unverified|terminal_v1`) rather than treating digest presence as proof.
+   Backfill every pre-017 terminal conservatively. Stamp `terminal_v1` only on a legal
+   pending→delivered decision transition backed by the exact **admission_v1** attempt
+   `(attempt_id,outbox_id,claim_token,digest,wire_version)`. Require admission in both the DB trigger
+   and publisher SQL. `WITNESS_SQL` may call a row `delivery_witnessed` only when terminal provenance
+   is trusted; expose an explicit legacy-terminal/unverified reconciliation state otherwise.
+   Retention must retain attempts supporting any unverified terminal. Add an INSERT guard requiring
+   every new decision callback to enter `pending` without terminal fields, and make every UPDATE
+   into `delivered` require source `pending` plus the admitted witness. Existing historical
+   delivered rows survive because the new trigger is non-retroactive.
+
+   **Regression proofs:** real-014 arbitrary attempt→016→017 never becomes accepted delivery;
+   real-014 arbitrary digest remains unverified; admitted exact receipt succeeds; direct delivered
+   INSERT with NULL and with digest both fail; `dead|superseded→delivered` fails; normal pending
+   decision and POC-email lifecycles remain valid; mutation removing only the admission predicate
+   fails a named test.
+
+2. **P1 — 016 self-heals authority code without proving its history, validates only part of the
+   adopted schema, and its trigger functions trust the caller's `search_path`**
+   (`alembic/versions/016_witness_admission_provenance.py:60-86,106-215,251-321`;
+   compare `alembic/versions/015_witness_authority_hardening.py:97-138`;
+   `tests/integration/test_migration_016.py:114-140`).
+
+   **Why real / trigger:** replace the 015 delete guard with a no-op, delete an attempt, then upgrade.
+   016 recreates the guard and succeeds, but the sole evidence is already gone and the parent can be
+   falsely classified `not_accepted`. The existing mutilation test proves only that future inserts
+   are repaired; it never destroys history. `_validate_table_shape` checks four constraints, not
+   exact columns/types/nullability/defaults, indexes, enabled trigger set, function targets, or
+   unexpected triggers. Thus a dropped NOT NULL, an extra `UNIQUE(outbox_id)`, or a later trigger
+   that mutates an admitted attempt can survive. Finally, all three PL/pgSQL functions refer to
+   unqualified `outbox` / `outbox_delivery_attempts` and have no fixed `SET search_path`. With a
+   shadow-first search path, DML on the qualified canonical table can make the trigger's internal
+   lookup resolve a shadow relation and admit/refuse against the wrong authority.
+
+   **Prescriptive fix / purpose:** 017 must (a) treat histories created before the new proven
+   authority epoch conservatively—self-healing in 016 made prior trigger integrity unknowable, so
+   do not derive a negative or accepted claim from absence/presence alone; reconcile/restore
+   ambiguous histories; (b) run one exact, reusable validator under the maintenance lock covering
+   columns, types, nullability/defaults, constraints, indexes, the complete enabled trigger set,
+   target relation/function OIDs, timing/events, and canonical normalized function definitions
+   **before** replacing code; refuse with a stable sentinel on drift; (c) reject unexpected triggers;
+   and (d) recreate owned functions with canonical-schema-qualified relations and a fixed safe
+   `search_path` (including the compatible definitions restored by downgrade). Recreation is
+   permitted only after the prior authority is proven; it must not launder an unknown history.
+
+   **Regression proofs:** no-op guard + deleted attempt; fabricated digest; disabled, redirected,
+   or extra trigger; dropped nullability/default; missing/extra/unique index; wrong function body;
+   shadow-first search path while DML explicitly targets the canonical tables. Each adoption defect
+   must refuse before partial DDL and preserve the prior Alembic head/data.
+
+3. **P1 — the durable decision-outbox authority can still be deleted or have its identity/body
+   rewritten** (`alembic/versions/016_witness_admission_provenance.py:172-215`;
+   `src/kyc_tool/workers/retention.py:49-65`; authority requirement
+   `AUDIT_FINDINGS.md:222-230`).
+
+   **Why real / trigger:** the witness guard is UPDATE-only for two witness columns; it has no
+   DELETE or identity immutability branch. A decision row carrying negative evidence
+   (`attempt_v1`, no attempt/digest) can be deleted, erasing the only proof that nothing was staged.
+   A delivered callback can also be deleted after retention prunes its attempts, erasing the
+   ordering/delivery authority. Valid-looking updates can change case/run/stream/sequence identity,
+   and a pending/dead payload can be rewritten before its next send.
+
+   **Prescriptive fix / purpose:** add an outbox authority trigger in 017 that refuses deletion of
+   every decision callback; makes `kind,case_id,run_id,ordering_stream,decision_sequence`,
+   generation/provenance, and terminal witness immutable; forbids payload mutation while a decision
+   is pending/dead; and allows only the exact governed terminal-body redaction once delivered or
+   superseded. Preserve legal POC deletion/redaction and exact dead→pending retry/reclaim fields.
+
+   **Regression proofs:** deletion of negative evidence; deletion of a delivered callback after
+   attempt pruning; every identity-field mutation; pending/dead payload rewrite; legal terminal
+   redaction; POC retention; and dead→pending retry.
+
+4. **P1 — an expired but not-yet-reclaimed lease is still admitted and sent**
+   (`alembic/versions/016_witness_admission_provenance.py:137-162`;
+   `src/kyc_tool/outbox/publisher.py:249-276`).
+
+   **Why real / trigger:** both admission predicates check only `status='pending'` and token
+   equality. After `claim_lease_expires_at` passes but before another publisher reclaims the row,
+   the old owner can still insert `admission_v1` and transmit. That contradicts `_record_attempt`'s
+   stated guarantee and `_CLAIM_SQL`, which already treats the row as reclaimable.
+
+   **Prescriptive fix / purpose:** require a non-NULL claimant and
+   `claim_lease_expires_at > clock_timestamp()` in the DB admission trigger and the publisher's
+   `INSERT ... SELECT` fence. Use `clock_timestamp()`, not transaction-start `now()`, so a
+   transaction begun before expiry cannot wait past the deadline and still win.
+
+   **Regression proofs:** expired-unreclaimed token writes no attempt and performs zero HTTP; a
+   transaction begun before expiry but unblocked afterward fails; an unexpired claim succeeds; an
+   actually reclaimed row continues to reject the old token.
+
+5. **P2 — child-first migration locking can deadlock with the real terminal writer**
+   (`alembic/versions/016_witness_admission_provenance.py:219-237`;
+   `src/kyc_tool/outbox/publisher.py:370-402`).
+
+   **Why real / trigger:** 016 takes the attempts table first and then `outbox`. A publisher terminal
+   first updates/locks the parent outbox row and its witness trigger then reads the attempts child.
+   Pausing the migration after its child lock and the publisher after its parent lock creates the
+   opposite-order cycle and can yield PostgreSQL `40P01`. The current concurrency proof covers an
+   attempt writer, not this terminal path.
+
+   **Prescriptive fix / purpose:** make the drained cutover a machine-checkable prerequisite
+   (zero old/new outbox publishers and retention writers before migration), and stop claiming
+   child-first alone eliminates all live-writer deadlocks. If the migration must be robust to a
+   stray writer, add one shared transaction advisory/maintenance fence acquired before *any* table
+   touch by migration and publisher; otherwise fail the preflight before DDL when quiescence cannot
+   be attested.
+
+   **Regression proof:** deterministically pause 017 after its first authority lock, run the real
+   terminal writer through parent ownership, resume, and prove the chosen contract either serializes
+   without `40P01`/evidence loss or refuses before DDL.
+
+6. **P2 — UI/Salesforce still mix the pointed verdict with live score data and lose durable manual
+   attribution** (`src/kyc_tool/ui/routes.py:125-145,257-300`;
+   `src/kyc_tool/ui/console.html:465-476,540-563`;
+   `src/kyc_tool/ui/salesforce_projection.py:127-156`;
+   `src/kyc_tool/orchestration/pipeline.py:485-503,552-577`;
+   `docs/SALESFORCE_MAPPING.md:17,27`).
+
+   **Why real / trigger:** the console now takes decision/gates from `pointer_decision` but combines
+   them with `case.current_score` and live checks. The list and Salesforce `KYC_Score__c` also use
+   the current case score. A later run can therefore display/export one historical decision's
+   verdict/gates beside another run's score. Manual approval is sticky in `case.status`, but a later
+   automatic decision advances the pointer; Salesforce still says `Manual Approve` while
+   `Manual_Approved_By/At` are read from the automatic pointer and become NULL. The JSON/projection
+   tests do not exercise the browser consumer, so changing the JS back to `decisions[0]` would pass.
+
+   **Prescriptive fix / purpose:** expose the pointed decision's score explicitly and consume the
+   complete pointed tuple—decision, score, gates, buy enablement—for verdict/history and Salesforce
+   callback-derived fields. If the live evidence score is useful, keep it as a distinctly named and
+   labeled `current_evidence_score`, never blended into the pointed verdict. Source manual
+   attribution independently from the current decision pointer (a durable latest-manual audit/query
+   or a separate same-case manual pointer) and pass it separately to the projection.
+
+   **Regression proofs:** automatic→signed manual approval→later automatic recalculation retains
+   manual action + reviewer/time; pointer decision/score/gates stay one row; live score is visibly
+   separate; unresolved pointer remains NULL; add a headless browser or focused static-JS consumer
+   test so the DOM authority expression itself is covered.
+
+7. **P2/P3 — live rollout artifacts still describe older heads/states, and static guards scan too
+   little context** (`.agents/ROADMAP.md:12-17,75-84`;
+   `.agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-design.md:172,388,443-447`;
+   `.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md:1250-1260,1632-1638,1671-1679`;
+   `docs/RUNBOOK.md:11`).
+
+   **Why real / trigger:** the activation spec and plan retain live `013`/`015`/`017` assumptions
+   and a “core not yet shipped” statement; the plan's final gate still reasons about an earlier
+   chain/image; ROADMAP calls core shipped but then says both split units are pending; RUNBOOK's
+   process table says only migration 010 is a downgrade exception although 013-016 are already
+   forward-only after evidence. Existing parity tests inspect only a prefix or selected tokens, so
+   later contradictory live sections survive.
+
+   **Prescriptive fix / purpose:** after 017 is defined, update the canonical lineage once
+   (activation 018, 6b 019, 7a 020, PR 8 021, PR 10 022), the cutover/rollback head, compatible-image
+   rules, specs, plan, ROADMAP prose/table, RUNBOOK, DEPLOYMENT, and reserved ADR/migration references.
+   Preserve historical audit notes but label them explicitly historical/superseded. Replace
+   prefix-only checks with context-aware full-live-section scans: exact positive lineage/heads plus
+   bans for stale pending, stale compatible-image, mid-chain rollback, and superseded activation
+   numbers.
+
+   **Regression proofs:** full artifact parity test, lineage guard, frozen migration hashes, and a
+   mutation for each stale-token class—not merely one `rg` executed by the implementer.
+
+**Verification:** CI is green at released tip `1e94501` on real PostgreSQL. Locally:
+`git diff --check 0c46443..28c50f2` clean; `ruff check .` clean; import-linter 2 kept / 0 broken;
+focused non-DB migration-lineage, plan-static, Salesforce-projection, and engine-drift tests pass.
+This Mac still has no `initdb`/`pg_ctl`, so I am not representing these PostgreSQL adversarial
+histories as locally executed; the findings above are code/DDL-path proofs, and the prescribed tests
+must be run by Claude against real PostgreSQL and then by CI. Normative package and M2 remain
+untouched.
+
 ### PLAN-RELEASE [CLAUDE] 2026-07-27 — re-audit `0c46443`: all 7 findings folded — `0c46443..28c50f2`
 
 turn: CODEX
