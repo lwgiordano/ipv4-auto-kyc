@@ -3,7 +3,7 @@
 ## Context
 
 PR 7b was split (user decision, 2026-07-22) into **7b-core** (this doc, migration `013`, shippable
-hardening) and **7b-activation** (migration `016`, `down_revision='015'` — repair `014` and witness-authority hardening `015` sit between them; see §attempt authority — the platform-authoritative cutover — bootstrap,
+hardening) and **7b-activation** (migration `018`, `down_revision='017'` — the repair `014`, hardening `015`, admission `016` and authority-boundary `017` revisions sit between them; see §attempt authority — the platform-authoritative cutover — bootstrap,
 wire emission, phase state machine). The split isolates the intricate platform-coordination into its
 own unit and lets this self-contained hardening land and reach REVIEW-CLEAN on its own. Both remain
 ahead of PR 6b; 6b's *activation* still waits on 7b-activation.
@@ -533,10 +533,10 @@ drained as the forward cutover; the `LOCK TABLE` in §1 is defense-in-depth, not
 pause submissions, disable autoscaling/restarts; (2) hard-stop and orchestrator-attest **zero** API,
 pipeline, outbox, `dev_worker`, retention, and every writer; (3) **while 013 still exists**, run
 `reset_interrupted_outbox_claims` and verify zero claim tuples; (4) run `alembic downgrade 012` —
-the walk is `016 → 015 → 014 → 013 → 012` and EACH revision preflights byte-stably: `016` on any
+the walk is `017 → 016 → 015 → 014 → 013 → 012` and EACH revision preflights byte-stably: `017`/`016` on any
 attempt/digest/`attempt_v1` row (negative evidence included), `015`/`014` on any attempt or digest,
 `013` on `superseded`/digest/amended-history. On ANY refusal the DB stays on the witness-authority
-schema and rollback is KEEP-or-redeploy the reviewed **`016`-compatible** image — an older publisher
+schema and rollback is KEEP-or-redeploy the reviewed **`017`-compatible** image — an older publisher
 lacks the receipt/terminal contract and must not run against preserved evidence; (5) deploy the
 pre-7b image **only after** the entire walk reaches `012`. Redeploying the pre-7b image *before*
 013 is applied is also safe. (7b-activation

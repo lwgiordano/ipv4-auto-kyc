@@ -32,6 +32,56 @@ def _seed_decisions(session_factory, case_id, seqs):
         s.commit()
 
 
+def _seed_callback_in_state(session_factory, case_id, seq, status, *, payload="{}",
+                            delivered_at_sql=None, resolved_at_sql=None, created_at_sql=None):
+    """Seed a decision callback in a historical state THROUGH LEGAL TRANSITIONS.
+
+    Migration 017 makes the lifecycle an authority: every decision callback is born pending
+    (INSERT of a terminal row is refused), delivered is reachable only from pending and only with
+    an admitted witness, and payload/identity are immutable in flight. So historical states are
+    built the way history built them — pending, claim, admitted attempt, witnessed terminal — and
+    then the SCHEDULE timestamps (delivered_at/resolved_at, which are metadata, not witness
+    evidence) are rewound to the requested age. Requires the decisions chain for
+    (case_id, seq) to exist (_seed_decisions). Returns the outbox id."""
+    r = f"{case_id}-r{seq}"
+    created = ", created_at) VALUES" if created_at_sql else ") VALUES"
+    created_val = f", {created_at_sql})" if created_at_sql else ")"
+    with session_factory() as s:
+        oid = s.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
+            "status, payload_json, witness_generation" + created +
+            f" ('decision_callback',:c,:r,'decision',:q,'pending',CAST(:p AS jsonb),"
+            f"'attempt_v1'{created_val} RETURNING id"),
+            {"c": case_id, "r": r, "q": seq, "p": payload}).scalar_one()
+        if status == "dead":
+            s.execute(text("UPDATE outbox SET status='dead' WHERE id=:i"), {"i": oid})
+        elif status == "superseded":
+            s.execute(text(
+                f"UPDATE outbox SET status='superseded', "
+                f"resolved_at={resolved_at_sql or 'now()'} WHERE id=:i"), {"i": oid})
+        elif status == "delivered":
+            row = s.execute(text(
+                "UPDATE outbox SET claim_token=gen_random_uuid(), "
+                "claim_lease_expires_at=now()+interval '1 hour', claimed_by='seeder' "
+                "WHERE id=:i RETURNING claim_token"), {"i": oid}).one()
+            s.execute(text(
+                "INSERT INTO outbox_delivery_attempts (attempt_id, outbox_id, claim_token, "
+                "wire_version, request_sha256) VALUES (gen_random_uuid(), :o, :t, 'legacy', :s)"),
+                {"o": oid, "t": row.claim_token, "s": "a" * 64})
+            s.execute(text(
+                "UPDATE outbox SET status='delivered', delivered_at=now(), "
+                "callback_wire_sha256=:s, wire_version='legacy', claim_token=NULL, "
+                "claim_lease_expires_at=NULL, claimed_by=NULL WHERE id=:i"),
+                {"s": "a" * 64, "i": oid})
+            if delivered_at_sql:
+                s.execute(text(
+                    f"UPDATE outbox SET delivered_at={delivered_at_sql} WHERE id=:i"), {"i": oid})
+        elif status != "pending":
+            raise AssertionError(f"unsupported seed status {status}")
+        s.commit()
+    return oid
+
+
 def _enqueue_cb(session_factory, case_id, seq):
     r = f"{case_id}-r{seq}"
     with session_factory() as s:
@@ -94,11 +144,7 @@ def test_residual_risk_send_before_stamp_reverts_expected(
     next pass its local guard predicate is false (seq 2 unstamped) and seq 1 IS sent (HTTP #2) —
     the exact residual revert 7b-activation later turns into a platform high-water no-op."""
     _seed_decisions(session_factory, "c3", [1, 2])  # decisions/runs at PUBLISH_DECISION, unstamped
-    with session_factory() as s:  # seq 1 callback as an OLDER dead row (lower id)
-        seq1_id = s.execute(text(
-            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
-            "VALUES ('decision_callback','c3','c3-r1','decision',1,'dead') RETURNING id")).scalar_one()
-        s.commit()
+    seq1_id = _seed_callback_in_state(session_factory, "c3", 1, "dead")  # older, lower id
     _enqueue_cb(session_factory, "c3", 2)  # seq 2 pending, higher id
 
     def _boom(self, row, token, wire_sha256=None):  # raise BEFORE any terminal txn starts
@@ -140,18 +186,8 @@ def _superseded_callback(session_factory, case_id, *, resolved_at="now()"):
     first — seq 1 on `case_id` via _seed_decisions — then insert its callback already
     superseded. Returns the outbox id."""
     _seed_decisions(session_factory, case_id, [1])
-    r = f"{case_id}-r1"
-    with session_factory() as s:
-        oid = s.execute(
-            text(
-                "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-                "status, resolved_at) VALUES ('decision_callback',:c,:r,'decision',1,"
-                f"'superseded', {resolved_at}) RETURNING id"
-            ),
-            {"c": case_id, "r": r},
-        ).scalar_one()
-        s.commit()
-    return oid
+    return _seed_callback_in_state(session_factory, case_id, 1, "superseded",
+                                   resolved_at_sql=resolved_at)
 
 
 def test_retention_redacts_callback_bodies_and_prunes_poc_email(session_factory, clean_db):
@@ -164,17 +200,16 @@ def test_retention_redacts_callback_bodies_and_prunes_poc_email(session_factory,
     old = "now() - interval '3000 days'"
     _superseded_callback(session_factory, "c4", resolved_at=old)
     _seed_decisions(session_factory, "c4", [9])
+    _seed_callback_in_state(
+        session_factory, "c4", 9, "delivered", delivered_at_sql=old,
+        payload='{"decision":"approve","checks":[{"source":"reviewer:r-42"}]}')
     with session_factory() as s:
-        s.execute(text("INSERT INTO cases (id) VALUES ('c4') ON CONFLICT DO NOTHING"))
         s.execute(text(
-            f"INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-            f"status, delivered_at, payload_json, callback_wire_sha256, wire_version) VALUES "
-            f"('decision_callback','c4','c4-r9','decision',9,'delivered',{old},"
-            f"'{{\"decision\":\"approve\",\"checks\":[{{\"source\":\"reviewer:r-42\"}}]}}'::jsonb,"
-            f"'{'a' * 64}','legacy')"))
+            "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
+            "VALUES ('poc_email','c4','email','pending')"))
         s.execute(text(
-            f"INSERT INTO outbox (kind, case_id, ordering_stream, status, delivered_at) "
-            f"VALUES ('poc_email','c4','email','delivered',{old})"))
+            f"UPDATE outbox SET status='delivered', delivered_at={old} "
+            f"WHERE kind='poc_email' AND case_id='c4'"))
         s.commit()
 
     counts = prune(session_factory, 7 * 365)
@@ -205,13 +240,8 @@ def test_retention_leaves_in_window_callback_bodies_alone(session_factory, clean
     from kyc_tool.workers.retention import prune
 
     _seed_decisions(session_factory, "c4c", [3])
-    with session_factory() as s:
-        s.execute(text("INSERT INTO cases (id) VALUES ('c4c') ON CONFLICT DO NOTHING"))
-        s.execute(text(
-            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-            "status, delivered_at, payload_json) VALUES ('decision_callback','c4c','c4c-r3',"
-            "'decision',3,'delivered', now(), '{\"decision\":\"approve\"}'::jsonb)"))
-        s.commit()
+    _seed_callback_in_state(session_factory, "c4c", 3, "delivered",
+                            payload='{"decision":"approve"}')
     counts = prune(session_factory, 7 * 365)
     assert counts["outbox_callback_redacted"] == 0
     with session_factory() as s:
@@ -270,15 +300,9 @@ def test_retention_leaves_dead_callback_body_alone(session_factory, clean_db):
     from kyc_tool.workers.retention import prune
 
     _seed_decisions(session_factory, "cdead", [1])
-    with session_factory() as s:
-        s.execute(text("INSERT INTO cases (id) VALUES ('cdead') ON CONFLICT DO NOTHING"))
-        s.execute(text(
-            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-            "status, payload_json, created_at) VALUES ('decision_callback','cdead','cdead-r1',"
-            "'decision',1,'dead',"
-            "'{\"decision\":\"approve\",\"checks\":[{\"source\":\"reviewer:dead-1\"}]}'::jsonb,"
-            "now() - interval '3000 days')"))
-        s.commit()
+    _seed_callback_in_state(
+        session_factory, "cdead", 1, "dead", created_at_sql="now() - interval '3000 days'",
+        payload='{"decision":"approve","checks":[{"source":"reviewer:dead-1"}]}')
 
     counts = prune(session_factory, 7 * 365)
 
@@ -298,13 +322,8 @@ def test_retention_redaction_is_idempotent(session_factory, clean_db):
 
     old = "now() - interval '3000 days'"
     _seed_decisions(session_factory, "cidem", [1])
-    with session_factory() as s:
-        s.execute(text("INSERT INTO cases (id) VALUES ('cidem') ON CONFLICT DO NOTHING"))
-        s.execute(text(
-            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-            "status, delivered_at, payload_json) VALUES ('decision_callback','cidem','cidem-r1',"
-            f"'decision',1,'delivered',{old},'{{\"decision\":\"approve\"}}'::jsonb)"))
-        s.commit()
+    _seed_callback_in_state(session_factory, "cidem", 1, "delivered", delivered_at_sql=old,
+                            payload='{"decision":"approve"}')
 
     first = prune(session_factory, 7 * 365)
     assert first["outbox_callback_redacted"] == 1
@@ -363,21 +382,11 @@ def test_outbox_terminal_estimate_within_tolerance_after_analyze(client, session
     interceptor) is that the estimate key exists and outbox_by_status/outbox_alerting — computed
     from the SAME single query — agree exactly."""
     _seed_decisions(session_factory, "cest", [1, 2, 3, 4])
+    _seed_callback_in_state(session_factory, "cest", 1, "delivered")
+    _seed_callback_in_state(session_factory, "cest", 2, "superseded")
+    _seed_callback_in_state(session_factory, "cest", 3, "pending")
+    _seed_callback_in_state(session_factory, "cest", 4, "dead")
     with session_factory() as s:
-        s.execute(text(
-            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-            "status, delivered_at) VALUES ('decision_callback','cest','cest-r1','decision',1,"
-            "'delivered', now())"))
-        s.execute(text(
-            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-            "status, resolved_at) VALUES ('decision_callback','cest','cest-r2','decision',2,"
-            "'superseded', now())"))
-        s.execute(text(
-            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-            "status) VALUES ('decision_callback','cest','cest-r3','decision',3,'pending')"))
-        s.execute(text(
-            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-            "status) VALUES ('decision_callback','cest','cest-r4','decision',4,'dead')"))
         s.commit()
     with session_factory() as s:
         s.execute(text("ANALYZE outbox"))  # planner stats now reflect the 4 rows just inserted

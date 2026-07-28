@@ -39,8 +39,12 @@ _AMENDED_013_DDL = [
 ]
 
 
-def _seed_callback(conn, case_id, run_id, seq, status, *, delivered=False):
-    """One valid case→event→run→decision→callback chain, callback in `status`."""
+def _seed_callback(conn, case_id, run_id, seq, status, *, delivered=False, generation=None):
+    """One valid case→event→run→decision→callback chain, callback in `status`.
+
+    `generation` (when set) is written explicitly at INSERT — the only moment the
+    witness_generation column is writable once 015's immutability trigger is live.
+    """
     conn.execute(text("INSERT INTO cases (id, last_decision_sequence) VALUES (:c, :s) "
                       "ON CONFLICT (id) DO UPDATE SET last_decision_sequence = :s"),
                  {"c": case_id, "s": seq})
@@ -56,11 +60,17 @@ def _seed_callback(conn, case_id, run_id, seq, status, *, delivered=False):
         "policy_shas, manual, decision_sequence) VALUES "
         "(:d,:c,:r,'approve',10,'{}'::jsonb,'enabled','{}'::jsonb,false,:s)"),
         {"d": f"{run_id}-d", "c": case_id, "r": run_id, "s": seq})
+    gen_col = ", witness_generation" if generation else ""
+    gen_val = ", :gen" if generation else ""
+    params = {"c": case_id, "r": run_id, "s": seq, "st": status}
+    if generation:
+        params["gen"] = generation
     return conn.execute(text(
         "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status, "
-        "delivered_at, payload_json) VALUES ('decision_callback',:c,:r,'decision',:s,:st,"
-        + ("now()" if delivered else "NULL") + ",'{}'::jsonb) RETURNING id"),
-        {"c": case_id, "r": run_id, "s": seq, "st": status}).scalar_one()
+        "delivered_at, payload_json" + gen_col + ") VALUES ('decision_callback',:c,:r,'decision',"
+        ":s,:st," + ("now()" if delivered else "NULL") + ",'{}'::jsonb" + gen_val
+        + ") RETURNING id"),
+        params).scalar_one()
 
 
 def _witness(conn, run_id):

@@ -251,6 +251,16 @@ def test_manual_approve_then_org_id_enables_buying(client, post_event, phase3_wo
     assert case["status"] == "approved_manual"  # sticky — platform enforced it
     assert case["buy_status"] == "buy_enabled"  # ORG-ID unlocked buying
 
+    # the Salesforce projection survives the LATER automatic decision (re-audit 15d875d F6):
+    # the pointer honestly moves to the newer automatic row, while action + attribution keep
+    # naming the manual act for as long as the case stays approved_manual
+    full = client.get(f"/ui/api/cases/{case_id}/full").json()
+    assert full["pointer_decision"]["manual"] is False  # the scenario is real: pointer moved on
+    sf = full["salesforce"]
+    assert sf["Platform_Action_Taken__c"] == "Manual Approve"
+    assert sf["Manual_Approved_By__c"] == "rev-1"
+    assert sf["Manual_Approved_At__c"] is not None
+
 
 # --- PR 5b final-review fix (spec §8.7): manual-approve actor-floor matrix --
 #

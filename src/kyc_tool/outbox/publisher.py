@@ -48,6 +48,14 @@ POC_EMAIL = "poc_email"
 # becoming an uninterpretable witness.
 _WIRE_VERSION = "legacy"
 
+# Shared maintenance fence (migration 017): writers take it SHARED per transaction; witness
+# maintenance (migrations) takes it EXCLUSIVE before any table lock. One global order, so a
+# terminal writer holding the parent row can never form a lock cycle with a migration that
+# starts child-first — the migration simply waits at the fence. Keep in sync with
+# alembic 017's _FENCE_KEY.
+_MAINTENANCE_FENCE_KEY = 720170001
+_FENCE_SQL = text("SELECT pg_advisory_xact_lock_shared(:k)")
+
 
 class _StaleClaim(Exception):
     """Raised BEFORE any network traffic when the claim is no longer live.
@@ -259,13 +267,18 @@ class OutboxPublisher:
         """
         attempt_id = str(uuid.uuid4())
         with uow(self.session_factory) as session:
+            session.execute(_FENCE_SQL, {"k": _MAINTENANCE_FENCE_KEY})
             applied = session.execute(
                 text(
                     "INSERT INTO outbox_delivery_attempts "
                     "(attempt_id, outbox_id, claim_token, wire_version, request_sha256) "
                     "SELECT :attempt_id, :outbox_id, :token, :wire_version, :sha "
                     "WHERE EXISTS (SELECT 1 FROM outbox WHERE id=:outbox_id "
-                    "AND status='pending' AND claim_token=:token) "
+                    "AND status='pending' AND claim_token=:token "
+                    # an EXPIRED lease is reclaimable and must not stage evidence — wall clock,
+                    # not transaction-start now(), so waiting past the deadline cannot win
+                    # (re-audit 15d875d F4; the DB admission trigger enforces the same rule).
+                    "AND claim_lease_expires_at > clock_timestamp()) "
                     "RETURNING attempt_id"
                 ),
                 {"attempt_id": attempt_id, "outbox_id": outbox_id, "token": token,
@@ -304,7 +317,10 @@ class OutboxPublisher:
 
     def process_once(self) -> bool:
         """Claim and deliver one pending row of one (case, stream). Returns False when idle."""
-        lease = self.settings.outbox_backoff_base_seconds * (2 ** (self.settings.outbox_max_attempts - 1))
+        # The lease is its own setting (ge=1), never derived from the backoff schedule: with
+        # admission fenced on an UNEXPIRED lease, a zero-backoff config would otherwise mint
+        # already-expired claims that can never stage or deliver anything.
+        lease = self.settings.outbox_lease_seconds
         with uow(self.session_factory) as session:
             row = session.execute(
                 _CLAIM_SQL, {"lease_seconds": min(lease, 3600), "claimed_by": self._claimant}
@@ -368,6 +384,7 @@ class OutboxPublisher:
         wire_sha256 = receipt.wire_sha256 if receipt else None
         now = datetime.now(UTC)
         with uow(self.session_factory) as session:
+            session.execute(_FENCE_SQL, {"k": _MAINTENANCE_FENCE_KEY})
             # The wire witness lands in the SAME fenced statement as the terminal: the digest is
             # only meaningful for the delivery it describes, so it must not be writable by a
             # stale claimant whose UPDATE no longer matches. 7b-core never puts decision_sequence
@@ -387,7 +404,10 @@ class OutboxPublisher:
                     "  SELECT 1 FROM outbox_delivery_attempts a WHERE a.outbox_id=:id "
                     "  AND a.attempt_id=:attempt_id_probe "
                     "  AND a.claim_token=:token AND a.request_sha256=:sha_probe "
-                    "  AND a.wire_version=:wire_version_probe)) RETURNING id"
+                    "  AND a.wire_version=:wire_version_probe "
+                    # only an ADMITTED attempt underwrites a terminal — a pre-authority row's
+                    # staging claim is unproven (re-audit 15d875d F1)
+                    "  AND a.admission='admission_v1')) RETURNING id"
                 ),
                 # wire_version is decided in Python, not by a SQL CASE over :sha — reusing one
                 # parameter as both a value and a NULL test leaves its type indeterminate to

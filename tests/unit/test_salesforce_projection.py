@@ -35,10 +35,11 @@ def project(**overrides):
         "checks": [],
         "open_task_types": [],
         "poc_token_outstanding": False,
-        # the projection derives the non-manual action from the POINTED decision row's own
-        # value (re-audit 0c46443 F6) — the fixture carries it like the real pointer row does
-        "latest_decision": {"decision": "approve", "gates_json": {"no_hard_conflict": True},
-                            "manual": False},
+        # the projection derives the non-manual action AND the score from the POINTED decision
+        # row's own values (re-audits 0c46443 F6, 15d875d F6) — the fixture carries them like
+        # the real pointer row does
+        "latest_decision": {"decision": "approve", "score": 105,
+                            "gates_json": {"no_hard_conflict": True}, "manual": False},
     }
     kwargs.update(overrides)
     return project_salesforce_fields(**kwargs)
@@ -52,6 +53,34 @@ def test_approve_maps_core_fields():
     assert fields["Platform_Action_Taken__c"] == "Approve Account"
     assert fields["Broker_Status__c"] == "Clear"
     assert fields["Hard_Conflict__c"] is False
+
+
+def test_unresolved_pointer_projects_honest_blanks_not_live_guesses():
+    """When the pre-014 decision order is ambiguous the pointer is NULL: the projection must
+    say NOTHING about score or action — the live recomputed case score is not what was decided
+    (re-audit 15d875d F6)."""
+    fields = project(latest_decision=None)
+    assert fields["KYC_Score__c"] is None  # NOT case.current_score (105)
+    assert fields["Platform_Action_Taken__c"] is None
+
+
+def test_manual_attribution_survives_a_later_automatic_decision():
+    """The pointer follows the newest decision; manual attribution must not. After manual
+    approve → later automatic run, the case is still approved_manual: action stays Manual
+    Approve, By/At name the manual act, and the score is the POINTED (automatic) row's
+    (re-audit 15d875d F6)."""
+    fields = project(
+        case={**BASE_CASE, "status": "approved_manual"},
+        latest_decision={"decision": "manual_review_insufficient", "score": 40,
+                         "gates_json": {}, "manual": False},  # the newer automatic row
+        latest_manual_decision={"decision": "manual_review_insufficient", "score": 40,
+                                "manual": True, "reviewer_id": "rev-9",
+                                "decided_at": "2026-01-03T00:00:00Z"},
+    )
+    assert fields["Platform_Action_Taken__c"] == "Manual Approve"
+    assert fields["Manual_Approved_By__c"] == "rev-9"
+    assert fields["Manual_Approved_At__c"] == "2026-01-03T00:00:00Z"
+    assert fields["KYC_Score__c"] == 40
 
 
 def test_a5_approved_manual_maps_to_account_approved_plus_manual_action():

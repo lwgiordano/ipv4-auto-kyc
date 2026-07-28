@@ -8,7 +8,7 @@
 | Pipeline worker | `python -m kyc_tool.workers.pipeline_worker` | N processes; per-case FIFO is queue-enforced |
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | delivers decision callbacks + POC emails |
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily); prunes per KYC_RETENTION_DAYS |
-| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 (see below) |
+| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-017 witness chain (see below); 017's upgrade itself refuses while any live outbox claim exists (`MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` — publishers must be drained) |
 | v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, POST-cutover (PR 5a §6a); idempotent |
 | Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot; PRE-cutover for `enforce_bundle_pinning` (PR 6, `docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
 | Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot; stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
@@ -23,10 +23,11 @@
 > readiness-verified, run the activation command above once to start the v1
 > observation clock.
 
-> **Migrations 013-016 (PR 7b-core) are forward-only after any wire witness — positive OR
+> **Migrations 013-017 (PR 7b-core) are forward-only after any wire witness — positive OR
 > negative** (an `attempt_v1` decision callback with no attempt is durable proof nothing was
 > staged, and counts). Their downgrades refuse with stable sentinels, in execution order
-> (`MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -34,7 +35,7 @@
 > terminal `callback_wire_sha256`, or a `superseded` row exists — immutable
 > delivery evidence is never destroyed because local status looks terminal;
 > for a pending/dead callback the attempt row is the only proof bytes were
-> staged. On refusal, KEEP or redeploy the reviewed **016-compatible** image — an older
+> staged. On refusal, KEEP or redeploy the reviewed **017-compatible** image — an older
 > publisher lacks the receipt/terminal contract and must not run against preserved evidence;
 > a pre-7b image is permitted only after the entire walk reaches 012.
 

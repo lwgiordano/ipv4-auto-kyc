@@ -12,6 +12,7 @@ import hashlib
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 from kyc_tool.outbox import witness
 from kyc_tool.outbox.publisher import _StaleClaim
@@ -144,21 +145,18 @@ def test_retry_under_a_new_claim_cannot_overwrite_the_first_attempt(
     assert _witness_of(session_factory, "cd-r1").witness == witness.DELIVERY_WITNESSED
 
 
-def test_pre_013_delivered_row_is_legacy_unwitnessed(session_factory, clean_db):
-    """A row delivered before 013 has no digest and no attempt. It must classify as
-    `legacy_unwitnessed` — NOT as `not_accepted`, and never by fabricating a digest from
-    payload_json, whose jsonb key order is not the order that was sent."""
+def test_decision_callback_cannot_be_born_delivered(session_factory, clean_db):
+    """At head, a decision callback cannot be INSERTed already-delivered: rows enter the
+    outbox pending, unwitnessed and unclaimed, and reach `delivered` only through the
+    witnessed transition. Genuine pre-013 rows are adopted by migration 014 at their own
+    revision (classification coverage lives in test_migration_014.py); a head-schema writer
+    producing a born-delivered row is fabricating history and must be refused."""
     _seed_decisions(session_factory, "ce", [1])
-    with session_factory() as s:
+    with session_factory() as s, pytest.raises(ProgrammingError, match="enter the outbox pending"):
         s.execute(text(
             "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
             "status, delivered_at, payload_json) VALUES ('decision_callback','ce','ce-r1',"
             "'decision',1,'delivered',now(),'{\"run_id\":\"ce-r1\"}'::jsonb)"))
-        s.commit()
-
-    row = _witness_of(session_factory, "ce-r1")
-    assert row.callback_wire_sha256 is None
-    assert row.witness == witness.LEGACY_UNWITNESSED
 
 
 def test_never_sent_row_is_not_accepted(session_factory, clean_db):
@@ -209,13 +207,14 @@ def test_retention_never_prunes_the_only_evidence_a_row_was_sent(session_factory
         # the pending->delivered transition with the digest its attempt matches.
         rows = {}
         for seq, sha in ((1, "a" * 64), (2, None)):
-            rows[seq] = s.execute(text(
+            row_id = s.execute(text(
                 "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-                "status, claim_token, claim_lease_expires_at, claimed_by) VALUES "
-                "('decision_callback','ch',:r,'decision',:seq,'pending',"
-                "gen_random_uuid(), now() + interval '1 hour', 'seeder') "
-                "RETURNING id, claim_token"),
-                {"r": f"ch-r{seq}", "seq": seq}).one()
+                "status) VALUES ('decision_callback','ch',:r,'decision',:seq,'pending') "
+                "RETURNING id"), {"r": f"ch-r{seq}", "seq": seq}).scalar_one()
+            rows[seq] = s.execute(text(
+                "UPDATE outbox SET claim_token=gen_random_uuid(), "
+                "claim_lease_expires_at=now() + interval '1 hour', claimed_by='seeder' "
+                "WHERE id=:i RETURNING id, claim_token"), {"i": row_id}).one()
             s.execute(text(
                 "INSERT INTO outbox_delivery_attempts (attempt_id, outbox_id, claim_token, "
                 "wire_version, request_sha256, attempted_at) VALUES (gen_random_uuid(), :o, "

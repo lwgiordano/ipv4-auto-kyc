@@ -67,6 +67,7 @@ def project_salesforce_fields(
     open_task_types: list[str],
     poc_token_outstanding: bool,
     latest_decision: dict | None,
+    latest_manual_decision: dict | None = None,
 ) -> dict:
     live = _live(checks)
     submitted = case.get("submitted_json") or {}
@@ -136,11 +137,22 @@ def project_salesforce_fields(
 
     reason_codes = sorted({code for c in live for code in (c.get("reason_codes") or [])})
 
-    manual = latest_decision if (latest_decision or {}).get("manual") else None
+    # Manual attribution is STICKY: a later automatic decision moves the pointer but must not
+    # blank Manual_Approved_By/At while the case remains approved_manual. The caller passes the
+    # latest manual row as its own argument (re-audit 15d875d F6); falling back to the pointed
+    # row keeps old callers correct when the pointed row IS the manual one.
+    manual = (
+        latest_manual_decision
+        if (latest_manual_decision or {}).get("manual")
+        else (latest_decision if (latest_decision or {}).get("manual") else None)
+    )
 
     return {
         "KYC_Status__c": KYC_STATUS_MAP.get(case.get("status", "")),
-        "KYC_Score__c": case.get("current_score", 0),
+        # the POINTED decision's score — what was actually decided — never the live recomputed
+        # case score, which can drift after the decision; None when the pointer is unresolved
+        # (ambiguous pre-014 order): an honest blank, not a guess (re-audit 15d875d F6)
+        "KYC_Score__c": (latest_decision or {}).get("score"),
         "Buy_Enablement_Status__c": BUY_STATUS_MAP.get(case.get("buy_status", "")),
         "Platform_Action_Taken__c": action,
         "ORG_ID__c": org_handle,
@@ -174,7 +186,7 @@ def project_salesforce_fields(
 # mapping doc so the UI documents itself).
 FIELD_SOURCES = {
     "KYC_Status__c": "case status (approved_manual → 'Account Approved', AUDIT:A5)",
-    "KYC_Score__c": "decision callback score / case current_score",
+    "KYC_Score__c": "pointed decision row's score (blank while pre-014 order is unresolved)",
     "Buy_Enablement_Status__c": "case buy_status (tool asserts enabled/locked; platform may show transients)",
     "Platform_Action_Taken__c": "latest decision; 'Manual Approve' when case is approved_manual",
     "ORG_ID__c": "live org_id_match check detail, else submitted org handle",
@@ -186,7 +198,7 @@ FIELD_SOURCES = {
     "Broker_Status__c": "case broker_status (exact-match gate)",
     "Hard_Conflict__c": "NOT gates.no_hard_conflict from the latest decision",
     "Review_Reason_Codes__c": "union of live checks' reason codes",
-    "Manual_Approved_By__c": "manual decision row reviewer",
-    "Manual_Approved_At__c": "manual decision row timestamp",
+    "Manual_Approved_By__c": "latest MANUAL decision row's reviewer (sticky across later autos)",
+    "Manual_Approved_At__c": "latest MANUAL decision row's timestamp (sticky across later autos)",
     "KYC_Check__c": "one child record per check row (live + superseded)",
 }

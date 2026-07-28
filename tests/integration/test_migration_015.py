@@ -61,17 +61,13 @@ def test_witness_fabrication_refused(pg, name, setup_sql, tamper_sql, must_match
     command.upgrade(cfg, "head")
     eng = create_engine(url)
     with eng.begin() as conn:
-        oid = _seed_callback(conn, "cf", "cf-r1", 1, "pending")
-        if setup_sql == "gen-attempt-v1":
-            # generation is INSERT-time-only (flips are the thing under test), so rebuild the
-            # outbox row as attempt_v1: delete the seeded one and insert its replacement
-            conn.execute(text("DELETE FROM outbox WHERE id = :i"), {"i": oid})
-            oid = conn.execute(text(
-                "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-                "status, payload_json, witness_generation) VALUES "
-                "('decision_callback','cf','cf-r1','decision',1,'pending','{}'::jsonb,"
-                "'attempt_v1') RETURNING id")).scalar_one()
-        elif setup_sql == "claim":
+        # generation is INSERT-time-only (flips are the thing under test) and decision
+        # callbacks are undeletable at head (017), so the attempt_v1 case seeds its row
+        # born-attempt_v1 rather than rebuilding a legacy seed.
+        oid = _seed_callback(
+            conn, "cf", "cf-r1", 1, "pending",
+            generation="attempt_v1" if setup_sql == "gen-attempt-v1" else None)
+        if setup_sql == "claim":
             conn.execute(text(
                 "UPDATE outbox SET claim_token = gen_random_uuid(), "
                 "claim_lease_expires_at = now() + interval '1 hour', claimed_by = 'w' "
@@ -132,7 +128,7 @@ def test_terminal_digest_requires_matching_attempt_at_the_database(pg):
         "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL WHERE id=:i"
     )
     for sha, version in (("f" * 64, "legacy"), ("a" * 64, "sequenced")):
-        with pytest.raises(Exception, match="no attempt"), eng.begin() as conn:
+        with pytest.raises(Exception, match="terminal wire witness refused"), eng.begin() as conn:
             conn.execute(text(terminal), {"s": sha, "v": version, "i": row.id})
     with eng.begin() as conn:  # the matching one succeeds
         conn.execute(text(terminal), {"s": "a" * 64, "v": "legacy", "i": row.id})
@@ -273,8 +269,8 @@ def test_015_downgrade_and_live_attempt_writer_never_deadlock(pg):
         writer.dispose()
     assert not t.is_alive()
     assert "40P01" not in result["outcome"] and "deadlock" not in result["outcome"].lower()
-    # the walk now starts at 016, whose (equally child-first) downgrade refuses first
-    assert "MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE" in result["outcome"]
+    # the walk now starts at 017, whose (equally child-first) downgrade refuses first
+    assert "MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE" in result["outcome"]
     eng.dispose()
 
 
@@ -286,7 +282,7 @@ def test_unused_database_round_trips_through_015(pg):
     command.upgrade(cfg, "head")
     eng = create_engine(url)
     with eng.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "016"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "017"
     eng.dispose()
 
 

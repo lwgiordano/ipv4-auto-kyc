@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -128,7 +129,11 @@ class Settings(BaseSettings):
     # Process-local — divide by worker count when scaling out.
     adapter_rate_limits: dict[str, float] = {}
 
-    # Outbox delivery
+    # Outbox delivery. The lease is the crash-detection window for ONE claimed delivery
+    # attempt — deliberately its own knob, never derived from the retry backoff: admission
+    # (DB trigger + publisher fence) refuses evidence from an expired claim, so a lease that
+    # collapses toward zero would make every claim unable to deliver anything at all.
+    outbox_lease_seconds: int = Field(default=300, ge=1)
     outbox_max_attempts: int = 8
     outbox_backoff_base_seconds: int = 10
 

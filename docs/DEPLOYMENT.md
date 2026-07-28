@@ -128,11 +128,12 @@ three things: does it include a **migration**, any **new env vars**, and any
   deliberately refuses (it will not delete immutable audit events to recreate
   the old global unique — see `docs/RUNBOOK.md` and ADR-003). If two cases have
   shared an idempotency key, roll forward with a fix; do not downgrade 010.
-  **Exception — migrations 013-016 (PR 7b-core) are forward-only after any wire
+  **Exception — migrations 013-017 (PR 7b-core) are forward-only after any wire
   witness exists, positive OR negative** (an `attempt_v1` decision callback with no attempt
   is durable proof nothing was staged, and counts). Their downgrades refuse — with stable
   sentinels, in execution order
-  (`MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+  (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+  `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -142,11 +143,17 @@ three things: does it include a **migration**, any **new env vars**, and any
   pending/dead callback, the attempt row is the ONLY record that bytes were
   staged), and a local terminal status is never a reason to destroy the record
   of what the platform accepted. On refusal, KEEP or redeploy the reviewed
-  **016-compatible** image — an older publisher lacks the receipt/terminal
+  **017-compatible** image — an older publisher lacks the receipt/terminal
   contract and must not run against preserved evidence. Rollback after first
   witness use is a flag/image rollback on that compatible schema, never a
   schema downgrade; a pre-7b image is permitted only after the entire walk
-  reaches 012.
+  reaches 012. 017's UPGRADE side is also gated: it refuses with
+  `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` while any live (unexpired) outbox claim
+  exists — stop the publishers (and retention), let leases expire or run
+  `reset_interrupted_outbox_claims`, then retry. Witness writers and the
+  migrations now share one advisory fence (writers shared, maintenance
+  exclusive), so a downgrade attempted against a live writer queues instead of
+  deadlocking.
 
 ## 7. Monitoring and incidents
 

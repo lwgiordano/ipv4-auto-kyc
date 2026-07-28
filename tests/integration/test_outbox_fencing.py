@@ -213,6 +213,31 @@ def test_stale_decision_loser_cannot_stamp_run_or_published_at(
         assert s.execute(text("SELECT published_at FROM decisions WHERE id='d1'")).scalar_one() is not None
 
 
+def test_expired_unreclaimed_owner_stages_no_attempt(session_factory, settings, clean_db):
+    """Re-audit 15d875d F4: between lease expiry and anyone reclaiming, the old owner's token
+    still matches and the row is still pending — only the CLOCK has ruled against it. The claim
+    SQL already treats that row as reclaimable, so the attempt fence must agree: _record_attempt
+    raises _StaleClaim BEFORE any transmission and commits nothing."""
+    from kyc_tool.outbox.publisher import _StaleClaim
+
+    _seed_decision_chain(session_factory, case_id="c1", run_id="r1", decision_id="d1",
+                         seq=1, ev_seq=1)
+    with session_factory() as s:
+        from kyc_tool.outbox.publisher import enqueue_decision_callback
+        enqueue_decision_callback(s, case_id="c1", run_id="r1", body={"run_id": "r1"},
+                                  decision_sequence=1)
+        s.commit()
+    rowA = _claim(session_factory, "A")
+    _expire_lease(session_factory, rowA.id)  # nobody reclaims: token intact, status pending
+
+    stale_pub = _pub_for(session_factory, settings)
+    with pytest.raises(_StaleClaim):
+        stale_pub._record_attempt(outbox_id=rowA.id, token=str(rowA.claim_token),
+                                  wire_version="legacy", request_sha256="a" * 64)
+    with session_factory() as s:
+        assert s.execute(text("SELECT count(*) FROM outbox_delivery_attempts")).scalar_one() == 0
+
+
 def _seed_decision_chain(session_factory, *, case_id, run_id, decision_id, seq, ev_seq):
     """One valid case→event→run→automatic-decision chain (decision carries `seq`); the
     caller enqueues its callback separately."""

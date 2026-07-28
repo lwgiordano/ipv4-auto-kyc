@@ -216,6 +216,16 @@ def case_full(case_id: str, request: Request) -> dict:
                 {"d": case["latest_decision_row_id"]},
             ).mappings().first()
             pointer_decision = dict(row) if row else None
+        # manual attribution is sticky (re-audit 15d875d F6): the pointer moves to later
+        # automatic decisions, but Manual_Approved_By/At must keep naming the manual act
+        manual_row = session.execute(
+            text(
+                "SELECT id, run_id, decision, score, manual, reviewer_id, decided_at "
+                "FROM decisions WHERE case_id=:id AND manual = true ORDER BY id DESC LIMIT 1"
+            ),
+            {"id": case_id},
+        ).mappings().first()
+        latest_manual_decision = dict(manual_row) if manual_row else None
         tasks = _rows(
             session.execute(
                 text(
@@ -280,6 +290,7 @@ def case_full(case_id: str, request: Request) -> dict:
         open_task_types=[t["task_type"] for t in tasks if t["status"] == "open"],
         poc_token_outstanding=token_outstanding,
         latest_decision=pointer_decision,
+        latest_manual_decision=latest_manual_decision,
     )
 
     return _json_safe(

@@ -28,10 +28,14 @@ def test_unwitnessed_delivery_refused_but_legacy_delivered_rows_survive(pg):
     (legacy NULLs) are untouched because the guard is transition-scoped."""
     url = _fresh_db(pg, "kyc_mig_016_f1")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    # the legacy row is seeded in the world that produced it: at 016 a born-delivered INSERT
+    # was still expressible (017's lifecycle INSERT guard forecloses it), then adopted upward
+    command.upgrade(cfg, "016")
     eng = create_engine(url)
     with eng.begin() as conn:
         legacy = _seed_callback(conn, "c1", "c1-r1", 1, "delivered", delivered=True)  # pre-witness
+    command.upgrade(cfg, "head")
+    with eng.begin() as conn:
         target = _claimed_pending(conn, "c1", "c1-r2", 2, with_attempt=False).id
 
     with pytest.raises(Exception, match="unwitnessed delivery refused"), eng.begin() as conn:
@@ -128,6 +132,9 @@ def test_mutilated_authority_functions_are_erased_by_recreation(pg):
     with eng.begin() as conn:  # mutilated: UPDATE passes — insert-only is decorative
         conn.execute(text("UPDATE outbox_delivery_attempts SET request_sha256 = :s"),
                      {"s": "d" * 64})
+        conn.execute(text(  # release the claim: 017's preflight requires writer quiescence
+            "UPDATE outbox SET claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL "
+            "WHERE id = :i"), {"i": row.id})
 
     command.upgrade(cfg, "head")  # recreation erases the mutilation
 
@@ -143,27 +150,23 @@ def test_mutilated_authority_functions_are_erased_by_recreation(pg):
 def test_downgrade_refuses_on_negative_evidence_alone(pg):
     """Re-audit F4: an attempt_v1 decision callback with NO attempt and NO digest is the durable
     proof nothing was staged — the only state licensing a non-delivery claim. The real documented
-    command (subprocess, head→012) must refuse at 016 with only that row on the books."""
+    command (subprocess, head→012) must refuse with only that row on the books; the refusal now
+    lands at 017, the outermost witness authority in the walk, guarding the same evidence."""
     url = _fresh_db(pg, "kyc_mig_016_f4")
     cfg = _config(url)
     command.upgrade(cfg, "head")
     eng = create_engine(url)
     with eng.begin() as conn:
-        _seed_callback(conn, "c5", "c5-r1", 1, "pending")
-        conn.execute(text("DELETE FROM outbox"))  # replace with an attempt_v1 row, cleanly
-        conn.execute(text(
-            "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, "
-            "status, payload_json, witness_generation) VALUES "
-            "('decision_callback','c5','c5-r1','decision',1,'pending','{}'::jsonb,'attempt_v1')"))
+        _seed_callback(conn, "c5", "c5-r1", 1, "pending", generation="attempt_v1")
 
     env = {**os.environ, "KYC_DATABASE_URL": url}
     refused = subprocess.run(
         [sys.executable, "-m", "alembic", "-c", "alembic.ini", "downgrade", "012"],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert refused.returncode != 0
-    assert "MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE" in refused.stdout + refused.stderr
+    assert "MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE" in refused.stdout + refused.stderr
     with eng.connect() as conn:  # nothing lost, still at head
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "016"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "017"
         assert conn.execute(text(
             "SELECT witness_generation FROM outbox")).scalar_one() == "attempt_v1"
     eng.dispose()
@@ -177,6 +180,6 @@ def test_unused_database_round_trips_through_016(pg):
     command.upgrade(cfg, "head")
     eng = create_engine(url)
     with eng.begin() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "016"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "017"
         _claimed_pending(conn, "c6", "c6-r1", 1)  # the full legal write path still works
     eng.dispose()

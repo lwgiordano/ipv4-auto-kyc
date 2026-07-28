@@ -14,7 +14,7 @@ Sources for every value below: the decision callback (`POST …/kyc/decision`),
 | Salesforce field | Source in tool output | Mapping |
 |---|---|---|
 | `KYC_Status__c` | case `status` | `registered`* / `email_verification_pending`* / `email_verified`* / `enrichment_running`* → their labels; `kyc_pending` → "KYC Pending"; `manual_review_insufficient` → "Manual Review - Insufficient Score"; `account_approved` → "Account Approved"; **`approved_manual` → "Account Approved"** (see `Platform_Action_Taken__c`); `rejected` → "Rejected". *Pre-tool statuses are platform-owned (AUDIT:C1). |
-| `KYC_Score__c` | callback `score` | integer, as-is |
+| `KYC_Score__c` | the pointed latest-decision row's `score` (what was decided — never the live recomputed case score; blank while the pre-014 decision order is unresolved) | integer, as-is |
 | `Buy_Enablement_Status__c` | case `buy_status` | `not_applicable` → "Not Applicable"; `buy_locked_org_id_required` → "Buy Locked - ORG-ID Required"; `org_id_validation_pending`† → "ORG-ID Validation Pending"; `org_id_failed`† → "ORG-ID Failed"; `buy_enabled` → "Buy Enabled"; `buy_suspended` → "Buy Suspended". †Platform-derived transient states — the tool's callback only ever asserts `enabled` / `locked_org_id_required`; the platform may show finer-grained transitions between callbacks. |
 | `Platform_Action_Taken__c` | callback `decision` + manual-approve event | `approve` → "Approve Account"; `approve_buy_locked` → "Approve Account - Buy Locked"; `reject` → "Reject" (or "Suspend" per platform policy); manual approve (no callback — the platform initiated it) → "Manual Approve" |
 | `ORG_ID__c` / `ORG_ID_Status__c` | live `org_id_match` check | handle from check detail; status: none → "Pending"; `pass` → "Pass"; `fail` → "Fail"; superseded rows → "Superseded" |
@@ -24,7 +24,7 @@ Sources for every value below: the decision callback (`POST …/kyc/decision`),
 | `Broker_Status__c` | case `broker_status` | `clear` → "Clear"; `allowed_broker` → "Allowed Broker"; `blocked` → "Blocked" |
 | `Hard_Conflict__c` | callback `gates.no_hard_conflict` | boolean **negated** (`no_hard_conflict: false` ⇒ `Hard_Conflict__c = true`) |
 | `Review_Reason_Codes__c` | union of live checks' `reason_codes` | delimited text / multi-select |
-| `Manual_Approved_By__c` / `Manual_Approved_At__c` | manual-approve audit (platform initiated it; also in tool audit log) | reviewer id, timestamp |
+| `Manual_Approved_By__c` / `Manual_Approved_At__c` | latest MANUAL decision row (sticky: a later automatic decision moves the latest-decision pointer but never blanks the manual attribution while the case stays `approved_manual`); platform initiated it; also in tool audit log | reviewer id, timestamp |
 
 ## KYC_Check__c child records
 
