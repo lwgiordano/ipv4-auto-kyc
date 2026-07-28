@@ -100,7 +100,7 @@ def test_canonical_017_to_018_path_upgrades(pg):
     everything is not a check."""
     url = _fresh_db(pg, "kyc_mig_018_canonical")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "018")
     eng = create_engine(url)
     with eng.connect() as conn:
         assert conn.execute(
@@ -271,7 +271,7 @@ def test_018_is_forward_only_even_on_an_unused_database(pg):
     would happily have proceeded."""
     url = _fresh_db(pg, "kyc_mig_018_forward_only")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "018")  # 018's OWN refusal; 019 refuses one revision above it
 
     with pytest.raises(RuntimeError, match="MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY"):
         command.downgrade(cfg, "017")

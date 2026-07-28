@@ -13,11 +13,20 @@ cannot form at all: maintenance simply queues behind live writers.
 
 `prune()` and the publisher take this as the FIRST transactional statement, before any DML — a
 fence acquired after the parent is already locked would fence nothing.
+
+**What this fence does NOT cover.** It orders the WITNESS writers — the publisher's attempt and
+terminal transactions, and retention — against maintenance. The pipeline's decide transaction is
+a different writer: it locks the case row (`SELECT … FOR UPDATE`) and only then inserts the
+outbox row, and it does not take this fence. A migration that locks `outbox` before `cases` can
+therefore still deadlock with a live decide transaction, and the live-claim preflight cannot see
+one (a run mid-decide holds no outbox claim). That case is covered by the DRAINED cutover, which
+stops the pipeline along with every other writer — not by this fence. Do not describe the fence
+as making maintenance safe against arbitrary concurrent writers; it does not.
 """
 
 from sqlalchemy import text
 
-# Keep in sync with the `_FENCE_KEY` constant in alembic/versions/017_* and 018_* (a migration
+# Keep in sync with the `_FENCE_KEY` constant in alembic/versions/017_*, 018_* and 019_* (a migration
 # cannot import application code, so the value is asserted equal by test_outbox_fence.py).
 MAINTENANCE_FENCE_KEY = 720170001
 

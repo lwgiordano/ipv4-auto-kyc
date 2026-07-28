@@ -128,12 +128,12 @@ three things: does it include a **migration**, any **new env vars**, and any
   deliberately refuses (it will not delete immutable audit events to recreate
   the old global unique — see `docs/RUNBOOK.md` and ADR-003). If two cases have
   shared an idempotency key, roll forward with a fix; do not downgrade 010.
-  **Exception — migrations 013-018 (PR 7b-core) are forward-only after any wire
+  **Exception — migrations 013-019 (PR 7b-core) are forward-only after any wire
   witness exists, positive OR negative** (an `attempt_v1` decision callback with no attempt
   is durable proof nothing was staged, and counts). Their downgrades refuse — with stable
-  sentinels, in execution order — and `018` refuses UNCONDITIONALLY
-  (`MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`), because walking below it would
-  restore search-path-vulnerable authority functions
+  sentinels, in execution order — and `018`/`019` refuse UNCONDITIONALLY
+  (`MIGRATION_01{8,9}_DOWNGRADE_REFUSED_FORWARD_ONLY`), because walking below them
+  would restore search-path-vulnerable authority functions
   (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -145,21 +145,26 @@ three things: does it include a **migration**, any **new env vars**, and any
   pending/dead callback, the attempt row is the ONLY record that bytes were
   staged), and a local terminal status is never a reason to destroy the record
   of what the platform accepted. On refusal, KEEP or redeploy the reviewed
-  **018-compatible** image — an older publisher lacks the receipt/terminal
+  **019-compatible** image — an older publisher lacks the receipt/terminal
   contract and must not run against preserved evidence. Rollback after first
   witness use is a flag/image rollback on that compatible schema, never a
   schema downgrade; a pre-7b image is permitted only after the entire walk
   reaches 012 — which is only possible on a schema that never reached `018`. Once
-  `018` IS installed, the supported rollback is redeploying the prior reviewed
-  `018`-compatible image against schema `018`; the schema itself does not move.
+  `018`/`019` ARE installed, the supported rollback is redeploying the prior reviewed
+  `019`-compatible image against schema `019`; the schema itself does not move.
   The UPGRADE side is gated too: `017` and `018` both refuse with
   `MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` while any live (unexpired) outbox claim
   exists — stop the publishers AND retention, let leases expire or run
   `reset_interrupted_outbox_claims`, then retry — and `018` additionally refuses with
-  `MIGRATION_018_AUTHORITY_MANIFEST_MISMATCH` when the observable authority surface is
-  not the one `017` installed. Witness writers, retention and the migrations all share
-  one advisory fence (writers shared, maintenance exclusive), so maintenance queues
-  behind a live writer instead of deadlocking with it.
+  `MIGRATION_01{8,9}_AUTHORITY_MANIFEST_MISMATCH` when the observable authority surface
+  is not the one the prior revision installed. Witness writers (the publisher and
+  retention) share one advisory fence with the migrations — writers shared, maintenance
+  exclusive — so maintenance queues behind those writers instead of deadlocking with
+  them. **The fence does not cover the pipeline's decide transaction**, which locks the
+  case row before inserting the outbox row and takes no fence; a migration run against a
+  live pipeline can still deadlock, and the live-claim preflight cannot see a run
+  mid-decide because it holds no outbox claim. That is what the DRAINED cutover is for —
+  stop the pipeline workers too, not just the publishers.
 
 ## 7. Monitoring and incidents
 
