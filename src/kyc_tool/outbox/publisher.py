@@ -36,6 +36,7 @@ from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Outbox
 from kyc_tool.outbox.emails import EmailSender, LoggingEmailSender
+from kyc_tool.outbox.fence import take_shared_fence
 
 log = structlog.get_logger(__name__)
 
@@ -47,14 +48,6 @@ POC_EMAIL = "poc_email"
 # pinned by ck_attempt_wire_vocab, so an unknown value fails at the database rather than silently
 # becoming an uninterpretable witness.
 _WIRE_VERSION = "legacy"
-
-# Shared maintenance fence (migration 017): writers take it SHARED per transaction; witness
-# maintenance (migrations) takes it EXCLUSIVE before any table lock. One global order, so a
-# terminal writer holding the parent row can never form a lock cycle with a migration that
-# starts child-first — the migration simply waits at the fence. Keep in sync with
-# alembic 017's _FENCE_KEY.
-_MAINTENANCE_FENCE_KEY = 720170001
-_FENCE_SQL = text("SELECT pg_advisory_xact_lock_shared(:k)")
 
 
 class _StaleClaim(Exception):
@@ -170,7 +163,8 @@ class OutboxPublisher:
     ) -> None:
         self.session_factory = session_factory
         self.settings = settings
-        self.http = http_client or httpx.Client(timeout=10.0)
+        self.http = http_client or httpx.Client(
+            timeout=settings.outbox_http_timeout_seconds)
         self.email_sender = email_sender or LoggingEmailSender()
         self._claimant = f"{socket.gethostname()}:{os.getpid()}"
 
@@ -261,13 +255,18 @@ class OutboxPublisher:
         This records staged INTENT — the exact bytes, durably, before any transmission is
         tried — not transmission itself: the process can die between this commit and the send.
 
-        Fenced on the same `(status, claim_token)` predicate as every terminal: a claimant whose
-        lease expired writes nothing here either, and — because this runs before the send — it
-        does not transmit at all. Raises `_StaleClaim` in that case.
+        Fenced on the same `(status, claim_token, live lease)` predicate as every terminal, and
+        it runs BEFORE the send: a claimant whose lease expired stages nothing and therefore
+        transmits nothing. Raises `_StaleClaim` in that case.
+
+        Precisely: expiry makes the row reclaimable and stops a stale claimant from staging or
+        sending anything NEW. It cannot revoke a request already on the wire — no lease can, and
+        the residual duplicate that follows from it is the documented at-least-once property (A6),
+        which the platform dedupes on `(case_id, run_id)`.
         """
         attempt_id = str(uuid.uuid4())
         with uow(self.session_factory) as session:
-            session.execute(_FENCE_SQL, {"k": _MAINTENANCE_FENCE_KEY})
+            take_shared_fence(session)
             applied = session.execute(
                 text(
                     "INSERT INTO outbox_delivery_attempts "
@@ -304,14 +303,41 @@ class OutboxPublisher:
 
         POC emails get no attempt row: they carry no wire digest, nothing reconciles them against
         a remote ledger, and their duplicate-on-retry behaviour is the documented at-least-once
-        property (A6) rather than a gap in evidence.
+        property (A6) rather than a gap in evidence. They DO get the same presend ownership check
+        (re-audit `cbb783b` F5) — evidence and ownership are different questions, and a stale
+        claimant emailing a token it cached before losing the row is a real side effect.
         """
         if kind == DECISION_CALLBACK:
             return self._deliver_decision_callback(payload, outbox_id=outbox_id, token=token)
         if kind == POC_EMAIL:
+            self._assert_claim_live(outbox_id=outbox_id, token=token)
             self.email_sender.send(payload["to"], payload["subject"], payload["body"])
             return None
         raise ValueError(f"unknown outbox kind: {kind}")
+
+    def _assert_claim_live(self, *, outbox_id: int, token: str) -> None:
+        """Refuse to produce an external side effect for a row this publisher no longer owns.
+
+        The decision-callback path gets this for free: `_record_attempt`'s fenced INSERT is its
+        presend check. A POC email stages no evidence, so it needs the ownership question asked
+        directly — same predicate, same wall clock. Raises `_StaleClaim` BEFORE the provider call.
+
+        This makes the row unsendable by a stale claimant; it does NOT revoke a request already on
+        the wire. No lease can: once bytes leave the socket the side effect exists whatever the
+        clock says. That residual is the documented at-least-once property (A6), and the real mail
+        provider must key its idempotency on `outbox.id` so a duplicate is collapsed receiver-side.
+        """
+        with uow(self.session_factory) as session:
+            take_shared_fence(session)
+            live = session.execute(
+                text(
+                    "SELECT 1 FROM outbox WHERE id=:outbox_id AND status='pending' "
+                    "AND claim_token=:token AND claim_lease_expires_at > clock_timestamp()"
+                ),
+                {"outbox_id": outbox_id, "token": token},
+            ).first()
+        if live is None:
+            raise _StaleClaim(outbox_id)
 
     # -- loop ---------------------------------------------------------------
 
@@ -323,7 +349,7 @@ class OutboxPublisher:
         lease = self.settings.outbox_lease_seconds
         with uow(self.session_factory) as session:
             row = session.execute(
-                _CLAIM_SQL, {"lease_seconds": min(lease, 3600), "claimed_by": self._claimant}
+                _CLAIM_SQL, {"lease_seconds": lease, "claimed_by": self._claimant}
             ).first()
         if row is None:
             return False
@@ -384,7 +410,7 @@ class OutboxPublisher:
         wire_sha256 = receipt.wire_sha256 if receipt else None
         now = datetime.now(UTC)
         with uow(self.session_factory) as session:
-            session.execute(_FENCE_SQL, {"k": _MAINTENANCE_FENCE_KEY})
+            take_shared_fence(session)
             # The wire witness lands in the SAME fenced statement as the terminal: the digest is
             # only meaningful for the delivery it describes, so it must not be writable by a
             # stale claimant whose UPDATE no longer matches. 7b-core never puts decision_sequence

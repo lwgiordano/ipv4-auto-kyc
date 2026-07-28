@@ -285,12 +285,25 @@ _DISPROVEN_CLAIMS = [
         "preserved evidence (re-audits 0c46443 F5, 15d875d F7).",
     ),
     (
-        # activation is migration 018; every earlier number it wore (014-017) was consumed by a
-        # 7b-core revision. Lines RECORDING a renumber ("moves to", "renumbered") are the
-        # correction itself, not a reassertion.
-        r"^(?!.*(?:renumber|moves to|forced)).*7b-activation\W{0,15}(?:migration )?`?01[4-7]\b",
-        "7b-activation is migration `018` (`down_revision='017'`): 7b-core shipped 013-017, and "
-        "the lineage test pins pending[0]=head+1 (re-audit 15d875d F7).",
+        # activation is migration 019; every earlier number it wore (014-018) was consumed by a
+        # 7b-core revision. The proximity window is gone: a stale number three sentences after
+        # the word "activation" is the same defect as one three characters after it (re-audit
+        # `cbb783b` F8). Lines RECORDING a renumber are the correction, not a reassertion.
+        # `013`-`018` (the 7b-core SHIPPED range) and `down_revision='018'` (activation's correct
+        # parent) are not stale activation numbers — exclude those two shapes explicitly rather
+        # than by proximity, which is what let these contradictions survive before.
+        r"^(?!.*(?:renumber|moves to|forced|historical|superseded|`013`-|down_revision))"
+        r".*(?:7b-activation|activation)[^\n]{0,80}?`01[4-8]`",
+        "7b-activation is migration `019` (`down_revision='018'`): 7b-core shipped 013-018, and "
+        "the lineage test pins pending[0]=head+1 (re-audits 15d875d F7, cbb783b F8).",
+    ),
+    (
+        # "the walk is 017 -> ..." as LIVE guidance: with 018 installed there is no schema
+        # downgrade at all, so any live text presenting the walk as the rollback path is wrong.
+        r"^(?!.*(?:historical|superseded|unreachable|never reached))"
+        r".*rollback is.*`?alembic downgrade",
+        "with `018` installed the rollback is the prior reviewed 018-compatible IMAGE on schema "
+        "`018` — `alembic downgrade` refuses unconditionally (re-audit `cbb783b` F3).",
     ),
 ]
 

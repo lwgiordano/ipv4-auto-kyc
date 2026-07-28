@@ -63,7 +63,10 @@ def test_upgrade_downgrade_upgrade(pg: str):
     url = pg.rsplit("/", 1)[0] + "/kyc_migration_test"
     cfg = _config(url)
 
-    alembic_command.upgrade(cfg, "head")
+    # 018 is forward-only by design (re-audit `cbb783b` F3 — walking below it would restore
+    # search-path-vulnerable authority functions), so the down-to-base leg runs from 017. The
+    # 017->018->refusal path is proven separately in test_migration_018.py.
+    alembic_command.upgrade(cfg, "017")
     engine = create_engine(url)
     assert set(inspect(engine).get_table_names()) >= EXPECTED_TABLES
 
@@ -87,7 +90,9 @@ def test_010_downgrade_refuses_after_cross_case_reuse(pg: str):
     loudly rather than delete immutable audit events."""
     url = _fresh_db(pg, "kyc_migration_refuse_test")
     cfg = _config(url)
-    alembic_command.upgrade(cfg, "head")
+    # 017, not head: 018 is forward-only, so a head-anchored walk would refuse at 018 and never
+    # reach the 010 blocker this test is about (018's own refusal is proven in its own suite).
+    alembic_command.upgrade(cfg, "017")
 
     engine = create_engine(url)
     with engine.begin() as conn:
@@ -151,7 +156,7 @@ def test_011_downgrade_refuses_after_use(pg, populate_sql, ids):
 def test_011_downgrade_clean_when_unused(pg):
     url = _fresh_db(pg, "kyc_mig_011_clean")
     cfg = _config(url)
-    alembic_command.upgrade(cfg, "head")
+    alembic_command.upgrade(cfg, "017")        # 018 is forward-only; walk from below it
     alembic_command.downgrade(cfg, "010")      # empty schema → clean
     alembic_command.upgrade(cfg, "head")
 

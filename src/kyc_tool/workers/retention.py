@@ -28,6 +28,7 @@ from sqlalchemy import text
 
 from kyc_tool.config import get_settings
 from kyc_tool.db.session import make_engine, make_session_factory, uow
+from kyc_tool.outbox.fence import take_shared_fence
 
 log = structlog.get_logger(__name__)
 
@@ -35,6 +36,14 @@ log = structlog.get_logger(__name__)
 def prune(session_factory, retention_days: int) -> dict[str, int]:
     counts: dict[str, int] = {}
     with uow(session_factory) as session:
+        # FIRST statement of the transaction, before any DML (re-audit `cbb783b` F4): retention
+        # updates the parent `outbox` and then deletes from the child `outbox_delivery_attempts`,
+        # which is the exact opposite of a migration's child-then-parent lock order — a real
+        # 40P01 cycle, and one the live-claim preflight cannot see because retention holds no
+        # claim. Taking the shared maintenance fence here puts retention under the same global
+        # order as every other witness writer: a migration waiting at the exclusive fence simply
+        # queues until this transaction commits.
+        take_shared_fence(session)
         counts["audit_log"] = session.execute(
             text("DELETE FROM audit_log WHERE at < now() - make_interval(days => :d)"),
             {"d": retention_days},

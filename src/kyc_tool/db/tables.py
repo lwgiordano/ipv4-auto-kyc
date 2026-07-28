@@ -65,6 +65,13 @@ class Case(Base):
     # commit order, which is exactly how the read API once paired a decision with the previous
     # decision's gates. Composite FK pins it to a decision of THIS case.
     latest_decision_row_id: Mapped[str | None] = mapped_column(Text)
+    # Migration 018: the MANUAL pointer, maintained by its own INSERT trigger. Separate from the
+    # pointer above because manual attribution is sticky — a later automatic decision moves the
+    # verdict pointer but must never blank who approved the case (re-audit `cbb783b` F6). Sorting
+    # `decisions` to find "the latest manual row" is not an option: `id` is a random UUID hex and
+    # `decided_at` is transaction-start time. NULL means unresolved, never "no manual approval":
+    # a legacy case with two or more manual rows cannot be ordered and is left explicitly unknown.
+    latest_manual_decision_row_id: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -72,6 +79,12 @@ class Case(Base):
             ["decisions.id", "decisions.case_id"],
             name="fk_cases_latest_decision",
             use_alter=True,  # cases↔decisions FKs are circular at the table level
+        ),
+        ForeignKeyConstraint(
+            ["latest_manual_decision_row_id", "id"],
+            ["decisions.id", "decisions.case_id"],
+            name="fk_cases_latest_manual_decision",
+            use_alter=True,
         ),
     )
 

@@ -68,14 +68,15 @@ def _seed_callback_in_state(session_factory, case_id, seq, status, *, payload="{
                 "INSERT INTO outbox_delivery_attempts (attempt_id, outbox_id, claim_token, "
                 "wire_version, request_sha256) VALUES (gen_random_uuid(), :o, :t, 'legacy', :s)"),
                 {"o": oid, "t": row.claim_token, "s": "a" * 64})
+            # delivered_at is written BY the terminal transition, never rewound afterwards: a
+            # terminal row's timestamps are frozen from 018 on (re-audit `cbb783b` F2), which is
+            # exactly the resurrection surface this seeding used to imitate.
             s.execute(text(
-                "UPDATE outbox SET status='delivered', delivered_at=now(), "
+                f"UPDATE outbox SET status='delivered', "
+                f"delivered_at={delivered_at_sql or 'now()'}, "
                 "callback_wire_sha256=:s, wire_version='legacy', claim_token=NULL, "
                 "claim_lease_expires_at=NULL, claimed_by=NULL WHERE id=:i"),
                 {"s": "a" * 64, "i": oid})
-            if delivered_at_sql:
-                s.execute(text(
-                    f"UPDATE outbox SET delivered_at={delivered_at_sql} WHERE id=:i"), {"i": oid})
         elif status != "pending":
             raise AssertionError(f"unsupported seed status {status}")
         s.commit()

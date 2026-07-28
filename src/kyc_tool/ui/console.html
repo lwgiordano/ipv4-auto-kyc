@@ -415,20 +415,22 @@ async function viewCases(){
   const rows=body.cases.map(c=>`<tr class="click" data-id="${esc(c.id)}">
     <td><span class="strong">${esc(c.company_name||c.id)}</span><div class="sub mono">${esc(c.id)}</div></td>
     <td>${pill(c.latest_decision||"missing",c.latest_decision?undefined:"No decision")}</td>
-    <td class="num strong">${c.current_score}</td>
+    <td class="num strong">${c.decision_score??"—"}</td>
+    <td class="num sub">${c.current_evidence_score}</td>
     <td class="sub">${esc(c.status)}</td><td class="sub">${esc(c.buy_status)}</td>
     <td>${pill(c.broker_status)}</td>
     <td class="num">${when(c.updated_at)}</td>
     <td style="color:var(--faint)">›</td></tr>`).join("")
-    ||emptyRow(8,"No cases yet",`Send a <code>kyb.run_requested</code> from the <a href="#/composer">Composer</a> to create one`);
+    ||emptyRow(9,"No cases yet",`Send a <code>kyb.run_requested</code> from the <a href="#/composer">Composer</a> to create one`);
   page.innerHTML=tbar("Cases","Every case the platform has sent events for")+`
     <div class="toolbar">
       <div class="search"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M14 14l-3.5-3.5"/></svg>
         <input id="q" placeholder="Search id or company…" value="${esc(q)}" aria-label="search cases"></div>
       <span class="note">${body.cases.length} case${body.cases.length===1?"":"s"}</span></div>
     <div class="card"><div class="bd flush"><table>
-      <thead><tr><th>Case</th><th>Decision</th><th class="num">Score</th><th>Status</th>
-      <th>Buy</th><th>Broker</th><th class="num">Updated</th><th></th></tr></thead>
+      <thead><tr><th>Case</th><th>Decision</th><th class="num" title="the score of the published decision row">Decision score</th>
+      <th class="num" title="live evidence recomputed from today's checks — not the published decision">Live evidence</th>
+      <th>Status</th><th>Buy</th><th>Broker</th><th class="num">Updated</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`;
   $("#q").addEventListener("input",e=>{sessionStorage.setItem("caseq",e.target.value);
     clearTimeout(window.__qt);window.__qt=setTimeout(viewCases,250)});
@@ -466,14 +468,15 @@ async function viewCase(id){
   // only — transaction-start timestamps invert against commit order, and c.latest_decision goes
   // stale after a record-only manual approval, so neither may pick the verdict tuple.
   const latest=d.pointer_decision||{},gates=latest.gates_json||{};
-  const s=d.score,max=Math.max(s.threshold*1.3,s.total+10);
+  const s=d.score,live=s.current_evidence_score,max=Math.max(s.threshold*1.3,live+10);
   const decision=latest.decision??null;
-  const barColor=decision==="approve"||decision==="approve_buy_locked"?"var(--green)":
-                 decision==="reject"?"var(--red)":"var(--amber)";
-  const gap=s.threshold-s.total;
-  const verdict=decision==="reject"?`<span style="color:var(--red)">rejected — broker gate</span>`:
-    gap>0?`<span style="color:var(--amber)">${gap} to threshold</span>`:
-    `<span style="color:var(--green)">threshold met</span>`;
+  // The bar is LIVE EVIDENCE and is styled neutrally on purpose: colouring it by the published
+  // decision, or captioning it "threshold met", made one visual read out of two different
+  // authority eras (re-audit cbb783b F6). The published tuple gets its own card below.
+  const liveGap=s.threshold-live;
+  const liveNote=liveGap>0?`${liveGap} below threshold`:`at or above threshold`;
+  const decisionColor=decision==="approve"||decision==="approve_buy_locked"?"var(--green)":
+                      decision==="reject"?"var(--red)":decision?"var(--amber)":"var(--faint)";
   const sdot=st=>st==="pass"?`<span class="sdot g">✓</span>`:st==="fail"?`<span class="sdot r">✕</span>`:
     st==="needs_review"?`<span class="sdot a">!</span>`:`<span class="sdot n">·</span>`;
   const contrib=s.items.map(it=>`<div class="crow">${sdot(it.status)}
@@ -544,15 +547,24 @@ async function viewCase(id){
        ${c.status==="approved_manual"?pill("manual","Approved manually"):`<span class="pill p-neutral">${esc(c.status)}</span>`}
        <span class="pill p-neutral">buy: ${esc(c.buy_status)}</span>${pill(c.broker_status,`broker: ${c.broker_status}`)}</span>`,
       `<button class="primary" id="sendbtn">Send event</button>`)}
-    <div class="card"><div class="hd"><h3>Score vs threshold</h3>
-        <span class="hint">bar = live points · tick = auto-approval threshold</span></div>
+    <div class="card"><div class="hd"><h3>Published decision</h3>
+        <span class="hint">every field below comes from ONE decision row — the ordering authority</span></div>
+      <div class="bd">
+        ${latest.decision?`<div class="bullet"><div class="val">
+            <b style="color:${decisionColor}">${esc(latest.decision)}</b>
+            <span class="of">score ${latest.score??"—"} · buy ${esc(latest.buy_enablement||"—")}</span>
+            <span class="verdict sub">decided ${esc(fmtExact(latest.decided_at))}</span></div></div>`
+          :`<div class="sub">No published decision for this case yet${d.decisions.length?` — the historical order is unresolved, so no row may be shown as the verdict`:""}.</div>`}
+      </div></div>
+    <div class="card"><div class="hd"><h3>Live evidence — not the published decision</h3>
+        <span class="hint">recomputed from today's checks · tick = auto-approval threshold</span></div>
       <div class="bd">
         <div class="bullet">
-          <div class="val"><b>${s.total}</b><span class="of">/ ${s.threshold} required</span>
-            <span class="verdict">${verdict}</span></div>
+          <div class="val"><b>${live}</b><span class="of">/ ${s.threshold} required</span>
+            <span class="verdict sub">${liveNote}</span></div>
           <div class="btrack">
             <span class="bband" style="width:${Math.min(100,s.threshold/max*100)}%"></span>
-            <span class="bmeasure" style="width:${Math.min(100,s.total/max*100)}%;background:${barColor}"></span>
+            <span class="bmeasure" style="width:${Math.min(100,live/max*100)}%;background:var(--faint)"></span>
             <span class="btick" style="left:${s.threshold/max*100}%"><span>${s.threshold} target</span></span>
           </div>
         </div>

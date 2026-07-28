@@ -44,11 +44,14 @@ def test_unwitnessed_delivery_refused_but_legacy_delivered_rows_survive(pg):
             "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL WHERE id=:i"),
             {"i": target})
 
-    with eng.begin() as conn:  # the legacy delivered row is untouched and still updatable
-        conn.execute(text("UPDATE outbox SET last_error = 'note' WHERE id = :i"), {"i": legacy})
+    with eng.connect() as conn:  # the legacy delivered row survived the upgrade untouched
         st = conn.execute(text("SELECT status, callback_wire_sha256 FROM outbox WHERE id=:i"),
                           {"i": legacy}).one()
     assert st.status == "delivered" and st.callback_wire_sha256 is None
+    # …and from 018 on it is FROZEN as terminal, which is a stronger statement than the
+    # "still updatable" one this test used to make (re-audit `cbb783b` F2)
+    with pytest.raises(Exception, match="terminal"), eng.begin() as conn:
+        conn.execute(text("UPDATE outbox SET last_error = 'note' WHERE id = :i"), {"i": legacy})
     eng.dispose()
 
 
@@ -164,20 +167,23 @@ def test_downgrade_refuses_on_negative_evidence_alone(pg):
         [sys.executable, "-m", "alembic", "-c", "alembic.ini", "downgrade", "012"],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert refused.returncode != 0
-    assert "MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE" in refused.stdout + refused.stderr
+    # the walk stops at the OUTERMOST authority: 018 is forward-only, so it refuses before 017's
+    # witness guard is even consulted. Same evidence preserved, one revision earlier.
+    assert "MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY" in refused.stdout + refused.stderr
     with eng.connect() as conn:  # nothing lost, still at head
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "017"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "018"
         assert conn.execute(text(
             "SELECT witness_generation FROM outbox")).scalar_one() == "attempt_v1"
     eng.dispose()
 
 
 def test_unused_database_round_trips_through_016(pg):
+    """016's own round trip, anchored at 017: `018` is forward-only once installed."""
     url = _fresh_db(pg, "kyc_mig_016_roundtrip")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "017")
     command.downgrade(cfg, "012")
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "017")
     eng = create_engine(url)
     with eng.begin() as conn:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "017"

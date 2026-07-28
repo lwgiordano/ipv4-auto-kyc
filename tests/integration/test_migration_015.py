@@ -234,7 +234,7 @@ def test_015_downgrade_and_live_attempt_writer_never_deadlock(pg):
     (no 40P01), then — the attempt having committed first — refuses on the witness."""
     url = _fresh_db(pg, "kyc_mig_015_deadlock")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "017")  # 018 is forward-only; the walk this proves starts below it
     eng = create_engine(url)
     with eng.begin() as conn:
         row = _claimed_pending(conn, "cd", "cd-r1", 1, with_attempt=False)
@@ -277,9 +277,11 @@ def test_015_downgrade_and_live_attempt_writer_never_deadlock(pg):
 def test_unused_database_round_trips_through_015(pg):
     url = _fresh_db(pg, "kyc_mig_015_roundtrip")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    # 018 is forward-only once installed (re-audit `cbb783b` F3), so a round trip that
+    # walks below its own revision is anchored at 017 — the top of the walkable chain.
+    command.upgrade(cfg, "017")
     command.downgrade(cfg, "012")
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "017")
     eng = create_engine(url)
     with eng.connect() as conn:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "017"

@@ -428,3 +428,65 @@ def test_stale_loser_cannot_supersede_reclaimed_row(session_factory, settings, p
     assert final_ob.claimed_by is None
     assert final_run == "COMPLETE"
     assert final_audit == before_audit + 1  # exactly one audit_log row written
+
+
+def test_stale_poc_claimant_sends_no_email(session_factory, settings, clean_db, monkeypatch):
+    """Re-audit `cbb783b` F5: the decision-callback path gets its presend check for free (the
+    fenced attempt INSERT), but a POC email staged no evidence and so called the provider with no
+    ownership check at all. A publisher paused after claiming, whose lease then expires and whose
+    row is reclaimed and delivered by B, must make ZERO provider calls when it resumes."""
+    from kyc_tool.outbox.publisher import _StaleClaim
+
+    class _CountingSender:
+        def __init__(self) -> None:
+            self.sent: list[tuple] = []
+
+        def send(self, to, subject, body):
+            self.sent.append((to, subject, body))
+
+    _seed_case(session_factory, "c1")
+    _enqueue_email(session_factory, case_id="c1", to="keep@x")
+
+    rowA = _claim(session_factory, "A")
+    assert rowA is not None
+    _expire_lease(session_factory, rowA.id)
+    rowB = _claim(session_factory, "B")           # B reclaims under a fresh token
+    assert rowB is not None and rowB.claim_token != rowA.claim_token
+
+    senderA = _CountingSender()
+    pubA = _pub_for(session_factory, settings)
+    pubA.email_sender = senderA
+    with pytest.raises(_StaleClaim):              # A resumes: presend gate refuses
+        pubA._deliver("poc_email", {"to": "keep@x", "subject": "s", "body": "b"},
+                      outbox_id=rowA.id, token=str(rowA.claim_token))
+    assert senderA.sent == [], "a stale claimant must not reach the mail provider at all"
+
+    senderB = _CountingSender()                   # B, the real owner, still delivers
+    pubB = _pub_for(session_factory, settings)
+    pubB.email_sender = senderB
+    pubB._deliver("poc_email", {"to": "keep@x", "subject": "s", "body": "b"},
+                  outbox_id=rowB.id, token=str(rowB.claim_token))
+    assert len(senderB.sent) == 1
+
+
+def test_configured_lease_reaches_the_database_unclamped(session_factory, settings, clean_db):
+    """The claim SQL used `min(lease, 3600)`, so a configured 7200 silently became one hour and
+    nothing said so. The bound is declared at the settings layer now; what is configured is what
+    the row's lease actually becomes."""
+    _seed_case(session_factory, "c1")
+    _enqueue_email(session_factory, case_id="c1", to="lease@x")
+
+    leased = settings.model_copy(update={"outbox_lease_seconds": 1800})
+    pub = _pub_for(session_factory, leased)
+    row = None
+    from kyc_tool.outbox.publisher import _CLAIM_SQL
+    with session_factory() as s:
+        row = s.execute(_CLAIM_SQL, {"lease_seconds": leased.outbox_lease_seconds,
+                                     "claimed_by": pub._claimant}).first()
+        s.commit()
+    assert row is not None
+    with session_factory() as s:
+        delta = s.execute(text(
+            "SELECT EXTRACT(EPOCH FROM (claim_lease_expires_at - now())) FROM outbox WHERE id=:i"),
+            {"i": row.id}).scalar_one()
+    assert 1700 < float(delta) <= 1800, f"configured lease was not what landed: {delta}"

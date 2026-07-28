@@ -244,3 +244,33 @@ documented choice · 🔵 hygiene/wording.
   contains the pre-redaction body, independent of `KYC_RETENTION_DAYS`, until it
   ages out on its own backup retention schedule — see `docs/RUNBOOK.md`
   ("Retention & compliance").
+
+### 🔵 D-7bcore-boundary — Local delivery evidence vs platform authority (PR 7b-core)
+
+- The witness state `delivery_witnessed` is a **local publisher 2xx attestation bound to exact
+  staged bytes** — the strongest statement this database can make about a decision callback, and
+  explicitly **not** proof of a receiver fact. A database cannot observe a socket; it observes
+  that its own application code reported one.
+- **The terminating authority for what the receiver holds is the platform's signed
+  accepted-request ledger**, introduced by PR 7b-activation. That unit must reconcile every
+  `delivery_witnessed` row against the ledger and require digest/encoding agreement before
+  declaring platform authority; a mismatch is a fail-closed `integrity_mismatch` terminal, never
+  "nothing to reconcile".
+- In-database authority (migrations `013`-`018`) defends against **application defects and
+  races** — exhaustively. It does not defend against an adversary holding the database's own
+  privileges, and the schema does not pretend otherwise.
+- Two adversarial-audit prescriptions were formally rebutted and both dispositions were ACCEPTED
+  by the reviewing agent:
+  - **R1 — an extra local terminal-provenance column** (plus demotion of all pre-existing
+    terminals): declined. A second local bit cannot prove a network fact against an actor who can
+    rewrite the same database, and the demotion would retroactively re-label rows delivered under
+    the already-fenced path.
+  - **R2 — proving the prior authority before recreating it**: declined for prior *execution*
+    history, which PostgreSQL records nowhere; ACCEPTED for *present observable structure*, which
+    is provable. Migration `018` therefore validates the complete observable surface of both
+    authority tables (ordered columns/types/nullability/defaults, exact constraint definitions,
+    exact index definitions, the complete enabled trigger set by exact `pg_get_triggerdef`, and
+    each owned function's normalized-body digest plus pinned `search_path`) and makes no claim
+    about earlier execution.
+- Recorded in full as **ADR-008**; the operative wording lives in `src/kyc_tool/outbox/witness.py`,
+  which every reconciliation query goes through.

@@ -102,3 +102,27 @@ def test_production_allows_pinning_off():
     # PR 6 is NOT boot-required in production; hardened() must still validate off.
     s = hardened(enforce_bundle_pinning=False)
     validate_for_production(s)   # must not raise
+
+
+def test_lease_shorter_than_the_http_budget_fails_boot():
+    """Re-audit `cbb783b` F5: a claim lease that expires while one delivery attempt is still in
+    flight makes every terminal unwitnessable — admission refuses evidence from an expired claim,
+    so the row retries forever. The combination is refused at boot, not discovered in production."""
+    v = production_config_violations(
+        hardened(outbox_lease_seconds=5, outbox_http_timeout_seconds=10.0))
+    assert any("outbox_lease_seconds" in s and "outbox_http_timeout_seconds" in s for s in v)
+
+    # equal is still refused: the lease must bound the WHOLE attempt, not merely match it
+    v_equal = production_config_violations(
+        hardened(outbox_lease_seconds=10, outbox_http_timeout_seconds=10.0))
+    assert any("outbox_lease_seconds" in s for s in v_equal)
+
+    assert production_config_violations(
+        hardened(outbox_lease_seconds=300, outbox_http_timeout_seconds=10.0)) == []
+
+
+def test_lease_bound_is_declared_not_silently_clamped():
+    """The claim SQL used to clamp with `min(lease, 3600)`, so 7200 became one hour in silence.
+    The bound belongs to the settings layer, where exceeding it is an error the operator sees."""
+    with pytest.raises(Exception, match="less than or equal to 3600|outbox_lease_seconds"):
+        Settings(environment="development", outbox_lease_seconds=7200)

@@ -124,12 +124,18 @@ def overview(request: Request) -> dict:
 
 @router.get("/ui/api/cases")
 def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(default=50)) -> dict:
-    # the listed decision is the POINTED row's value (or NULL when unresolved/none) — the
+    # The listed decision is the POINTED row's value (or NULL when unresolved/none) — the
     # cases.latest_decision projection column goes stale after a record-only manual approval
     # and must not be served as the verdict (re-audit 0c46443 F6).
+    #
+    # The pointed row's own `score` ships beside it as `decision_score`, and the live recomputed
+    # `current_evidence_score` is a DISTINCT field (re-audit `cbb783b` F6): serving one Score
+    # column that mixed a historical verdict with a later evidence total let the list render
+    # "Approve / 40" for a case decided at 105. Two names, two meanings, never blended.
     sql = """
         SELECT c.id, c.company_name, c.jurisdiction, c.status, c.buy_status, c.broker_status,
-               c.current_score, d.decision AS latest_decision, c.updated_at
+               c.current_score AS current_evidence_score,
+               d.decision AS latest_decision, d.score AS decision_score, c.updated_at
         FROM cases c
         LEFT JOIN decisions d ON d.id = c.latest_decision_row_id AND d.case_id = c.id
         {where}
@@ -216,16 +222,23 @@ def case_full(case_id: str, request: Request) -> dict:
                 {"d": case["latest_decision_row_id"]},
             ).mappings().first()
             pointer_decision = dict(row) if row else None
-        # manual attribution is sticky (re-audit 15d875d F6): the pointer moves to later
-        # automatic decisions, but Manual_Approved_By/At must keep naming the manual act
-        manual_row = session.execute(
-            text(
-                "SELECT id, run_id, decision, score, manual, reviewer_id, decided_at "
-                "FROM decisions WHERE case_id=:id AND manual = true ORDER BY id DESC LIMIT 1"
-            ),
-            {"id": case_id},
-        ).mappings().first()
-        latest_manual_decision = dict(manual_row) if manual_row else None
+        # Manual attribution is sticky (re-audit 15d875d F6): the verdict pointer moves to later
+        # automatic decisions, but Manual_Approved_By/At must keep naming the manual act. It is
+        # read from its OWN trigger-maintained pointer, never by sorting `decisions` — `id` is a
+        # random UUID hex, so `ORDER BY id DESC` returned the lexically largest manual row rather
+        # than the latest one (re-audit `cbb783b` F6), and `decided_at` inverts against commit
+        # order. NULL here is honestly unresolved: either no manual approval, or a legacy history
+        # with several that cannot be ordered.
+        latest_manual_decision = None
+        if case.get("latest_manual_decision_row_id"):
+            manual_row = session.execute(
+                text(
+                    "SELECT id, run_id, decision, score, manual, reviewer_id, decided_at "
+                    "FROM decisions WHERE id=:d"
+                ),
+                {"d": case["latest_manual_decision_row_id"]},
+            ).mappings().first()
+            latest_manual_decision = dict(manual_row) if manual_row else None
         tasks = _rows(
             session.execute(
                 text(
@@ -297,18 +310,27 @@ def case_full(case_id: str, request: Request) -> dict:
         {
             "case": case,
             "checks": checks,
+            # LIVE evidence, recomputed from today's checks — NOT the published decision. Named
+            # so the consumer cannot mistake it for one (re-audit `cbb783b` F6); the decided
+            # value travels with the pointed row below, as `pointer_decision.score`.
             "score": {
-                "total": case["current_score"],
+                "current_evidence_score": case["current_score"],
+                "total": case["current_score"],  # retained: the rubric panel's own bar total
                 "threshold": policy.rubric.threshold,
                 "items": score_items,
+                "is_published_decision": False,
             },
             "runs": runs,
             "adapter_results": adapter_results,
             "events": events,
             "decisions": decisions,
             # the authoritative row the Salesforce projection was built from (may be None for an
-            # ambiguous pre-014 history) — surfaced so consumers can SEE which row is authority
+            # ambiguous pre-014 history) — surfaced so consumers can SEE which row is authority.
+            # decision, score, gates and buy_enablement all come from THIS one row or from none.
             "pointer_decision": pointer_decision,
+            # the sticky manual act (own pointer; None = no manual approval OR an unorderable
+            # legacy multi-manual history — the projection treats both as unresolved)
+            "latest_manual_decision": latest_manual_decision,
             "review_tasks": tasks,
             "poc_tokens": tokens,
             "audit": list(reversed(audit)),

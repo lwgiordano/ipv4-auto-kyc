@@ -3,7 +3,7 @@
 ## Context
 
 PR 7b was split (user decision, 2026-07-22) into **7b-core** (this doc, migration `013`, shippable
-hardening) and **7b-activation** (migration `018`, `down_revision='017'` — the repair `014`, hardening `015`, admission `016` and authority-boundary `017` revisions sit between them; see §attempt authority — the platform-authoritative cutover — bootstrap,
+hardening) and **7b-activation** (migration `019`, `down_revision='018'` — the repair `014`, hardening `015`, admission `016`, authority-boundary `017` and transition-authority `018` revisions sit between them; see §attempt authority — the platform-authoritative cutover — bootstrap,
 wire emission, phase state machine). The split isolates the intricate platform-coordination into its
 own unit and lets this self-contained hardening land and reach REVIEW-CLEAN on its own. Both remain
 ahead of PR 6b; 6b's *activation* still waits on 7b-activation.
@@ -233,7 +233,7 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   decision/run ids** on any missing, orphan, or duplicate mapping (the decide path writes decision +
   callback in one transaction, so a missing row means retention/corruption and its safe order **cannot
   be guessed** — fail closed; recovery is **restore-from-authoritative-backup or remain on 012 in
-  `BLOCKED_NO_AUTHORITATIVE_MAPPING`** (§Rollout step 0; activation `016` is downstream and cannot repair this),
+  `BLOCKED_NO_AUTHORITATIVE_MAPPING`** (§Rollout step 0; activation `019` is downstream and cannot repair this),
   never a `decided_at` fallback); (2) `decision_sequence = row_number() OVER (PARTITION BY decision.case_id
   ORDER BY outbox.id)`, copy it to the matching outbox row, seed `last_decision_sequence = per-case
   max`; manual stays NULL. Other preflight refusals (raise, roll back): `>1` callback per run,
@@ -331,7 +331,7 @@ that manual approval: trigger = automatic decide enqueues its callback → the c
 processed → `reviewer.manual_approve` becomes the case's current state → the publisher claims the
 queued callback and the local guard sees **no higher locally-published automatic sequence**
 (manual has none) → the old automatic callback IS sent. All three are documented as expected
-pre-activation and are turned into platform-high-water no-ops only in 016 (whose acceptance is
+pre-activation and are turned into platform-high-water no-ops only in 019 (whose acceptance is
 strengthened so an unaccepted pending/dead callback older than a manual-current platform source
 cannot replace it). PR 6b may **build** on 7b-core's sequence primitive but
 not activate until 7b-activation is `active`.
@@ -374,7 +374,7 @@ while the schedule stays suspended and the zero-running attestation holds**. **O
 — before stopping service** (no outage begun). **Recovery — restore-or-block (user-confirmed decision,
 2026-07-23):** the only valid success path is to **restore the exact callback row from authoritative
 backup and rerun the diagnostic clean**; otherwise **remain on 012 in `BLOCKED_NO_AUTHORITATIVE_MAPPING`**
-(the exact sentinel — one token, no whitespace). **activation (`016`) is downstream and cannot
+(the exact sentinel — one token, no whitespace). **activation (`019`) is downstream and cannot
 repair this** — no `016` command is a substitute. There is **no** pre-013 reconciliation unit in this
 approved core design (the user considered and declined it). Backup availability is an **operator
 prerequisite**, not a consequence of the retention setting. Never fabricate a callback, delete an
@@ -532,14 +532,17 @@ read-back-asserts zero claims.
 drained as the forward cutover; the `LOCK TABLE` in §1 is defense-in-depth, not a substitute): (1)
 pause submissions, disable autoscaling/restarts; (2) hard-stop and orchestrator-attest **zero** API,
 pipeline, outbox, `dev_worker`, retention, and every writer; (3) **while 013 still exists**, run
-`reset_interrupted_outbox_claims` and verify zero claim tuples; (4) run `alembic downgrade 012` —
-the walk is `017 → 016 → 015 → 014 → 013 → 012` and EACH revision preflights byte-stably: `017`/`016` on any
-attempt/digest/`attempt_v1` row (negative evidence included), `015`/`014` on any attempt or digest,
-`013` on `superseded`/digest/amended-history. On ANY refusal the DB stays on the witness-authority
-schema and rollback is KEEP-or-redeploy the reviewed **`017`-compatible** image — an older publisher
-lacks the receipt/terminal contract and must not run against preserved evidence; (5) deploy the
-pre-7b image **only after** the entire walk reaches `012`. Redeploying the pre-7b image *before*
-013 is applied is also safe. (7b-activation
+`reset_interrupted_outbox_claims` and verify zero claim tuples; (4) **with `018` installed, `alembic
+downgrade` is not the rollback path** — `018` is forward-only (it refuses downgrade once installed,
+sentinel `MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`), so rollback is **redeploying the prior
+reviewed `018`-compatible image on schema `018`** — an older publisher lacks the receipt/terminal
+contract and must not run against preserved evidence. Historically, before `018` shipped, a schema
+walk existed (`017 → 016 → 015 → 014 → 013 → 012`, each revision preflighting byte-stably: `017`/`016`
+on any attempt/digest/`attempt_v1` row including negative evidence, `015`/`014` on any attempt or
+digest, `013` on `superseded`/digest/amended-history) — that walk is superseded and unreachable once
+`018` is on the schema; (5) deploy the pre-7b image **only after** downgrading below `013` on a schema
+that never reached `018` (the historical walk above, terminating at `012`). Redeploying the pre-7b
+image *before* 013 is applied is also safe. (7b-activation
 is separately forward-only-after-use.) Mirror this exact order in `DEPLOYMENT.md`/`RUNBOOK.md` — do not
 rely on the operator remembering that the forward drain also applies backward.
 
@@ -673,7 +676,7 @@ rely on the operator remembering that the forward drain also applies backward.
 - **Residual-risk (F2 — pins the honest boundary):** fake receiver; single publisher; seq 2 sent,
   fault injected **after HTTP 2xx but before `_record_delivered` commits**; restart, requeue seq 1 →
   the guard's `published_at` predicate is false and seq 1 **is** sent — assert the revert is
-  **expected pre-activation** (the future 016 test turns the same replay into a high-water no-op).
+  **expected pre-activation** (the future 019 test turns the same replay into a high-water no-op).
 - **Fenced claim (defect 3) — both kinds, winner/loser (rev-2 F1):** barrier publisher A after claim;
   expire its lease; B reclaims. **Decision:** B delivers; release A into **both** success and
   stale-final-attempt failure paths → B's outbox tuple, run state, and `published_at` are unchanged and
@@ -734,7 +737,7 @@ Amendments folding the four spec-affecting findings of the Codex complete-unit r
   (MATCH SIMPLE — manual rows exempt by design), ORM-mirrored, dependency-safe downgrade order.
 - **F4 — Third residual (§5, §Invariants):** manual-current vs late automatic callback documented
   with its trigger sequence + a real end-to-end expected-pre-activation test; 013 still allocates
-  no sequence for manual rows; 016's acceptance is strengthened against it (activation spec rev 2).
+  no sequence for manual rows; activation's acceptance is strengthened against it (activation spec rev 2).
 - **F8 — `superseded` is decision-only (§1):** the lifecycle CHECK's superseded branch additionally
   requires `kind='decision_callback'`; negatives + fixtures updated accordingly.
 

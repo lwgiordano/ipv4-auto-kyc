@@ -258,7 +258,9 @@ def test_unused_database_round_trips_head_012_head(pg):
     evidence, not to an unused schema."""
     url = _fresh_db(pg, "kyc_mig_014_roundtrip")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    # 018 is forward-only once installed (re-audit `cbb783b` F3), so a round trip that
+    # walks below its own revision is anchored at 017 — the top of the walkable chain.
+    command.upgrade(cfg, "017")
     command.downgrade(cfg, "012")
     command.upgrade(cfg, "head")
     eng = create_engine(url)

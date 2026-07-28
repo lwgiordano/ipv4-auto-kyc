@@ -8,7 +8,7 @@
 | Pipeline worker | `python -m kyc_tool.workers.pipeline_worker` | N processes; per-case FIFO is queue-enforced |
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | delivers decision callbacks + POC emails |
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily); prunes per KYC_RETENTION_DAYS |
-| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-017 witness chain (see below); 017's upgrade itself refuses while any live outbox claim exists (`MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` — publishers must be drained) |
+| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-018 witness chain (see below). **018 is forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
 | v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, POST-cutover (PR 5a §6a); idempotent |
 | Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot; PRE-cutover for `enforce_bundle_pinning` (PR 6, `docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
 | Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot; stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
@@ -23,9 +23,13 @@
 > readiness-verified, run the activation command above once to start the v1
 > observation clock.
 
-> **Migrations 013-017 (PR 7b-core) are forward-only after any wire witness — positive OR
+> **Migrations 013-018 (PR 7b-core) are forward-only after any wire witness — positive OR
 > negative** (an `attempt_v1` decision callback with no attempt is durable proof nothing was
-> staged, and counts). Their downgrades refuse with stable sentinels, in execution order
+> staged, and counts). **`018` goes further: it refuses downgrade unconditionally**
+> (`MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`) — walking below it would restore
+> search-path-vulnerable authority functions, so once `018` is on the schema the ONLY
+> rollback is redeploying the prior reviewed **018-compatible** image against it. Below
+> `018` the walk still preflights with stable sentinels, in execution order
 > (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -35,7 +39,7 @@
 > terminal `callback_wire_sha256`, or a `superseded` row exists — immutable
 > delivery evidence is never destroyed because local status looks terminal;
 > for a pending/dead callback the attempt row is the only proof bytes were
-> staged. On refusal, KEEP or redeploy the reviewed **017-compatible** image — an older
+> staged. On refusal, KEEP or redeploy the reviewed **018-compatible** image — an older
 > publisher lacks the receipt/terminal contract and must not run against preserved evidence;
 > a pre-7b image is permitted only after the entire walk reaches 012.
 
@@ -270,3 +274,13 @@ operator surface once it's live:
 All via environment (see `.env.example`): platform HMAC, CH/ARIN keys,
 email provider, S3. Nothing is ever logged; POC token emails log only a
 recipient hash.
+
+> **Upgrade preflight (`017`, `018`).** Both refuse with
+> `MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` while any unexpired outbox claim exists — the
+> drained-cutover precondition is machine-checked, not a runbook promise. Stop the publishers
+> AND retention, let leases expire or run `python -m kyc_tool.ops.reset_interrupted_outbox_claims`,
+> then retry. `018` additionally refuses with `MIGRATION_018_AUTHORITY_MANIFEST_MISMATCH` when the
+> observable authority surface (columns, constraints, indexes, trigger definitions, authority
+> function bodies, pinned `search_path`) is not the one `017` installed — reconcile the
+> environment, or restore from the reviewed image, before retrying. Every refusal happens BEFORE
+> any DDL: the schema and the alembic head are left exactly as they were.

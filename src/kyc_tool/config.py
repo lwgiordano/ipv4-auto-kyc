@@ -133,7 +133,16 @@ class Settings(BaseSettings):
     # attempt — deliberately its own knob, never derived from the retry backoff: admission
     # (DB trigger + publisher fence) refuses evidence from an expired claim, so a lease that
     # collapses toward zero would make every claim unable to deliver anything at all.
-    outbox_lease_seconds: int = Field(default=300, ge=1)
+    #
+    # `le=3600` is declared here rather than silently clamped at the claim SQL (re-audit
+    # `cbb783b` F5: the claim used min(lease, 3600), so a configured 7200 became one hour and
+    # nothing said so). The upper bound is the outer limit on how long a crashed publisher can
+    # hold a row hostage; the lower bound that matters is enforced against the HTTP budget in
+    # `production_config_violations`, because a lease shorter than one delivery attempt makes
+    # every claim expire mid-flight.
+    outbox_lease_seconds: int = Field(default=300, ge=1, le=3600)
+    # The per-request HTTP budget the publisher gives one callback attempt.
+    outbox_http_timeout_seconds: float = Field(default=10.0, gt=0)
     outbox_max_attempts: int = 8
     outbox_backoff_base_seconds: int = 10
 
@@ -230,6 +239,17 @@ def production_config_violations(settings: Settings) -> list[str]:
             v.append(f"hmac_v1 {label} sunset date is not timezone-aware ISO-8601 ({iso!r})")
     if settings.hmac_v1_observation_window_days < 1:
         v.append("hmac_v1 observation window days must be >= 1")
+
+    # A claim lease shorter than one delivery attempt's HTTP budget expires WHILE that attempt is
+    # in flight: admission then refuses the terminal for a request the receiver may well have
+    # accepted, and the row retries forever (re-audit `cbb783b` F5). The lease must bound the
+    # whole attempt, so it is required to exceed the HTTP budget rather than merely match it.
+    if settings.outbox_lease_seconds <= settings.outbox_http_timeout_seconds:
+        v.append(
+            f"outbox_lease_seconds ({settings.outbox_lease_seconds}) must exceed "
+            f"outbox_http_timeout_seconds ({settings.outbox_http_timeout_seconds}) — a lease "
+            f"that expires mid-attempt makes every delivery unwitnessable"
+        )
 
     return v
 

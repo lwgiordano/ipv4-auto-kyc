@@ -102,10 +102,12 @@ def test_decision_callback_cannot_be_born_anywhere_but_pending(pg):
 
 def test_dead_to_delivered_is_closed(pg):
     """`delivered` is reachable only from `pending`: a dead row re-entering the delivered state
-    would mint acceptance out of a terminal failure."""
+    would mint acceptance out of a terminal failure. (018 states the same rule through its
+    complete per-kind transition matrix, so the refusal message differs above 017 — this case is
+    pinned to the revision that introduced it.)"""
     url = _fresh_db(pg, "kyc_mig_017_deadpath")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "017")
     eng = create_engine(url)
     with eng.begin() as conn:
         row = _claimed_pending(conn, "cd", "cd-r1", 1, with_attempt=False)
@@ -217,13 +219,13 @@ def test_upgrade_refuses_while_claims_are_live(pg):
         row = _claimed_pending(conn, "cq", "cq-r1", 1, with_attempt=False)
 
     with pytest.raises(RuntimeError, match="MIGRATION_017_PREFLIGHT_LIVE_CLAIMS"):
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "017")
 
     with eng.begin() as conn:
         conn.execute(text(
             "UPDATE outbox SET claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL "
             "WHERE id=:i"), {"i": row.id})
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "017")
     with eng.connect() as conn:
         assert conn.execute(
             text("SELECT version_num FROM alembic_version")).scalar_one() == "017"
@@ -236,7 +238,7 @@ def test_017_downgrade_and_fenced_writer_never_deadlock(pg):
     proceeds when the writer commits, and then refuses on the witness the writer just wrote."""
     url = _fresh_db(pg, "kyc_mig_017_fence")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "017")
     eng = create_engine(url)
     with eng.begin() as conn:
         row = _claimed_pending(conn, "cf", "cf-r1", 1, with_attempt=False)
@@ -338,11 +340,13 @@ def test_authority_functions_ignore_the_session_search_path(pg):
 
 
 def test_unused_database_round_trips_through_017(pg):
+    """017's own round trip, pinned to 017: `018` is forward-only once installed, so the walk
+    below it is closed by design and is proven refused in test_migration_018.py."""
     url = _fresh_db(pg, "kyc_mig_017_roundtrip")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "017")
     command.downgrade(cfg, "012")
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "017")
     eng = create_engine(url)
     with eng.begin() as conn:
         assert conn.execute(

@@ -9,9 +9,9 @@ Status: **PR 1–4 shipped** (`c37c052`, `7a19a9f`, `4c91be6`; PR 4 this commit)
 Items 1–6 complete (PR 5a shipped: HMAC v2 + per-case idempotency). Item 11
 complete (PR 5b shipped: review-record binding). Item 7A complete (PR 6
 shipped: per-run policy bundle pinning + `engine_build_id`) — but M2 stays a
-HARD STOP (see §D). **PR 7b (item 8) was split into PR 7b-core (SHIPPED as `013`-`017`:
-stream separation + local decision ordering + the witness repair/authority/admission/boundary
-revisions — see §C) and PR 7b-activation (`018`, the platform-authoritative cutover —
+HARD STOP (see §D). **PR 7b (item 8) was split into PR 7b-core (SHIPPED as `013`-`018`:
+stream separation + local decision ordering + the witness repair/authority/admission/boundary/
+transition-authority revisions — see §C) and PR 7b-activation (`019`, the platform-authoritative cutover —
 the next pending unit once 7b-core reaches AUDIT-CLEAN).**
 Both are ahead of PR 6b, which consumes the callback-ordering guarantee its
 revalidation coordinator rests on (Codex PR-6b rev-5 F3); 7b-core is shipped,
@@ -78,12 +78,13 @@ that lands its migration.
 | PR 7b-core hardening | 8 | shipped | 015 | witness AUTHORITY: attempt admission trigger (live claim only), `witness_generation` immutable, terminal digest write-once (pending→delivered with matching attempt; never cleared/rewritten), exact-definition re-validation of the adopted attempt table (complete constraint/index/trigger sets, schema-bound), child-first downgrade lock order (no 40P01 vs live writers), forward-only-after-any-witness |
 | PR 7b-core admission | 8 | shipped | 016 | witness ADMISSION provenance: `outbox_delivery_attempts.admission` (`legacy_unverified`\|`admission_v1`, stamped only by the trigger — pre-authority attempts are never promoted into staged-intent evidence); unwitnessed decision delivery refused at the transition; canonical authority functions DROPPED+RECREATED (name-only validation proved gameable); downgrade also refuses on NEGATIVE evidence (`attempt_v1` rows) |
 | PR 7b-core boundary | 8 | shipped | 017 | outbox AUTHORITY BOUNDARY: admission requires an UNEXPIRED lease (`clock_timestamp()`, trigger + publisher fence — an expired claim stages nothing and sends nothing); decision callbacks born pending/unwitnessed/unclaimed (INSERT guard) and undeletable (DELETE guard; negative evidence survives); identity (kind/case/run/stream/sequence) immutable; payload immutable while sendable, governed redaction only once terminal; `delivered` reachable only from `pending`; ONE shared advisory fence for witness writers (shared) and migrations (exclusive) replaces lock-order reasoning; machine-checked quiescence preflight; full structural validation + `search_path`-pinned functions; REBUTS the provenance-regress prescriptions (see bus) |
-| PR 7b-activation | 8 | pending | 018 | wire `decision_sequence` emission + `integrity_mismatch`; platform high-water bootstrap (candidate manifest + signed response envelope); `outbox_ordering_activation` phase machine + immutable `BYTEA` artifacts; four CAS CLIs + activation cutover (`down_revision='017'`, forward-only-after-use) |
-| PR 6b | 7B | pending | 019 | revalidation / rollout staging |
-| PR 7a | 9 | pending | 020 | `jobs.lease_token` |
-| PR 8 | 10 | pending | 021 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
+| PR 7b-core transition authority | 8 | shipped | 018 | dual-table CANONICAL MANIFEST (ordered columns/types/nullability/defaults, every named constraint's exact definition, every index's exact definition, the complete enabled trigger set with exact `pg_get_triggerdef`, each owned function's normalized-body digest + pinned `search_path`) refusing BEFORE any DDL; ONE exhaustive per-kind transition matrix making `delivered`/`superseded` FINAL (no resurrection to pending/dead; terminal timestamps/claim tuple/witness/identity/attempts/errors frozen, only the governed payload redaction permitted); `cases.latest_manual_decision_row_id` (trigger-maintained sticky manual-attribution pointer replacing `ORDER BY decisions.id DESC` — `decisions.id` is a random UUID, so sorting it was wrong); retention brought inside the shared advisory fence; **forward-only** downgrade |
+| PR 7b-activation | 8 | pending | 019 | wire `decision_sequence` emission + `integrity_mismatch`; platform high-water bootstrap (candidate manifest + signed response envelope); `outbox_ordering_activation` phase machine + immutable `BYTEA` artifacts; four CAS CLIs + activation cutover (`down_revision='018'`, forward-only-after-use) |
+| PR 6b | 7B | pending | 020 | revalidation / rollout staging |
+| PR 7a | 9 | pending | 021 | `jobs.lease_token` |
+| PR 8 | 10 | pending | 022 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
 | PR 9a/b/c | 12 | — | — | contract + adapter-output validation + real providers |
-| PR 10 | 13 | pending | 022 | broker full-list snapshots, `runs.{matched_broker_entity_id,matched_identifier_class,broker_snapshot_revision}` |
+| PR 10 | 13 | pending | 023 | broker full-list snapshots, `runs.{matched_broker_entity_id,matched_identifier_class,broker_snapshot_revision}` |
 
 ---
 
@@ -293,7 +294,7 @@ common** single-replica revert; the **send-before-stamp** and **cross-replica** 
 7b-activation (documented residual risk). `decision_sequence` is **internal** (not on the wire).
 Legacy backfill orders by `outbox.id` (under-lock serialization), **not** `decided_at` (txn-start);
 a missing legacy callback is **restore-from-backup or `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012**
-(user-confirmed 2026-07-23; no pre-013 reconciliation unit; 7b-activation/`018` is downstream). A **step-0 pre-window
+(user-confirmed 2026-07-23; no pre-013 reconciliation unit; 7b-activation/`019` is downstream). A **step-0 pre-window
 `verify_pr7b_core_backfill` diagnostic** (schema-012-compatible, `SHARE`-locked) runs with retention
 **terminated + zero-running attested** before any outage. Drained migration cutover (shipped
 `requeue_interrupted_jobs`; **no** pre-013 outbox reset — the claim columns don't exist yet; a
@@ -302,7 +303,7 @@ no mutating prod smoke); **reversible-before-first-supersession** downgrade (ref
 `superseded` row exists). Cross-replica authority is 7b-activation.
 
 ### PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2)
-Migration **018** (`down_revision='017'`): `outbox.failure_class`; the `outbox_ordering_activation`
+Migration **019** (`down_revision='018'`): `outbox.failure_class`; the `outbox_ordering_activation`
 phase singleton (`legacy→bootstrap_in_progress→bootstrapped→active`, ordered timestamps, 64-hex
 digests, no reverse transition) with kind-typed FKs to an **immutable `BYTEA`
 `outbox_ordering_bootstrap_artifacts`** table (UPDATE/DELETE-refusing trigger). Puts
@@ -320,7 +321,7 @@ CAS CLIs (`export_outbox_ordering_manifest`, `begin_outbox_ordering_bootstrap`,
 may build on 7b-core's primitive but not activate until `phase='active'` (ADR-008).
 
 ### PR 6b — Revalidation (item 7B) — PENDING, required for M4
-Migration **019** (`down_revision='018'`). Revalidate immutable evidence under the run's pinned
+Migration **020** (`down_revision='019'`). Revalidate immutable evidence under the run's pinned
 bundle+engine, write **superseding** checks; a tightened pass rule marks prior PASSes stale until
 revalidated; block rollout activation until successors exist. Consumes PR 7b-activation's exact
 convergence contract (greatest per-case sequence platform-acknowledged, incl. `dead` as a hard
@@ -328,13 +329,13 @@ blocker); rev 6 must separately prove a superseded coordinator's higher delivere
 the target validator pair (7b ordering ≠ freshness).
 
 ### PR 7a — Queue lease fencing (item 9)
-Migration **020** (`down_revision='019'`): `jobs.lease_token`. Every transition gated on
+Migration **021** (`down_revision='020'`): `jobs.lease_token`. Every transition gated on
 `(id, locked_by, lease_token, status='running')`; heartbeat ≤ lease/3; cadence
 reaper fails the run in the **same txn**; fenced complete inside the decide txn
 (stale worker rolls back the decision).
 
 ### PR 8 — Object-store containment + immutable evidence (item 10)
-Migration 021. Structured `ObjectRef{key, sha256, size?, content_type?, version_id?}`
+Migration 022. Structured `ObjectRef{key, sha256, size?, content_type?, version_id?}`
 (**no bucket field**); separate input vs evidence buckets; `_safe_path` containment
 (reject traversal/absolute/symlink/foreign-bucket); streamed byte cap; verify digest;
 copy source doc to a content-addressed immutable evidence key **before** OCR is
@@ -352,7 +353,7 @@ close the OCR ownership decision (recommend `TextractOcrEngine`, keep
 `document.uploaded`).
 
 ### PR 10 — Production ops hardening (item 13)
-Migration 022: broker **full-list immutable snapshots** `(revision, sha256,
+Migration 023: broker **full-list immutable snapshots** `(revision, sha256,
 json_bytes, author, timestamp)` — NOT per-entity versioning (6 entities; snapshots
 reproduce matches AND non-matches, simpler); run records matched entity + snapshot
 revision. `adapters/retry.py` (transient classification + Retry-After — job-layer

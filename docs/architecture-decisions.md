@@ -4,6 +4,76 @@ A running log of significant decisions and their rationale. Newest first.
 
 ---
 
+## ADR-008 — Local delivery evidence vs platform authority (PR 7b)
+
+**Context.** PR 7b-core (migrations `013`-`018`) built an in-database witness
+authority for decision callbacks: attempts are staged before transmission,
+admission is stamped only by a trigger and only under an unexpired claim, a
+terminal digest may be written only on the `pending → delivered` transition
+and only when an ADMITTED attempt matches it, terminal rows are frozen, and
+decision callbacks can be neither deleted nor re-identified. Two adversarial
+audit rounds pressed on what that authority actually proves, and the loop had
+to answer a question it had been leaving implicit: when the tool says
+`delivery_witnessed`, what exactly is it asserting, and against whom?
+
+The pressure came from two prescriptions, both formally rebutted and both
+dispositions ACCEPTED by the reviewing agent:
+
+- **R1 — an additional local terminal-provenance column** (`terminal_v1`),
+  stamped by a trigger on a legal delivery, with all pre-existing terminals
+  demoted to "unverified" pending reconciliation. Declined: the threat it
+  addresses is an actor with raw SQL/DDL privileges, and such an actor can
+  mint the new bit exactly as easily as the old one — provenance-on-provenance
+  moves the trust question one level up without ever terminating it. The
+  demotion would additionally re-label, retroactively, every row delivered
+  under the already-fenced `015`/`016`/`017` path.
+- **R2 — proving the prior authority before recreating it.** Declined for
+  prior *execution* history, which PostgreSQL does not record anywhere: no
+  catalog says what a function body DID between two migrations, and any check
+  runs inside the same database whose integrity is in question. ACCEPTED for
+  *present observable structure*, which is provable — and migration `018`
+  implements exactly that carve-out.
+
+**Decision.**
+
+1. **`delivery_witnessed` is a LOCAL PUBLISHER 2xx ATTESTATION BOUND TO EXACT
+   STAGED BYTES.** It is the strongest statement this database can make, and
+   it is NOT proof of a receiver fact. A database cannot observe a socket; it
+   observes that its own application code reported one. The taxonomy's other
+   states (`send_intent_witnessed`, `legacy_unwitnessed`, `not_accepted`) each
+   say precisely what local evidence does and does not settle, and
+   `legacy_*` means "local history cannot prove this either way".
+2. **The terminating authority is the platform's signed accepted-request
+   ledger.** PR 7b-activation introduces it, and must reconcile every
+   `delivery_witnessed` row against it, requiring digest and encoding
+   agreement before platform authority is declared. A mismatch is a
+   fail-closed `integrity_mismatch` terminal — never "nothing to reconcile".
+3. **In-database authority defends against application defects and races**,
+   which is what `013`-`018` do exhaustively. It does not defend against an
+   adversary holding the database's own privileges, and the schema does not
+   pretend otherwise.
+4. **What IS provable at migration time gets validated, completely.** `018`
+   pins the full observable surface of both authority tables — ordered columns
+   with types, nullability and defaults; every named constraint's exact
+   definition; every index's exact definition; the complete enabled trigger
+   set compared as exact `pg_get_triggerdef` (timing, events, target relation
+   and target function all live inside that one string); and each owned
+   function's normalized-body digest together with its pinned `search_path` —
+   refusing before any DDL. It claims nothing about earlier execution.
+
+**Consequences.** Operators and the platform team get one honest sentence per
+row rather than a confident one: the tool can say what it staged and what its
+publisher observed, and it defers to the platform for what was accepted. PR
+7b-activation's convergence contract is therefore not an optimisation but the
+completion of this ADR — until it ships, reconciliation of a
+`delivery_witnessed` row against the platform ledger is manual. The rebuttal
+dispositions above are recorded so a future round does not relitigate them
+from scratch; the boundary itself is restated in `AUDIT_FINDINGS.md`
+(D-7bcore-boundary) and in `src/kyc_tool/outbox/witness.py`, which is the
+module every reconciliation query goes through.
+
+---
+
 ## ADR-005 — Per-run policy bundle pinning (PR 6)
 
 **Context.** Three problems compounded around the policy bundle a run is

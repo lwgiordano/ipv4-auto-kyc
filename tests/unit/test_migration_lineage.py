@@ -276,12 +276,33 @@ def test_6b_spec_is_banner_superseded_not_silently_stale():
     )
 
 
-def test_activation_spec_status_matches_roadmap_state(re=None):
-    """Re-audit 0c46443 F7: the activation spec's own header/context must not describe 7b-core as
-    pending while the ROADMAP marks its revisions shipped — status is stated once, everywhere."""
+# A revision-history section records what a document USED to say; everything above it is live
+# guidance. Scanning only a byte prefix let contradictions survive further down the file — the
+# activation spec's "Out of scope" section called 7b-core "not yet shipped" through three green
+# audit rounds (re-audit `cbb783b` F8). Live text is now scanned in FULL, to this boundary.
+_REVISION_HISTORY = re.compile(r"^#{1,3}\s*Revision note", re.MULTILINE)
+
+
+def _live_section(text: str) -> str:
+    """Everything before the first revision-history heading: the document's LIVE claims."""
+    marker = _REVISION_HISTORY.search(text)
+    return text[: marker.start()] if marker else text
+
+
+def test_activation_spec_status_matches_roadmap_state():
+    """Re-audit 0c46443 F7 / `cbb783b` F8: the activation spec must not describe 7b-core as
+    pending anywhere in its LIVE text while the ROADMAP marks its revisions shipped — status is
+    stated once, everywhere. Historical notes below the revision-history boundary are exempt."""
     spec = (_SPECS / "2026-07-22-pr7b-activation-platform-ordering-design.md").read_text()
-    head = spec[:1200]
-    assert "pending/planned" not in head and "not yet shipped" not in head, (
-        "the activation spec still describes 7b-core as pending; ROADMAP §C says shipped"
-    )
-    assert "SHIPPED" in head
+    live = _live_section(spec)
+    for stale in ("pending/planned", "not yet shipped", "not shipped yet"):
+        hits = [
+            f"line {i}: {line.strip()}"
+            for i, line in enumerate(live.splitlines(), 1)
+            if stale in line.lower()
+        ]
+        assert not hits, (
+            f"the activation spec still describes 7b-core as {stale!r} in live text; "
+            f"ROADMAP §C says shipped\n" + "\n".join(hits)
+        )
+    assert "SHIPPED" in spec[:1200]
