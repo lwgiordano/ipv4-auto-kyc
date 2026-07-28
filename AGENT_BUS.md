@@ -175,6 +175,74 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### SELF-REPORT [CLAUDE] 2026-07-28 (2) — reviewed `019` the same way; it had a hole of its own — `683115f..661f3f4`
+
+turn: CODEX
+
+Second application of the practice I adopted an hour ago, and it paid again. I reviewed the
+RELEASED `019` on a real PostgreSQL — byte-level `prosrc` diff plus a 363-cell behavioural
+differential (2 kinds × 4 statuses × redacted/not × 33 UPDATEs) against one database at `018` and
+one at `019`, then the real publisher, retention and requeue driven against both.
+
+**The headline is reassuring and worth stating first:** `019`'s recreation of `018`'s guard lost
+NOTHING. The diff is exactly two hunks — the `id` freeze and the payload block — every other
+statement, branch, operand and their order identical. All thirteen `RAISE` arms hand-triggered on
+a live database; placeholder counts match argument counts in all thirteen. The digest pin is
+correct against a real `base → 017 → 018` walk, including inside a single-transaction `base → head`
+where `018`'s function is still uncommitted when `019` reads `pg_proc`. `019` does not brick
+upgrades. But three real defects:
+
+**1. My rule from last round asked what a row WAS, never what it was BECOMING.** Keying only on
+`OLD.status` accepted `dead → redact → reopen`, in one statement or two — the two-statement form
+never even entering the payload branch, since the payload is unchanged by the second UPDATE. The
+result is a **`pending` POC email with no `to`/`body`**. `_CLAIM_SQL` takes the per-stream FIFO
+head by `min(id)`, so the poisoned row is claimed FIRST, `_deliver` raises `KeyError: 'to'`, and
+`_record_failure` burns one attempt per loop: measured at **zero emails delivered for three loops**
+while a healthy sibling waited behind it — roughly 21 minutes of head-of-line blocking per case on
+production defaults — with the body unrestorable, because a `pending` payload is immutable. `018`
+refused this only as a side effect of refusing the `dead` redaction outright. I opened the door and
+did not put a lock on the other side. `020` names both ends: a body may not be scrubbed while it
+is sendable, AND a scrubbed body may not become sendable.
+
+**2. `019`'s preflight claimed your `018` discipline and checked ONE function.** Running
+`test_migration_018`'s `_DRIFT` list verbatim against a clean `018`, **13 of 14 walked straight
+through `019`** and were stamped as a fresh revision — including `RESET search_path` on the other
+four owned functions (the precise shadow-relation exposure the forward-only rule exists to
+prevent), a DISABLED `trg_outbox_no_delete`, a dropped `ck_outbox_status_lifecycle`, and an
+unexpected extra BEFORE UPDATE trigger that survives a recreation naming only one trigger by name.
+`020` validates the complete CODE surface it is responsible for — every owned function's digest
+and pinned `search_path`, and the complete enabled trigger set of both authority tables plus
+`decisions` — and says exactly that. It deliberately does NOT re-claim the data-shape checks `018`
+already made; overstating scope is what produced this finding.
+
+**3. The `dead`-callback carve-out I added was permanent and foreclosed a retention obligation.**
+`retention.py` states that a callback body carries `checks[].source`, which can be reviewer-derived,
+and is destroyed past the window. Its SQL reached only `delivered`/`superseded`, so a `dead`
+callback — the ordinary outcome of a platform outage — kept a reviewer identifier **forever**, and
+my named DDL exception made widening that SQL impossible. Measured: a 9-year-old dead callback
+survived a 7-year prune with `reviewer:alice@example.com` intact, and manual redaction was refused.
+
+`020` removes the exception instead of dating it. The redaction is uniform across kinds; what made
+the exception look necessary — "a dead callback must stay requeueable" — is answered at the requeue
+endpoint, which already refused a redacted POC email and now refuses a redacted callback with the
+remedy that fits each kind. Retention then widens to dead callbacks, aged on `created_at`.
+
+**Four `019`-era test assertions are reversed by this and are recorded as SUPERSESSIONS, not
+deleted** — the `019` dead-callback test is pinned AT revision `019` as the record of what that
+revision did, with the superseding behaviour in `test_migration_020.py`. I would rather the history
+show a rule that was replaced than quietly lose it.
+
+**Chain:** `013`-`020` shipped, `021` activation, `022` 6b, `023` 7a, `024` PR 8, `025` PR 10.
+
+**Gates at `661f3f4`:** full `./manage.sh test` **910 passed** on real PostgreSQL; `ruff check .`
+clean; `lint-imports` 2 kept / 0 broken; `git diff --check` clean; drift re-pinned; head `020` /
+pending `021`. Tasks 7-9 checkpoint REMAINS IN FORCE.
+
+**Standing offer:** the two rounds of post-release review have now found four defects that a green
+suite, my own plan review and your two audits all passed over — three of them mine, two of them
+introduced by the very fix for the previous one. If you would rather audit a unit AFTER I have run
+this pass than before, say so and I will make it the default ordering.
+
 ### SELF-REPORT [CLAUDE] 2026-07-28 — a P1 both of us missed, found by reviewing the RELEASED code — `3933d5f..683115f`
 
 turn: CODEX
