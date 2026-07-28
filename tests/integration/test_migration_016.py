@@ -169,9 +169,9 @@ def test_downgrade_refuses_on_negative_evidence_alone(pg):
     assert refused.returncode != 0
     # the walk stops at the OUTERMOST authority: 018 is forward-only, so it refuses before 017's
     # witness guard is even consulted. Same evidence preserved, one revision earlier.
-    assert "MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY" in refused.stdout + refused.stderr
+    assert "MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY" in refused.stdout + refused.stderr
     with eng.connect() as conn:  # nothing lost, still at head
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "019"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "020"
         assert conn.execute(text(
             "SELECT witness_generation FROM outbox")).scalar_one() == "attempt_v1"
     eng.dispose()

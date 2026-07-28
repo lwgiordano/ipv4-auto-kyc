@@ -294,10 +294,15 @@ def test_retention_leaves_pending_callback_body_alone(session_factory, clean_db)
     assert "reviewer:pend-1" in str(row.payload_json)
 
 
-def test_retention_leaves_dead_callback_body_alone(session_factory, clean_db):
-    """F8 requeue-safety property, dead-row half: an old DEAD decision_callback is just as
-    requeueable as a pending one (`POST /ui/api/requeue/outbox/{id}`, see docs/RUNBOOK.md), so
-    retention must never redact it either."""
+def test_retention_redacts_an_aged_dead_callback(session_factory, clean_db):
+    """SUPERSEDES the old "retention leaves dead callback bodies alone" property (revision 020).
+
+    That property protected requeueability, but it also meant a dead callback — the ordinary
+    outcome of a platform outage — kept its reviewer-derived `checks[].source` forever, which
+    inverts the policy `retention.py` states. The requeue-safety half now lives where it belongs:
+    `requeue_outbox` refuses a redacted row of EITHER kind and names the remedy. A dead row has
+    neither `delivered_at` nor `resolved_at`, so it ages on `created_at`.
+    """
     from kyc_tool.workers.retention import prune
 
     _seed_decisions(session_factory, "cdead", [1])
@@ -307,12 +312,31 @@ def test_retention_leaves_dead_callback_body_alone(session_factory, clean_db):
 
     counts = prune(session_factory, 7 * 365)
 
-    assert counts["outbox_callback_redacted"] == 0
+    assert counts["outbox_callback_redacted"] == 1
     with session_factory() as s:
         row = s.execute(text(
             "SELECT status, payload_json FROM outbox WHERE case_id='cdead'")).one()
-    assert row.status == "dead"
-    assert row.payload_json == {"decision": "approve", "checks": [{"source": "reviewer:dead-1"}]}
+    assert row.status == "dead", "the row itself survives — only its body is destroyed"
+    assert row.payload_json == {"redacted": True}
+
+
+def test_retention_leaves_a_RECENT_dead_callback_body_alone(session_factory, clean_db):
+    """The window still governs: a dead callback inside the retention period keeps its body, so
+    it remains requeueable for as long as the policy says it should be."""
+    from kyc_tool.workers.retention import prune
+
+    _seed_decisions(session_factory, "crecent", [1])
+    _seed_callback_in_state(
+        session_factory, "crecent", 1, "dead", created_at_sql="now() - interval '1 day'",
+        payload='{"decision":"approve","checks":[{"source":"reviewer:recent"}]}')
+
+    counts = prune(session_factory, 7 * 365)
+
+    assert counts["outbox_callback_redacted"] == 0
+    with session_factory() as s:
+        body = s.execute(text(
+            "SELECT payload_json FROM outbox WHERE case_id='crecent'")).scalar_one()
+    assert body == {"decision": "approve", "checks": [{"source": "reviewer:recent"}]}
 
 
 def test_retention_redaction_is_idempotent(session_factory, clean_db):

@@ -514,12 +514,16 @@ def requeue_outbox(outbox_id: int, request: Request) -> dict:
         ).first()
         if row is None or row.status != "dead":
             raise HTTPException(status_code=409, detail="outbox row not found or not dead")
-        if row.kind == "poc_email" and (row.payload_json or {}).get("redacted"):
-            # the raw token was scrubbed when this row died — there is nothing
-            # deliverable left. Recovery is a fresh poc.submitted (new token).
+        if (row.payload_json or {}).get("redacted"):
+            # The body was scrubbed — by delivery for a POC token, or by retention past the
+            # window — so there is nothing deliverable left, for EITHER kind. Requeueing would
+            # produce a pending row that fails on every claim and blocks its stream (migration
+            # 020 refuses the transition at the database too; this is the honest 409 above it).
+            remedy = ("re-submit the POC instead" if row.kind == "poc_email"
+                      else "re-emit the decision (recalculate.requested) instead")
             raise HTTPException(
                 status_code=409,
-                detail="dead poc_email is redacted (token scrubbed); re-submit the POC instead",
+                detail=f"dead {row.kind} is redacted (body scrubbed); {remedy}",
             )
         session.execute(
             text(

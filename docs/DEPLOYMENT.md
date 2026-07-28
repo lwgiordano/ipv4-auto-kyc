@@ -128,11 +128,11 @@ three things: does it include a **migration**, any **new env vars**, and any
   deliberately refuses (it will not delete immutable audit events to recreate
   the old global unique — see `docs/RUNBOOK.md` and ADR-003). If two cases have
   shared an idempotency key, roll forward with a fix; do not downgrade 010.
-  **Exception — migrations 013-019 (PR 7b-core) are forward-only after any wire
+  **Exception — migrations 013-020 (PR 7b-core) are forward-only after any wire
   witness exists, positive OR negative** (an `attempt_v1` decision callback with no attempt
   is durable proof nothing was staged, and counts). Their downgrades refuse — with stable
-  sentinels, in execution order — and `018`/`019` refuse UNCONDITIONALLY
-  (`MIGRATION_01{8,9}_DOWNGRADE_REFUSED_FORWARD_ONLY`), because walking below them
+  sentinels, in execution order — and `018`/`019`/`020` refuse UNCONDITIONALLY
+  (`MIGRATION_0{18,19,20}_DOWNGRADE_REFUSED_FORWARD_ONLY`), because walking below them
   would restore search-path-vulnerable authority functions
   (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
   `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -145,13 +145,13 @@ three things: does it include a **migration**, any **new env vars**, and any
   pending/dead callback, the attempt row is the ONLY record that bytes were
   staged), and a local terminal status is never a reason to destroy the record
   of what the platform accepted. On refusal, KEEP or redeploy the reviewed
-  **019-compatible** image — an older publisher lacks the receipt/terminal
+  **020-compatible** image — an older publisher lacks the receipt/terminal
   contract and must not run against preserved evidence. Rollback after first
   witness use is a flag/image rollback on that compatible schema, never a
   schema downgrade; a pre-7b image is permitted only after the entire walk
   reaches 012 — which is only possible on a schema that never reached `018`. Once
-  `018`/`019` ARE installed, the supported rollback is redeploying the prior reviewed
-  `019`-compatible image against schema `019`; the schema itself does not move.
+  `018`/`019`/`020` ARE installed, the supported rollback is redeploying the prior
+  reviewed `020`-compatible image against schema `020`; the schema does not move.
   The UPGRADE side is gated too: `017` and `018` both refuse with
   `MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` while any live (unexpired) outbox claim
   exists — stop the publishers AND retention, let leases expire or run

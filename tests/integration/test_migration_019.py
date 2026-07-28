@@ -55,12 +55,17 @@ def test_dead_poc_email_scrubs_its_raw_token(session_factory, settings, clean_db
     assert row.payload_json == {"redacted": True}, f"raw token still at rest: {row.payload_json}"
 
 
-def test_dead_decision_callback_keeps_its_body(pg):
-    """The deliberate exception: `dead → pending` is a supported operator requeue, so a dead
-    decision callback must stay sendable. Redacting one is refused."""
+def test_dead_decision_callback_kept_its_body_at_019(pg):
+    """019's deliberate exception, pinned AT 019 — revision 020 REMOVED it.
+
+    The reasoning it encoded ("a dead callback must stay requeueable") was sound; putting it in
+    DDL was not, because it had no expiry and foreclosed retention's own stated policy. 020 makes
+    the redaction uniform and moves the requeue protection to the endpoint. This test stays as the
+    record of what 019 did, at the revision where it was true; `test_migration_020.py` holds the
+    superseding behaviour."""
     url = _fresh_db(pg, "kyc_mig_019_dead_cb")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "019")
     eng = create_engine(url)
     with eng.begin() as conn:
         oid = _seed_callback(conn, "cd", "cd-r1", 1, "pending")
@@ -131,11 +136,17 @@ def test_019_refuses_to_replace_a_guard_it_did_not_write(pg):
 
 
 def test_019_is_forward_only(pg):
+    """019's OWN refusal, pinned at 019: 020 refuses one revision above it."""
     url = _fresh_db(pg, "kyc_mig_019_forward")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "019")
     with pytest.raises(RuntimeError, match="MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY"):
         command.downgrade(cfg, "018")
+    eng = create_engine(url)
+    with eng.connect() as conn:  # the schema does not move
+        assert conn.execute(
+            text("SELECT version_num FROM alembic_version")).scalar_one() == "019"
+    eng.dispose()
 
 
 def test_outbox_id_is_immutable(pg):

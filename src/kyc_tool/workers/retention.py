@@ -63,12 +63,21 @@ def prune(session_factory, retention_days: int) -> dict[str, int]:
         # out of scope: a hash plus internal ordinals still joinable to a case. Retaining it past
         # the window is a governed decision (AUDIT_FINDINGS.md D9), not a personal-data
         # determination — this repo bounds what it keeps; it does not decide what the law calls it.
+        # `dead` is included from migration 020 on. A callback that exhausted its attempts is
+        # the ordinary outcome of a platform outage, and its body carries the same
+        # reviewer-derived `checks[].source` as any other — leaving it forever because delivery
+        # happened not to succeed inverted the policy this module states. A dead row has neither
+        # `delivered_at` nor `resolved_at`, so it ages on `created_at`; the requeue endpoint
+        # refuses a redacted row, so scrubbing one costs nothing recoverable (the decision row
+        # survives and can be re-emitted).
         counts["outbox_callback_redacted"] = session.execute(
             text(
                 "UPDATE outbox SET payload_json = '{\"redacted\": true}'::jsonb "
-                "WHERE kind='decision_callback' AND status IN ('delivered','superseded') "
+                "WHERE kind='decision_callback' "
+                "AND status IN ('delivered','superseded','dead') "
                 "AND payload_json <> '{\"redacted\": true}'::jsonb "
-                "AND COALESCE(delivered_at, resolved_at) < now() - make_interval(days => :d)"
+                "AND COALESCE(delivered_at, resolved_at, created_at) "
+                "    < now() - make_interval(days => :d)"
             ),
             {"d": retention_days},
         ).rowcount

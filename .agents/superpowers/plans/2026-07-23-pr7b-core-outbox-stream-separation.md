@@ -21,10 +21,10 @@
 - **Lint gate.** `.venv/bin/ruff check .` (rules `E,F,I,UP,B,SIM`; **no `;`/E702 multi-statement lines**) **and** `.venv/bin/lint-imports` (import-linter, **2 contracts kept / 0 broken**). New code lives in `db`/`outbox`/`orchestration`/`events`/`workers`/`api`/`ui`/`ops` — never add an import into `domain`/`validators`/`policy`/`adapters`, so both contracts stay green. **Never run `./manage.sh fmt`.**
 - **CANONICAL CLOSE-OUT ORDER for any `src/kyc_tool/**`-touching task (findings 6):** the whole-source drift guard (`test_engine_source_hash_pinned`) fails on ANY `src/` edit, so `./manage.sh test` returns nonzero until the hash is re-pinned. Every such task's close-out therefore runs **in this exact order — never `./manage.sh test` before the re-pin**: (1) run the task's targeted `.venv/bin/pytest` selectors green; (2) run the drift-guard test once to observe it RED (the deliberately-red TDD step — label it RED, never a gate); (3) compute+paste the new `EXPECTED_ENGINE_SOURCE_HASH` and re-run the drift-guard test GREEN; (4) `./manage.sh test` → exit 0; (5) `.venv/bin/ruff check .` → exit 0; (6) `.venv/bin/lint-imports` → exit 0; (7) **checkpoint or commit — see below**. **Tasks 1-6 are worktree CHECKPOINTS that end at step (6) with `git status` (NO commit); the single atomic `013`+runtime commit is made at the end of Task 6 (F1).** Tasks 7-9 (and Task 6's final step) commit normally. Tasks that touch only `alembic/`, docs, or `.agents/` skip steps 2-3 and run `./manage.sh test` directly.
 - **Exact exception types in tests (finding 9).** Never assert a bare `pytest.raises(Exception)` on an authoritative refusal. Use: `sqlalchemy.exc.IntegrityError` for CHECK / FK / unique / NOT-NULL violations; `sqlalchemy.exc.OperationalError` with `exc.value.orig.sqlstate == "55P03"` for a `lock_timeout` (psycopg3 exposes `.sqlstate` on `.orig`); `RuntimeError` for a migration/CLI fail-closed refusal raised in Python (`alembic.command.upgrade`/`downgrade` propagate the migration's `RuntimeError` unwrapped) — always paired with an assertion on the message substring. Match a `lock_timeout` on a real statement with `conn.execute(text("SET lock_timeout='2s'"))` first.
-- **Delivery-layer only — NO scoring/gate/decision semantic change.** The callback HTTP body stays **byte-identical** to pre-7b: `decision_sequence` is written to the `decisions`/`outbox` **columns only**, never added to `payload_json` or the wire (that is 7b-activation / `020`).
+- **Delivery-layer only — NO scoring/gate/decision semantic change.** The callback HTTP body stays **byte-identical** to pre-7b: `decision_sequence` is written to the `decisions`/`outbox` **columns only**, never added to `payload_json` or the wire (that is 7b-activation / `021`).
 - **Engine drift guard.** Every task that edits any file under `src/kyc_tool/**` MUST re-pin `EXPECTED_ENGINE_SOURCE_HASH` in `tests/policy_driven/test_engine_build_id_guard.py` **in the same commit** (see the re-pin one-liner in "Test infrastructure" below). **Do NOT bump `ENGINE_BUILD_ID`** — this is not a scoring change. The src-touching tasks are **1, 2 (the frozen `migration_contracts/v013_backfill.py`), 3, 4, 5, 7, 8** — each re-pins. Tasks that touch only `alembic/`, docs, or `.agents/` (parts of 6, 9) do NOT re-pin (the guard closure is `src/kyc_tool/**/*.py` only).
 - **Do NOT edit `KYC_Tool_Build_Package/`** (normative spec, immutable) or anything touching **M2** / `KYC_ENFORCE_POSITIVE_DECISIONS` / `enforce_positive_decisions`.
-- **ROADMAP lineage.** `.agents/ROADMAP.md §C` reserves PR 7b-core = `013` (shipped), the witness repair = `014` (shipped), the witness-authority hardening = `015` (shipped), the admission provenance = `016` (shipped, re-audit `0c46443`), the authority boundary = `017` (shipped, re-audit `15d875d`), the transition authority = `018` (shipped, re-audit `cbb783b`), and 7b-activation = `020` (five forced renumbers: `013` was amended in place after commit → repair `014`; `014`'s authority gaps were then repaired in `015` because a published revision is never edited — the same rule both times). Do **not** renumber further, which `tests/unit/test_migration_lineage.py` forces as soon as `alembic/versions/013_*.py` exists on disk: make the flip in **Task 1 Step 3b** and commit it in **Task 6's atomic `013` commit** (both files are read off disk, and CI checks out the commit, not the worktree). `tests/unit/test_migration_lineage.py` must stay green from Task 1's checkpoint onward.
+- **ROADMAP lineage.** `.agents/ROADMAP.md §C` reserves PR 7b-core = `013` (shipped), the witness repair = `014` (shipped), the witness-authority hardening = `015` (shipped), the admission provenance = `016` (shipped, re-audit `0c46443`), the authority boundary = `017` (shipped, re-audit `15d875d`), the transition authority = `018` (shipped, re-audit `cbb783b`), and 7b-activation = `021` (five forced renumbers: `013` was amended in place after commit → repair `014`; `014`'s authority gaps were then repaired in `015` because a published revision is never edited — the same rule both times). Do **not** renumber further, which `tests/unit/test_migration_lineage.py` forces as soon as `alembic/versions/013_*.py` exists on disk: make the flip in **Task 1 Step 3b** and commit it in **Task 6's atomic `013` commit** (both files are read off disk, and CI checks out the commit, not the worktree). `tests/unit/test_migration_lineage.py` must stay green from Task 1's checkpoint onward.
 - **Codex build constraints (carry verbatim):** migration/outbox/CLI mutation proofs run against **real Postgres and the real CLI entry points** (`main()` / `python -m …`), never a helper-only shim. The retention "zero active tasks before it deletes" attestation is a **runbook / `TODO(integration)`** deployment acceptance, **NOT** a pytest (retention is a scheduled one-shot with no in-repo liveness registry).
 - **Branch:** work on `claude/project-setup-verify-kpfgjs`. **Never put any model identifier in artifacts.**
 - **Commit trailer on EVERY commit:**
@@ -431,7 +431,7 @@ new outbox delete/write from invalidating the snapshot until the diagnostic comm
 the read-only parity checks at READ COMMITTED. On any violation it prints actionable decision/
 run/outbox ids and exits nonzero; a missing mapping additionally prints the exact
 BLOCKED_NO_AUTHORITATIVE_MAPPING sentinel. Recovery is restore-from-authoritative-backup or
-remain on 012 — activation (`020`) is downstream and cannot repair this. It NEVER writes.
+remain on 012 — activation (`021`) is downstream and cannot repair this. It NEVER writes.
 
     python -m kyc_tool.ops.verify_pr7b_core_backfill
 """
@@ -1220,7 +1220,7 @@ Documents stream separation + local ordering + the 7b-core/activation boundary i
 
 **Interfaces:**
 - Consumes: everything shipped in Tasks 1-8 (CLIs by name, migration behavior).
-- Produces: docs + governance only. The lineage invariant (head ∈ shipped, `pending[0]` = head+1) was established in Task 1; head is now `019` (the payload repair) and `pending[0]=020` (7b-activation).
+- Produces: docs + governance only. The lineage invariant (head ∈ shipped, `pending[0]` = head+1) was established in Task 1; head is now `020` (redaction uniformity) and `pending[0]=021` (7b-activation).
 
 - [ ] **Step 1: Confirm the lineage guard is already green** — it was satisfied in Task 1 Step 3b and committed atomically with `013` in Task 6; this step only proves no later task regressed it:
 
@@ -1233,12 +1233,12 @@ Expected: PASS.
 | PR 7b-core | 8 | shipped | 013 | `outbox.ordering_stream` (NOT NULL) + `case_id` NOT NULL + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + a **best-effort** local `superseded` guard (higher *locally-stamped* delivery only; send-before-stamp / cross-replica / manual-current-then-late-automatic-callback reverts remain for 7b-activation); identity + ordering (`UNIQUE decisions(case_id, decision_sequence)` [per-case namespace] + `UNIQUE(run_id)` + triple FK + composite `decisions(run_id,case_id)→runs(id,case_id)` FK + partial callback index); fenced claim (`claim_token`); exhaustive per-status lifecycle CHECKs (`superseded` decision-only); `ordering_stream`/`case_id` real `SET NOT NULL` (drained cutover, **reversible-before-first-supersession** downgrade) |
 ```
 
-(Leave 7b-activation `020` and every other row unchanged. Also update the prose note near line 12-14 if it says "7b-core is next" — change to "7b-core shipped (`013`-`018`); 7b-activation (`020`) is next".)
+(Leave 7b-activation `021` and every other row unchanged. Also update the prose note near line 12-14 if it says "7b-core is next" — change to "7b-core shipped (`013`-`018`); 7b-activation (`021`) is next".)
 
 - [ ] **Step 3: Re-run the lineage guard after the docs edits**
 
 Run: `.venv/bin/pytest tests/unit/test_migration_lineage.py -v`
-Expected: PASS (`head 019 ∈ shipped`; `pending[0]=020=head+1`; disjoint/exhaustive/contiguous all hold).
+Expected: PASS (`head 020 ∈ shipped`; `pending[0]=021=head+1`; disjoint/exhaustive/contiguous all hold).
 
 - [ ] **Step 4: Write `docs/OVERVIEW.md`** — insert this exact subsection **immediately before** `### Read endpoints (pull, on demand)` (currently line 184, inside `## 4. The integration contract`):
 
@@ -1253,7 +1253,7 @@ gets an internal per-case `decision_sequence`, allocated under the case's `FOR U
 `superseded` guard**: an older requeued callback is suppressed only when a higher-sequence decision
 already carries a locally-stamped `published_at`. Each claim is fenced by a `claim_token` so a stale
 publisher cannot overwrite a reclaimer's terminal. **Boundary:** THREE residual reverts are NOT
-closed here and remain expected until 7b-activation (`020`) adds the platform high-water mark:
+closed here and remain expected until 7b-activation (`021`) adds the platform high-water mark:
 send-before-stamp; cross-replica; and a queued automatic callback delivered AFTER a later manual
 approval (manual approvals carry no run, no callback, and no sequence, so the local guard has no
 higher locally-published automatic sequence to compare). 7b-core does not claim exactly-once (see
@@ -1354,7 +1354,7 @@ higher locally-published automatic sequence to compare). 7b-core does not claim 
 3. Run the shipped `python -m kyc_tool.ops.requeue_interrupted_jobs`. NO outbox reset here — the
    pre-013 schema has no claim columns; an interrupted old claim simply waits until its already-
    recorded `next_attempt_at`. Preserve every pending row's `next_attempt_at`.
-4. Run `python -m alembic -c alembic.ini upgrade head` (the chain `013`→`014`→`015`→`016`→`017`→`018`→`019`) — the deployment image runs its exact
+4. Run `python -m alembic -c alembic.ini upgrade head` (the chain `013`→`014`→`015`→`016`→`017`→`018`→`019`→`020`) — the deployment image runs its exact
    equivalent. This repeats the §0 parity preflights under the zero-writer boundary and is the
    authoritative fail-closed check (the pre-window diagnostic is an early detector, not a substitute).
    `017` additionally machine-checks the drain: it refuses with `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`
@@ -1371,7 +1371,7 @@ R2. Hard-stop and orchestrator-attest zero API, pipeline, outbox, `dev_worker`, 
 R3. While 013 still exists, run `python -m kyc_tool.ops.reset_interrupted_outbox_claims` (post-013-only;
     clears complete claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero) and
     verify zero claim tuples.
-R4. **With `019` installed there is no schema-downgrade path**: `018` and `019` refuse unconditionally
+R4. **With `020` installed there is no schema-downgrade path**: `018`, `019` and `020` refuse unconditionally
     (`MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`) because walking below it would restore
     search-path-vulnerable authority functions, so rollback goes straight to R5 (image-only on
     schema `018`). The walk below is the HISTORICAL path, reachable only on a schema that never
@@ -1394,7 +1394,7 @@ R4. **With `019` installed there is no schema-downgrade path**: `018` and `019` 
       (`MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`), or the attempt table under a bare `013`
       stamp (`MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`).
 R5. ROLLBACK OUTCOME A — downgrade REFUSED (any sentinel above): the DB stays on the
-    witness-authority schema, so KEEP or redeploy the reviewed **`019`-COMPATIBLE image** digest —
+    witness-authority schema, so KEEP or redeploy the reviewed **`020`-COMPATIBLE image** digest —
     an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
     evidence; the pre-7b image is PROHIBITED outright. Rollback after first witness use is a
     FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is
@@ -1557,7 +1557,7 @@ def _head_db(pg, name):
     with eng.connect() as conn:
         head = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
     eng.dispose()
-    assert head == "019", f"the documented rollback must start from the REAL head, got {head}"
+    assert head == "020", f"the documented rollback must start from the REAL head, got {head}"
     return url
 
 
@@ -1571,10 +1571,10 @@ def test_documented_rollback_command_refuses_at_the_forward_only_head(pg):
     refused = subprocess.run([*_ALEMBIC, "-c", "alembic.ini", "downgrade", "012"],
                              cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert refused.returncode != 0
-    assert "MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY" in refused.stdout + refused.stderr
+    assert "MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY" in refused.stdout + refused.stderr
     eng = create_engine(url)
     with eng.connect() as conn:  # the schema does not move; rollback is image-only from here
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "019"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "020"
     eng.dispose()
 
     # the SAME argv without the positional revision is the invalid form the docs must never use
@@ -1619,9 +1619,9 @@ def test_documented_rollback_command_refuses_on_witness_evidence(pg):
     refused = subprocess.run([*_ALEMBIC, "-c", "alembic.ini", "downgrade", "012"],
                              cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert refused.returncode != 0
-    assert "MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY" in refused.stdout + refused.stderr
+    assert "MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY" in refused.stdout + refused.stderr
     with eng.connect() as conn:  # still at head; nothing was dropped underneath the evidence
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "019"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "020"
         assert conn.execute(text("SELECT count(*) FROM outbox_delivery_attempts")).scalar_one() == 1
     eng.dispose()
 ```
@@ -1629,7 +1629,7 @@ def test_documented_rollback_command_refuses_on_witness_evidence(pg):
 - [ ] **Step 8: Verify + full gate + commit**
 
 ```bash
-# ROADMAP: 7b-core shipped/013-019, 7b-activation still pending/020, no contradictory allocation
+# ROADMAP: 7b-core shipped/013-020, 7b-activation still pending/021, no contradictory allocation
 rg -n "PR 7b-core \| 8 \| shipped \| 013" .agents/ROADMAP.md
 rg -n "PR 7b-activation \| 8 \| pending \| 019" .agents/ROADMAP.md
 .venv/bin/pytest tests/unit/test_docs_cutover_parity.py tests/unit/test_migration_lineage.py \
@@ -1652,7 +1652,7 @@ Claude-Session: https://claude.ai/code/session_015B9mwM3CytAHNuR3bxnXTK"
 - [ ] `./manage.sh lint` (ruff) + `.venv/bin/lint-imports` → **2 contracts kept / 0 broken**.
 - [ ] `.venv/bin/pytest tests/unit/test_migration_lineage.py -v` → green (post-flip).
 - [ ] `./manage.sh test` → whole suite green.
-- [ ] Confirm `rg -n "013" .agents/ROADMAP.md` shows no contradictory live allocation and the 7b-core chain (`013`-`019`) is `shipped`, 7b-activation `020` still `pending`.
+- [ ] Confirm `rg -n "013" .agents/ROADMAP.md` shows no contradictory live allocation and the 7b-core chain (`013`-`020`) is `shipped`, 7b-activation `021` still `pending`.
 - [ ] Confirm the callback HTTP body is byte-identical to pre-7b (no `decision_sequence` in `payload_json` / on the wire) — `tests/integration/test_callback_signing.py` + `test_run_walk.py` unchanged and green.
 - [ ] Confirm `ENGINE_BUILD_ID` was NOT bumped and `EXPECTED_ENGINE_SOURCE_HASH` is re-pinned to the finished tree.
 
@@ -1688,7 +1688,7 @@ Every spec section maps to a task: §1 Migration 013 → Tasks 1 (columns/stream
 
 ## Codex plan-review round 3 — 6 findings closed (all real; REVIEW-CLEAN boundary intact, no 014 pulled in)
 
-1. **(P1) Rollback/forward resume.** The canonical RUNBOOK/DEPLOYMENT block is now a two-branch state machine: forward step 6 restores all five paused controls; rollback R4 branches to **R5 (downgrade REFUSED → keep the reviewed head-compatible image (`019` today), prohibit pre-7b, restore all five OR declare an incident)** and **R6 (downgrade SUCCEEDED → deploy prior digest, `/readyz` + workers, restore all five)**. "All five" includes removing the composer edge block in addition to retention, autoscaling, restarts, and submissions. `test_docs_cutover_parity.py` requires both `ROLLBACK OUTCOME A/B`, `PROHIBIT the pre-7b image`, the resume token, two edge-block establishments, and three edge-block removals — beside the full-body byte-identical compare.
+1. **(P1) Rollback/forward resume.** The canonical RUNBOOK/DEPLOYMENT block is now a two-branch state machine: forward step 6 restores all five paused controls; rollback R4 branches to **R5 (downgrade REFUSED → keep the reviewed head-compatible image (`020` today), prohibit pre-7b, restore all five OR declare an incident)** and **R6 (downgrade SUCCEEDED → deploy prior digest, `/readyz` + workers, restore all five)**. "All five" includes removing the composer edge block in addition to retention, autoscaling, restarts, and submissions. `test_docs_cutover_parity.py` requires both `ROLLBACK OUTCOME A/B`, `PROHIBIT the pre-7b image`, the resume token, two edge-block establishments, and three edge-block removals — beside the full-body byte-identical compare.
 2. **(P2) Lifecycle-gap in the shared preflight.** Added `invalid_legacy_outbox_lifecycle` to the frozen contract (the schema-012 projection of `ck_outbox_status_lifecycle`: status vocabulary + delivered_at shape); four `_PARITY_BAD_SEEDS` (`lifecycle_pending_delivered_at`/`_delivered_null_at`/`_dead_delivered_at`/`_unknown_status`) prove the real CLI **and** the real 013 upgrade refuse each before DDL, a `test_013_valid_lifecycle_rows_upgrade_clean` proves valid pending/delivered/dead pass, and a named mutation removing the check is the witness. A `_PARITY_SEED_VIOLATION` map pins the exact violation name per seed.
 3. **(P2) Exact rollback command.** `test_documented_rollback_command_downgrades_013` now runs **exactly** `[str(REPO_ROOT/'.venv/bin/alembic'), '-c', 'alembic.ini', 'downgrade', '012']` with `cwd=REPO_ROOT` + `KYC_DATABASE_URL` (`alembic.ini` ships an empty `sqlalchemy.url`, so env.py falls to that var), asserts head `012`, and asserts the same argv without `012` exits nonzero — identical to the documented command.
 4. **(P2) Ruff-clean copy-ready Python.** Wrapped all 39 over-110 lines (string implicit-concatenation / arg breaks / split asserts) → **0** lines >110; self-review actually ran `.venv/bin/ruff check --select E,W` on every fenced block (0 E501/whitespace/indent findings) and `compile()` on every real module block (0 SyntaxErrors); the two residual ruff flags are provable false positives on non-code insertion fragments (a docstring-text snippet, the `ARRAY, JSONB, UUID` import line used in the full `tables.py`).
