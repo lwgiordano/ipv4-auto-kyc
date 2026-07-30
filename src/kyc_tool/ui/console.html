@@ -553,7 +553,10 @@ async function viewCase(id){
         ${latest.decision?`<div class="bullet"><div class="val">
             <b style="color:${decisionColor}">${esc(latest.decision)}</b>
             <span class="of">score ${latest.score??"—"} · buy ${esc(latest.buy_enablement||"—")}</span>
-            <span class="verdict sub">decided ${esc(fmtExact(latest.decided_at))}</span></div></div>`
+            <span class="verdict sub">decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
+          <h4>Published decision hard gates</h4>
+          <div class="gates published-gates">${["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"]
+            .map(g0=>`<div class="gate ${gates[g0]?"ok":"no"}">${gates[g0]?"✓":"✕"} ${esc(g0.replace(/_/g," "))}</div>`).join("")}</div>`
           :`<div class="sub">No published decision for this case yet${d.decisions.length?` — the historical order is unresolved, so no row may be shown as the verdict`:""}.</div>`}
       </div></div>
     <div class="card"><div class="hd"><h3>Live evidence — not the published decision</h3>
@@ -570,9 +573,6 @@ async function viewCase(id){
         </div>
         <div class="contrib">${contrib}</div>
       </div></div>
-    <h2 class="sec">Hard gates — all five must pass for auto-approval</h2>
-    <div class="gates">${["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"]
-      .map(g0=>`<div class="gate ${gates[g0]?"ok":"no"}">${gates[g0]?"✓":"✕"} ${esc(g0.replace(/_/g," "))}</div>`).join("")}</div>
     <h2 class="sec">Checks &amp; supersession</h2>
     <div class="card"><div class="bd flush"><table>
       <thead><tr><th>Type</th><th>Chain — oldest → live</th><th>Source</th></tr></thead>

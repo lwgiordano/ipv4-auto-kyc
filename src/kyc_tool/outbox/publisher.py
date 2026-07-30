@@ -242,11 +242,34 @@ class OutboxPublisher:
             outbox_id=outbox_id, token=token, wire_version=_WIRE_VERSION,
             request_sha256=wire_sha256,
         )
-        response = self.http.send(request)
-        response.raise_for_status()
+        self._send_with_total_deadline(request)
         return DeliveryReceipt(
             attempt_id=attempt_id, wire_sha256=wire_sha256, wire_version=_WIRE_VERSION
         )
+
+    def _send_with_total_deadline(self, request: httpx.Request) -> None:
+        """Send and fully consume a callback response inside one absolute attempt budget.
+
+        `httpx.Timeout(0.2)` means each connect/read/write/pool wait may take up to 0.2s; a
+        receiver that slowly drips bytes can keep the request alive much longer. The outbox lease
+        is a wall-clock ownership claim, so the publisher enforces its own monotonic deadline and
+        raises before a slow response can run past the configured attempt budget.
+        """
+        deadline = time.monotonic() + self.settings.outbox_http_timeout_seconds
+        response = self.http.send(request, stream=True)
+        try:
+            if time.monotonic() > deadline:
+                raise httpx.TimeoutException("callback exceeded total HTTP budget", request=request)
+            for _chunk in response.iter_bytes():
+                if time.monotonic() > deadline:
+                    raise httpx.TimeoutException(
+                        "callback exceeded total HTTP budget", request=request
+                    )
+            if time.monotonic() > deadline:
+                raise httpx.TimeoutException("callback exceeded total HTTP budget", request=request)
+            response.raise_for_status()
+        finally:
+            response.close()
 
     def _record_attempt(self, *, outbox_id: int, token: str, wire_version: str,
                         request_sha256: str) -> str:
@@ -415,11 +438,14 @@ class OutboxPublisher:
             # only meaningful for the delivery it describes, so it must not be writable by a
             # stale claimant whose UPDATE no longer matches. 7b-core never puts decision_sequence
             # on the wire, so the encoding is always 'legacy' here; 014 introduces 'sequenced'.
+            redacted_payload = json.dumps({"redacted": True})
             applied = session.execute(
                 text(
                     "UPDATE outbox SET status='delivered', delivered_at=:now, "
                     "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL, "
-                    "callback_wire_sha256=:sha, wire_version=:wire_version "
+                    "callback_wire_sha256=:sha, wire_version=:wire_version, "
+                    "payload_json = CASE WHEN :redact_payload THEN CAST(:redacted AS jsonb) "
+                    "ELSE payload_json END "
                     "WHERE id=:id AND status='pending' AND claim_token=:token "
                     # A terminal digest asserts "these exact bytes were staged and accepted", so
                     # it may only land when the matching attempt row — same claim, same digest,
@@ -441,6 +467,7 @@ class OutboxPublisher:
                 # the same reason: one parameter, one role.
                 {"id": row.id, "now": now, "token": token, "sha": wire_sha256,
                  "wire_version": receipt.wire_version if receipt else None,
+                 "redact_payload": row.kind == POC_EMAIL, "redacted": redacted_payload,
                  "needs_witness": receipt is not None,
                  "attempt_id_probe": receipt.attempt_id if receipt else None,
                  "sha_probe": wire_sha256,
@@ -454,12 +481,6 @@ class OutboxPublisher:
                 log.warning("outbox_stale_or_unwitnessed_completion",
                             outbox_id=row.id, attempted="delivered")
                 return
-            if row.kind == POC_EMAIL:
-                # the raw POC token existed only to be emailed; don't retain it at rest.
-                session.execute(
-                    text("UPDATE outbox SET payload_json = CAST(:p AS jsonb) WHERE id=:id"),
-                    {"id": row.id, "p": json.dumps({"redacted": True})},
-                )
             if row.kind == DECISION_CALLBACK and row.run_id:
                 session.execute(
                     text(
@@ -483,22 +504,27 @@ class OutboxPublisher:
         delay = self.settings.outbox_backoff_base_seconds * (2 ** (attempts - 1))
         with uow(self.session_factory) as session:
             if dead:
+                redacted_payload = json.dumps({"redacted": True})
                 applied = session.execute(
                     text(
                         "UPDATE outbox SET status='dead', attempts=:a, last_error=:e, "
-                        "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL "
+                        "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL, "
+                        "payload_json = CASE WHEN :redact_payload THEN CAST(:redacted AS jsonb) "
+                        "ELSE payload_json END "
                         "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
                     ),
-                    {"id": row.id, "a": attempts, "e": error[:2000], "token": token},
+                    {
+                        "id": row.id,
+                        "a": attempts,
+                        "e": error[:2000],
+                        "token": token,
+                        "redact_payload": row.kind == POC_EMAIL,
+                        "redacted": redacted_payload,
+                    },
                 ).first()
                 if applied is None:
                     log.warning("outbox_stale_claim_completion", outbox_id=row.id, attempted="dead")
                     return
-                if row.kind == POC_EMAIL:
-                    session.execute(
-                        text("UPDATE outbox SET payload_json = CAST(:p AS jsonb) WHERE id=:id"),
-                        {"id": row.id, "p": json.dumps({"redacted": True})},
-                    )
             else:
                 applied = session.execute(
                     text(

@@ -2,10 +2,10 @@
 
 ## Context
 
-PR 7b was split (user decision, 2026-07-22) into **7b-core** (SHIPPED as `013`-`021` — stream
+PR 7b was split (user decision, 2026-07-22) into **7b-core** (SHIPPED as `013`-`022` — stream
 separation, an internal per-case `decision_sequence` + locked counter, a
 **best-effort local** `superseded` guard, a **fenced** claim, per-case + triple-identity constraints,
-status/lifecycle CHECKs) and **7b-activation** (this doc, migration `022`, `down_revision='021'`).
+status/lifecycle CHECKs, witness/redaction/authority repairs) and **7b-activation** (this doc, migration `023`, `down_revision='022'`).
 7b-core closes the mixed-FIFO defect locally and **mitigates** the requeue revert with a best-effort
 guard that fires **only when a higher delivery was locally stamped** — the **single-publisher
 send-before-stamp revert AND the cross-replica revert both remain open** for this unit's platform
@@ -41,7 +41,7 @@ closed; PR 6b gets a truthful convergence witness.** PR 6b's *activation* consum
 
 ## Architecture
 
-### 1. Migration 022 (`down_revision='021'`)
+### 1. Migration 023 (`down_revision='022'`)
 
 Adds only what activation needs (7b-core's `013` already carries stream/sequence/claim/identity):
 
@@ -380,7 +380,7 @@ bound sequence; the discarded pre-release callbacks never satisfy it.
 
 ## Testing strategy (real Postgres, each with a mutation witness)
 
-- **Migration 022:** `failure_class` + activation singleton + artifacts; direct SQL for every illegal
+- **Migration 023:** `failure_class` + activation singleton + artifacts; direct SQL for every illegal
   phase tuple (`active`/`bootstrapped` without digests/artifacts, reverse transition, out-of-order
   timestamps) fails; `integrity_mismatch` lifecycle CHECK enforced; `up→down→up` clean on a legacy
   schema; downgrade **refuses** once `phase != 'legacy'`.
@@ -444,7 +444,7 @@ reconciliation semantics), `.agents/ROADMAP.md` (the split + renumber + ADR-008,
 
 - Everything in 7b-core (stream separation, the internal sequence, the best-effort local `superseded`
   guard, the fenced claim, the per-case + identity constraints) is a **prerequisite**, SHIPPED as
-  `013`-`018`.
+  `013`-`022`.
 - No enforcement/scoring/`ENGINE_BUILD_ID` change; M2 untouched. `event_sequence` (D1, PR 2) keeps its
   `_callback_body` gate. PR 7a fences the **jobs** queue. PR 6b consumes this unit's ordering
   authority; it may build on 7b-core's primitive but not activate until `phase='active'`.
@@ -738,33 +738,41 @@ shared maintenance/writer advisory fence, quiescence preflight). This unit there
 migration **`018`** (`down_revision='017'`), and 7b-core's shipped range reads `013`-`017`.
 No contract content changed in this revision; O1/O2/O3 above remain OPEN and still BLOCK PR 6b.
 
-## Revision note — rev 10 (2026-07-28): renumbered to migration `022` (mechanical)
+## Revision note — rev 10 (2026-07-28): renumbered to migration `023` (mechanical)
 
 7b-core's outbox transition authority (dual-table canonical manifest validation, the exhaustive
 per-kind terminal transition matrix, `cases.latest_manual_decision_row_id`, retention inside the
 shared advisory fence, forward-only downgrade) shipped as revision `018`. This unit therefore moves
-to migration **`022`** (`down_revision='018'`), and 7b-core's shipped range now reads `013`-`018`.
+to migration **`023`** (`down_revision='018'`), and 7b-core's shipped range read
+`013` through `018` at that historical point.
 No contract content changed in this revision; O1/O2/O3 above remain OPEN and still BLOCK PR 6b.
 
-## Revision note — rev 10 (2026-07-28): renumbered to migration `022` (mechanical)
+## Revision note — rev 10 (2026-07-28): renumbered to migration `023` (mechanical)
 
 7b-core shipped a payload-rule repair as revision `019` (a dead POC email must still scrub its
 raw token — `017`'s rule permitted the governed redaction only on `delivered`/`superseded`, so the
 give-up path could not scrub and rolled back instead). This unit therefore moves to migration
-**`022`** (`down_revision='019'`), and 7b-core's shipped range reads `013`-`019`. No contract
+**`023`** (`down_revision='019'`), and 7b-core's shipped range reads `013`-`019`. No contract
 content changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.
 
-## Revision note — rev 11 (2026-07-28): renumbered to migration `022` (mechanical)
+## Revision note — rev 11 (2026-07-28): renumbered to migration `023` (mechanical)
 
 7b-core shipped a redaction-uniformity repair as revision `020` (a scrubbed body may not become
 sendable; the `dead`-callback carve-out removed in favour of a requeue-endpoint refusal, and
-retention widened to dead callbacks). This unit therefore moves to migration **`022`**
+retention widened to dead callbacks). This unit therefore moves to migration **`023`**
 (`down_revision='020'`), and 7b-core's shipped range reads `013`-`020`. No contract content
 changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.
 
-## Revision note — rev 12 (2026-07-28): renumbered to migration `022` (mechanical)
+## Revision note — rev 12 (2026-07-28): renumbered to migration `023` (mechanical)
 
 7b-core shipped a poison-recovery repair as revision `021` (a guard must stop the bad write, never
 strand the row: `020`'s state assertion fired on the CLAIM and stopped the whole outbox). This unit
-therefore moves to migration **`022`** (`down_revision='021'`), and 7b-core's shipped range reads
-`013`-`021`. No contract content changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.
+therefore moves to migration **`023`** (`down_revision='022'`), and 7b-core's shipped range reads
+`013` through `021` at that historical point. No contract content changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.
+
+## Revision note — rev 14 (2026-07-30): renumbered to migration `023` (mechanical)
+
+7b-core shipped an authority-invariant repair as revision `022` (exact trigger definitions and
+origin-enabled mode; terminal POC redaction; immutable `created_at`; manual-pointer/manual-flag DB
+guards). This unit remains migration **`023`** with `down_revision='022'`, and 7b-core's shipped
+range now reads `013`-`022`. No contract content changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.

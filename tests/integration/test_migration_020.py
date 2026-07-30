@@ -19,13 +19,19 @@ pytestmark = pytest.mark.postgres
 _REDACT = "'{\"redacted\": true}'::jsonb"
 
 
-def _dead_poc(conn, case_id="cu"):
+def _dead_poc(conn, case_id="cu", *, redact=True):
     conn.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case_id})
     oid = conn.execute(text(
         "INSERT INTO outbox (kind, case_id, ordering_stream, payload_json, status) VALUES "
         "('poc_email',:c,'email','{\"to\":\"a@b\",\"subject\":\"s\",\"body\":\"TOKEN\"}'::jsonb,"
         "'pending') RETURNING id"), {"c": case_id}).scalar_one()
-    conn.execute(text("UPDATE outbox SET status='dead' WHERE id=:i"), {"i": oid})
+    if redact:
+        conn.execute(
+            text(f"UPDATE outbox SET status='dead', payload_json={_REDACT} WHERE id=:i"),
+            {"i": oid},
+        )
+    else:
+        conn.execute(text("UPDATE outbox SET status='dead' WHERE id=:i"), {"i": oid})
     return oid
 
 
@@ -65,10 +71,10 @@ def test_an_unredacted_dead_row_can_still_be_requeued(pg):
     reopenable, for both kinds."""
     url = _fresh_db(pg, "kyc_mig_020_requeue_ok")
     cfg = _config(url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "020")
     eng = create_engine(url)
     with eng.begin() as conn:
-        poc = _dead_poc(conn, "cv")
+        poc = _dead_poc(conn, "cv", redact=False)
         cb = _seed_callback(conn, "cv", "cv-r1", 1, "pending")
         conn.execute(text("UPDATE outbox SET status='dead' WHERE id=:i"), {"i": cb})
     with eng.begin() as conn:
@@ -219,8 +225,10 @@ def test_the_poisoned_row_scenario_is_unreachable_end_to_end(session_factory, se
             "INSERT INTO outbox (kind, case_id, ordering_stream, payload_json, status) VALUES "
             "('poc_email','cz','email','{\"to\":\"c@d\",\"subject\":\"s\",\"body\":\"T2\"}'::jsonb,"
             "'pending')"))
-        s.execute(text("UPDATE outbox SET status='dead' WHERE id=:i"), {"i": first})
-        s.execute(text(f"UPDATE outbox SET payload_json={_REDACT} WHERE id=:i"), {"i": first})
+        s.execute(
+            text(f"UPDATE outbox SET status='dead', payload_json={_REDACT} WHERE id=:i"),
+            {"i": first},
+        )
         s.commit()
 
     # the poisoning UPDATE is refused at the database…

@@ -209,7 +209,8 @@ def test_retention_redacts_callback_bodies_and_prunes_poc_email(session_factory,
             "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
             "VALUES ('poc_email','c4','email','pending')"))
         s.execute(text(
-            f"UPDATE outbox SET status='delivered', delivered_at={old} "
+            f"UPDATE outbox SET status='delivered', delivered_at={old}, "
+            "payload_json='{\"redacted\": true}'::jsonb "
             f"WHERE kind='poc_email' AND case_id='c4'"))
         s.commit()
 
@@ -385,7 +386,8 @@ def test_metrics_reports_superseded_out_of_the_alert_set(client, session_factory
         s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, "
                        "status) VALUES ('poc_email','cm','email','pending')"))
         s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, "
-                       "status) VALUES ('poc_email','cm','email','dead')"))
+                       "status, payload_json) VALUES ('poc_email','cm','email','dead',"
+                       "'{\"redacted\": true}'::jsonb)"))
         s.commit()
     with session_factory() as s:
         s.execute(text("ANALYZE outbox"))
@@ -442,8 +444,8 @@ def test_outbox_terminal_estimate_clamped_when_never_analyzed(client, session_fa
             "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
             "VALUES ('poc_email','cclamp','email','pending')"))
         s.execute(text(
-            "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
-            "VALUES ('poc_email','cclamp','email','dead')"))
+            "INSERT INTO outbox (kind, case_id, ordering_stream, status, payload_json) "
+            "VALUES ('poc_email','cclamp','email','dead','{\"redacted\": true}'::jsonb)"))
         # simulate the never-analyzed sentinel deterministically (this IS what TRUNCATE leaves
         # behind — see the docstring above); do this AFTER the inserts so it isn't overwritten.
         s.execute(text("UPDATE pg_class SET reltuples = -1 WHERE relname = 'outbox'"))

@@ -141,8 +141,14 @@ class Settings(BaseSettings):
     # `production_config_violations`, because a lease shorter than one delivery attempt makes
     # every claim expire mid-flight.
     outbox_lease_seconds: int = Field(default=300, ge=1, le=3600)
-    # The per-request HTTP budget the publisher gives one callback attempt.
+    # The absolute wall-clock HTTP budget the publisher gives one callback attempt. HTTPX's own
+    # scalar timeout is an inactivity timeout per socket operation; the publisher also enforces
+    # this value with a monotonic deadline while consuming the response body.
     outbox_http_timeout_seconds: float = Field(default=10.0, gt=0)
+    # Extra room for DB commit/processing around the absolute HTTP budget. The production kill
+    # switch requires the lease to exceed timeout + margin, otherwise a slow-but-valid response can
+    # outlive the claim and be reclaimed by another publisher before the first terminal write.
+    outbox_lease_margin_seconds: float = Field(default=1.0, ge=0)
     outbox_max_attempts: int = 8
     outbox_backoff_base_seconds: int = 10
 
@@ -240,15 +246,17 @@ def production_config_violations(settings: Settings) -> list[str]:
     if settings.hmac_v1_observation_window_days < 1:
         v.append("hmac_v1 observation window days must be >= 1")
 
-    # A claim lease shorter than one delivery attempt's HTTP budget expires WHILE that attempt is
-    # in flight: admission then refuses the terminal for a request the receiver may well have
-    # accepted, and the row retries forever (re-audit `cbb783b` F5). The lease must bound the
-    # whole attempt, so it is required to exceed the HTTP budget rather than merely match it.
-    if settings.outbox_lease_seconds <= settings.outbox_http_timeout_seconds:
+    # A claim lease shorter than one delivery attempt's absolute HTTP budget plus DB/processing
+    # margin expires WHILE that attempt is in flight: admission then refuses the terminal for a
+    # request the receiver may well have accepted, and the row retries forever. HTTPX's scalar
+    # timeout is not a whole-attempt deadline, so the publisher enforces this same budget with a
+    # monotonic clock and production must leave margin for the terminal transaction.
+    required_lease = settings.outbox_http_timeout_seconds + settings.outbox_lease_margin_seconds
+    if settings.outbox_lease_seconds <= required_lease:
         v.append(
             f"outbox_lease_seconds ({settings.outbox_lease_seconds}) must exceed "
-            f"outbox_http_timeout_seconds ({settings.outbox_http_timeout_seconds}) — a lease "
-            f"that expires mid-attempt makes every delivery unwitnessable"
+            f"outbox_http_timeout_seconds + outbox_lease_margin_seconds ({required_lease}) — "
+            f"a lease that expires mid-attempt makes every delivery unwitnessable"
         )
 
     return v

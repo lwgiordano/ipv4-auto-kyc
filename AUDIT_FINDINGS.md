@@ -227,10 +227,12 @@ documented choice · 🔵 hygiene/wording.
   `delivered_at`/`resolved_at`, and the recorded wire digest
   (`callback_wire_sha256`, `wire_version`) survive because the row is the durable
   ordering authority 7b-activation reconciles the platform against; deleting it
-  would break that reconciliation. Redaction is scoped to `status IN
-  ('delivered','superseded')` only — a `pending` or requeueable `dead` row is never
-  touched, because a redacted body would make a legal requeue send
-  `{"redacted": true}` to the platform. The surviving remainder is pseudonymous —
+  would break that reconciliation. Redaction is scoped to terminal/non-sendable
+  decision callbacks: `delivered` and `superseded` age by `delivered_at`/`resolved_at`,
+  and `dead` ages by `created_at`. A `pending` callback is never touched. A redacted
+  `dead` callback is deliberately **not** requeueable: the requeue endpoint refuses
+  redacted bodies, and a retry must be a new `recalculate.requested` run because the
+  original callback body is intentionally gone. The surviving remainder is pseudonymous —
   a hash plus internal ordinals, still joinable back to a case and, through it, to
   the natural person it concerns — and retaining it past the window is a
   deliberate, governed choice, not a claim that it falls outside any regulation's
@@ -256,7 +258,7 @@ documented choice · 🔵 hygiene/wording.
   `delivery_witnessed` row against the ledger and require digest/encoding agreement before
   declaring platform authority; a mismatch is a fail-closed `integrity_mismatch` terminal, never
   "nothing to reconcile".
-- In-database authority (migrations `013`-`018`) defends against **application defects and
+- In-database authority (migrations `013`-`022`) defends against **application defects and
   races** — exhaustively. It does not defend against an adversary holding the database's own
   privileges, and the schema does not pretend otherwise.
 - Two adversarial-audit prescriptions were formally rebutted and both dispositions were ACCEPTED

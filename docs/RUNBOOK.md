@@ -8,7 +8,7 @@
 | Pipeline worker | `python -m kyc_tool.workers.pipeline_worker` | N processes; per-case FIFO is queue-enforced |
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | delivers decision callbacks + POC emails |
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily); prunes per KYC_RETENTION_DAYS |
-| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-021 witness chain (see below). **018 through 021 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
+| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-022 witness chain (see below). **018 through 022 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
 | v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, POST-cutover (PR 5a §6a); idempotent |
 | Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot; PRE-cutover for `enforce_bundle_pinning` (PR 6, `docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
 | Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot; stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
@@ -23,15 +23,18 @@
 > readiness-verified, run the activation command above once to start the v1
 > observation clock.
 
-> **Migrations 013-021 (PR 7b-core) are forward-only after any wire witness — positive OR
+> **Migrations 013-022 (PR 7b-core) are forward-only after any wire witness — positive OR
 > negative** (an `attempt_v1` decision callback with no attempt is durable proof nothing was
-> staged, and counts). **`018` and `019` go further: they refuse downgrade
-> unconditionally** (`MIGRATION_021_DOWNGRADE_REFUSED_FORWARD_ONLY`,
+> staged, and counts). **`018` through `022` go further: they refuse downgrade
+> unconditionally** (`MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY`,
+> `MIGRATION_021_DOWNGRADE_REFUSED_FORWARD_ONLY`,
 > `MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY`,
 > `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY`,
 > `MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`) — walking below them would restore
-> search-path-vulnerable authority functions, so once `018` is on the schema the ONLY
-> rollback is redeploying the prior reviewed **021-compatible** image against it. Below
+> search-path-vulnerable or under-validated authority functions, so once `018` is on the schema
+> the ONLY rollback is redeploying the prior reviewed **022-compatible** image against it.
+> Do not apply `022` in production until that bridge image has been reviewed and staged; this
+> preproduction branch otherwise rolls forward. Below
 > `018` the walk still preflights with stable sentinels, in execution order
 > (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -42,7 +45,7 @@
 > terminal `callback_wire_sha256`, or a `superseded` row exists — immutable
 > delivery evidence is never destroyed because local status looks terminal;
 > for a pending/dead callback the attempt row is the only proof bytes were
-> staged. On refusal, KEEP or redeploy the reviewed **021-compatible** image — an older
+> staged. On refusal, KEEP or redeploy the reviewed **022-compatible** image — an older
 > publisher lacks the receipt/terminal contract and must not run against preserved evidence;
 > a pre-7b image is permitted only after the entire walk reaches 012.
 
@@ -298,8 +301,9 @@ recipient hash.
 
 > **Upgrade preflight (`017`, `018`).** Both refuse with
 > `MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` while any unexpired outbox claim exists — the
-> drained-cutover precondition is machine-checked, not a runbook promise. Stop the publishers
-> AND retention and let the leases expire, then retry. (The migrations' own refusal text
+> database checks live outbox claims, but it cannot prove that no API, publisher, pipeline,
+> dev worker, or retention process is still running. Stop those processes, attest zero old
+> processes at the orchestrator, then let the leases expire and retry. (The migrations' own refusal text
 > names a `reset_interrupted_outbox_claims` CLI: that command is PLANNED and NOT YET
 > BUILT — it ships with the checkpointed ops tasks. Until it does, waiting out the lease
 > is the remediation; `KYC_OUTBOX_LEASE_SECONDS` bounds how long that takes.) `018` and `019` additionally refuse with

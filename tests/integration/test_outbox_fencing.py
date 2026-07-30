@@ -156,6 +156,37 @@ def test_stale_poc_loser_touches_nothing_before_reclaimer_sends(
     assert final.status == "delivered" and final.payload_json == {"redacted": True}
 
 
+def test_final_poc_failure_dead_letters_and_redacts_atomically(
+    session_factory, settings, clean_db
+):
+    """Revision 022 requires a POC email's terminal status and redaction in one fenced write.
+
+    The old two-step code (`status='dead'` then a second redaction UPDATE) now fails the trigger,
+    so this regression proves the real publisher writes the final-attempt terminal legally.
+    """
+    _seed_case(session_factory, "c-poc-dead")
+    _enqueue_email(session_factory, case_id="c-poc-dead", to="dead@x")
+    row = _claim(session_factory, "winner")
+
+    from kyc_tool.outbox.publisher import OutboxPublisher
+
+    publisher = OutboxPublisher(
+        session_factory,
+        settings.model_copy(update={"outbox_max_attempts": 1}),
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
+    )
+    publisher._record_failure(row, "provider failed", row.claim_token)
+
+    with session_factory() as s:
+        terminal = s.execute(
+            text("SELECT status, payload_json, last_error FROM outbox WHERE id=:i"),
+            {"i": row.id},
+        ).one()
+    assert terminal.status == "dead"
+    assert terminal.payload_json == {"redacted": True}
+    assert terminal.last_error == "provider failed"
+
+
 def test_stale_decision_loser_cannot_stamp_run_or_published_at(
     session_factory, settings, publisher, callback_capture, clean_db
 ):

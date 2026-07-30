@@ -158,10 +158,48 @@ def test_manual_approve_end_to_end_serves_one_row_on_every_surface(
     full = client.get("/ui/api/cases/cme/full").json()
     assert full["pointer_decision"]["manual"] is True
     assert full["pointer_decision"]["reviewer_id"] == "rev-1"
+    assert full["manual_decision_provenance"] == "latest_manual_row"
     sf = full["salesforce"]
     assert sf["Platform_Action_Taken__c"] == "Manual Approve"
     assert sf["Manual_Approved_By__c"] == "rev-1"      # attribution from the pointer row,
     assert sf["Hard_Conflict__c"] is False             # gates from the pointer row too
+
+
+def test_full_view_disambiguates_missing_manual_from_unresolved_manual_history(
+    client, session_factory, clean_db
+):
+    """A NULL manual pointer used to collapse two different facts: no manual approval exists, or
+    legacy/manual order is present but unresolved. The full UI API now tells operators which one
+    they are looking at, without guessing by `decided_at` or UUID order."""
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('c-no-manual')"))
+        s.execute(text("INSERT INTO cases (id) VALUES ('c-manual-legacy')"))
+        s.commit()
+
+    no_manual = client.get("/ui/api/cases/c-no-manual/full").json()
+    assert no_manual["latest_manual_decision"] is None
+    assert no_manual["manual_decision_provenance"] == "no_manual_decisions"
+
+    with session_factory.kw["bind"].begin() as conn:
+        conn.execute(text(
+            "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+            "buy_enablement, policy_shas, manual, reviewer_id) VALUES "
+            "('cml-manual-a','c-manual-legacy',NULL,'approved_manual',10,'{}'::jsonb,"
+            "'enabled','{}'::jsonb,true,'rev-a')"))
+        conn.execute(text(
+            "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+            "buy_enablement, policy_shas, manual, reviewer_id) VALUES "
+            "('cml-manual-b','c-manual-legacy',NULL,'rejected_manual',0,'{}'::jsonb,"
+            "'locked','{}'::jsonb,true,'rev-b')"))
+        # Model a migrated legacy ambiguity: manual rows exist, but the trigger-maintained
+        # sticky pointer cannot name one as authoritative.
+        conn.execute(text(
+            "UPDATE cases SET latest_manual_decision_row_id = NULL "
+            "WHERE id='c-manual-legacy'"))
+
+    unresolved = client.get("/ui/api/cases/c-manual-legacy/full").json()
+    assert unresolved["latest_manual_decision"] is None
+    assert unresolved["manual_decision_provenance"] == "unresolved_legacy_order"
 
 
 def test_unresolved_ambiguity_metric_counts_only_real_ambiguity(client, session_factory, clean_db):

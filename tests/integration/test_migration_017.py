@@ -140,7 +140,8 @@ def test_decision_callbacks_are_undeletable(pg):
                      {"o": row.id})
         conn.execute(text(
             "INSERT INTO outbox (kind, case_id, ordering_stream, payload_json, status, "
-            "delivered_at) VALUES ('poc_email','cn','email','{}'::jsonb,'delivered',now())"))
+            "delivered_at) VALUES ('poc_email','cn','email','{\"redacted\": true}'::jsonb,"
+            "'delivered',now())"))
 
     for target in (negative, row.id):  # …but neither callback row itself may go
         with pytest.raises(Exception, match="deletion refused"), eng.begin() as conn:

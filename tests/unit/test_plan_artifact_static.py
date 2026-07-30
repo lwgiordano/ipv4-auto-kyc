@@ -272,38 +272,39 @@ _DISPROVEN_CLAIMS = [
     ),
     (
         # a walk that STARTS below the real head omits the top of the chain; the full walk
-        # `017 → 016 → 015 → 014 → 013 → 012` never matches (its inner pairs are "→ "-preceded).
+        # `022 → … → 013 → 012` never matches (its inner pairs are "→ "-preceded).
         r"(?<!→ )\b01[45] → 013 → 012|(?<!→ )\b016 → 015 → ",
-        "the documented rollback walk starts at the REAL head (017 → 016 → 015 → 014 → 013 → "
+        "the documented rollback walk starts at the REAL head (022 → … → 013 → "
         "012); a walk starting mid-chain never executes the refusals production actually hits "
         "(re-audits 0c46443 F5, 15d875d F7).",
     ),
     (
-        r"\b01[3-6]`?-COMPATIBLE image|compatible schema after first witness use",
-        "on refusal the operator keeps the reviewed 017-compatible image — naming an older "
+        r"\b01[3-9]`?-COMPATIBLE image|020`?-COMPATIBLE image|"
+        r"021`?-COMPATIBLE image|compatible schema after first witness use",
+        "on refusal the operator keeps the reviewed 022-compatible image — naming an older "
         "compatibility set restarts a publisher without the receipt/terminal contract against "
         "preserved evidence (re-audits 0c46443 F5, 15d875d F7).",
     ),
     (
-        # activation is migration 019; every earlier number it wore (014-018) was consumed by a
+        # activation is migration 023; every earlier number it wore was consumed by a
         # 7b-core revision. The proximity window is gone: a stale number three sentences after
         # the word "activation" is the same defect as one three characters after it (re-audit
         # `cbb783b` F8). Lines RECORDING a renumber are the correction, not a reassertion.
-        # `013`-`018` (the 7b-core SHIPPED range) and `down_revision='018'` (activation's correct
+        # `013`-`022` (the 7b-core SHIPPED range) and `down_revision='022'` (activation's correct
         # parent) are not stale activation numbers — exclude those two shapes explicitly rather
         # than by proximity, which is what let these contradictions survive before.
         r"^(?!.*(?:renumber|moves to|forced|historical|superseded|`013`-|down_revision))"
-        r".*(?:7b-activation|activation)[^\n]{0,80}?`01[4-8]`",
-        "7b-activation is migration `019` (`down_revision='018'`): 7b-core shipped 013-018, and "
+        r".*(?:7b-activation|activation)[^\n]{0,80}?`(?:01[4-9]|02[0-2])`",
+        "7b-activation is migration `023` (`down_revision='022'`): 7b-core shipped 013-022, and "
         "the lineage test pins pending[0]=head+1 (re-audits 15d875d F7, cbb783b F8).",
     ),
     (
-        # "the walk is 017 -> ..." as LIVE guidance: with 018 installed there is no schema
+        # "the walk is 017 -> ..." as LIVE guidance: with 022 installed there is no schema
         # downgrade at all, so any live text presenting the walk as the rollback path is wrong.
         r"^(?!.*(?:historical|superseded|unreachable|never reached))"
         r".*rollback is.*`?alembic downgrade",
-        "with `018` installed the rollback is the prior reviewed 018-compatible IMAGE on schema "
-        "`018` — `alembic downgrade` refuses unconditionally (re-audit `cbb783b` F3).",
+        "with `022` installed the rollback is the prior reviewed 022-compatible IMAGE on schema "
+        "`022` — `alembic downgrade` refuses unconditionally (re-audit `cbb783b` F3).",
     ),
 ]
 

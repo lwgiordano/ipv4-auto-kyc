@@ -340,7 +340,8 @@ def test_live_metrics_query_never_scans_terminal_history(session_factory, clean_
         # poc_email terminals: no decision-chain FKs needed, lifecycle-legal when delivered
         s.execute(text(
             "INSERT INTO outbox (kind, case_id, ordering_stream, status, delivered_at, "
-            "payload_json) SELECT 'poc_email','cm','email','delivered',now(),'{}'::jsonb "
+            "payload_json) SELECT 'poc_email','cm','email','delivered',now(),"
+            "'{\"redacted\": true}'::jsonb "
             "FROM generate_series(1, 100000)"))
         s.execute(text(
             "INSERT INTO outbox (kind, case_id, ordering_stream, status, payload_json) "

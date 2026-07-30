@@ -96,7 +96,13 @@ def test_pending_payload_is_still_immutable_and_arbitrary_values_still_refused(p
             "INSERT INTO outbox (kind, case_id, ordering_stream, payload_json, status) VALUES "
             "('poc_email','cn','email','{\"body\":\"t\"}'::jsonb,'pending') RETURNING id"
         )).scalar_one()
-        conn.execute(text("UPDATE outbox SET status='dead' WHERE id=:i"), {"i": dead_poc})
+        conn.execute(
+            text(
+                "UPDATE outbox SET status='dead', payload_json='{\"redacted\": true}'::jsonb "
+                "WHERE id=:i"
+            ),
+            {"i": dead_poc},
+        )
 
     with pytest.raises(Exception, match="immutable while the row is pending"), eng.begin() as conn:
         conn.execute(text(
@@ -164,7 +170,8 @@ def test_outbox_id_is_immutable(pg):
             "delivered_at) VALUES ('poc_email','ci','email','{}'::jsonb,'pending',NULL) "
             "RETURNING id")).scalar_one()
         conn.execute(text(
-            "UPDATE outbox SET status='delivered', delivered_at=now() WHERE id=:i"), {"i": poc})
+            "UPDATE outbox SET status='delivered', delivered_at=now(), "
+            "payload_json='{\"redacted\": true}'::jsonb WHERE id=:i"), {"i": poc})
 
     for target in (pending, poc):  # live row AND terminal row
         with pytest.raises(Exception, match="identity is immutable"), eng.begin() as conn:

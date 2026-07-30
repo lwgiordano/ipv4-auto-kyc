@@ -62,7 +62,11 @@ def test_case_detail_decision_card_sources_the_whole_tuple_from_one_row():
     card = card[: card.index("Live evidence")]
     for expr in ("latest.decision", "latest.score", "latest.buy_enablement"):
         assert expr in card, f"the published-decision card must render {expr}"
+    assert "Published decision hard gates" in card
+    assert "published-gates" in card
+    assert "gates[g0]" in card
     assert "current_score" not in card and "current_evidence_score" not in card
+    assert '<h2 class="sec">Hard gates' not in VIEW_CASE
 
 
 def test_live_bar_is_not_coloured_by_the_published_decision():

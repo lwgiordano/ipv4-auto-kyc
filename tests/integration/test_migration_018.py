@@ -224,16 +224,15 @@ def test_legal_lifecycles_still_work_for_both_kinds(pg):
         other = _seed_callback(conn, "cg", "cg-r2", 2, "pending")
         _supersede_legally(conn, other)
 
-        # poc email: pending -> dead -> pending -> delivered, then retention deletes it
+        # poc email: terminal transitions redact in the same statement at current head.
         conn.execute(text(
             "INSERT INTO outbox (kind, case_id, ordering_stream, payload_json, status) "
             "VALUES ('poc_email','cg','email','{}'::jsonb,'pending')"))
         pid = conn.execute(text(
             "SELECT id FROM outbox WHERE kind='poc_email'")).scalar_one()
-        conn.execute(text("UPDATE outbox SET status='dead' WHERE id=:i"), {"i": pid})
-        conn.execute(text("UPDATE outbox SET status='pending' WHERE id=:i"), {"i": pid})
         conn.execute(text(
-            "UPDATE outbox SET status='delivered', delivered_at=now() WHERE id=:i"), {"i": pid})
+            "UPDATE outbox SET status='delivered', delivered_at=now(), "
+            "payload_json='{\"redacted\": true}'::jsonb WHERE id=:i"), {"i": pid})
         assert conn.execute(text("DELETE FROM outbox WHERE id=:i"), {"i": pid}).rowcount == 1
 
     with eng.connect() as conn:

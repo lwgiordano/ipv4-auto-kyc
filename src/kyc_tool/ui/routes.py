@@ -230,6 +230,7 @@ def case_full(case_id: str, request: Request) -> dict:
         # order. NULL here is honestly unresolved: either no manual approval, or a legacy history
         # with several that cannot be ordered.
         latest_manual_decision = None
+        manual_decision_provenance = "no_manual_decisions"
         if case.get("latest_manual_decision_row_id"):
             manual_row = session.execute(
                 text(
@@ -239,6 +240,15 @@ def case_full(case_id: str, request: Request) -> dict:
                 {"d": case["latest_manual_decision_row_id"]},
             ).mappings().first()
             latest_manual_decision = dict(manual_row) if manual_row else None
+            if latest_manual_decision:
+                manual_decision_provenance = "latest_manual_row"
+        if latest_manual_decision is None:
+            manual_rows = session.execute(
+                text("SELECT count(*) FROM decisions WHERE case_id=:id AND manual IS TRUE"),
+                {"id": case_id},
+            ).scalar_one()
+            if manual_rows:
+                manual_decision_provenance = "unresolved_legacy_order"
         tasks = _rows(
             session.execute(
                 text(
@@ -331,6 +341,7 @@ def case_full(case_id: str, request: Request) -> dict:
             # the sticky manual act (own pointer; None = no manual approval OR an unorderable
             # legacy multi-manual history — the projection treats both as unresolved)
             "latest_manual_decision": latest_manual_decision,
+            "manual_decision_provenance": manual_decision_provenance,
             "review_tasks": tasks,
             "poc_tokens": tokens,
             "audit": list(reversed(audit)),

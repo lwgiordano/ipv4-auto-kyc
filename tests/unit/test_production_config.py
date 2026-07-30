@@ -104,18 +104,24 @@ def test_production_allows_pinning_off():
     validate_for_production(s)   # must not raise
 
 
-def test_lease_shorter_than_the_http_budget_fails_boot():
-    """Re-audit `cbb783b` F5: a claim lease that expires while one delivery attempt is still in
-    flight makes every terminal unwitnessable — admission refuses evidence from an expired claim,
-    so the row retries forever. The combination is refused at boot, not discovered in production."""
+def test_lease_shorter_than_the_http_budget_plus_margin_fails_boot():
+    """A claim lease must exceed the absolute attempt budget plus DB/processing margin.
+
+    HTTPX's scalar timeout is per-operation inactivity, not a total request deadline; the publisher
+    enforces the total budget itself, and production must leave room for the terminal transaction.
+    """
     v = production_config_violations(
-        hardened(outbox_lease_seconds=5, outbox_http_timeout_seconds=10.0))
+        hardened(outbox_lease_seconds=11, outbox_http_timeout_seconds=10.0))
     assert any("outbox_lease_seconds" in s and "outbox_http_timeout_seconds" in s for s in v)
 
-    # equal is still refused: the lease must bound the WHOLE attempt, not merely match it
-    v_equal = production_config_violations(
-        hardened(outbox_lease_seconds=10, outbox_http_timeout_seconds=10.0))
-    assert any("outbox_lease_seconds" in s for s in v_equal)
+    v_no_margin = production_config_violations(
+        hardened(
+            outbox_lease_seconds=10,
+            outbox_http_timeout_seconds=9.5,
+            outbox_lease_margin_seconds=0.5,
+        )
+    )
+    assert any("outbox_lease_seconds" in s for s in v_no_margin)
 
     assert production_config_violations(
         hardened(outbox_lease_seconds=300, outbox_http_timeout_seconds=10.0)) == []

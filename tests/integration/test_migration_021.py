@@ -77,8 +77,10 @@ def test_making_a_redacted_row_sendable_is_still_refused(pg):
             "INSERT INTO outbox (kind, case_id, ordering_stream, payload_json, status) VALUES "
             "('poc_email','cb','email','{\"to\":\"a@b\"}'::jsonb,'pending') RETURNING id"
         )).scalar_one()
-        conn.execute(text("UPDATE outbox SET status='dead' WHERE id=:i"), {"i": oid})
-        conn.execute(text(f"UPDATE outbox SET payload_json={_REDACT} WHERE id=:i"), {"i": oid})
+        conn.execute(
+            text(f"UPDATE outbox SET status='dead', payload_json={_REDACT} WHERE id=:i"),
+            {"i": oid},
+        )
 
     for tamper in (
         f"UPDATE outbox SET status='pending', payload_json={_REDACT} WHERE id=:i",
@@ -128,15 +130,27 @@ def test_no_row_may_be_born_pending_with_a_redacted_body(pg, kind, extra_cols, e
 
 # --- the upgrade refuses rather than silently arming the outage ------------------------------
 
-def test_upgrade_refuses_when_a_poisoned_row_already_exists(pg):
+@pytest.mark.parametrize("claimed", [False, True])
+def test_upgrade_refuses_when_a_poisoned_row_already_exists(pg, claimed):
     """`020` held ACCESS EXCLUSIVE and never looked, so upgrading a database damaged by a `019`
-    deployment armed the outage in silence. This names the rows and gives the retirement SQL."""
-    url = _fresh_db(pg, "kyc_mig_021_preflight")
+    deployment armed the outage in silence. This names the rows and the recovery SQL must work for
+    both unclaimed and claimed poisoned rows."""
+    url = _fresh_db(pg, f"kyc_mig_021_preflight_{'claimed' if claimed else 'open'}")
     cfg = _config(url)
     command.upgrade(cfg, "020")
     eng = create_engine(url)
     with eng.begin() as conn:
         oid = _poisoned_pending_poc(conn, "cr")
+        if claimed:
+            # At 020 this corrupted state can only be present as a historical row that predates
+            # the stricter guard. Model that boundary explicitly; the production path being
+            # audited is the 021 preflight/remediation, not 020's known claim-time failure.
+            conn.execute(text("ALTER TABLE outbox DISABLE TRIGGER trg_outbox_witness_guard"))
+            conn.execute(text(
+                "UPDATE outbox SET claim_token=gen_random_uuid(), "
+                "claim_lease_expires_at=now()+interval '1 hour', claimed_by='w' WHERE id=:i"
+            ), {"i": oid})
+            conn.execute(text("ALTER TABLE outbox ENABLE TRIGGER trg_outbox_witness_guard"))
 
     with pytest.raises(RuntimeError, match="MIGRATION_021_PREFLIGHT_UNSENDABLE_PENDING_ROWS") as e:
         command.upgrade(cfg, "head")
@@ -147,12 +161,13 @@ def test_upgrade_refuses_when_a_poisoned_row_already_exists(pg):
 
     with eng.begin() as conn:  # the documented retirement, then it upgrades
         conn.execute(text(
-            "UPDATE outbox SET status='dead', last_error='body redacted; unsendable' "
+            "UPDATE outbox SET status='dead', last_error='body redacted; unsendable', "
+            "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL "
             f"WHERE status='pending' AND payload_json = {_REDACT}"))
     command.upgrade(cfg, "head")
     with eng.connect() as conn:
         assert conn.execute(
-            text("SELECT version_num FROM alembic_version")).scalar_one() == "021"
+            text("SELECT version_num FROM alembic_version")).scalar_one() == "022"
     eng.dispose()
 
 
