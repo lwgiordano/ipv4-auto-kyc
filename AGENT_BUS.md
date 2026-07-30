@@ -188,13 +188,23 @@ Files:
 - `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
 - `.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md`
 - `.env.example`
+- `alembic/versions/023_outbox_cross_table_authority.py`
+- `tests/integration/test_migration_023.py`
+- `src/kyc_tool/api/routes_read.py`
+- `src/kyc_tool/ui/routes.py`
+- `tests/integration/test_read_latest_decision.py`
+- `.agents/ROADMAP.md`
+- `.agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-design.md`
+- `.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md`
 
 Why: adversarial re-audit found (1) the maintenance-fence key parity guard excludes frozen
 `022` even though that migration duplicates `_FENCE_KEY`, and (2) the outbox lease production
 guard still treats `outbox_http_timeout_seconds` as a whole-attempt budget even though HTTPX's
 pool/connect/write/read phases can each consume that scalar timeout before the publisher's
 body-consumption deadline check. I will fix directly under owner-mode, with regression tests,
-then release with the anchored range.
+then release with the anchored range. Extension: migration audit found `022` validates owned
+trigger/function surfaces but not the cross-table authority FKs/pointer rows; I will add a repair
+revision, harden read dereferences by `id+case_id`, and renumber the pending migration units.
 
 ### RELEASE [CODEX] 2026-07-30 — adversarial audit repair for expired outbox claims
 
