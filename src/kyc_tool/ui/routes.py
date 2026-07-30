@@ -217,9 +217,10 @@ def case_full(case_id: str, request: Request) -> dict:
             row = session.execute(
                 text(
                     "SELECT id, run_id, decision, score, gates_json, buy_enablement, manual, "
-                    "reviewer_id, decided_at, published_at FROM decisions WHERE id=:d"
+                    "reviewer_id, decided_at, published_at FROM decisions WHERE id=:d "
+                    "AND case_id=:id"
                 ),
-                {"d": case["latest_decision_row_id"]},
+                {"d": case["latest_decision_row_id"], "id": case_id},
             ).mappings().first()
             pointer_decision = dict(row) if row else None
         # Manual attribution is sticky (re-audit 15d875d F6): the verdict pointer moves to later
@@ -235,9 +236,9 @@ def case_full(case_id: str, request: Request) -> dict:
             manual_row = session.execute(
                 text(
                     "SELECT id, run_id, decision, score, manual, reviewer_id, decided_at "
-                    "FROM decisions WHERE id=:d"
+                    "FROM decisions WHERE id=:d AND case_id=:id AND manual IS TRUE"
                 ),
-                {"d": case["latest_manual_decision_row_id"]},
+                {"d": case["latest_manual_decision_row_id"], "id": case_id},
             ).mappings().first()
             latest_manual_decision = dict(manual_row) if manual_row else None
             if latest_manual_decision:

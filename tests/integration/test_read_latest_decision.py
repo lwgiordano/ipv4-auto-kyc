@@ -34,6 +34,34 @@ def _insert_chain(conn, case_id, run_id, seq, gates_marker):
          "g": f'{{"marker": "{gates_marker}"}}'})
 
 
+def _restore_latest_decision_fk(engine):
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE cases SET latest_decision_row_id = NULL WHERE id = 'drift-a'"))
+        conn.execute(text("ALTER TABLE cases DROP CONSTRAINT IF EXISTS fk_cases_latest_decision"))
+        conn.execute(text(
+            "ALTER TABLE cases ADD CONSTRAINT fk_cases_latest_decision "
+            "FOREIGN KEY (latest_decision_row_id, id) REFERENCES decisions(id, case_id)"
+        ))
+
+
+def _restore_latest_manual_fk(engine):
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE cases SET latest_manual_decision_row_id = NULL WHERE id = 'manual-a'")
+        )
+        conn.execute(text("ALTER TABLE cases DROP CONSTRAINT IF EXISTS fk_cases_latest_manual_decision"))
+        conn.execute(text(
+            "ALTER TABLE cases ADD CONSTRAINT fk_cases_latest_manual_decision "
+            "FOREIGN KEY (latest_manual_decision_row_id, id) REFERENCES decisions(id, case_id)"
+        ))
+        conn.execute(text("DROP TRIGGER IF EXISTS trg_cases_latest_manual_guard ON cases"))
+        conn.execute(text(
+            "CREATE TRIGGER trg_cases_latest_manual_guard "
+            "BEFORE UPDATE OF latest_manual_decision_row_id ON cases "
+            "FOR EACH ROW EXECUTE FUNCTION cases_latest_manual_pointer_guard()"
+        ))
+
+
 def test_inverted_decided_at_cannot_cross_pair_gates(client, session_factory, clean_db):
     """The two-connection inversion, for real: B fixes its transaction clock EARLY, A commits its
     whole chain (seq 1), THEN B commits seq 2 — so seq 2 is the later commit with the EARLIER
@@ -110,6 +138,79 @@ def test_pointer_rejects_a_decision_of_another_case(session_factory, clean_db):
     ):
         conn.execute(text(
             "UPDATE cases SET latest_decision_row_id = 'cx1-r1-d' WHERE id = 'cx2'"))
+
+
+def test_read_surfaces_do_not_dereference_cross_case_pointer_if_fk_drifted(
+    client, session_factory, clean_db
+):
+    """Defense in depth for migration 023: even on a drifted DB, read paths fetch pointer rows
+    by `(id, case_id)`, never by id alone."""
+    engine = session_factory.kw["bind"]
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE cases DROP CONSTRAINT fk_cases_latest_decision"))
+            conn.execute(text(
+                "INSERT INTO cases (id, last_decision_sequence) VALUES ('drift-a', 0)"
+            ))
+            conn.execute(text(
+                "INSERT INTO cases (id, last_decision_sequence) VALUES ('drift-b', 1)"
+            ))
+            _insert_chain(conn, "drift-b", "drift-b-r1", 1, "borrowed")
+            conn.execute(
+                text(
+                    "UPDATE cases SET latest_decision_row_id='drift-b-r1-d' "
+                    "WHERE id='drift-a'"
+                )
+            )
+
+        body = client.get("/v1/cases/drift-a").json()
+        assert body["latest_decision"] is None
+        assert body["gates"] == {}
+        assert body["decision_provenance"] == "no_decisions"
+
+        full = client.get("/ui/api/cases/drift-a/full").json()
+        assert full["pointer_decision"] is None
+    finally:
+        _restore_latest_decision_fk(engine)
+
+
+def test_full_view_does_not_dereference_cross_case_manual_pointer_if_fk_drifted(
+    client, session_factory, clean_db
+):
+    engine = session_factory.kw["bind"]
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TRIGGER IF EXISTS trg_cases_latest_manual_guard ON cases"))
+            conn.execute(text("ALTER TABLE cases DROP CONSTRAINT fk_cases_latest_manual_decision"))
+            conn.execute(text("INSERT INTO cases (id) VALUES ('manual-a')"))
+            conn.execute(text("INSERT INTO cases (id) VALUES ('manual-b')"))
+            conn.execute(
+                text(
+                    "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                    "actor_json, payload_json, event_sequence) VALUES "
+                    "('manual-b-ev','manual-b','manual-b-k','h','x','{}'::jsonb,'{}'::jsonb,1)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
+                    "buy_enablement, policy_shas, manual, reviewer_id) VALUES "
+                    "('manual-b-d','manual-b',NULL,'approve',10,'{}'::jsonb,'enabled',"
+                    "'{}'::jsonb,true,'rev-b')"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE cases SET latest_manual_decision_row_id='manual-b-d' "
+                    "WHERE id='manual-a'"
+                )
+            )
+
+        full = client.get("/ui/api/cases/manual-a/full").json()
+        assert full["latest_manual_decision"] is None
+        assert full["manual_decision_provenance"] == "no_manual_decisions"
+    finally:
+        _restore_latest_manual_fk(engine)
 
 
 def test_null_pointer_with_decisions_returns_empty_gates_not_a_guess(

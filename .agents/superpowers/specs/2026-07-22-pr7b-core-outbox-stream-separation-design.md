@@ -1,10 +1,10 @@
-# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 12)
+# PR 7b-core — Outbox stream separation + local decision ordering (item 8, part 1) — design (rev 13)
 
 ## Context
 
 PR 7b was split (user decision, 2026-07-22) into **7b-core** (this doc, migrations
-`013`-`022`, shipped local hardening/repair) and **7b-activation** (migration `023`,
-`down_revision='022'` — the platform-authoritative cutover: bootstrap, wire emission,
+`013`-`023`, shipped local hardening/repair) and **7b-activation** (migration `024`,
+`down_revision='023'` — the platform-authoritative cutover: bootstrap, wire emission,
 phase state machine). The split isolates the intricate platform-coordination into its
 own unit and lets this self-contained hardening land and reach REVIEW-CLEAN on its own. Both remain
 ahead of PR 6b; 6b's *activation* still waits on 7b-activation.
@@ -119,8 +119,9 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
 
   So the publisher builds the request, hashes the exact bytes of `httpx.Request.content`, commits
   an attempt row **under the live claim**, and only then sends. Fenced on the same
-  `(status='pending', claim_token)` predicate as every terminal, so a claimant whose lease expired
-  writes nothing here either — and, because the fence precedes the send, transmits nothing.
+  `(status='pending', claim_token, claim_lease_expires_at > clock_timestamp())` predicate as every
+  terminal/retry write, so a claimant whose lease expired writes nothing here either — and, because
+  the fence precedes the send, transmits nothing.
 
   **What an attempt row proves — exactly staged intent, nothing more (re-audit F9).** The commit
   and the send are two events with no atomic boundary between them: die in the gap and the row
@@ -234,7 +235,7 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   decision/run ids** on any missing, orphan, or duplicate mapping (the decide path writes decision +
   callback in one transaction, so a missing row means retention/corruption and its safe order **cannot
   be guessed** — fail closed; recovery is **restore-from-authoritative-backup or remain on 012 in
-  `BLOCKED_NO_AUTHORITATIVE_MAPPING`** (§Rollout step 0; activation `023` is downstream and cannot repair this),
+  `BLOCKED_NO_AUTHORITATIVE_MAPPING`** (§Rollout step 0; activation `024` is downstream and cannot repair this),
   never a `decided_at` fallback); (2) `decision_sequence = row_number() OVER (PARTITION BY decision.case_id
   ORDER BY outbox.id)`, copy it to the matching outbox row, seed `last_decision_sequence = per-case
   max`; manual stays NULL. Other preflight refusals (raise, roll back): `>1` callback per run,
@@ -295,8 +296,8 @@ not be described as if it does.
 **The fenced outbox UPDATE is the single ownership gate** in every terminal *and the retry* path
 (`_record_delivered`, `_record_failure`'s **retry and dead** branches, `_record_superseded`). Each
 begins with `UPDATE outbox SET <status/claim-clear/...> WHERE id=:id AND status='pending' AND
-claim_token=:token RETURNING id` and branches on an explicit result (`applied: bool` from the returned
-row / `rowcount`) — **never** an assertion (a raise would escape `process_once`, and `_record_failure`
+claim_token=:token AND claim_lease_expires_at > clock_timestamp() RETURNING id` and branches on an
+explicit result (`applied: bool` from the returned row / `rowcount`) — **never** an assertion (a raise would escape `process_once`, and `_record_failure`
 already runs inside the delivery exception handler, so a normal lease-loss race must not kill the
 worker). The dependent writes are gated on `applied`, because the shipped code performs them
 **after** the outbox UPDATE, keyed by `id`/`run_id` (`publisher.py:167-190` POC redaction + run +
@@ -332,7 +333,7 @@ that manual approval: trigger = automatic decide enqueues its callback → the c
 processed → `reviewer.manual_approve` becomes the case's current state → the publisher claims the
 queued callback and the local guard sees **no higher locally-published automatic sequence**
 (manual has none) → the old automatic callback IS sent. All three are documented as expected
-pre-activation and are turned into platform-high-water no-ops only in 023 (whose acceptance is
+pre-activation and are turned into platform-high-water no-ops only in 024 (whose acceptance is
 strengthened so an unaccepted pending/dead callback older than a manual-current platform source
 cannot replace it). PR 6b may **build** on 7b-core's sequence primitive but
 not activate until 7b-activation is `active`.
@@ -375,7 +376,7 @@ while the schedule stays suspended and the zero-running attestation holds**. **O
 — before stopping service** (no outage begun). **Recovery — restore-or-block (user-confirmed decision,
 2026-07-23):** the only valid success path is to **restore the exact callback row from authoritative
 backup and rerun the diagnostic clean**; otherwise **remain on 012 in `BLOCKED_NO_AUTHORITATIVE_MAPPING`**
-(the exact sentinel — one token, no whitespace). **activation (`023`) is downstream and cannot
+(the exact sentinel — one token, no whitespace). **activation (`024`) is downstream and cannot
 repair this** — no `016` command is a substitute. There is **no** pre-013 reconciliation unit in this
 approved core design (the user considered and declined it). Backup availability is an **operator
 prerequisite**, not a consequence of the retention setting. Never fabricate a callback, delete an
@@ -520,7 +521,7 @@ retries) —
 claim is encoded only in `next_attempt_at` and cannot be distinguished from legitimate backoff.
 **Preserve every pending row's `next_attempt_at`**; an interrupted old claim simply waits until its
 already-recorded due time (bounded by the documented old lease); (4) `alembic upgrade head` (the
-chain `013`→`014`→`015`→`016`) —
+chain `013`→`014`→`015`→`016`→`017`→`018`→`019`→`020`→`021`→`022`) —
 which **repeats the §0 preflights under the zero-writer boundary** and remains the authoritative
 fail-closed check (the pre-window diagnostic is an early detector, not a substitute);
 (5) start API only, probe `/readyz`, then start+attest the fenced workers — **no mutating prod smoke**;
@@ -555,7 +556,8 @@ rely on the operator remembering that the forward drain also applies backward.
 - `decision_sequence` allocated only under `Case FOR UPDATE`, unique per case, monotonic; **internal**
   (not emitted). Each callback bound by the triple identity to exactly one automatic decision.
 - Every **retry and terminal** transition uses one fenced `UPDATE ... WHERE id AND status='pending'
-  AND claim_token=:token RETURNING id`: **one row** applies all dependent writes in the same
+  AND claim_token=:token AND claim_lease_expires_at > clock_timestamp() RETURNING id`: **one row**
+  applies all dependent writes in the same
   transaction (retry-clock reset, POC redaction, run completion, `decisions.published_at`, terminal
   audit); **zero rows** returns a non-raising audited no-op (`outbox_stale_claim_completion`) and
   stamps nothing — **never** an assertion (it would kill the worker). The claim lease is separate from
@@ -678,7 +680,8 @@ rely on the operator remembering that the forward drain also applies backward.
 - **Residual-risk (F2 — pins the honest boundary):** fake receiver; single publisher; seq 2 sent,
   fault injected **after HTTP 2xx but before `_record_delivered` commits**; restart, requeue seq 1 →
   the guard's `published_at` predicate is false and seq 1 **is** sent — assert the revert is
-  **expected pre-activation** (the future 022 test turns the same replay into a high-water no-op).
+  **expected pre-activation** (the future 024 activation test turns the same replay into a
+  high-water no-op).
 - **Fenced claim (defect 3) — both kinds, winner/loser (rev-2 F1):** barrier publisher A after claim;
   expire its lease; B reclaims. **Decision:** B delivers; release A into **both** success and
   stale-final-attempt failure paths → B's outbox tuple, run state, and `published_at` are unchanged and

@@ -40,6 +40,9 @@ STUB_ADAPTERS_PROFILE = "fixture"
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", ""}
 _MIN_HMAC_SECRET_LEN = 32
+# HTTPX exposes one scalar timeout as four phase budgets: pool acquisition, connect, write, and
+# response-header read. It is not a total callback-attempt clock.
+_HTTPX_CALLBACK_PHASE_COUNT = 4
 
 
 class Settings(BaseSettings):
@@ -141,13 +144,15 @@ class Settings(BaseSettings):
     # `production_config_violations`, because a lease shorter than one delivery attempt makes
     # every claim expire mid-flight.
     outbox_lease_seconds: int = Field(default=300, ge=1, le=3600)
-    # The absolute wall-clock HTTP budget the publisher gives one callback attempt. HTTPX's own
-    # scalar timeout is an inactivity timeout per socket operation; the publisher also enforces
-    # this value with a monotonic deadline while consuming the response body.
+    # Per HTTPX operation timeout for one callback attempt. This is NOT a whole-request wall-clock
+    # deadline: HTTPX may spend the scalar budget separately in pool/connect/write/read-header
+    # phases. The publisher treats the response status as the acknowledgement and closes the body
+    # stream without consuming it, so a slow response body cannot hold the outbox lease hostage.
     outbox_http_timeout_seconds: float = Field(default=10.0, gt=0)
-    # Extra room for DB commit/processing around the absolute HTTP budget. The production kill
-    # switch requires the lease to exceed timeout + margin, otherwise a slow-but-valid response can
-    # outlive the claim and be reclaimed by another publisher before the first terminal write.
+    # Extra room for DB commit/processing around the HTTPX phase envelope. The production kill
+    # switch requires the lease to exceed pool+connect+write+read-header timeout phases plus this
+    # margin, otherwise a slow-but-valid response can outlive the claim and be reclaimed by another
+    # publisher before the first terminal write.
     outbox_lease_margin_seconds: float = Field(default=1.0, ge=0)
     outbox_max_attempts: int = 8
     outbox_backoff_base_seconds: int = 10
@@ -246,16 +251,21 @@ def production_config_violations(settings: Settings) -> list[str]:
     if settings.hmac_v1_observation_window_days < 1:
         v.append("hmac_v1 observation window days must be >= 1")
 
-    # A claim lease shorter than one delivery attempt's absolute HTTP budget plus DB/processing
+    # A claim lease shorter than one delivery attempt's HTTPX phase envelope plus DB/processing
     # margin expires WHILE that attempt is in flight: admission then refuses the terminal for a
     # request the receiver may well have accepted, and the row retries forever. HTTPX's scalar
-    # timeout is not a whole-attempt deadline, so the publisher enforces this same budget with a
-    # monotonic clock and production must leave margin for the terminal transaction.
-    required_lease = settings.outbox_http_timeout_seconds + settings.outbox_lease_margin_seconds
+    # timeout is not a whole-attempt deadline: pool acquisition, connect, write, and response-header
+    # read can each spend the scalar timeout before the application sees the status. The publisher
+    # does not consume response bodies, so body drip is deliberately outside this envelope.
+    http_phase_envelope = settings.outbox_http_timeout_seconds * _HTTPX_CALLBACK_PHASE_COUNT
+    required_lease = http_phase_envelope + settings.outbox_lease_margin_seconds
     if settings.outbox_lease_seconds <= required_lease:
         v.append(
             f"outbox_lease_seconds ({settings.outbox_lease_seconds}) must exceed "
-            f"outbox_http_timeout_seconds + outbox_lease_margin_seconds ({required_lease}) — "
+            f"the HTTPX phase envelope ({_HTTPX_CALLBACK_PHASE_COUNT} × "
+            f"outbox_http_timeout_seconds = {http_phase_envelope}) "
+            f"+ outbox_lease_margin_seconds "
+            f"({settings.outbox_lease_margin_seconds}) = {required_lease} — "
             f"a lease that expires mid-attempt makes every delivery unwitnessable"
         )
 

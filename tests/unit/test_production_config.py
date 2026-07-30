@@ -104,15 +104,25 @@ def test_production_allows_pinning_off():
     validate_for_production(s)   # must not raise
 
 
-def test_lease_shorter_than_the_http_budget_plus_margin_fails_boot():
-    """A claim lease must exceed the absolute attempt budget plus DB/processing margin.
+def test_lease_shorter_than_the_http_attempt_envelope_plus_margin_fails_boot():
+    """A claim lease must exceed the HTTPX phase envelope plus DB/processing margin.
 
-    HTTPX's scalar timeout is per-operation inactivity, not a total request deadline; the publisher
-    enforces the total budget itself, and production must leave room for the terminal transaction.
+    HTTPX's scalar timeout is per-operation inactivity, not a total request deadline. A legal
+    attempt can spend that budget in pool/connect/write/read-header phases before the publisher
+    receives the response status, so production must size the lease for the full envelope.
     """
     v = production_config_violations(
         hardened(outbox_lease_seconds=11, outbox_http_timeout_seconds=10.0))
     assert any("outbox_lease_seconds" in s and "outbox_http_timeout_seconds" in s for s in v)
+
+    v_phase_envelope = production_config_violations(
+        hardened(
+            outbox_lease_seconds=40,
+            outbox_http_timeout_seconds=10.0,
+            outbox_lease_margin_seconds=1.0,
+        )
+    )
+    assert any("HTTPX phase envelope" in s for s in v_phase_envelope)
 
     v_no_margin = production_config_violations(
         hardened(

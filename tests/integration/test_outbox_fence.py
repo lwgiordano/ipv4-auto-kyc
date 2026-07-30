@@ -19,6 +19,16 @@ from tests.integration.test_migrations import _config, _fresh_db
 
 pytestmark = pytest.mark.postgres
 
+FENCED_MIGRATIONS = (
+    "017_outbox_authority_boundary.py",
+    "018_outbox_transition_authority.py",
+    "019_outbox_dead_poc_redaction.py",
+    "020_outbox_redaction_uniformity.py",
+    "021_outbox_poison_recovery.py",
+    "022_outbox_authority_manifest_and_terminal_invariants.py",
+    "023_outbox_cross_table_authority.py",
+)
+
 
 def test_fence_key_matches_every_migration_that_takes_it():
     """A migration cannot import application code, so the constant is duplicated by necessity —
@@ -28,12 +38,28 @@ def test_fence_key_matches_every_migration_that_takes_it():
     from kyc_tool.config import REPO_ROOT
 
     versions = Path(REPO_ROOT) / "alembic" / "versions"
-    for name in ("017_outbox_authority_boundary.py", "018_outbox_transition_authority.py",
-                 "019_outbox_dead_poc_redaction.py",
-                 "020_outbox_redaction_uniformity.py",
-                 "021_outbox_poison_recovery.py"):
+    for name in FENCED_MIGRATIONS:
         src = (versions / name).read_text()
         assert f"_FENCE_KEY = {MAINTENANCE_FENCE_KEY}" in src, f"{name} does not share the fence"
+
+
+def test_fence_key_list_covers_every_fenced_migration():
+    """The parity test must name every migration that duplicates the key.
+
+    Regression: revision 022 takes the maintenance fence but was omitted from the hard-coded sync
+    list, so a future drift in 022's duplicated `_FENCE_KEY` would not fail CI.
+    """
+    from pathlib import Path
+
+    from kyc_tool.config import REPO_ROOT
+
+    versions = Path(REPO_ROOT) / "alembic" / "versions"
+    discovered = {
+        path.name
+        for path in versions.glob("*.py")
+        if "_FENCE_KEY =" in path.read_text() and path.name != "__init__.py"
+    }
+    assert set(FENCED_MIGRATIONS) == discovered
 
 
 def _run_migration_in_thread(cfg, target, result: dict, *, downgrade=False):

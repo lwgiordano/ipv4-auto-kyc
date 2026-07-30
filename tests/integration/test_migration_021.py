@@ -167,7 +167,7 @@ def test_upgrade_refuses_when_a_poisoned_row_already_exists(pg, claimed):
     command.upgrade(cfg, "head")
     with eng.connect() as conn:
         assert conn.execute(
-            text("SELECT version_num FROM alembic_version")).scalar_one() == "022"
+            text("SELECT version_num FROM alembic_version")).scalar_one() == "023"
     eng.dispose()
 
 

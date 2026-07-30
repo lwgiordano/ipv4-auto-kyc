@@ -43,10 +43,14 @@ def get_case(case_id: str, request: Request) -> dict:
         # a NULL pointer with decisions present is a pre-014 manual-among-several history whose
         # write order has no durable record; it serves no decision tuple rather than a guess, is
         # counted in /v1/metrics, and heals on the case's next decision.
-        latest = (
-            session.get(DecisionRow, case.latest_decision_row_id)
-            if case.latest_decision_row_id else None
-        )
+        latest = None
+        if case.latest_decision_row_id:
+            latest = session.execute(
+                select(DecisionRow).where(
+                    DecisionRow.id == case.latest_decision_row_id,
+                    DecisionRow.case_id == case_id,
+                )
+            ).scalar_one_or_none()
         if latest is not None:
             provenance = "latest_decision_row"
         elif session.execute(

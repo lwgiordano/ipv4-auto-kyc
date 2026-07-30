@@ -1,11 +1,11 @@
-# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 13)
+# PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2) — design (rev 15)
 
 ## Context
 
-PR 7b was split (user decision, 2026-07-22) into **7b-core** (SHIPPED as `013`-`022` — stream
+PR 7b was split (user decision, 2026-07-22) into **7b-core** (SHIPPED as `013`-`023` — stream
 separation, an internal per-case `decision_sequence` + locked counter, a
 **best-effort local** `superseded` guard, a **fenced** claim, per-case + triple-identity constraints,
-status/lifecycle CHECKs, witness/redaction/authority repairs) and **7b-activation** (this doc, migration `023`, `down_revision='022'`).
+status/lifecycle CHECKs, witness/redaction/authority repairs) and **7b-activation** (this doc, migration `024`, `down_revision='023'`).
 7b-core closes the mixed-FIFO defect locally and **mitigates** the requeue revert with a best-effort
 guard that fires **only when a higher delivery was locally stamped** — the **single-publisher
 send-before-stamp revert AND the cross-replica revert both remain open** for this unit's platform
@@ -41,7 +41,7 @@ closed; PR 6b gets a truthful convergence witness.** PR 6b's *activation* consum
 
 ## Architecture
 
-### 1. Migration 023 (`down_revision='022'`)
+### 1. Migration 024 (`down_revision='023'`)
 
 Adds only what activation needs (7b-core's `013` already carries stream/sequence/claim/identity):
 
@@ -763,16 +763,24 @@ retention widened to dead callbacks). This unit therefore moves to migration **`
 (`down_revision='020'`), and 7b-core's shipped range reads `013`-`020`. No contract content
 changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.
 
-## Revision note — rev 12 (2026-07-28): renumbered to migration `023` (mechanical)
+## Historical revision note — rev 12 (2026-07-28): superseded migration number
 
 7b-core shipped a poison-recovery repair as revision `021` (a guard must stop the bad write, never
-strand the row: `020`'s state assertion fired on the CLAIM and stopped the whole outbox). This unit
-therefore moves to migration **`023`** (`down_revision='022'`), and 7b-core's shipped range reads
-`013` through `021` at that historical point. No contract content changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.
+strand the row: `020`'s state assertion fired on the CLAIM and stopped the whole outbox). At that
+historical point this unit was temporarily numbered `023`; rev 15 below supersedes that allocation.
+No contract content changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.
 
-## Revision note — rev 14 (2026-07-30): renumbered to migration `023` (mechanical)
+## Historical revision note — rev 14 (2026-07-30): superseded migration number
 
 7b-core shipped an authority-invariant repair as revision `022` (exact trigger definitions and
 origin-enabled mode; terminal POC redaction; immutable `created_at`; manual-pointer/manual-flag DB
-guards). This unit remains migration **`023`** with `down_revision='022'`, and 7b-core's shipped
-range now reads `013`-`022`. No contract content changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.
+guards). At that historical point this unit was still temporarily numbered `023`; rev 15 below
+supersedes that allocation. No contract content changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.
+
+## Revision note — rev 15 (2026-07-30): renumbered to migration `024` (mechanical)
+
+7b-core shipped a validation-only cross-table authority repair as revision `023`: exact FKs/unique
+targets and same-case data for `fk_outbox_decision_triple`, `fk_cases_latest_decision`, and
+`fk_cases_latest_manual_decision`, plus read-surface `id+case_id` hardening. This unit therefore
+moves to migration **`024`** (`down_revision='023'`), and 7b-core's shipped range reads `013`-`023`.
+No activation contract content changed; O1/O2/O3 remain OPEN and still BLOCK PR 6b.

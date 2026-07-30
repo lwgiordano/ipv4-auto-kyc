@@ -242,31 +242,22 @@ class OutboxPublisher:
             outbox_id=outbox_id, token=token, wire_version=_WIRE_VERSION,
             request_sha256=wire_sha256,
         )
-        self._send_with_total_deadline(request)
+        self._send_for_status(request)
         return DeliveryReceipt(
             attempt_id=attempt_id, wire_sha256=wire_sha256, wire_version=_WIRE_VERSION
         )
 
-    def _send_with_total_deadline(self, request: httpx.Request) -> None:
-        """Send and fully consume a callback response inside one absolute attempt budget.
+    def _send_for_status(self, request: httpx.Request) -> None:
+        """Send a callback request and treat the response status as the acknowledgement.
 
-        `httpx.Timeout(0.2)` means each connect/read/write/pool wait may take up to 0.2s; a
-        receiver that slowly drips bytes can keep the request alive much longer. The outbox lease
-        is a wall-clock ownership claim, so the publisher enforces its own monotonic deadline and
-        raises before a slow response can run past the configured attempt budget.
+        `httpx.Timeout(0.2)` means each pool/connect/write/read wait may take up to 0.2s; it is not
+        a whole-request wall-clock deadline. The publisher therefore does not consume the response
+        body at all: for this callback contract, a 2xx status is the local delivery witness, and a
+        slow-dripping body must not keep the claim lease occupied after the receiver has already
+        accepted the request.
         """
-        deadline = time.monotonic() + self.settings.outbox_http_timeout_seconds
         response = self.http.send(request, stream=True)
         try:
-            if time.monotonic() > deadline:
-                raise httpx.TimeoutException("callback exceeded total HTTP budget", request=request)
-            for _chunk in response.iter_bytes():
-                if time.monotonic() > deadline:
-                    raise httpx.TimeoutException(
-                        "callback exceeded total HTTP budget", request=request
-                    )
-            if time.monotonic() > deadline:
-                raise httpx.TimeoutException("callback exceeded total HTTP budget", request=request)
             response.raise_for_status()
         finally:
             response.close()

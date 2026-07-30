@@ -171,7 +171,7 @@ def test_downgrade_refuses_on_negative_evidence_alone(pg):
     # witness guard is even consulted. Same evidence preserved, one revision earlier.
     assert "MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY" in refused.stdout + refused.stderr
     with eng.connect() as conn:  # nothing lost, still at head
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "022"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "023"
         assert conn.execute(text(
             "SELECT witness_generation FROM outbox")).scalar_one() == "attempt_v1"
     eng.dispose()
