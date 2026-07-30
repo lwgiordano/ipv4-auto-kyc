@@ -187,6 +187,7 @@ Files:
 - `tests/policy_driven/test_engine_build_id_guard.py`
 - `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
 - `.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md`
+- `.env.example`
 
 Why: adversarial re-audit found (1) the maintenance-fence key parity guard excludes frozen
 `022` even though that migration duplicates `_FENCE_KEY`, and (2) the outbox lease production
