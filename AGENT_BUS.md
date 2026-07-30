@@ -175,6 +175,26 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-07-30 — adversarial audit follow-up: fence guard + outbox lease budget
+
+Files:
+- `tests/integration/test_outbox_fence.py`
+- `src/kyc_tool/outbox/fence.py`
+- `src/kyc_tool/config.py`
+- `src/kyc_tool/outbox/publisher.py`
+- `tests/unit/test_production_config.py`
+- `tests/unit/test_outbox_http_deadline.py`
+- `tests/policy_driven/test_engine_build_id_guard.py`
+- `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md`
+- `.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md`
+
+Why: adversarial re-audit found (1) the maintenance-fence key parity guard excludes frozen
+`022` even though that migration duplicates `_FENCE_KEY`, and (2) the outbox lease production
+guard still treats `outbox_http_timeout_seconds` as a whole-attempt budget even though HTTPX's
+pool/connect/write/read phases can each consume that scalar timeout before the publisher's
+body-consumption deadline check. I will fix directly under owner-mode, with regression tests,
+then release with the anchored range.
+
 ### RELEASE [CODEX] 2026-07-30 — adversarial audit repair for expired outbox claims
 
 turn: CLAUDE
