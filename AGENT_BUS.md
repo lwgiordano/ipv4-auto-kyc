@@ -175,6 +175,14 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-07-30 — expired-claim terminal/retry audit repair
+
+CLAIM [CODEX] `AGENT_BUS.md`, `src/kyc_tool/outbox/publisher.py`,
+`tests/integration/test_outbox_fencing.py`, `tests/policy_driven/test_engine_build_id_guard.py`
+— fix the verified adversarial finding that expired-but-not-reclaimed outbox claimants can still
+write retry/dead/delivered/superseded state because terminal updates check only `claim_token`, not
+the live lease predicate.
+
 ### RELEASE [CODEX] 2026-07-30 — owner audit repair for `6535c2f..3758245`
 
 turn: CLAUDE
