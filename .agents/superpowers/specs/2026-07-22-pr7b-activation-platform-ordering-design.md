@@ -729,6 +729,17 @@ items were partly built on; they are restated here as requirements, not as settl
   exact event, state and setting names — none of `manual.release_requested`,
   `outbox_manual_release`, or the outcome/reaper contract currently appears in any of them.
 
+- **O4 (2026-07-30) — this unit must carry the pipeline-quiescence preflight `022`/`023` could
+  not.** Those two are the first revisions in the chain to take `ACCESS EXCLUSIVE` on `decisions`
+  and `cases`. The decide transaction locks `cases` FOR UPDATE, then inserts `decisions`, then
+  inserts `outbox` — the opposite order — so a concurrent decide deadlocks the migration
+  (`40P01`, reproduced; the identical harness against `021` commits both sides). It fails safely,
+  but it costs the window, and `022`/`023` are published so no preflight can be added to them.
+  This unit takes the same locks. **Required:** a machine-checked preflight in the same shape as
+  `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` — refuse with a stable sentinel while any pipeline job is
+  claimed or any run is mid-decide, rather than relying on an operator having read the runbook.
+  The live-claim preflight cannot substitute: a run mid-decide holds no outbox claim.
+
 
 ## Revision note — rev 9 (2026-07-28): renumbered to migration `018` (mechanical)
 
