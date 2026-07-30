@@ -8,7 +8,7 @@
 | Pipeline worker | `python -m kyc_tool.workers.pipeline_worker` | N processes; per-case FIFO is queue-enforced |
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | delivers decision callbacks + POC emails |
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily); prunes per KYC_RETENTION_DAYS |
-| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-022 witness chain (see below). **018 through 022 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
+| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-023 witness chain (see below). **018 through 022 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`, `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
 | v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, POST-cutover (PR 5a §6a); idempotent |
 | Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot; PRE-cutover for `enforce_bundle_pinning` (PR 6, `docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
 | Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot; stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
@@ -23,7 +23,7 @@
 > readiness-verified, run the activation command above once to start the v1
 > observation clock.
 
-> **Migrations 013-022 (PR 7b-core) are forward-only after any wire witness — positive OR
+> **Migrations 013-023 (PR 7b-core) are forward-only after any wire witness — positive OR
 > negative** (an `attempt_v1` decision callback with no attempt is durable proof nothing was
 > staged, and counts). **`018` through `022` go further: they refuse downgrade
 > unconditionally** (`MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY`,
@@ -32,9 +32,11 @@
 > `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY`,
 > `MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`) — walking below them would restore
 > search-path-vulnerable or under-validated authority functions, so once `018` is on the schema
-> the ONLY rollback is redeploying the prior reviewed **022-compatible** image against it.
-> Do not apply `022` in production until that bridge image has been reviewed and staged; this
-> preproduction branch otherwise rolls forward. Below
+> the ONLY rollback is redeploying the prior reviewed **023-compatible** image against it.
+> `023` itself is validation-only and its downgrade is a no-op, so a walk started from the head
+> does not stop there — it reaches `022` and refuses with that sentinel, one revision lower than
+> the command names. Do not apply `018` or anything above it in production until that bridge
+> image has been reviewed and staged; this preproduction branch otherwise rolls forward. Below
 > `018` the walk still preflights with stable sentinels, in execution order
 > (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -45,9 +47,45 @@
 > terminal `callback_wire_sha256`, or a `superseded` row exists — immutable
 > delivery evidence is never destroyed because local status looks terminal;
 > for a pending/dead callback the attempt row is the only proof bytes were
-> staged. On refusal, KEEP or redeploy the reviewed **022-compatible** image — an older
+> staged. On refusal, KEEP or redeploy the reviewed **023-compatible** image — an older
 > publisher lacks the receipt/terminal contract and must not run against preserved evidence;
 > a pre-7b image is permitted only after the entire walk reaches 012.
+
+### Migration refusal sentinels
+
+Every deliberate migration refusal raises a **stable sentinel string**, so a refused
+`alembic upgrade`/`downgrade` reads as a designed stop rather than a broken migration.
+Grep the sentinel out of the command's output and find it here. The exception message
+itself always names the offending rows or objects and the remediation — this index tells
+you what class of stop you are looking at; the message tells you what to do about it.
+
+`tests/unit/test_plan_artifact_static.py` fails if a migration raises a sentinel this
+table omits, so a new refusal cannot ship undocumented.
+
+| Sentinel | Fires when |
+|---|---|
+| `MIGRATION_014_ATTEMPT_AUTHORITY_MISMATCH` | upgrade: the pre-existing `outbox_delivery_attempts` table being adopted is not the exact expected shape (the amended-013 history means 014 adopts-or-creates) |
+| `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` | upgrade: an unexpired outbox claim exists — stop publishers **and** retention, attest zero old processes, let leases expire or run `reset_interrupted_outbox_claims`, retry |
+| `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS` | upgrade: same live-claim preflight as 017 |
+| `MIGRATION_018_AUTHORITY_MANIFEST_MISMATCH` | upgrade: the observable authority surface (columns, named constraints, indexes, trigger set, function-body digests) is not the one the prior revision installed — refuses **before** any DDL |
+| `MIGRATION_019_AUTHORITY_MANIFEST_MISMATCH` | upgrade: same manifest check, pinned to 018's surface |
+| `MIGRATION_020_AUTHORITY_CODE_MISMATCH` | upgrade: an owned function body or `search_path` pin, or an enabled trigger, differs from the canonical code surface |
+| `MIGRATION_021_AUTHORITY_CODE_MISMATCH` | upgrade: same code-surface check, pinned to 020's |
+| `MIGRATION_021_PREFLIGHT_UNSENDABLE_PENDING_ROWS` | upgrade: `pending` rows carry a redacted body and can never be delivered — the message lists their ids and the `UPDATE … SET status='dead'` that retires them. Arming the guard over them would head-of-line block their streams |
+| `MIGRATION_022_AUTHORITY_SURFACE_MISMATCH` | upgrade: 021's exact trigger definitions or origin-enable modes do not validate |
+| `MIGRATION_022_MANUAL_POINTER_MISMATCH` | upgrade: a `cases.latest_manual_decision_row_id` does not reference a same-case **manual** decision, so the guard cannot be installed over the data |
+| `MIGRATION_023_CROSS_TABLE_AUTHORITY_MISMATCH` | upgrade: a cross-table authority constraint (`fk_outbox_decision_triple`, `fk_cases_latest_decision`, `fk_cases_latest_manual_decision`, their unique targets) or a same-case pointer/outbox row does not validate |
+| `MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY` | downgrade: 013's recorded history was amended, so its own downgrade cannot be trusted to be the inverse of what ran |
+| `MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE` | downgrade: wire witness exists (attempt row, terminal `callback_wire_sha256`, or a `superseded` row) |
+| `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE` | downgrade: as 013 |
+| `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE` | downgrade: as 013 |
+| `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE` | downgrade: as 013, and additionally on NEGATIVE evidence (an `attempt_v1` row with no attempt is durable proof nothing was staged) |
+| `MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE` | downgrade: as 016; this is the outermost witness authority, so a walk from above stops here first |
+| `MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: **unconditional** — walking below 018 restores search-path-vulnerable or under-validated authority functions |
+| `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
+| `MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
+| `MIGRATION_021_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
+| `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional — the highest refusal on the chain, so this is the sentinel a walk from the head actually hits (`023`'s downgrade is a validation-only no-op) |
 
 > **`enforce_bundle_pinning` (PR 6) is a drained, not rolling, flag flip.**
 > Off (default), every worker scores under its own process-loaded policy
@@ -300,14 +338,16 @@ email provider, S3. Nothing is ever logged; POC token emails log only a
 recipient hash.
 
 > **Upgrade preflight (`017`, `018`).** Both refuse with
-> `MIGRATION_01{7,8}_PREFLIGHT_LIVE_CLAIMS` while any unexpired outbox claim exists — the
+> `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` / `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS`
+> while any unexpired outbox claim exists — the
 > database checks live outbox claims, but it cannot prove that no API, publisher, pipeline,
 > dev worker, or retention process is still running. Stop those processes, attest zero old
 > processes at the orchestrator, then let the leases expire and retry. (The migrations' own refusal text
 > names a `reset_interrupted_outbox_claims` CLI: that command is PLANNED and NOT YET
 > BUILT — it ships with the checkpointed ops tasks. Until it does, waiting out the lease
 > is the remediation; `KYC_OUTBOX_LEASE_SECONDS` bounds how long that takes.) `018` and `019` additionally refuse with
-> `MIGRATION_01{8,9}_AUTHORITY_MANIFEST_MISMATCH` when the
+> `MIGRATION_018_AUTHORITY_MANIFEST_MISMATCH` / `MIGRATION_019_AUTHORITY_MANIFEST_MISMATCH`
+> when the
 > observable authority surface (columns, constraints, indexes, trigger definitions, authority
 > function bodies, pinned `search_path`) is not the one `017` installed — reconcile the
 > environment, or restore from the reviewed image, before retrying. Every refusal happens BEFORE

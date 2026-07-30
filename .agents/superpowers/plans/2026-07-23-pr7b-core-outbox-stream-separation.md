@@ -1402,7 +1402,7 @@ R4. **With `021` installed there is no schema-downgrade path**: `018` through `0
       (`MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`), or the attempt table under a bare `013`
       stamp (`MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`).
 R5. ROLLBACK OUTCOME A — downgrade REFUSED (any sentinel above): the DB stays on the
-    witness-authority schema, so KEEP or redeploy the reviewed **`022`-COMPATIBLE image** digest —
+    witness-authority schema, so KEEP or redeploy the reviewed **`023`-COMPATIBLE image** digest —
     an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
     evidence; the pre-7b image is PROHIBITED outright. Rollback after first witness use is a
     FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is

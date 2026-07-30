@@ -17,6 +17,7 @@ import sys
 import pytest
 
 from kyc_tool.config import REPO_ROOT
+from tests import roadmap
 
 PLAN = REPO_ROOT / ".agents" / "superpowers" / "plans" / (
     "2026-07-23-pr7b-core-outbox-stream-separation.md"
@@ -228,6 +229,38 @@ _ARTIFACTS = [
 ]
 
 
+# Operator-facing runbooks. They are NOT design artifacts, so they are deliberately not run
+# through the whole ban list below; they are checked for the facts an operator acts on during
+# an incident — which image is compatible with the live schema, and which refusal sentinels to
+# expect. Both were wrong when these checks were written: the image was named a full revision
+# behind the schema, and no upgrade-side sentinel was documented anywhere.
+_OPERATOR_DOCS = [
+    REPO_ROOT / "docs" / "RUNBOOK.md",
+    REPO_ROOT / "docs" / "DEPLOYMENT.md",
+]
+
+# --- revision numbers are DERIVED from ROADMAP §C, never transcribed --------------------------
+# Two of the bans below name migration numbers, and both were hand-maintained lists. Both went
+# stale on the release that shipped `023`: the activation ban still permitted `023` — the number
+# activation had just vacated — and its message named the wrong revisions. A gate written to catch
+# stale migration numbers, itself one revision behind, through a full audit round.
+#
+# The numbers now come from §C, which `tests/unit/test_migration_lineage.py` pins against the real
+# Alembic chain (every authored revision is `shipped`, no `pending` revision exists yet, the live
+# head is the highest `shipped`). A release updates one table and these bans follow it.
+_RECORDS = roadmap.records()
+_HEAD = roadmap.head(_RECORDS)                                  # live schema == live image
+_CORE = roadmap.unit_revisions(_RECORDS, "PR 7b-core")          # the whole 7b-core family
+_ACTIVATION = roadmap.unit_revisions(_RECORDS, "PR 7b-activation")[0]
+
+
+def _alternation(numbers) -> str:
+    """`(?:014|015|…)` — an explicit alternation, not a character-class range. `01[4-9]` reads
+    like a range but silently stops extending at the decade boundary, which is why the previous
+    hand-written ban needed a separate `020`/`021` clause bolted onto it every release."""
+    return "(?:" + "|".join(f"{n:03d}" for n in sorted(numbers)) + ")"
+
+
 # Claims that were asserted in an earlier revision, disproven by review, and corrected. Each is
 # banned by regex so it cannot be reasserted — every one of these survived at least one full
 # review round as live text contradicting the code, because prose has no compiler and a corrected
@@ -272,39 +305,50 @@ _DISPROVEN_CLAIMS = [
     ),
     (
         # a walk that STARTS below the real head omits the top of the chain; the full walk
-        # `022 → … → 013 → 012` never matches (its inner pairs are "→ "-preceded).
+        # `NNN → … → 013 → 012` never matches (its inner pairs are "→ "-preceded).
         r"(?<!→ )\b01[45] → 013 → 012|(?<!→ )\b016 → 015 → ",
-        "the documented rollback walk starts at the REAL head (022 → … → 013 → "
+        f"the documented rollback walk starts at the REAL head ({_HEAD:03d} → … → 013 → "
         "012); a walk starting mid-chain never executes the refusals production actually hits "
         "(re-audits 0c46443 F5, 15d875d F7).",
     ),
     (
-        r"\b01[3-9]`?-COMPATIBLE image|020`?-COMPATIBLE image|"
-        r"021`?-COMPATIBLE image|compatible schema after first witness use",
-        "on refusal the operator keeps the reviewed 022-compatible image — naming an older "
-        "compatibility set restarts a publisher without the receipt/terminal contract against "
-        "preserved evidence (re-audits 0c46443 F5, 15d875d F7).",
+        # The NUMERIC half of this ban is now `test_compatible_image_names_the_live_head`, which
+        # is strictly stronger: it rejects ANY number that is not the head (including one typed
+        # ahead of a release) instead of only the numbers someone remembered to enumerate, and it
+        # covers the operator docs too — where the stale `022` actually survived. What stays here
+        # is the non-numeric claim, which no head number can express.
+        r"compatible schema after first witness use",
+        "after first witness use no downgrade is reachable, so what the operator keeps is a "
+        "compatible IMAGE, not a compatible SCHEMA — naming a schema implies a walk that "
+        "refuses (re-audits 0c46443 F5, 15d875d F7).",
     ),
     (
-        # activation is migration 023; every earlier number it wore was consumed by a
-        # 7b-core revision. The proximity window is gone: a stale number three sentences after
-        # the word "activation" is the same defect as one three characters after it (re-audit
-        # `cbb783b` F8). Lines RECORDING a renumber are the correction, not a reassertion.
-        # `013`-`022` (the 7b-core SHIPPED range) and `down_revision='022'` (activation's correct
-        # parent) are not stale activation numbers — exclude those two shapes explicitly rather
-        # than by proximity, which is what let these contradictions survive before.
-        r"^(?!.*(?:renumber|moves to|forced|historical|superseded|`013`-|down_revision))"
-        r".*(?:7b-activation|activation)[^\n]{0,80}?`(?:01[4-9]|02[0-2])`",
-        "7b-activation is migration `023` (`down_revision='022'`): 7b-core shipped 013-022, and "
-        "the lineage test pins pending[0]=head+1 (re-audits 15d875d F7, cbb783b F8).",
+        # Every number below activation's own reservation, down to the first 7b-core revision,
+        # was consumed by a 7b-core revision — so near the word "activation" each is a number
+        # activation used to wear. The proximity window is gone: a stale number three sentences
+        # after the word "activation" is the same defect as one three characters after it
+        # (re-audit `cbb783b` F8). Lines RECORDING a renumber are the correction, not a
+        # reassertion. The 7b-core SHIPPED range (`013`-`0NN`) and `down_revision='0NN'`
+        # (activation's correct parent) are not stale activation numbers — those two shapes are
+        # excluded explicitly rather than by proximity, which is what let these survive before.
+        rf"^(?!.*(?:renumber|moves to|forced|historical|superseded|`{_CORE[0]:03d}`-"
+        rf"|down_revision))"
+        rf".*(?:7b-activation|activation)[^\n]{{0,80}}?"
+        rf"`{_alternation(range(_CORE[0] + 1, _ACTIVATION))}`",
+        f"7b-activation is migration `{_ACTIVATION:03d}` "
+        f"(`down_revision='{_ACTIVATION - 1:03d}'`): 7b-core shipped "
+        f"{_CORE[0]:03d}-{_CORE[-1]:03d}, and the lineage test pins pending[0]=head+1 "
+        "(re-audits 15d875d F7, cbb783b F8).",
     ),
     (
-        # "the walk is 017 -> ..." as LIVE guidance: with 022 installed there is no schema
-        # downgrade at all, so any live text presenting the walk as the rollback path is wrong.
+        # "the walk is 017 -> ..." as LIVE guidance: with the forward-only revisions installed
+        # there is no schema downgrade at all, so any live text presenting the walk as the
+        # rollback path is wrong.
         r"^(?!.*(?:historical|superseded|unreachable|never reached))"
         r".*rollback is.*`?alembic downgrade",
-        "with `022` installed the rollback is the prior reviewed 022-compatible IMAGE on schema "
-        "`022` — `alembic downgrade` refuses unconditionally (re-audit `cbb783b` F3).",
+        f"with `{_HEAD:03d}` installed the rollback is the prior reviewed "
+        f"{_HEAD:03d}-compatible IMAGE on the schema it is already on — `alembic downgrade` "
+        "refuses unconditionally (re-audit `cbb783b` F3).",
     ),
 ]
 
@@ -322,6 +366,133 @@ def test_artifact_does_not_reassert_a_disproven_claim(path, pattern, why):
         and "must not" not in line.lower() and "does NOT" not in line
     ]
     assert not hits, f"{path.name} reasserts a disproven claim — {why}\n" + "\n".join(hits)
+
+
+# --- facts an operator acts on, checked against their real source ----------------------------
+
+# "`022`-compatible image", "**023-compatible** image", "image … 023-COMPATIBLE" — any way of
+# naming the compatible IMAGE, in either word order. Scoped to the image claim on purpose:
+# "schema-012-compatible" describes a pre-window diagnostic CLI that really does run against
+# schema 012, and is not a rollback-image claim at all. `(?<!\d)` keeps a year ("2022-compatible")
+# from reading as revision 022.
+_COMPAT = r"(?<!\d)(?<!schema-)(\d{3})`?\s*-\s*compatible"
+_COMPAT_IMAGE = re.compile(
+    rf"{_COMPAT}[^\n]{{0,40}}?image|image[^\n]{{0,40}}?{_COMPAT}", re.IGNORECASE
+)
+
+
+def _compat_number(match: re.Match) -> int:
+    """The revision from whichever word order matched."""
+    return int(match.group(1) or match.group(2))
+
+
+@pytest.mark.parametrize("path", [*_ARTIFACTS, *_OPERATOR_DOCS], ids=lambda p: p.name)
+def test_compatible_image_names_the_live_head(path):
+    """The reviewed image an operator keeps on a refused downgrade must be named for the LIVE
+    head, everywhere it is named.
+
+    This replaces an enumerated ban on older numbers, which could only catch numbers someone
+    remembered to add and only in the three design artifacts — so when `023` shipped, both
+    runbooks went on telling an operator to keep a `022`-compatible image. Comparing against
+    the derived head instead fails on any wrong number in either direction, and covers the
+    runbooks, which are what gets read at 3am.
+    """
+    wrong = [
+        f"line {i}: {line.strip()}"
+        for i, line in enumerate(path.read_text().splitlines(), 1)
+        for match in _COMPAT_IMAGE.finditer(line)
+        if _compat_number(match) != _HEAD
+    ]
+    assert not wrong, (
+        f"{path.name} names a compatibility set that is not the live head {_HEAD:03d} — an "
+        "older image lacks the receipt/terminal contract and must not run against preserved "
+        f"evidence; a newer one does not exist yet\n" + "\n".join(wrong)
+    )
+
+
+_SENTINEL = re.compile(r"MIGRATION_\d{3}_[A-Z][A-Z_]+")
+# `MIGRATION_0{18,19}_…` — a shell-brace contraction. It reads fine and greps for nothing.
+_CONTRACTED_SENTINEL = re.compile(r"MIGRATION_\d*\{")
+_RUNBOOK = REPO_ROOT / "docs" / "RUNBOOK.md"
+
+
+def _raised_sentinels() -> set[str]:
+    return {
+        name
+        for source in (REPO_ROOT / "alembic" / "versions").glob("*.py")
+        for name in _SENTINEL.findall(source.read_text())
+    }
+
+
+def test_runbook_indexes_every_migration_refusal_sentinel():
+    """The runbook's sentinel index covers every sentinel a migration can raise.
+
+    Sentinels exist so a refused upgrade/downgrade reads as a designed stop rather than as a
+    broken migration — which only works if the operator can find the string. When this check
+    was written, ALL of the upgrade-side sentinels (manifest mismatches, the live-claim
+    preflights, the unsendable-rows preflight) appeared in no operator document at all: a
+    refusal an operator could hit in a maintenance window with nothing to look up.
+    """
+    missing = sorted(_raised_sentinels() - set(_SENTINEL.findall(_RUNBOOK.read_text())))
+    assert not missing, (
+        "RUNBOOK.md § 'Migration refusal sentinels' does not index every refusal a migration "
+        f"can raise — an operator who hits one of these has nothing to look up:\n{missing}"
+    )
+
+
+@pytest.mark.parametrize("path", _OPERATOR_DOCS, ids=lambda p: p.name)
+def test_operator_docs_name_no_unraisable_sentinel(path):
+    """The converse: a sentinel no migration raises is a typo or a leftover, and sends the
+    operator looking for a string that will never appear."""
+    phantom = sorted(set(_SENTINEL.findall(path.read_text())) - _raised_sentinels())
+    assert not phantom, (
+        f"{path.name} names sentinel(s) no migration raises: {phantom}"
+    )
+
+
+@pytest.mark.parametrize("path", _OPERATOR_DOCS, ids=lambda p: p.name)
+def test_operator_docs_spell_sentinels_out(path):
+    """`MIGRATION_0{18,19,20,21,22}_DOWNGRADE_REFUSED_FORWARD_ONLY` is five sentinels an
+    operator cannot grep for, and it is invisible to both checks above — which is how
+    DEPLOYMENT.md came to document the forward-only refusals without naming any of them."""
+    contracted = [
+        f"line {i}: {line.strip()}"
+        for i, line in enumerate(path.read_text().splitlines(), 1)
+        if _CONTRACTED_SENTINEL.search(line)
+    ]
+    assert not contracted, (
+        f"{path.name} contracts sentinel names with braces; spell each one out so a refused "
+        "command's output can be grepped against this document\n" + "\n".join(contracted)
+    )
+
+
+def test_derived_bans_track_the_roadmap():
+    """The derivation itself, pinned: the bans must move with §C.
+
+    Without this, a §C parse that silently returned nothing would produce an alternation that
+    matches nothing and a gate that passes by vacuity — the same failure mode as the stale
+    hand-written list, minus the evidence.
+    """
+    assert _CORE and list(range(_CORE[0], _CORE[-1] + 1)) == _CORE, (
+        f"7b-core's §C reservations are not a contiguous range: {_CORE}"
+    )
+    assert _CORE[-1] == _HEAD, (
+        f"live head {_HEAD:03d} is not 7b-core's last revision {_CORE[-1]:03d} — a later unit "
+        "shipped, so the bans below need re-reading, not just re-deriving"
+    )
+    assert _ACTIVATION == _HEAD + 1, (
+        f"activation reserves {_ACTIVATION:03d}, not head+1 ({_HEAD + 1:03d})"
+    )
+    activation_ban = next(p for p, _why in _DISPROVEN_CLAIMS if "7b-activation|activation" in p)
+    # the number activation just vacated is banned; its current one is not
+    assert re.search(activation_ban, f"7b-activation is migration `{_HEAD:03d}`", re.IGNORECASE)
+    assert not re.search(
+        activation_ban, f"7b-activation is migration `{_ACTIVATION:03d}`", re.IGNORECASE
+    )
+    assert _COMPAT_IMAGE.search(f"the reviewed `{_HEAD - 1:03d}`-compatible image")
+    assert _compat_number(_COMPAT_IMAGE.search(f"**{_HEAD:03d}-COMPATIBLE** image")) == _HEAD
+    assert _compat_number(_COMPAT_IMAGE.search(f"image is {_HEAD:03d}-compatible")) == _HEAD
+    assert not _COMPAT_IMAGE.search("schema-012-compatible, SHARE-locked diagnostic")
 
 
 @pytest.mark.parametrize("path", _ARTIFACTS, ids=lambda p: p.name)

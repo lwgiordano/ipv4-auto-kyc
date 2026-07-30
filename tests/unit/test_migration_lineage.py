@@ -7,12 +7,17 @@ lookup). Round 2 added a numeric guard; round 3 showed it ignored ownership; rou
 showed it silently ignored an *unknown* State (a typo like `pendng`) — orphaning a
 revision from both ownership sets — and that the negative tests bypassed the parser.
 
-This guard parses the §C table into ordered `(unit, state, revisions)` records **without
-deduplication** and fail-closes on any State that is not exactly `shipped`/`pending`/`—`,
-so `shipped ∪ pending` is a disjoint, exhaustive partition of the reserved revisions.
-The regression tests drive crafted Markdown through the real parser, not hand-built
-records, so a parser regression (reintroduced dedup, a shifted column) is caught too.
-Everything is read off disk — no database.
+This guard reads the §C table through `tests/roadmap.py` — the shared parser, which keeps
+ordered `(unit, state, revisions)` records **without deduplication** — and fail-closes on
+any State that is not exactly `shipped`/`pending`/`—`, so `shipped ∪ pending` is a
+disjoint, exhaustive partition of the reserved revisions. The regression tests drive
+crafted Markdown through that same parser, not hand-built records, so a parser regression
+(reintroduced dedup, a shifted column) is caught too. Everything is read off disk — no
+database.
+
+This is also what licenses the OTHER §C consumer: `tests/unit/test_plan_artifact_static.py`
+derives its banned revision numbers from §C, and it is the checks here that make §C a
+truthful statement about the live Alembic chain rather than a table someone edits freely.
 """
 
 import re
@@ -22,29 +27,13 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from kyc_tool.config import REPO_ROOT
+from tests.roadmap import ROADMAP, parse_records
 
 
 def _script() -> ScriptDirectory:
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     return ScriptDirectory.from_config(cfg)
-
-
-def _parse_roadmap_records(text: str) -> list[tuple[str, str, list[int]]]:
-    """Ordered `(unit, state, [revisions])` from the §C table, NO deduplication —
-    a revision double-booked across two rows must survive as two records so the
-    duplicate is visible. Columns: `| Unit | Item(s) | State | Migration | Content |`."""
-    records: list[tuple[str, str, list[int]]] = []
-    for line in text.splitlines():
-        if not line.lstrip().startswith("| PR "):  # data rows only (skips header/separator)
-            continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 4:
-            continue
-        unit, state, migration = cells[0], cells[2], cells[3]
-        revisions = [int(tok) for tok in re.findall(r"\b0\d\d\b", migration)]
-        records.append((unit, state, revisions))
-    return records
 
 
 def _validate_lineage(
@@ -114,8 +103,7 @@ def test_roadmap_lineage_consistent_with_alembic():
     script = _script()
     existing = {int(r.revision) for r in script.walk_revisions()}
     head_num = int(script.get_heads()[0])
-    records = _parse_roadmap_records((REPO_ROOT / ".agents" / "ROADMAP.md").read_text())
-    _validate_lineage(records, existing, head_num)
+    _validate_lineage(parse_records(ROADMAP.read_text()), existing, head_num)
 
 
 # --- mutation resistance: crafted §C tables are driven through the REAL parser so a
@@ -144,7 +132,7 @@ _REAL_BODY = [
 
 def _validate_body(body_rows: list[str]) -> None:
     text = _HEADER + "\n".join(body_rows) + "\n"
-    _validate_lineage(_parse_roadmap_records(text), _EXISTING, _HEAD)
+    _validate_lineage(parse_records(text), _EXISTING, _HEAD)
 
 
 def test_parser_and_validator_accept_real_shape():
@@ -213,7 +201,7 @@ _SPECS = REPO_ROOT / ".agents" / "superpowers" / "specs"
 
 
 def _roadmap_text() -> str:
-    return (REPO_ROOT / ".agents" / "ROADMAP.md").read_text()
+    return ROADMAP.read_text()
 
 
 def test_roadmap_detail_sections_chain_contiguously():

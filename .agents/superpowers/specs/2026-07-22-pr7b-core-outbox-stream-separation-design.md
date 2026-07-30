@@ -537,7 +537,7 @@ pipeline, outbox, `dev_worker`, retention, and every writer; (3) **while 013 sti
 `reset_interrupted_outbox_claims` and verify zero claim tuples; (4) **with `018` through `022`
 installed, `alembic downgrade` is not the rollback path** — these revisions are forward-only once
 installed (latest sentinel `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY`), so rollback is
-**redeploying the prior reviewed `022`-compatible image on schema `022`** — an older publisher
+**redeploying the prior reviewed `023`-compatible image on the schema it is already on** — an older publisher
 lacks the receipt/terminal contract and must not run against preserved evidence. Historically,
 before `018` shipped, a schema
 walk existed (`017 → 016 → 015 → 014 → 013 → 012`, each revision preflighting byte-stably: `017`/`016`
