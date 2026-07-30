@@ -175,6 +175,18 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM-EXTEND [CODEX] 2026-07-30 — include 023 authority repair parity files
+
+Files added: `.agents/ROADMAP.md`,
+`.agents/superpowers/specs/2026-07-22-pr6b-revalidation-design.md`,
+`.env.example`, `src/kyc_tool/api/routes_read.py`, `src/kyc_tool/ui/routes.py`,
+`alembic/versions/023_outbox_cross_table_authority.py`,
+`tests/integration/test_migration_023.py`,
+`tests/integration/test_read_latest_decision.py` — the full suite surfaced that the local 023
+cross-table authority repair is present but the activation/6b spec banners and fence parity guard
+must be aligned with head `023` / activation `024` / 6b `025` before this owner audit can be
+released cleanly.
+
 ### CLAIM [CODEX] 2026-07-30 — adversarial audit follow-up: fence guard + outbox lease budget
 
 Files:
