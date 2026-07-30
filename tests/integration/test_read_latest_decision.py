@@ -166,7 +166,10 @@ def test_read_surfaces_do_not_dereference_cross_case_pointer_if_fk_drifted(
         body = client.get("/v1/cases/drift-a").json()
         assert body["latest_decision"] is None
         assert body["gates"] == {}
-        assert body["decision_provenance"] == "no_decisions"
+        # This used to answer "no_decisions" — a definite NEGATIVE drawn from missing evidence,
+        # for a case whose own pointer names a decision row. Refusing to dereference a drifted
+        # pointer is right; reporting the refusal as "there were none" is not.
+        assert body["decision_provenance"] == "unresolved_pointer_drift"
 
         full = client.get("/ui/api/cases/drift-a/full").json()
         assert full["pointer_decision"] is None
@@ -208,7 +211,10 @@ def test_full_view_does_not_dereference_cross_case_manual_pointer_if_fk_drifted(
 
         full = client.get("/ui/api/cases/manual-a/full").json()
         assert full["latest_manual_decision"] is None
-        assert full["manual_decision_provenance"] == "no_manual_decisions"
+        # Same correction as the verdict pointer above: a manual pointer this case cannot claim
+        # is drift, and "no_manual_decisions" would assert the case was never manually approved
+        # on the strength of a lookup that was refused.
+        assert full["manual_decision_provenance"] == "unresolved_pointer_drift"
     finally:
         _restore_latest_manual_fk(engine)
 

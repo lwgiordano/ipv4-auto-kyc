@@ -175,7 +175,10 @@ three things: does it include a **migration**, any **new env vars**, and any
   them. **The fence does not cover the pipeline's decide transaction**, which locks the
   case row before inserting the outbox row and takes no fence; a migration run against a
   live pipeline can still deadlock, and the live-claim preflight cannot see a run
-  mid-decide because it holds no outbox claim. That is what the DRAINED cutover is for —
+  mid-decide because it holds no outbox claim. `022` and `023` sharpen that from "can" to
+  "does": they are the first revisions to take `ACCESS EXCLUSIVE` on `decisions` and `cases`,
+  in the opposite order from the decide transaction, so a concurrent decide deadlocks them
+  (`40P01`) — see `docs/RUNBOOK.md`. That is what the DRAINED cutover is for —
   stop the pipeline workers too, not just the publishers.
 
 ## 7. Monitoring and incidents

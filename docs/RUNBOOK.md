@@ -51,6 +51,17 @@
 > publisher lacks the receipt/terminal contract and must not run against preserved evidence;
 > a pre-7b image is permitted only after the entire walk reaches 012.
 
+> **`022` and `023` need the PIPELINE drained too, not just the publishers.** They are the
+> first revisions in the chain to take `ACCESS EXCLUSIVE` on `decisions` and `cases`. The decide
+> transaction locks `cases` FOR UPDATE, then inserts `decisions`, then inserts `outbox` — the
+> opposite order — so running either migration against a live pipeline **deadlocks** (Postgres
+> reports `40P01` and kills one side; reproduced against a live decide, and `021` does not do
+> it). This is not silent corruption: DDL is transactional, so a killed migration rolls back
+> whole and the schema stays where it was. But it costs the window and it can kill a decide
+> instead of the migration, so drain the pipeline workers as well before applying `022`/`023`
+> and re-run. Unlike the live-claim preflight, this one is **not machine-checked** — `022` and
+> `023` are published and cannot be amended to add one.
+
 ### Migration refusal sentinels
 
 Every deliberate migration refusal raises a **stable sentinel string**, so a refused

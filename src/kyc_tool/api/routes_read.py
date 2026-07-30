@@ -53,6 +53,12 @@ def get_case(case_id: str, request: Request) -> dict:
             ).scalar_one_or_none()
         if latest is not None:
             provenance = "latest_decision_row"
+        elif case.latest_decision_row_id:
+            # The pointer names a row this case cannot claim. `fk_cases_latest_decision` binds
+            # (pointer, case_id) so 022 onward forbids it, but a pre-022 history could carry it —
+            # and then the count below can legitimately find no same-case decision and answer
+            # "no_decisions", a definite negative drawn from missing evidence. Name the drift.
+            provenance = "unresolved_pointer_drift"
         elif session.execute(
             select(DecisionRow.id).where(DecisionRow.case_id == case_id).limit(1)
         ).first():

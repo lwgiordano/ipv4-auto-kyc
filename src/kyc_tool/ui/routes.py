@@ -232,18 +232,25 @@ def case_full(case_id: str, request: Request) -> dict:
         # with several that cannot be ordered.
         latest_manual_decision = None
         manual_decision_provenance = "no_manual_decisions"
-        if case.get("latest_manual_decision_row_id"):
+        manual_pointer = case.get("latest_manual_decision_row_id")
+        if manual_pointer:
             manual_row = session.execute(
                 text(
                     "SELECT id, run_id, decision, score, manual, reviewer_id, decided_at "
                     "FROM decisions WHERE id=:d AND case_id=:id AND manual IS TRUE"
                 ),
-                {"d": case["latest_manual_decision_row_id"], "id": case_id},
+                {"d": manual_pointer, "id": case_id},
             ).mappings().first()
             latest_manual_decision = dict(manual_row) if manual_row else None
-            if latest_manual_decision:
-                manual_decision_provenance = "latest_manual_row"
-        if latest_manual_decision is None:
+            # A pointer the hardened predicate rejects (other case, or not manual) is drift, and
+            # the one thing it is NOT is proof that no manual approval happened. 022 forbids that
+            # state at the database and validates the existing data, so reaching here means a row
+            # written around the guard — report it as unresolved rather than silently answering
+            # "no manual approval" for a case whose own pointer disagrees.
+            manual_decision_provenance = (
+                "latest_manual_row" if latest_manual_decision else "unresolved_pointer_drift"
+            )
+        if latest_manual_decision is None and not manual_pointer:
             manual_rows = session.execute(
                 text("SELECT count(*) FROM decisions WHERE case_id=:id AND manual IS TRUE"),
                 {"id": case_id},

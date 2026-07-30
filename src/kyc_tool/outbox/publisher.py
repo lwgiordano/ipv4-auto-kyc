@@ -49,6 +49,11 @@ POC_EMAIL = "poc_email"
 # becoming an uninterpretable witness.
 _WIRE_VERSION = "legacy"
 
+# How much of a callback acknowledgement body the publisher will read to keep the connection
+# reusable. A platform ack is a few hundred bytes; past this it is not an ack we need, and reading
+# further would let the receiver decide how long the tool holds its claim.
+_MAX_ACK_BODY_BYTES = 64 * 1024
+
 
 class _StaleClaim(Exception):
     """Raised BEFORE any network traffic when the claim is no longer live.
@@ -250,15 +255,41 @@ class OutboxPublisher:
     def _send_for_status(self, request: httpx.Request) -> None:
         """Send a callback request and treat the response status as the acknowledgement.
 
-        `httpx.Timeout(0.2)` means each pool/connect/write/read wait may take up to 0.2s; it is not
-        a whole-request wall-clock deadline. The publisher therefore does not consume the response
-        body at all: for this callback contract, a 2xx status is the local delivery witness, and a
-        slow-dripping body must not keep the claim lease occupied after the receiver has already
-        accepted the request.
+        The status is the witness, but the body is still DRAINED — under a byte cap and a real
+        wall-clock budget — before the response is closed. Closing an unconsumed HTTP/1.1
+        response is not free: httpcore cannot know where the next response begins on that
+        socket, so it discards the connection. Measured on real sockets, four sequential
+        callbacks opened four connections instead of one (a full TCP+TLS handshake per delivery
+        against the production `https` callback URL) and the receiver took a broken pipe writing
+        its response body every single time. Draining also restores the truncation signal: a
+        gateway that emits `200` headers before its origin commits, then closes, raises here and
+        is retried, instead of stamping a terminal witness for bytes nobody kept.
+
+        The budget is what makes that safe to do. `httpx.Timeout` is per-I/O-operation
+        inactivity, not a deadline, so a receiver dripping bytes under the timeout could
+        otherwise set the publisher's pace and hold the claim lease past expiry. Past the cap or
+        the budget the drain is abandoned — the delivery still counts, we just pay the dropped
+        connection in the pathological case instead of in the normal one.
         """
+        deadline = time.monotonic() + self.settings.outbox_http_timeout_seconds
         response = self.http.send(request, stream=True)
         try:
             response.raise_for_status()
+            if response.is_stream_consumed:
+                # The transport already read the whole body (any eager-content client, and every
+                # `MockTransport` handler that returns a plain `httpx.Response`). Nothing is left
+                # on the socket, so there is nothing to drain — and `iter_raw()` would raise
+                # `StreamConsumed` for a delivery that in fact succeeded.
+                return
+            consumed = 0
+            for chunk in response.iter_raw():
+                consumed += len(chunk)
+                if consumed > _MAX_ACK_BODY_BYTES or time.monotonic() > deadline:
+                    log.warning(
+                        "outbox_callback_ack_body_abandoned",
+                        consumed_bytes=consumed, url=str(request.url),
+                    )
+                    return
         finally:
             response.close()
 

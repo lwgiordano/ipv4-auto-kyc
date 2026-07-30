@@ -41,7 +41,12 @@ STUB_ADAPTERS_PROFILE = "fixture"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", ""}
 _MIN_HMAC_SECRET_LEN = 32
 # HTTPX exposes one scalar timeout as four phase budgets: pool acquisition, connect, write, and
-# response-header read. It is not a total callback-attempt clock.
+# response-header read. It is not a total callback-attempt clock, and multiplying by four does
+# NOT produce one: each budget resets on I/O ACTIVITY, so a receiver dribbling response headers
+# with gaps under the timeout stalls the attempt for as long as it likes. Measured: a 0.5s
+# timeout — nominal 2.0s "envelope" — held the publisher 32s on drizzled headers. Four is a
+# conservative FLOOR for the lease, chosen so the common slow-but-honest attempt fits inside a
+# claim; it is not an upper bound on attempt duration, and no scalar timeout can give one.
 _HTTPX_CALLBACK_PHASE_COUNT = 4
 
 
@@ -146,13 +151,14 @@ class Settings(BaseSettings):
     outbox_lease_seconds: int = Field(default=300, ge=1, le=3600)
     # Per HTTPX operation timeout for one callback attempt. This is NOT a whole-request wall-clock
     # deadline: HTTPX may spend the scalar budget separately in pool/connect/write/read-header
-    # phases. The publisher treats the response status as the acknowledgement and closes the body
-    # stream without consuming it, so a slow response body cannot hold the outbox lease hostage.
+    # phases, and each resets on activity. It doubles as the publisher's wall-clock budget for
+    # draining the acknowledgement body, which IS a real deadline (see `_send_for_status`).
     outbox_http_timeout_seconds: float = Field(default=10.0, gt=0)
-    # Extra room for DB commit/processing around the HTTPX phase envelope. The production kill
+    # Extra room for DB commit/processing around the HTTPX phase budgets. The production kill
     # switch requires the lease to exceed pool+connect+write+read-header timeout phases plus this
     # margin, otherwise a slow-but-valid response can outlive the claim and be reclaimed by another
-    # publisher before the first terminal write.
+    # publisher before the first terminal write. Raising `outbox_http_timeout_seconds` raises the
+    # required lease four-fold, so the two knobs must be moved together.
     outbox_lease_margin_seconds: float = Field(default=1.0, ge=0)
     outbox_max_attempts: int = 8
     outbox_backoff_base_seconds: int = 10
@@ -251,19 +257,20 @@ def production_config_violations(settings: Settings) -> list[str]:
     if settings.hmac_v1_observation_window_days < 1:
         v.append("hmac_v1 observation window days must be >= 1")
 
-    # A claim lease shorter than one delivery attempt's HTTPX phase envelope plus DB/processing
+    # A claim lease shorter than one delivery attempt's HTTPX phase budgets plus DB/processing
     # margin expires WHILE that attempt is in flight: admission then refuses the terminal for a
-    # request the receiver may well have accepted, and the row retries forever. HTTPX's scalar
-    # timeout is not a whole-attempt deadline: pool acquisition, connect, write, and response-header
-    # read can each spend the scalar timeout before the application sees the status. The publisher
-    # does not consume response bodies, so body drip is deliberately outside this envelope.
-    http_phase_envelope = settings.outbox_http_timeout_seconds * _HTTPX_CALLBACK_PHASE_COUNT
-    required_lease = http_phase_envelope + settings.outbox_lease_margin_seconds
+    # request the receiver may well have accepted, and the row is redelivered. This is a FLOOR,
+    # not a proof — see _HTTPX_CALLBACK_PHASE_COUNT: no scalar-timeout arithmetic bounds attempt
+    # duration, so a lease above this floor can still expire mid-attempt against a pathological
+    # receiver. That residual is why the terminal write fails closed (the delivery is retried and
+    # deduped by the platform) rather than being written by a claimant who no longer owns the row.
+    http_phase_floor = settings.outbox_http_timeout_seconds * _HTTPX_CALLBACK_PHASE_COUNT
+    required_lease = http_phase_floor + settings.outbox_lease_margin_seconds
     if settings.outbox_lease_seconds <= required_lease:
         v.append(
             f"outbox_lease_seconds ({settings.outbox_lease_seconds}) must exceed "
-            f"the HTTPX phase envelope ({_HTTPX_CALLBACK_PHASE_COUNT} × "
-            f"outbox_http_timeout_seconds = {http_phase_envelope}) "
+            f"the HTTPX phase floor ({_HTTPX_CALLBACK_PHASE_COUNT} × "
+            f"outbox_http_timeout_seconds = {http_phase_floor}) "
             f"+ outbox_lease_margin_seconds "
             f"({settings.outbox_lease_margin_seconds}) = {required_lease} — "
             f"a lease that expires mid-attempt makes every delivery unwitnessable"
