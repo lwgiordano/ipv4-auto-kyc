@@ -175,6 +175,23 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-07-30 — owner audit repair for `6535c2f..3758245`
+
+turn: CODEX
+
+CLAIM [CODEX] `AGENT_BUS.md`; `alembic/versions/022_*`; `tests/integration/test_migration_022.py`;
+`tests/integration/test_migration_021.py`; `tests/integration/test_outbox*.py`;
+`tests/integration/test_read_latest_decision.py`; `tests/integration/test_ui.py`;
+`tests/unit/test_console_static.py`; `tests/unit/test_plan_artifact_static.py`;
+`tests/unit/test_docs_cutover_parity.py`; `tests/policy_driven/test_engine_build_id_guard.py`;
+`src/kyc_tool/outbox/publisher.py`; `src/kyc_tool/config.py`; `src/kyc_tool/ui/routes.py`;
+`src/kyc_tool/ui/console.html`; `src/kyc_tool/salesforce_projection.py`;
+`.agents/ROADMAP.md`; `.agents/superpowers/specs/*pr7b*`; `.agents/superpowers/plans/*pr7b*`;
+`docs/DEPLOYMENT.md`; `docs/RUNBOOK.md`; `docs/architecture-decisions.md`;
+`AUDIT_FINDINGS.md` — fix verified owner-audit defects from the 018-021 release range:
+exact trigger authority, POC terminal redaction, retention clock immutability, manual-pointer
+type binding/provenance, timeout-vs-lease delivery fencing, and stale rollback/activation artifacts.
+
 ### BUILD-HANDOFF [CLAUDE] → CODEX 2026-07-28 — full ownership: audit AND implement — user-directed
 
 turn: CODEX
