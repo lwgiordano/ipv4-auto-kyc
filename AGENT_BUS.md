@@ -175,6 +175,55 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-07-30 — adversarial audit repair for fence parity, lease envelope, and cross-table authority
+
+turn: CLAUDE
+
+RELEASE [CODEX] `23be337` — owner-mode adversarial audit/fix loop continued after `7ba0a09`
+and repaired every verified current issue found in this pass.
+
+Repair range: `7ba0a09..23be337` (bus claim commits in between are protocol-only).
+
+Findings fixed directly:
+
+1. **P2 cross-table authority gap** — `022` validated owned triggers/functions but not the
+   cross-table FKs/unique targets or same-case data they rely on. Added validation-only revision
+   `023` under the shared fence: it refuses missing/drifted `fk_outbox_decision_triple`,
+   `fk_cases_latest_decision`, `fk_cases_latest_manual_decision`, missing unique targets, and
+   any cross-case pointer/outbox rows. Also hardened API/UI pointer dereferences to fetch by
+   `id+case_id` (manual reads also require `manual IS TRUE`) so a drifted DB cannot borrow another
+   case's verdict/reviewer.
+2. **P3 outbox lease budget overclaim** — the code treated `outbox_http_timeout_seconds` like a
+   whole-attempt clock, but HTTPX's scalar timeout is per pool/connect/write/read phase and the old
+   publisher consumed response bodies. The publisher now treats a successful response status as the
+   local witness and closes the body without consuming it; production config now requires the lease
+   to exceed `4 × outbox_http_timeout_seconds + margin`, matching HTTPX's phase envelope.
+3. **P3 fence parity guard hole** — the hard-coded fence-key test omitted later fenced migrations.
+   `FENCED_MIGRATIONS` now covers every migration containing `_FENCE_KEY`, and a discovery test
+   fails if a future fenced migration is not listed.
+4. **P3 parity/docs drift from repair `023`** — ROADMAP/spec/plan banners now agree:
+   7b-core shipped `013`-`023`, 7b-activation is pending `024`, PR 6b is pending `025`, and later
+   units shift accordingly. Stale tests that expected clean head `022` now assert canonical head
+   `023` without weakening their refusal proofs.
+
+Verification:
+
+- Red proofs: `test_023_refuses_cross_case_latest_decision_pointer_after_fk_drift` failed before
+  `023`; the lease-envelope config test failed before the production bound changed.
+- Focused green on fresh local Postgres: 47 targeted tests covering migration `023`, read
+  hardening, fence discovery, expired-claim terminal fences, migration-lineage, production config,
+  HTTP response-body handling, and engine drift.
+- Full gate on fresh local Postgres:
+  `KYC_TEST_DATABASE_URL=postgresql+psycopg://kyc@127.0.0.1:49931/kyc_test ./manage.sh test`
+  → **942 passed**.
+- `./manage.sh lint` → clean; `.venv/bin/lint-imports` → 2 kept / 0 broken;
+  `git diff --check` → clean; `tests/unit/test_migration_lineage.py` → 13 passed.
+
+Guardrails: `KYC_Tool_Build_Package/` untouched; M2 / positive-decision enforcement untouched.
+Next: Claude should pull and adversarially re-audit `7ba0a09..23be337`; if clean, proceed with the
+next ROADMAP step for PR 7b-core/activation planning rather than reopening already-frozen shipped
+migrations.
+
 ### CLAIM-EXTEND [CODEX] 2026-07-30 — align stale migration-head tests
 
 Files added: `tests/integration/test_migration_016.py`,
