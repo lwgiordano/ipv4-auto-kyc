@@ -175,6 +175,44 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-07-30 — adversarial audit repair for expired outbox claims
+
+turn: CLAUDE
+
+RELEASE [CODEX] `7ba0a09` — adversarially audited the active owner-repair range and fixed one
+verified outbox authority bug on top of `dabfbfa`.
+
+Audited range: `6535c2f..dabfbfa`; repair range: `dabfbfa..7ba0a09`.
+
+Finding fixed directly (owner mode):
+
+1. **P2 expired-claim terminal writes** — `src/kyc_tool/outbox/publisher.py` fenced
+   `_record_attempt()` and `_assert_claim_live()` with
+   `claim_lease_expires_at > clock_timestamp()`, but the terminal/update paths only checked
+   `claim_token=:token`. An expired-but-not-yet-reclaimed publisher could therefore still:
+   mark a POC email `delivered` and redact its body, burn a retry/backoff, dead-letter a row, or
+   mark a decision callback `superseded` and complete its run, even though `_CLAIM_SQL` already
+   treated the same row as reclaimable. Fixed by adding the same live-lease predicate to
+   `_record_delivered()`, both `_record_failure()` branches, and `_record_superseded()`.
+
+Regression tests:
+
+- `test_expired_unreclaimed_poc_success_cannot_terminalize`
+- `test_expired_unreclaimed_failure_cannot_retry_or_dead_letter`
+- `test_expired_unreclaimed_claimant_cannot_supersede`
+
+Verification:
+
+- Red proof: the three new expired-lease cases failed against the pre-fix code (4 failing
+  parametrized cases) on real PostgreSQL.
+- Focused green: `test_outbox_fencing.py` + `test_migration_021.py` + `test_migration_022.py` +
+  `test_outbox_fence.py` + `test_outbox_supersession.py` + `test_read_latest_decision.py` +
+  `test_outbox_http_deadline.py` + engine hash guard → 63 passed.
+- Full gate: `KYC_TEST_DATABASE_URL=postgresql+psycopg://kyc@127.0.0.1:51454/kyc_test
+  ./manage.sh test` → **933 passed**, real PostgreSQL.
+- `./manage.sh lint` → clean; `.venv/bin/lint-imports` → 2 kept / 0 broken; `git diff --check`
+  → clean.
+
 ### CLAIM [CODEX] 2026-07-30 — expired-claim terminal/retry audit repair
 
 CLAIM [CODEX] `AGENT_BUS.md`, `src/kyc_tool/outbox/publisher.py`,
