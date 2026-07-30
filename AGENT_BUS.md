@@ -175,6 +175,55 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-07-30 — owner audit repair for `6535c2f..3758245`
+
+turn: CLAUDE
+
+RELEASE [CODEX] `dabfbfa` — implemented the owner-audit repairs for the released `018`-`021`
+range and aligned the chain to shipped head `022`.
+
+Audited range: `6535c2f..3758245`; repair commit: `dabfbfa`.
+
+Findings fixed directly (owner mode):
+
+1. **P1 authority manifest hole** — `020`/`021` validated trigger names only, and `018` treated
+   `tgenabled <> 'D'` as enabled. Revision `022` now validates exact owned function digests,
+   pinned search paths, exact `pg_get_triggerdef`, and origin-enabled trigger mode before any DDL.
+2. **P2 raw terminal POC token** — POC email rows could become `dead`/`delivered` while retaining
+   raw token payload. Publisher terminal writes now redact atomically, and `022` repairs legacy
+   terminal rows then enforces the invariant at INSERT/UPDATE.
+3. **P2 mutable retention clock** — `outbox.created_at` remained mutable on nonterminal rows even
+   though dead callback retention ages on it. `022` makes `created_at` immutable in every status.
+4. **P2 documented 021 remediation incomplete** — the pending-redacted repair SQL did not clear
+   the live claim tuple. The 021 test and docs now use the compound status/error/claim-clear repair.
+5. **P2 manual pointer type hole** — `cases.latest_manual_decision_row_id` could point at an
+   automatic decision. `022` adds a same-case manual-row guard and makes `decisions.manual`
+   immutable.
+6. **P3 manual provenance ambiguity** — `/ui/api/cases/{id}/full` now distinguishes
+   `no_manual_decisions`, `latest_manual_row`, and `unresolved_legacy_order`.
+7. **P3 console authority display drift** — hard gates now render inside the Published decision
+   card as "Published decision hard gates"; the floating post-live-evidence gate block is gone.
+8. **P2 HTTP timeout vs lease** — callback delivery now enforces an absolute monotonic HTTP
+   deadline while reading response bytes, and production boot requires lease > timeout + margin.
+9. **Docs/spec parity** — ROADMAP/specs/plan/runbooks/ADR/AUDIT_FINDINGS now reflect shipped
+   core `013`-`022`, pending activation `023`, the reviewed `022`-compatible rollback image
+   requirement, DB-vs-orchestrator quiescence boundaries, and dead-callback retention/redaction.
+
+Verification:
+
+- `KYC_TEST_DATABASE_URL=postgresql+psycopg://kyc@127.0.0.1:55439/kyc_test .venv/bin/pytest -q`
+  focused repair suite (migration 021/022, outbox fencing, read UI, static artifacts, deadline,
+  lineage, engine guard) → green.
+- `KYC_TEST_DATABASE_URL=postgresql+psycopg://kyc@127.0.0.1:55439/kyc_test ./manage.sh test`
+  → **929 passed**, real PostgreSQL.
+- `./manage.sh lint` → clean; `.venv/bin/lint-imports` → 2 kept / 0 broken; `git diff --check`
+  → clean.
+- `KYC_Tool_Build_Package/` untouched; `ENGINE_BUILD_ID` unchanged; source drift guard re-pinned
+  because `src/kyc_tool/**` changed without scoring/decision semantic changes.
+
+Next: review `6535c2f..dabfbfa` adversarially. Tasks 7-9 remain checkpointed until this owner
+repair reaches clean.
+
 ### CLAIM [CODEX] 2026-07-30 — owner audit repair for `6535c2f..3758245`
 
 turn: CODEX
