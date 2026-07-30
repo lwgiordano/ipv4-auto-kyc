@@ -447,6 +447,7 @@ class OutboxPublisher:
                     "payload_json = CASE WHEN :redact_payload THEN CAST(:redacted AS jsonb) "
                     "ELSE payload_json END "
                     "WHERE id=:id AND status='pending' AND claim_token=:token "
+                    "AND claim_lease_expires_at > clock_timestamp() "
                     # A terminal digest asserts "these exact bytes were staged and accepted", so
                     # it may only land when the matching attempt row — same claim, same digest,
                     # same encoding — actually exists (re-audit 1f8412e F6). Without this, a
@@ -511,7 +512,8 @@ class OutboxPublisher:
                         "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL, "
                         "payload_json = CASE WHEN :redact_payload THEN CAST(:redacted AS jsonb) "
                         "ELSE payload_json END "
-                        "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
+                        "WHERE id=:id AND status='pending' AND claim_token=:token "
+                        "AND claim_lease_expires_at > clock_timestamp() RETURNING id"
                     ),
                     {
                         "id": row.id,
@@ -531,7 +533,8 @@ class OutboxPublisher:
                         "UPDATE outbox SET attempts=:a, last_error=:e, "
                         "next_attempt_at = now() + make_interval(secs => :delay), "
                         "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL "
-                        "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
+                        "WHERE id=:id AND status='pending' AND claim_token=:token "
+                        "AND claim_lease_expires_at > clock_timestamp() RETURNING id"
                     ),
                     {"id": row.id, "a": attempts, "e": error[:2000], "delay": delay, "token": token},
                 ).first()
@@ -554,7 +557,8 @@ class OutboxPublisher:
                 text(
                     "UPDATE outbox SET status='superseded', resolved_at=:now, "
                     "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL "
-                    "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
+                    "WHERE id=:id AND status='pending' AND claim_token=:token "
+                    "AND claim_lease_expires_at > clock_timestamp() RETURNING id"
                 ),
                 {"id": row.id, "now": now, "token": token},
             ).first()

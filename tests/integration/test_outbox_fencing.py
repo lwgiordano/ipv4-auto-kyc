@@ -227,9 +227,9 @@ def test_stale_decision_loser_cannot_stamp_run_or_published_at(
         stale_pub._record_delivered(rowA, rowA.claim_token, ghost)   # dies at the SQL fence
         stale_pub._record_delivered(rowA, rowA.claim_token)          # dies at the kind gate
         stale_pub._record_failure(rowA, "boom", rowA.claim_token)
-    assert [e for e in logs if e["event"] == "outbox_stale_or_unwitnessed_completion"]
-    assert [e for e in logs if e["event"] == "outbox_terminal_rejected_unwitnessed"]
     assert [e for e in logs if e["event"] == "outbox_stale_claim_completion"]
+    assert [e for e in logs if e["event"] == "outbox_terminal_rejected_unwitnessed"]
+    assert [e for e in logs if e["event"] == "outbox_stale_or_unwitnessed_completion"]
 
     with session_factory() as s:
         run_state = s.execute(text("SELECT state FROM runs WHERE id='r1'")).scalar_one()
@@ -267,6 +267,131 @@ def test_expired_unreclaimed_owner_stages_no_attempt(session_factory, settings, 
                                   wire_version="legacy", request_sha256="a" * 64)
     with session_factory() as s:
         assert s.execute(text("SELECT count(*) FROM outbox_delivery_attempts")).scalar_one() == 0
+
+
+def test_expired_unreclaimed_poc_success_cannot_terminalize(session_factory, settings, clean_db):
+    """An expired-but-not-yet-reclaimed owner is no longer authoritative.
+
+    Production mutation this catches: `_record_delivered` checking only `claim_token=:token`.
+    Without the live-lease predicate, a publisher that resumes after its lease expires can mark a
+    POC token email delivered and redact its body even though `_CLAIM_SQL` already considers that
+    row reclaimable by someone else.
+    """
+    _seed_case(session_factory, "c-expired-delivered")
+    _enqueue_email(session_factory, case_id="c-expired-delivered", to="expired@x")
+    row = _claim(session_factory, "A")
+    assert row is not None
+    _expire_lease(session_factory, row.id)
+
+    pub = _pub_for(session_factory, settings)
+    with structlog.testing.capture_logs() as logs:
+        pub._record_delivered(row, row.claim_token)
+
+    assert [e for e in logs if e["event"] == "outbox_stale_or_unwitnessed_completion"]
+    with session_factory() as s:
+        after = s.execute(
+            text(
+                "SELECT status, payload_json, delivered_at, claim_token, claimed_by "
+                "FROM outbox WHERE id=:i"
+            ),
+            {"i": row.id},
+        ).one()
+    assert after.status == "pending"
+    assert after.payload_json != {"redacted": True}
+    assert after.delivered_at is None
+    assert after.claim_token == row.claim_token and after.claimed_by == "A"
+
+
+@pytest.mark.parametrize("max_attempts, expected_attempted", [(3, "retry"), (1, "dead")])
+def test_expired_unreclaimed_failure_cannot_retry_or_dead_letter(
+    session_factory, settings, clean_db, max_attempts, expected_attempted
+):
+    """An expired owner cannot burn attempts, reschedule, or dead-letter the row.
+
+    Production mutation this catches: either `_record_failure` branch omitting the live-lease
+    predicate. Token equality is not enough once the lease is past `clock_timestamp()`.
+    """
+    _seed_case(session_factory, f"c-expired-{expected_attempted}")
+    _enqueue_email(session_factory, case_id=f"c-expired-{expected_attempted}", to="expired@x")
+    row = _claim(session_factory, "A")
+    assert row is not None
+    _expire_lease(session_factory, row.id)
+
+    pub = _pub_for(session_factory, settings.model_copy(update={"outbox_max_attempts": max_attempts}))
+    with session_factory() as s:
+        before = s.execute(
+            text(
+                "SELECT status, attempts, next_attempt_at, last_error, claim_token, "
+                "claim_lease_expires_at, claimed_by, payload_json::text AS payload "
+                "FROM outbox WHERE id=:i"
+            ),
+            {"i": row.id},
+        ).one()
+    with structlog.testing.capture_logs() as logs:
+        pub._record_failure(row, "expired failure", row.claim_token)
+
+    stale = [e for e in logs if e["event"] == "outbox_stale_claim_completion"]
+    assert stale and stale[0]["attempted"] == expected_attempted
+    with session_factory() as s:
+        after = s.execute(
+            text(
+                "SELECT status, attempts, next_attempt_at, last_error, claim_token, "
+                "claim_lease_expires_at, claimed_by, payload_json::text AS payload "
+                "FROM outbox WHERE id=:i"
+            ),
+            {"i": row.id},
+        ).one()
+    assert after == before
+
+
+def test_expired_unreclaimed_claimant_cannot_supersede(session_factory, settings, clean_db):
+    """An expired owner cannot suppress a callback and complete its run.
+
+    Production mutation this catches: `_record_superseded` checking only `claim_token=:token`.
+    The higher sequence is real and already published, so the only thing that should stop this
+    branch is the expired ownership lease.
+    """
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    _seed_decision_chain(
+        session_factory, case_id="c-expired-supersede", run_id="old-r", decision_id="old-d",
+        seq=1, ev_seq=1,
+    )
+    _seed_decision_chain(
+        session_factory, case_id="c-expired-supersede", run_id="new-r", decision_id="new-d",
+        seq=2, ev_seq=2,
+    )
+    with session_factory() as s:
+        enqueue_decision_callback(
+            s, case_id="c-expired-supersede", run_id="old-r", body={"run_id": "old-r"},
+            decision_sequence=1,
+        )
+        s.execute(text("UPDATE decisions SET published_at=now() WHERE id='new-d'"))
+        s.commit()
+    row = _claim(session_factory, "A")
+    assert row is not None
+    _expire_lease(session_factory, row.id)
+
+    pub = _pub_for(session_factory, settings)
+    with structlog.testing.capture_logs() as logs:
+        pub._record_superseded(row, row.claim_token)
+
+    stale = [e for e in logs if e["event"] == "outbox_stale_claim_completion"]
+    assert stale and stale[0]["attempted"] == "superseded"
+    with session_factory() as s:
+        after = s.execute(
+            text("SELECT status, resolved_at, claim_token, claimed_by FROM outbox WHERE id=:i"),
+            {"i": row.id},
+        ).one()
+        run_state = s.execute(text("SELECT state FROM runs WHERE id='old-r'")).scalar_one()
+        audit_rows = s.execute(
+            text("SELECT count(*) FROM audit_log WHERE action='outbox.superseded'")
+        ).scalar_one()
+    assert after.status == "pending"
+    assert after.resolved_at is None
+    assert after.claim_token == row.claim_token and after.claimed_by == "A"
+    assert run_state == "PUBLISH_DECISION"
+    assert audit_rows == 0
 
 
 def _seed_decision_chain(session_factory, *, case_id, run_id, decision_id, seq, ev_seq):
