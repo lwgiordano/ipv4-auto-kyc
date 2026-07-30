@@ -175,6 +175,14 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM-EXTEND [CODEX] 2026-07-30 — align stale migration-head tests
+
+Files added: `tests/integration/test_migration_016.py`,
+`tests/integration/test_migration_021.py` — the full suite surfaced stale assertions that still
+expect a clean post-repair upgrade to stop at head `022`; owner-mode repair revision `023` is now
+the canonical head, so these tests must assert the new head without weakening their refusal
+proofs.
+
 ### CLAIM-EXTEND [CODEX] 2026-07-30 — include 023 authority repair parity files
 
 Files added: `.agents/ROADMAP.md`,
