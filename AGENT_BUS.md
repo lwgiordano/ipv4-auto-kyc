@@ -175,6 +175,75 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### BUILD-HANDOFF [CLAUDE] → CODEX 2026-07-28 — full ownership: audit AND implement — user-directed
+
+turn: CODEX
+
+The human is pausing Claude's side (token budget) and has directed that **Codex now holds the
+OWNER role: audit, implement, commit, push — not audit-only.** This activates the Build-loop-v2
+ownership arrangement early, by explicit user decision, for as long as it takes; it supersedes
+"Codex reviews, Claude builds" until a `HANDBACK [CODEX] → CLAUDE` entry. Everything below is what
+you need that previously lived only on my side of the wire.
+
+**State snapshot (durable truth = this bus + `.agents/ROADMAP.md §C` + git; my local progress
+ledger is git-ignored scratch and is NOT on the wire — treat these bus entries as the record, and
+write yours the same way):**
+
+- Chain: `013`-`021` shipped, all FROZEN (a published revision is never edited — every repair is a
+  NEW revision; this unit has now done that eight times). `018`-`021` are forward-only
+  unconditionally. `013` is double-hash-pinned. Head `021`, `pending[0] = 022` (7b-activation).
+- Gates at `3758245`/`9c849a1`: full suite **917 passed** on real PostgreSQL, `ruff` clean,
+  `lint-imports` 2 kept / 0 broken, `git diff --check` clean, engine-drift pin current, lineage
+  green. CI green on PR #1 at `9c849a1`.
+- Tasks 7-9 of the 7b-core plan REMAIN CHECKPOINTED (your own instruction, still in force).
+- 7b-activation (`022`) carries OPEN blockers O1/O2/O3 (activation spec rev 13) — they block 6b.
+
+**Your queue, in order:**
+
+1. **Audit `6535c2f..3758245`** (the `018` fold + my three self-reported repairs `019`/`020`/`021`).
+   Weight `020`/`021` heavily: I was wrong twice in a row about my own fixes, in the same file, in
+   the same way — the three SELF-REPORT entries below give the full record and the guard-writing
+   rule that came out of it. **Fix what you find yourself** under normal CLAIM/RELEASE — do not
+   post CHANGES-REQUIRED-and-wait; that arrangement is suspended.
+2. **Adopt the post-release practice** that found all four defects the suites missed: after each
+   unit you release, adversarially review the RELEASED code against a real PostgreSQL — drive the
+   real publisher/retention/requeue, not the plan. Plan-time review caught none of them.
+3. On AUDIT-CLEAN: the checkpoint lifts — **execute Tasks 7-9** of
+   `.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md` (rollback-command
+   test, docs-cutover parity, final gate). Note the plan's embedded `test_rollback_command.py`
+   block predates `018+` forward-only and must be adapted to it (head `021`, walk refused).
+4. **The squash question is the HUMAN's, not yours or mine:** nine revisions, four of them
+   repairs-of-repairs, none ever applied outside ephemeral CI. Squashing before first production
+   apply may be right, but it rewrites branch history — present it, don't do it.
+5. Then 7b-activation (`022`) via its spec — resolving O1/O2/O3 first.
+
+**Operational facts you'll need (learned the hard way, so you don't re-learn them):**
+
+- `tests/pg.py` honors **`KYC_TEST_DATABASE_URL`** — point it at ANY running PostgreSQL 16
+  (Docker, homebrew, Postgres.app) and the whole integration suite runs without `initdb`/`pg_ctl`.
+  This removes your "cannot execute the PG repros locally" limitation; local red-first runs are
+  the floor now that you own the fixes. CI stays the backstop, not the primary gate.
+- `./manage.sh test` IGNORES selector args (runs everything); use `.venv/bin/pytest <paths>` for
+  targeted runs.
+- Any change under `src/`: re-pin `EXPECTED_ENGINE_SOURCE_HASH` in
+  `tests/policy_driven/test_engine_build_id_guard.py` IN THE SAME COMMIT (compute via that
+  module's `_framed_hash`). NO `ENGINE_BUILD_ID` bump unless scoring/decision semantics change.
+- Inserting a revision renumbers EVERY pending allocation (ROADMAP §C + prose, activation spec +
+  rev note, 6b banner, core spec, plan, RUNBOOK, DEPLOYMENT, and the ban regexes in
+  `tests/unit/test_plan_artifact_static.py`). The lineage + plan-static tests machine-check most
+  of it; run them first after any renumber.
+- The advisory fence key `720170001` is defined ONCE in `src/kyc_tool/outbox/fence.py` and
+  duplicated by necessity in migrations `017`-`021`; `tests/integration/test_outbox_fence.py`
+  asserts parity — extend that list for any new migration that takes the fence.
+- Bus process: fetch/rebase BEFORE committing bus entries; newest-on-top; anchor commit ranges;
+  one entry per release with gates stated.
+- Untouchable, as ever: `KYC_Tool_Build_Package/` (normative, pristine), M2 /
+  `enforce_positive_decisions`, and the frozen-revision rule.
+
+**Handback:** when the human brings Claude back, post `HANDBACK [CODEX] → CLAUDE` with the same
+shape as this entry (state snapshot, queue, anything you learned). Claude's session start is
+`git pull` + read this bus, so nothing else is required — the wire is the branch.
+
 ### SELF-REPORT [CLAUDE] 2026-07-28 (3) — my `020` fix was WORSE than the bug it replaced; repaired as `021` — `661f3f4..3758245`
 
 turn: CODEX
