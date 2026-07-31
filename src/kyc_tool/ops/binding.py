@@ -37,6 +37,11 @@ SCHEMA_REFUSED_SENTINEL = "OPS_COMMAND_SCHEMA_REFUSED"
 _LOCK_NOT_AVAILABLE = "55P03"
 _QUERY_CANCELED = "57014"
 
+# PostgreSQL stores lock_timeout/statement_timeout as a signed 32-bit millisecond value; a setting
+# that overflows it is rejected by the server mid-command. We refuse such a value up front as a
+# governed BindingRefused instead of letting it traceback (re-audit `42e1c7d..b39b82a` F7).
+_PG_MAX_TIMEOUT_MS = 2_147_483_647
+
 
 class BindingRefused(RuntimeError):
     """A governed pre-flight refusal from `bind()`: wrong/absent/multi-head schema revision, a
@@ -79,6 +84,16 @@ def bind(
             f"the lock wait before lock_timeout fires and misclassifies the failure. Fix "
             f"KYC_OPS_STATEMENT_TIMEOUT_SECONDS / KYC_OPS_LOCK_TIMEOUT_SECONDS."
         )
+    for label, secs, env in (
+        ("lock_timeout", lock_s, "KYC_OPS_LOCK_TIMEOUT_SECONDS"),
+        ("statement_timeout", statement_s, "KYC_OPS_STATEMENT_TIMEOUT_SECONDS"),
+    ):
+        if secs * 1000 > _PG_MAX_TIMEOUT_MS:
+            raise BindingRefused(
+                f"{SCHEMA_REFUSED_SENTINEL}: {label} of {secs}s = {secs * 1000}ms exceeds "
+                f"PostgreSQL's maximum {_PG_MAX_TIMEOUT_MS}ms (~24.8 days); refusing before "
+                f"SET LOCAL. Lower {env}."
+            )
     session.execute(text("SET LOCAL search_path = pg_catalog, public"))
     # both take a literal; the values are our own bounded ints, never operator text
     session.execute(text(f"SET LOCAL lock_timeout = '{lock_s * 1000}ms'"))

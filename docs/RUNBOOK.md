@@ -14,7 +14,7 @@
 | Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot; stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
 | Bundle epoch activation | `python -m kyc_tool.ops.activate_bundle_pinning_epoch --expect-bundle-hash <sha256> --expect-engine <id>` | one-shot, POST-cutover (PR 6, `docs/DEPLOYMENT.md` §10); idempotent on a matching re-run, fails on a mismatched one |
 | 7b-core pre-window diagnostic | `python -m kyc_tool.ops.verify_pr7b_core_backfill` | one-shot, schema-012-compatible, SHARE-locked, read-only; PRE-window (retention suspended + attested zero) — nonzero exit + `BLOCKED_NO_AUTHORITATIVE_MAPPING` blocks the cutover (see the cutover section) |
-| 7b-core ops prerequisites | `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites` | one-shot, READ-ONLY, takes NO lock (no writer stop needed) — run BEFORE pausing service to confirm the maintenance credential: reports current role, `outbox_id_seq` owner, whether they match, schema revision, and the lock/statement budgets; nonzero unless the current role OWNS the sequence, so a wrong credential is caught before the outage, not inside it |
+| 7b-core ops prerequisites | `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites --expect-revision 012` | one-shot, READ-ONLY, takes NO lock (no writer stop needed) — run BEFORE pausing service to confirm the maintenance credential: refuses unless the schema is exactly `--expect-revision` (the restore path is `012`), then reports current role, `outbox_id_seq` owner, whether they match, and the lock/statement budgets; nonzero unless the current role OWNS the sequence, so a wrong credential OR wrong phase is caught before the outage, not inside it |
 | Outbox claim reset | `python -m kyc_tool.ops.reset_interrupted_outbox_claims` | one-shot, post-013-only; ONLY with every publisher stopped + attested — clears complete claim tuples, preserves `next_attempt_at`, atomic (refuses on any surviving tuple) |
 | Outbox sequence repair | `python -m kyc_tool.ops.repair_outbox_sequence [--floor N]` | one-shot, DRAINED maintenance stop only (takes `ACCESS EXCLUSIVE` on outbox); restarts `outbox_id_seq` at `GREATEST(max(id), floor)+1` with a fail-closed read-back — exit status IS the result |
 | 7b-core callback restore | `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file> --expect-original-id <id> --expect-manifest-digest <sha256> [--apply]` | one-shot, schema-012 ONLY, pre-window maintenance stop; dry-run by default; `--expect-manifest-digest` (sha256 of the file, from the signed backup manifest) is MANDATORY — the file cannot self-certify; inserts the exact backed-up row AND floors the sequence past it in one transaction, double fail-closed read-back (see cutover step 0.5/0.6) |
@@ -291,10 +291,11 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
     THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE — a pre-window maintenance stop, not the
-    cutover (which 0.4 still gates): FIRST run `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites`
-    (read-only, takes NO lock) and confirm it is GREEN — correct role, `outbox_id_seq` ownership,
-    schema phase, and timeout budgets — so a wrong maintenance credential is caught HERE, not at
-    `ALTER SEQUENCE` inside the stop; then pause submissions, hard-stop and attest EVERY writer (API,
+    cutover (which 0.4 still gates): FIRST run `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites
+    --expect-revision 012` (read-only, takes NO lock) and confirm it is GREEN — exact schema phase,
+    correct role, `outbox_id_seq` ownership, and timeout budgets — so a wrong maintenance credential
+    OR wrong phase is caught HERE, not at `ALTER SEQUENCE` inside the stop; then pause submissions,
+    hard-stop and attest EVERY writer (API,
     pipeline, outbox, `dev_worker`, retention), then run
     `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json>
     --expect-original-id <id> --expect-manifest-digest <sha256>` (dry-run first; add `--apply` to

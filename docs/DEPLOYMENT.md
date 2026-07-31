@@ -447,10 +447,11 @@ migration 010 established in ADR-003).
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
     THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE — a pre-window maintenance stop, not the
-    cutover (which 0.4 still gates): FIRST run `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites`
-    (read-only, takes NO lock) and confirm it is GREEN — correct role, `outbox_id_seq` ownership,
-    schema phase, and timeout budgets — so a wrong maintenance credential is caught HERE, not at
-    `ALTER SEQUENCE` inside the stop; then pause submissions, hard-stop and attest EVERY writer (API,
+    cutover (which 0.4 still gates): FIRST run `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites
+    --expect-revision 012` (read-only, takes NO lock) and confirm it is GREEN — exact schema phase,
+    correct role, `outbox_id_seq` ownership, and timeout budgets — so a wrong maintenance credential
+    OR wrong phase is caught HERE, not at `ALTER SEQUENCE` inside the stop; then pause submissions,
+    hard-stop and attest EVERY writer (API,
     pipeline, outbox, `dev_worker`, retention), then run
     `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json>
     --expect-original-id <id> --expect-manifest-digest <sha256>` (dry-run first; add `--apply` to

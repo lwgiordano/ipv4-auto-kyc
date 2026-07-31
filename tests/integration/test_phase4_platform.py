@@ -124,7 +124,13 @@ def test_redelivery_carries_identical_dedupe_key(
     with engine.begin() as conn:  # expire ONLY the lease — the reclaim path, not a raw rewrite
         conn.execute(text("UPDATE outbox SET claim_lease_expires_at = now() - interval '1 second' "
                           "WHERE case_id='case-redeliver'"))
-    publisher.process_pending()  # reclaim under a NEW token → HTTP #2 → real stamp (call #2)
+    # F1 (`42e1c7d..b39b82a`): reclaiming an expired-but-uncleared claim RECONCILES the crashed
+    # attempt (backoff) — it does NOT resend in the same cycle (that could breach max_attempts).
+    publisher.process_pending()
+    assert len(callback_capture.requests) == 1  # still just HTTP #1; the reclaim only reconciled
+    with engine.begin() as conn:  # make the backed-off row due; a FRESH claim now resends
+        conn.execute(text("UPDATE outbox SET next_attempt_at = now() WHERE case_id='case-redeliver'"))
+    publisher.process_pending()  # fresh claim under a NEW token → HTTP #2 → real stamp (call #2)
 
     bodies = [r["body"] for r in callback_capture.requests]
     assert len(bodies) == 2

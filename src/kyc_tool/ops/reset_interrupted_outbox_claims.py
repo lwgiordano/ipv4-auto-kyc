@@ -31,19 +31,12 @@ def reset_claims(session_factory, *, lock_timeout_seconds: int = 60,
     """Clear every complete outbox claim tuple; return the count. Refuses pre-013; on a
     surviving tuple it rolls back BEFORE commit and raises (atomic — no partial reset)."""
     with session_factory() as session:
+        # min_revision='013' makes the pre-013 refusal a GOVERNED BindingRefused (stable sentinel,
+        # nonzero, no traceback — re-audit `42e1c7d..b39b82a` F6) instead of the old bare
+        # RuntimeError. The claim columns this command clears exist only from 013, and bind()
+        # refuses anything below it before taking any lock or reading a row.
         binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
-                     statement_timeout_seconds=statement_timeout_seconds)
-        has_col = session.execute(
-            text(
-                "SELECT 1 FROM information_schema.columns WHERE table_schema='public' "
-                "AND table_name='outbox' AND column_name='claim_token'"
-            )
-        ).first()
-        if has_col is None:
-            raise RuntimeError(
-                "reset_interrupted_outbox_claims refuses pre-013 schema: no claim_token column "
-                "(an interrupted pre-013 claim is encoded only in next_attempt_at)"
-            )
+                     statement_timeout_seconds=statement_timeout_seconds, min_revision="013")
         # Held through commit — the read-back below is diagnosis; THIS is the guarantee.
         session.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
         count = session.execute(

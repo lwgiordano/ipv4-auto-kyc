@@ -344,7 +344,7 @@ def test_ops_prerequisites_preflight_reports_role_and_phase_read_only(pg):
     phase + budgets, and mutates nothing (the sequence is untouched)."""
     url = _fresh_db(pg, "kyc_ops_preflight_ok")
     command.upgrade(_config(url), "012")
-    proc = _run("verify_pr7b_ops_prerequisites", url)  # no writer stop, no lock — runs live
+    proc = _run("verify_pr7b_ops_prerequisites", url, "--expect-revision", "012")  # no stop, no lock
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "owns_sequence: True" in proc.stdout and "schema_revision: 012" in proc.stdout
     assert "statement_timeout_seconds" in proc.stdout  # reports both budgets
@@ -353,6 +353,18 @@ def test_ops_prerequisites_preflight_reports_role_and_phase_read_only(pg):
     with engine.connect() as conn:  # read-only: nothing mutated
         assert conn.execute(text("SELECT is_called FROM public.outbox_id_seq")).scalar_one() is False
     engine.dispose()
+
+
+def test_ops_prerequisites_preflight_refuses_the_wrong_phase(pg):
+    """Re-audit `42e1c7d..b39b82a` F5: the expected phase is part of the exit condition — on a 013
+    DB (right owner, wrong phase for the restore path) the preflight REFUSES with a governed
+    sentinel and never prints OK."""
+    url = _fresh_db(pg, "kyc_ops_preflight_phase")
+    command.upgrade(_config(url), "013")
+    proc = _run("verify_pr7b_ops_prerequisites", url, "--expect-revision", "012")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in proc.stderr and "OK" not in proc.stdout
+    assert "Traceback" not in proc.stderr
 
 
 def test_ops_prerequisites_preflight_flags_a_non_owner_before_the_outage(pg):
@@ -372,7 +384,7 @@ def test_ops_prerequisites_preflight_flags_a_non_owner_before_the_outage(pg):
     nonowner_url = make_url(url).set(username="kyc_pf_nonowner", password="x").render_as_string(
         hide_password=False)
 
-    proc = _run("verify_pr7b_ops_prerequisites", nonowner_url)
+    proc = _run("verify_pr7b_ops_prerequisites", nonowner_url, "--expect-revision", "012")
     assert proc.returncode != 0, proc.stdout + proc.stderr
     assert "own" in (proc.stdout + proc.stderr).lower()  # reports the ownership gap
 

@@ -283,6 +283,15 @@ def production_config_violations(settings: Settings) -> list[str]:
     # makes "the publisher never waits on a claim past its attempt" an enforced property. A
     # DETACHED attempt's late effect remains the at-least-once residual — see
     # OUTBOX_ATTEMPT_DEADLINE_PHASES.
+    # A zero DB-accounting margin leaves no room between the send deadline and lease expiry for the
+    # failure/terminal write to land, so the admission budget would not actually cover accounting
+    # (re-audit `42e1c7d..b39b82a` F2). Production requires a positive margin.
+    if settings.outbox_lease_margin_seconds <= 0:
+        v.append(
+            "outbox_lease_margin_seconds must be > 0 (a zero DB-accounting margin leaves no room "
+            "for the failure/terminal write between the send deadline and lease expiry)"
+        )
+
     attempt_deadline = settings.outbox_http_timeout_seconds * OUTBOX_ATTEMPT_DEADLINE_PHASES
     required_lease = attempt_deadline + settings.outbox_lease_margin_seconds
     if settings.outbox_lease_seconds <= required_lease:

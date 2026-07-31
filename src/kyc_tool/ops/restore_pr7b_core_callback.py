@@ -69,6 +69,18 @@ from kyc_tool.ops import binding
 _SCHEMA_VERSION = "pr7b-core.restore.v1"
 
 
+def _reject_nonfinite(value: str):
+    """json.loads parse_constant hook: PostgreSQL JSONB rejects NaN/Infinity/-Infinity, but
+    Python's json.loads accepts them by default — which would slip past validation and only fault
+    at the JSONB cast (re-audit `42e1c7d..b39b82a` F3). Reject them at parse time instead."""
+    raise ValueError(f"non-finite JSON constant not allowed: {value}")
+
+
+def _loads_strict(raw) -> object:
+    """json.loads that refuses NaN/Infinity/-Infinity — for every untrusted evidence parse."""
+    return json.loads(raw, parse_constant=_reject_nonfinite)
+
+
 class _Evidence(BaseModel):
     """Strict, versioned backup-evidence schema (re-audit `538e55e..42e1c7d` F3).
 
@@ -81,7 +93,9 @@ class _Evidence(BaseModel):
     retry/audit fields is exactly what makes a restore not "exact".
     """
 
-    model_config = ConfigDict(extra="forbid")
+    # strict=True so mistyped fields are REFUSED, not coerced: `"1"`->1 and `true`->1 no longer
+    # pass an int field (re-audit `42e1c7d..b39b82a` F3). extra=forbid rejects unknown fields.
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     schema_version: Literal[_SCHEMA_VERSION]
     decision_id: str = Field(min_length=1)
@@ -111,13 +125,20 @@ class _Evidence(BaseModel):
             raise ValueError("timestamp must be timezone-aware (carry a UTC offset)")
         return v
 
+    @field_validator("decision_id", "run_id", "case_id")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("identifier must not be blank/whitespace")
+        return v
+
     @field_validator("payload_json")
     @classmethod
     def _body_is_json_object(cls, v: str) -> str:
         try:
-            parsed = json.loads(v)
+            parsed = _loads_strict(v)  # rejects NaN/Infinity, which JSONB would reject at the cast
         except ValueError as exc:
-            raise ValueError("payload_json is not valid JSON") from exc
+            raise ValueError("payload_json is not valid JSON (or carries a non-finite constant)") from exc
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object, not a list/scalar")
         return v
@@ -172,7 +193,7 @@ def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
             "signed-manifest value) — the file is not the authenticated backup, or a field was altered"
         )
     try:
-        raw = json.loads(raw_bytes)
+        raw = _loads_strict(raw_bytes)  # rejects NaN/Infinity that JSONB would fault on later
     except ValueError as exc:
         raise _Refused(f"evidence file is not valid JSON ({type(exc).__name__})") from exc
     if not isinstance(raw, dict):
@@ -187,7 +208,7 @@ def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
         raise _Refused(f"evidence file failed schema validation: {problems}") from exc
     data = model.model_dump()
     # F1: the body (a JSON object, model-checked) must name the SAME case/run as the evidence tuple.
-    body = json.loads(data["payload_json"])
+    body = _loads_strict(data["payload_json"])
     if body.get("case_id") != data["case_id"] or body.get("run_id") != data["run_id"]:
         raise _Refused("the callback body's case_id/run_id do not match the evidence tuple")
     return data
@@ -232,10 +253,18 @@ def restore_callback(
                 f"(decision={evidence['decision_id']!r}, case={evidence['case_id']!r}, "
                 f"run={evidence['run_id']!r})"
             )
-        candidate_digest = session.execute(
-            text("SELECT encode(sha256(convert_to(CAST(:p AS jsonb)::text,'UTF8')),'hex')"),
-            {"p": evidence["payload_json"]},
-        ).scalar_one()
+        try:
+            candidate_digest = session.execute(
+                text("SELECT encode(sha256(convert_to(CAST(:p AS jsonb)::text,'UTF8')),'hex')"),
+                {"p": evidence["payload_json"]},
+            ).scalar_one()
+        except SQLAlchemyError as exc:
+            # The JSONB cast is the one pre-savepoint query that touches untrusted body text. A
+            # value that slipped the strict parser must still refuse SANITIZED here, never leak the
+            # payload through a traceback (re-audit `42e1c7d..b39b82a` F3).
+            raise _Refused(
+                f"the database rejected the evidence body ({type(exc).__name__}); nothing changed"
+            ) from exc
         if candidate_digest != evidence["body_digest"]:
             raise _Refused(
                 f"candidate body digests to {candidate_digest}, evidence claims "

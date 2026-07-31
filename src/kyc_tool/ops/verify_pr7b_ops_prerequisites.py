@@ -8,9 +8,10 @@ any maintenance lock (it needs no writer stop) — the current role, the exact o
 lock/statement timeout budgets, then exits 0 only when the current role OWNS the sequence (the
 identity `ALTER SEQUENCE` requires). It NEVER writes.
 
-    python -m kyc_tool.ops.verify_pr7b_ops_prerequisites
+    python -m kyc_tool.ops.verify_pr7b_ops_prerequisites --expect-revision 012
 """
 
+import argparse
 import sys
 
 from sqlalchemy import text
@@ -21,16 +22,20 @@ from kyc_tool.ops import binding
 
 
 def check_prerequisites(
-    session_factory, *, lock_timeout_seconds: int = 60,
+    session_factory, *, expect_revision: str, lock_timeout_seconds: int = 60,
     statement_timeout_seconds: int | None = None,
 ) -> tuple[int, dict]:
-    """Return (exit_code, report). Read-only: `binding.bind()` pins the governed schema, validates
-    single-head revision + sequence backing, and sets the timeout budgets — it takes NO table lock.
-    `require_sequence_owner=False` so this REPORTS ownership instead of refusing; we then read
-    role/owner/phase and roll back. Exit 0 iff the current role owns public.outbox_id_seq."""
+    """Return (exit_code, report). Read-only: `binding.bind(exact_revision=expect_revision)` pins
+    the governed schema, requires EXACTLY the phase the operator is preflighting for (the restore
+    path is `012`; a 013 DB is a different governed problem), validates sequence backing, and sets
+    the timeout budgets — it takes NO maintenance lock. `require_sequence_owner=False` so this
+    REPORTS ownership instead of refusing; we then read role/owner and roll back. The phase is part
+    of the exit condition (a wrong schema refuses via BindingRefused — re-audit `42e1c7d..b39b82a`
+    F5); exit 0 additionally requires the current role to OWN public.outbox_id_seq."""
     with session_factory() as s:
         binding.bind(s, lock_timeout_seconds=lock_timeout_seconds,
-                     statement_timeout_seconds=statement_timeout_seconds)
+                     statement_timeout_seconds=statement_timeout_seconds,
+                     exact_revision=expect_revision)
         role = s.execute(text("SELECT current_user")).scalar_one()
         owner = s.execute(text(
             "SELECT pg_catalog.pg_get_userbyid(c.relowner) FROM pg_catalog.pg_class c "
@@ -49,23 +54,37 @@ def check_prerequisites(
         "sequence_owner": owner,
         "owns_sequence": owns,
         "schema_revision": revision,
+        "expected_revision": expect_revision,
         "lock_timeout_seconds": lock_timeout_seconds,
         "statement_timeout_seconds": effective_statement,
     }
     return (0 if owns else 1), report
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--expect-revision", required=True,
+                        help="the schema phase this maintenance requires (the restore path is 012); "
+                             "a different governed schema refuses, so OK cannot print on the wrong one")
+    args = parser.parse_args(argv)
     settings = get_settings()
     try:
         code, report = check_prerequisites(
             make_session_factory(make_engine(settings.database_url)),
+            expect_revision=args.expect_revision,
             lock_timeout_seconds=settings.ops_lock_timeout_seconds,
             statement_timeout_seconds=settings.ops_statement_timeout_seconds,
         )
     except binding.BindingRefused as exc:  # a schema/identity problem IS a preflight failure
         print(str(exc), file=sys.stderr)
         return 1
+    except Exception as exc:  # noqa: BLE001 — a blocked catalog read is a governed timeout, not a crash
+        message = binding.timeout_message(
+            "verify_pr7b_ops_prerequisites", "a catalog read", exc)
+        if message:
+            print(message, file=sys.stderr)
+            return 1
+        raise
     for key, value in report.items():
         print(f"{key}: {value}")
     if code == 0:

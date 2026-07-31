@@ -129,14 +129,18 @@ class DeliveryReceipt:
 # Claim the min-id pending row of ONE (case_id, ordering_stream) FIFO stream, fencing it
 # with a fresh claim_token + lease. next_attempt_at is left as the retry due time (the
 # lease is separate). case_id is NOT NULL (013), so there is no case_id IS NULL bypass.
+#
+# The CTE captures the PRE-claim claim_token as `prev_claim_token`: a non-NULL value means we
+# reclaimed a row whose prior claim expired WITHOUT being cleared by a terminal — i.e. the
+# predecessor admitted an attempt (or crashed mid-cycle) and never terminalized. process_once
+# reconciles that instead of sending again, so a crash cannot push real sends past
+# outbox_max_attempts (re-audit `42e1c7d..b39b82a` F1). A cleanly-released row (post-terminal or
+# never claimed) has prev_claim_token NULL and takes the ordinary admit+send path.
 _CLAIM_SQL = text(
     """
-    UPDATE outbox
-    SET claim_token = gen_random_uuid(),
-        claim_lease_expires_at = now() + make_interval(secs => :lease_seconds),
-        claimed_by = :claimed_by
-    WHERE id = (
-        SELECT o.id FROM outbox o
+    WITH claimed AS (
+        SELECT o.id, o.claim_token AS prev_claim_token
+        FROM outbox o
         WHERE o.status = 'pending' AND o.next_attempt_at <= now()
           AND (o.claim_token IS NULL OR o.claim_lease_expires_at <= now())
           AND o.id = (
@@ -149,8 +153,15 @@ _CLAIM_SQL = text(
         FOR UPDATE OF o SKIP LOCKED
         LIMIT 1
     )
-    RETURNING id, kind, case_id, run_id, payload_json, attempts, ordering_stream,
-              decision_sequence, claim_token
+    UPDATE outbox
+    SET claim_token = gen_random_uuid(),
+        claim_lease_expires_at = now() + make_interval(secs => :lease_seconds),
+        claimed_by = :claimed_by
+    FROM claimed
+    WHERE outbox.id = claimed.id
+    RETURNING outbox.id, outbox.kind, outbox.case_id, outbox.run_id, outbox.payload_json,
+              outbox.attempts, outbox.ordering_stream, outbox.decision_sequence,
+              outbox.claim_token, claimed.prev_claim_token
     """
 )
 
@@ -461,7 +472,11 @@ class OutboxPublisher:
         admitted = session.execute(
             text(
                 "UPDATE outbox SET attempts = attempts + 1, "
-                "claim_lease_expires_at = clock_timestamp() + make_interval(secs => :budget) "
+                # GREATEST so admission only ever EXTENDS the claim — never shortens a healthy lease
+                # to the (smaller) attempt budget (re-audit `42e1c7d..b39b82a` F2). A near-expiry
+                # claim is extended to cover the send + accounting; a fresh 300s claim keeps its 300s.
+                "claim_lease_expires_at = GREATEST(claim_lease_expires_at, "
+                "clock_timestamp() + make_interval(secs => :budget)) "
                 "WHERE id = :id AND status = 'pending' AND claim_token = :token "
                 "AND claim_lease_expires_at > clock_timestamp() RETURNING id"
             ),
@@ -603,6 +618,16 @@ class OutboxPublisher:
             if superseded:
                 self._record_superseded(row, token)
                 return True
+
+        # Expired-claim RECONCILIATION before any new send (re-audit `42e1c7d..b39b82a` F1). A
+        # non-NULL prev_claim_token means the prior claim expired WITHOUT a terminal clearing it:
+        # the predecessor admitted an attempt (attempts already incremented, before its send) or
+        # crashed mid-cycle. Sending again here would make one more network call and could push
+        # real sends past outbox_max_attempts. Reconcile instead — dead-letter at/over max, else
+        # back off and release — and let a LATER fresh claim make the next attempt.
+        if row.prev_claim_token is not None:
+            self._reconcile_expired_claim(row, token)
+            return True
 
         try:
             receipt = self._deliver(row.kind, row.payload_json, outbox_id=row.id, token=token)
@@ -761,6 +786,72 @@ class OutboxPublisher:
             log.error("outbox_dead_letter", outbox_id=row.id, kind=row.kind, error=error)
         else:
             log.warning("outbox_retry", outbox_id=row.id, kind=row.kind, attempts=attempts)
+
+    def _reconcile_expired_claim(self, row, token) -> None:
+        """Reconcile a row reclaimed from an EXPIRED-but-UNCLEARED claim WITHOUT sending again
+        (re-audit `42e1c7d..b39b82a` F1). The predecessor either admitted an attempt (attempts was
+        incremented BEFORE its send, so it is already counted) or crashed between claim and
+        admission (no attempt, attempts unchanged). Either way a fresh send here could exceed
+        outbox_max_attempts, so we only account:
+
+        - attempts >= max  → dead-letter, fenced, no send (redact POC body, same as _record_failure);
+        - 0 < attempts < max → back off ONE boundary and release; a later fresh claim sends next;
+        - attempts == 0 → nothing was ever sent; just release the stale claim, due now.
+
+        Fenced on the reclaimer's token (like _record_failure): a straggler predecessor finishing
+        late matches zero rows and is a no-op. attempts is NEVER incremented here — the crashed
+        attempt, if any, was already counted at its own admission.
+        """
+        attempts = row.attempts
+        note = "reconciled: prior claim expired without terminalizing"
+        with uow(self.session_factory) as session:
+            if attempts == 0:
+                # No attempt was ever admitted under the dead claim; release and let a fresh claim
+                # make attempt 1. Nothing sent, nothing to account.
+                applied = session.execute(
+                    text(
+                        "UPDATE outbox SET claim_token=NULL, claim_lease_expires_at=NULL, "
+                        "claimed_by=NULL, next_attempt_at=now() "
+                        "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
+                    ),
+                    {"id": row.id, "token": token},
+                ).first()
+                marker = "reconcile_release"
+            elif attempts >= self.settings.outbox_max_attempts:
+                redacted_payload = json.dumps({"redacted": True})
+                applied = session.execute(
+                    text(
+                        "UPDATE outbox SET status='dead', last_error=:e, "
+                        "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL, "
+                        "payload_json = CASE WHEN :redact_payload THEN CAST(:redacted AS jsonb) "
+                        "ELSE payload_json END "
+                        "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
+                    ),
+                    {"id": row.id, "e": note, "token": token,
+                     "redact_payload": row.kind == POC_EMAIL, "redacted": redacted_payload},
+                ).first()
+                marker = "reconcile_dead"
+            else:
+                delay = self.settings.outbox_backoff_base_seconds * (2 ** (attempts - 1))
+                applied = session.execute(
+                    text(
+                        "UPDATE outbox SET last_error=:e, "
+                        "next_attempt_at = now() + make_interval(secs => :delay), "
+                        "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL "
+                        "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
+                    ),
+                    {"id": row.id, "e": note, "delay": delay, "token": token},
+                ).first()
+                marker = "reconcile_retry"
+        if applied is None:
+            log.warning("outbox_stale_claim_completion", outbox_id=row.id, attempted=marker)
+            return
+        if marker == "reconcile_dead":
+            log.error("outbox_dead_letter", outbox_id=row.id, kind=row.kind,
+                      error="reconciled at max_attempts (predecessor did not terminalize)")
+        else:
+            log.info("outbox_reclaim_reconciled", outbox_id=row.id, kind=row.kind,
+                     attempts=attempts, outcome=marker)
 
     def _record_superseded(self, row, token) -> None:
         """A higher locally-stamped delivery proved this callback obsolete: terminally

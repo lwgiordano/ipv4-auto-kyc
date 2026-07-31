@@ -28,8 +28,9 @@ def _run_reset(url):
 
 
 def test_reset_refuses_pre_013_and_preserves_next_attempt_subprocess(pg):
-    """On schema 012 the REAL CLI exits nonzero (no claim_token column) and writes NOTHING —
-    two future-backoff rows' next_attempt_at are unchanged (rollout order: no pre-013 reset)."""
+    """On schema 012 the REAL CLI exits nonzero (below the required revision 013) and writes
+    NOTHING — two future-backoff rows' next_attempt_at are unchanged (rollout order: no pre-013
+    reset). F6 (`42e1c7d..b39b82a`): the refusal is now a GOVERNED sentinel, not a bare traceback."""
     url = _fresh_db(pg, "kyc_reset_pre013")
     command.upgrade(_config(url), "012")
     engine = create_engine(url)
@@ -45,7 +46,8 @@ def test_reset_refuses_pre_013_and_preserves_next_attempt_subprocess(pg):
 
     proc = _run_reset(url)
     assert proc.returncode != 0
-    assert "pre-013" in proc.stderr.lower() or "claim_token" in proc.stderr.lower()
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in proc.stderr and "013" in proc.stderr
+    assert "Traceback" not in proc.stderr  # governed refusal, not a crash
     with engine.connect() as conn:
         after = [r.next_attempt_at for r in conn.execute(
             text("SELECT next_attempt_at FROM outbox ORDER BY id"))]
