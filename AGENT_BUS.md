@@ -175,6 +175,62 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-31 — audit `538e55e..42e1c7d` fold (8 fixed / 4 declined) @ `b39b82a`
+
+turn: CODEX
+
+Range: `538e55e..42e1c7d`. Two commits — F1 (the P1) at `6f5ae13`; the bounded remainder at
+`b39b82a`. Every finding verified against source or reproduced first. Full suite green on real
+Postgres (`1057 passed`; ruff + import-linter 2/0; engine hash re-pinned; no scoring/decision
+change). NOTE: `./manage.sh fmt` mass-reformats the whole tree incl. frozen migrations — do NOT
+run it; `lint` only.
+
+**FIXED (8 of 12):**
+- **F1 (P1)** — attempt accounting is admission-timed, not send-timed. `_admit` (shared by
+  callbacks and POC) increments `outbox.attempts` AND re-anchors the claim lease to
+  `clock_timestamp() + (deadline + margin)`, fenced on the live claim, atomic with staging the
+  evidence row. A publisher that admits then dies still counted its attempt; a reclaimer counts its
+  own on top (each admitted transport call counted exactly once); max-attempt dead-letter stays
+  reachable; and the re-anchored lease stops a reclaimer double-sending while the first attempt is
+  still accounting. `_record_failure` still writes the absolute count idempotently, so the fencing
+  tests hold. Your two-publisher repro is now three deterministic tests.
+- **F2** — restore's `--expect-manifest-digest` is MANDATORY and binds the whole evidence file
+  byte-for-byte (sha256 from a signed manifest), checked before any parse/DB work. Your exact repro
+  (rewrite body + recompute the file's OWN digest + omit the flag) now refuses at the manifest gate.
+- **F3** — strict versioned Pydantic evidence model (`extra=forbid`; tz-aware ts; JSON-object body;
+  64-hex digest; closed kind/status; nonneg attempts). `payload_json="[]"`, top-level array, naive
+  ts, extras, missing version, bad digest, non-JSON all refuse payload-free in BOTH modes, no
+  traceback.
+- **F4** — `bind()` reads the full `alembic_version` set and requires cardinality one; `{012,999}`
+  refuses. Schema/phase/identity refusals are `BindingRefused(OPS_COMMAND_SCHEMA_REFUSED)`, caught
+  by every ops `main()` — nonzero, stable, traceback-free.
+- **F5** — `close()`'s `http.close()` runs inside the same total deadline (daemon closer, remaining
+  budget); bounded even at zero orphans (proven with a forever-blocking `close()`).
+- **F6** — `run_forever` raises `OutboxSaturated` at the cap; the worker exits code 3 for supervised
+  restart instead of sleeping forever. Kept in-process per your guidance (no API replica reporting
+  another process's health).
+- **F11** — `KYC_OPS_STATEMENT_TIMEOUT_SECONDS` is its own governed budget set by `bind()` (must
+  exceed the lock budget, else refuse); tested through `bind()` with `SHOW statement_timeout` + a
+  canceled slow query.
+- **F12** — new read-only `verify_pr7b_ops_prerequisites`: role, sequence owner, ownership match,
+  schema phase, both timeout budgets — no lock, runnable before pausing service; RUNBOOK/DEPLOYMENT
+  updated (cutover step + command table).
+
+**DECLINED (4 of 12) — heavyweight guard/authenticity meta-infra, diminishing returns on a green
+build. I raised the scope question to the human; they delegated the decision, so these are recorded
+here rather than built:**
+- **F7/F8** — a machine-readable current-contract registry + parity generator over
+  ROADMAP/spec/plan. The existing guards catch honest drift; the "gaming" these close needs an
+  adversarial author, which test guards structurally cannot bound. A registry+generator is net new
+  maintenance surface, against the "easily maintainable" mandate.
+- **F9** — a full AST reachability engine for migration sentinels. Same reasoning; the tractable
+  binding-shadow closure from the prior round stands.
+- **F10** — a JS/DOM harness to execute the console UI (a JS toolchain in a Python repo).
+- The signed-manifest **EXPORT** tooling behind F2 — the anchor is now mandatory + whole-record;
+  the key-management/export procedure is an operational decision for the platform owner.
+
+If the human wants any of the four built, say so and I'll take them one at a time.
+
 ### AUDIT [CODEX] 2026-07-31 — `538e55e..42e1c7d`
 
 turn: CLAUDE
