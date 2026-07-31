@@ -26,11 +26,13 @@ from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.ops import binding
 
 
-def reset_claims(session_factory, *, lock_timeout_seconds: int = 60) -> int:
+def reset_claims(session_factory, *, lock_timeout_seconds: int = 60,
+                 statement_timeout_seconds: int | None = None) -> int:
     """Clear every complete outbox claim tuple; return the count. Refuses pre-013; on a
     surviving tuple it rolls back BEFORE commit and raises (atomic — no partial reset)."""
     with session_factory() as session:
-        binding.bind(session, lock_timeout_seconds=lock_timeout_seconds)
+        binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
+                     statement_timeout_seconds=statement_timeout_seconds)
         has_col = session.execute(
             text(
                 "SELECT 1 FROM information_schema.columns WHERE table_schema='public' "
@@ -68,7 +70,14 @@ def main() -> int:
     settings = get_settings()
     session_factory = make_session_factory(make_engine(settings.database_url))
     try:
-        n = reset_claims(session_factory, lock_timeout_seconds=settings.ops_lock_timeout_seconds)
+        n = reset_claims(
+            session_factory,
+            lock_timeout_seconds=settings.ops_lock_timeout_seconds,
+            statement_timeout_seconds=settings.ops_statement_timeout_seconds,
+        )
+    except binding.BindingRefused as exc:  # governed schema/phase refusal: stable, no traceback
+        print(str(exc), file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001 — one-shot CLI: classify, print, exit nonzero
         message = binding.timeout_message(
             "reset_interrupted_outbox_claims", "ACCESS EXCLUSIVE on public.outbox", exc)

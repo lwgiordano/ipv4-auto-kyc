@@ -8,9 +8,11 @@ sequence step that was unreachable before cutover, and a repair that only knew c
 later). This command IS the executable form, run inside a PRE-WINDOW MAINTENANCE STOP (every
 writer stopped and attested — it takes `ACCESS EXCLUSIVE` on `public.outbox`):
 
-- input is a structured backup-evidence JSON file (every schema-012 outbox column, the
-  decision id, and the body digest computed ON THE BACKUP ROW) plus `--expect-original-id`,
-  which must equal the file's id — double-entry against restoring the wrong row;
+- input is a STRICT, VERSIONED backup-evidence JSON file (`schema_version` plus every schema-012
+  outbox column, the decision id, and the body digest computed ON THE BACKUP ROW) parsed through a
+  typed model that refuses unknown fields, naive timestamps, a non-object body, and malformed
+  shapes with a stable payload-free refusal — never a traceback (re-audit `538e55e..42e1c7d` F3) —
+  plus `--expect-original-id`, which must equal the file's id (double-entry against the wrong row);
 - **only a DELIVERED, terminal decision callback may be restored** (re-audit `8377440` F1):
   retention prunes only `delivered` rows, so that is the only legitimate gap. A restored
   `delivered` row is TERMINAL — the claim SQL selects `status='pending'`, so it is never
@@ -20,10 +22,12 @@ writer stopped and attested — it takes `ACCESS EXCLUSIVE` on `public.outbox`):
 - the body must be a decision-callback body whose embedded `case_id`/`run_id` agree with the
   evidence tuple AND the linked automatic decision — a body that names a different case/run is
   refused;
-- `--expect-body-digest` (optional) pins the digest OUT OF BAND: an operator who has the
-  digest from a signed backup manifest supplies it, and the file's own `body_digest` must
-  match it. The file is not self-authenticating — a signed/detached backup manifest is the
-  operator prerequisite documented in RUNBOOK; this flag is where that authenticity enters;
+- `--expect-manifest-digest` (REQUIRED, dry-run AND apply) pins authenticity OUT OF BAND: it is
+  the sha256 of the evidence file taken from a signed/detached backup manifest, and it binds the
+  ENTIRE file byte-for-byte — altering the body OR any lifecycle field changes the digest and
+  refuses before any parsing or DB work. The file is NOT self-authenticating (re-audit
+  `538e55e..42e1c7d` F2): recomputing the file's own digest and omitting a flag no longer applies
+  anything. Obtaining and signing this digest is the operator prerequisite documented in RUNBOOK;
 - DRY-RUN by default: it runs the EXACT apply path inside a SAVEPOINT and rolls back, so a
   value that would fail on apply (a malformed timestamp, a lifecycle CHECK) fails dry-run too
   — dry-run and apply are the same code, never divergent previews (re-audit `8377440` F2);
@@ -32,7 +36,7 @@ writer stopped and attested — it takes `ACCESS EXCLUSIVE` on `public.outbox`):
   both the acceptance predicate (exactly one row) and the sequence tuple before commit.
 
     python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
-        --expect-original-id <id> [--expect-body-digest <sha256>] [--apply]
+        --expect-original-id <id> --expect-manifest-digest <sha256> [--apply]
 
 After a green apply, rerun `verify_pr7b_core_backfill`; it is the gate that reopens cutover.
 
@@ -41,16 +45,20 @@ decision linkage are ALL machine-refused. The remaining lifecycle values (attemp
 next_attempt_at, last_error, timestamps) are ATTESTED inputs from the backup — a delivered row
 is terminal so they never affect delivery, and nothing in the target database can contradict a
 falsified backup value. That is why the evidence must come from the authoritative backup by the
-documented capture query, and why `--expect-body-digest` from a signed manifest is the
-sanctioned authenticity anchor.
+documented capture query, and why the MANDATORY `--expect-manifest-digest` (sha256 of the whole
+evidence file, from a signed manifest) is the sanctioned authenticity anchor — it binds every
+attested field, so a falsified backup value cannot pass without also breaking the signed digest.
 """
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import sys
 from pathlib import Path
+from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -58,17 +66,70 @@ from kyc_tool.config import get_settings
 from kyc_tool.db.session import make_engine, make_session_factory, uow
 from kyc_tool.ops import binding
 
-# Every schema-012 evidence field is REQUIRED (nullables carry explicit null). Omitting the
-# retry/audit fields is what makes "exact" false — a previously retried callback restored with
-# a reset attempts/next_attempt_at/last_error is not the row that was pruned.
-_REQUIRED_FIELDS = (
+_SCHEMA_VERSION = "pr7b-core.restore.v1"
+
+
+class _Evidence(BaseModel):
+    """Strict, versioned backup-evidence schema (re-audit `538e55e..42e1c7d` F3).
+
+    Unknown fields are refused, ids are non-blank, the digest is 64-hex, timestamps are
+    timezone-aware ISO-8601, `payload_json` is a JSON OBJECT string, kind/status are closed to the
+    only restorable shape (a delivered decision callback), and attempts is non-negative. So a
+    malformed shape is a stable, payload-free refusal — never a traceback (e.g. the old
+    `payload_json="[]"` → `AttributeError`) and never a mid-INSERT DB error whose text leaks the
+    payload. Every schema-012 field is REQUIRED (nullables carry an explicit null): omitting the
+    retry/audit fields is exactly what makes a restore not "exact".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[_SCHEMA_VERSION]
+    decision_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    case_id: str = Field(min_length=1)
+    original_outbox_id: int = Field(ge=1)
+    original_kind: Literal["decision_callback"]
+    original_status: Literal["delivered"]
+    body_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    original_delivered_at: str  # delivered ⇒ non-null (Literal status forces it)
+    original_next_attempt_at: str | None
+    original_last_error: str | None
+    original_attempts: int = Field(ge=0)
+    original_created_at: str
+    payload_json: str = Field(min_length=1)
+
+    @field_validator("original_delivered_at", "original_next_attempt_at", "original_created_at")
+    @classmethod
+    def _tz_aware(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        try:
+            parsed = dt.datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("not an ISO-8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp must be timezone-aware (carry a UTC offset)")
+        return v
+
+    @field_validator("payload_json")
+    @classmethod
+    def _body_is_json_object(cls, v: str) -> str:
+        try:
+            parsed = json.loads(v)
+        except ValueError as exc:
+            raise ValueError("payload_json is not valid JSON") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("payload_json must be a JSON object, not a list/scalar")
+        return v
+
+
+# Columns the acceptance predicate binds: every evidence field mapping to a public.outbox column
+# (the model minus schema_version and payload_json, which the SQL renders separately).
+_ACCEPTANCE_COLUMNS = (
     "decision_id", "run_id", "case_id", "original_outbox_id", "original_kind", "body_digest",
     "original_status", "original_delivered_at", "original_attempts", "original_next_attempt_at",
-    "original_last_error", "original_created_at", "payload_json",
+    "original_last_error", "original_created_at",
 )
-# Fields that MUST be an ISO-8601 timestamp when non-null. Parsed in Python before any SQL, so a
-# malformed value is a stable refusal, never a mid-INSERT DB error whose text leaks the payload.
-_TIMESTAMP_FIELDS = ("original_delivered_at", "original_next_attempt_at", "original_created_at")
 
 # The runbook's POSITIVE acceptance predicate, verbatim contract: MUST return exactly one row.
 # `IS NOT DISTINCT FROM` so NULL matches NULL; digest over the stored row's jsonb::text — the
@@ -92,63 +153,49 @@ class _Refused(RuntimeError):
     """A governed refusal with a stable, payload-free operator message."""
 
 
-def _load_evidence(path: Path, *, expect_body_digest: str | None) -> dict:
-    raw = json.loads(path.read_text())
-    missing = [f for f in _REQUIRED_FIELDS if f not in raw]
-    if missing:
-        raise _Refused(f"evidence file is missing required field(s): {missing}")
-    if not isinstance(raw["payload_json"], str):
-        raise _Refused(
-            "payload_json must be the exact `payload_json::text` STRING from the backup row — "
-            "a re-encoded object cannot prove byte identity"
-        )
-    if not isinstance(raw["original_outbox_id"], int) or raw["original_outbox_id"] < 1:
-        raise _Refused(f"original_outbox_id must be a positive int, got {raw['original_outbox_id']!r}")
-    # F1: only a delivered, terminal decision callback is a legitimate restore target.
-    if raw["original_kind"] != "decision_callback":
-        raise _Refused(f"only decision_callback rows are restorable, not {raw['original_kind']!r}")
-    if raw["original_status"] != "delivered":
-        raise _Refused(
-            f"only a DELIVERED (terminal) callback may be restored, not {raw['original_status']!r} "
-            "— retention prunes only delivered rows, and a non-terminal restore would be sendable"
-        )
-    if raw["original_delivered_at"] is None:
-        raise _Refused("a delivered callback must carry a non-null original_delivered_at")
-    # F2: normalize typed fields up front so a malformed value refuses cleanly, pre-SQL.
-    for field in _TIMESTAMP_FIELDS:
-        value = raw[field]
-        if value is None:
-            continue
-        try:
-            dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise _Refused(f"{field} is not an ISO-8601 timestamp: {value!r}") from exc
-    if not isinstance(raw["original_attempts"], int) or raw["original_attempts"] < 0:
-        raise _Refused(f"original_attempts must be a non-negative int, got {raw['original_attempts']!r}")
-    # F1: the body must be a decision-callback body naming the SAME case/run as the evidence.
+def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
+    """Verify the MANDATORY out-of-band manifest digest over the whole file, then strictly parse and
+    validate it. Every file/JSON/shape error becomes a payload-free `_Refused` — never a traceback,
+    never an echo of the evidence values (re-audit `538e55e..42e1c7d` F2/F3)."""
     try:
-        body = json.loads(raw["payload_json"])
+        raw_bytes = path.read_bytes()
+    except OSError as exc:
+        raise _Refused(f"evidence file could not be read ({type(exc).__name__})") from exc
+    # F2: the manifest anchor is checked FIRST and binds the ENTIRE file byte-for-byte. The operator
+    # obtains sha256(evidence.json) from a signed/detached backup manifest and passes it here; a file
+    # that self-certifies cannot pass, and altering ANY field (body OR any lifecycle field) changes
+    # this digest and refuses before any parsing or DB work.
+    actual = hashlib.sha256(raw_bytes).hexdigest()
+    if actual != expect_manifest_digest.strip().lower():
+        raise _Refused(
+            "the evidence file's sha256 does not match --expect-manifest-digest (the out-of-band "
+            "signed-manifest value) — the file is not the authenticated backup, or a field was altered"
+        )
+    try:
+        raw = json.loads(raw_bytes)
     except ValueError as exc:
-        raise _Refused("payload_json is not valid JSON") from exc
-    if body.get("case_id") != raw["case_id"] or body.get("run_id") != raw["run_id"]:
-        raise _Refused(
-            "the callback body's case_id/run_id do not match the evidence tuple "
-            f"(body {body.get('case_id')!r}/{body.get('run_id')!r} vs evidence "
-            f"{raw['case_id']!r}/{raw['run_id']!r})"
+        raise _Refused(f"evidence file is not valid JSON ({type(exc).__name__})") from exc
+    if not isinstance(raw, dict):
+        raise _Refused("evidence file must be a JSON object")
+    try:
+        model = _Evidence.model_validate(raw)
+    except ValidationError as exc:
+        # payload-free: report only field locations + error TYPES, never the offending input values
+        problems = sorted(
+            {f"{'.'.join(str(p) for p in e['loc'])}: {e['type']}" for e in exc.errors()}
         )
-    # F1: out-of-band authenticity anchor. When the operator supplies the digest from a signed
-    # backup manifest, the file's own claimed digest must match it — the file cannot self-certify.
-    if expect_body_digest is not None and raw["body_digest"] != expect_body_digest:
-        raise _Refused(
-            "the evidence file's body_digest does not match --expect-body-digest (the out-of-band "
-            "manifest value) — the file is not the authenticated backup row"
-        )
-    return raw
+        raise _Refused(f"evidence file failed schema validation: {problems}") from exc
+    data = model.model_dump()
+    # F1: the body (a JSON object, model-checked) must name the SAME case/run as the evidence tuple.
+    body = json.loads(data["payload_json"])
+    if body.get("case_id") != data["case_id"] or body.get("run_id") != data["run_id"]:
+        raise _Refused("the callback body's case_id/run_id do not match the evidence tuple")
+    return data
 
 
 def restore_callback(
     session_factory, evidence: dict, *, expect_original_id: int, apply: bool,
-    lock_timeout_seconds: int = 60,
+    lock_timeout_seconds: int = 60, statement_timeout_seconds: int | None = None,
 ) -> dict:
     """Validate — and with apply=True perform — the governed restore. Returns a report dict.
 
@@ -161,14 +208,12 @@ def restore_callback(
             f"original_outbox_id={evidence['original_outbox_id']} — double-entry failed"
         )
     with uow(session_factory) as session:
+        # bind(exact_revision="012") owns the schema/phase gate: it reads the FULL version set,
+        # requires cardinality one, and refuses a multi-head or off-012 schema as BindingRefused —
+        # no separate .scalar_one() that would itself traceback on a multi-head state (F4).
         binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
-                     require_sequence_owner=True)  # ALTER SEQUENCE needs ownership (F13)
-        version = session.execute(text("SELECT version_num FROM public.alembic_version")).scalar_one()
-        if version != "012":
-            raise _Refused(
-                "this restore is the schema-012 pre-cutover contract; alembic_version is "
-                f"{version!r}. A post-013 gap is a different governed problem."
-            )
+                     statement_timeout_seconds=statement_timeout_seconds,
+                     exact_revision="012", require_sequence_owner=True)
         session.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
 
         oid = evidence["original_outbox_id"]
@@ -229,7 +274,7 @@ def restore_callback(
             )
             accepted = session.execute(
                 _ACCEPTANCE_SQL,
-                {k: evidence[k] for k in _REQUIRED_FIELDS if k != "payload_json"},
+                {k: evidence[k] for k in _ACCEPTANCE_COLUMNS},
             ).fetchall()
             if accepted != [(1,)]:
                 raise _Refused(
@@ -262,22 +307,24 @@ def main(argv: list[str] | None = None) -> int:
                         help="backup-evidence JSON (every schema-012 outbox column + digest)")
     parser.add_argument("--expect-original-id", required=True, type=int,
                         help="must equal the evidence file's original_outbox_id (double entry)")
-    parser.add_argument("--expect-body-digest", default=None,
-                        help="out-of-band body digest from a signed backup manifest (optional)")
+    parser.add_argument("--expect-manifest-digest", required=True,
+                        help="sha256 of the evidence file, taken from your signed/detached backup "
+                             "manifest (out-of-band; REQUIRED — the file cannot self-certify)")
     parser.add_argument("--apply", action="store_true",
                         help="perform the restore; without it, validate the exact path and roll back")
     args = parser.parse_args(argv)
     settings = get_settings()
     try:
-        evidence = _load_evidence(args.evidence, expect_body_digest=args.expect_body_digest)
+        evidence = _load_evidence(args.evidence, expect_manifest_digest=args.expect_manifest_digest)
         report = restore_callback(
             make_session_factory(make_engine(settings.database_url)),
             evidence,
             expect_original_id=args.expect_original_id,
             apply=args.apply,
             lock_timeout_seconds=settings.ops_lock_timeout_seconds,
+            statement_timeout_seconds=settings.ops_statement_timeout_seconds,
         )
-    except _Refused as exc:
+    except (_Refused, binding.BindingRefused) as exc:  # governed refusal: stable, no traceback
         print(f"restore_pr7b_core_callback: REFUSED — {exc}", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 — one-shot CLI: classify, print, exit nonzero

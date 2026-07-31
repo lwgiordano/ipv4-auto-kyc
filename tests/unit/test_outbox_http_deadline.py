@@ -330,6 +330,62 @@ def test_close_is_bounded_not_linear_in_orphan_count():
         gate.set()
 
 
+def test_close_is_bounded_even_when_http_close_blocks_forever():
+    """Re-audit `538e55e..42e1c7d` F5: close()'s OWN self.http.close() must run inside the same
+    total deadline. A client whose close() hangs otherwise wedges shutdown even at ZERO orphans —
+    the exact 'CLOSE_ENTER, no return' the audit measured."""
+    from kyc_tool.outbox.publisher import _ORPHAN_DRAIN_SECONDS
+
+    gate = threading.Event()
+
+    class _UncloseableClient(httpx.Client):
+        def close(self):
+            gate.wait()  # http.close() itself never returns
+
+    publisher = OutboxPublisher(
+        lambda: None,
+        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
+        http_client=_UncloseableClient(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
+    )
+    try:
+        assert publisher._orphans == []  # ZERO orphans — Codex's exact case
+        started = time.monotonic()
+        publisher.close()  # must return despite http.close() blocking forever
+        assert time.monotonic() - started < _ORPHAN_DRAIN_SECONDS + 1.0, (
+            "close() waited on a forever-blocking http.close() instead of bounding it"
+        )
+    finally:
+        gate.set()
+
+
+def test_run_forever_exits_on_saturation_for_supervised_restart():
+    """Re-audit `538e55e..42e1c7d` F6: at the orphan cap, run_forever must become EXTERNALLY
+    observable — raise OutboxSaturated so the worker exits nonzero and a supervisor restarts it —
+    not sleep forever like an empty queue (which stalled delivery invisibly)."""
+    from kyc_tool.outbox.publisher import (
+        OutboxSaturated,
+        _AttemptDeadlineExceeded,
+    )
+
+    gate = threading.Event()
+    publisher = OutboxPublisher(
+        lambda: None,
+        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
+        http_client=httpx.Client(transport=_WedgedTransport(gate)),
+    )
+    try:
+        while not publisher.at_capacity():  # wedge sends until the cap is reached
+            request = publisher.http.build_request("POST", "http://platform.test/x", content=b"{}")
+            with pytest.raises(_AttemptDeadlineExceeded):
+                publisher._send_for_status(request)
+        # saturated: run_forever raises (does NOT sleep forever) before claiming anything new
+        with pytest.raises(OutboxSaturated):
+            publisher.run_forever(poll_seconds=0)
+    finally:
+        gate.set()
+    publisher.close()
+
+
 def test_daemon_send_threads_never_block_process_exit():
     """A publisher whose send is wedged in an uninterruptible call must not hang interpreter
     shutdown — the audit measured a child process unable to exit within two seconds."""

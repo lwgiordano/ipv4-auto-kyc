@@ -229,29 +229,58 @@ def test_reset_fence_blocks_a_claimant_arriving_in_the_readback_window(pg):
     engine.dispose()
 
 
-def test_statement_timeout_bounds_a_slow_query_not_just_lock_acquisition(pg):
-    """Re-audit `8377440` F10: only lock acquisition was bounded. A held-off statement (a
-    concurrent ACCESS EXCLUSIVE holder makes the reset's own LOCK wait, but statement_timeout
-    is the ceiling on total statement time) must also refuse within a bound, nothing changed."""
-    url = _fresh_db(pg, "kyc_ops_stmt")
-    command.upgrade(_config(url), "013")
-    engine = create_engine(url)
-    with engine.begin() as conn:
-        conn.execute(text("INSERT INTO public.cases (id) VALUES ('c1')"))
-        conn.execute(text(
-            "INSERT INTO public.outbox (kind, case_id, ordering_stream, status) "
-            "VALUES ('poc_email','c1','email','pending')"))
-    # A pg_sleep longer than the statement bound, run as the ops statement path would hit it:
-    # prove statement_timeout is SET (not just lock_timeout) by observing a canceled slow query.
-    with engine.connect() as conn:
-        conn.execute(text("SET LOCAL statement_timeout = '500ms'"))
-        import pytest as _pytest
-        from sqlalchemy.exc import OperationalError
-        with _pytest.raises(OperationalError) as ei:
-            conn.execute(text("SELECT pg_sleep(3)"))
-        from kyc_tool.ops import binding
+def test_bind_sets_statement_timeout_from_its_own_setting(pg):
+    """Re-audit `538e55e..42e1c7d` F11: statement_timeout is a SEPARATE governed budget SET BY
+    bind() from KYC_OPS_STATEMENT_TIMEOUT_SECONDS — not a constant derived from the lock, and (the
+    prior test's gap) actually exercised THROUGH bind(). Call bind(), read back SHOW
+    statement_timeout, and prove a query past the bound is canceled (57014). Nothing mutated."""
+    from sqlalchemy.exc import OperationalError
+
+    from kyc_tool.db.session import make_engine, make_session_factory
+    from kyc_tool.ops import binding
+
+    url = _fresh_db(pg, "kyc_ops_stmt_bind")
+    command.upgrade(_config(url), "012")
+    sf = make_session_factory(make_engine(url))
+    with sf() as s:
+        binding.bind(s, lock_timeout_seconds=1, statement_timeout_seconds=2, exact_revision="012")
+        assert s.execute(text("SHOW statement_timeout")).scalar_one() == "2s"  # from the setting
+        with pytest.raises(OperationalError) as ei:  # the bound is real, not just declared
+            s.execute(text("SELECT pg_sleep(5)"))
         assert binding.is_statement_timeout(ei.value), "57014 must classify as statement timeout"
+        s.rollback()
+
+
+def test_bind_refuses_a_statement_budget_at_or_below_the_lock_budget(pg):
+    """A statement ceiling <= the lock budget would cancel the lock wait before lock_timeout fires
+    and misclassify the failure; bind() refuses it as a governed BindingRefused, changing nothing."""
+    from kyc_tool.db.session import make_engine, make_session_factory
+    from kyc_tool.ops import binding
+
+    url = _fresh_db(pg, "kyc_ops_stmt_coherent")
+    command.upgrade(_config(url), "012")
+    sf = make_session_factory(make_engine(url))
+    with sf() as s, pytest.raises(binding.BindingRefused, match="OPS_COMMAND_SCHEMA_REFUSED"):
+        binding.bind(s, lock_timeout_seconds=5, statement_timeout_seconds=5, exact_revision="012")
+
+
+def test_multi_head_alembic_version_refuses_instead_of_reading_one_arbitrary_row(pg):
+    """Re-audit `538e55e..42e1c7d` F4: bind() read one arbitrary row via .scalar(), so a multi-head
+    `{012, 999}` satisfied an exact/floor check against whichever row returned (verify printed
+    'schema-012 parity matrix clean' and exited 0). bind() now reads the FULL version set, requires
+    cardinality one, and refuses — a governed sentinel, nonzero, no traceback, nothing certified."""
+    url = _fresh_db(pg, "kyc_ops_multihead")
+    command.upgrade(_config(url), "012")
+    engine = create_engine(url)
+    with engine.begin() as conn:  # inject a second head — an invalid migration state
+        conn.execute(text("INSERT INTO public.alembic_version (version_num) VALUES ('999')"))
     engine.dispose()
+
+    proc = _run("verify_pr7b_core_backfill", url)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in proc.stderr, proc.stderr
+    assert "schema-012 parity matrix clean" not in proc.stdout  # never certified a phase it didn't check
+    assert "Traceback" not in proc.stderr  # governed refusal, not a crash
 
 
 def test_repair_and_restore_refuse_a_non_owner_before_mutating(pg):
@@ -303,3 +332,52 @@ def test_verify_refuses_any_phase_other_than_exactly_012(pg):
         else:
             assert proc.returncode != 0, f"rev {rev} must refuse"
             assert "schema-012 parity matrix clean" not in proc.stdout, f"rev {rev} was certified"
+            # F4: a wrong-phase refusal is a GOVERNED sentinel, not a Python traceback
+            assert "Traceback" not in proc.stderr, f"rev {rev} tracebacked instead of refusing"
+            assert "OPS_COMMAND_SCHEMA_REFUSED" in proc.stderr, proc.stderr
+
+
+def test_ops_prerequisites_preflight_reports_role_and_phase_read_only(pg):
+    """Re-audit `538e55e..42e1c7d` F12: an operator must VERIFY role, sequence owner, schema phase,
+    and timeout budgets BEFORE pausing service — a read-only preflight that needs NO maintenance
+    stop and takes no ACCESS EXCLUSIVE lock. As the owning role it exits 0, reports ownership +
+    phase + budgets, and mutates nothing (the sequence is untouched)."""
+    url = _fresh_db(pg, "kyc_ops_preflight_ok")
+    command.upgrade(_config(url), "012")
+    proc = _run("verify_pr7b_ops_prerequisites", url)  # no writer stop, no lock — runs live
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "owns_sequence: True" in proc.stdout and "schema_revision: 012" in proc.stdout
+    assert "statement_timeout_seconds" in proc.stdout  # reports both budgets
+    assert "Traceback" not in proc.stderr
+    engine = create_engine(url)
+    with engine.connect() as conn:  # read-only: nothing mutated
+        assert conn.execute(text("SELECT is_called FROM public.outbox_id_seq")).scalar_one() is False
+    engine.dispose()
+
+
+def test_ops_prerequisites_preflight_flags_a_non_owner_before_the_outage(pg):
+    """A wrong (non-owning) production credential is caught by the read-only preflight BEFORE the
+    outage — nonzero, reports it does not own the sequence — instead of being discovered inside
+    maintenance at ALTER SEQUENCE. Nothing is mutated."""
+    url = _fresh_db(pg, "kyc_ops_preflight_nonowner")
+    command.upgrade(_config(url), "012")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE ROLE kyc_pf_nonowner LOGIN PASSWORD 'x'"))
+        conn.execute(text("GRANT ALL ON ALL TABLES IN SCHEMA public TO kyc_pf_nonowner"))
+        conn.execute(text("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO kyc_pf_nonowner"))
+        conn.execute(text("GRANT USAGE ON SCHEMA public TO kyc_pf_nonowner"))
+    engine.dispose()
+    from sqlalchemy.engine import make_url
+    nonowner_url = make_url(url).set(username="kyc_pf_nonowner", password="x").render_as_string(
+        hide_password=False)
+
+    proc = _run("verify_pr7b_ops_prerequisites", nonowner_url)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "own" in (proc.stdout + proc.stderr).lower()  # reports the ownership gap
+
+    eng = create_engine(url)
+    with eng.begin() as conn:
+        conn.execute(text("DROP OWNED BY kyc_pf_nonowner"))
+        conn.execute(text("DROP ROLE kyc_pf_nonowner"))
+    eng.dispose()

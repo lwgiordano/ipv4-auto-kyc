@@ -38,7 +38,8 @@ from kyc_tool.ops import binding
 _SEQUENCE = "public.outbox_id_seq"
 
 
-def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: int = 60) -> int:
+def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: int = 60,
+                    statement_timeout_seconds: int | None = None) -> int:
     """Restart the outbox id sequence at GREATEST(max(id), floor)+1. Returns the value the
     NEXT allocation takes.
 
@@ -49,6 +50,7 @@ def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: in
         raise RuntimeError(f"refusing: floor must be a non-negative int, got {floor!r}")
     with uow(session_factory) as session:
         binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
+                     statement_timeout_seconds=statement_timeout_seconds,
                      require_sequence_owner=True)  # ALTER SEQUENCE needs ownership (F13)
         # The fence. Writers are already stopped by the runbook; this makes that a guarantee
         # rather than an assumption, and ALTER SEQUENCE (unlike setval) excludes concurrent
@@ -83,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
             make_session_factory(make_engine(settings.database_url)),
             floor=args.floor,
             lock_timeout_seconds=settings.ops_lock_timeout_seconds,
+            statement_timeout_seconds=settings.ops_statement_timeout_seconds,
         )
     except RuntimeError as exc:
         print(f"repair_outbox_sequence: FAILED — {exc}", file=sys.stderr)

@@ -447,10 +447,17 @@ migration 010 established in ADR-003).
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
     THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE — a pre-window maintenance stop, not the
-    cutover (which 0.4 still gates): pause submissions, hard-stop and attest EVERY writer (API,
+    cutover (which 0.4 still gates): FIRST run `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites`
+    (read-only, takes NO lock) and confirm it is GREEN — correct role, `outbox_id_seq` ownership,
+    schema phase, and timeout budgets — so a wrong maintenance credential is caught HERE, not at
+    `ALTER SEQUENCE` inside the stop; then pause submissions, hard-stop and attest EVERY writer (API,
     pipeline, outbox, `dev_worker`, retention), then run
     `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json>
-    --expect-original-id <id>` (dry-run first; add `--apply` to perform). It validates the whole
+    --expect-original-id <id> --expect-manifest-digest <sha256>` (dry-run first; add `--apply` to
+    perform). `--expect-manifest-digest` is MANDATORY: it is the sha256 of the evidence file
+    (`sha256sum <file.json>`) taken from — and verified against — your signed/detached backup
+    manifest, so the file cannot self-certify and altering ANY field is refused before any DB work.
+    It validates the whole
     contract below, inserts the exact original row, floors the sequence past the restored id
     (`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
     the acceptance predicate and the sequence before committing — any mismatch rolls back row and
@@ -480,9 +487,10 @@ migration 010 established in ADR-003).
         `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012. The evidence tuple is captured into the JSON
         file `restore_pr7b_core_callback --evidence` consumes; `--expect-original-id` must repeat
         the id (double entry). The id, body digest and decision linkage are machine-refused on
-        mismatch; the lifecycle fields are ATTESTED inputs from the backup — nothing in the target
-        database can contradict a falsified backup value, which is why the file and the documented
-        capture query are the only sanctioned source.
+        mismatch; the lifecycle fields are ATTESTED inputs from the backup — but the MANDATORY
+        `--expect-manifest-digest` (sha256 of the whole evidence file, from the signed manifest)
+        binds every one of them, so a falsified backup value cannot pass without also breaking the
+        signed digest. The signed manifest and the documented capture query are the sanctioned source.
     (c) ACCEPTANCE PREDICATE — POSITIVE and fail-closed. Run per restored callback; it MUST return
         EXACTLY ONE row before proceeding. ZERO rows = still blocked. Do NOT invert it into a
         "select the mismatches, expect zero rows" form: an absent row (or one restored under the

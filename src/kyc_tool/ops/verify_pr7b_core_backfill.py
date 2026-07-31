@@ -24,7 +24,8 @@ from kyc_tool.migration_contracts.v013_backfill import BLOCKED_SENTINEL, MISSING
 from kyc_tool.ops import binding
 
 
-def verify_backfill(session_factory, *, lock_timeout_seconds: int = 60) -> tuple[int, list[str]]:
+def verify_backfill(session_factory, *, lock_timeout_seconds: int = 60,
+                    statement_timeout_seconds: int | None = None) -> tuple[int, list[str]]:
     """Return (exit_code, offending_ids). Takes the SHARE lock first, runs the shared parity
     matrix, and NEVER writes (rolls back before returning)."""
     with session_factory() as s:
@@ -35,7 +36,8 @@ def verify_backfill(session_factory, *, lock_timeout_seconds: int = 60) -> tuple
         # exact 012: this is the PRE-window diagnostic and its parity matrix is schema-012 shaped.
         # On a 013+ DB it would otherwise lock, run, and print "schema-012 parity matrix clean" —
         # certifying a phase it never checked (re-audit `8377440` F12).
-        binding.bind(s, lock_timeout_seconds=lock_timeout_seconds, exact_revision="012")
+        binding.bind(s, lock_timeout_seconds=lock_timeout_seconds,
+                     statement_timeout_seconds=statement_timeout_seconds, exact_revision="012")
         s.execute(text("LOCK TABLE public.outbox IN SHARE MODE"))  # BEFORE any data SELECT
         violations = run_parity(s)
         s.rollback()  # read-only: never write, never hold the lock past the check
@@ -60,7 +62,11 @@ def main() -> int:
         code, _ = verify_backfill(
             make_session_factory(make_engine(settings.database_url)),
             lock_timeout_seconds=settings.ops_lock_timeout_seconds,
+            statement_timeout_seconds=settings.ops_statement_timeout_seconds,
         )
+    except binding.BindingRefused as exc:  # governed schema/phase refusal: stable, no traceback
+        print(str(exc), file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001 — one-shot CLI: classify, print, exit nonzero
         message = binding.timeout_message(
             "verify_pr7b_core_backfill", "SHARE on public.outbox", exc

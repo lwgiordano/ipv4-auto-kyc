@@ -27,73 +27,105 @@ from sqlalchemy.exc import OperationalError
 LOCK_TIMEOUT_SENTINEL = "OPS_COMMAND_LOCK_TIMEOUT"
 STATEMENT_TIMEOUT_SENTINEL = "OPS_COMMAND_STATEMENT_TIMEOUT"
 SEQUENCE_OWNER_SENTINEL = "OPS_COMMAND_NOT_SEQUENCE_OWNER"
+# Every schema-identity / phase / cardinality refusal `bind()` raises carries this sentinel, so a
+# one-shot CLI's main() catches `BindingRefused`, prints the stable line, and exits nonzero WITHOUT
+# a Python traceback (re-audit `538e55e..42e1c7d` F4).
+SCHEMA_REFUSED_SENTINEL = "OPS_COMMAND_SCHEMA_REFUSED"
 
 # psycopg surfaces a timed-out lock as SQLSTATE 55P03 (lock_not_available); a statement that
 # overruns statement_timeout as 57014 (query_canceled).
 _LOCK_NOT_AVAILABLE = "55P03"
 _QUERY_CANCELED = "57014"
 
-# statement_timeout gets HEADROOM over lock_timeout: a command may legitimately wait most of the
-# lock budget and THEN run its (bounded) query, so the statement ceiling is lock + a work margin.
-# Both are bounded — an orphan lock OR a runaway full-table scan refuses instead of hanging the
-# window (re-audit `8377440` F10: only lock acquisition was bounded before).
-_STATEMENT_WORK_HEADROOM_SECONDS = 300
+
+class BindingRefused(RuntimeError):
+    """A governed pre-flight refusal from `bind()`: wrong/absent/multi-head schema revision, a
+    sequence-ownership gap, or an incoherent timeout budget. A `RuntimeError` subclass so existing
+    broad handlers still catch it, but a distinct type so every ops `main()` can turn it into a
+    stable, traceback-free, non-mutating exit (re-audit `538e55e..42e1c7d` F4)."""
 
 
 def bind(
     session,
     *,
     lock_timeout_seconds: int,
+    statement_timeout_seconds: int | None = None,
     min_revision: str | None = None,
     exact_revision: str | None = None,
     require_sequence_owner: bool = False,
 ) -> None:
     """Pin the transaction to the governed schema and bound its waits. Call FIRST.
 
-    Raises RuntimeError (fail-closed, nothing touched) when the governed schema is absent, off
+    Raises `BindingRefused` (fail-closed, nothing touched) when the governed schema is absent,
+    empty, or in a multi-head/invalid state (`alembic_version` cardinality != 1), off
     `exact_revision`/below `min_revision`, `public.outbox` is not backed by `public.outbox_id_seq`,
     or (when `require_sequence_owner`) the current role does not OWN the sequence — the last is a
     preflight so an operator learns it BEFORE entering maintenance, not at `ALTER SEQUENCE`
     (re-audit `8377440` F13).
+
+    `statement_timeout_seconds` is the SEPARATE per-statement ceiling (its own governed budget, not
+    a constant derived from the lock — re-audit `538e55e..42e1c7d` F11). It must exceed
+    `lock_timeout_seconds` (a statement may wait most of the lock budget, then run its query); a
+    ceiling at or below the lock budget would cancel the lock wait before `lock_timeout` fires and
+    misclassify the failure, so `bind()` refuses it. When omitted it falls back to
+    `lock_timeout_seconds + 300` (the historical headroom) so non-production callers keep working.
     """
+    lock_s = int(lock_timeout_seconds)
+    statement_s = lock_s + 300 if statement_timeout_seconds is None else int(statement_timeout_seconds)
+    if statement_s <= lock_s:
+        raise BindingRefused(
+            f"{SCHEMA_REFUSED_SENTINEL}: statement_timeout ({statement_s}s) must exceed "
+            f"lock_timeout ({lock_s}s) — a statement ceiling at or below the lock budget cancels "
+            f"the lock wait before lock_timeout fires and misclassifies the failure. Fix "
+            f"KYC_OPS_STATEMENT_TIMEOUT_SECONDS / KYC_OPS_LOCK_TIMEOUT_SECONDS."
+        )
     session.execute(text("SET LOCAL search_path = pg_catalog, public"))
     # both take a literal; the values are our own bounded ints, never operator text
-    session.execute(text(f"SET LOCAL lock_timeout = '{int(lock_timeout_seconds) * 1000}ms'"))
-    statement_ms = (int(lock_timeout_seconds) + _STATEMENT_WORK_HEADROOM_SECONDS) * 1000
-    session.execute(text(f"SET LOCAL statement_timeout = '{statement_ms}ms'"))
+    session.execute(text(f"SET LOCAL lock_timeout = '{lock_s * 1000}ms'"))
+    session.execute(text(f"SET LOCAL statement_timeout = '{statement_s * 1000}ms'"))
     has_table = session.execute(
         text(
             "SELECT 1 FROM pg_catalog.pg_tables "
             "WHERE schemaname='public' AND tablename='alembic_version'"
         )
     ).first()
-    version = (
-        session.execute(text("SELECT version_num FROM public.alembic_version")).scalar()
+    # Read the FULL ordered version set and require cardinality one BEFORE any comparison: `.scalar()`
+    # reads one arbitrary row, so a multi-head `{012, 999}` would silently satisfy an exact/floor
+    # check against whichever row came back (re-audit `538e55e..42e1c7d` F4).
+    versions = (
+        sorted(session.execute(text("SELECT version_num FROM public.alembic_version")).scalars().all())
         if has_table
-        else None
+        else []
     )
-    if version is None:
-        raise RuntimeError(
-            "refusing: public.alembic_version is absent or empty — this database is not the "
-            "governed schema this command maintains"
+    if not versions:
+        raise BindingRefused(
+            f"{SCHEMA_REFUSED_SENTINEL}: public.alembic_version is absent or empty — this database "
+            "is not the governed schema this command maintains"
         )
+    if len(versions) > 1:
+        raise BindingRefused(
+            f"{SCHEMA_REFUSED_SENTINEL}: public.alembic_version holds {len(versions)} rows "
+            f"({versions}) — a multi-head/invalid migration state; refusing before any comparison "
+            "or mutation. Resolve the migration heads first."
+        )
+    version = versions[0]
     if exact_revision is not None and version != exact_revision:
-        raise RuntimeError(
-            f"refusing: public.alembic_version={version!r} is not the required "
+        raise BindingRefused(
+            f"{SCHEMA_REFUSED_SENTINEL}: public.alembic_version={version!r} is not the required "
             f"revision {exact_revision!r} (this command is phase-specific)"
         )
     if min_revision is not None and version < min_revision:
-        raise RuntimeError(
-            f"refusing: public.alembic_version={version!r} is below the required "
+        raise BindingRefused(
+            f"{SCHEMA_REFUSED_SENTINEL}: public.alembic_version={version!r} is below the required "
             f"revision {min_revision!r}"
         )
     backing = session.execute(
         text("SELECT pg_get_serial_sequence('public.outbox', 'id')")
     ).scalar()
     if backing != "public.outbox_id_seq":
-        raise RuntimeError(
-            f"refusing: public.outbox.id is backed by {backing!r}, not public.outbox_id_seq — "
-            "object identity cannot be trusted"
+        raise BindingRefused(
+            f"{SCHEMA_REFUSED_SENTINEL}: public.outbox.id is backed by {backing!r}, not "
+            "public.outbox_id_seq — object identity cannot be trusted"
         )
     if require_sequence_owner:
         owner_ok = session.execute(
@@ -105,7 +137,7 @@ def bind(
             )
         ).scalar()
         if not owner_ok:
-            raise RuntimeError(
+            raise BindingRefused(
                 f"{SEQUENCE_OWNER_SENTINEL}: current_user does not OWN public.outbox_id_seq — "
                 "ALTER SEQUENCE requires ownership, not merely ALL privileges. Run this command "
                 "as the sequence's owning role (the migration/ops credential; see RUNBOOK)."

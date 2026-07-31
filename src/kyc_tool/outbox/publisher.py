@@ -83,6 +83,14 @@ class _StaleClaim(Exception):
     """
 
 
+class OutboxSaturated(RuntimeError):
+    """The orphan-cap circuit breaker tripped: detached wedged sends have reached
+    `_MAX_ORPHAN_SENDS`, so the publisher can stage nothing new. `run_forever` raises this instead
+    of sleeping forever like an empty queue, making saturation SUPERVISOR-VISIBLE (re-audit
+    `538e55e..42e1c7d` F6): the worker exits nonzero, a supervisor restarts it, and the fresh
+    process drops the daemon attempts and reclaims their connections — observable recovery."""
+
+
 @dataclass(frozen=True)
 class DeliveryReceipt:
     """Proof-of-staging a decision-callback terminal must present (re-audit `4dfdf8a` F1).
@@ -350,13 +358,25 @@ class OutboxPublisher:
         return len(self._orphans) >= _MAX_ORPHAN_SENDS
 
     def close(self) -> None:
-        """Release the HTTP client under ONE bounded deadline (not per-orphan — that made
-        shutdown linear in orphan count, re-audit `8377440` F5). Daemon threads never block
+        """Release the HTTP client under ONE bounded TOTAL deadline covering BOTH the orphan joins
+        and `self.http.close()` itself (re-audit `8377440` F5 bounded the joins; `538e55e..42e1c7d`
+        F5 bounds the close). `http.close()` can hang on a wedged pool, so it runs in a daemon
+        joined only for the remaining budget: a bounded close may leak a connection for the OS to
+        reap, but it never waits forever — even at zero orphans. Daemon threads never block
         interpreter exit, so this is hygiene for a long-lived embedder (tests, dev worker)."""
         cutoff = time.monotonic() + _ORPHAN_DRAIN_SECONDS
         for t in self._orphans:
             t.join(timeout=max(0.0, cutoff - time.monotonic()))
         self._reap_orphans()
+        closer = threading.Thread(
+            target=self._safe_http_close, name="outbox-http-close", daemon=True
+        )
+        closer.start()
+        closer.join(timeout=max(0.0, cutoff - time.monotonic()))
+        if closer.is_alive():
+            log.warning("outbox_http_close_timeout", drain_seconds=_ORPHAN_DRAIN_SECONDS)
+
+    def _safe_http_close(self) -> None:
         with contextlib.suppress(Exception):
             self.http.close()
 
@@ -795,5 +815,16 @@ class OutboxPublisher:
     def run_forever(self, poll_seconds: float = 0.5) -> None:
         log.info("outbox_publisher_started")
         while True:
+            if self.at_capacity():
+                # Saturation is a SUPERVISOR-VISIBLE terminal state for the long-lived process, not
+                # an invisible forever-sleep (re-audit `538e55e..42e1c7d` F6). Exit nonzero (via the
+                # worker) so a supervisor restarts us; the fresh process drops the daemon attempts
+                # and reclaims their connections. process_pending (bounded) keeps its soft-stall.
+                log.critical("outbox_delivery_saturated_exit",
+                             live_orphans=len(self._orphans), cap=_MAX_ORPHAN_SENDS)
+                raise OutboxSaturated(
+                    f"outbox delivery saturated: {len(self._orphans)} detached send(s) "
+                    f">= cap {_MAX_ORPHAN_SENDS}; exiting for supervised restart"
+                )
             if not self.process_once():
                 time.sleep(poll_seconds)

@@ -49,6 +49,10 @@ def test_runbook_and_deployment_cutover_bodies_identical():
         "substituting `now()` for `delivered_at` is prohibited",
         # re-audit `f495de8` F1 / `8377440` F3 — SHIPPED bounded CLI, floors in ONE transaction:
         "restore_pr7b_core_callback", "--expect-original-id",
+        # re-audit `538e55e..42e1c7d` F2 — the out-of-band manifest anchor is MANDATORY and named:
+        "--expect-manifest-digest", "signed", "the file cannot self-certify",
+        # re-audit `538e55e..42e1c7d` F12 — the read-only ops-prerequisite preflight runs first:
+        "verify_pr7b_ops_prerequisites",
         "GREATEST(max(id), original_id) + 1", "pre-window maintenance stop",
         "Pasting the SQL below by hand is NOT a sanctioned path",
     ):

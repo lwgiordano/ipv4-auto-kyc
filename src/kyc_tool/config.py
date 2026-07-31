@@ -176,6 +176,13 @@ class Settings(BaseSettings):
     # refuses with the stable OPS_COMMAND_LOCK_TIMEOUT sentinel (nothing changed) instead of
     # hanging a window on an orphan transaction with no diagnosis.
     ops_lock_timeout_seconds: int = Field(default=60, ge=1)
+    # The SEPARATE ceiling on total statement time for a one-shot ops command (its own governed
+    # budget, not a constant derived from the lock — re-audit `538e55e..42e1c7d` F11). A statement
+    # may legitimately wait most of the lock budget and THEN run its bounded query, so this must
+    # exceed ops_lock_timeout_seconds; `binding.bind()` refuses if it does not. A runaway query
+    # then refuses with OPS_COMMAND_STATEMENT_TIMEOUT instead of hanging the window. Default 360 =
+    # the historical 60s lock + 300s work headroom, so the default behaviour is unchanged.
+    ops_statement_timeout_seconds: int = Field(default=360, ge=1)
 
     # Retention (compliance default: 7 years)
     retention_days: int = 7 * 365
