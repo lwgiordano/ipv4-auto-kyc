@@ -257,13 +257,17 @@ class OutboxPublisher:
         Raises `_StaleClaim` — before any network traffic — if the claim is no longer live.
         """
         request, wire_sha256 = self._build_callback_request(payload)
-        # COMMIT the attempt BEFORE the send. Everything about this ordering is the point: if the
-        # attempt were recorded after, or in the same transaction as the terminal, then the
-        # publisher's own proven residual (2xx received, terminal transaction faults, row stays
-        # pending) would leave the platform holding bytes the tool has no record of. The converse
-        # gap is accepted and named: die between this commit and the send and the attempt row
-        # records staged INTENT for bytes that never left — which is why the witness state it
-        # yields is send_intent_witnessed, not proof of transmission.
+        # COMMIT the attempt BEFORE the send, and in that same commit COUNT it and EXTEND the
+        # claim over the whole send + accounting window. Everything about this ordering is the
+        # point: if the attempt were recorded after, or in the same transaction as the terminal,
+        # then the publisher's own proven residual (2xx received, terminal transaction faults, row
+        # stays pending) would leave the platform holding bytes the tool has no record of. The
+        # converse gap is accepted and named: die between this commit and the send and the attempt
+        # row records staged INTENT for bytes that never left — which is why the witness state it
+        # yields is send_intent_witnessed, not proof of transmission. Counting at admission (not at
+        # accounting) is what makes the count survive a crash between the two; extending the lease
+        # here is what stops a reclaimer from sending a duplicate while this attempt is still being
+        # accounted (re-audit `538e55e..42e1c7d` F1).
         attempt_id = self._record_attempt(
             outbox_id=outbox_id, token=token, wire_version=_WIRE_VERSION,
             request_sha256=wire_sha256,
@@ -409,16 +413,53 @@ class OutboxPublisher:
         finally:
             response.close()
 
+    def _admission_budget(self) -> float:
+        """Seconds a freshly admitted attempt's claim must survive: the enforced per-attempt send
+        deadline (`OUTBOX_ATTEMPT_DEADLINE_PHASES × timeout`) plus the DB-accounting margin. Sized
+        so the failure/terminal write always lands before any reclaimer can take the row — the
+        explicit accounting budget re-audit `538e55e..42e1c7d` F1 asks for, not a boot-time margin
+        alone."""
+        return (
+            OUTBOX_ATTEMPT_DEADLINE_PHASES * self.settings.outbox_http_timeout_seconds
+            + self.settings.outbox_lease_margin_seconds
+        )
+
+    def _admit(self, session: Session, *, outbox_id: int, token: str) -> bool:
+        """Count this transport attempt and re-anchor the claim over the send + accounting window,
+        fenced on the LIVE claim, inside the caller's transaction. Returns True if admitted, False
+        if the claim is no longer live (expired lease → reclaimable).
+
+        Counting happens HERE — before the send — not at accounting after it (re-audit
+        `538e55e..42e1c7d` F1): a publisher that admits then dies still leaves `attempts`
+        incremented, so a reclaimer counts its own attempt on top and max-attempt dead-letter
+        stays reachable; no admitted transport call is ever under-counted. `_record_failure` then
+        writes the same absolute count (`row.attempts + 1`) idempotently, so a live claimant's own
+        failure accounting is unchanged. Re-anchoring the lease to `deadline + accounting budget`
+        (wall clock, not transaction now()) means a production-valid claim cannot expire between
+        admission and the failure/terminal write, so no reclaimer sends a duplicate while the first
+        attempt is still being accounted."""
+        admitted = session.execute(
+            text(
+                "UPDATE outbox SET attempts = attempts + 1, "
+                "claim_lease_expires_at = clock_timestamp() + make_interval(secs => :budget) "
+                "WHERE id = :id AND status = 'pending' AND claim_token = :token "
+                "AND claim_lease_expires_at > clock_timestamp() RETURNING id"
+            ),
+            {"id": outbox_id, "token": token, "budget": self._admission_budget()},
+        ).first()
+        return admitted is not None
+
     def _record_attempt(self, *, outbox_id: int, token: str, wire_version: str,
                         request_sha256: str) -> str:
-        """Commit one immutable attempt row under the live claim. Returns its `attempt_id`.
+        """Admit (count + re-anchor the lease) and commit one immutable attempt row under the live
+        claim, atomically. Returns its `attempt_id`.
 
         This records staged INTENT — the exact bytes, durably, before any transmission is
         tried — not transmission itself: the process can die between this commit and the send.
 
-        Fenced on the same `(status, claim_token, live lease)` predicate as every terminal, and
-        it runs BEFORE the send: a claimant whose lease expired stages nothing and therefore
-        transmits nothing. Raises `_StaleClaim` in that case.
+        Admission and the evidence INSERT share ONE transaction fenced on the live claim, and both
+        run BEFORE the send: a claimant whose lease expired admits nothing, stages nothing, and
+        therefore transmits nothing. Raises `_StaleClaim` in that case.
 
         Precisely: expiry makes the row reclaimable and stops a stale claimant from staging or
         sending anything NEW. It cannot revoke a request already on the wire — no lease can, and
@@ -428,24 +469,20 @@ class OutboxPublisher:
         attempt_id = str(uuid.uuid4())
         with uow(self.session_factory) as session:
             take_shared_fence(session)
-            applied = session.execute(
+            if not self._admit(session, outbox_id=outbox_id, token=token):
+                raise _StaleClaim(outbox_id)
+            # The admit above proved the claim live and re-anchored the lease in THIS transaction,
+            # holding the row lock; the INSERT's admission trigger independently re-checks
+            # token/status/kind, so a plain INSERT is safe and atomic with the count.
+            session.execute(
                 text(
                     "INSERT INTO outbox_delivery_attempts "
                     "(attempt_id, outbox_id, claim_token, wire_version, request_sha256) "
-                    "SELECT :attempt_id, :outbox_id, :token, :wire_version, :sha "
-                    "WHERE EXISTS (SELECT 1 FROM outbox WHERE id=:outbox_id "
-                    "AND status='pending' AND claim_token=:token "
-                    # an EXPIRED lease is reclaimable and must not stage evidence — wall clock,
-                    # not transaction-start now(), so waiting past the deadline cannot win
-                    # (re-audit 15d875d F4; the DB admission trigger enforces the same rule).
-                    "AND claim_lease_expires_at > clock_timestamp()) "
-                    "RETURNING attempt_id"
+                    "VALUES (:attempt_id, :outbox_id, :token, :wire_version, :sha)"
                 ),
                 {"attempt_id": attempt_id, "outbox_id": outbox_id, "token": token,
                  "wire_version": wire_version, "sha": request_sha256},
-            ).first()
-        if applied is None:
-            raise _StaleClaim(outbox_id)
+            )
         return attempt_id
 
     def _outbound_v1_sunset_passed(self) -> bool:
@@ -464,24 +501,30 @@ class OutboxPublisher:
 
         POC emails get no attempt row: they carry no wire digest, nothing reconciles them against
         a remote ledger, and their duplicate-on-retry behaviour is the documented at-least-once
-        property (A6) rather than a gap in evidence. They DO get the same presend ownership check
-        (re-audit `cbb783b` F5) — evidence and ownership are different questions, and a stale
-        claimant emailing a token it cached before losing the row is a real side effect.
+        property (A6) rather than a gap in evidence. They DO get the same presend admission
+        (re-audit `cbb783b` F5, `538e55e..42e1c7d` F1) — counted and lease-re-anchored before the
+        provider call, same as a callback's `_record_attempt` — because a stale claimant emailing a
+        token it cached before losing the row is a real side effect, and an admitted-then-crashed
+        email must not go under-counted either.
         """
         if kind == DECISION_CALLBACK:
             return self._deliver_decision_callback(payload, outbox_id=outbox_id, token=token)
         if kind == POC_EMAIL:
-            self._assert_claim_live(outbox_id=outbox_id, token=token)
+            self._admit_poc_claim(outbox_id=outbox_id, token=token)
             self.email_sender.send(payload["to"], payload["subject"], payload["body"])
             return None
         raise ValueError(f"unknown outbox kind: {kind}")
 
-    def _assert_claim_live(self, *, outbox_id: int, token: str) -> None:
-        """Refuse to produce an external side effect for a row this publisher no longer owns.
+    def _admit_poc_claim(self, *, outbox_id: int, token: str) -> None:
+        """POC-email counterpart of `_record_attempt`'s admission: count the attempt and re-anchor
+        the claim over the send + accounting window, fenced on the live claim. Raises `_StaleClaim`
+        BEFORE the provider call if the claim is no longer live.
 
-        The decision-callback path gets this for free: `_record_attempt`'s fenced INSERT is its
-        presend check. A POC email stages no evidence, so it needs the ownership question asked
-        directly — same predicate, same wall clock. Raises `_StaleClaim` BEFORE the provider call.
+        A POC email stages no wire-evidence row (nothing reconciles it against a remote ledger; its
+        duplicate-on-retry is the at-least-once property, A6), but it is COUNTED here, before the
+        send, for the same reason a callback is: a crash between admission and accounting must not
+        leave the attempt uncounted (max-attempt dead-letter must stay reachable), and the claim
+        must cover the send so a reclaimer cannot double-send while this one is still accounting.
 
         This makes the row unsendable by a stale claimant; it does NOT revoke a request already on
         the wire. No lease can: once bytes leave the socket the side effect exists whatever the
@@ -490,15 +533,8 @@ class OutboxPublisher:
         """
         with uow(self.session_factory) as session:
             take_shared_fence(session)
-            live = session.execute(
-                text(
-                    "SELECT 1 FROM outbox WHERE id=:outbox_id AND status='pending' "
-                    "AND claim_token=:token AND claim_lease_expires_at > clock_timestamp()"
-                ),
-                {"outbox_id": outbox_id, "token": token},
-            ).first()
-        if live is None:
-            raise _StaleClaim(outbox_id)
+            if not self._admit(session, outbox_id=outbox_id, token=token):
+                raise _StaleClaim(outbox_id)
 
     # -- loop ---------------------------------------------------------------
 
@@ -649,6 +685,11 @@ class OutboxPublisher:
         log.info("outbox_delivered", outbox_id=row.id, kind=row.kind, case_id=row.case_id)
 
     def _record_failure(self, row, error: str, token) -> None:
+        # `row.attempts` is the claim snapshot; admission already incremented the DB to exactly
+        # this value, so writing it back ABSOLUTELY (SET attempts=:a, never attempts+1) is
+        # idempotent with the count and never doubles it (re-audit `538e55e..42e1c7d` F1). This
+        # method still owns the count for a claimant that reaches it directly (the fencing tests
+        # drive it without admission), which is why the value is computed here too.
         attempts = row.attempts + 1
         dead = attempts >= self.settings.outbox_max_attempts
         delay = self.settings.outbox_backoff_base_seconds * (2 ** (attempts - 1))

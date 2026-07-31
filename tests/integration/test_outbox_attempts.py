@@ -10,16 +10,28 @@ case an operator was reconciling.
 
 import hashlib
 
+import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 
 from kyc_tool.outbox import witness
-from kyc_tool.outbox.publisher import _StaleClaim
+from kyc_tool.outbox.publisher import _CLAIM_SQL, OutboxPublisher, _StaleClaim
 from kyc_tool.workers.retention import prune
 from tests.integration.test_outbox_supersession import _enqueue_cb, _seed_decisions
 
 pytestmark = pytest.mark.postgres
+
+# Minimal but PRODUCTION-VALID outbox settings for the F1 accounting tests: the lease (int, ge=1)
+# must exceed 4 × http_timeout + margin = 4 × 0.1 + 0.5 = 0.9, and 1 does. This is the exact tuple
+# whose race Codex reproduced (`538e55e..42e1c7d` F1): a claim that is valid at claim time yet has
+# little lease left by the time the send starts.
+_F1_SETTINGS = {
+    "outbox_http_timeout_seconds": 0.1,
+    "outbox_lease_margin_seconds": 0.5,
+    "outbox_lease_seconds": 1,
+    "outbox_backoff_base_seconds": 0,
+}
 
 
 class _InjectedFault(RuntimeError):
@@ -475,3 +487,118 @@ def test_receipt_naming_a_different_attempt_writes_nothing(
     with session_factory() as s:
         assert s.execute(text("SELECT status FROM outbox WHERE id=:i"),
                          {"i": row.id}).scalar_one() == "delivered"
+
+
+# --- F1: attempt accounting is admission-timed, not send-timed (`538e55e..42e1c7d`) -----------
+
+
+def test_attempt_is_counted_at_admission_before_the_send(session_factory, clean_db, settings):
+    """outbox.attempts is incremented at ADMISSION — before the bytes leave — not deferred to
+    _record_failure after the send. Proven by reading the counter from INSIDE the transport, i.e.
+    at the instant of the send: if counting were send-timed the probe would see 0."""
+    _seed_decisions(session_factory, "fa", [1])
+    _enqueue_cb(session_factory, "fa", 1)
+    sends: list[int] = []
+    at_send: dict = {}
+
+    def _probe_then_fail(request):
+        sends.append(1)
+        with session_factory() as s:
+            at_send["attempts"] = s.execute(
+                text("SELECT attempts FROM outbox WHERE run_id='fa-r1'")
+            ).scalar_one()
+        return httpx.Response(500)
+
+    pub = OutboxPublisher(
+        session_factory, settings.model_copy(update=_F1_SETTINGS),
+        http_client=httpx.Client(transport=httpx.MockTransport(_probe_then_fail)),
+    )
+    assert pub.process_once() is True
+    assert sends == [1]                       # exactly one transport call
+    assert at_send["attempts"] == 1           # already counted when those bytes went out
+
+
+def test_admission_reanchors_a_nearly_expired_claim_to_cover_send_and_accounting(
+    session_factory, clean_db, settings
+):
+    """A production-valid claim that reaches admission nearly expired is re-anchored to the full
+    send + accounting budget, so a reclaimer cannot take the row (and double-send) while the first
+    attempt is still being accounted. Deterministic: shorten the lease to ~200ms, admit, then read
+    the re-anchored lease and prove a concurrent claim finds nothing."""
+    _seed_decisions(session_factory, "fc", [1])
+    _enqueue_cb(session_factory, "fc", 1)
+    prod = settings.model_copy(update=_F1_SETTINGS)   # admission budget = 4*0.1 + 0.5 = 0.9s
+
+    with session_factory() as s:
+        rowA = s.execute(
+            _CLAIM_SQL, {"lease_seconds": prod.outbox_lease_seconds, "claimed_by": "A"}
+        ).one()
+        s.execute(
+            text("UPDATE outbox SET claim_lease_expires_at = now() + interval '200 milliseconds' "
+                 "WHERE id=:i"), {"i": rowA.id},
+        )
+        s.commit()
+
+    pub = OutboxPublisher(
+        session_factory, prod,
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
+    )
+    pub._record_attempt(outbox_id=rowA.id, token=rowA.claim_token,
+                        wire_version="legacy", request_sha256="a" * 64)
+
+    with session_factory() as s:
+        # re-anchored from ~200ms out to ~900ms out — comfortably past a 700ms floor
+        covers = s.execute(
+            text("SELECT claim_lease_expires_at > now() + interval '700 milliseconds' "
+                 "FROM outbox WHERE id=:i"), {"i": rowA.id},
+        ).scalar_one()
+        reclaim = s.execute(_CLAIM_SQL, {"lease_seconds": 1, "claimed_by": "B"}).first()
+    assert covers is True                      # lease was extended to the send+accounting window
+    assert reclaim is None                     # so no reclaimer can double-send during accounting
+
+
+def test_admitted_then_crashed_attempt_is_counted_so_dead_letter_stays_reachable(
+    session_factory, clean_db, settings
+):
+    """THE P1 (`538e55e..42e1c7d` F1). A publisher that admits a transport attempt then dies before
+    accounting must still have COUNTED it: a reclaimer counts its own on top, exactly once each, so
+    max-attempt dead-letter stays reachable and nothing is under-counted. Driven deterministically —
+    admit, drop the claimant, expire the re-anchored lease, reclaim — because a concurrency
+    invariant is proven by controlling the interleaving, not by racing threads and hoping."""
+    _seed_decisions(session_factory, "fb", [1])
+    _enqueue_cb(session_factory, "fb", 1)
+    prod = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 2})
+    fail = OutboxPublisher(
+        session_factory, prod,
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))),
+    )
+
+    # Publisher A: claim, admit + stage the attempt, then DIE before any accounting.
+    with session_factory() as s:
+        rowA = s.execute(
+            _CLAIM_SQL, {"lease_seconds": prod.outbox_lease_seconds, "claimed_by": "A"}
+        ).one()
+        s.commit()
+    fail._record_attempt(outbox_id=rowA.id, token=rowA.claim_token,
+                         wire_version="legacy", request_sha256="a" * 64)
+    with session_factory() as s:
+        after_a = s.execute(
+            text("SELECT attempts FROM outbox WHERE id=:i"), {"i": rowA.id}
+        ).scalar_one()
+    assert after_a == 1                        # counted, though A never reaches _record_failure
+    assert len(_attempts(session_factory, "fb-r1")) == 1
+
+    # A's re-anchored lease eventually expires; B reclaims and resends through the real loop.
+    with session_factory() as s:
+        s.execute(text("UPDATE outbox SET claim_lease_expires_at = now() - interval '1 second' "
+                       "WHERE id=:i"), {"i": rowA.id})
+        s.commit()
+    assert fail.process_once() is True         # B: claim(snapshot=1) → admit(2) → 500 → dead
+
+    with session_factory() as s:
+        st = s.execute(
+            text("SELECT status, attempts FROM outbox WHERE id=:i"), {"i": rowA.id}
+        ).one()
+    assert st.status == "dead"                 # dead-letter reachable despite A's lost accounting
+    assert st.attempts == 2                    # A's (1) + B's (1): each admitted call counted once
+    assert len(_attempts(session_factory, "fb-r1")) == 2

@@ -53,7 +53,9 @@ def test_callback_retries_on_5xx_then_delivers(client, engine, post_event, worke
             text("SELECT status, attempts FROM outbox WHERE run_id=:r"), {"r": run_id}
         ).one()
     assert status == "delivered"
-    assert attempts == 2  # two recorded failures before success
+    # attempts counts admitted transport calls, not just failures: two 500s + the delivering 200
+    # = 3 (each attempt is counted at admission, before its send — re-audit `538e55e..42e1c7d` F1).
+    assert attempts == 3
     assert client.get(f"/v1/runs/{run_id}").json()["state"] == "COMPLETE"
 
 
