@@ -48,7 +48,8 @@ def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: in
     if not isinstance(floor, int) or floor < 0:
         raise RuntimeError(f"refusing: floor must be a non-negative int, got {floor!r}")
     with uow(session_factory) as session:
-        binding.bind(session, lock_timeout_seconds=lock_timeout_seconds)
+        binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
+                     require_sequence_owner=True)  # ALTER SEQUENCE needs ownership (F13)
         # The fence. Writers are already stopped by the runbook; this makes that a guarantee
         # rather than an assumption, and ALTER SEQUENCE (unlike setval) excludes concurrent
         # nextval for the duration of the transaction.
@@ -87,14 +88,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"repair_outbox_sequence: FAILED — {exc}", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 — one-shot CLI: classify, print, exit nonzero
-        if binding.is_lock_timeout(exc):
-            print(
-                "repair_outbox_sequence: FAILED — "
-                + binding.lock_timeout_message(
-                    "repair_outbox_sequence", "ACCESS EXCLUSIVE on public.outbox"
-                ),
-                file=sys.stderr,
-            )
+        message = binding.timeout_message(
+            "repair_outbox_sequence", "ACCESS EXCLUSIVE on public.outbox", exc)
+        if message:
+            print(f"repair_outbox_sequence: FAILED — {message}", file=sys.stderr)
             return 1
         raise
     print(f"repair_outbox_sequence: OK — next allocation will be {next_id}")

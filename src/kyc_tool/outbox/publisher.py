@@ -52,9 +52,13 @@ POC_EMAIL = "poc_email"
 # becoming an uninterpretable witness.
 _WIRE_VERSION = "legacy"
 
-# Detached (deadline-overrun) send threads alive at once before the publisher logs CRITICAL —
-# past this, the callback endpoint is pathologically wedged and needs an operator.
+# Detached (deadline-overrun) send threads tolerated at once. This is a HARD resource cap, not a
+# log threshold: at capacity the publisher STOPS CLAIMING (circuit breaker), so a pathologically
+# wedged callback endpoint cannot accrete unbounded threads/connections — it stalls delivery
+# (health goes red) until an operator intervenes, which is the safe failure.
 _MAX_ORPHAN_SENDS = 8
+# Total (not per-orphan) seconds close() waits for detached sends to finish — bounded shutdown.
+_ORPHAN_DRAIN_SECONDS = 2.0
 
 # How much of a callback acknowledgement body the publisher will read to keep the connection
 # reusable. A platform ack is a few hundred bytes; past this it is not an ack we need, and reading
@@ -184,14 +188,11 @@ class OutboxPublisher:
     ) -> None:
         self.session_factory = session_factory
         self.settings = settings
-        # Rebuilding the client is part of the attempt-deadline contract: cancelling a stuck
-        # attempt works by closing the client out from under it (the blocked socket op raises),
-        # after which the pool is unusable and a fresh client takes its place.
-        self._http_factory = lambda: httpx.Client(timeout=settings.outbox_http_timeout_seconds)
-        self.http = http_client or self._http_factory()
+        self.http = http_client or httpx.Client(timeout=settings.outbox_http_timeout_seconds)
         self.email_sender = email_sender or LoggingEmailSender()
         self._claimant = f"{socket.gethostname()}:{os.getpid()}"
         self._orphans: list[threading.Thread] = []
+        self._saturated = False
 
     # -- delivery -----------------------------------------------------------
 
@@ -282,21 +283,21 @@ class OutboxPublisher:
         thread and the publisher waits at most `OUTBOX_ATTEMPT_DEADLINE_PHASES × timeout` — the
         same number the production config requires the lease to exceed.
 
-        What the bound guarantees, precisely (re-audit `f495de8` F2): the PUBLISHER's forward
-        progress (it stops waiting, accounts a retryable failure, and moves on with a fresh
-        client) and clean process exit (daemon threads never block shutdown). What it cannot
-        guarantee: retraction of the attempt itself. Closing the client unblocks socket
-        operations, but an OS call that ignores it (a hung resolver) keeps the detached thread
-        alive until the OS gives up, and a request whose bytes are already moving may still
-        complete — a late 2xx after failure accounting is the documented at-least-once residual
-        (A6) the platform dedupes on (case_id, run_id). No in-process design retracts an
-        in-flight request; a supervised child process (kill + rebuild) is the only stronger
-        boundary and is deliberately not taken here — recorded on the bus. Detached attempts
-        are tracked and reaped; more than _MAX_ORPHAN_SENDS alive at once is logged CRITICAL as
-        an operator signal that the callback endpoint is pathologically wedged.
+        What the bound guarantees, precisely (re-audits `f495de8` F2, `8377440` F4): the
+        publisher RETURNS within `deadline` — the `queue.get(timeout=deadline)` is the only wait,
+        and the overrun branch does no unbounded work (no synchronous `client.close()`, no join),
+        so failure accounting lands well inside the lease the config sizes against. And clean
+        process exit, since the worker is daemon. What it cannot guarantee: retraction of the
+        attempt itself. A request whose bytes are already moving may still complete — a late 2xx
+        after failure accounting is the documented at-least-once residual (A6) the platform
+        dedupes on (case_id, run_id). No in-process design retracts an in-flight request; a
+        supervised child process is the only stronger boundary and is deferred (recorded on the
+        bus). Detached attempts are tracked, reaped, and CAPPED: at `_MAX_ORPHAN_SENDS` the
+        publisher stops claiming (`at_capacity`), so a wedged endpoint stalls delivery instead of
+        leaking threads/connections without bound.
         """
         deadline = OUTBOX_ATTEMPT_DEADLINE_PHASES * self.settings.outbox_http_timeout_seconds
-        self._orphans = [t for t in self._orphans if t.is_alive()]
+        self._reap_orphans()
         outcome: queue.Queue = queue.Queue(maxsize=1)
         client = self.http
 
@@ -312,38 +313,48 @@ class OutboxPublisher:
         try:
             (exc,) = outcome.get(timeout=deadline)
         except queue.Empty:
-            log.error("outbox_attempt_deadline_exceeded",
-                      url=str(request.url), deadline_seconds=deadline)
-            # Closing the client makes any blocked SOCKET op in the worker raise; the worker is
-            # daemon either way, so a truly stuck OS call detaches instead of wedging delivery
-            # or process exit. New sends get a fresh client immediately.
-            self.http = self._http_factory()
-            with contextlib.suppress(Exception):  # a wedged pool must not mask the timeout
-                client.close()
-            worker.join(timeout=1.0)
-            if worker.is_alive():
-                self._orphans.append(worker)
-                if len(self._orphans) > _MAX_ORPHAN_SENDS:
-                    log.critical("outbox_send_orphans_accumulating",
-                                 orphans=len(self._orphans), url=str(request.url))
+            # Detach STRICTLY WITHIN the budget (re-audit `8377440` F4): NO synchronous
+            # `client.close()` and NO join here — both are themselves unbounded (a wedged pool
+            # never closes) and would push the publisher's return past the `4 × timeout` the
+            # lease is sized against, so a valid lease could expire before failure accounting.
+            # The worker is daemon (never blocks process exit) and keeps using the SHARED client;
+            # its connection releases when it finishes or its own per-phase httpx timeout fires.
+            # A truly wedged OS call holds one connection until the OS gives up — bounded by the
+            # capacity gate (`at_capacity`, checked before the next claim) and reclaimed fully
+            # only by the supervised child-process boundary (deferred; recorded on the bus). No
+            # client rebuild: a fresh client is pointless while the old one is neither closed nor
+            # exhausted, and rebuilding is just more unbudgeted work on the hot path.
+            self._orphans.append(worker)
+            log.error("outbox_attempt_deadline_exceeded", url=str(request.url),
+                      deadline_seconds=deadline, live_orphans=len(self._orphans))
             raise _AttemptDeadlineExceeded(
                 f"delivery attempt exceeded its {deadline}s wait-bound and was detached"
             ) from None
-        worker.join(timeout=5.0)
+        # The worker put its result as its last act; it is finished. No join needed.
         if exc is not None:
             raise exc
 
-    def close(self) -> None:
-        """Release the HTTP client and give any detached attempts a moment to die.
+    def _reap_orphans(self) -> None:
+        self._orphans = [t for t in self._orphans if t.is_alive()]
 
-        Daemon threads never block interpreter exit, so this is hygiene, not a requirement —
-        but a long-lived embedder (tests, the dev worker) should call it."""
-        try:
+    def at_capacity(self) -> bool:
+        """True when detached (wedged) sends have reached the resource cap. A REAL gate, not a
+        log line (re-audit `8377440` F5): `process_once` refuses to claim while this holds, so
+        resources stay bounded — no new attempt is staged past the cap — instead of one thread
+        and one held connection accreting per stuck send."""
+        self._reap_orphans()
+        return len(self._orphans) >= _MAX_ORPHAN_SENDS
+
+    def close(self) -> None:
+        """Release the HTTP client under ONE bounded deadline (not per-orphan — that made
+        shutdown linear in orphan count, re-audit `8377440` F5). Daemon threads never block
+        interpreter exit, so this is hygiene for a long-lived embedder (tests, dev worker)."""
+        cutoff = time.monotonic() + _ORPHAN_DRAIN_SECONDS
+        for t in self._orphans:
+            t.join(timeout=max(0.0, cutoff - time.monotonic()))
+        self._reap_orphans()
+        with contextlib.suppress(Exception):
             self.http.close()
-        finally:
-            for t in self._orphans:
-                t.join(timeout=0.5)
-            self._orphans = [t for t in self._orphans if t.is_alive()]
 
     def _send_and_drain(self, client: httpx.Client, request: httpx.Request) -> None:
         """Send, treat the response status as the acknowledgement, and drain the body safely.
@@ -493,6 +504,17 @@ class OutboxPublisher:
 
     def process_once(self) -> bool:
         """Claim and deliver one pending row of one (case, stream). Returns False when idle."""
+        # Circuit breaker (re-audit `8377440` F5): if detached wedged sends have hit the cap, do
+        # NOT claim another row — claiming would stage a new attempt whose thread/connection we
+        # cannot bound. Refusing to claim stalls delivery (surfaced as saturated) rather than
+        # leaking resources; it is the safe failure while an operator addresses the wedged endpoint.
+        if self.at_capacity():
+            if not self._saturated:  # log the edge, not every poll
+                log.critical("outbox_delivery_saturated",
+                             live_orphans=len(self._orphans), cap=_MAX_ORPHAN_SENDS)
+            self._saturated = True
+            return False
+        self._saturated = False
         # The lease is its own setting (ge=1), never derived from the backoff schedule: with
         # admission fenced on an UNEXPIRED lease, a zero-backoff config would otherwise mint
         # already-expired claims that can never stage or deliver anything.

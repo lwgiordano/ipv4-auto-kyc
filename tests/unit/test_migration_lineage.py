@@ -338,6 +338,46 @@ def test_6b_spec_is_banner_superseded_not_silently_stale():
     )
 
 
+_ACTIVATION_SPEC = _SPECS / "2026-07-22-pr7b-activation-platform-ordering-design.md"
+
+
+def _activation_live() -> str:
+    """The activation spec's live text (above the first revision-note heading)."""
+    text_ = _ACTIVATION_SPEC.read_text()
+    marker = re.search(r"^#{1,3}\s*Revision note", text_, re.MULTILINE)
+    return text_[: marker.start()] if marker else text_
+
+
+def test_activation_live_contract_points_at_024_not_the_frozen_022():
+    """Re-audit `8377440` F8: O3 said "expand the canonical 022 ROADMAP row" while activation is
+    024 and 022 is frozen 7b-core. No live activation-owned instruction may target 022/023 as if
+    it were this unit's row."""
+    live = _activation_live()
+    stale = [
+        f"line {i}: {ln.strip()}"
+        for i, ln in enumerate(live.splitlines(), 1)
+        if re.search(r"canonical\s+0(?:22|23)\s+ROADMAP row", ln)
+        or re.search(r"expand the\s+0(?:22|23)\b", ln, re.IGNORECASE)
+    ]
+    assert not stale, "activation live text still points work at a frozen 7b-core row\n" + "\n".join(stale)
+
+
+def test_activation_cutover_fences_every_decision_writer_not_only_publishers():
+    """Re-audit `8377440` F8 + O4: the drained cutover must stop EVERY writer that takes the
+    decisions/cases locks or emits a callback — publishers, dev_worker, pipeline, AND the API's
+    inline manual-approve — not publishers alone. A cutover that names only publishers/dev_worker
+    contradicts O4's own fence requirement."""
+    live = _activation_live()
+    cutover = re.search(r"\*\*Activation cutover:\*\*.*?(?=\n\*\*Rollback)", live, re.DOTALL)
+    assert cutover, "activation cutover paragraph not found in live text"
+    body = cutover.group(0)
+    for writer in ("pipeline", "API"):
+        assert writer in body, (
+            f"the activation cutover does not name the {writer!r} decision writer — O4 requires "
+            "every decisions/cases-lock writer stopped, not just publishers"
+        )
+
+
 # A revision-history section records what a document USED to say; everything above it is live
 # guidance. Scanning only a byte prefix let contradictions survive further down the file — the
 # activation spec's "Out of scope" section called 7b-core "not yet shipped" through three green

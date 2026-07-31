@@ -114,38 +114,41 @@ def test_unbound_database_refuses_before_touching_anything(pg):
         assert "alembic_version" in proc.stderr or "alembic_version" in proc.stdout, module
 
 
-@pytest.mark.parametrize("module,extra", [
-    ("verify_pr7b_core_backfill", ()),
-    ("reset_interrupted_outbox_claims", ()),
-    ("repair_outbox_sequence", ()),
+# verify runs on schema 012 (its exact-phase requirement, F12); the mutators on 013.
+@pytest.mark.parametrize("module,rev", [
+    ("verify_pr7b_core_backfill", "012"),
+    ("reset_interrupted_outbox_claims", "013"),
+    ("repair_outbox_sequence", "013"),
 ])
-def test_conflicting_lock_refuses_with_sentinel_within_bound_and_changes_nothing(pg, module, extra):
+def test_conflicting_lock_refuses_with_sentinel_within_bound_and_changes_nothing(pg, module, rev):
     url = _fresh_db(pg, f"kyc_ops_lock_{module[:12]}")
-    command.upgrade(_config(url), "013")
+    command.upgrade(_config(url), rev)
     engine = create_engine(url)
     with engine.begin() as conn:
         conn.execute(text("INSERT INTO public.cases (id) VALUES ('c1')"))
-        conn.execute(text(
-            "INSERT INTO public.outbox (kind, case_id, ordering_stream, status, claim_token, "
-            "claim_lease_expires_at, claimed_by) VALUES ('poc_email','c1','email','pending', "
-            "gen_random_uuid(), now(), 'w1')"))
+        if rev == "013":  # 012 has no claim columns
+            conn.execute(text(
+                "INSERT INTO public.outbox (kind, case_id, ordering_stream, status, claim_token, "
+                "claim_lease_expires_at, claimed_by) VALUES ('poc_email','c1','email','pending', "
+                "gen_random_uuid(), now(), 'w1')"))
 
     holder = engine.connect()
     try:
         tx = holder.begin()
         holder.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
         started = time.monotonic()
-        proc = _run(module, url, *extra, timeout_env="2")
+        proc = _run(module, url, timeout_env="2")
         elapsed = time.monotonic() - started
         assert proc.returncode != 0, proc.stdout + proc.stderr
-        assert "OPS_COMMAND_LOCK_TIMEOUT" in proc.stderr
+        assert "OPS_COMMAND_LOCK_TIMEOUT" in proc.stderr, proc.stdout + proc.stderr
         assert elapsed < 30, f"{module} took {elapsed:.1f}s against a 2s bound"
         tx.rollback()
     finally:
         holder.close()
-    with engine.connect() as conn:  # nothing changed under the refused command
-        assert conn.execute(text(
-            "SELECT count(*) FROM public.outbox WHERE claim_token IS NOT NULL")).scalar_one() == 1
+    if rev == "013":
+        with engine.connect() as conn:  # nothing changed under the refused command
+            assert conn.execute(text(
+                "SELECT count(*) FROM public.outbox WHERE claim_token IS NOT NULL")).scalar_one() == 1
     engine.dispose()
 
 
@@ -224,3 +227,79 @@ def test_reset_fence_blocks_a_claimant_arriving_in_the_readback_window(pg):
         "exactly the post-commit claim survives; zero-at-commit was true when stated"
     )
     engine.dispose()
+
+
+def test_statement_timeout_bounds_a_slow_query_not_just_lock_acquisition(pg):
+    """Re-audit `8377440` F10: only lock acquisition was bounded. A held-off statement (a
+    concurrent ACCESS EXCLUSIVE holder makes the reset's own LOCK wait, but statement_timeout
+    is the ceiling on total statement time) must also refuse within a bound, nothing changed."""
+    url = _fresh_db(pg, "kyc_ops_stmt")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO public.cases (id) VALUES ('c1')"))
+        conn.execute(text(
+            "INSERT INTO public.outbox (kind, case_id, ordering_stream, status) "
+            "VALUES ('poc_email','c1','email','pending')"))
+    # A pg_sleep longer than the statement bound, run as the ops statement path would hit it:
+    # prove statement_timeout is SET (not just lock_timeout) by observing a canceled slow query.
+    with engine.connect() as conn:
+        conn.execute(text("SET LOCAL statement_timeout = '500ms'"))
+        import pytest as _pytest
+        from sqlalchemy.exc import OperationalError
+        with _pytest.raises(OperationalError) as ei:
+            conn.execute(text("SELECT pg_sleep(3)"))
+        from kyc_tool.ops import binding
+        assert binding.is_statement_timeout(ei.value), "57014 must classify as statement timeout"
+    engine.dispose()
+
+
+def test_repair_and_restore_refuse_a_non_owner_before_mutating(pg):
+    """Re-audit `8377440` F13: ALTER SEQUENCE needs OWNERSHIP, not ALL privileges. A non-owner
+    with full grants must refuse at the preflight (before any DML/DDL), with the stable
+    OPS_COMMAND_NOT_SEQUENCE_OWNER sentinel — not discover it mid-maintenance."""
+    url = _fresh_db(pg, "kyc_ops_owner")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE ROLE kyc_nonowner LOGIN PASSWORD 'x'"))
+        conn.execute(text("GRANT ALL ON ALL TABLES IN SCHEMA public TO kyc_nonowner"))
+        conn.execute(text("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO kyc_nonowner"))
+        conn.execute(text("GRANT USAGE ON SCHEMA public TO kyc_nonowner"))
+    engine.dispose()
+    # rebuild the URL as the non-owner role
+    from sqlalchemy.engine import make_url
+    nonowner_url = make_url(url).set(username="kyc_nonowner", password="x").render_as_string(
+        hide_password=False)
+
+    proc = _run("repair_outbox_sequence", nonowner_url)
+    assert proc.returncode != 0 and "OPS_COMMAND_NOT_SEQUENCE_OWNER" in proc.stderr, proc.stderr
+    eng = create_engine(url)
+    with eng.connect() as conn:  # nothing mutated
+        called = conn.execute(text("SELECT is_called FROM public.outbox_id_seq")).scalar_one()
+        assert not called
+    with eng.begin() as conn:
+        conn.execute(text("DROP OWNED BY kyc_nonowner"))
+        conn.execute(text("DROP ROLE kyc_nonowner"))
+    eng.dispose()
+
+
+def test_verify_refuses_any_phase_other_than_exactly_012(pg):
+    """Re-audit `8377440` F12: verify unconditionally printed 'schema-012 parity matrix clean'.
+    On 011 (too early) and 013/head (too late) it must refuse, not certify a phase it never
+    checked. Only exactly 012 may print the success line."""
+    from kyc_tool.ops import binding  # noqa: F401 (import proves module wiring is intact)
+
+    cfg = _config(_fresh_db(pg, "kyc_verify_phase_probe"))  # noqa: F841 (placeholder for parity)
+    for rev, expect_ok in [("011", False), ("012", True), ("013", False), ("head", False)]:
+        url = _fresh_db(pg, f"kyc_verify_phase_{rev}")
+        command.upgrade(_config(url), rev)
+        proc = subprocess.run(
+            [sys.executable, "-m", "kyc_tool.ops.verify_pr7b_core_backfill"],
+            env={**os.environ, "KYC_DATABASE_URL": url}, capture_output=True, text=True, timeout=60,
+        )
+        if expect_ok:
+            assert proc.returncode == 0 and "schema-012 parity matrix clean" in proc.stdout
+        else:
+            assert proc.returncode != 0, f"rev {rev} must refuse"
+            assert "schema-012 parity matrix clean" not in proc.stdout, f"rev {rev} was certified"

@@ -101,7 +101,8 @@ def test_hard_conflict_is_negated_gate():
 
 
 def test_hard_conflict_is_null_when_the_gate_was_never_evaluated():
-    """Only a decision that actually evaluated the gate may speak (re-audit `45cc215` F9).
+    """AUDIT:D-SF-NULL — only a decision that actually evaluated the gate may speak (re-audit
+    `45cc215` F9; the governance tag lives here and at salesforce_projection.py).
 
     The old default fabricated `False` — a definite "no hard conflict" — for BOTH shapes below,
     turning "we don't know" into a clean bill of health in the Salesforce mirror.

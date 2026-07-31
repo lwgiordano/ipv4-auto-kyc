@@ -421,18 +421,93 @@ _RUNBOOK = REPO_ROOT / "docs" / "RUNBOOK.md"
 _EXTRA_SENTINELS = {"BLOCKED_NO_AUTHORITATIVE_MAPPING"}
 
 
+def _resolve_module_raises(source_text: str, imported: dict[str, str]) -> tuple[set[str], int]:
+    """(sentinels credited to a raise, count of unsentinelled raises) for ONE module's source.
+
+    Sentinels are credited to a `raise` only from string LITERALS or from module-level string
+    constants a raise interpolates — never from a name REBOUND in any non-module scope, since
+    without full dataflow we cannot know which binding that raise sees (re-audits `45cc215` F8,
+    `f495de8`/`8377440` F9). Factored out so the binding-shadow regressions can drive crafted
+    source through the exact resolver the live inventory uses.
+    """
+    import ast
+
+    tree = ast.parse(source_text)
+    # MODULE-LEVEL string constants only (tree.body, not ast.walk).
+    consts = dict(imported)
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            consts[node.targets[0].id] = node.value.value
+    # Any name bound by ANY form inside a non-module scope is TAINTED everywhere: parameter,
+    # Assign, AnnAssign, walrus, comprehension/for target, or local import. The one exception is
+    # a local import of a REAL sentinel from the contract module (013 does exactly this:
+    # `from ...v013_backfill import BLOCKED_SENTINEL` inside upgrade()) — that binds the name to
+    # the genuine sentinel value, so it is CREDITED, not tainted; every other local import rebinds
+    # the name to something else and is a shadow.
+    tainted: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            continue
+        args = node.args
+        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg):
+            if arg is not None:
+                tainted.add(arg.arg)
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Assign):
+                tainted.update(t.id for t in sub.targets if isinstance(t, ast.Name))
+            elif isinstance(sub, ast.AnnAssign | ast.NamedExpr) and isinstance(sub.target, ast.Name):
+                tainted.add(sub.target.id)
+            elif isinstance(sub, ast.comprehension):
+                tainted.update(n.id for n in ast.walk(sub.target) if isinstance(n, ast.Name))
+            elif isinstance(sub, ast.ImportFrom):
+                for alias in sub.names:
+                    bound = alias.asname or alias.name
+                    if alias.name in imported and (sub.module or "").startswith(
+                        "kyc_tool.migration_contracts"
+                    ):
+                        consts.setdefault(bound, imported[alias.name])  # the real sentinel
+                    else:
+                        tainted.add(bound)
+            elif isinstance(sub, ast.Import):
+                tainted.update((a.asname or a.name.split(".")[0]) for a in sub.names)
+            elif isinstance(sub, ast.For):
+                tainted.update(n.id for n in ast.walk(sub.target) if isinstance(n, ast.Name))
+    raised: set[str] = set()
+    plain = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise):
+            continue
+        parts: list[str] = []
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                parts.append(sub.value)
+            elif isinstance(sub, ast.Name) and sub.id in consts and sub.id not in tainted:
+                parts.append(consts[sub.id])
+        found = (
+            set(_SENTINEL.findall(" ".join(parts)))
+            | (set(parts) & _EXTRA_SENTINELS)
+            | {p for p in parts for x in _EXTRA_SENTINELS if x in p}
+        )
+        if found:
+            raised |= found
+        else:
+            plain += 1
+    return raised, plain
+
+
 def _migration_raise_inventory() -> tuple[set[str], dict[str, int]]:
     """(sentinels that appear in an actual `raise`, unsentinelled-raise count per file), by AST.
 
     The lexical scan this replaces proved a token EXISTS in the file, not that any refusal
     raises it: an unused constant minted a phantom "documented refusal", and a deliberate
-    RuntimeError with no sentinel at all was invisible (re-audit `45cc215` F8). Walking each
-    `raise` node — resolving module-level string constants and same-package imports the message
-    interpolates — ties every indexed sentinel to a raise site and surfaces every raise that
-    carries none.
+    RuntimeError with no sentinel at all was invisible (re-audit `45cc215` F8).
     """
-    import ast
-
     from kyc_tool.migration_contracts import v013_backfill
 
     imported = {
@@ -443,48 +518,10 @@ def _migration_raise_inventory() -> tuple[set[str], dict[str, int]]:
     raised: set[str] = set()
     plain: dict[str, int] = {}
     for source in sorted((REPO_ROOT / "alembic" / "versions").glob("*.py")):
-        tree = ast.parse(source.read_text())
-        # MODULE-LEVEL constants only (tree.body, not ast.walk): a first draft resolved every
-        # same-named Assign anywhere, so a local `_SENTINEL = 'plain'.strip()` shadowing a
-        # module constant still credited the module value (re-audit `f495de8` F9).
-        consts = dict(imported)
-        for node in tree.body:
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, str)
-            ):
-                consts[node.targets[0].id] = node.value.value
-        # ...and any name REBOUND in a non-module scope is TAINTED everywhere: without full
-        # dataflow we cannot know which binding a given raise sees, so a tainted name never
-        # licenses a sentinel — the raise must carry a literal, or it counts as plain.
-        tainted = {
-            sub.targets[0].id
-            for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-            for sub in ast.walk(node)
-            if isinstance(sub, ast.Assign)
-            and len(sub.targets) == 1
-            and isinstance(sub.targets[0], ast.Name)
-        }
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Raise):
-                continue
-            parts: list[str] = []
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
-                    parts.append(sub.value)
-                elif isinstance(sub, ast.Name) and sub.id in consts and sub.id not in tainted:
-                    parts.append(consts[sub.id])
-            found = set(_SENTINEL.findall(" ".join(parts))) | (
-                set(parts) & _EXTRA_SENTINELS
-            ) | {p for p in parts for x in _EXTRA_SENTINELS if x in p}
-            if found:
-                raised |= found
-            else:
-                plain[source.name] = plain.get(source.name, 0) + 1
+        module_raised, module_plain = _resolve_module_raises(source.read_text(), imported)
+        raised |= module_raised
+        if module_plain:
+            plain[source.name] = module_plain
     return raised, plain
 
 
@@ -506,6 +543,62 @@ def test_every_migration_refusal_carries_a_sentinel_except_the_frozen_three():
         "deliberate refusal must raise a stable MIGRATION_NNN_* sentinel (and be indexed in the "
         "runbook); the frozen three are published and may not change"
     )
+
+
+# A module-level sentinel constant, then a raise that a LOCAL binding shadows. Each variant binds
+# `_SENTINEL` to plain text inside a function by a different form; the resolver must NOT credit
+# the module value — the raise must be classified plain (re-audit `8377440` F9).
+_SHADOW_PROLOGUE = "_SENTINEL = 'MIGRATION_099_REFUSED_FROZEN'\n"
+
+
+@pytest.mark.parametrize("shadow", [
+    "    _SENTINEL = 'plain'.strip()",                 # local Assign
+    "    _SENTINEL: str = 'plain'",                    # AnnAssign
+    "    if (_SENTINEL := 'plain'):\n        pass",    # walrus
+    "    for _SENTINEL in ['plain']:\n        pass",   # for-target
+    "    _x = [_SENTINEL for _SENTINEL in ['plain']]", # comprehension target
+    "    from os import getcwd as _SENTINEL",          # local import
+], ids=["assign", "annassign", "walrus", "for", "comprehension", "import"])
+def test_a_local_shadow_of_a_sentinel_name_is_never_credited(shadow):
+    src = (
+        f"{_SHADOW_PROLOGUE}"
+        "def upgrade():\n"
+        f"{shadow}\n"
+        "    raise RuntimeError(_SENTINEL)\n"
+    )
+    raised, plain = _resolve_module_raises(src, {})
+    assert "MIGRATION_099_REFUSED_FROZEN" not in raised, (
+        "a name rebound in a local scope must not credit the module sentinel"
+    )
+    assert plain == 1, "the shadowed raise must be classified plain (no literal sentinel)"
+
+
+def test_a_parameter_shadow_of_a_sentinel_name_is_never_credited():
+    src = (
+        f"{_SHADOW_PROLOGUE}"
+        "def _helper(_SENTINEL):\n"
+        "    raise RuntimeError(_SENTINEL)\n"
+    )
+    raised, plain = _resolve_module_raises(src, {})
+    assert "MIGRATION_099_REFUSED_FROZEN" not in raised
+    assert plain == 1
+
+
+def test_a_literal_sentinel_at_the_raise_is_credited():
+    """The positive control: an actual string literal at the raise site IS a documented refusal."""
+    src = "def upgrade():\n    raise RuntimeError('MIGRATION_099_REFUSED_FROZEN: bad')\n"
+    raised, plain = _resolve_module_raises(src, {})
+    assert raised == {"MIGRATION_099_REFUSED_FROZEN"} and plain == 0
+
+
+def test_a_module_constant_a_raise_interpolates_is_credited():
+    """And a module-level constant a raise references IS credited (the common real shape)."""
+    src = (
+        "_S = 'MIGRATION_099_REFUSED_FROZEN'\n"
+        "def upgrade():\n    raise RuntimeError(f'{_S}: bad')\n"
+    )
+    raised, _ = _resolve_module_raises(src, {})
+    assert raised == {"MIGRATION_099_REFUSED_FROZEN"}
 
 
 def test_runbook_indexes_every_migration_refusal_sentinel():

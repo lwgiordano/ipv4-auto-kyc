@@ -43,7 +43,8 @@ def _seed_and_prune(url, tmp_path, *, gap_to: int | None = None):
     shape (original id above the sequence high-water)."""
     engine = create_engine(url)
     payload = json.dumps(
-        {"decision": "approve", "checks": [{"source": "reviewer:José Ω"}], "gates": {"ok": True}},
+        {"case_id": "c1", "run_id": "rA", "decision": "approve",
+         "checks": [{"source": "reviewer:José Ω"}], "gates": {"ok": True}},
         ensure_ascii=False,
     )
     with engine.begin() as conn:
@@ -115,17 +116,19 @@ def test_restore_above_high_water_floors_the_sequence_and_greens_the_diagnostic(
     assert _verify(url).returncode == 0  # the gate that reopens cutover is green
 
 
-# Only components with an in-database ORACLE can refuse: the id (double-entry flag), the body
-# (digest), and the decision linkage (the decisions row). The lifecycle fields are ATTESTED
-# inputs — a falsified backup value is inserted and read back self-consistently, and no oracle
-# short of the backup itself can catch it; that boundary is the CLI docstring's contract and
-# why the evidence file + --expect-original-id double entry exist at all.
+# Machine-refused components: id (double entry), kind/status/lifecycle, the body's case/run
+# tuple, the body digest, and the decision linkage. The remaining lifecycle VALUES (attempts,
+# timestamps, last_error) are attested backup inputs — but a delivered row is TERMINAL, so a
+# falsified value there can never make the row sendable; that boundary is the docstring contract.
 @pytest.mark.parametrize("mutation", [
     {"original_outbox_id": 999},          # fails the double-entry against --expect
     {"body_digest": "0" * 64},            # payload no longer proves the backed-up body
-    {"run_id": "r-nope"},                 # no matching automatic decision
-    {"decision_id": "d-nope"},
-    {"case_id": "c-nope"},
+    {"run_id": "r-nope"},                 # body tuple + decision linkage disagree
+    {"decision_id": "d-nope"},            # no matching automatic decision
+    {"case_id": "c-nope"},                # body tuple disagrees
+    {"original_kind": "poc_email"},       # only decision_callback is restorable
+    {"original_status": "pending"},       # F1: only DELIVERED (terminal) may be restored
+    {"original_delivered_at": None},      # a delivered row must carry the timestamp
 ])
 def test_one_changed_evidence_component_refuses_and_writes_nothing(pg, tmp_path, mutation):
     url = _fresh_db(pg, f"kyc_restore_mut_{abs(hash(str(mutation))) % 10_000}")
@@ -164,3 +167,75 @@ def test_expect_id_mismatch_wrong_revision_and_existing_row_all_refuse(pg, tmp_p
     engine.dispose()
     post = _cli(url, "--evidence", str(path), "--expect-original-id", str(oid), "--apply")
     assert post.returncode != 0 and "schema-012" in post.stderr
+
+
+def test_injected_sendable_callback_is_refused_at_the_root(pg, tmp_path):
+    """Re-audit `8377440` F1: the exploit was manufacturing a SENDABLE (pending) callback with an
+    attacker body from a self-consistent file. Requiring delivered+terminal closes it — a pending
+    restore is refused outright, so no injected body can ever be claimed, signed, or sent."""
+    url = _fresh_db(pg, "kyc_restore_inject")
+    command.upgrade(_config(url), "012")
+    evidence, path = _seed_and_prune(url, tmp_path)
+    # attacker rewrites body + recomputes its digest + flips to sendable — internally consistent
+    engine = create_engine(url)
+    poisoned_body = json.dumps({"case_id": "c1", "run_id": "rA", "decision": "approve",
+                                "injected": "attacker-controlled"})
+    with engine.connect() as conn:
+        digest = conn.execute(text(
+            "SELECT encode(sha256(convert_to(CAST(:p AS jsonb)::text,'UTF8')),'hex')"),
+            {"p": poisoned_body}).scalar_one()
+    engine.dispose()
+    bad = {**evidence, "payload_json": poisoned_body, "body_digest": digest,
+           "original_status": "pending", "original_delivered_at": None}
+    path.write_text(json.dumps(bad, ensure_ascii=False))
+
+    proc = _cli(url, "--evidence", str(path),
+                "--expect-original-id", str(evidence["original_outbox_id"]), "--apply")
+    assert proc.returncode != 0 and "DELIVERED" in proc.stderr
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM outbox")).scalar_one() == 0
+    engine.dispose()
+
+
+def test_dry_run_and_apply_agree_on_a_value_that_only_fails_deep(pg, tmp_path):
+    """Re-audit `8377440` F2: a malformed timestamp used to pass DRY-RUN (which returned before
+    the casts) and blow up under --apply with a traceback leaking payload_json. Dry-run now runs
+    the exact apply path in a savepoint, so BOTH modes refuse the same value cleanly — no
+    traceback, no payload in the output."""
+    url = _fresh_db(pg, "kyc_restore_parity")
+    command.upgrade(_config(url), "012")
+    evidence, path = _seed_and_prune(url, tmp_path)
+    bad = {**evidence, "original_created_at": "not-a-timestamp"}
+    path.write_text(json.dumps(bad, ensure_ascii=False))
+    oid = str(evidence["original_outbox_id"])
+
+    dry = _cli(url, "--evidence", str(path), "--expect-original-id", oid)
+    applied = _cli(url, "--evidence", str(path), "--expect-original-id", oid, "--apply")
+    for proc in (dry, applied):
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "REFUSED" in proc.stderr
+        assert "DRY-RUN OK" not in proc.stdout, "a value that fails apply must fail dry-run too"
+        assert "Traceback" not in proc.stderr, "a refusal must be stable, not a crash"
+        assert "attacker" not in proc.stderr and "payload_json" not in proc.stderr.lower()
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM outbox")).scalar_one() == 0
+    engine.dispose()
+
+
+def test_out_of_band_digest_mismatch_refuses(pg, tmp_path):
+    """--expect-body-digest is the authenticity anchor: a file whose claimed digest differs from
+    the operator's signed-manifest value is refused before any DB work."""
+    url = _fresh_db(pg, "kyc_restore_oob")
+    command.upgrade(_config(url), "012")
+    evidence, path = _seed_and_prune(url, tmp_path)
+    proc = _cli(url, "--evidence", str(path),
+                "--expect-original-id", str(evidence["original_outbox_id"]),
+                "--expect-body-digest", "f" * 64, "--apply")
+    assert proc.returncode != 0 and "out-of-band" in proc.stderr
+    # the matching digest still works
+    ok = _cli(url, "--evidence", str(path),
+              "--expect-original-id", str(evidence["original_outbox_id"]),
+              "--expect-body-digest", evidence["body_digest"], "--apply")
+    assert ok.returncode == 0, ok.stdout + ok.stderr

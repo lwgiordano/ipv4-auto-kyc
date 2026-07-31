@@ -85,3 +85,20 @@ def test_case_list_separates_decision_score_from_live_evidence():
     assert "c.current_evidence_score" in VIEW_CASES
     # the blended field the list used to render under a single "Score" column
     assert "c.current_score" not in VIEW_CASES
+
+
+# --- manual provenance is visible for every state (re-audit `8377440` F6) ---------------------
+
+def test_manual_provenance_has_a_distinct_pill_for_every_state():
+    """A legacy-unresolved manual history must not render identically to 'no manual approval'.
+    All four API states need their own manual-scoped label in the pill map."""
+    for state in ("latest_manual_row", "unresolved_pointer_drift",
+                  "unresolved_legacy_order", "no_manual_decisions"):
+        assert f"{state}_manual" in CONSOLE, f"manual provenance state {state!r} has no pill"
+
+
+def test_case_detail_renders_the_manual_provenance_not_only_drift():
+    """The full view must surface the manual provenance for every non-empty state, not just the
+    drift case — otherwise `unresolved_legacy_order` is invisible (looks like no manual approval)."""
+    assert 'd.manual_decision_provenance!=="no_manual_decisions"' in VIEW_CASE
+    assert "provPill(d.manual_decision_provenance,true)" in VIEW_CASE

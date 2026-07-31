@@ -25,20 +25,42 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 LOCK_TIMEOUT_SENTINEL = "OPS_COMMAND_LOCK_TIMEOUT"
+STATEMENT_TIMEOUT_SENTINEL = "OPS_COMMAND_STATEMENT_TIMEOUT"
+SEQUENCE_OWNER_SENTINEL = "OPS_COMMAND_NOT_SEQUENCE_OWNER"
 
-# psycopg surfaces a timed-out lock as SQLSTATE 55P03 (lock_not_available).
+# psycopg surfaces a timed-out lock as SQLSTATE 55P03 (lock_not_available); a statement that
+# overruns statement_timeout as 57014 (query_canceled).
 _LOCK_NOT_AVAILABLE = "55P03"
+_QUERY_CANCELED = "57014"
+
+# statement_timeout gets HEADROOM over lock_timeout: a command may legitimately wait most of the
+# lock budget and THEN run its (bounded) query, so the statement ceiling is lock + a work margin.
+# Both are bounded — an orphan lock OR a runaway full-table scan refuses instead of hanging the
+# window (re-audit `8377440` F10: only lock acquisition was bounded before).
+_STATEMENT_WORK_HEADROOM_SECONDS = 300
 
 
-def bind(session, *, lock_timeout_seconds: int, min_revision: str | None = None) -> None:
+def bind(
+    session,
+    *,
+    lock_timeout_seconds: int,
+    min_revision: str | None = None,
+    exact_revision: str | None = None,
+    require_sequence_owner: bool = False,
+) -> None:
     """Pin the transaction to the governed schema and bound its waits. Call FIRST.
 
-    Raises RuntimeError (fail-closed, nothing touched) when the governed schema is absent,
-    below `min_revision`, or `public.outbox` is not backed by `public.outbox_id_seq`.
+    Raises RuntimeError (fail-closed, nothing touched) when the governed schema is absent, off
+    `exact_revision`/below `min_revision`, `public.outbox` is not backed by `public.outbox_id_seq`,
+    or (when `require_sequence_owner`) the current role does not OWN the sequence — the last is a
+    preflight so an operator learns it BEFORE entering maintenance, not at `ALTER SEQUENCE`
+    (re-audit `8377440` F13).
     """
     session.execute(text("SET LOCAL search_path = pg_catalog, public"))
-    # lock_timeout takes a literal; the value is our own bounded int, never operator text
+    # both take a literal; the values are our own bounded ints, never operator text
     session.execute(text(f"SET LOCAL lock_timeout = '{int(lock_timeout_seconds) * 1000}ms'"))
+    statement_ms = (int(lock_timeout_seconds) + _STATEMENT_WORK_HEADROOM_SECONDS) * 1000
+    session.execute(text(f"SET LOCAL statement_timeout = '{statement_ms}ms'"))
     has_table = session.execute(
         text(
             "SELECT 1 FROM pg_catalog.pg_tables "
@@ -55,6 +77,11 @@ def bind(session, *, lock_timeout_seconds: int, min_revision: str | None = None)
             "refusing: public.alembic_version is absent or empty — this database is not the "
             "governed schema this command maintains"
         )
+    if exact_revision is not None and version != exact_revision:
+        raise RuntimeError(
+            f"refusing: public.alembic_version={version!r} is not the required "
+            f"revision {exact_revision!r} (this command is phase-specific)"
+        )
     if min_revision is not None and version < min_revision:
         raise RuntimeError(
             f"refusing: public.alembic_version={version!r} is below the required "
@@ -68,16 +95,62 @@ def bind(session, *, lock_timeout_seconds: int, min_revision: str | None = None)
             f"refusing: public.outbox.id is backed by {backing!r}, not public.outbox_id_seq — "
             "object identity cannot be trusted"
         )
+    if require_sequence_owner:
+        owner_ok = session.execute(
+            text(
+                "SELECT pg_catalog.pg_get_userbyid(c.relowner) = current_user "
+                "FROM pg_catalog.pg_class c "
+                "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname='public' AND c.relname='outbox_id_seq'"
+            )
+        ).scalar()
+        if not owner_ok:
+            raise RuntimeError(
+                f"{SEQUENCE_OWNER_SENTINEL}: current_user does not OWN public.outbox_id_seq — "
+                "ALTER SEQUENCE requires ownership, not merely ALL privileges. Run this command "
+                "as the sequence's owning role (the migration/ops credential; see RUNBOOK)."
+            )
+
+
+def _sqlstate(exc: BaseException) -> str | None:
+    orig = getattr(exc, "orig", exc) if isinstance(exc, OperationalError) else exc
+    return getattr(orig, "sqlstate", None)
 
 
 def is_lock_timeout(exc: BaseException) -> bool:
     """True when `exc` is (or wraps) PostgreSQL's lock_not_available (55P03)."""
-    orig = getattr(exc, "orig", exc) if isinstance(exc, OperationalError) else exc
-    return getattr(orig, "sqlstate", None) == _LOCK_NOT_AVAILABLE
+    return _sqlstate(exc) == _LOCK_NOT_AVAILABLE
+
+
+def is_statement_timeout(exc: BaseException) -> bool:
+    """True when `exc` is (or wraps) PostgreSQL's query_canceled (57014)."""
+    return _sqlstate(exc) == _QUERY_CANCELED
+
+
+def timeout_message(command: str, held_for: str, exc: BaseException) -> str | None:
+    """Stable operator refusal for a bounded-wait timeout, or None if `exc` is neither.
+
+    One classifier for both bounds so every ops CLI handles them identically: an orphan LOCK and
+    a runaway STATEMENT each get a distinct sentinel and the same "nothing changed, find the
+    blocker, re-run" guidance."""
+    if is_lock_timeout(exc):
+        return (
+            f"{LOCK_TIMEOUT_SENTINEL}: {command} could not acquire {held_for} within the bound "
+            f"(KYC_OPS_LOCK_TIMEOUT_SECONDS) — another transaction holds a conflicting lock. "
+            f"Nothing was changed. Find and resolve the blocker (pg_stat_activity / pg_locks), "
+            f"then re-run."
+        )
+    if is_statement_timeout(exc):
+        return (
+            f"{STATEMENT_TIMEOUT_SENTINEL}: {command} exceeded its statement_timeout while "
+            f"working on {held_for} — a query ran longer than the bound allows. Nothing was "
+            f"changed. Investigate the blocker/load, then re-run."
+        )
+    return None
 
 
 def lock_timeout_message(command: str, held_for: str) -> str:
-    """The stable operator-facing refusal for a timed-out lock."""
+    """Back-compat shim: the lock-timeout half of `timeout_message`."""
     return (
         f"{LOCK_TIMEOUT_SENTINEL}: {command} could not acquire {held_for} within the bound "
         f"(KYC_OPS_LOCK_TIMEOUT_SECONDS) — another transaction holds a conflicting lock. "

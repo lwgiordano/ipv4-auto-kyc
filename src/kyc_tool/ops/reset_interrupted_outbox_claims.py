@@ -70,13 +70,10 @@ def main() -> int:
     try:
         n = reset_claims(session_factory, lock_timeout_seconds=settings.ops_lock_timeout_seconds)
     except Exception as exc:  # noqa: BLE001 — one-shot CLI: classify, print, exit nonzero
-        if binding.is_lock_timeout(exc):
-            print(
-                binding.lock_timeout_message(
-                    "reset_interrupted_outbox_claims", "ACCESS EXCLUSIVE on public.outbox"
-                ),
-                file=sys.stderr,
-            )
+        message = binding.timeout_message(
+            "reset_interrupted_outbox_claims", "ACCESS EXCLUSIVE on public.outbox", exc)
+        if message:
+            print(message, file=sys.stderr)
             return 1
         raise
     print(f"reset {n} interrupted outbox claim(s); 0 claim tuples remain")

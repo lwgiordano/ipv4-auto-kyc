@@ -325,7 +325,12 @@ to prevent exactly that.
 ### 5. Rollout (drained activation window) + rollback
 
 **Activation cutover:** (1) pause platform KYC state changes **incl. manual approvals**; stop +
-orchestrator-attest zero outbox publishers **and `dev_worker`**; `begin_outbox_ordering_bootstrap` CAS
+orchestrator-attest zero of EVERY writer that takes the `decisions`/`cases` locks or emits a
+callback — outbox publishers, `dev_worker`, the **pipeline workers** (automatic decide), AND
+the **API** (inline `reviewer.manual_approve` decides in the ingest transaction; O4). The 024
+migration additionally takes the shared admission fence BEFORE the case lock so a straggler
+waits rather than deadlocks, but old-image writers predate the fence, so the hard stop of ALL
+of them is the guarantee during the window; `begin_outbox_ordering_bootstrap` CAS
 → `bootstrap_in_progress`. (2) run the external bootstrap (§3) + verify;
 `record_platform_ordering_bootstrap` CAS → `bootstrapped`; publishers stay at **zero**. (3) deploy
 `callback_include_decision_sequence=true` to **every** activation-reading process while publishers are
@@ -491,7 +496,8 @@ planted below the marker pass unchecked. Revision notes below record how each ar
   `(case_id, release_id)` permits one release id on two cases while the prose requires the second to
   be rejected. **Required before 6b:** a global `UNIQUE(release_id)` returning 409 and rolling back
   the losing event/run/job; a test with two concurrent cases proving exactly one admitted and zero
-  loser orphans. Expand the canonical 022 ROADMAP row; record the local-extension / two-system
+  loser orphans. Expand the canonical **024** ROADMAP row (this unit's row — activation is
+  `024`, not `022`, which is frozen 7b-core); record the local-extension / two-system
   authority decision in `AUDIT_FINDINGS.md`; define request, outcome, reaper and recovery in
   `PLATFORM_INTEGRATION`, `DEPLOYMENT` and `RUNBOOK`; and add static parity assertions pinning the
   exact event, state and setting names — none of `manual.release_requested`,

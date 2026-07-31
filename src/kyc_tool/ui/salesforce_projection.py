@@ -162,10 +162,11 @@ def project_salesforce_fields(
         "Business_Document_Status__c": doc_status,
         "Website_Review_Status__c": website_status,
         "Broker_Status__c": BROKER_MAP.get(case.get("broker_status", "")),
-        # ONLY an authoritative decision that actually evaluated the gate may speak: absent
-        # tuple (drift / unresolved order) and bypassed gates (manual approval) both project
-        # NULL. The old default fabricated `False` — a definite "no hard conflict" — out of the
-        # gate never having been evaluated (Codex re-audit `45cc215` F9).
+        # AUDIT:D-SF-NULL — ONLY an authoritative decision that actually evaluated the gate
+        # may speak: absent tuple (drift / unresolved order) and bypassed gates (manual
+        # approval) both project NULL. The old default fabricated `False` — a definite "no
+        # hard conflict" — out of the gate never having been evaluated (re-audit `45cc215`
+        # F9). NULLABLE refines `salesforce_sync_fields.json`'s `boolean` (package frozen).
         "Hard_Conflict__c": (
             not gates["no_hard_conflict"] if "no_hard_conflict" in gates else None
         ),

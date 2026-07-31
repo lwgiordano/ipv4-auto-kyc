@@ -204,39 +204,38 @@ class _HeaderDripReceiver:
 
     def close(self):
         self._sock.close()
-
-
-def test_header_drip_is_cancelled_at_the_attempt_deadline_and_the_publisher_recovers():
+def test_header_drip_returns_within_the_bound_and_the_publisher_keeps_working():
     """A receiver dribbling header bytes under the inactivity timeout held a bare send 32x past
-    the nominal envelope — stalling the single-threaded publisher and outliving the claim lease.
-    The enforced deadline must cancel the attempt as a retryable failure, and the NEXT delivery
-    must succeed on the rebuilt client."""
+    the nominal envelope. The publisher must RETURN within the bound (detaching the attempt as a
+    retryable failure), and — sharing one client — the NEXT delivery still succeeds."""
     from kyc_tool.outbox.publisher import _AttemptDeadlineExceeded
 
     drip = _HeaderDripReceiver()
     publisher = OutboxPublisher(
         lambda: None,
         Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.1),
-    )  # enforced deadline: 4 x 0.1 = 0.4s
+    )  # bound: 4 x 0.1 = 0.4s
     try:
         request = publisher.http.build_request("POST", drip.url, content=b"{}")
         started = time.monotonic()
         with pytest.raises(_AttemptDeadlineExceeded):
             publisher._send_for_status(request)
         elapsed = time.monotonic() - started
-        assert elapsed < 3.0, f"cancellation took {elapsed:.2f}s — the deadline is not enforced"
+        # the return is bounded by the queue timeout ALONE — no synchronous close()/join eating
+        # into the lease (re-audit `8377440` F4). Generous ceiling for CI scheduling jitter.
+        assert elapsed < 1.0, f"return took {elapsed:.2f}s — cleanup is not off the hot path"
     finally:
         drip.close()
 
     healthy = _Receiver()
-    try:  # the stuck client was replaced; delivery works again without a new publisher
+    try:  # the shared client still delivers; no rebuild needed
         publisher._send_for_status(
             publisher.http.build_request("POST", healthy.url, content=b"{}")
         )
         assert healthy.connections == 1
     finally:
         healthy.close()
-        publisher.http.close()
+        publisher.close()
 
 
 class _WedgedTransport(httpx.BaseTransport):
@@ -251,36 +250,84 @@ class _WedgedTransport(httpx.BaseTransport):
         return httpx.Response(200)
 
 
-def test_wedged_attempts_detach_bounded_and_never_block_forward_progress():
-    """Re-audit `f495de8` F2: the bound is a WAIT-bound. What it must deliver: the publisher
-    keeps moving (timely retryable failure per attempt), detached threads are tracked and
-    reaped, and repeated wedges accumulate bounded orphans rather than wedging delivery."""
+def test_return_bound_holds_even_when_close_would_block():
+    """The specific F4 trigger: a client whose close() blocks forever. The deadline path must
+    NOT call it synchronously, so the publisher still returns within the bound."""
+    from kyc_tool.outbox.publisher import _AttemptDeadlineExceeded
+
     gate = threading.Event()
+
+    class _UncloseableClient(httpx.Client):
+        def close(self):
+            gate.wait()  # close() itself wedges — the exact audited hang
+
     publisher = OutboxPublisher(
         lambda: None,
         Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
+        http_client=_UncloseableClient(transport=_WedgedTransport(gate)),
+    )
+    try:
+        request = publisher.http.build_request("POST", "http://platform.test/x", content=b"{}")
+        started = time.monotonic()
+        with pytest.raises(_AttemptDeadlineExceeded):
+            publisher._send_for_status(request)
+        assert time.monotonic() - started < 1.0, "a blocking close() must not be on the hot path"
+    finally:
+        gate.set()
+
+
+def test_capacity_is_a_hard_cap_that_stops_new_claims_not_a_log_line():
+    """Re-audit `8377440` F5: wedged sends must not accrete past the cap. Beyond it the publisher
+    reports at_capacity and process_once refuses to claim (returns False) — resources bounded,
+    delivery stalled (safe), not one thread/connection per stuck send forever."""
+    from kyc_tool.outbox.publisher import _MAX_ORPHAN_SENDS, _AttemptDeadlineExceeded
+
+    gate = threading.Event()
+    publisher = OutboxPublisher(
+        lambda: None,
+        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
         http_client=httpx.Client(transport=_WedgedTransport(gate)),
     )
-    from kyc_tool.outbox.publisher import _AttemptDeadlineExceeded
-
     try:
-        for i in range(3):
-            # after the first overrun the rebuilt client is a REAL client; re-wedge it
-            publisher.http = httpx.Client(transport=_WedgedTransport(gate))
-            request = publisher.http.build_request("POST", "http://platform.test/kyc/decision",
-                                                   content=b"{}")
-            started = time.monotonic()
+        # drive well PAST the cap; orphan count must saturate AT the cap, never exceed it
+        for _ in range(_MAX_ORPHAN_SENDS + 5):
+            if publisher.at_capacity():
+                break
+            request = publisher.http.build_request("POST", "http://platform.test/x", content=b"{}")
             with pytest.raises(_AttemptDeadlineExceeded):
                 publisher._send_for_status(request)
-            assert time.monotonic() - started < 2.0, "forward progress must be timely"
-            assert len(publisher._orphans) == i + 1, "each wedged attempt is tracked, none lost"
+        assert publisher.at_capacity()
+        assert len(publisher._orphans) == _MAX_ORPHAN_SENDS, (
+            f"orphans={len(publisher._orphans)} — the cap is not enforced as a ceiling"
+        )
+        # process_once must now REFUSE to claim (circuit breaker), reporting idle
+        assert publisher.process_once() is False
+        assert publisher._saturated
     finally:
-        gate.set()  # un-wedge: the detached threads can now finish and be reaped
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and any(t.is_alive() for t in publisher._orphans):
-        time.sleep(0.02)
+        gate.set()
     publisher.close()
-    assert publisher._orphans == [], "released orphans must reap on close()"
+
+
+def test_close_is_bounded_not_linear_in_orphan_count():
+    """close() waits ONE total budget for detached sends, not 0.5s each (re-audit `8377440` F5)."""
+    from kyc_tool.outbox.publisher import _ORPHAN_DRAIN_SECONDS, _AttemptDeadlineExceeded
+
+    gate = threading.Event()
+    publisher = OutboxPublisher(
+        lambda: None,
+        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
+        http_client=httpx.Client(transport=_WedgedTransport(gate)),
+    )
+    try:
+        while not publisher.at_capacity():
+            request = publisher.http.build_request("POST", "http://platform.test/x", content=b"{}")
+            with pytest.raises(_AttemptDeadlineExceeded):
+                publisher._send_for_status(request)
+    finally:
+        started = time.monotonic()
+        publisher.close()  # threads still wedged: bounded by the TOTAL drain budget, not N x it
+        assert time.monotonic() - started < _ORPHAN_DRAIN_SECONDS + 1.0
+        gate.set()
 
 
 def test_daemon_send_threads_never_block_process_exit():

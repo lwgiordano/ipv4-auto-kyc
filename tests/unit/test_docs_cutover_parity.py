@@ -39,20 +39,15 @@ def test_runbook_and_deployment_cutover_bodies_identical():
         "default-id INSERT is prohibited", "ACCEPTANCE PREDICATE",
         "every schema-012 `outbox` column", "o.attempts = :original_attempts",
         "o.created_at IS NOT DISTINCT FROM :original_created_at",
-        "pg_get_serial_sequence('outbox','id')",
-        # re-review 0ca264b P1/P2 — the predicate is POSITIVE and the sequence is READ-ONLY:
+        # the predicate is POSITIVE (re-review 0ca264b P1/P2):
         "MUST return", "EXACTLY ONE row", "ZERO rows = still blocked",
-        "SEQUENCE PRECONDITION", "`setval(...)` is prohibited on this path",
-        "SEPARATE DRAINED action", "python -m kyc_tool.ops.repair_outbox_sequence",
-        "LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE",
-        "COALESCE(max(id), 0) + 1",
-        # the repair is the SHIPPED fail-closed CLI, not a psql block that exits 0 on a
-        # false boolean. Assert the CLI and its readback contract, not the deleted recipe:
-        "repair_outbox_sequence: OK", "repair_outbox_sequence: FAILED",
-        "exit status IS the result",
+        # re-audit `8377440` F3 — the sequence is the restore CLI's job; NO circular precondition,
+        # and `repair_outbox_sequence` is the SEPARATE case (divergent high-water, no row):
+        "THE SEQUENCE IS THE RESTORE CLI'S JOB", "there is NO separate precondition",
+        "python -m kyc_tool.ops.repair_outbox_sequence",
+        "SEPARATE DRAINED action", "ONLY case the restore does not cover",
         "substituting `now()` for `delivered_at` is prohibited",
-        # re-audit `f495de8` F1 — the restore is a SHIPPED bounded CLI, not pasted SQL, and
-        # it floors the sequence past the restored id in the SAME transaction:
+        # re-audit `f495de8` F1 / `8377440` F3 — SHIPPED bounded CLI, floors in ONE transaction:
         "restore_pr7b_core_callback", "--expect-original-id",
         "GREATEST(max(id), original_id) + 1", "pre-window maintenance stop",
         "Pasting the SQL below by hand is NOT a sanctioned path",
@@ -60,5 +55,7 @@ def test_runbook_and_deployment_cutover_bodies_identical():
         assert token in rb  # safety-critical details survive, not just the numbered leaders
     assert "setval(pg_get_serial_sequence" not in rb  # the live sequence write must stay deleted
     assert "RESTART WITH <" not in rb  # no pseudocode placeholder survives into the runbook
+    # F3: the circular "confirm next_id > original before restoring" gate must be GONE
+    assert "confirm the id the sequence would hand the next writer is already past it" not in rb
     assert rb.count("edge-block the composer") == 2  # forward + rollback both establish the fence
     assert rb.count("remove the composer edge block") == 3  # forward + both rollback outcomes clear it

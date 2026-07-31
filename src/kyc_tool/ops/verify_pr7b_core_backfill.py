@@ -32,7 +32,10 @@ def verify_backfill(session_factory, *, lock_timeout_seconds: int = 60) -> tuple
         # `public.outbox` we are about to lock is the real object (a smuggled search_path
         # otherwise redirects everything below), and touch no outbox DATA — the SHARE lock
         # still precedes every data SELECT, which is the property the retention-race test pins.
-        binding.bind(s, lock_timeout_seconds=lock_timeout_seconds)
+        # exact 012: this is the PRE-window diagnostic and its parity matrix is schema-012 shaped.
+        # On a 013+ DB it would otherwise lock, run, and print "schema-012 parity matrix clean" —
+        # certifying a phase it never checked (re-audit `8377440` F12).
+        binding.bind(s, lock_timeout_seconds=lock_timeout_seconds, exact_revision="012")
         s.execute(text("LOCK TABLE public.outbox IN SHARE MODE"))  # BEFORE any data SELECT
         violations = run_parity(s)
         s.rollback()  # read-only: never write, never hold the lock past the check
@@ -59,13 +62,11 @@ def main() -> int:
             lock_timeout_seconds=settings.ops_lock_timeout_seconds,
         )
     except Exception as exc:  # noqa: BLE001 — one-shot CLI: classify, print, exit nonzero
-        if binding.is_lock_timeout(exc):
-            print(
-                binding.lock_timeout_message(
-                    "verify_pr7b_core_backfill", "SHARE on public.outbox"
-                ),
-                file=sys.stderr,
-            )
+        message = binding.timeout_message(
+            "verify_pr7b_core_backfill", "SHARE on public.outbox", exc
+        )
+        if message:
+            print(message, file=sys.stderr)
             return 1
         raise
     if code == 0:

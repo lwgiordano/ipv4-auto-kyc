@@ -500,38 +500,22 @@ migration 010 established in ADR-003).
            AND o.created_at IS NOT DISTINCT FROM :original_created_at;`
         Every schema-012 column is compared, so dropping any one of them from the restore fails
         the predicate. `IS NOT DISTINCT FROM` is used for nullables so NULL matches NULL.
-    (d) SEQUENCE PRECONDITION — READ-ONLY. Step 0 runs with API/pipeline/outbox writers LIVE (only
-        retention is suspended; the first hard-stop is cutover step 2), so NO sequence write happens
-        here. `setval(...)` is prohibited on this path: a sequence is a non-transactional object,
-        `LOCK TABLE outbox IN SHARE MODE` does NOT fence it, and a read-modify-write can rewind it
-        below an already-allocated id under a concurrent `nextval` → duplicate primary key. It is
-        also unnecessary: a retention-pruned id fills a gap BELOW the advanced sequence. Instead,
-        BEFORE restoring, confirm the id the sequence would hand the next writer is already past it
-        (`pg_get_serial_sequence('outbox','id')` names the sequence; expected `public.outbox_id_seq`):
-        `SELECT last_value + (CASE WHEN is_called THEN 1 ELSE 0 END) > <original_outbox_id> AS ok
-         FROM outbox_id_seq;`
-        It MUST be `true` — the quantity only ever increases under `nextval`, so observing it once
-        with writers live is durable. If it is `false` the row is NOT a prune (it is a restore from a
-        divergent lineage): ABORT step 0. A genuine sequence repair is a SEPARATE DRAINED action —
-        run it only after cutover step 2 has hard-stopped and attested every writer at zero, using a
-        sequence-serializing statement (`ALTER SEQUENCE`, which excludes concurrent `nextval`, unlike
-        `setval`), then read the value back before any writer restarts:
-        **Run the SHIPPED, TESTED ops CLI — do not paste SQL mid-outage:**
-        `python -m kyc_tool.ops.repair_outbox_sequence`
-        It takes `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` inside one transaction (the drain
-        fence is part of the procedure, not advice), computes `COALESCE(max(id), 0) + 1`, performs
-        the `ALTER SEQUENCE … RESTART WITH` (which takes a LITERAL value, never an
-        expression), and then **fail-closed reads back** `last_value`/`is_called` from the sequence
-        relation, rolling back and exiting **nonzero** unless they are exactly `(next_id, false)`.
-        It never calls `nextval` to probe: consuming an id to check the sequence, then `setval`-ing
-        it back, is itself a write to the object being repaired. On success it prints
-        `repair_outbox_sequence: OK` and on any failed read-back `repair_outbox_sequence: FAILED`
-        with the observed tuple — its exit status IS the result; a printed boolean is not, which
-        is why the earlier psql block could report success after a bad repair.
-    (e) The restore CLI enforces (b)+(c)+the sequence floor atomically; a genuinely divergent
-        sequence WITHOUT a restore (nothing missing, high-water wrong) is the only case for the
-        SEPARATE DRAINED `repair_outbox_sequence` (same maintenance-stop preconditions;
-        `--floor <id>` when an id above max must stay cleared).
+    (d) THE SEQUENCE IS THE RESTORE CLI'S JOB — there is NO separate precondition to satisfy
+        first (re-audit `8377440` F3: the old text made the restore reachable only after a
+        `next_id > original_outbox_id` check that the documented max=5/missing-id=100 case fails,
+        which is exactly the case the restore exists for). `restore_pr7b_core_callback` floors the
+        sequence to `GREATEST(max(id), original_id) + 1` in the SAME transaction as the row
+        insert, under `ACCESS EXCLUSIVE`, with a fail-closed read-back — whether the missing id is
+        below OR above the current high-water. It never `setval`s (a read-modify-write on a
+        non-transactional object that can rewind under concurrent `nextval`); `ALTER SEQUENCE …
+        RESTART WITH` takes a literal and excludes `nextval` for the transaction. Run it (dry-run,
+        then `--apply`) as step 0.5 above — the restore and the sequence floor are ONE action, not
+        a check-then-repair sequence.
+    (e) `python -m kyc_tool.ops.repair_outbox_sequence` is the SEPARATE DRAINED action for the
+        ONLY case the restore does not cover: a divergent sequence high-water with NO row to
+        restore (nothing missing, the counter itself is wrong). Same maintenance-stop
+        preconditions and owner privilege; `--floor <id>` when an id above max must stay cleared.
+        It is never a prerequisite the restore waits on.
     (f) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
 
 **Cutover (only after 0.4 is green):**

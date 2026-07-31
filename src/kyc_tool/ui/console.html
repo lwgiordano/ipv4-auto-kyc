@@ -322,8 +322,11 @@ const PILL={
   integrity_drift:["p-red","⚠","Pointer drift"],
   clear:["p-green","✓","Clear"],allowed_broker:["p-amber","!","Allowed broker"],blocked:["p-red","✕","Blocked"],
 };
-const PROV_PILL={unresolved_pointer_drift:["integrity_drift",undefined],unresolved_legacy_order:["missing","Unresolved order (pre-014)"],no_decisions:["missing","No decisions yet"],no_manual_decisions:["missing","No manual approval"],unresolved_pointer_drift_manual:["integrity_drift","Manual pointer drift"]};
-const provPill=(p,manual)=>{const k=manual&&p==="unresolved_pointer_drift"?p+"_manual":p;const[q,label]=PROV_PILL[k]||["missing",p];return pill(q,label)};
+const PROV_PILL={unresolved_pointer_drift:["integrity_drift",undefined],unresolved_legacy_order:["missing","Unresolved order (pre-014)"],no_decisions:["missing","No decisions yet"],no_manual_decisions:["missing","No manual approval"],latest_manual_row:["manual","Manual approval"],
+  // every MANUAL provenance state has its own pill (re-audit `8377440` F6): a legacy-unresolved
+  // manual history must NOT render identically to "no manual approval".
+  latest_manual_row_manual:["manual","Manual approval (authoritative)"],unresolved_pointer_drift_manual:["integrity_drift","Manual pointer drift"],unresolved_legacy_order_manual:["missing","Manual order unresolved (pre-014)"],no_manual_decisions_manual:["p-neutral","No manual approval"]};
+const provPill=(p,manual)=>{const k=manual?p+"_manual":p;const[q,label]=PROV_PILL[k]||PROV_PILL[p]||["missing",p];return pill(q,label)};
 const pill=(k,label)=>{const[c,i,d]=PILL[k]||["p-neutral","·",k];
   return`<span class="pill ${c}">${i}${NBSP}${esc(label??d)}</span>`};
 
@@ -548,7 +551,7 @@ async function viewCase(id){
     <div class="crumb"><a href="#/cases">Cases</a> / <span class="mono">${esc(c.id)}</span></div>
     ${tbar(esc(c.company_name||c.id),
       `<span class="chips">${decision?pill(decision):provPill(d.decision_provenance)}
-       ${d.manual_decision_provenance==="unresolved_pointer_drift"?provPill(d.manual_decision_provenance,true):""}
+       ${d.manual_decision_provenance&&d.manual_decision_provenance!=="no_manual_decisions"?provPill(d.manual_decision_provenance,true):""}
        ${c.status==="approved_manual"?pill("manual","Approved manually"):`<span class="pill p-neutral">${esc(c.status)}</span>`}
        <span class="pill p-neutral">buy: ${esc(c.buy_status)}</span>${pill(c.broker_status,`broker: ${c.broker_status}`)}</span>`,
       `<button class="primary" id="sendbtn">Send event</button>`)}
