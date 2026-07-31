@@ -43,11 +43,13 @@ _MIN_HMAC_SECRET_LEN = 32
 # HTTPX exposes one scalar timeout as four phase budgets: pool acquisition, connect, write, and
 # response-header read. It is not a total callback-attempt clock, and multiplying by four does
 # NOT produce one: each budget resets on I/O ACTIVITY, so a receiver dribbling response headers
-# with gaps under the timeout stalls the attempt for as long as it likes. Measured: a 0.5s
-# timeout — nominal 2.0s "envelope" — held the publisher 32s on drizzled headers. Four is a
-# conservative FLOOR for the lease, chosen so the common slow-but-honest attempt fits inside a
-# claim; it is not an upper bound on attempt duration, and no scalar timeout can give one.
-_HTTPX_CALLBACK_PHASE_COUNT = 4
+# with gaps under the timeout can stall a bare send indefinitely. Measured: a 0.5s timeout —
+# nominal 2.0s "envelope" — held a bare send 32s on drizzled headers. That is why the publisher
+# ENFORCES this as a hard wall-clock deadline on the whole attempt (send + status + ack drain,
+# `publisher._send_for_status`): past 4 × timeout the attempt is cancelled and recorded as a
+# retryable failure. With that enforcement, `lease > 4 × timeout + margin` (checked below) is a
+# real guarantee that a claim outlives its attempt — not phase arithmetic presented as one.
+OUTBOX_ATTEMPT_DEADLINE_PHASES = 4
 
 
 class Settings(BaseSettings):
@@ -257,20 +259,19 @@ def production_config_violations(settings: Settings) -> list[str]:
     if settings.hmac_v1_observation_window_days < 1:
         v.append("hmac_v1 observation window days must be >= 1")
 
-    # A claim lease shorter than one delivery attempt's HTTPX phase budgets plus DB/processing
-    # margin expires WHILE that attempt is in flight: admission then refuses the terminal for a
-    # request the receiver may well have accepted, and the row is redelivered. This is a FLOOR,
-    # not a proof — see _HTTPX_CALLBACK_PHASE_COUNT: no scalar-timeout arithmetic bounds attempt
-    # duration, so a lease above this floor can still expire mid-attempt against a pathological
-    # receiver. That residual is why the terminal write fails closed (the delivery is retried and
-    # deduped by the platform) rather than being written by a claimant who no longer owns the row.
-    http_phase_floor = settings.outbox_http_timeout_seconds * _HTTPX_CALLBACK_PHASE_COUNT
-    required_lease = http_phase_floor + settings.outbox_lease_margin_seconds
+    # A claim lease shorter than one delivery attempt plus DB/processing margin expires WHILE
+    # that attempt is in flight: admission then refuses the terminal for a request the receiver
+    # may well have accepted, and the row is redelivered. The publisher enforces
+    # `OUTBOX_ATTEMPT_DEADLINE_PHASES × timeout` as a hard wall-clock deadline on every attempt
+    # (see `_send_for_status`), so requiring the lease to exceed that deadline plus margin makes
+    # "the claim outlives its attempt" an enforced property, not phase arithmetic.
+    attempt_deadline = settings.outbox_http_timeout_seconds * OUTBOX_ATTEMPT_DEADLINE_PHASES
+    required_lease = attempt_deadline + settings.outbox_lease_margin_seconds
     if settings.outbox_lease_seconds <= required_lease:
         v.append(
             f"outbox_lease_seconds ({settings.outbox_lease_seconds}) must exceed "
-            f"the HTTPX phase floor ({_HTTPX_CALLBACK_PHASE_COUNT} × "
-            f"outbox_http_timeout_seconds = {http_phase_floor}) "
+            f"the enforced per-attempt deadline ({OUTBOX_ATTEMPT_DEADLINE_PHASES} × "
+            f"outbox_http_timeout_seconds = {attempt_deadline}) "
             f"+ outbox_lease_margin_seconds "
             f"({settings.outbox_lease_margin_seconds}) = {required_lease} — "
             f"a lease that expires mid-attempt makes every delivery unwitnessable"

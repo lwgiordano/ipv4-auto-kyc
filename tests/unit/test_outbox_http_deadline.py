@@ -167,3 +167,73 @@ def test_truncated_2xx_is_a_failure_not_a_delivery():
             _deliver(receiver, 1)
     finally:
         receiver.close()
+
+
+class _HeaderDripReceiver:
+    """Sends the status line one byte at a time with gaps UNDER the inactivity timeout —
+    the attack no per-operation timeout can stop, because each byte resets the budget."""
+
+    def __init__(self, interval: float = 0.02):
+        self.interval = interval
+        self._sock = socket.socket()
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(4)
+        self.url = f"http://127.0.0.1:{self._sock.getsockname()[1]}/kyc/decision"
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                conn, _ = self._sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._drip, args=(conn,), daemon=True).start()
+
+    def _drip(self, conn):
+        conn.settimeout(10)
+        try:
+            head = b""
+            while b"\r\n\r\n" not in head:
+                head += conn.recv(65536)
+            for byte in b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n" * 100:
+                time.sleep(self.interval)
+                conn.sendall(bytes([byte]))
+        except OSError:
+            return
+
+    def close(self):
+        self._sock.close()
+
+
+def test_header_drip_is_cancelled_at_the_attempt_deadline_and_the_publisher_recovers():
+    """A receiver dribbling header bytes under the inactivity timeout held a bare send 32x past
+    the nominal envelope — stalling the single-threaded publisher and outliving the claim lease.
+    The enforced deadline must cancel the attempt as a retryable failure, and the NEXT delivery
+    must succeed on the rebuilt client."""
+    from kyc_tool.outbox.publisher import _AttemptDeadlineExceeded
+
+    drip = _HeaderDripReceiver()
+    publisher = OutboxPublisher(
+        lambda: None,
+        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.1),
+    )  # enforced deadline: 4 x 0.1 = 0.4s
+    try:
+        request = publisher.http.build_request("POST", drip.url, content=b"{}")
+        started = time.monotonic()
+        with pytest.raises(_AttemptDeadlineExceeded):
+            publisher._send_for_status(request)
+        elapsed = time.monotonic() - started
+        assert elapsed < 3.0, f"cancellation took {elapsed:.2f}s — the deadline is not enforced"
+    finally:
+        drip.close()
+
+    healthy = _Receiver()
+    try:  # the stuck client was replaced; delivery works again without a new publisher
+        publisher._send_for_status(
+            publisher.http.build_request("POST", healthy.url, content=b"{}")
+        )
+        assert healthy.connections == 1
+    finally:
+        healthy.close()
+        publisher.http.close()

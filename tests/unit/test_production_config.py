@@ -104,32 +104,31 @@ def test_production_allows_pinning_off():
     validate_for_production(s)   # must not raise
 
 
-def test_lease_shorter_than_the_http_attempt_floor_plus_margin_fails_boot():
-    """A claim lease must exceed the HTTPX phase floor plus DB/processing margin.
+def test_lease_shorter_than_the_enforced_attempt_deadline_plus_margin_fails_boot():
+    """A claim lease must exceed the ENFORCED per-attempt deadline plus DB/processing margin.
 
-    HTTPX's scalar timeout is per-operation inactivity, not a total request deadline. A legal
-    attempt can spend that budget in pool/connect/write/read-header phases before the publisher
-    receives the response status, so production must size the lease for at least that much.
-
-    It is a FLOOR and the message must say so: each phase budget resets on I/O activity, so
-    4 × timeout bounds nothing — a receiver drizzling response headers held a publisher 32s
-    against a nominal 2s "envelope". Calling it an envelope told operators the lease could not
-    expire mid-attempt, which is false; the terminal write fails closed for exactly that case.
+    HTTPX's scalar timeout is per-operation inactivity, not a total request deadline — each
+    phase budget resets on I/O activity, so 4 × timeout bounds nothing by itself (a receiver
+    drizzling response headers held a bare send 32s against a nominal 2s "envelope"). The
+    publisher therefore enforces 4 × timeout as a hard wall-clock deadline on every attempt
+    (`_send_for_status` cancels and records a retryable failure past it), which is what makes
+    this boot check a real guarantee that a claim outlives its attempt.
     """
     v = production_config_violations(
         hardened(outbox_lease_seconds=11, outbox_http_timeout_seconds=10.0))
     assert any("outbox_lease_seconds" in s and "outbox_http_timeout_seconds" in s for s in v)
 
-    v_phase_floor = production_config_violations(
+    v_deadline = production_config_violations(
         hardened(
             outbox_lease_seconds=40,
             outbox_http_timeout_seconds=10.0,
             outbox_lease_margin_seconds=1.0,
         )
     )
-    assert any("HTTPX phase floor" in s for s in v_phase_floor)
-    assert not any("envelope" in s for s in v_phase_floor), (
-        "the message must not promise an envelope the arithmetic does not deliver"
+    assert any("enforced per-attempt deadline" in s for s in v_deadline)
+    assert not any("envelope" in s for s in v_deadline), (
+        "the message must not promise an envelope — the guarantee comes from the publisher's "
+        "enforced deadline, and the message names exactly that"
     )
 
     v_no_margin = production_config_violations(

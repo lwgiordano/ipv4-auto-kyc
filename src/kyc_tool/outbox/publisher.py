@@ -22,6 +22,8 @@ import re
 import socket
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -31,7 +33,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from kyc_tool import security
-from kyc_tool.config import Settings, parse_sunset
+from kyc_tool.config import OUTBOX_ATTEMPT_DEADLINE_PHASES, Settings, parse_sunset
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Outbox
@@ -53,6 +55,15 @@ _WIRE_VERSION = "legacy"
 # reusable. A platform ack is a few hundred bytes; past this it is not an ack we need, and reading
 # further would let the receiver decide how long the tool holds its claim.
 _MAX_ACK_BODY_BYTES = 64 * 1024
+
+
+class _AttemptDeadlineExceeded(Exception):
+    """One delivery attempt overran its enforced wall-clock deadline and was cancelled.
+
+    HTTPX's per-operation timeouts reset on I/O activity, so a receiver dribbling bytes under
+    the timeout could otherwise hold the (single-threaded) publisher — and its claim — for as
+    long as it liked. Routed through the ordinary failure path: accounted, backed off, retried.
+    """
 
 
 class _StaleClaim(Exception):
@@ -168,10 +179,14 @@ class OutboxPublisher:
     ) -> None:
         self.session_factory = session_factory
         self.settings = settings
-        self.http = http_client or httpx.Client(
-            timeout=settings.outbox_http_timeout_seconds)
+        # Rebuilding the client is part of the attempt-deadline contract: cancelling a stuck
+        # attempt works by closing the client out from under it (the blocked socket op raises),
+        # after which the pool is unusable and a fresh client takes its place.
+        self._http_factory = lambda: httpx.Client(timeout=settings.outbox_http_timeout_seconds)
+        self.http = http_client or self._http_factory()
         self.email_sender = email_sender or LoggingEmailSender()
         self._claimant = f"{socket.gethostname()}:{os.getpid()}"
+        self._send_pool: ThreadPoolExecutor | None = None
 
     # -- delivery -----------------------------------------------------------
 
@@ -253,9 +268,42 @@ class OutboxPublisher:
         )
 
     def _send_for_status(self, request: httpx.Request) -> None:
-        """Send a callback request and treat the response status as the acknowledgement.
+        """One delivery attempt under an ENFORCED wall-clock deadline.
 
-        The status is the witness, but the body is still DRAINED — under a byte cap and a real
+        HTTPX's per-operation timeouts reset on I/O activity, so no combination of them bounds
+        an attempt: a receiver dripping one header byte per interval holds a bare `send()`
+        indefinitely (measured: 32s against a 0.5s timeout), stalling the single-threaded
+        publisher and outliving the claim lease. The attempt therefore runs in a worker thread
+        with an absolute deadline of `OUTBOX_ATTEMPT_DEADLINE_PHASES × timeout` — the same
+        number the production config requires the lease to exceed, which is what makes
+        `lease > deadline + margin` a real guarantee instead of phase arithmetic. On overrun the
+        client is closed out from under the stuck thread (the blocked socket op raises), a fresh
+        client replaces it, and the attempt is recorded as an ordinary retryable failure.
+        """
+        deadline = OUTBOX_ATTEMPT_DEADLINE_PHASES * self.settings.outbox_http_timeout_seconds
+        if self._send_pool is None:
+            self._send_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="outbox-send")
+        future = self._send_pool.submit(self._send_and_drain, request)
+        try:
+            future.result(timeout=deadline)
+        except FutureTimeout:
+            log.error("outbox_attempt_deadline_exceeded",
+                      url=str(request.url), deadline_seconds=deadline)
+            # Closing the client makes the stuck thread's socket op raise, so it dies instead of
+            # wedging the pool; the pool is discarded anyway (unblocking is not guaranteed on
+            # every transport) and both are rebuilt fresh.
+            self.http.close()
+            self.http = self._http_factory()
+            self._send_pool.shutdown(wait=False, cancel_futures=True)
+            self._send_pool = None
+            raise _AttemptDeadlineExceeded(
+                f"delivery attempt exceeded its {deadline}s deadline and was cancelled"
+            ) from None
+
+    def _send_and_drain(self, request: httpx.Request) -> None:
+        """Send, treat the response status as the acknowledgement, and drain the body safely.
+
+        The status is the witness, but the body is still DRAINED — under a byte cap and a
         wall-clock budget — before the response is closed. Closing an unconsumed HTTP/1.1
         response is not free: httpcore cannot know where the next response begins on that
         socket, so it discards the connection. Measured on real sockets, four sequential
@@ -265,11 +313,15 @@ class OutboxPublisher:
         gateway that emits `200` headers before its origin commits, then closes, raises here and
         is retried, instead of stamping a terminal witness for bytes nobody kept.
 
-        The budget is what makes that safe to do. `httpx.Timeout` is per-I/O-operation
-        inactivity, not a deadline, so a receiver dripping bytes under the timeout could
-        otherwise set the publisher's pace and hold the claim lease past expiry. Past the cap or
-        the budget the drain is abandoned — the delivery still counts, we just pay the dropped
-        connection in the pathological case instead of in the normal one.
+        Abandoning the drain past the cap or budget is deliberate and DELIVERS: the witness this
+        taxonomy records is receipt of the 2xx status for the exact staged request bytes — the
+        response body carries no callback semantics, and completing its framing would prove
+        nothing more about what the platform accepted. Failing here instead would let any
+        verbose-but-healthy receiver drive a delivered callback through retries into a dead
+        letter — a false negative manufactured from our own refusal to keep reading. The cost of
+        abandonment is one dropped connection, paid in the pathological case instead of the
+        normal one. (A framing violation the drain OBSERVES — premature close, bad chunking —
+        still raises and retries; that is the receiver breaking HTTP, not us walking away.)
         """
         deadline = time.monotonic() + self.settings.outbox_http_timeout_seconds
         response = self.http.send(request, stream=True)
@@ -280,6 +332,14 @@ class OutboxPublisher:
                 # `MockTransport` handler that returns a plain `httpx.Response`). Nothing is left
                 # on the socket, so there is nothing to drain — and `iter_raw()` would raise
                 # `StreamConsumed` for a delivery that in fact succeeded.
+                return
+            declared = response.headers.get("content-length")
+            if declared and declared.isdigit() and int(declared) > _MAX_ACK_BODY_BYTES:
+                # The receiver has promised more than the cap: the drain would be abandoned
+                # anyway, so skip the pointless read instead of paying for _MAX_ACK_BODY_BYTES
+                # of a body we will not keep.
+                log.warning("outbox_callback_ack_body_abandoned",
+                            declared_bytes=int(declared), url=str(request.url))
                 return
             consumed = 0
             for chunk in response.iter_raw():
@@ -525,6 +585,14 @@ class OutboxPublisher:
         attempts = row.attempts + 1
         dead = attempts >= self.settings.outbox_max_attempts
         delay = self.settings.outbox_backoff_base_seconds * (2 ** (attempts - 1))
+        # Fenced on `claim_token` alone — deliberately NOT on a live lease. A failure write is
+        # BOOKKEEPING (attempts, backoff, dead-letter), not a witness: the danger the live-lease
+        # predicate exists for — a lapsed claimant stamping delivery evidence on a row someone
+        # else now owns — cannot arise here, and token rotation already fences the reclaimed
+        # case (a new claimant mints a new token, so this UPDATE matches zero rows). Requiring a
+        # live lease ADDITIONALLY made any failure that landed after lease expiry unrecordable:
+        # attempts never bumped, next_attempt_at stayed due, and the loop reclaimed and resent
+        # immediately — an unthrottled external send per cycle, with max_attempts unreachable.
         with uow(self.session_factory) as session:
             if dead:
                 redacted_payload = json.dumps({"redacted": True})
@@ -534,8 +602,7 @@ class OutboxPublisher:
                         "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL, "
                         "payload_json = CASE WHEN :redact_payload THEN CAST(:redacted AS jsonb) "
                         "ELSE payload_json END "
-                        "WHERE id=:id AND status='pending' AND claim_token=:token "
-                        "AND claim_lease_expires_at > clock_timestamp() RETURNING id"
+                        "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
                     ),
                     {
                         "id": row.id,
@@ -555,8 +622,7 @@ class OutboxPublisher:
                         "UPDATE outbox SET attempts=:a, last_error=:e, "
                         "next_attempt_at = now() + make_interval(secs => :delay), "
                         "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL "
-                        "WHERE id=:id AND status='pending' AND claim_token=:token "
-                        "AND claim_lease_expires_at > clock_timestamp() RETURNING id"
+                        "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
                     ),
                     {"id": row.id, "a": attempts, "e": error[:2000], "delay": delay, "token": token},
                 ).first()

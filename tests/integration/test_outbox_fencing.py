@@ -302,46 +302,16 @@ def test_expired_unreclaimed_poc_success_cannot_terminalize(session_factory, set
     assert after.claim_token == row.claim_token and after.claimed_by == "A"
 
 
-@pytest.mark.parametrize("max_attempts, expected_attempted", [(3, "retry"), (1, "dead")])
-def test_expired_unreclaimed_failure_cannot_retry_or_dead_letter(
-    session_factory, settings, clean_db, max_attempts, expected_attempted
-):
-    """An expired owner cannot burn attempts, reschedule, or dead-letter the row.
-
-    Production mutation this catches: either `_record_failure` branch omitting the live-lease
-    predicate. Token equality is not enough once the lease is past `clock_timestamp()`.
-    """
-    _seed_case(session_factory, f"c-expired-{expected_attempted}")
-    _enqueue_email(session_factory, case_id=f"c-expired-{expected_attempted}", to="expired@x")
-    row = _claim(session_factory, "A")
-    assert row is not None
-    _expire_lease(session_factory, row.id)
-
-    pub = _pub_for(session_factory, settings.model_copy(update={"outbox_max_attempts": max_attempts}))
-    with session_factory() as s:
-        before = s.execute(
-            text(
-                "SELECT status, attempts, next_attempt_at, last_error, claim_token, "
-                "claim_lease_expires_at, claimed_by, payload_json::text AS payload "
-                "FROM outbox WHERE id=:i"
-            ),
-            {"i": row.id},
-        ).one()
-    with structlog.testing.capture_logs() as logs:
-        pub._record_failure(row, "expired failure", row.claim_token)
-
-    stale = [e for e in logs if e["event"] == "outbox_stale_claim_completion"]
-    assert stale and stale[0]["attempted"] == expected_attempted
-    with session_factory() as s:
-        after = s.execute(
-            text(
-                "SELECT status, attempts, next_attempt_at, last_error, claim_token, "
-                "claim_lease_expires_at, claimed_by, payload_json::text AS payload "
-                "FROM outbox WHERE id=:i"
-            ),
-            {"i": row.id},
-        ).one()
-    assert after == before
+# SUPERSEDED (Codex re-audit `45cc215` F4): `test_expired_unreclaimed_failure_cannot_retry_or_
+# dead_letter` pinned the live-lease predicate on BOTH `_record_failure` branches — and that
+# predicate made any failure landing after lease expiry unrecordable: attempts never bumped,
+# next_attempt_at stayed due, and the loop reclaimed and resent the same row immediately, with
+# max_attempts unreachable (measured: two external sends, one accounted). A failure write is
+# bookkeeping, not a witness; the fence that matters is token ROTATION, which
+# `test_failure_from_a_rotated_out_claim_still_writes_nothing` (end of file) still pins. The
+# accounting contract that replaces this test lives beside it:
+# `test_failure_after_lease_expiry_is_accounted_exactly_once` and
+# `test_final_failure_after_lease_expiry_still_dead_letters_and_redacts`.
 
 
 def test_expired_unreclaimed_claimant_cannot_supersede(session_factory, settings, clean_db):
@@ -646,3 +616,114 @@ def test_configured_lease_reaches_the_database_unclamped(session_factory, settin
             "SELECT EXTRACT(EPOCH FROM (claim_lease_expires_at - now())) FROM outbox WHERE id=:i"),
             {"i": row.id}).scalar_one()
     assert 1700 < float(delta) <= 1800, f"configured lease was not what landed: {delta}"
+
+
+# --- failure accounting survives lease expiry (Codex re-audit `45cc215` F4) -------------------
+# The terminal WITNESS writes are fenced on (token, live lease); the failure write is fenced on
+# the token alone. Requiring a live lease there made any failure that landed after expiry
+# unrecordable: attempts never bumped, next_attempt_at stayed due, and the loop reclaimed and
+# resent immediately — one unthrottled external send per cycle, with max_attempts unreachable.
+
+
+def _expired_claim(session_factory, *, case_id, attempts=0):
+    """A pending due row whose claim tuple is set but whose lease has ALREADY expired —
+    exactly the state a slow delivery leaves behind when its failure outlives the lease."""
+    from types import SimpleNamespace
+
+    with session_factory() as s:
+        got = s.execute(
+            text(
+                "UPDATE outbox SET claim_token=gen_random_uuid(), "
+                "claim_lease_expires_at = now() - interval '1 second', claimed_by='t', "
+                "attempts=:a WHERE case_id=:c AND status='pending' "
+                "RETURNING id, kind, attempts, claim_token"
+            ),
+            {"c": case_id, "a": attempts},
+        ).one()
+        s.commit()
+    return SimpleNamespace(id=got.id, kind=got.kind, attempts=got.attempts), got.claim_token
+
+
+def test_failure_after_lease_expiry_is_accounted_exactly_once(session_factory, settings, clean_db):
+    """The audit's measured loop: lease expires mid-delivery, the failure write matched zero
+    rows, and the same row was reclaimed and resent with no attempt recorded. The failure must
+    account (attempts+1, future backoff, tuple cleared) even though the lease is gone."""
+    from kyc_tool.outbox.publisher import OutboxPublisher
+
+    _seed_case(session_factory, "cexp")
+    _enqueue_email(session_factory, case_id="cexp", to="x@y")
+    row, token = _expired_claim(session_factory, case_id="cexp")
+    pub = OutboxPublisher(
+        session_factory, settings,
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
+    )
+
+    pub._record_failure(row, "delivery outlived its lease", token)
+
+    with session_factory() as s:
+        st = s.execute(
+            text("SELECT status, attempts, claim_token, next_attempt_at > now() AS backed_off, "
+                 "last_error FROM outbox WHERE id=:i"), {"i": row.id}
+        ).one()
+    assert st.status == "pending" and st.attempts == 1
+    assert st.claim_token is None, "the expired tuple must be cleared, not left to block reclaim"
+    assert st.backed_off, "no backoff = the loop reclaims and resends immediately"
+    assert "outlived" in st.last_error
+
+
+def test_final_failure_after_lease_expiry_still_dead_letters_and_redacts(
+    session_factory, settings, clean_db
+):
+    """max_attempts must remain reachable through expired-lease failures — and the dead POC
+    email still scrubs its body in the same statement (022's terminal-redaction invariant)."""
+    from kyc_tool.outbox.publisher import OutboxPublisher
+
+    _seed_case(session_factory, "cdead")
+    _enqueue_email(session_factory, case_id="cdead", to="x@y")
+    row, token = _expired_claim(
+        session_factory, case_id="cdead", attempts=settings.outbox_max_attempts - 1
+    )
+    pub = OutboxPublisher(
+        session_factory, settings,
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
+    )
+
+    pub._record_failure(row, "last straw", token)
+
+    with session_factory() as s:
+        st = s.execute(
+            text("SELECT status, attempts, payload_json FROM outbox WHERE id=:i"), {"i": row.id}
+        ).one()
+    assert st.status == "dead" and st.attempts == settings.outbox_max_attempts
+    assert st.payload_json == {"redacted": True}, "terminal POC redaction must survive expiry"
+
+
+def test_failure_from_a_rotated_out_claim_still_writes_nothing(
+    session_factory, settings, clean_db
+):
+    """The fence that MATTERS is token rotation, and dropping the live-lease predicate must not
+    weaken it: once another claimant owns the row (new token), the old claimant's failure write
+    matches zero rows — its outcome belongs to a claim that no longer exists."""
+    from kyc_tool.outbox.publisher import OutboxPublisher
+
+    _seed_case(session_factory, "crot")
+    _enqueue_email(session_factory, case_id="crot", to="x@y")
+    row, old_token = _expired_claim(session_factory, case_id="crot")
+    with session_factory() as s:  # a second publisher reclaims: token rotates
+        s.execute(text(
+            "UPDATE outbox SET claim_token=gen_random_uuid(), "
+            "claim_lease_expires_at = now() + interval '60 seconds' WHERE id=:i"), {"i": row.id})
+        s.commit()
+    pub = OutboxPublisher(
+        session_factory, settings,
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
+    )
+
+    pub._record_failure(row, "stale claimant reporting late", old_token)
+
+    with session_factory() as s:
+        st = s.execute(
+            text("SELECT status, attempts, claim_token FROM outbox WHERE id=:i"), {"i": row.id}
+        ).one()
+    assert st.status == "pending" and st.attempts == 0
+    assert st.claim_token is not None, "the new claimant's tuple must be untouched"
