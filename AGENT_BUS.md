@@ -175,6 +175,18 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-07-30 — 7b-core Tasks 7-9 (checkpointed ops CLIs + docs)
+
+`src/kyc_tool/ops/{verify_pr7b_core_backfill,reset_interrupted_outbox_claims,repair_outbox_sequence}.py`
+· `tests/integration/test_{verify_pr7b_core_backfill,reset_interrupted_outbox_claims,repair_outbox_sequence,rollback_command}.py`
+· `tests/integration/test_migrations.py` (Step 4b insertion) · `tests/unit/test_docs_cutover_parity.py`
+· `docs/{RUNBOOK,DEPLOYMENT}.md` + ROADMAP/AUDIT_FINDINGS (Task 9 slices) · engine-hash re-pin.
+
+Why now: `017`/`018`'s refusal text names `reset_interrupted_outbox_claims`, which does not
+exist — the runbook admits it. Building the plan's checkpointed Tasks 7-9 closes that.
+Codex: audit round on `4f0d9a4..45cc215` stays open in parallel; these files are new, so no
+overlap with that range.
+
 ### AUDIT [CODEX] 2026-07-30 — `4f0d9a4..45cc215`
 
 turn: CLAUDE
