@@ -321,11 +321,15 @@ def test_012_validate_does_not_block_writers(pg):
 
 # --- PR 7b-core: migration 013 (outbox stream separation + local decision ordering) ---
 
-def _seed_legacy_callback(conn, *, case_id, run_id, decision_id, ev_seq, status="pending", decided_at=None):
+def _seed_legacy_callback(
+    conn, *, case_id, run_id, decision_id, ev_seq, status="pending", decided_at=None, payload=None
+):
     """Seed one valid case→event→run→automatic-decision→decision_callback chain at schema
     012 (no ordering_stream / decision_sequence columns yet), the callback in `status`
     (pending | delivered | dead). outbox.id order is enqueue order; decided_at defaults to
-    txn-start now() unless pinned. Runs inside the caller's transaction. Returns outbox id."""
+    txn-start now() unless pinned; `payload` (a JSON string) defaults to '{}' — the restore
+    acceptance test passes a nested non-ASCII body because an empty one matches anything.
+    Runs inside the caller's transaction. Returns outbox id."""
     conn.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case_id})
     conn.execute(
         text(
@@ -354,9 +358,9 @@ def _seed_legacy_callback(conn, *, case_id, run_id, decision_id, ev_seq, status=
     oid = conn.execute(
         text(
             f"INSERT INTO outbox (kind, case_id, run_id, payload_json, status, delivered_at) "
-            f"VALUES ('decision_callback',:c,:r,'{{}}'::jsonb,:st,{da}) RETURNING id"
+            f"VALUES ('decision_callback',:c,:r,CAST(:p AS jsonb),:st,{da}) RETURNING id"
         ),
-        {"c": case_id, "r": run_id, "st": status},
+        {"c": case_id, "r": run_id, "st": status, "p": payload if payload is not None else "{}"},
     ).scalar_one()
     return oid
 
@@ -1317,3 +1321,188 @@ def test_barrier_listener_never_leaks_when_thread_start_raises(pg, monkeypatch):
     # the whole point: the hook is gone despite the raise, and nothing was left running
     assert not event.contains(Engine, "after_cursor_execute", _barrier)
     assert not t.is_alive()
+
+
+# The runbook's executable restore acceptance predicate (Task 9 Step 5, step 0.6c). POSITIVE and
+# fail-closed: it asserts the restored row EXISTS and matches every recorded component, and must
+# return EXACTLY ONE row. A negative "select the mismatches, expect zero rows" formulation is
+# prohibited — an absent row, or one restored under the wrong run_id, matches nothing and is then
+# indistinguishable from an exact match (re-review 0ca264b P2).
+# EVERY schema-012 outbox column is recorded, restored and positively compared. The procedure runs
+# BEFORE 013, so it must not name a 013-only column: `resolved_at` and the claim tuple do not exist
+# yet, while `attempts`, `next_attempt_at`, `last_error` and `created_at` DO and are part of the row.
+# `IS NOT DISTINCT FROM` throughout so a NULL matches a NULL rather than yielding UNKNOWN.
+_RESTORE_ACCEPTANCE_SQL = text(
+    "SELECT 1 AS accepted FROM outbox o JOIN decisions d ON d.id = :decision_id "
+    "WHERE o.id = :original_outbox_id AND o.kind = :original_kind "
+    "AND o.case_id = :case_id AND o.run_id IS NOT DISTINCT FROM :run_id "
+    "AND d.case_id = o.case_id AND d.run_id IS NOT DISTINCT FROM o.run_id "
+    "AND encode(sha256(convert_to(o.payload_json::text,'UTF8')),'hex') = :body_digest "
+    "AND o.status = :original_status "
+    "AND o.delivered_at IS NOT DISTINCT FROM :original_delivered_at "
+    "AND o.attempts = :original_attempts "
+    "AND o.next_attempt_at IS NOT DISTINCT FROM :original_next_attempt_at "
+    "AND o.last_error IS NOT DISTINCT FROM :original_last_error "
+    "AND o.created_at IS NOT DISTINCT FROM :original_created_at"
+)
+
+# Read-only, monotonic sequence precondition (step 0.6d). The id the sequence would hand the NEXT
+# writer must already be PAST the restored id. is_called is load-bearing: on a never-called sequence
+# last_value is the id nextval will RETURN, not one already consumed. This never writes — a live
+# `setval(GREATEST(max(id), last_value))` can rewind the sequence under a concurrent nextval (a
+# non-transactional object; LOCK TABLE does not fence it) and is prohibited (re-review 0ca264b P1).
+_SEQ_HIGH_WATER_SQL = text(
+    "SELECT last_value + (CASE WHEN is_called THEN 1 ELSE 0 END) AS next_id FROM outbox_id_seq"
+)
+
+
+def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
+    """Re-audit F1 (+ re-review 0ca264b P1/P2) — the restore acceptance contract, on schema 012
+    with the REAL diagnostic CLI and the REAL 013 upgrade:
+    (1) two callbacks (ids captured), full evidence tuples recorded (simulating the backup);
+    (2) the OLDER callback is deleted (simulating a retention prune);
+    (3) the read-only sequence precondition holds — a pruned historical id is BELOW the
+        high-water mark, so no sequence write is needed (and none is performed);
+    (4) an ABSENT row is REJECTED (the fail-open hole the negative predicate had);
+    (5) a DEFAULT-id INSERT restore is REJECTED (its id differs — silent order reversal);
+    (6) each evidence component, mutated alone, is REJECTED (every one is load-bearing);
+    (7) restored with the EXACT original id AND original lifecycle fields → exactly one
+        accepted row, the real diagnostic CLI runs clean, 013 upgrades, and old/new map to
+        decision_sequence 1/2 (order authority preserved)."""
+    import datetime as _dt
+    import os
+    import subprocess
+    import sys
+
+    url = _fresh_db(pg, "kyc_mig_012_restore_acceptance")
+    cfg = _config(url)
+    alembic_command.upgrade(cfg, "012")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        # A non-empty, NESTED, non-ASCII body: with '{}' the restore round-trip proved nothing,
+        # because any empty payload matches any other (re-review 6a408a3 F6). Non-ASCII also
+        # exercises the digest's UTF-8 handling.
+        payload_a = json.dumps({
+            "decision": "approve", "buy_enablement": "enabled",
+            "gates": {"score_met": True, "legal_proof": True, "no_hard_conflict": True},
+            "checks": [{"type": "website_verified", "source": "reviewer:José Ω"}],
+        }, ensure_ascii=False)
+        oid_a = _seed_legacy_callback(conn, case_id="c1", run_id="rA", decision_id="dA",
+                                      ev_seq=1, status="delivered", payload=payload_a)
+        oid_b = _seed_legacy_callback(conn, case_id="c1", run_id="rB", decision_id="dB",
+                                      ev_seq=2, status="pending")
+        # A is a PREVIOUSLY RETRIED callback: without attempts/next_attempt_at/last_error/created_at
+        # in the evidence tuple, a restore that silently reset its retry clock and error history
+        # would still pass the predicate (re-review 0ca264b F4).
+        conn.execute(text(
+            "UPDATE outbox SET attempts=3, last_error='upstream 503', "
+            "next_attempt_at=now() - interval '2 days' WHERE id=:i"), {"i": oid_a})
+        assert oid_a < oid_b  # A is the authoritative OLDER callback
+        # the evidence tuple the operator captures FROM BACKUP before restoring — identity,
+        # body digest, AND the original lifecycle fields (substituting now() is prohibited)
+        evidence = {
+            r.run_id: {"decision_id": d, "run_id": r.run_id, "case_id": r.case_id,
+                       "original_outbox_id": r.id, "body_digest": r.digest,
+                       "original_status": r.status, "original_delivered_at": r.delivered_at,
+                       "original_attempts": r.attempts,
+                       "original_next_attempt_at": r.next_attempt_at,
+                       "original_last_error": r.last_error,
+                       "original_created_at": r.created_at, "original_kind": r.kind,
+                       "_payload": r.payload_json}
+            for r, d in zip(
+                conn.execute(text(
+                    "SELECT id, kind, run_id, case_id, status, delivered_at, attempts, "
+                    "next_attempt_at, last_error, created_at, payload_json, "
+                    "encode(sha256(convert_to(payload_json::text,'UTF8')),'hex') AS digest "
+                    "FROM outbox ORDER BY id")).all(),
+                ["dA", "dB"], strict=True,
+            )
+        }
+    ev = evidence["rA"]
+    assert ev["original_status"] == "delivered" and ev["original_delivered_at"] is not None
+    with engine.begin() as conn:  # simulate the retention prune of the OLD delivered callback
+        conn.execute(text("DELETE FROM outbox WHERE id=:i"), {"i": oid_a})
+
+    def _accepted(conn, e):
+        return conn.execute(_RESTORE_ACCEPTANCE_SQL, e).fetchall()
+
+    with engine.begin() as conn:
+        # (3) READ-ONLY precondition: the next id the sequence would hand out is already past
+        # the restored id, so the gap is safe to fill and NO sequence write is required.
+        next_id = conn.execute(_SEQ_HIGH_WATER_SQL).scalar_one()
+        assert next_id > ev["original_outbox_id"]
+        # (4) fail-closed on an ABSENT row: the pre-rev-10 negative predicate returned zero
+        # mismatches here and would have called this "accepted".
+        assert _accepted(conn, ev) == []
+
+    with engine.begin() as conn:  # (5) the PROHIBITED default-id restore
+        bad_id = conn.execute(text(
+            "INSERT INTO outbox (kind, case_id, run_id, payload_json, status, delivered_at) "
+            "VALUES ('decision_callback','c1','rA','{}'::jsonb,'delivered', now()) RETURNING id"
+        )).scalar_one()
+        assert bad_id > oid_b  # a fresh id — the restored row would rank NEWER than rB
+        assert _accepted(conn, ev) == []  # REJECTED: the id does not match the evidence
+        conn.execute(text("DELETE FROM outbox WHERE id=:i"), {"i": bad_id})  # operator undoes it
+
+    with engine.begin() as conn:  # (7a) the governed restore: EXACT id AND exact lifecycle
+        conn.execute(text(
+            "INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, delivered_at, "
+            "attempts, next_attempt_at, last_error, created_at) "
+            "VALUES (:i,:k,:c,:r,CAST(:p AS jsonb),:st,:da,:at,:na,:le,:ca)"
+        ), {"i": ev["original_outbox_id"], "k": ev["original_kind"],
+            "p": json.dumps(ev["_payload"]), "c": ev["case_id"], "r": ev["run_id"],
+            "st": ev["original_status"], "da": ev["original_delivered_at"],
+            "at": ev["original_attempts"], "na": ev["original_next_attempt_at"],
+            "le": ev["original_last_error"], "ca": ev["original_created_at"]})
+        assert _accepted(conn, ev) == [(1,)]  # ACCEPTED: exactly one row, every component matched
+        # the body really round-tripped — not an empty placeholder that would match anything
+        stored = conn.execute(text("SELECT payload_json FROM outbox WHERE id=:i"),
+                              {"i": ev["original_outbox_id"]}).scalar_one()
+        assert stored == ev["_payload"] and stored["checks"][0]["source"] == "reviewer:José Ω"
+
+        # (6) every evidence component is separately load-bearing: mutate one at a time, and
+        # the acceptance predicate must reject the (unchanged, correctly restored) row.
+        mutations = {
+            "decision_id": "d-nope",
+            "run_id": "r-nope",
+            "case_id": "c-nope",
+            "original_outbox_id": ev["original_outbox_id"] + 1000,
+            "body_digest": "0" * 64,
+            "original_kind": "poc_email",
+            "original_status": "pending",
+            "original_delivered_at": ev["original_delivered_at"] + _dt.timedelta(seconds=1),
+            "original_attempts": ev["original_attempts"] + 1,
+            "original_next_attempt_at": (
+                ev["original_next_attempt_at"] + _dt.timedelta(seconds=1)
+                if ev["original_next_attempt_at"] is not None
+                else _dt.datetime.now(_dt.UTC)
+            ),
+            "original_last_error": "not the recorded error",
+            "original_created_at": ev["original_created_at"] + _dt.timedelta(seconds=1),
+        }
+        for key, bad in mutations.items():
+            assert _accepted(conn, {**ev, key: bad}) == [], f"{key} is not load-bearing"
+
+        # a TAMPERED stored body must be rejected BEFORE the exact backup body is accepted —
+        # otherwise the digest column proves nothing about what was actually restored.
+        conn.execute(text("UPDATE outbox SET payload_json = CAST(:p AS jsonb) WHERE id=:i"),
+                     {"i": ev["original_outbox_id"],
+                      "p": json.dumps({**ev["_payload"], "decision": "reject"})})
+        assert _accepted(conn, ev) == []            # rejected: stored body no longer matches
+        conn.execute(text("UPDATE outbox SET payload_json = CAST(:p AS jsonb) WHERE id=:i"),
+                     {"i": ev["original_outbox_id"], "p": json.dumps(ev["_payload"])})
+        assert _accepted(conn, ev) == [(1,)]        # exact backup body restored -> accepted again
+
+    proc = subprocess.run(  # the REAL diagnostic must now be clean
+        [sys.executable, "-m", "kyc_tool.ops.verify_pr7b_core_backfill"],
+        env={**os.environ, "KYC_DATABASE_URL": url},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    alembic_command.upgrade(cfg, "013")  # the real migration ranks by outbox.id
+    with engine.connect() as conn:
+        seqs = {r.id: r.decision_sequence for r in conn.execute(
+            text("SELECT id, decision_sequence FROM decisions WHERE case_id='c1'"))}
+    assert seqs == {"dA": 1, "dB": 2}  # the restored OLD callback keeps sequence 1
+    engine.dispose()

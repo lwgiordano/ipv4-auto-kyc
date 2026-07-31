@@ -1345,14 +1345,15 @@ higher locally-published automatic sequence to compare). 7b-core does not claim 
         **Run the SHIPPED, TESTED ops CLI — do not paste SQL mid-outage:**
         `python -m kyc_tool.ops.repair_outbox_sequence`
         It takes `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` inside one transaction (the drain
-        fence is part of the procedure, not advice), computes `COALESCE(max(id),0)+1`, performs
-        the `ALTER SEQUENCE … RESTART WITH <literal>` (`RESTART WITH` takes a literal, never an
+        fence is part of the procedure, not advice), computes `COALESCE(max(id), 0) + 1`, performs
+        the `ALTER SEQUENCE … RESTART WITH` (which takes a LITERAL value, never an
         expression), and then **fail-closed reads back** `last_value`/`is_called` from the sequence
         relation, rolling back and exiting **nonzero** unless they are exactly `(next_id, false)`.
         It never calls `nextval` to probe: consuming an id to check the sequence, then `setval`-ing
-        it back, is itself a write to the object being repaired. Its exit status is the result —
-        a printed boolean is not, which is why the earlier psql block could report success after a
-        bad repair.
+        it back, is itself a write to the object being repaired. On success it prints
+        `repair_outbox_sequence: OK` and on any failed read-back `repair_outbox_sequence: FAILED`
+        with the observed tuple — its exit status IS the result; a printed boolean is not, which
+        is why the earlier psql block could report success after a bad repair.
     (e) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
 
 **Cutover (only after 0.4 is green):**
@@ -1362,7 +1363,7 @@ higher locally-published automatic sequence to compare). 7b-core does not claim 
 3. Run the shipped `python -m kyc_tool.ops.requeue_interrupted_jobs`. NO outbox reset here — the
    pre-013 schema has no claim columns; an interrupted old claim simply waits until its already-
    recorded `next_attempt_at`. Preserve every pending row's `next_attempt_at`.
-4. Run `python -m alembic -c alembic.ini upgrade head` (the chain `013`→`014`→`015`→`016`→`017`→`018`→`019`→`020`→`021`) — the deployment image runs its exact
+4. Run `python -m alembic -c alembic.ini upgrade head` (the chain `013`→`014`→…→`022`→`023`) — the deployment image runs its exact
    equivalent. This repeats the §0 parity preflights under the zero-writer boundary and is the
    authoritative fail-closed check (the pre-window diagnostic is an early detector, not a substitute).
    `017` additionally machine-checks the drain: it refuses with `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`
@@ -1379,11 +1380,14 @@ R2. Hard-stop and orchestrator-attest zero API, pipeline, outbox, `dev_worker`, 
 R3. While 013 still exists, run `python -m kyc_tool.ops.reset_interrupted_outbox_claims` (post-013-only;
     clears complete claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero) and
     verify zero claim tuples.
-R4. **With `021` installed there is no schema-downgrade path**: `018` through `021` refuse unconditionally
-    (`MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`) because walking below it would restore
+R4. **With `018` or anything above it installed there is no schema-downgrade path**: `018` through
+    `022` refuse unconditionally — a walk from the head prints
+    `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY` (`023`'s downgrade is a validation-only
+    no-op the walk passes through first; the whole command is ONE transaction, so on refusal
+    even that step rolls back and the schema does not move) — because walking below them would restore
     search-path-vulnerable authority functions, so rollback goes straight to R5 (image-only on
-    schema `018`). The walk below is the HISTORICAL path, reachable only on a schema that never
-    reached `018`/`019`: run `python -m alembic -c alembic.ini downgrade 012` (the revision is a
+    the schema already installed). The walk below is the HISTORICAL path, reachable only on a
+    schema that never reached `018`: run `python -m alembic -c alembic.ini downgrade 012` (the revision is a
     REQUIRED positional argument — a bare `alembic downgrade` exits with a usage error
     mid-outage). That walk is `017 → 016 → 015 → 014 → 013 → 012`, and EACH revision preflights
     under
@@ -1404,7 +1408,7 @@ R4. **With `021` installed there is no schema-downgrade path**: `018` through `0
 R5. ROLLBACK OUTCOME A — downgrade REFUSED (any sentinel above): the DB stays on the
     witness-authority schema, so KEEP or redeploy the reviewed **`023`-COMPATIBLE image** digest —
     an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
-    evidence; the pre-7b image is PROHIBITED outright. Rollback after first witness use is a
+    evidence; PROHIBIT the pre-7b image outright. Rollback after first witness use is a
     FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is
     permitted ONLY after the entire walk reaches `012` (outcome B). Verify `/readyz`, start + attest its fenced workers, then
     re-enable retention, autoscaling/restarts, and submissions and remove the composer edge block —

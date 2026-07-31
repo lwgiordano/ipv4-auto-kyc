@@ -13,6 +13,9 @@
 | Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot; PRE-cutover for `enforce_bundle_pinning` (PR 6, `docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
 | Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot; stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
 | Bundle epoch activation | `python -m kyc_tool.ops.activate_bundle_pinning_epoch --expect-bundle-hash <sha256> --expect-engine <id>` | one-shot, POST-cutover (PR 6, `docs/DEPLOYMENT.md` §10); idempotent on a matching re-run, fails on a mismatched one |
+| 7b-core pre-window diagnostic | `python -m kyc_tool.ops.verify_pr7b_core_backfill` | one-shot, schema-012-compatible, SHARE-locked, read-only; PRE-window (retention suspended + attested zero) — nonzero exit + `BLOCKED_NO_AUTHORITATIVE_MAPPING` blocks the cutover (see the cutover section) |
+| Outbox claim reset | `python -m kyc_tool.ops.reset_interrupted_outbox_claims` | one-shot, post-013-only; ONLY with every publisher stopped + attested — clears complete claim tuples, preserves `next_attempt_at`, atomic (refuses on any surviving tuple) |
+| Outbox sequence repair | `python -m kyc_tool.ops.repair_outbox_sequence` | one-shot, DRAINED window only (takes `ACCESS EXCLUSIVE` on outbox); restarts `outbox_id_seq` at `max(id)+1` with a fail-closed read-back — exit status IS the result |
 
 > **Migration 010 (PR 5a) is a non-hot, forward-only-after-reuse cutover.** It
 > drops the global unique on `events.idempotency_key`, which the *old* image's
@@ -51,24 +54,33 @@
 > publisher lacks the receipt/terminal contract and must not run against preserved evidence;
 > a pre-7b image is permitted only after the entire walk reaches 012.
 
-> **`022` and `023` need the PIPELINE drained too, not just the publishers.** They are the
-> first revisions in the chain to take `ACCESS EXCLUSIVE` on `decisions` and `cases`. The decide
-> transaction locks `cases` FOR UPDATE, then inserts `decisions`, then inserts `outbox` — the
-> opposite order — so running either migration against a live pipeline **deadlocks** (Postgres
-> reports `40P01` and kills one side; reproduced against a live decide, and `021` does not do
-> it). This is not silent corruption: DDL is transactional, so a killed migration rolls back
-> whole and the schema stays where it was. But it costs the window and it can kill a decide
-> instead of the migration, so drain the pipeline workers as well before applying `022`/`023`
-> and re-run. Unlike the live-claim preflight, this one is **not machine-checked** — `022` and
-> `023` are published and cannot be amended to add one.
+> **`022` and `023` need EVERY decision writer drained — the pipeline AND the API — not just
+> the publishers.** They are the first revisions in the chain to take `ACCESS EXCLUSIVE` on
+> `decisions` and `cases`. Two writers take those locks in the opposite order: the pipeline's
+> decide transaction (case `FOR UPDATE`, then the `decisions` insert), and the **API process
+> itself** — `reviewer.manual_approve` is handled inline in the ingest transaction with the
+> same case-lock-then-decision-insert shape, with no job and no run, so a job/run drain check
+> cannot see it. Running either migration against either writer **deadlocks** (Postgres
+> reports `40P01` and kills one side; reproduced against both a live decide and a live inline
+> manual approval; `021` does not do it). This is not silent corruption: DDL is transactional,
+> so a killed migration rolls back whole and the schema stays where it was. But it costs the
+> window and it can kill the approval instead of the migration, so before applying `022`/`023`
+> pause event submission, stop and attest the API writers AND the pipeline workers (as well as
+> publishers/retention), then re-run. Unlike the live-claim preflight, this one is **not
+> machine-checked** — `022` and `023` are published and cannot be amended to add one; the
+> machine-checked fence ships with `024` (activation blocker O4).
 
 ### Migration refusal sentinels
 
 Every deliberate migration refusal raises a **stable sentinel string**, so a refused
 `alembic upgrade`/`downgrade` reads as a designed stop rather than a broken migration.
 Grep the sentinel out of the command's output and find it here. The exception message
-itself always names the offending rows or objects and the remediation — this index tells
-you what class of stop you are looking at; the message tells you what to do about it.
+names the offending rows or objects and a remediation — but published migrations are
+frozen, so a frozen message can lag this document: **where the message and this runbook
+disagree, the runbook wins.** Concretely, `022`'s forward-only refusal still names the
+compatible image for the revision it froze at (`022`); the image to keep is always the one
+compatible with the **live head** — `023`-compatible today, kept current in this document
+by a head-derived test that a frozen migration message cannot satisfy.
 
 `tests/unit/test_plan_artifact_static.py` fails if a migration raises a sentinel this
 table omits, so a new refusal cannot ship undocumented.
@@ -131,6 +143,9 @@ lists **all** violations at once:
 | `KYC_ADAPTERS_PROFILE` | not the `fixture` stub |
 | `KYC_READ_AUTH_REQUIRED` | `true` (read API requires a signed request) |
 | `KYC_UI_ADMIN_TOKEN` | required when `KYC_UI_ENABLED=true` |
+| `KYC_OUTBOX_LEASE_SECONDS` | must EXCEED `4 × KYC_OUTBOX_HTTP_TIMEOUT_SECONDS + KYC_OUTBOX_LEASE_MARGIN_SECONDS` — the publisher enforces 4 × timeout as a hard per-attempt deadline, and a lease that expires mid-attempt makes every delivery unwitnessable |
+| `KYC_OUTBOX_HTTP_TIMEOUT_SECONDS` | per HTTPX **inactivity** phase (not a total clock); 4 × this is the enforced whole-attempt deadline. Raising it raises the required lease FOUR-fold — move the two together or production refuses to boot |
+| `KYC_OUTBOX_LEASE_MARGIN_SECONDS` | DB commit/processing room added to the deadline in the lease rule above |
 
 The real OCR/email/adapter providers are not implemented yet (they land with the
 executable-contract work), so a production worker cannot start until they exist —
@@ -256,6 +271,152 @@ Adapter p95 in `/v1/metrics`; per-upstream rate caps via
 count). Queue depth is `jobs_by_status.queued`; scale pipeline workers
 horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
 
+## PR 7b-core cutover — drained maintenance window (migration 013)
+
+**Step 0 — pre-window diagnostic (BEFORE any outage):**
+0.1 Suspend the retention schedule.
+0.2 Terminate and wait for every active retention task.
+0.3 Capture target-orchestrator zero-running evidence. `TODO(integration)`: the exact ECS/Fargate
+    `aws ecs list-tasks --cluster <c> --family retention` (or EC2 equivalent) command + its expected
+    zero-task output MUST be recorded here once the production substrate is chosen. A pytest does NOT
+    prove this — it is a deployment acceptance. Do not invent a substrate.
+0.4 With the schedule still suspended, run the digest-pinned
+    `python -m kyc_tool.ops.verify_pr7b_core_backfill`. The result is valid ONLY while retention stays
+    suspended AND the 0.3 attestation holds.
+0.5 On failure, ABORT here — before stopping service (no outage begun). Recovery is restore-or-block:
+    restore from authoritative backup the EXACT callback row, OR remain on 012 in
+    `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`024`) is
+    downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
+    `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
+0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
+    advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
+    (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
+        callback: `decision_id` plus **every schema-012 `outbox` column** —
+        `(id, kind, case_id, run_id, payload_json, status, attempts, next_attempt_at,
+        delivered_at, last_error, created_at)` — with `body_digest` computed ON THE BACKUP ROW as
+        `encode(sha256(convert_to(payload_json::text,'UTF8')),'hex')`. `md5(...)` is prohibited.
+        This procedure runs BEFORE 013, so it must name NO 013-only column: `resolved_at`,
+        `ordering_stream`, `decision_sequence` and the claim tuple do not exist yet. Omitting the
+        retry/audit columns is what makes "exact" false — a previously retried callback restored
+        with a reset `attempts`/`next_attempt_at`/`last_error` is NOT the row that was pruned.
+    (b) The restore MUST re-insert the ORIGINAL primary key AND every other recorded column:
+        `INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, attempts,
+         next_attempt_at, delivered_at, last_error, created_at) VALUES (<original_outbox_id>, ...)`
+         — every value from the evidence tuple, none defaulted. A
+        default-id INSERT is prohibited (it allocates a fresh id and re-ranks the restored older
+        callback as newer), and substituting `now()` for `delivered_at` is prohibited (it falsifies
+        the audit record). If the original id is unavailable, do NOT restore: remain
+        `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012.
+    (c) ACCEPTANCE PREDICATE — POSITIVE and fail-closed. Run per restored callback; it MUST return
+        EXACTLY ONE row before proceeding. ZERO rows = still blocked. Do NOT invert it into a
+        "select the mismatches, expect zero rows" form: an absent row (or one restored under the
+        wrong `run_id`) matches nothing and would read as accepted.
+        `SELECT 1 AS accepted FROM outbox o JOIN decisions d ON d.id = :decision_id
+         WHERE o.id = :original_outbox_id AND o.kind = :original_kind
+           AND o.case_id = :case_id AND o.run_id = :run_id
+           AND d.case_id = o.case_id AND d.run_id = o.run_id
+           AND encode(sha256(convert_to(o.payload_json::text,'UTF8')),'hex') = :body_digest
+           AND o.status = :original_status
+           AND o.delivered_at IS NOT DISTINCT FROM :original_delivered_at
+           AND o.attempts = :original_attempts
+           AND o.next_attempt_at IS NOT DISTINCT FROM :original_next_attempt_at
+           AND o.last_error IS NOT DISTINCT FROM :original_last_error
+           AND o.created_at IS NOT DISTINCT FROM :original_created_at;`
+        Every schema-012 column is compared, so dropping any one of them from the restore fails
+        the predicate. `IS NOT DISTINCT FROM` is used for nullables so NULL matches NULL.
+    (d) SEQUENCE PRECONDITION — READ-ONLY. Step 0 runs with API/pipeline/outbox writers LIVE (only
+        retention is suspended; the first hard-stop is cutover step 2), so NO sequence write happens
+        here. `setval(...)` is prohibited on this path: a sequence is a non-transactional object,
+        `LOCK TABLE outbox IN SHARE MODE` does NOT fence it, and a read-modify-write can rewind it
+        below an already-allocated id under a concurrent `nextval` → duplicate primary key. It is
+        also unnecessary: a retention-pruned id fills a gap BELOW the advanced sequence. Instead,
+        BEFORE restoring, confirm the id the sequence would hand the next writer is already past it
+        (`pg_get_serial_sequence('outbox','id')` names the sequence; expected `public.outbox_id_seq`):
+        `SELECT last_value + (CASE WHEN is_called THEN 1 ELSE 0 END) > <original_outbox_id> AS ok
+         FROM outbox_id_seq;`
+        It MUST be `true` — the quantity only ever increases under `nextval`, so observing it once
+        with writers live is durable. If it is `false` the row is NOT a prune (it is a restore from a
+        divergent lineage): ABORT step 0. A genuine sequence repair is a SEPARATE DRAINED action —
+        run it only after cutover step 2 has hard-stopped and attested every writer at zero, using a
+        sequence-serializing statement (`ALTER SEQUENCE`, which excludes concurrent `nextval`, unlike
+        `setval`), then read the value back before any writer restarts:
+        **Run the SHIPPED, TESTED ops CLI — do not paste SQL mid-outage:**
+        `python -m kyc_tool.ops.repair_outbox_sequence`
+        It takes `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` inside one transaction (the drain
+        fence is part of the procedure, not advice), computes `COALESCE(max(id), 0) + 1`, performs
+        the `ALTER SEQUENCE … RESTART WITH` (which takes a LITERAL value, never an
+        expression), and then **fail-closed reads back** `last_value`/`is_called` from the sequence
+        relation, rolling back and exiting **nonzero** unless they are exactly `(next_id, false)`.
+        It never calls `nextval` to probe: consuming an id to check the sequence, then `setval`-ing
+        it back, is itself a write to the object being repaired. On success it prints
+        `repair_outbox_sequence: OK` and on any failed read-back `repair_outbox_sequence: FAILED`
+        with the observed tuple — its exit status IS the result; a printed boolean is not, which
+        is why the earlier psql block could report success after a bad repair.
+    (e) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
+
+**Cutover (only after 0.4 is green):**
+1. Pause submission, edge-block the composer, disable autoscaling/restarts.
+2. Hard-stop API, pipeline, outbox, `dev_worker` (queue AND outbox), retention, and every writer;
+   attest zero at the orchestrator.
+3. Run the shipped `python -m kyc_tool.ops.requeue_interrupted_jobs`. NO outbox reset here — the
+   pre-013 schema has no claim columns; an interrupted old claim simply waits until its already-
+   recorded `next_attempt_at`. Preserve every pending row's `next_attempt_at`.
+4. Run `python -m alembic -c alembic.ini upgrade head` (the chain `013`→`014`→…→`022`→`023`) — the deployment image runs its exact
+   equivalent. This repeats the §0 parity preflights under the zero-writer boundary and is the
+   authoritative fail-closed check (the pre-window diagnostic is an early detector, not a substitute).
+   `017` additionally machine-checks the drain: it refuses with `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`
+   while any live (unexpired) outbox claim exists — leases must expire or be reset first.
+5. Start API only, probe `/readyz`, then start + attest the fenced workers. No mutating prod smoke.
+6. RESUME (forward completion): re-enable retention, autoscaling/restarts, and submissions, and
+   remove the composer edge block. The window is NOT closed until all five paused controls
+   (retention, autoscaling, restarts, submissions, composer edge block) are restored or removed.
+
+**Rollback — a two-branch maintenance state machine (as drained as the forward cutover). BOTH branches
+end in a full resume — never leave the system stopped or retention frozen:**
+R1. Pause submissions, edge-block the composer, disable autoscaling/restarts.
+R2. Hard-stop and orchestrator-attest zero API, pipeline, outbox, `dev_worker`, retention, every writer.
+R3. While 013 still exists, run `python -m kyc_tool.ops.reset_interrupted_outbox_claims` (post-013-only;
+    clears complete claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero) and
+    verify zero claim tuples.
+R4. **With `018` or anything above it installed there is no schema-downgrade path**: `018` through
+    `022` refuse unconditionally — a walk from the head prints
+    `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY` (`023`'s downgrade is a validation-only
+    no-op the walk passes through first; the whole command is ONE transaction, so on refusal
+    even that step rolls back and the schema does not move) — because walking below them would restore
+    search-path-vulnerable authority functions, so rollback goes straight to R5 (image-only on
+    the schema already installed). The walk below is the HISTORICAL path, reachable only on a
+    schema that never reached `018`: run `python -m alembic -c alembic.ini downgrade 012` (the revision is a
+    REQUIRED positional argument — a bare `alembic downgrade` exits with a usage error
+    mid-outage). That walk is `017 → 016 → 015 → 014 → 013 → 012`, and EACH revision preflights
+    under
+    `LOCK TABLE ... ACCESS EXCLUSIVE` (child-first from `015` on; `017` first takes the shared
+    maintenance/writer advisory fence EXCLUSIVE, so it queues behind live witness writers instead
+    of reasoning about their lock order). Sentinels in execution order:
+    - `017` refuses — `MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE` — when ANY attempt row,
+      terminal wire digest, or `attempt_v1` decision callback exists. NEGATIVE evidence counts:
+      an attempt-regime row with no attempt is the durable proof nothing was staged.
+    - `016` refuses — `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE` — same rule one revision
+      down (defense in depth below `017`), including the `attempt_v1` negative-evidence case.
+    - `015` refuses — `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE` — on any attempt row or
+      terminal digest (child-first lock order; cannot deadlock a live writer).
+    - `014` refuses — `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE` — same witness rule.
+    - `013` refuses on a `superseded` row, a surviving terminal digest
+      (`MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`), or the attempt table under a bare `013`
+      stamp (`MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`).
+R5. ROLLBACK OUTCOME A — downgrade REFUSED (any sentinel above): the DB stays on the
+    witness-authority schema, so KEEP or redeploy the reviewed **`023`-COMPATIBLE image** digest —
+    an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
+    evidence; PROHIBIT the pre-7b image outright. Rollback after first witness use is a
+    FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is
+    permitted ONLY after the entire walk reaches `012` (outcome B). Verify `/readyz`, start + attest its fenced workers, then
+    re-enable retention, autoscaling/restarts, and submissions and remove the composer edge block —
+    OR remain in a DELIBERATELY DECLARED maintenance incident while the forward fix is applied. Do
+    not end stopped.
+R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image digest; start API, probe
+    `/readyz`, then start + attest its workers; attest image digest + running processes; then re-enable
+    retention, autoscaling/restarts, and submissions and remove the composer edge block. Redeploying
+    the pre-7b image BEFORE 013 is applied is also safe.
+
 ## Retention & compliance
 
 `workers.retention` prunes audit rows, delivered **`poc_email`** outbox rows,
@@ -353,10 +514,12 @@ recipient hash.
 > while any unexpired outbox claim exists — the
 > database checks live outbox claims, but it cannot prove that no API, publisher, pipeline,
 > dev worker, or retention process is still running. Stop those processes, attest zero old
-> processes at the orchestrator, then let the leases expire and retry. (The migrations' own refusal text
-> names a `reset_interrupted_outbox_claims` CLI: that command is PLANNED and NOT YET
-> BUILT — it ships with the checkpointed ops tasks. Until it does, waiting out the lease
-> is the remediation; `KYC_OUTBOX_LEASE_SECONDS` bounds how long that takes.) `018` and `019` additionally refuse with
+> processes at the orchestrator, then either let the leases expire
+> (`KYC_OUTBOX_LEASE_SECONDS` bounds how long that takes) or run the shipped
+> `python -m kyc_tool.ops.reset_interrupted_outbox_claims` (post-013-only; clears complete
+> claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero — it refuses
+> rather than partially resetting if any tuple survives), then retry. It MUST NOT run while
+> any publisher is live. `018` and `019` additionally refuse with
 > `MIGRATION_018_AUTHORITY_MANIFEST_MISMATCH` / `MIGRATION_019_AUTHORITY_MANIFEST_MISMATCH`
 > when the
 > observable authority surface (columns, constraints, indexes, trigger definitions, authority

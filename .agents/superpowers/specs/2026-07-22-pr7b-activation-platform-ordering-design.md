@@ -78,7 +78,7 @@ Adds only what activation needs (7b-core's `013` already carries stream/sequence
 
 **Payload ownership boundary (rev-6 P3):** 013 (7b-core) writes `decision_sequence` **only to the
 `decisions`/`outbox` columns** and keeps `payload_json` **and the HTTP body byte-identical** to pre-7b
-— it puts nothing on the wire and owns no phase reader. **022 owns the callback-JSON field**: it
+— it puts nothing on the wire and owns no phase reader. **The activation migration (`024`) owns the callback-JSON field**: it
 (a) **backfills** the internal field into every surviving legacy `decision_callback.payload_json` from
 the FK-bound column, and (b) **adds** it to newly-enqueued callback payloads. Neither the pipeline nor
 013 flag-gates anything. All emission lives at `_deliver_decision_callback` (`publisher.py:82-122`),
@@ -93,7 +93,7 @@ governed by `read_ordering_phase(session) → (phase, flag)`:
 
 Checked **before claim** and **again immediately before HTTP** (phase can advance between). Config
 (`config.py:77-79`): `callback_include_decision_sequence: bool = False`; schema
-(`api/schemas.py:144-164`): `decision_sequence: int | None = None`. (022's payload backfill, defined
+(`api/schemas.py:144-164`): `decision_sequence: int | None = None`. (the `024` payload backfill, defined
 in the ownership boundary above, is what lets a pre-flag pending/dead callback emit correctly after
 activation and never strand.)
 
@@ -169,7 +169,7 @@ shared transaction between the platform and the tool, so ownership must be split
 | Owner | Owns |
 |---|---|
 | **Platform** | effective source, current `manual_event_id`, pending release id + deadline + operator, `h(c)`, and the **final atomic source swap** |
-| **Tool (022)** | a durable `outbox_manual_release` record keyed `(case_id, release_id)`: the signed request/event id, the requested `manual_event_id`, the authorized principal, the deadline, an immutable outcome `pending|completed|expired|cancelled`, and the bound `run_id`/`decision_sequence` |
+| **Tool (`024`)** | a durable `outbox_manual_release` record keyed `(case_id, release_id)`: the signed request/event id, the requested `manual_event_id`, the authorized principal, the deadline, an immutable outcome `pending|completed|expired|cancelled`, and the bound `run_id`/`decision_sequence` |
 
 Neither side may infer the other's state. The tool's record is what makes the saga recoverable after
 a lost response; the platform's swap is what makes it authoritative.
@@ -380,15 +380,15 @@ bound sequence; the discarded pre-release callbacks never satisfy it.
 
 ## Testing strategy (real Postgres, each with a mutation witness)
 
-- **Migration 023:** `failure_class` + activation singleton + artifacts; direct SQL for every illegal
+- **The activation migration (`024`):** `failure_class` + activation singleton + artifacts; direct SQL for every illegal
   phase tuple (`active`/`bootstrapped` without digests/artifacts, reverse transition, out-of-order
   timestamps) fails; `integrity_mismatch` lifecycle CHECK enforced; `up→down→up` clean on a legacy
   schema; downgrade **refuses** once `phase != 'legacy'`.
 - **Payload-ownership boundary (rev-6 P3):** after **013**, the DB `payload_json` **and** the wire body
-  contain **no** `decision_sequence`; after the **022** migration, existing pending/dead
-  `decision_callback.payload_json` contains the FK-bound value and a newly-enqueued 022 callback
+  contain **no** `decision_sequence`; after the activation migration (`024`), existing pending/dead
+  `decision_callback.payload_json` contains the FK-bound value and a newly-enqueued post-activation callback
   contains it internally; `legacy` still emits the pre-7b bytes; `active` emits it. Mutations —
-  adding the JSON field in 013, or omitting either the 022 legacy-backfill or the 022 new-enqueue
+  adding the JSON field in 013, or omitting either the `024` legacy-backfill or the `024` new-enqueue
   writer — must fail.
 - **Wire emission + silent-loss window:** create pending **and** dead callbacks while `legacy`; enter
   `bootstrap_in_progress`; barrier an old `legacy`/false-flag publisher immediately before HTTP and
@@ -444,7 +444,7 @@ reconciliation semantics), `.agents/ROADMAP.md` (the split + renumber + ADR-008,
 
 - Everything in 7b-core (stream separation, the internal sequence, the best-effort local `superseded`
   guard, the fenced claim, the per-case + identity constraints) is a **prerequisite**, SHIPPED as
-  `013`-`022`.
+  `013`-`023`.
 - No enforcement/scoring/`ENGINE_BUILD_ID` change; M2 untouched. `event_sequence` (D1, PR 2) keeps its
   `_callback_body` gate. PR 7a fences the **jobs** queue. PR 6b consumes this unit's ordering
   authority; it may build on 7b-core's primitive but not activate until `phase='active'`.
@@ -729,16 +729,25 @@ items were partly built on; they are restated here as requirements, not as settl
   exact event, state and setting names — none of `manual.release_requested`,
   `outbox_manual_release`, or the outcome/reaper contract currently appears in any of them.
 
-- **O4 (2026-07-30) — this unit must carry the pipeline-quiescence preflight `022`/`023` could
-  not.** Those two are the first revisions in the chain to take `ACCESS EXCLUSIVE` on `decisions`
-  and `cases`. The decide transaction locks `cases` FOR UPDATE, then inserts `decisions`, then
-  inserts `outbox` — the opposite order — so a concurrent decide deadlocks the migration
-  (`40P01`, reproduced; the identical harness against `021` commits both sides). It fails safely,
-  but it costs the window, and `022`/`023` are published so no preflight can be added to them.
-  This unit takes the same locks. **Required:** a machine-checked preflight in the same shape as
-  `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` — refuse with a stable sentinel while any pipeline job is
-  claimed or any run is mid-decide, rather than relying on an operator having read the runbook.
-  The live-claim preflight cannot substitute: a run mid-decide holds no outbox claim.
+- **O4 (2026-07-30, amended same day) — this unit must fence BOTH decision writers, because a
+  quiescence preflight alone cannot see one of them.** `022`/`023` are the first revisions in the
+  chain to take `ACCESS EXCLUSIVE` on `decisions` and `cases`, and TWO writers take those locks
+  in the opposite order: the pipeline's decide transaction (case `FOR UPDATE` → `decisions`
+  insert) and the **API's inline `reviewer.manual_approve`** (`events/ingest.py` handles it in
+  the ingest transaction — same lock shape, no job, no run, no outbox claim, so no job/run/claim
+  preflight can observe it). A concurrent decide OR inline approval deadlocks the migration
+  (`40P01`, both reproduced; the identical harness against `021` commits both sides). It fails
+  safely, but it costs the window, and `022`/`023` are published so nothing can be added to
+  them; their drain requirement is runbook-only. **Required for `024` (which takes the same
+  locks):** (a) put BOTH decide paths — automatic decide and inline manual approve — behind the
+  ONE shared maintenance/admission fence (`pg_advisory_xact_lock_shared`, `outbox/fence.py`),
+  acquired BEFORE the case lock, with the activation migration taking the exclusive side, so a
+  live writer makes the migration WAIT instead of deadlocking it; (b) keep a machine-checked
+  preflight with a stable sentinel for the residual it can see (claimed jobs, live outbox
+  claims); (c) during any old-image transition, require the full maintenance stop — an
+  old-image writer does not take the fence, so the fence proves nothing about it. Proof: real
+  two-connection races (ingest-shaped and decide-shaped) against `024` must wait or refuse
+  cleanly — never `40P01`.
 
 
 ## Revision note — rev 9 (2026-07-28): renumbered to migration `018` (mechanical)

@@ -258,7 +258,7 @@ documented choice · 🔵 hygiene/wording.
   `delivery_witnessed` row against the ledger and require digest/encoding agreement before
   declaring platform authority; a mismatch is a fail-closed `integrity_mismatch` terminal, never
   "nothing to reconcile".
-- In-database authority (migrations `013`-`022`) defends against **application defects and
+- In-database authority (migrations `013`-`023`) defends against **application defects and
   races** — exhaustively. It does not defend against an adversary holding the database's own
   privileges, and the schema does not pretend otherwise.
 - Two adversarial-audit prescriptions were formally rebutted and both dispositions were ACCEPTED
@@ -276,3 +276,38 @@ documented choice · 🔵 hygiene/wording.
     about earlier execution.
 - Recorded in full as **ADR-008**; the operative wording lives in `src/kyc_tool/outbox/witness.py`,
   which every reconciliation query goes through.
+
+### 🔵 D-7bcore — Outbox local ordering (PR 7b-core) provenance boundary
+
+- Migration 013's decision_sequence backfill orders each case by `outbox.id` (the under-lock enqueue
+  serialization for rows the guard can deliver). This is a **deterministic reconstruction, not proof
+  of original publication order** — `decided_at` is transaction-start time and can invert the true
+  order, so it is never used.
+- A legacy automatic decision without a surviving `decision_callback` is a **fail-closed migration
+  refusal** (`BLOCKED_NO_AUTHORITATIVE_MAPPING`): restore from authoritative backup or remain on 012.
+  A restore is an **executable identity contract** (RUNBOOK step 0.6): re-insert the EXACT original
+  `outbox.id` AND the original lifecycle fields, with the recorded `(decision_id, run_id, case_id,
+  original_outbox_id, body_digest, original_status, original_delivered_at)` evidence, and pass a
+  **positive** acceptance predicate that must return exactly one row — a default-id INSERT is
+  prohibited (it silently reverses the legacy order), `now()` for `delivered_at` is prohibited (it
+  falsifies the record), and a "zero mismatches = accepted" formulation is prohibited (an absent row
+  would read as accepted). If the original id is unavailable, remain blocked. No sequence is written
+  on this path: the precondition is a read-only check that the next id the sequence would allocate is
+  already past the restored id, and a genuine sequence repair is a separate drained `ALTER SEQUENCE`.
+- **🔵 RETENTION — VERIFY `AUDIT_FINDINGS.md` D9; do NOT append a second retention block
+  (re-audit `1f8412e` F8).** The governed decision already exists as D9: the decision_callback ROW
+  survives as the durable ordering authority; its BODY (which carried reviewer-derived
+  `checks[].source`) is redacted past `KYC_RETENTION_DAYS`; the surviving remainder (ids, ordinals,
+  digest) is pseudonymous and its retention is governed, with the deployer's data controller
+  accountable and pre-redaction backups aging out on their own schedule. Task 9's job here is to
+  CONFIRM D9, ROADMAP, RUNBOOK, and the module docstring still agree — an appended near-duplicate
+  block would be a second source of truth that drifts. Attempt rows are pruned only where the
+  terminal digest makes them redundant; for any other row they are sole evidence and retention
+  never touches them.
+  - **Capacity is part of the contract, not an afterthought:** the claim indexes are **partial to
+    `status='pending'`**, the exact live alerting count is served by `014`'s
+    `ix_outbox_live_status` (pending, dead), and `/v1/metrics` reports terminal history as a
+    planner-statistics ESTIMATE (`outbox_terminal_total_estimate`) rather than any count that scans
+    the unbounded terminal tail.
+  - The POC token — the genuinely sensitive outbox body — is still destroyed twice over: redacted in
+    the fenced terminal UPDATE itself (delivered AND dead, `020`/`022`) and pruned on schedule.

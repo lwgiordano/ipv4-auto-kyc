@@ -6,7 +6,7 @@ A running log of significant decisions and their rationale. Newest first.
 
 ## ADR-008 — Local delivery evidence vs platform authority (PR 7b)
 
-**Context.** PR 7b-core (migrations `013`-`022`) built an in-database witness
+**Context.** PR 7b-core (migrations `013`-`023`) built an in-database witness
 authority for decision callbacks: attempts are staged before transmission,
 admission is stamped only by a trigger and only under an unexpired claim, a
 terminal digest may be written only on the `pending → delivered` transition
@@ -49,7 +49,7 @@ dispositions ACCEPTED by the reviewing agent:
    agreement before platform authority is declared. A mismatch is a
    fail-closed `integrity_mismatch` terminal — never "nothing to reconcile".
 3. **In-database authority defends against application defects and races**,
-   which is what `013`-`022` do exhaustively. It does not defend against an
+   which is what `013`-`023` do exhaustively. It does not defend against an
    adversary holding the database's own privileges, and the schema does not
    pretend otherwise.
 4. **What IS provable at migration time gets validated, completely.** `018` and `022`

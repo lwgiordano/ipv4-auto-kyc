@@ -25,18 +25,46 @@ ROADMAP = REPO_ROOT / ".agents" / "ROADMAP.md"
 # `(unit, state, revisions)` — one per §C data row, in table order.
 Record = tuple[str, str, list[int]]
 
+_SECTION_C = "## C."
+
+
+def section_c(text: str) -> str:
+    """EXACTLY the §C section: from the `## C.` heading to the next `## ` heading.
+
+    Reservations are read from here and nowhere else. The whole-document scan this replaces
+    accepted a `| PR … |` row ANYWHERE — so a reservation row relocated into an appendix still
+    parsed as authority, and a §C-shaped row in prose could shadow the table
+    (Codex re-audit `45cc215` F7). `reservation_rows_outside_section_c` is the other half:
+    a stray row is an ERROR, not merely invisible.
+    """
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(_SECTION_C))
+    body = []
+    for line in lines[start + 1:]:
+        if line.startswith("## "):
+            break
+        body.append(line)
+    return "\n".join(body)
+
 
 def parse_records(text: str) -> list[Record]:
-    """Ordered `(unit, state, [revisions])` from the §C table, NO deduplication —
-    a revision double-booked across two rows must survive as two records so the
-    duplicate is visible. Columns: `| Unit | Item(s) | State | Migration | Content |`."""
+    """Ordered `(unit, state, [revisions])` from a §C-shaped table, NO deduplication —
+    a revision double-booked across two rows must survive as two records so the duplicate
+    is visible. Columns: `| Unit | Item(s) | State | Migration | Content |` — EXACTLY five;
+    a `| PR …` row with any other shape raises rather than being silently skipped, because
+    a malformed row is a reservation the parser would otherwise orphan."""
     records: list[Record] = []
     for line in text.splitlines():
         if not line.lstrip().startswith("| PR "):  # data rows only (skips header/separator)
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 4:
-            continue
+        # maxsplit=4: the Content cell legitimately contains literal `|` (e.g. `legacy|attempt_v1`),
+        # so everything past the fourth delimiter is one cell — a naive split would mis-shape it.
+        cells = [c.strip() for c in line.strip().strip("|").split("|", 4)]
+        if len(cells) != 5:
+            raise ValueError(
+                f"§C row has {len(cells)} cells, want exactly 5 "
+                f"(Unit | Item(s) | State | Migration | Content): {line.strip()!r}"
+            )
         unit, state, migration = cells[0], cells[2], cells[3]
         revisions = [int(tok) for tok in re.findall(r"\b0\d\d\b", migration)]
         records.append((unit, state, revisions))
@@ -44,8 +72,25 @@ def parse_records(text: str) -> list[Record]:
 
 
 def records() -> list[Record]:
-    """The live §C table."""
-    return parse_records(ROADMAP.read_text())
+    """The live §C table — and ONLY §C."""
+    return parse_records(section_c(ROADMAP.read_text()))
+
+
+def reservation_rows_outside_section_c(text: str) -> list[str]:
+    """Reservation-shaped `| PR … |` rows carrying a revision number OUTSIDE §C.
+
+    To a reader such a row looks like a reservation; to the (§C-anchored) parser it does not
+    exist. That divergence is exactly how a reservation could be 'relocated' out of the
+    authority table while still reading as reserved — so any such row is reported for a guard
+    to fail on, rather than silently ignored."""
+    c_rows = {line.strip() for line in section_c(text).splitlines()}
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.lstrip().startswith("| PR ")
+        and line.strip() not in c_rows
+        and re.search(r"\b0\d\d\b", line)
+    ]
 
 
 def shipped(recs: list[Record]) -> list[int]:

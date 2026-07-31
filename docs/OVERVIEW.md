@@ -181,6 +181,22 @@ decided_at
 
 Delivery is **at-least-once**, so the platform must dedupe on `(case_id, run_id)`.
 
+### Outbox delivery ordering & local decision sequence (PR 7b-core)
+
+Decision callbacks and POC emails are delivered from a transactional outbox. As of PR 7b-core the
+publisher claims the oldest pending row **per `(case_id, ordering_stream)` FIFO stream** (`decision`
+vs `email`), so a stuck POC email never blocks a case's decision callbacks. Every automatic decision
+gets an internal per-case `decision_sequence`, allocated under the case's `FOR UPDATE` lock — it is
+**not on the wire** (the callback body is byte-identical to pre-7b) and drives a **best-effort local
+`superseded` guard**: an older requeued callback is suppressed only when a higher-sequence decision
+already carries a locally-stamped `published_at`. Each claim is fenced by a `claim_token` so a stale
+publisher cannot overwrite a reclaimer's terminal. **Boundary:** THREE residual reverts are NOT
+closed here and remain expected until 7b-activation (`024`) adds the platform high-water mark:
+send-before-stamp; cross-replica; and a queued automatic callback delivered AFTER a later manual
+approval (manual approvals carry no run, no callback, and no sequence, so the local guard has no
+higher locally-published automatic sequence to compare). 7b-core does not claim exactly-once (see
+`AUDIT_FINDINGS.md` A6).
+
 ### Read endpoints (pull, on demand)
 
 `GET /v1/cases/{id}` · `/v1/cases/{id}/checks` · `/v1/runs/{id}` ·

@@ -9,7 +9,7 @@ Status: **PR 1–4 shipped** (`c37c052`, `7a19a9f`, `4c91be6`; PR 4 this commit)
 Items 1–6 complete (PR 5a shipped: HMAC v2 + per-case idempotency). Item 11
 complete (PR 5b shipped: review-record binding). Item 7A complete (PR 6
 shipped: per-run policy bundle pinning + `engine_build_id`) — but M2 stays a
-HARD STOP (see §D). **PR 7b (item 8) was split into PR 7b-core (SHIPPED as `013`-`022`:
+HARD STOP (see §D). **PR 7b (item 8) was split into PR 7b-core (SHIPPED as `013`-`023`:
 stream separation + local decision ordering + the witness repair/authority/admission/boundary/
 transition-authority/repair revisions — see §C) and PR 7b-activation (`024`, the platform-authoritative cutover —
 the next pending unit once 7b-core reaches AUDIT-CLEAN).**
@@ -306,6 +306,13 @@ a missing legacy callback is **restore-from-backup or `BLOCKED_NO_AUTHORITATIVE_
 `reset_interrupted_outbox_claims` CLI is post-013-only; digest-pinned;
 no mutating prod smoke); **reversible-before-first-supersession** downgrade (refuses once a
 `superseded` row exists). Cross-replica authority is 7b-activation.
+**Ops CLIs + cutover docs (plan Tasks 7-9) SHIPPED 2026-07-30:** `verify_pr7b_core_backfill`,
+`reset_interrupted_outbox_claims`, `repair_outbox_sequence` (all subprocess-tested against real
+Postgres, incl. the SHARE-lock retention race and the schema-012 restore-acceptance contract),
+the byte-identical RUNBOOK/DEPLOYMENT cutover section (pinned by
+`tests/unit/test_docs_cutover_parity.py`), and the exact documented rollback command proven
+against a real head DB (`tests/integration/test_rollback_command.py`, head/sentinel DERIVED,
+never transcribed).
 
 ### PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2)
 Migration **024** (`down_revision='023'`): `outbox.failure_class`; the `outbox_ordering_activation`

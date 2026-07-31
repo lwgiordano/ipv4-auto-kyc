@@ -410,22 +410,91 @@ def test_compatible_image_names_the_live_head(path):
     )
 
 
-_SENTINEL = re.compile(r"MIGRATION_\d{3}_[A-Z][A-Z_]+")
+# digits are legal INSIDE a sentinel suffix — the old charset (`[A-Z][A-Z_]+`) silently
+# truncated at the first digit, so a hypothetical `..._V2` sentinel indexed as its own prefix
+_SENTINEL = re.compile(r"MIGRATION_\d{3}_[A-Z][A-Z0-9_]*[A-Z0-9]")
 # `MIGRATION_0{18,19}_…` — a shell-brace contraction. It reads fine and greps for nothing.
 _CONTRACTED_SENTINEL = re.compile(r"MIGRATION_\d*\{")
 _RUNBOOK = REPO_ROOT / "docs" / "RUNBOOK.md"
+# The one deliberate migration stop that is not MIGRATION_-prefixed: 013's fail-closed
+# missing-mapping refusal, shared with the pre-window diagnostic CLI.
+_EXTRA_SENTINELS = {"BLOCKED_NO_AUTHORITATIVE_MAPPING"}
 
 
-def _raised_sentinels() -> set[str]:
-    return {
-        name
-        for source in (REPO_ROOT / "alembic" / "versions").glob("*.py")
-        for name in _SENTINEL.findall(source.read_text())
+def _migration_raise_inventory() -> tuple[set[str], dict[str, int]]:
+    """(sentinels that appear in an actual `raise`, unsentinelled-raise count per file), by AST.
+
+    The lexical scan this replaces proved a token EXISTS in the file, not that any refusal
+    raises it: an unused constant minted a phantom "documented refusal", and a deliberate
+    RuntimeError with no sentinel at all was invisible (re-audit `45cc215` F8). Walking each
+    `raise` node — resolving module-level string constants and same-package imports the message
+    interpolates — ties every indexed sentinel to a raise site and surfaces every raise that
+    carries none.
+    """
+    import ast
+
+    from kyc_tool.migration_contracts import v013_backfill
+
+    imported = {
+        name: value
+        for name, value in vars(v013_backfill).items()
+        if isinstance(value, str) and (_SENTINEL.fullmatch(value) or value in _EXTRA_SENTINELS)
     }
+    raised: set[str] = set()
+    plain: dict[str, int] = {}
+    for source in sorted((REPO_ROOT / "alembic" / "versions").glob("*.py")):
+        tree = ast.parse(source.read_text())
+        consts = dict(imported)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
+                consts[node.targets[0].id] = node.value.value
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Raise):
+                continue
+            parts: list[str] = []
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                    parts.append(sub.value)
+                elif isinstance(sub, ast.Name) and sub.id in consts:
+                    parts.append(consts[sub.id])
+            found = set(_SENTINEL.findall(" ".join(parts))) | (
+                set(parts) & _EXTRA_SENTINELS
+            ) | {p for p in parts for x in _EXTRA_SENTINELS if x in p}
+            if found:
+                raised |= found
+            else:
+                plain[source.name] = plain.get(source.name, 0) + 1
+    return raised, plain
+
+
+# Frozen migrations that predate the sentinel discipline, with their EXACT unsentinelled
+# deliberate-raise counts. Equality is the contract: a new unsentinelled raise ANYWHERE fails
+# (add a sentinel instead), and so does any change to these counts — these files are published
+# and must not move.
+_FROZEN_PLAIN_RAISES = {
+    "010_hmac_v2_per_case_idempotency.py": 1,
+    "011_policy_bundle_pinning.py": 1,
+    "013_outbox_stream_separation.py": 5,
+}
+
+
+def test_every_migration_refusal_carries_a_sentinel_except_the_frozen_three():
+    _, plain = _migration_raise_inventory()
+    assert plain == _FROZEN_PLAIN_RAISES, (
+        f"unsentinelled migration raise counts changed: {plain} != {_FROZEN_PLAIN_RAISES}. A new "
+        "deliberate refusal must raise a stable MIGRATION_NNN_* sentinel (and be indexed in the "
+        "runbook); the frozen three are published and may not change"
+    )
 
 
 def test_runbook_indexes_every_migration_refusal_sentinel():
-    """The runbook's sentinel index covers every sentinel a migration can raise.
+    """The runbook's sentinel index covers every sentinel a migration ACTUALLY RAISES.
 
     Sentinels exist so a refused upgrade/downgrade reads as a designed stop rather than as a
     broken migration — which only works if the operator can find the string. When this check
@@ -433,7 +502,10 @@ def test_runbook_indexes_every_migration_refusal_sentinel():
     preflights, the unsendable-rows preflight) appeared in no operator document at all: a
     refusal an operator could hit in a maintenance window with nothing to look up.
     """
-    missing = sorted(_raised_sentinels() - set(_SENTINEL.findall(_RUNBOOK.read_text())))
+    raised, _ = _migration_raise_inventory()
+    runbook = _RUNBOOK.read_text()
+    documented = set(_SENTINEL.findall(runbook)) | {s for s in _EXTRA_SENTINELS if s in runbook}
+    missing = sorted(raised - documented)
     assert not missing, (
         "RUNBOOK.md § 'Migration refusal sentinels' does not index every refusal a migration "
         f"can raise — an operator who hits one of these has nothing to look up:\n{missing}"
@@ -442,9 +514,12 @@ def test_runbook_indexes_every_migration_refusal_sentinel():
 
 @pytest.mark.parametrize("path", _OPERATOR_DOCS, ids=lambda p: p.name)
 def test_operator_docs_name_no_unraisable_sentinel(path):
-    """The converse: a sentinel no migration raises is a typo or a leftover, and sends the
-    operator looking for a string that will never appear."""
-    phantom = sorted(set(_SENTINEL.findall(path.read_text())) - _raised_sentinels())
+    """The converse: a sentinel no migration RAISES is a typo, a leftover, or an unused
+    constant's phantom — each sends the operator looking for a string that will never appear.
+    Raised-in-a-raise (AST), not merely present-in-the-file, is what makes an unused constant
+    unable to license a doc mention."""
+    raised, _ = _migration_raise_inventory()
+    phantom = sorted(set(_SENTINEL.findall(path.read_text())) - raised)
     assert not phantom, (
         f"{path.name} names sentinel(s) no migration raises: {phantom}"
     )
@@ -463,6 +538,48 @@ def test_operator_docs_spell_sentinels_out(path):
     assert not contracted, (
         f"{path.name} contracts sentinel names with braces; spell each one out so a refused "
         "command's output can be grepped against this document\n" + "\n".join(contracted)
+    )
+
+
+# Governance documents whose LIVE text states the 7b-core range. The three design artifacts get
+# the full ban list; these get the one derived fact that drifted across ALL of them when `023`
+# shipped: the range "`013`-`0NN`" kept saying `022` (re-audit `45cc215` F6).
+_RANGE_DOCS = [
+    REPO_ROOT / ".agents" / "ROADMAP.md",
+    REPO_ROOT / "docs" / "architecture-decisions.md",
+    REPO_ROOT / "AUDIT_FINDINGS.md",
+    *_ARTIFACTS,
+    *_OPERATOR_DOCS,
+]
+# `013`-`022`, 013-022, `013` - `022` … — any spelling of the core range.
+_CORE_RANGE = re.compile(r"`?013`?\s*[-–]\s*`?0(\d\d)`?")
+# Everything above a spec's first revision-note heading is its LIVE claims; below is history.
+_REVISION_HISTORY = re.compile(r"^#{1,3}\s*Revision note", re.MULTILINE)
+
+
+def _live_section(text: str) -> str:
+    marker = _REVISION_HISTORY.search(text)
+    return text[: marker.start()] if marker else text
+
+
+@pytest.mark.parametrize("path", _RANGE_DOCS, ids=lambda p: p.name)
+def test_core_range_claims_name_the_live_head(path):
+    """Everywhere live text states the 7b-core range as `013`-`0NN`, NN is the live head.
+
+    Enumerated bans could never keep up with this one: the range appears in ROADMAP prose, the
+    ADR, AUDIT_FINDINGS, both specs, the plan and both runbooks, and every release moves it.
+    Historical text below a spec's first revision-note heading is exempt — history is allowed
+    to say what was true."""
+    live = _live_section(path.read_text())
+    wrong = [
+        f"line {i}: {line.strip()[:110]}"
+        for i, line in enumerate(live.splitlines(), 1)
+        for m in _CORE_RANGE.finditer(line)
+        if int(m.group(1)) != _HEAD
+    ]
+    assert not wrong, (
+        f"{path.name} states the 7b-core range with an end other than the live head "
+        f"{_HEAD:03d}\n" + "\n".join(wrong)
     )
 
 

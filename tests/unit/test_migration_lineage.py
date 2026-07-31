@@ -27,6 +27,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from kyc_tool.config import REPO_ROOT
+from tests import roadmap
 from tests.roadmap import ROADMAP, parse_records
 
 
@@ -103,7 +104,53 @@ def test_roadmap_lineage_consistent_with_alembic():
     script = _script()
     existing = {int(r.revision) for r in script.walk_revisions()}
     head_num = int(script.get_heads()[0])
-    _validate_lineage(parse_records(ROADMAP.read_text()), existing, head_num)
+    _validate_lineage(roadmap.records(), existing, head_num)
+
+
+def test_no_reservation_shaped_row_survives_outside_section_c():
+    """Reservations are read from §C and ONLY §C — so a reservation-shaped row anywhere else is
+    an ERROR, not merely invisible. Without this, a row 'relocated' out of the table would still
+    read as reserved to a human while the parser no longer saw it (re-audit `45cc215` F7)."""
+    stray = roadmap.reservation_rows_outside_section_c(ROADMAP.read_text())
+    assert not stray, (
+        "reservation-shaped rows outside ROADMAP §C — move them into the table or delete them:\n"
+        + "\n".join(stray)
+    )
+
+
+def test_parser_rejects_a_malformed_reservation_row():
+    """A `| PR …` row with the wrong cell count is a reservation the old parser silently
+    SKIPPED — orphaning it from every ownership check. It now raises."""
+    with pytest.raises(ValueError, match="want exactly 5"):
+        parse_records(_HEADER + "| PR 2 | shipped | 008 | x |\n")
+
+
+def test_every_unit_detail_declaration_matches_its_section_c_row():
+    """Ownership, not just number-sets: §G's per-unit sections each declare their migration
+    (`Migration `NNN`` / `migration **NNN**`), and every declared number must be reserved by
+    that SAME unit's §C row(s). Swapping two pending owners in §C leaves every set-level check
+    green — identical numbers, different owners — and this is what catches it
+    (re-audit `45cc215` F7). Units whose sections declare nothing are skipped."""
+    text_ = _roadmap_text()
+    recs = roadmap.records()
+    lines = text_.splitlines()
+    headings = [(i, ln) for i, ln in enumerate(lines) if ln.startswith("### PR ")]
+    assert headings, "ROADMAP §G unit sections are gone — the ownership check has no input"
+    checked = 0
+    for idx, (i, heading) in enumerate(headings):
+        unit = heading.removeprefix("### ").split(" — ")[0].strip()
+        end = headings[idx + 1][0] if idx + 1 < len(headings) else len(lines)
+        body = "\n".join(lines[i:end])
+        declared = {int(m) for m in re.findall(r"[Mm]igration\s+\*?\*?`?(\d{3})`?\*?\*?", body)}
+        if not declared:
+            continue
+        owned = set(roadmap.unit_revisions(recs, unit))
+        assert declared <= owned, (
+            f"{unit}: §G declares migration(s) {sorted(declared - owned)} that its §C row(s) do "
+            f"not reserve (row owns {sorted(owned)}) — either the table or the section is lying"
+        )
+        checked += 1
+    assert checked >= 5, f"only {checked} unit sections declare migrations — the check went blind"
 
 
 # --- mutation resistance: crafted §C tables are driven through the REAL parser so a
