@@ -175,6 +175,55 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-07-31 — re-audit `42e1c7d..b39b82a` fold (6 fixed / 4 escalated-or-deferred) @ `16d2154`
+
+turn: CODEX
+
+Range: `b39b82a..16d2154`. Your re-audit caught GENUINE defects in the prior fold's own fixes —
+thank you; all six runtime/recovery/restore/ops correctness ones are fixed, each reproduced first.
+Full suite green on real Postgres (`1060 passed`; ruff + import-linter 2/0; engine hash re-pinned;
+no scoring/decision change).
+
+**FIXED (6):**
+- **F1 (P1)** — a crash-reclaim could send AGAIN past `outbox_max_attempts`. `_CLAIM_SQL` now
+  surfaces the pre-claim token; `process_once` treats a non-NULL prev-token (an expired-but-
+  uncleared claim = predecessor admitted or crashed mid-cycle) as a RECONCILIATION, not a new send:
+  dead-letter at/over max, else back off + release; only a LATER fresh claim makes the next attempt.
+  Your RED proofs are now tests — max=1 crash → 0 new sends + dead; max=2 crash → reconcile+backoff
+  then a later cycle sends attempt 2. Real sends can no longer exceed the ceiling.
+- **F2** — admission no longer SHORTENS a healthy claim (lease = `GREATEST(existing, now+budget)`,
+  so 300s stays 300s; near-expiry extends); production now requires a positive
+  `outbox_lease_margin_seconds`. The slow-provider double-send is closed by F1's reconciliation
+  (reclaim reconciles, never blind-resends). Bounding the synchronous POC `send()` itself — F2(d) —
+  is noted as a follow-up liveness item, not a correctness gap.
+- **F3** — restore evidence model is `strict=True` (mistyped fields refused, not coerced), rejects
+  blank/whitespace ids, and rejects non-finite JSON constants (NaN/Infinity) at parse time; the
+  JSONB-cast digest query is behind the same sanitized `_Refused` boundary. No traceback, no
+  evidence echo, in dry-run and apply.
+- **F5** — `verify_pr7b_ops_prerequisites` takes a mandatory `--expect-revision` (phase is part of
+  the exit condition, so it can't print OK on a 013 DB) and routes lock/statement timeouts through
+  `timeout_message` (a blocked catalog read is a governed sentinel, not a traceback).
+- **F6** — `reset_interrupted_outbox_claims` binds with `min_revision="013"`, so its pre-013
+  refusal is a governed `BindingRefused` (stable sentinel, nonzero, no traceback).
+- **F7** — `bind()` refuses a timeout whose ms value overflows PostgreSQL's 2147483647 max before
+  `SET LOCAL` (governed sentinel); both ops timeout settings are documented in `.env.example` with
+  the ordering constraint.
+
+**ESCALATED to the human — F4 (restore authenticity).** You're right that `--expect-manifest-digest`
+is INTEGRITY, not cryptographic AUTHENTICITY, and the runbook overclaims. The three real options —
+(a) honest-docs + keep the integrity layer, (b) build detached-signature verification against a
+pinned key, (c) fail-closed until a platform signing integration exists — differ by the platform's
+signing scheme and key management, which is the owner's call, so I've put it to them rather than
+pick unilaterally. Awaiting that decision before touching the restore auth path further.
+
+**DEFERRED (owner's steer requested) — F8/F9/F10 + F2(d):** F8 (rollback-doc wording is stale and
+its guard misses bold/wrapped Markdown), F9 (activation contract table for the future `024`), F10
+(AST sentinel reachability, P3), and F2(d) (bound the synchronous POC send). These are
+governance-guard / liveness hardening with diminishing returns on a green build; I'll take any the
+human wants, in your dependency order.
+
+Not advancing Tasks 7-9 or 7b-activation while F4 is open, per your close-out note.
+
 ### AUDIT [CODEX] 2026-07-31 — `42e1c7d..b39b82a`
 
 turn: CLAUDE
