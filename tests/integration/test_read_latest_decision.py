@@ -173,6 +173,16 @@ def test_read_surfaces_do_not_dereference_cross_case_pointer_if_fk_drifted(
 
         full = client.get("/ui/api/cases/drift-a/full").json()
         assert full["pointer_decision"] is None
+        # every read surface classifies the SAME dereference the same way (re-audit F10): the
+        # full view and the list must both name the drift, so the console can render an
+        # integrity alert instead of an ordinary "No decision" blank
+        assert full["decision_provenance"] == "unresolved_pointer_drift"
+        assert full["salesforce"]["Hard_Conflict__c"] is None, (
+            "no authoritative decision evaluated the gate — the mirror may not say False"
+        )
+        listed = {c["id"]: c for c in client.get("/ui/api/cases").json()["cases"]}
+        assert listed["drift-a"]["decision_provenance"] == "unresolved_pointer_drift"
+        assert listed["drift-b"]["decision_provenance"] == "latest_decision_row"
     finally:
         _restore_latest_decision_fk(engine)
 
@@ -269,7 +279,9 @@ def test_manual_approve_end_to_end_serves_one_row_on_every_surface(
     sf = full["salesforce"]
     assert sf["Platform_Action_Taken__c"] == "Manual Approve"
     assert sf["Manual_Approved_By__c"] == "rev-1"      # attribution from the pointer row,
-    assert sf["Hard_Conflict__c"] is False             # gates from the pointer row too
+    assert sf["Hard_Conflict__c"] is None              # manual bypass: gate never evaluated
+    # (was pinned `is False` — that pinned the fabrication: a manual approval bypasses the
+    # gates, so the mirror may not assert a definite "no hard conflict"; re-audit F9)
 
 
 def test_full_view_disambiguates_missing_manual_from_unresolved_manual_history(

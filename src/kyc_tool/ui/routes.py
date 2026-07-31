@@ -21,6 +21,7 @@ from kyc_tool.api.routes_metrics import metrics as collect_metrics
 from kyc_tool.api.schemas import PAYLOAD_MODELS, EventEnvelope
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
+from kyc_tool.domain import provenance
 from kyc_tool.events.ingest import ingest_event
 from kyc_tool.ui import integrations as integrations_report
 from kyc_tool.ui.salesforce_projection import FIELD_SOURCES, project_salesforce_fields
@@ -135,7 +136,10 @@ def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(
     sql = """
         SELECT c.id, c.company_name, c.jurisdiction, c.status, c.buy_status, c.broker_status,
                c.current_score AS current_evidence_score,
-               d.decision AS latest_decision, d.score AS decision_score, c.updated_at
+               d.decision AS latest_decision, d.score AS decision_score, c.updated_at,
+               c.latest_decision_row_id IS NOT NULL AS pointer_set,
+               d.id IS NOT NULL AS pointer_resolved,
+               EXISTS (SELECT 1 FROM decisions dd WHERE dd.case_id = c.id) AS has_decisions
         FROM cases c
         LEFT JOIN decisions d ON d.id = c.latest_decision_row_id AND d.case_id = c.id
         {where}
@@ -148,6 +152,15 @@ def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(
         params["q"] = f"%{q}%"
     with request.app.state.session_factory() as session:
         cases = _rows(session.execute(text(sql.format(where=where)), params))
+    # Classified through the shared taxonomy, so a NULL verdict cell is never ambiguous between
+    # "no decisions", "unresolved legacy order" and "pointer drift" — the last one is an
+    # integrity condition the console must surface, not render as an ordinary blank.
+    for c in cases:
+        c["decision_provenance"] = provenance.classify(
+            pointer_set=c.pop("pointer_set"),
+            row_resolved=c.pop("pointer_resolved"),
+            any_rows=c.pop("has_decisions"),
+        )
     return _json_safe({"cases": cases})
 
 
@@ -223,6 +236,13 @@ def case_full(case_id: str, request: Request) -> dict:
                 {"d": case["latest_decision_row_id"], "id": case_id},
             ).mappings().first()
             pointer_decision = dict(row) if row else None
+        # classify the dereference exactly like the canonical API — a null pointer_decision must
+        # never be ambiguous between "no decisions", legacy order, and integrity DRIFT
+        decision_provenance = provenance.classify(
+            pointer_set=bool(case.get("latest_decision_row_id")),
+            row_resolved=pointer_decision is not None,
+            any_rows=bool(decisions),
+        )
         # Manual attribution is sticky (re-audit 15d875d F6): the verdict pointer moves to later
         # automatic decisions, but Manual_Approved_By/At must keep naming the manual act. It is
         # read from its OWN trigger-maintained pointer, never by sorting `decisions` — `id` is a
@@ -231,7 +251,6 @@ def case_full(case_id: str, request: Request) -> dict:
         # order. NULL here is honestly unresolved: either no manual approval, or a legacy history
         # with several that cannot be ordered.
         latest_manual_decision = None
-        manual_decision_provenance = "no_manual_decisions"
         manual_pointer = case.get("latest_manual_decision_row_id")
         if manual_pointer:
             manual_row = session.execute(
@@ -242,21 +261,19 @@ def case_full(case_id: str, request: Request) -> dict:
                 {"d": manual_pointer, "id": case_id},
             ).mappings().first()
             latest_manual_decision = dict(manual_row) if manual_row else None
-            # A pointer the hardened predicate rejects (other case, or not manual) is drift, and
-            # the one thing it is NOT is proof that no manual approval happened. 022 forbids that
-            # state at the database and validates the existing data, so reaching here means a row
-            # written around the guard — report it as unresolved rather than silently answering
-            # "no manual approval" for a case whose own pointer disagrees.
-            manual_decision_provenance = (
-                "latest_manual_row" if latest_manual_decision else "unresolved_pointer_drift"
-            )
-        if latest_manual_decision is None and not manual_pointer:
-            manual_rows = session.execute(
+        # A pointer the hardened predicate rejects (other case, or not manual) is DRIFT, and the
+        # one thing it is not is proof that no manual approval happened — the shared taxonomy
+        # (domain/provenance.py) reports it as unresolved rather than silently answering "no
+        # manual approval" for a case whose own pointer disagrees.
+        manual_decision_provenance = provenance.classify(
+            pointer_set=bool(manual_pointer),
+            row_resolved=latest_manual_decision is not None,
+            any_rows=bool(manual_pointer) or bool(session.execute(
                 text("SELECT count(*) FROM decisions WHERE case_id=:id AND manual IS TRUE"),
                 {"id": case_id},
-            ).scalar_one()
-            if manual_rows:
-                manual_decision_provenance = "unresolved_legacy_order"
+            ).scalar_one()),
+            manual=True,
+        )
         tasks = _rows(
             session.execute(
                 text(
@@ -346,6 +363,7 @@ def case_full(case_id: str, request: Request) -> dict:
             # ambiguous pre-014 history) — surfaced so consumers can SEE which row is authority.
             # decision, score, gates and buy_enablement all come from THIS one row or from none.
             "pointer_decision": pointer_decision,
+            "decision_provenance": decision_provenance,
             # the sticky manual act (own pointer; None = no manual approval OR an unorderable
             # legacy multi-manual history — the projection treats both as unresolved)
             "latest_manual_decision": latest_manual_decision,

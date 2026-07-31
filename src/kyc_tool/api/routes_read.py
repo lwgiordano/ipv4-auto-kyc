@@ -7,6 +7,7 @@ from sqlalchemy import select, text
 from kyc_tool.api.auth import require_read_access
 from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.db.tables import Case, DecisionRow, ReviewTask, Run
+from kyc_tool.domain import provenance
 
 router = APIRouter()
 
@@ -51,20 +52,17 @@ def get_case(case_id: str, request: Request) -> dict:
                     DecisionRow.case_id == case_id,
                 )
             ).scalar_one_or_none()
-        if latest is not None:
-            provenance = "latest_decision_row"
-        elif case.latest_decision_row_id:
-            # The pointer names a row this case cannot claim. `fk_cases_latest_decision` binds
-            # (pointer, case_id) so 022 onward forbids it, but a pre-022 history could carry it —
-            # and then the count below can legitimately find no same-case decision and answer
-            # "no_decisions", a definite negative drawn from missing evidence. Name the drift.
-            provenance = "unresolved_pointer_drift"
-        elif session.execute(
-            select(DecisionRow.id).where(DecisionRow.case_id == case_id).limit(1)
-        ).first():
-            provenance = "unresolved_legacy_order"
-        else:
-            provenance = "no_decisions"
+        # Classified through the shared taxonomy (domain/provenance.py): a set-but-unresolvable
+        # pointer is DRIFT — `fk_cases_latest_decision` binds (pointer, case_id) so 022 onward
+        # forbids it, but a pre-022 history could carry it, and answering "no_decisions" for it
+        # would be a definite negative drawn from a lookup that was refused.
+        decision_provenance = provenance.classify(
+            pointer_set=bool(case.latest_decision_row_id),
+            row_resolved=latest is not None,
+            any_rows=bool(case.latest_decision_row_id) or bool(session.execute(
+                select(DecisionRow.id).where(DecisionRow.case_id == case_id).limit(1)
+            ).first()),
+        )
         return {
             "case_id": case.id,
             "status": case.status,
@@ -77,7 +75,7 @@ def get_case(case_id: str, request: Request) -> dict:
             "latest_decision": (latest.decision if latest else None),
             "decision_score": (latest.score if latest else None),
             "gates": (latest.gates_json if latest else {}),
-            "decision_provenance": provenance,
+            "decision_provenance": decision_provenance,
             "live_checks": [_check_json(c) for c in live],
         }
 

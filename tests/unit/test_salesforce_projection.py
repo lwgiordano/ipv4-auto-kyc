@@ -100,6 +100,20 @@ def test_hard_conflict_is_negated_gate():
     assert fields["Hard_Conflict__c"] is True
 
 
+def test_hard_conflict_is_null_when_the_gate_was_never_evaluated():
+    """Only a decision that actually evaluated the gate may speak (re-audit `45cc215` F9).
+
+    The old default fabricated `False` — a definite "no hard conflict" — for BOTH shapes below,
+    turning "we don't know" into a clean bill of health in the Salesforce mirror.
+    """
+    # no authoritative decision tuple at all (pointer drift / unresolved legacy order)
+    assert project(latest_decision=None)["Hard_Conflict__c"] is None
+    # a manual approval bypasses the gates: nothing evaluated no_hard_conflict
+    manual = project(latest_decision={"decision": "approve", "score": 10,
+                                      "gates_json": {"bypassed": True}, "manual": True})
+    assert manual["Hard_Conflict__c"] is None
+
+
 def test_org_id_states():
     live = project(checks=[_check("org_id_match", "pass", detail={"org_handle": "ORG-A"})])
     assert (live["ORG_ID__c"], live["ORG_ID_Status__c"]) == ("ORG-A", "Pass")

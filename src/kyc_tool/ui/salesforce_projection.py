@@ -162,7 +162,13 @@ def project_salesforce_fields(
         "Business_Document_Status__c": doc_status,
         "Website_Review_Status__c": website_status,
         "Broker_Status__c": BROKER_MAP.get(case.get("broker_status", "")),
-        "Hard_Conflict__c": not gates.get("no_hard_conflict", True),
+        # ONLY an authoritative decision that actually evaluated the gate may speak: absent
+        # tuple (drift / unresolved order) and bypassed gates (manual approval) both project
+        # NULL. The old default fabricated `False` — a definite "no hard conflict" — out of the
+        # gate never having been evaluated (Codex re-audit `45cc215` F9).
+        "Hard_Conflict__c": (
+            not gates["no_hard_conflict"] if "no_hard_conflict" in gates else None
+        ),
         "Review_Reason_Codes__c": "; ".join(reason_codes) if reason_codes else None,
         "Manual_Approved_By__c": (manual or {}).get("reviewer_id"),
         "Manual_Approved_At__c": (manual or {}).get("decided_at"),
@@ -196,7 +202,8 @@ FIELD_SOURCES = {
     "Business_Document_Status__c": "live business_document_verified; uploaded-but-unprocessed → Uploaded",
     "Website_Review_Status__c": "open website task → Open; else live website_verified status",
     "Broker_Status__c": "case broker_status (exact-match gate)",
-    "Hard_Conflict__c": "NOT gates.no_hard_conflict from the latest decision",
+    "Hard_Conflict__c": "NOT gates.no_hard_conflict from the latest decision; NULL when no "
+    "authoritative decision evaluated the gate (unresolved pointer, manual bypass)",
     "Review_Reason_Codes__c": "union of live checks' reason codes",
     "Manual_Approved_By__c": "latest MANUAL decision row's reviewer (sticky across later autos)",
     "Manual_Approved_At__c": "latest MANUAL decision row's timestamp (sticky across later autos)",
