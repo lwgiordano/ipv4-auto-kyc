@@ -175,6 +175,171 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-07-31 — `538e55e..42e1c7d`
+
+turn: CLAUDE
+
+Adversarial complete-range re-audit with independent publisher and governance lanes plus parent
+reproduction against PostgreSQL 16. Aggregate gates are green (`1040 passed`; Ruff clean; import
+contracts 2 kept/0 broken; `git diff --check` clean), but the range is **not audit-clean**. The
+ordinary suite does not exercise the failures below. Fix in priority order: runtime attempt
+accounting first, recovery/ops authority next, operator/governance guards last.
+
+1. **P1 — a production-valid lease can expire after attempt admission but before the bounded send
+   and its failure accounting, allowing a second transport call while the first attempt is
+   under-counted.** `src/kyc_tool/outbox/publisher.py:124-147,252-271,299-335,412-448,651-698`,
+   `src/kyc_tool/config.py:271-289`, and `tests/unit/test_production_config.py:107-144`. The lease
+   starts at claim, but the four-phase send deadline starts later; `_record_attempt` checks only that
+   the lease is still positive, not that enough lease remains for the complete send plus accounting.
+   Real two-publisher trigger with an accepted tuple (lease 1s, HTTP timeout .1s, margin .5s): A
+   entered its blocked transport with .146s lease remaining; B reclaimed after expiry and sent; A's
+   later failure lost its fenced update. Result: two transport calls and two durable attempt rows,
+   but `outbox.attempts=1` and only one backoff. This is not the accepted late-2xx duplicate residual;
+   retry/dead-letter accounting itself is lost. **Fix:** at attempt admission atomically extend the
+   current token's lease through the whole enforced deadline plus an explicit DB-accounting budget.
+   Before any reclaimer sends, reconcile every prior admitted-but-unaccounted attempt exactly once
+   (durable accounted marker, or an equivalently unambiguous count), apply its backoff/dead-letter,
+   and return without a same-cycle resend. Do not rely on a boot-time margin alone. **Test:** two real
+   publishers, minimal production-valid settings, a pause between claim/admission/send, and a forever
+   transport; prove the predecessor is counted once before any resend and max-attempt dead-letter
+   remains reachable.
+
+2. **P2 — restore evidence is still self-authenticating in the documented/apply path.**
+   `src/kyc_tool/ops/restore_pr7b_core_callback.py:23-26,95-146,259-268`,
+   `docs/RUNBOOK.md:287-328`, and `tests/integration/test_restore_pr7b_core_callback.py:84-116,227-241`.
+   `--expect-body-digest` is optional and the runbook's command omits it. On real schema 012 I changed
+   a delivered callback from approve to reject, replaced its checks, recomputed the file's own digest,
+   omitted the flag, and `--apply` exited 0; the altered body was committed as immutable delivered
+   audit evidence. Making the row terminal closed the prior *sendable* injection, but did not make the
+   backup authentic. **Fix:** require an out-of-band authenticity value for apply (and preferably
+   dry-run), sourced by an executable backup-export/signed-manifest procedure. Bind the manifest to a
+   canonical digest of the entire evidence record, not only `payload_json`, so lifecycle/audit fields
+   cannot be changed independently. Remove “optional” and make the runbook show how the operator
+   obtains and verifies it. **Tests:** jointly mutate body+digest and separately mutate each lifecycle
+   field; without a valid external manifest every case must refuse before row/sequence mutation.
+
+3. **P2 — the promised versioned typed restore schema is not implemented; malformed JSON shapes can
+   still crash the maintenance CLI.** `restore_pr7b_core_callback.py:61-71,95-146,259-289`. The file
+   is an unversioned `dict`; the parsed callback body is used with `.get()` without checking it is an
+   object. Exact trigger: `payload_json="[]"` raises `AttributeError: 'list' object has no attribute
+   'get'`; `main()` re-raises it as a traceback. Naive timestamps are also accepted and interpreted in
+   the database session timezone, and unknown fields are silently accepted. **Fix:** define one strict,
+   versioned evidence model (extra fields forbidden; body object; typed/nonblank ids; 64-hex digest;
+   timezone-aware datetimes; closed kind/status; nonnegative attempts), convert every file/JSON/model
+   error to `_Refused`, and never echo evidence. **Tests:** drive both dry-run and apply with top-level
+   array/null/scalar, body array/null/scalar, naive/bad timestamps, wrong scalar types, extras, and bad
+   JSON; require the same stable payload-free refusal, no traceback, no DB/sequence change.
+
+4. **P2 — “exact schema 012” accepts a multi-head/invalid Alembic state, and ordinary wrong-phase
+   refusals still traceback.** `src/kyc_tool/ops/binding.py:64-88`,
+   `src/kyc_tool/ops/verify_pr7b_core_backfill.py:35-71`, and
+   `tests/integration/test_ops_binding.py:287-305`. `binding.bind()` uses `.scalar()`, so it reads one
+   arbitrary row. On real Postgres, `alembic_version={012,999}` exited 0 and printed
+   `OK (schema-012 parity matrix clean)`. On a normal 013 DB the CLI exits nonzero but prints a Python
+   traceback, not a governed refusal. **Fix:** fetch the full ordered version set, require cardinality
+   one before any exact/floor comparison, and give schema-identity/phase failures stable sentinels that
+   every ops `main()` catches. **Tests:** empty, singleton 011/012/013/head, duplicate/multi-head, and
+   unknown version sets; only singleton 012 may run/print OK, every refusal is nonzero, stable,
+   traceback-free, and non-mutating.
+
+5. **P2 — `OutboxPublisher.close()` is still unbounded although its docstring promises one total
+   shutdown deadline.** `src/kyc_tool/outbox/publisher.py:348-357` and
+   `tests/unit/test_outbox_http_deadline.py:253-276,311-330`. The orphan joins share a cutoff, but
+   `self.http.close()` then runs synchronously without a remaining-time bound; suppressing exceptions
+   does not suppress a hang. A client whose `close()` waits forever left a child process stuck after
+   two seconds, even with zero orphans (`CLOSE_ENTER`, no return). **Fix:** put client cleanup inside
+   the same total deadline (killable child owner, or a daemon cleanup task joined only for the
+   remaining budget); a bounded close may report/leak for process restart, but may not wait forever.
+   **Tests:** subprocess a forever-blocking `close()` at zero and maximum orphan count and prove one
+   constant total bound plus clean interpreter exit.
+
+6. **P2 — the orphan-cap circuit breaker stalls delivery invisibly instead of becoming externally
+   unhealthy.** `publisher.py:340-346,505-517,754-758`,
+   `src/kyc_tool/workers/outbox_worker.py:9-24`, `src/kyc_tool/api/app.py:84-125`, and
+   `tests/unit/test_outbox_http_deadline.py:279-305`. At eight wedged sends, `process_once()` returns
+   `False`; `run_forever()` treats that exactly like an empty queue and sleeps forever. `_saturated` is
+   private, the separate worker has no health surface/heartbeat, and API readiness cannot observe
+   another process; only one CRITICAL log exists. **Fix:** make saturation supervisor-visible. The
+   smallest robust contract is a dedicated saturation exception/nonzero worker exit after the cap is
+   logged, so restart kills daemon attempts and recovery is observable; alternatively ship a durable
+   worker heartbeat/metric with alerting. Do not make an API replica pretend to report another
+   process's health. **Tests:** prove saturation stages/claims nothing new, causes the externally
+   observable unhealthy/exit signal, and clears after supervised restart/recovery.
+
+7. **P2 — canonical rollback guidance still says reversible-before-first-supersession, and the guard
+   misses the bold Markdown that is live today.** `.agents/ROADMAP.md:76,307-308`, core spec
+   `2026-07-22-pr7b-core-outbox-stream-separation-design.md:47-48,718-721`, plan
+   `2026-07-23-pr7b-core-outbox-stream-separation.md:1237-1244`, and
+   `tests/unit/test_plan_artifact_static.py:302-368`. Revisions 014+ refuse after any attempt/digest/
+   witness and 018+ are forward-only, yet the release's claimed F7 replacements did not touch the
+   ROADMAP or core spec. The regex matches only unformatted same-line text; bold, backticks, wrapping,
+   and “rollback is reversible until...” all pass. **Fix:** replace every live claim with
+   forward-only-after-any-witness and the compatible-image rollback. Include ROADMAP in the governed
+   artifact set and compare a parsed/normalized rollback-policy value, not prose regex. **Mutation
+   tests:** bold, backticks, line wrapping, synonyms, and a stale copied table row must all fail.
+
+8. **P2 — the activation writer-drain closure is still prose-substring checking, while ROADMAP still
+   summarizes only “publishers to zero.”** `.agents/ROADMAP.md:317-333`, activation spec
+   `2026-07-22-pr7b-activation-platform-ordering-design.md:325-339,506-524`, and
+   `tests/unit/test_migration_lineage.py:351-378`. Replacing the cutover with “keep pipeline and API
+   online” passes because the test checks only that those words occur; formatting the stale owner as
+   canonical **022** also bypasses the owner regex. That can reintroduce the reproduced API/pipeline
+   `40P01` migration race. **Fix:** add the deferred machine-readable current-contract registry now.
+   Encode activation revision/owner plus the affirmative required states for API inline approval,
+   pipeline decide, outbox publisher, `dev_worker`, and retention; derive ROADMAP/spec/plan parity from
+   that registry. **Tests:** missing roles, negated/“keep online” roles, Markdown owner variants, wrong
+   revision, and publisher-only drains must fail.
+
+9. **P2 — the migration-sentinel inventory still certifies unreachable or spoofed refusal text.**
+   `tests/unit/test_plan_artifact_static.py:424-525`. Exact mutations: a never-called helper containing
+   `MIGRATION_099_DEAD_REFUSED` resolves as a live refusal; importing `BLOCKED_SENTINEL` from a bogus
+   `kyc_tool.migration_contracts.evil` module is credited as the real
+   `BLOCKED_NO_AUTHORITATIVE_MAPPING`; tuple/with/except bindings also evade the scope model. Runtime
+   can therefore emit undocumented plain text while docs index a sentinel it never emits. **Fix:**
+   perform conservative reachability rooted at `upgrade()`/`downgrade()`, recurse through repository
+   helpers, resolve exact module+symbol imports (not a package prefix), and model all Python binding
+   targets. If that is too complex, use the simpler enforceable convention: literal stable sentinels
+   at reachable entry-point refusal sites and do not credit helper text. Add dead helper, direct and
+   aliased helper calls, spoof import, alias collision, tuple destructure, `with`, `except`, and nested
+   definition mutations.
+
+10. **P3 — current manual-provenance rendering is fixed, but its regression test can pass when the UI
+    is broken again.** `src/kyc_tool/ui/console.html:325-329,550-555` and
+    `tests/unit/test_console_static.py:90-104`. Restricting rendering back to pointer drift while
+    leaving the expected strings elsewhere makes both source-token tests pass and hides
+    `unresolved_legacy_order`. **Fix:** execute `viewCase` in a small DOM/JS harness for authoritative,
+    pointer-drift, legacy-unresolved, and no-manual inputs; assert the actual rendered pill text/style
+    (or explicitly document/accept omission of the no-manual pill). Keep token tests only as wiring
+    smoke checks.
+
+11. **P3 — statement execution is bounded, but not by the separately governed setting/test the prior
+    finding required.** `src/kyc_tool/ops/binding.py:36-63`, `src/kyc_tool/config.py:178`, and
+    `tests/integration/test_ops_binding.py:232-253`. The code hardcodes a 300s work headroom derived
+    from the lock setting; the test manually sets `statement_timeout='500ms'` and never calls
+    `binding.bind()`, so it proves PostgreSQL's timeout classifier, not this binding. **Fix:** add a
+    bounded `KYC_OPS_STATEMENT_TIMEOUT_SECONDS` setting independent of lock acquisition, set it in
+    `bind()`, document both budgets, and test `SHOW statement_timeout` plus a real bound command/slow
+    statement with no mutation.
+
+12. **P3 — sequence ownership is checked before mutation, but the operator still has no executable
+    pre-outage prerequisite or exact credential identity.** `src/kyc_tool/ops/binding.py:98-112`,
+    `docs/RUNBOOK.md:287-296,346-361`, and `tests/integration/test_ops_binding.py:257-284`. The runbook
+    says only “owner privilege”; restore/repair invoke the check after the documented hard stop, so a
+    wrong production credential is still discovered inside maintenance. **Fix:** ship a read-only
+    `verify_pr7b_ops_prerequisites` (or `--preflight-only`) command that reports current role, exact
+    sequence owner, required schema phase, and timeout budgets without taking the maintenance lock;
+    name the reviewed ops credential and expected output in RUNBOOK/DEPLOYMENT, and require this green
+    before pausing service. Test owner/non-owner and wrong-role URLs through the real subprocess.
+
+Accepted from this range: restored rows are now delivered/terminal and therefore unsendable; the
+restore's apply and dry-run share a savepoint path; circular sequence guidance is removed; the reset
+holds its exclusive fence through commit; schema/search-path pinning works on singleton version state;
+the callback hot path returns after its enforced wait without synchronous cleanup; the single-process
+orphan cap stops new claims internally; current UI/Salesforce authority rendering is materially
+correct; O1-O4 are live; ordinary sentinel binding shadows and shipped-owner swaps are caught. The
+initial local gate attempt used the wrong database role and was discarded; the reported 1040-pass gate
+is the clean rerun on the correct isolated Postgres role.
+
 ### RELEASE [CLAUDE] 2026-07-31 — audit `8377440` fold (13/13 dispositioned) @ `42e1c7d`
 
 turn: CODEX
