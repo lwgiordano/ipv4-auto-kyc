@@ -77,18 +77,24 @@ def records() -> list[Record]:
 
 
 def reservation_rows_outside_section_c(text: str) -> list[str]:
-    """Reservation-shaped `| PR … |` rows carrying a revision number OUTSIDE §C.
+    """Reservation-shaped `| PR … |` rows carrying a revision number OUTSIDE §C's LINE SPAN.
 
     To a reader such a row looks like a reservation; to the (§C-anchored) parser it does not
     exist. That divergence is exactly how a reservation could be 'relocated' out of the
-    authority table while still reading as reserved — so any such row is reported for a guard
-    to fail on, rather than silently ignored."""
-    c_rows = {line.strip() for line in section_c(text).splitlines()}
+    authority table while still reading as reserved. Located by LINE SPAN, not row-text
+    membership: the first version of this check used a set of §C row strings, so an EXACT
+    duplicate of a §C row pasted elsewhere was invisible — two apparent authorities, one
+    checked (re-audit `f495de8` F8)."""
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(_SECTION_C))
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines)
+    )
     return [
         line.strip()
-        for line in text.splitlines()
-        if line.lstrip().startswith("| PR ")
-        and line.strip() not in c_rows
+        for i, line in enumerate(lines)
+        if not (start < i < end)
+        and line.lstrip().startswith("| PR ")
         and re.search(r"\b0\d\d\b", line)
     ]
 

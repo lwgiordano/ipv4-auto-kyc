@@ -45,10 +45,14 @@ _MIN_HMAC_SECRET_LEN = 32
 # NOT produce one: each budget resets on I/O ACTIVITY, so a receiver dribbling response headers
 # with gaps under the timeout can stall a bare send indefinitely. Measured: a 0.5s timeout —
 # nominal 2.0s "envelope" — held a bare send 32s on drizzled headers. That is why the publisher
-# ENFORCES this as a hard wall-clock deadline on the whole attempt (send + status + ack drain,
-# `publisher._send_for_status`): past 4 × timeout the attempt is cancelled and recorded as a
-# retryable failure. With that enforcement, `lease > 4 × timeout + margin` (checked below) is a
-# real guarantee that a claim outlives its attempt — not phase arithmetic presented as one.
+# ENFORCES this as a hard wall-clock WAIT-BOUND on the whole attempt (send + status + ack drain,
+# `publisher._send_for_status`): past 4 × timeout it stops waiting, detaches the attempt, and
+# records a retryable failure. `lease > 4 × timeout + margin` (checked below) therefore
+# guarantees the PUBLISHER never sits on a claim past its bound. It does not retract the
+# detached attempt itself — no in-process design can recall a request whose bytes may already
+# be moving — so a late 2xx after failure accounting is the documented at-least-once residual
+# (A6) the platform dedupes; the publisher tracks detached attempts and logs CRITICAL if they
+# accumulate.
 OUTBOX_ATTEMPT_DEADLINE_PHASES = 4
 
 
@@ -168,6 +172,11 @@ class Settings(BaseSettings):
     # POC tokens
     poc_token_ttl_hours: int = 72
 
+    # One-shot ops commands: how long a maintenance lock may be awaited before the command
+    # refuses with the stable OPS_COMMAND_LOCK_TIMEOUT sentinel (nothing changed) instead of
+    # hanging a window on an orphan transaction with no diagnosis.
+    ops_lock_timeout_seconds: int = Field(default=60, ge=1)
+
     # Retention (compliance default: 7 years)
     retention_days: int = 7 * 365
 
@@ -262,9 +271,11 @@ def production_config_violations(settings: Settings) -> list[str]:
     # A claim lease shorter than one delivery attempt plus DB/processing margin expires WHILE
     # that attempt is in flight: admission then refuses the terminal for a request the receiver
     # may well have accepted, and the row is redelivered. The publisher enforces
-    # `OUTBOX_ATTEMPT_DEADLINE_PHASES × timeout` as a hard wall-clock deadline on every attempt
-    # (see `_send_for_status`), so requiring the lease to exceed that deadline plus margin makes
-    # "the claim outlives its attempt" an enforced property, not phase arithmetic.
+    # `OUTBOX_ATTEMPT_DEADLINE_PHASES × timeout` as a hard wall-clock WAIT-bound on every
+    # attempt (see `_send_for_status`), so requiring the lease to exceed that bound plus margin
+    # makes "the publisher never waits on a claim past its attempt" an enforced property. A
+    # DETACHED attempt's late effect remains the at-least-once residual — see
+    # OUTBOX_ATTEMPT_DEADLINE_PHASES.
     attempt_deadline = settings.outbox_http_timeout_seconds * OUTBOX_ATTEMPT_DEADLINE_PHASES
     required_lease = attempt_deadline + settings.outbox_lease_margin_seconds
     if settings.outbox_lease_seconds <= required_lease:

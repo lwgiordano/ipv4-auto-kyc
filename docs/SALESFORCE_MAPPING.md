@@ -22,7 +22,7 @@ Sources for every value below: the decision callback (`POST …/kyc/decision`),
 | `Business_Document_Status__c` | live `business_document_verified` check | none → "None"; uploaded but unprocessed → "Uploaded"; `pass` → "Verified"; `fail` → "Failed" |
 | `Website_Review_Status__c` | review task / check | open task → "Open"; check `pass` → "Pass"; check `fail` → "Fail" |
 | `Broker_Status__c` | case `broker_status` | `clear` → "Clear"; `allowed_broker` → "Allowed Broker"; `blocked` → "Blocked" |
-| `Hard_Conflict__c` | callback `gates.no_hard_conflict` | boolean **negated** (`no_hard_conflict: false` ⇒ `Hard_Conflict__c = true`) |
+| `Hard_Conflict__c` | callback `gates.no_hard_conflict` | **NULLABLE boolean**, negated when present (`no_hard_conflict: false` ⇒ `true`). NULL in exactly two conditions — no authoritative decision tuple (unresolved pointer/legacy order), or a MANUAL approval whose gates were bypassed and never evaluated. The platform sync MUST carry NULL through, never coerce it to `false`: a coerced `false` asserts "no hard conflict" from a gate nothing evaluated (AUDIT:D-SF-NULL). The normative `salesforce_sync_fields.json` says `boolean`; this nullable refinement is the recorded correction — the package is committed unmodified by rule. |
 | `Review_Reason_Codes__c` | union of live checks' `reason_codes` | delimited text / multi-select |
 | `Manual_Approved_By__c` / `Manual_Approved_At__c` | latest MANUAL decision row (sticky: a later automatic decision moves the latest-decision pointer but never blanks the manual attribution while the case stays `approved_manual`); platform initiated it; also in tool audit log | reviewer id, timestamp |
 

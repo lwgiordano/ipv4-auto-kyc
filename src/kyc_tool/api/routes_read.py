@@ -45,7 +45,7 @@ def get_case(case_id: str, request: Request) -> dict:
         # write order has no durable record; it serves no decision tuple rather than a guess, is
         # counted in /v1/metrics, and heals on the case's next decision.
         latest = None
-        if case.latest_decision_row_id:
+        if case.latest_decision_row_id is not None:
             latest = session.execute(
                 select(DecisionRow).where(
                     DecisionRow.id == case.latest_decision_row_id,
@@ -57,9 +57,9 @@ def get_case(case_id: str, request: Request) -> dict:
         # forbids it, but a pre-022 history could carry it, and answering "no_decisions" for it
         # would be a definite negative drawn from a lookup that was refused.
         decision_provenance = provenance.classify(
-            pointer_set=bool(case.latest_decision_row_id),
+            pointer_set=case.latest_decision_row_id is not None,
             row_resolved=latest is not None,
-            any_rows=bool(case.latest_decision_row_id) or bool(session.execute(
+            any_rows=case.latest_decision_row_id is not None or bool(session.execute(
                 select(DecisionRow.id).where(DecisionRow.case_id == case_id).limit(1)
             ).first()),
         )

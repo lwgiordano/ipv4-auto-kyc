@@ -446,6 +446,19 @@ migration 010 established in ADR-003).
     `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`024`) is
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
+    THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE — a pre-window maintenance stop, not the
+    cutover (which 0.4 still gates): pause submissions, hard-stop and attest EVERY writer (API,
+    pipeline, outbox, `dev_worker`, retention), then run
+    `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json>
+    --expect-original-id <id>` (dry-run first; add `--apply` to perform). It validates the whole
+    contract below, inserts the exact original row, floors the sequence past the restored id
+    (`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
+    the acceptance predicate and the sequence before committing — any mismatch rolls back row and
+    sequence together. Then rerun 0.4 (the gate that reopens cutover) and either RESUME service or
+    proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path — the earlier
+    revision of this section prescribed exactly that and was circular: the diagnostic stayed red
+    until the restore, while the sequence repair was documented as reachable only after cutover
+    step 2 and knew nothing of the id being restored (re-audit `f495de8` F1).
 0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
     advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
     (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
@@ -464,7 +477,12 @@ migration 010 established in ADR-003).
         default-id INSERT is prohibited (it allocates a fresh id and re-ranks the restored older
         callback as newer), and substituting `now()` for `delivered_at` is prohibited (it falsifies
         the audit record). If the original id is unavailable, do NOT restore: remain
-        `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012.
+        `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012. The evidence tuple is captured into the JSON
+        file `restore_pr7b_core_callback --evidence` consumes; `--expect-original-id` must repeat
+        the id (double entry). The id, body digest and decision linkage are machine-refused on
+        mismatch; the lifecycle fields are ATTESTED inputs from the backup — nothing in the target
+        database can contradict a falsified backup value, which is why the file and the documented
+        capture query are the only sanctioned source.
     (c) ACCEPTANCE PREDICATE — POSITIVE and fail-closed. Run per restored callback; it MUST return
         EXACTLY ONE row before proceeding. ZERO rows = still blocked. Do NOT invert it into a
         "select the mismatches, expect zero rows" form: an absent row (or one restored under the
@@ -510,7 +528,11 @@ migration 010 established in ADR-003).
         `repair_outbox_sequence: OK` and on any failed read-back `repair_outbox_sequence: FAILED`
         with the observed tuple — its exit status IS the result; a printed boolean is not, which
         is why the earlier psql block could report success after a bad repair.
-    (e) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
+    (e) The restore CLI enforces (b)+(c)+the sequence floor atomically; a genuinely divergent
+        sequence WITHOUT a restore (nothing missing, high-water wrong) is the only case for the
+        SEPARATE DRAINED `repair_outbox_sequence` (same maintenance-stop preconditions;
+        `--floor <id>` when an id above max must stay cleared).
+    (f) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
 
 **Cutover (only after 0.4 is green):**
 1. Pause submission, edge-block the composer, disable autoscaling/restarts.

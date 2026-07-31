@@ -237,3 +237,77 @@ def test_header_drip_is_cancelled_at_the_attempt_deadline_and_the_publisher_reco
     finally:
         healthy.close()
         publisher.http.close()
+
+
+class _WedgedTransport(httpx.BaseTransport):
+    """A transport stuck in something `client.close()` cannot interrupt — the model of a hung
+    OS call (e.g. a resolver that never returns). Releasing `gate` un-wedges every attempt."""
+
+    def __init__(self, gate: threading.Event):
+        self.gate = gate
+
+    def handle_request(self, request):
+        self.gate.wait()
+        return httpx.Response(200)
+
+
+def test_wedged_attempts_detach_bounded_and_never_block_forward_progress():
+    """Re-audit `f495de8` F2: the bound is a WAIT-bound. What it must deliver: the publisher
+    keeps moving (timely retryable failure per attempt), detached threads are tracked and
+    reaped, and repeated wedges accumulate bounded orphans rather than wedging delivery."""
+    gate = threading.Event()
+    publisher = OutboxPublisher(
+        lambda: None,
+        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
+        http_client=httpx.Client(transport=_WedgedTransport(gate)),
+    )
+    from kyc_tool.outbox.publisher import _AttemptDeadlineExceeded
+
+    try:
+        for i in range(3):
+            # after the first overrun the rebuilt client is a REAL client; re-wedge it
+            publisher.http = httpx.Client(transport=_WedgedTransport(gate))
+            request = publisher.http.build_request("POST", "http://platform.test/kyc/decision",
+                                                   content=b"{}")
+            started = time.monotonic()
+            with pytest.raises(_AttemptDeadlineExceeded):
+                publisher._send_for_status(request)
+            assert time.monotonic() - started < 2.0, "forward progress must be timely"
+            assert len(publisher._orphans) == i + 1, "each wedged attempt is tracked, none lost"
+    finally:
+        gate.set()  # un-wedge: the detached threads can now finish and be reaped
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and any(t.is_alive() for t in publisher._orphans):
+        time.sleep(0.02)
+    publisher.close()
+    assert publisher._orphans == [], "released orphans must reap on close()"
+
+
+def test_daemon_send_threads_never_block_process_exit():
+    """A publisher whose send is wedged in an uninterruptible call must not hang interpreter
+    shutdown — the audit measured a child process unable to exit within two seconds."""
+    import subprocess
+    import sys as _sys
+
+    script = """
+import threading, httpx, sys
+from kyc_tool.config import Settings
+from kyc_tool.outbox.publisher import OutboxPublisher, _AttemptDeadlineExceeded
+
+class Wedged(httpx.BaseTransport):
+    def handle_request(self, request):
+        threading.Event().wait()  # forever
+
+pub = OutboxPublisher(lambda: None,
+    Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
+    http_client=httpx.Client(transport=Wedged()))
+try:
+    pub._send_for_status(pub.http.build_request("POST", "http://platform.test/x", content=b"{}"))
+except _AttemptDeadlineExceeded:
+    pass
+print("DETACHED-OK", flush=True)
+sys.exit(0)
+"""
+    proc = subprocess.run([_sys.executable, "-c", script],
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0 and "DETACHED-OK" in proc.stdout, proc.stdout + proc.stderr

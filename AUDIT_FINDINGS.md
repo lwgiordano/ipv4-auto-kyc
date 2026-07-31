@@ -311,3 +311,17 @@ documented choice · 🔵 hygiene/wording.
     the unbounded terminal tail.
   - The POC token — the genuinely sensitive outbox body — is still destroyed twice over: redacted in
     the fenced terminal UPDATE itself (delivered AND dead, `020`/`022`) and pruned on schedule.
+
+### 🔵 D-SF-NULL — `Hard_Conflict__c` is a NULLABLE boolean (correction to `salesforce_sync_fields.json`)
+
+- The normative `KYC_Tool_Build_Package/machine_readable/salesforce_sync_fields.json` types
+  `Hard_Conflict__c` as `boolean`. The projection formerly satisfied that by DEFAULTING to
+  `false` whenever the gate was absent — fabricating a definite "no hard conflict" out of (a) an
+  unresolved decision pointer and (b) a manual approval whose gates were bypassed and never
+  evaluated (re-audits `45cc215` F9, `f495de8` F6).
+- Corrected semantics: `Hard_Conflict__c` is `NOT gates.no_hard_conflict` when an authoritative
+  decision explicitly carries the gate, and **NULL** otherwise — exactly those two conditions.
+  The platform's Salesforce sync must carry NULL through; coercing NULL to `false` recreates the
+  fabricated clean bill downstream. The package stays committed unmodified (repo rule); this item
+  and `docs/SALESFORCE_MAPPING.md` are the recorded correction, and
+  `tests/unit/test_salesforce_projection.py` + the drift e2e pin the runtime behavior.

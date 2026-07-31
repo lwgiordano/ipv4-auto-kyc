@@ -85,10 +85,10 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   actually sent are **unrecoverable** for historical rows. `013` therefore does **NOT** backfill a
   digest: computing one from the normalized payload would fabricate a witness for bytes nobody can
   reconstruct, which is precisely the defect F1 identified. Pre-`013` deliveries are **un-witnessed by
-  construction**, and 016's bootstrap must seed their high-water from `decision_sequence` +
+  construction**, and the activation (`024`) bootstrap must seed their high-water from `decision_sequence` +
   `local_status` without a digest comparison rather than pretend otherwise.
-  This is what lets retention destroy the body while 016 keeps a witness — see the durable-authority
-  contract in §Rollout — and it is why 016 never re-encodes a stored payload.
+  This is what lets retention destroy the body while activation (`024`) keeps a witness — see the durable-authority
+  contract in §Rollout — and it is why activation (`024`) never re-encodes a stored payload.
   **Rev 10-11 rejected a stored digest column and this supersedes that**, without contradicting its
   reasoning: the objection was that a column duplicating a fact still derivable from `payload_json`
   creates a drift class. Once retention deliberately destroys the body, the digest is **no longer
@@ -173,7 +173,7 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   theoretical one. Its **only** sanctioned use is backup→restore **semantic equality**, where both
   sides are Postgres. It must never be exported as, compared against, or described as a
   received-body witness: a platform that hashes the bytes it actually accepted would disagree, and
-  one that merely echoes our SQL value proves nothing. 016's wire digest is a separate, versioned
+  one that merely echoes our SQL value proves nothing. Activation's (`024`) wire digest is a separate, versioned
   codec — see the activation spec's `callback_wire_sha256`.
 - **Fenced claim:** `outbox.{claim_lease_expires_at TIMESTAMPTZ NULL, claim_token UUID NULL,
   claimed_by TEXT NULL}`, claim tuple treated **all-three-together** (below).
@@ -183,7 +183,7 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   actual per-case ordering invariant (a plain PG UNIQUE; manual rows keep `decision_sequence=NULL`, so
   multiple NULLs stay legal). *Without this the namespace is not unique:* since `run_id` is already
   unique, `UNIQUE(run_id, case_id, decision_sequence)` adds **no** per-case uniqueness — `(run=A,
-  case=C, seq=1)` and `(run=B, case=C, seq=1)` satisfy it, and after 016 the second to reach the
+  case=C, seq=1)` and `(run=B, case=C, seq=1)` satisfy it, and after activation (`024`) the second to reach the
   platform is a high-water no-op that **silently discards a distinct decision**. Keep also
   `UNIQUE decisions(run_id, case_id, decision_sequence)` (the exact **triple-FK target**), the triple
   FK `outbox(run_id, case_id, decision_sequence) → decisions(...)`, and the partial `UNIQUE
@@ -377,7 +377,7 @@ while the schedule stays suspended and the zero-running attestation holds**. **O
 2026-07-23):** the only valid success path is to **restore the exact callback row from authoritative
 backup and rerun the diagnostic clean**; otherwise **remain on 012 in `BLOCKED_NO_AUTHORITATIVE_MAPPING`**
 (the exact sentinel — one token, no whitespace). **activation (`024`) is downstream and cannot
-repair this** — no `016` command is a substitute. There is **no** pre-013 reconciliation unit in this
+repair this** — no activation (`024`) command is a substitute. There is **no** pre-013 reconciliation unit in this
 approved core design (the user considered and declined it). Backup availability is an **operator
 prerequisite**, not a consequence of the retention setting. Never fabricate a callback, delete an
 immutable decision, or fall back to `decided_at`. The CLI contract on this path: **nonzero exit, the
@@ -455,13 +455,13 @@ success proceed.
 
 **Durable ordering authority — retention destroys the callback BODY on schedule and keeps only
 non-personal ordering evidence (rev 12, re-review `6a408a3` F5 + F1).** The restore path above repairs *history*; this clause prevents *recurrence*, and it is the
-storage/ownership decision 016 depends on. Before rev 10 an exact restore was self-defeating: it
+storage/ownership decision activation (`024`) depends on. Before rev 10 an exact restore was self-defeating: it
 reinstates the original 7-year-old `delivered_at`, so `retention.py:29-35`
 (`status='delivered' AND delivered_at < now() - interval`) re-deleted the row on its very next run,
-and the tool then had no way to derive 016's per-callback `(wire digest, local_status)` from the
+and the tool then had no way to derive activation's (`024`) per-callback `(wire digest, local_status)` from the
 immutable `decisions` row. 013 therefore establishes the **`outbox` row itself** as the durable
 authority for a decision callback's identity, order, body, and local status:
-- **What 016 actually consumes is the DIGEST, not the body.** Its manifest entry is
+- **What activation (`024`) actually consumes is the DIGEST, not the body.** Its manifest entry is
   `(case_id, run_id, decision_sequence, callback_wire_sha256, local_status)`. Nothing downstream needs
   `payload_json` itself. Rev 10-11 kept the whole body forever only because the manifest re-derived
   the digest from it at bootstrap time — an implementation detail, not a requirement.
@@ -487,8 +487,8 @@ authority for a decision callback's identity, order, body, and local status:
   accountable role is the deployer's data controller, and that pre-redaction backups age out
   on their own schedule. `KYC_RETENTION_DAYS` bounds what the body can carry; it does not
   discharge governance of the pseudonymous remainder, and this spec no longer claims it does.
-- **It also removes 016's ability to get history wrong.** Because the digest is recorded at send
-  time, 016 never re-encodes a stored payload — so 016's `decision_sequence` payload backfill
+- **It also removes activation's (`024`) ability to get history wrong.** Because the digest is recorded at send
+  time, activation never re-encodes a stored payload — so its `decision_sequence` payload backfill
   cannot change a digest, which was the whole of F1's reachable failure. `wire_version` is a
   recorded fact rather than a rule for reconstructing one. `013` backfills **no** historical
   digest and must not: `payload_json` is jsonb and normalizes key order, so a pre-013 row's sent
@@ -521,7 +521,7 @@ retries) —
 claim is encoded only in `next_attempt_at` and cannot be distinguished from legitimate backoff.
 **Preserve every pending row's `next_attempt_at`**; an interrupted old claim simply waits until its
 already-recorded due time (bounded by the documented old lease); (4) `alembic upgrade head` (the
-chain `013`→`014`→`015`→`016`→`017`→`018`→`019`→`020`→`021`→`022`) —
+chain `013`→`014`→…→`022`→`023`) —
 which **repeats the §0 preflights under the zero-writer boundary** and remains the authoritative
 fail-closed check (the pre-window diagnostic is an early detector, not a substitute);
 (5) start API only, probe `/readyz`, then start+attest the fenced workers — **no mutating prod smoke**;

@@ -21,13 +21,19 @@ from sqlalchemy import text
 from kyc_tool.config import get_settings
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.migration_contracts.v013_backfill import BLOCKED_SENTINEL, MISSING_CALLBACK, run_parity
+from kyc_tool.ops import binding
 
 
-def verify_backfill(session_factory) -> tuple[int, list[str]]:
+def verify_backfill(session_factory, *, lock_timeout_seconds: int = 60) -> tuple[int, list[str]]:
     """Return (exit_code, offending_ids). Takes the SHARE lock first, runs the shared parity
     matrix, and NEVER writes (rolls back before returning)."""
     with session_factory() as s:
-        s.execute(text("LOCK TABLE outbox IN SHARE MODE"))  # BEFORE any SELECT
+        # Governed-schema binding runs BEFORE the lock: its catalog reads establish that the
+        # `public.outbox` we are about to lock is the real object (a smuggled search_path
+        # otherwise redirects everything below), and touch no outbox DATA — the SHARE lock
+        # still precedes every data SELECT, which is the property the retention-race test pins.
+        binding.bind(s, lock_timeout_seconds=lock_timeout_seconds)
+        s.execute(text("LOCK TABLE public.outbox IN SHARE MODE"))  # BEFORE any data SELECT
         violations = run_parity(s)
         s.rollback()  # read-only: never write, never hold the lock past the check
     if not violations:
@@ -46,7 +52,22 @@ def verify_backfill(session_factory) -> tuple[int, list[str]]:
 
 
 def main() -> int:
-    code, _ = verify_backfill(make_session_factory(make_engine(get_settings().database_url)))
+    settings = get_settings()
+    try:
+        code, _ = verify_backfill(
+            make_session_factory(make_engine(settings.database_url)),
+            lock_timeout_seconds=settings.ops_lock_timeout_seconds,
+        )
+    except Exception as exc:  # noqa: BLE001 — one-shot CLI: classify, print, exit nonzero
+        if binding.is_lock_timeout(exc):
+            print(
+                binding.lock_timeout_message(
+                    "verify_pr7b_core_backfill", "SHARE on public.outbox"
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        raise
     if code == 0:
         print("verify_pr7b_core_backfill: OK (schema-012 parity matrix clean)")
     return code

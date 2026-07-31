@@ -248,6 +248,7 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
 h2.sec{font-size:12.5px;font-weight:600;color:var(--muted);text-transform:uppercase;
   letter-spacing:.05em;margin:32px 0 12px}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
+.gate.na{opacity:.55}
 </style>
 </head>
 <body>
@@ -321,6 +322,8 @@ const PILL={
   integrity_drift:["p-red","⚠","Pointer drift"],
   clear:["p-green","✓","Clear"],allowed_broker:["p-amber","!","Allowed broker"],blocked:["p-red","✕","Blocked"],
 };
+const PROV_PILL={unresolved_pointer_drift:["integrity_drift",undefined],unresolved_legacy_order:["missing","Unresolved order (pre-014)"],no_decisions:["missing","No decisions yet"],no_manual_decisions:["missing","No manual approval"],unresolved_pointer_drift_manual:["integrity_drift","Manual pointer drift"]};
+const provPill=(p,manual)=>{const k=manual&&p==="unresolved_pointer_drift"?p+"_manual":p;const[q,label]=PROV_PILL[k]||["missing",p];return pill(q,label)};
 const pill=(k,label)=>{const[c,i,d]=PILL[k]||["p-neutral","·",k];
   return`<span class="pill ${c}">${i}${NBSP}${esc(label??d)}</span>`};
 
@@ -415,7 +418,7 @@ async function viewCases(){
   const{body}=await j(`/ui/api/cases?q=${encodeURIComponent(q)}`);
   const rows=body.cases.map(c=>`<tr class="click" data-id="${esc(c.id)}">
     <td><span class="strong">${esc(c.company_name||c.id)}</span><div class="sub mono">${esc(c.id)}</div></td>
-    <td>${c.decision_provenance==="unresolved_pointer_drift"?pill("integrity_drift",undefined):pill(c.latest_decision||"missing",c.latest_decision?undefined:"No decision")}</td>
+    <td>${c.latest_decision?pill(c.latest_decision):provPill(c.decision_provenance)}</td>
     <td class="num strong">${c.decision_score??"—"}</td>
     <td class="num sub">${c.current_evidence_score}</td>
     <td class="sub">${esc(c.status)}</td><td class="sub">${esc(c.buy_status)}</td>
@@ -544,7 +547,8 @@ async function viewCase(id){
   page.innerHTML=`
     <div class="crumb"><a href="#/cases">Cases</a> / <span class="mono">${esc(c.id)}</span></div>
     ${tbar(esc(c.company_name||c.id),
-      `<span class="chips">${d.decision_provenance==="unresolved_pointer_drift"?pill("integrity_drift","Latest-decision pointer does not resolve"):pill(decision||"missing",decision?undefined:"No decision")}
+      `<span class="chips">${decision?pill(decision):provPill(d.decision_provenance)}
+       ${d.manual_decision_provenance==="unresolved_pointer_drift"?provPill(d.manual_decision_provenance,true):""}
        ${c.status==="approved_manual"?pill("manual","Approved manually"):`<span class="pill p-neutral">${esc(c.status)}</span>`}
        <span class="pill p-neutral">buy: ${esc(c.buy_status)}</span>${pill(c.broker_status,`broker: ${c.broker_status}`)}</span>`,
       `<button class="primary" id="sendbtn">Send event</button>`)}
@@ -557,7 +561,9 @@ async function viewCase(id){
             <span class="verdict sub">decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
           <h4>Published decision hard gates</h4>
           <div class="gates published-gates">${["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"]
-            .map(g0=>`<div class="gate ${gates[g0]?"ok":"no"}">${gates[g0]?"✓":"✕"} ${esc(g0.replace(/_/g," "))}</div>`).join("")}</div>`
+            .map(g0=>g0 in gates
+              ?`<div class="gate ${gates[g0]?"ok":"no"}">${gates[g0]?"✓":"✕"} ${esc(g0.replace(/_/g," "))}</div>`
+              :`<div class="gate na" title="this decision did not evaluate the gate (e.g. manual bypass)">· ${esc(g0.replace(/_/g," "))} — not evaluated</div>`).join("")}</div>`
           :`<div class="sub">${d.decision_provenance==="unresolved_pointer_drift"?`<b>Integrity drift:</b> this case\u2019s latest-decision pointer names a row the hardened lookup refuses (wrong case or missing). No row may be shown as the verdict \u2014 investigate; the database forbids this state from migration 022 on.`:d.decision_provenance==="unresolved_legacy_order"?`No published decision may be shown \u2014 the historical order is unresolved (pre-014 history); heals on the next decision.`:`No published decision for this case yet.`}</div>`}
       </div></div>
     <div class="card"><div class="hd"><h3>Live evidence — not the published decision</h3>

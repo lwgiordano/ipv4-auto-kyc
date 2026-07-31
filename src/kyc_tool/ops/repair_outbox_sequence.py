@@ -1,6 +1,6 @@
 """Drained outbox-sequence repair (PR 7b-core RUNBOOK step 0.6d escape hatch).
 
-Run ONLY inside the drained maintenance window, after every writer is hard-stopped and attested
+Run ONLY inside a drained maintenance stop, after every writer is hard-stopped and attested
 at zero. It exists because the step-0 precondition can legitimately fail when a restored id is
 NOT below the sequence high-water (a restore from a divergent lineage rather than a prune).
 
@@ -12,31 +12,51 @@ boolean is false, so a bad repair reports success. Here the exit status IS the r
 It never calls nextval() to probe: consuming an id and setval-ing it back is itself a write to
 the object under repair. The read-back reads last_value/is_called from the sequence relation.
 
-    python -m kyc_tool.ops.repair_outbox_sequence
+Restart target: `GREATEST(max(id), floor) + 1`. `--floor` (optional) serves the restore path —
+when an authoritative row with an id ABOVE current max(id) is about to be restored, the floor
+keeps the sequence from being restarted below it and later colliding (Codex re-audit `f495de8`
+F1: max=10, missing id=100 → a floorless repair sets next=11, and the restored 100 collides
+when the sequence catches up). `restore_pr7b_core_callback` passes it automatically; a bare run
+repairs to the current table contents.
+
+Execution is bound to the governed schema first (`ops/binding.py`): the sequence repaired is
+provably `public.outbox_id_seq`, and a conflicting lock refuses with `OPS_COMMAND_LOCK_TIMEOUT`
+after the bound instead of hanging the outage.
+
+    python -m kyc_tool.ops.repair_outbox_sequence [--floor N]
 """
 
+import argparse
 import sys
 
 from sqlalchemy import text
 
 from kyc_tool.config import get_settings
 from kyc_tool.db.session import make_engine, make_session_factory, uow
+from kyc_tool.ops import binding
 
-_SEQUENCE = "outbox_id_seq"
+_SEQUENCE = "public.outbox_id_seq"
 
 
-def repair_sequence(session_factory) -> int:
-    """Restart the outbox id sequence at max(id)+1. Returns the value the NEXT allocation takes.
+def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: int = 60) -> int:
+    """Restart the outbox id sequence at GREATEST(max(id), floor)+1. Returns the value the
+    NEXT allocation takes.
 
     Raises RuntimeError (rolling the transaction back) if the post-restart read-back is not
     exactly (next_id, is_called=false) — the caller must treat that as a failed repair.
     """
+    if not isinstance(floor, int) or floor < 0:
+        raise RuntimeError(f"refusing: floor must be a non-negative int, got {floor!r}")
     with uow(session_factory) as session:
+        binding.bind(session, lock_timeout_seconds=lock_timeout_seconds)
         # The fence. Writers are already stopped by the runbook; this makes that a guarantee
         # rather than an assumption, and ALTER SEQUENCE (unlike setval) excludes concurrent
         # nextval for the duration of the transaction.
-        session.execute(text("LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE"))
-        next_id = session.execute(text("SELECT COALESCE(max(id), 0) + 1 FROM outbox")).scalar_one()
+        session.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
+        next_id = session.execute(
+            text("SELECT GREATEST(COALESCE(max(id), 0), :f) + 1 FROM public.outbox"),
+            {"f": floor},
+        ).scalar_one()
         if not isinstance(next_id, int) or next_id < 1:  # never interpolate an untrusted value
             raise RuntimeError(f"refusing to restart {_SEQUENCE}: computed next_id={next_id!r}")
         session.execute(text(f"ALTER SEQUENCE {_SEQUENCE} RESTART WITH {next_id}"))
@@ -51,13 +71,32 @@ def repair_sequence(session_factory) -> int:
         return next_id
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--floor", type=int, default=0,
+                        help="minimum id the restarted sequence must clear (restore path)")
+    args = parser.parse_args(argv)
     settings = get_settings()
     try:
-        next_id = repair_sequence(make_session_factory(make_engine(settings.database_url)))
+        next_id = repair_sequence(
+            make_session_factory(make_engine(settings.database_url)),
+            floor=args.floor,
+            lock_timeout_seconds=settings.ops_lock_timeout_seconds,
+        )
     except RuntimeError as exc:
         print(f"repair_outbox_sequence: FAILED — {exc}", file=sys.stderr)
         return 1
+    except Exception as exc:  # noqa: BLE001 — one-shot CLI: classify, print, exit nonzero
+        if binding.is_lock_timeout(exc):
+            print(
+                "repair_outbox_sequence: FAILED — "
+                + binding.lock_timeout_message(
+                    "repair_outbox_sequence", "ACCESS EXCLUSIVE on public.outbox"
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        raise
     print(f"repair_outbox_sequence: OK — next allocation will be {next_id}")
     return 0
 

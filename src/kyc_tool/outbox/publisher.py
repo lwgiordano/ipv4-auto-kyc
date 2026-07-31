@@ -15,15 +15,16 @@ run_id NULL, no callback, and no sequence, so the guard sees no higher locally-
 published automatic sequence. All three are expected pre-activation.
 """
 
+import contextlib
 import hashlib
 import json
 import os
+import queue
 import re
 import socket
+import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -50,6 +51,10 @@ POC_EMAIL = "poc_email"
 # pinned by ck_attempt_wire_vocab, so an unknown value fails at the database rather than silently
 # becoming an uninterpretable witness.
 _WIRE_VERSION = "legacy"
+
+# Detached (deadline-overrun) send threads alive at once before the publisher logs CRITICAL —
+# past this, the callback endpoint is pathologically wedged and needs an operator.
+_MAX_ORPHAN_SENDS = 8
 
 # How much of a callback acknowledgement body the publisher will read to keep the connection
 # reusable. A platform ack is a few hundred bytes; past this it is not an ack we need, and reading
@@ -186,7 +191,7 @@ class OutboxPublisher:
         self.http = http_client or self._http_factory()
         self.email_sender = email_sender or LoggingEmailSender()
         self._claimant = f"{socket.gethostname()}:{os.getpid()}"
-        self._send_pool: ThreadPoolExecutor | None = None
+        self._orphans: list[threading.Thread] = []
 
     # -- delivery -----------------------------------------------------------
 
@@ -268,39 +273,79 @@ class OutboxPublisher:
         )
 
     def _send_for_status(self, request: httpx.Request) -> None:
-        """One delivery attempt under an ENFORCED wall-clock deadline.
+        """One delivery attempt under an ENFORCED wall-clock wait-bound.
 
         HTTPX's per-operation timeouts reset on I/O activity, so no combination of them bounds
         an attempt: a receiver dripping one header byte per interval holds a bare `send()`
         indefinitely (measured: 32s against a 0.5s timeout), stalling the single-threaded
-        publisher and outliving the claim lease. The attempt therefore runs in a worker thread
-        with an absolute deadline of `OUTBOX_ATTEMPT_DEADLINE_PHASES × timeout` — the same
-        number the production config requires the lease to exceed, which is what makes
-        `lease > deadline + margin` a real guarantee instead of phase arithmetic. On overrun the
-        client is closed out from under the stuck thread (the blocked socket op raises), a fresh
-        client replaces it, and the attempt is recorded as an ordinary retryable failure.
+        publisher and outliving the claim lease. The attempt therefore runs in a DAEMON worker
+        thread and the publisher waits at most `OUTBOX_ATTEMPT_DEADLINE_PHASES × timeout` — the
+        same number the production config requires the lease to exceed.
+
+        What the bound guarantees, precisely (re-audit `f495de8` F2): the PUBLISHER's forward
+        progress (it stops waiting, accounts a retryable failure, and moves on with a fresh
+        client) and clean process exit (daemon threads never block shutdown). What it cannot
+        guarantee: retraction of the attempt itself. Closing the client unblocks socket
+        operations, but an OS call that ignores it (a hung resolver) keeps the detached thread
+        alive until the OS gives up, and a request whose bytes are already moving may still
+        complete — a late 2xx after failure accounting is the documented at-least-once residual
+        (A6) the platform dedupes on (case_id, run_id). No in-process design retracts an
+        in-flight request; a supervised child process (kill + rebuild) is the only stronger
+        boundary and is deliberately not taken here — recorded on the bus. Detached attempts
+        are tracked and reaped; more than _MAX_ORPHAN_SENDS alive at once is logged CRITICAL as
+        an operator signal that the callback endpoint is pathologically wedged.
         """
         deadline = OUTBOX_ATTEMPT_DEADLINE_PHASES * self.settings.outbox_http_timeout_seconds
-        if self._send_pool is None:
-            self._send_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="outbox-send")
-        future = self._send_pool.submit(self._send_and_drain, request)
+        self._orphans = [t for t in self._orphans if t.is_alive()]
+        outcome: queue.Queue = queue.Queue(maxsize=1)
+        client = self.http
+
+        def attempt() -> None:
+            try:
+                self._send_and_drain(client, request)
+                outcome.put((None,))
+            except BaseException as exc:  # noqa: BLE001 — marshalled to the caller verbatim
+                outcome.put((exc,))
+
+        worker = threading.Thread(target=attempt, name="outbox-send", daemon=True)
+        worker.start()
         try:
-            future.result(timeout=deadline)
-        except FutureTimeout:
+            (exc,) = outcome.get(timeout=deadline)
+        except queue.Empty:
             log.error("outbox_attempt_deadline_exceeded",
                       url=str(request.url), deadline_seconds=deadline)
-            # Closing the client makes the stuck thread's socket op raise, so it dies instead of
-            # wedging the pool; the pool is discarded anyway (unblocking is not guaranteed on
-            # every transport) and both are rebuilt fresh.
-            self.http.close()
+            # Closing the client makes any blocked SOCKET op in the worker raise; the worker is
+            # daemon either way, so a truly stuck OS call detaches instead of wedging delivery
+            # or process exit. New sends get a fresh client immediately.
             self.http = self._http_factory()
-            self._send_pool.shutdown(wait=False, cancel_futures=True)
-            self._send_pool = None
+            with contextlib.suppress(Exception):  # a wedged pool must not mask the timeout
+                client.close()
+            worker.join(timeout=1.0)
+            if worker.is_alive():
+                self._orphans.append(worker)
+                if len(self._orphans) > _MAX_ORPHAN_SENDS:
+                    log.critical("outbox_send_orphans_accumulating",
+                                 orphans=len(self._orphans), url=str(request.url))
             raise _AttemptDeadlineExceeded(
-                f"delivery attempt exceeded its {deadline}s deadline and was cancelled"
+                f"delivery attempt exceeded its {deadline}s wait-bound and was detached"
             ) from None
+        worker.join(timeout=5.0)
+        if exc is not None:
+            raise exc
 
-    def _send_and_drain(self, request: httpx.Request) -> None:
+    def close(self) -> None:
+        """Release the HTTP client and give any detached attempts a moment to die.
+
+        Daemon threads never block interpreter exit, so this is hygiene, not a requirement —
+        but a long-lived embedder (tests, the dev worker) should call it."""
+        try:
+            self.http.close()
+        finally:
+            for t in self._orphans:
+                t.join(timeout=0.5)
+            self._orphans = [t for t in self._orphans if t.is_alive()]
+
+    def _send_and_drain(self, client: httpx.Client, request: httpx.Request) -> None:
         """Send, treat the response status as the acknowledgement, and drain the body safely.
 
         The status is the witness, but the body is still DRAINED — under a byte cap and a
@@ -324,7 +369,7 @@ class OutboxPublisher:
         still raises and retries; that is the receiver breaking HTTP, not us walking away.)
         """
         deadline = time.monotonic() + self.settings.outbox_http_timeout_seconds
-        response = self.http.send(request, stream=True)
+        response = client.send(request, stream=True)
         try:
             response.raise_for_status()
             if response.is_stream_consumed:

@@ -15,7 +15,8 @@
 | Bundle epoch activation | `python -m kyc_tool.ops.activate_bundle_pinning_epoch --expect-bundle-hash <sha256> --expect-engine <id>` | one-shot, POST-cutover (PR 6, `docs/DEPLOYMENT.md` §10); idempotent on a matching re-run, fails on a mismatched one |
 | 7b-core pre-window diagnostic | `python -m kyc_tool.ops.verify_pr7b_core_backfill` | one-shot, schema-012-compatible, SHARE-locked, read-only; PRE-window (retention suspended + attested zero) — nonzero exit + `BLOCKED_NO_AUTHORITATIVE_MAPPING` blocks the cutover (see the cutover section) |
 | Outbox claim reset | `python -m kyc_tool.ops.reset_interrupted_outbox_claims` | one-shot, post-013-only; ONLY with every publisher stopped + attested — clears complete claim tuples, preserves `next_attempt_at`, atomic (refuses on any surviving tuple) |
-| Outbox sequence repair | `python -m kyc_tool.ops.repair_outbox_sequence` | one-shot, DRAINED window only (takes `ACCESS EXCLUSIVE` on outbox); restarts `outbox_id_seq` at `max(id)+1` with a fail-closed read-back — exit status IS the result |
+| Outbox sequence repair | `python -m kyc_tool.ops.repair_outbox_sequence [--floor N]` | one-shot, DRAINED maintenance stop only (takes `ACCESS EXCLUSIVE` on outbox); restarts `outbox_id_seq` at `GREATEST(max(id), floor)+1` with a fail-closed read-back — exit status IS the result |
+| 7b-core callback restore | `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file> --expect-original-id <id> [--apply]` | one-shot, schema-012 ONLY, pre-window maintenance stop; dry-run by default; inserts the exact backed-up row AND floors the sequence past it in one transaction, double fail-closed read-back (see cutover step 0.5/0.6) |
 
 > **Migration 010 (PR 5a) is a non-hot, forward-only-after-reuse cutover.** It
 > drops the global unique on `events.idempotency_key`, which the *old* image's
@@ -288,6 +289,19 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
     `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`024`) is
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
+    THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE — a pre-window maintenance stop, not the
+    cutover (which 0.4 still gates): pause submissions, hard-stop and attest EVERY writer (API,
+    pipeline, outbox, `dev_worker`, retention), then run
+    `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json>
+    --expect-original-id <id>` (dry-run first; add `--apply` to perform). It validates the whole
+    contract below, inserts the exact original row, floors the sequence past the restored id
+    (`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
+    the acceptance predicate and the sequence before committing — any mismatch rolls back row and
+    sequence together. Then rerun 0.4 (the gate that reopens cutover) and either RESUME service or
+    proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path — the earlier
+    revision of this section prescribed exactly that and was circular: the diagnostic stayed red
+    until the restore, while the sequence repair was documented as reachable only after cutover
+    step 2 and knew nothing of the id being restored (re-audit `f495de8` F1).
 0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
     advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
     (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
@@ -306,7 +320,12 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
         default-id INSERT is prohibited (it allocates a fresh id and re-ranks the restored older
         callback as newer), and substituting `now()` for `delivered_at` is prohibited (it falsifies
         the audit record). If the original id is unavailable, do NOT restore: remain
-        `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012.
+        `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012. The evidence tuple is captured into the JSON
+        file `restore_pr7b_core_callback --evidence` consumes; `--expect-original-id` must repeat
+        the id (double entry). The id, body digest and decision linkage are machine-refused on
+        mismatch; the lifecycle fields are ATTESTED inputs from the backup — nothing in the target
+        database can contradict a falsified backup value, which is why the file and the documented
+        capture query are the only sanctioned source.
     (c) ACCEPTANCE PREDICATE — POSITIVE and fail-closed. Run per restored callback; it MUST return
         EXACTLY ONE row before proceeding. ZERO rows = still blocked. Do NOT invert it into a
         "select the mismatches, expect zero rows" form: an absent row (or one restored under the
@@ -352,7 +371,11 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
         `repair_outbox_sequence: OK` and on any failed read-back `repair_outbox_sequence: FAILED`
         with the observed tuple — its exit status IS the result; a printed boolean is not, which
         is why the earlier psql block could report success after a bad repair.
-    (e) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
+    (e) The restore CLI enforces (b)+(c)+the sequence floor atomically; a genuinely divergent
+        sequence WITHOUT a restore (nothing missing, high-water wrong) is the only case for the
+        SEPARATE DRAINED `repair_outbox_sequence` (same maintenance-stop preconditions;
+        `--floor <id>` when an id above max must stay cleared).
+    (f) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
 
 **Cutover (only after 0.4 is green):**
 1. Pause submission, edge-block the composer, disable autoscaling/restarts.

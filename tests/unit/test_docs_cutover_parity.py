@@ -51,6 +51,11 @@ def test_runbook_and_deployment_cutover_bodies_identical():
         "repair_outbox_sequence: OK", "repair_outbox_sequence: FAILED",
         "exit status IS the result",
         "substituting `now()` for `delivered_at` is prohibited",
+        # re-audit `f495de8` F1 — the restore is a SHIPPED bounded CLI, not pasted SQL, and
+        # it floors the sequence past the restored id in the SAME transaction:
+        "restore_pr7b_core_callback", "--expect-original-id",
+        "GREATEST(max(id), original_id) + 1", "pre-window maintenance stop",
+        "Pasting the SQL below by hand is NOT a sanctioned path",
     ):
         assert token in rb  # safety-critical details survive, not just the numbered leaders
     assert "setval(pg_get_serial_sequence" not in rb  # the live sequence write must stay deleted

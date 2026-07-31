@@ -226,7 +226,9 @@ def case_full(case_id: str, request: Request) -> dict:
         # exact inversion the pointer was introduced to eliminate (re-audit 4dfdf8a F4). A NULL
         # pointer (ambiguous pre-014 history) projects None, never a decided_at guess.
         pointer_decision = None
-        if case.get("latest_decision_row_id"):
+        # `is not None`, never truthiness: a schema-representable empty-string pointer is a
+        # SET pointer that resolves to nothing — DRIFT — not an absent one (re-audit F5)
+        if case.get("latest_decision_row_id") is not None:
             row = session.execute(
                 text(
                     "SELECT id, run_id, decision, score, gates_json, buy_enablement, manual, "
@@ -239,7 +241,7 @@ def case_full(case_id: str, request: Request) -> dict:
         # classify the dereference exactly like the canonical API — a null pointer_decision must
         # never be ambiguous between "no decisions", legacy order, and integrity DRIFT
         decision_provenance = provenance.classify(
-            pointer_set=bool(case.get("latest_decision_row_id")),
+            pointer_set=case.get("latest_decision_row_id") is not None,
             row_resolved=pointer_decision is not None,
             any_rows=bool(decisions),
         )
@@ -252,7 +254,7 @@ def case_full(case_id: str, request: Request) -> dict:
         # with several that cannot be ordered.
         latest_manual_decision = None
         manual_pointer = case.get("latest_manual_decision_row_id")
-        if manual_pointer:
+        if manual_pointer is not None:
             manual_row = session.execute(
                 text(
                     "SELECT id, run_id, decision, score, manual, reviewer_id, decided_at "
@@ -266,9 +268,9 @@ def case_full(case_id: str, request: Request) -> dict:
         # (domain/provenance.py) reports it as unresolved rather than silently answering "no
         # manual approval" for a case whose own pointer disagrees.
         manual_decision_provenance = provenance.classify(
-            pointer_set=bool(manual_pointer),
+            pointer_set=manual_pointer is not None,
             row_resolved=latest_manual_decision is not None,
-            any_rows=bool(manual_pointer) or bool(session.execute(
+            any_rows=manual_pointer is not None or bool(session.execute(
                 text("SELECT count(*) FROM decisions WHERE case_id=:id AND manual IS TRUE"),
                 {"id": case_id},
             ).scalar_one()),

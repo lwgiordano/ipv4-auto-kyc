@@ -4,15 +4,12 @@ on schema 012 (refuses) and 013 (clears only complete tuples), plus atomic-rollb
 import os
 import subprocess
 import sys
-import threading
 
 import pytest
 from alembic import command
-from sqlalchemy import create_engine, event, text
-from sqlalchemy.engine import Engine
+from sqlalchemy import create_engine, text
 
 from kyc_tool.db.session import make_engine, make_session_factory
-from kyc_tool.ops import reset_interrupted_outbox_claims as resetter
 from tests.integration.test_migrations import _config, _fresh_db
 
 pytestmark = pytest.mark.postgres
@@ -82,64 +79,14 @@ def test_reset_clears_only_claimed_preserves_next_attempt_subprocess(pg):
     engine.dispose()
 
 
-def test_reset_atomic_rollback_when_tuple_appears_before_readback(pg):
-    """A concurrent writer inserts a NEW claimed row AFTER reset's UPDATE but BEFORE its
-    read-back. reset must see remaining>0, ROLL BACK its UPDATE (no partial reset), and raise —
-    the originally-claimed row keeps its tuple. Proves the rollback-BEFORE-commit ordering."""
-    url = _fresh_db(pg, "kyc_reset_rollback")
-    command.upgrade(_config(url), "013")
-    engine = create_engine(url)
-    with engine.begin() as conn:
-        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
-        conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, claim_token, "
-                          "claim_lease_expires_at, claimed_by) VALUES ('poc_email','c1','email','pending', "
-                          "gen_random_uuid(), now(), 'w1')"))
-
-    at_readback = threading.Event()
-    go = threading.Event()
-
-    def _barrier(conn, cursor, statement, params, context, executemany):
-        if "count(*) from outbox where claim_token is not null" in statement.lower():
-            at_readback.set()
-            go.wait(timeout=15)  # pause BEFORE the read-back executes
-
-    err: list[Exception] = []
-
-    def run_reset():
-        try:
-            resetter.reset_claims(_sf(url))
-        except Exception as e:  # noqa: BLE001
-            err.append(e)
-
-    t = threading.Thread(target=run_reset)
-    # Identical cleanup discipline to Task 6 (re-review 6a408a3 F9): registration and start are
-    # tracked separately, because join() on a never-started thread raises and would otherwise
-    # abort cleanup before event.remove() — leaking this process-wide hook into later tests.
-    registered = started = False
-    try:
-        event.listen(Engine, "before_cursor_execute", _barrier)
-        registered = True
-        t.start()
-        started = True
-        assert at_readback.wait(timeout=15)  # reset's UPDATE done, about to read back
-        with engine.begin() as conn:          # concurrent writer commits a NEW claimed row
-            conn.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, status, claim_token, "
-                              "claim_lease_expires_at, claimed_by) VALUES "
-                              "('poc_email','c1','email','pending', "
-                              "gen_random_uuid(), now(), 'w2')"))
-        go.set()
-        t.join(timeout=15)
-    finally:
-        go.set()                                   # unconditional: never strand a waiting barrier
-        try:
-            if started:
-                t.join(timeout=15)
-                assert not t.is_alive(), "reset thread outlived the test"
-        finally:                                   # a join/assert failure cannot skip removal
-            if registered:
-                event.remove(Engine, "before_cursor_execute", _barrier)
-    assert err and isinstance(err[0], RuntimeError)  # reset raised
-    with engine.connect() as conn:
-        tuples = conn.execute(text("SELECT count(*) FROM outbox WHERE claim_token IS NOT NULL")).scalar_one()
-    assert tuples == 2  # atomic rollback: w1's clear was undone → both rows keep their tuple
-    engine.dispose()
+# SUPERSEDED (Codex re-audit `f495de8` F3): `test_reset_atomic_rollback_when_tuple_appears_
+# before_readback` pinned rollback-on-detection — but detection was the whole guarantee, and a
+# claimant committing in the read-back→commit window slipped past it: the command reported
+# "0 claim tuples remain" while one existed. The reset now holds ACCESS EXCLUSIVE on
+# public.outbox from before its UPDATE through commit, so that claimant BLOCKS instead of
+# falsifying the statement; under the fence this test's mid-window insert can no longer happen
+# and its assertions describe an unreachable interleaving. The replacing contract lives in
+# tests/integration/test_ops_binding.py::
+# test_reset_fence_blocks_a_claimant_arriving_in_the_readback_window (barrier AFTER the zero
+# read; the late claim lands strictly after commit), alongside the shadow-schema and
+# lock-timeout proofs for every ops command.

@@ -125,6 +125,33 @@ def test_parser_rejects_a_malformed_reservation_row():
         parse_records(_HEADER + "| PR 2 | shipped | 008 | x |\n")
 
 
+# SHIPPED revision → the exact §C row unit that owns it. Hand-pinned deliberately and safely:
+# unlike the moving head/range values this suite derives, shipped history is FROZEN — the map
+# only ever GROWS one entry per release (the failure message says append), and pinning it is the
+# only authority that catches an owner swap between two frozen rows, which leaves every
+# number-set, lineage, and §G check green because the numbers never change
+# (re-audit `f495de8` F8: swapping 014/015's owner rows passed everything).
+_SHIPPED_OWNERS = {
+    8: "PR 2", 9: "PR 4", 10: "PR 5a", 11: "PR 6", 12: "PR 6",
+    13: "PR 7b-core", 14: "PR 7b-core repair", 15: "PR 7b-core hardening",
+    16: "PR 7b-core admission", 17: "PR 7b-core boundary",
+    18: "PR 7b-core transition authority", 19: "PR 7b-core payload repair",
+    20: "PR 7b-core redaction uniformity", 21: "PR 7b-core poison recovery",
+    22: "PR 7b-core authority invariant repair", 23: "PR 7b-core cross-table authority repair",
+}
+
+
+def test_shipped_reservations_keep_their_frozen_owners():
+    owners = {
+        rev: unit for unit, state, revs in roadmap.records() if state == "shipped" for rev in revs
+    }
+    assert owners == _SHIPPED_OWNERS, (
+        "shipped revision→owner rows changed. Shipping a NEW migration appends exactly one "
+        "entry here (same commit as the §C State flip); any OTHER difference is frozen history "
+        f"being rewritten.\n  got: {owners}\n  pinned: {_SHIPPED_OWNERS}"
+    )
+
+
 def test_every_unit_detail_declaration_matches_its_section_c_row():
     """Ownership, not just number-sets: §G's per-unit sections each declare their migration
     (`Migration `NNN`` / `migration **NNN**`), and every declared number must be reserved by

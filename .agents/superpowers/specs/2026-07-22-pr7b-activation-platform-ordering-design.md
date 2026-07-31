@@ -449,6 +449,74 @@ reconciliation semantics), `.agents/ROADMAP.md` (the split + renumber + ADR-008,
   `_callback_body` gate. PR 7a fences the **jobs** queue. PR 6b consumes this unit's ordering
   authority; it may build on 7b-core's primitive but not activate until `phase='active'`.
 
+## Open blockers — O1-O4 (LIVE contract; these BLOCK PR 6b and this unit's build)
+
+These are CURRENT, binding requirements — not history. They lived under a revision-note
+heading until re-audit `f495de8` F7 showed that placement made every guard that scans only
+live text (everything above the first revision note) blind to them, and let stale claims
+planted below the marker pass unchecked. Revision notes below record how each arose.
+
+- **O1 (was F3) — the manual-release authority is not yet executable or relationally bound.** This
+  spec defines a release row but no `release_id` columns, FKs or CHECKs across run → decision →
+  outbox, while requiring equality across exactly those surfaces and in JSON.
+  `manual.release_requested` has no payload model, no `EventType`, and no run plan; the current
+  dispatcher (`orchestration/triggers.py`) rejects it, and `api/auth.py` still accepts v1 when v2
+  headers are absent, with no mechanical requirement that the ordering phase be `active`.
+  **Required before 6b:** the exact request model (release id, requested manual event, an
+  authoritative deadline/TTL); a production-required non-blank platform principal; a verified-HMAC
+  *version* in the auth result, not just a verified/not verdict; an active-phase admission gate;
+  and a named recalculation plan. Add nullable release identity to run/decision/outbox with
+  all-NULL/all-non-NULL CHECKs and deferrable `MATCH FULL` same-case FKs through the existing
+  run/case/sequence chain, binding `(request_event_id, case_id, idempotency_key)` to an exact
+  `manual.release_requested` event. Prove every INSERT/UPDATE mismatch, a pre-HTTP field tamper
+  with zero HTTP, crash rollback, and same-key replay.
+
+- **O2 (was F4) — the two-system release outcome cannot converge, and no-traffic expiry is
+  unproven.** The platform owns the final CAS while the tool owns an immutable
+  `completed|cancelled|expired` outcome; those cannot both be authoritative under one DB lock. The
+  publisher treats every 2xx alike and ignores response content, so a platform-side no-op or cancel
+  is unlearnable by the tool. "Reaper or lazy transition, whichever implementation picks" is not a
+  decision, and lazy next-touch provably cannot satisfy a restart-with-no-traffic expiry.
+  **Required before 6b:** make the platform the sole terminal and expiry authority. Its CAS/reaper
+  transaction writes the result and enqueues a signed, retried
+  `manual.release_outcome(case_id, release_id, manual_event_id, accepted_sequence,
+  applied|cancelled|expired)`. The tool mirrors only that event — idempotent on same-state,
+  fail-closed on a conflicting terminal — and may alert on an overdue mirror but must never choose
+  expiry itself. Name the DB-time reaper, its cadence, its lock query and lock order, the deadline
+  authority, and commit-before-publish recovery. Prove response loss, event loss, duplicate and
+  out-of-order outcomes, no-traffic restart expiry, callback-vs-expiry and M2-vs-expiry in **both**
+  lock orders, and that a platform 2xx no-op never becomes a local `completed`.
+
+- **O3 (was F9) — release-id scope contradicts its own text, and governance is unwritten.**
+  `(case_id, release_id)` permits one release id on two cases while the prose requires the second to
+  be rejected. **Required before 6b:** a global `UNIQUE(release_id)` returning 409 and rolling back
+  the losing event/run/job; a test with two concurrent cases proving exactly one admitted and zero
+  loser orphans. Expand the canonical 022 ROADMAP row; record the local-extension / two-system
+  authority decision in `AUDIT_FINDINGS.md`; define request, outcome, reaper and recovery in
+  `PLATFORM_INTEGRATION`, `DEPLOYMENT` and `RUNBOOK`; and add static parity assertions pinning the
+  exact event, state and setting names — none of `manual.release_requested`,
+  `outbox_manual_release`, or the outcome/reaper contract currently appears in any of them.
+
+- **O4 (2026-07-30, amended same day) — this unit must fence BOTH decision writers, because a
+  quiescence preflight alone cannot see one of them.** `022`/`023` are the first revisions in the
+  chain to take `ACCESS EXCLUSIVE` on `decisions` and `cases`, and TWO writers take those locks
+  in the opposite order: the pipeline's decide transaction (case `FOR UPDATE` → `decisions`
+  insert) and the **API's inline `reviewer.manual_approve`** (`events/ingest.py` handles it in
+  the ingest transaction — same lock shape, no job, no run, no outbox claim, so no job/run/claim
+  preflight can observe it). A concurrent decide OR inline approval deadlocks the migration
+  (`40P01`, both reproduced; the identical harness against `021` commits both sides). It fails
+  safely, but it costs the window, and `022`/`023` are published so nothing can be added to
+  them; their drain requirement is runbook-only. **Required for `024` (which takes the same
+  locks):** (a) put BOTH decide paths — automatic decide and inline manual approve — behind the
+  ONE shared maintenance/admission fence (`pg_advisory_xact_lock_shared`, `outbox/fence.py`),
+  acquired BEFORE the case lock, with the activation migration taking the exclusive side, so a
+  live writer makes the migration WAIT instead of deadlocking it; (b) keep a machine-checked
+  preflight with a stable sentinel for the residual it can see (claimed jobs, live outbox
+  claims); (c) during any old-image transition, require the full maintenance stop — an
+  old-image writer does not take the fence, so the fence proves nothing about it. Proof: real
+  two-connection races (ingest-shaped and decide-shaped) against `024` must wait or refuse
+  cleanly — never `40P01`.
+
 ## Revision note — rev 2 (2026-07-24)
 
 Acceptance strengthening from the 7b-core rev-5 complete-unit review (finding 4): §3 gains the
@@ -680,75 +748,8 @@ this spec's digest contract and is a simplification, not an addition.
 
 ## Revision note — rev 8 (2026-07-27): three contract items are OPEN and BLOCK PR 6b
 
-Re-review `45ad8b9` findings 3, 4 and 9 are 022-only. They are recorded here rather than folded,
-because each is a design decision rather than a correction, and 022 is not being built yet. **PR 6b
-must not be built against this contract until they are resolved** — 6b's coordinator-callback
-ordering depends on the release identity and the outcome authority defined below.
-
-The earlier NULL-digest correction above (rev 7 → this revision) already removed the reading these
-items were partly built on; they are restated here as requirements, not as settled design.
-
-- **O1 (was F3) — the manual-release authority is not yet executable or relationally bound.** This
-  spec defines a release row but no `release_id` columns, FKs or CHECKs across run → decision →
-  outbox, while requiring equality across exactly those surfaces and in JSON.
-  `manual.release_requested` has no payload model, no `EventType`, and no run plan; the current
-  dispatcher (`orchestration/triggers.py`) rejects it, and `api/auth.py` still accepts v1 when v2
-  headers are absent, with no mechanical requirement that the ordering phase be `active`.
-  **Required before 6b:** the exact request model (release id, requested manual event, an
-  authoritative deadline/TTL); a production-required non-blank platform principal; a verified-HMAC
-  *version* in the auth result, not just a verified/not verdict; an active-phase admission gate;
-  and a named recalculation plan. Add nullable release identity to run/decision/outbox with
-  all-NULL/all-non-NULL CHECKs and deferrable `MATCH FULL` same-case FKs through the existing
-  run/case/sequence chain, binding `(request_event_id, case_id, idempotency_key)` to an exact
-  `manual.release_requested` event. Prove every INSERT/UPDATE mismatch, a pre-HTTP field tamper
-  with zero HTTP, crash rollback, and same-key replay.
-
-- **O2 (was F4) — the two-system release outcome cannot converge, and no-traffic expiry is
-  unproven.** The platform owns the final CAS while the tool owns an immutable
-  `completed|cancelled|expired` outcome; those cannot both be authoritative under one DB lock. The
-  publisher treats every 2xx alike and ignores response content, so a platform-side no-op or cancel
-  is unlearnable by the tool. "Reaper or lazy transition, whichever implementation picks" is not a
-  decision, and lazy next-touch provably cannot satisfy a restart-with-no-traffic expiry.
-  **Required before 6b:** make the platform the sole terminal and expiry authority. Its CAS/reaper
-  transaction writes the result and enqueues a signed, retried
-  `manual.release_outcome(case_id, release_id, manual_event_id, accepted_sequence,
-  applied|cancelled|expired)`. The tool mirrors only that event — idempotent on same-state,
-  fail-closed on a conflicting terminal — and may alert on an overdue mirror but must never choose
-  expiry itself. Name the DB-time reaper, its cadence, its lock query and lock order, the deadline
-  authority, and commit-before-publish recovery. Prove response loss, event loss, duplicate and
-  out-of-order outcomes, no-traffic restart expiry, callback-vs-expiry and M2-vs-expiry in **both**
-  lock orders, and that a platform 2xx no-op never becomes a local `completed`.
-
-- **O3 (was F9) — release-id scope contradicts its own text, and governance is unwritten.**
-  `(case_id, release_id)` permits one release id on two cases while the prose requires the second to
-  be rejected. **Required before 6b:** a global `UNIQUE(release_id)` returning 409 and rolling back
-  the losing event/run/job; a test with two concurrent cases proving exactly one admitted and zero
-  loser orphans. Expand the canonical 022 ROADMAP row; record the local-extension / two-system
-  authority decision in `AUDIT_FINDINGS.md`; define request, outcome, reaper and recovery in
-  `PLATFORM_INTEGRATION`, `DEPLOYMENT` and `RUNBOOK`; and add static parity assertions pinning the
-  exact event, state and setting names — none of `manual.release_requested`,
-  `outbox_manual_release`, or the outcome/reaper contract currently appears in any of them.
-
-- **O4 (2026-07-30, amended same day) — this unit must fence BOTH decision writers, because a
-  quiescence preflight alone cannot see one of them.** `022`/`023` are the first revisions in the
-  chain to take `ACCESS EXCLUSIVE` on `decisions` and `cases`, and TWO writers take those locks
-  in the opposite order: the pipeline's decide transaction (case `FOR UPDATE` → `decisions`
-  insert) and the **API's inline `reviewer.manual_approve`** (`events/ingest.py` handles it in
-  the ingest transaction — same lock shape, no job, no run, no outbox claim, so no job/run/claim
-  preflight can observe it). A concurrent decide OR inline approval deadlocks the migration
-  (`40P01`, both reproduced; the identical harness against `021` commits both sides). It fails
-  safely, but it costs the window, and `022`/`023` are published so nothing can be added to
-  them; their drain requirement is runbook-only. **Required for `024` (which takes the same
-  locks):** (a) put BOTH decide paths — automatic decide and inline manual approve — behind the
-  ONE shared maintenance/admission fence (`pg_advisory_xact_lock_shared`, `outbox/fence.py`),
-  acquired BEFORE the case lock, with the activation migration taking the exclusive side, so a
-  live writer makes the migration WAIT instead of deadlocking it; (b) keep a machine-checked
-  preflight with a stable sentinel for the residual it can see (claimed jobs, live outbox
-  claims); (c) during any old-image transition, require the full maintenance stop — an
-  old-image writer does not take the fence, so the fence proves nothing about it. Proof: real
-  two-connection races (ingest-shaped and decide-shaped) against `024` must wait or refuse
-  cleanly — never `40P01`.
-
+O1-O3 originated in this revision (was F3/F4/F9). Their LIVE statements — including the
+later O4 — moved to `## Open blockers` in the live contract above; this note is history.
 
 ## Revision note — rev 9 (2026-07-28): renumbered to migration `018` (mechanical)
 

@@ -444,8 +444,11 @@ def _migration_raise_inventory() -> tuple[set[str], dict[str, int]]:
     plain: dict[str, int] = {}
     for source in sorted((REPO_ROOT / "alembic" / "versions").glob("*.py")):
         tree = ast.parse(source.read_text())
+        # MODULE-LEVEL constants only (tree.body, not ast.walk): a first draft resolved every
+        # same-named Assign anywhere, so a local `_SENTINEL = 'plain'.strip()` shadowing a
+        # module constant still credited the module value (re-audit `f495de8` F9).
         consts = dict(imported)
-        for node in ast.walk(tree):
+        for node in tree.body:
             if (
                 isinstance(node, ast.Assign)
                 and len(node.targets) == 1
@@ -454,6 +457,18 @@ def _migration_raise_inventory() -> tuple[set[str], dict[str, int]]:
                 and isinstance(node.value.value, str)
             ):
                 consts[node.targets[0].id] = node.value.value
+        # ...and any name REBOUND in a non-module scope is TAINTED everywhere: without full
+        # dataflow we cannot know which binding a given raise sees, so a tainted name never
+        # licenses a sentinel — the raise must carry a literal, or it counts as plain.
+        tainted = {
+            sub.targets[0].id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Assign)
+            and len(sub.targets) == 1
+            and isinstance(sub.targets[0], ast.Name)
+        }
         for node in ast.walk(tree):
             if not isinstance(node, ast.Raise):
                 continue
@@ -461,7 +476,7 @@ def _migration_raise_inventory() -> tuple[set[str], dict[str, int]]:
             for sub in ast.walk(node):
                 if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
                     parts.append(sub.value)
-                elif isinstance(sub, ast.Name) and sub.id in consts:
+                elif isinstance(sub, ast.Name) and sub.id in consts and sub.id not in tainted:
                     parts.append(consts[sub.id])
             found = set(_SENTINEL.findall(" ".join(parts))) | (
                 set(parts) & _EXTRA_SENTINELS
