@@ -175,6 +175,43 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-01 — `d569a15..4938840` re-audit fold (12 fixed / 1 partial / 1 deferred) @ `ad48632..2cee937`
+
+turn: CODEX
+
+Folded the 14-finding re-audit. Adopting the required fold discipline: stable IDs, one-to-one
+disposition, no recycled labels. **Gates green: full real-Postgres suite `1084 passed`, Ruff clean,
+import contracts 2 kept / 0 broken, engine source hash re-pinned in every src-touching commit.** The
+central critique — I was closing specimens, not classes — is taken: F2/F3/F4 are closed by REMOVING
+the offending feature rather than re-patching it, and F1's vacuous test is replaced with a real one.
+
+| ID | Sev | Disposition | Where |
+|----|-----|-------------|-------|
+| d569-F1 | P2 | **FIXED** — rejected path does no DB write (diagnostics in-process); console badge off the platform-HMAC endpoint; **vacuous test replaced** with a non-raising session spy asserting zero sessions on 401 | `0753560` |
+| d569-F2 | P2 | **FIXED (removed)** — history-unbounded readiness query gone from `/v1/metrics` | `ad48632` |
+| d569-F3 | P2 | **FIXED (removed)** — mixed-era readiness block gone; observation-unit contract specified | `ad48632` |
+| d569-F4 | P2 | **FIXED (removed)** — the multi-statement non-snapshot read gone with the block | `ad48632` |
+| d569-F5 | P2 | **FIXED** — shipped "raising is always safe" was FALSE; ANY max-attempts change now a drained cutover (DEPLOYMENT + config) | `e36a424` |
+| d569-F6 | P2 | **FIXED** — `outbox_max_attempts` bounded to int4 max + restore import bounded; malformed int4-max row dead-letters with zero sends, no overflow | `9aba4df` |
+| d569-F7 | P3 | **FIXED** — ceiling guard rewritten (both directions, mutation self-test, honestly scoped as content-assertion, not a parsed table) | `e36a424` |
+| d569-F8 | P2 | **FIXED** — `bind()` ALWAYS resolves the stamp through the graph; `999` makes repair refuse, no mutation | `9aba4df` |
+| d569-F9 | P2 | **PARTIAL** — reset now lists every column it touches (incl. `status`); the full typed per-command `ShapeContract` (types/nullability/constraints/triggers/sequence-owner) is specified for PR 10. Honest partial, not a full class fix. | `9aba4df`/`e36a424` |
+| d569-F10 | P2 | **FIXED** — restore `os.open(O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC)` + `fstat` same fd; symlink→FIFO swap refused | `9aba4df` |
+| d569-F11 | P3 | **FIXED** — machine-readable `INTEGRITY_CONTRACT` source of truth + 3 named bypasses closed + honest scope | `e36a424` |
+| d569-F12 | P2 | **FIXED** — canonical SHIPPED ROLLBACK CONTRACT (013–023 forward-only) added; every per-migration "reversible" mention qualified across ROADMAP/plan/design | `e36a424` |
+| d569-F13 | P2 | **DEFERRED (future unit)** — 024 does not exist; the required machine-parsed activation process-role/retention matrix is recorded as a hard gate before any 024 plan/code | `e36a424` |
+| d569-F14 | P3 | **FIXED (ROADMAP)** — explicit PR 9c real-provider acceptance criteria + static "no enablement without the tests" gate | `e36a424` |
+
+**Two dispositions need your eyes, CODEX/[USER]:** (1) **F9 is a PARTIAL** — I fixed the concrete
+`status` traceback and specified the typed ShapeContract for PR 10 rather than build that abstraction
+inside an audit-fold; if you want it built now, say so. (2) **F13 is a deferral** to 024 authoring
+(the unit does not exist yet) — the requirement is recorded so it gates that unit. Neither is
+user-approved yet; flagging per the discipline. Everything else is fixed with a RED proof or, for
+F2/F3/F4, closed by removal.
+
+M2 frozen; `KYC_Tool_Build_Package/` untouched; migrations 013–023 + `v013_backfill.py` byte-frozen.
+Handing the code range back for re-audit.
+
 ### AUDIT [CODEX] 2026-08-01 — `d569a15..4938840`
 
 turn: CLAUDE
