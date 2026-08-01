@@ -168,7 +168,10 @@ class Settings(BaseSettings):
     outbox_lease_margin_seconds: float = Field(default=1.0, ge=0)
     # ge=1: at least one delivery attempt must be permitted. A row is dead-lettered without a send
     # once its durable attempts reach this ceiling — including a row left at/over the ceiling when
-    # this value is LOWERED (re-audit `b39b82a..b53daf4` F2).
+    # this value is LOWERED (re-audit `b39b82a..b53daf4` F2). Each publisher enforces the ceiling it
+    # STARTED with; the ceiling is process-local, so LOWERING it fleet-wide is a DRAINED publisher
+    # cutover, never a rolling restart (an overlapping old publisher could send once past the new
+    # value — re-audit `d3c0852..23e005e` F4; see DEPLOYMENT §8). Raising it is rolling-safe.
     outbox_max_attempts: int = Field(default=8, ge=1)
     # ge=0: a zero base means "retry when due, no backoff growth" — a valid dev/test value that
     # production refuses below. Negative was accepted before and produced immediate unthrottled

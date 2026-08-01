@@ -214,6 +214,16 @@ both the job and its failed run. Three limits to know:
   hash that produced it.
 - Secrets only via environment / Secrets Manager; nothing secret is logged.
 - Never set `KYC_AUTH_DISABLED` outside local dev. Production boot refuses it.
+- **Lowering `KYC_OUTBOX_MAX_ATTEMPTS` is a DRAINED publisher cutover, not a
+  rolling restart.** Each publisher enforces the ceiling it was started with:
+  a row at/over the ceiling is dead-lettered before any send. But during a
+  rolling restart an OLD publisher (higher ceiling) overlaps a NEW one (lower
+  ceiling) and can make one more send past the new value. So to lower the
+  ceiling: stop ALL outbox publishers, confirm zero are running (the same
+  attested-stop the reset CLI requires), then start them on the new value.
+  **Raising** the ceiling is always safe under a rolling restart. (A fleet-wide
+  DB-persisted ceiling epoch is the fail-closed alternative if runtime config
+  drift must be impossible — deferred; the drained cutover is the contract today.)
 
 ## 9. PR 5b cutover — brief full maintenance window
 
