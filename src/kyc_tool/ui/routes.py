@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from sqlalchemy import text
 
 from kyc_tool.api.auth import require_admin
-from kyc_tool.api.routes_metrics import metrics as collect_metrics
+from kyc_tool.api.routes_metrics import collect_metrics
 from kyc_tool.api.schemas import PAYLOAD_MODELS, EventEnvelope
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
