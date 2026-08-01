@@ -21,6 +21,66 @@ LIVE_OUTBOX_SQL = (
     "SELECT status, count(*) FROM outbox WHERE status IN ('pending','dead') GROUP BY status"
 )
 
+# Shadow-mode automation-readiness gauge. 'approve' and 'approve_buy_locked' are the approve-class
+# outcomes (domain.decision.POSITIVE_DECISIONS) — the ones that, under enforcement, would let a
+# case transact without a human. Kept as literals here (the SQL needs the strings) rather than an
+# import, so this counts by the SAME names the engine writes.
+_AUTOMATION_READINESS_SQL = text(
+    """
+    WITH latest_auto AS (
+        SELECT DISTINCT ON (case_id) case_id, decision
+        FROM decisions WHERE manual = false
+        ORDER BY case_id, decision_sequence DESC
+    )
+    SELECT
+        count(*) FILTER (WHERE decision IN ('approve','approve_buy_locked'))
+            AS cases_would_auto_approve,
+        count(*) FILTER (WHERE decision NOT IN ('approve','approve_buy_locked'))
+            AS cases_engine_held,
+        count(*) FILTER (WHERE decision NOT IN ('approve','approve_buy_locked') AND EXISTS (
+            SELECT 1 FROM decisions d
+            WHERE d.case_id = latest_auto.case_id AND d.manual = true))
+            AS human_approved_after_engine_held
+    FROM latest_auto
+    """
+)
+
+
+def _automation_readiness(session) -> dict:
+    """Read-only shadow-mode gauge: the engine ALREADY renders these decisions — this only MEASURES
+    them, it enforces nothing. It is the "measure before you enforce" surface for a staged rollout.
+
+    - `automatic_decisions_by_type`: the mix of decisions the ENGINE renders (manual=false). A
+      sudden shift in the approve share is an early fraud/regression signal.
+    - `manual_approvals_total`: human `manual_approve` decisions (manual=true).
+    - `cases_would_auto_approve`: cases whose LATEST automatic decision is approve-class — the
+      population that would auto-approve WITHOUT a human under enforcement. This is the set to
+      SAMPLE and human-review to measure the residual false-approve rate.
+    - `cases_engine_held` / `human_approved_after_engine_held`: of cases the engine did NOT
+      auto-approve, how many a human later approved anyway — the conservative direction (workload
+      automation would save), and the only engine-vs-human disagreement this system records.
+
+    HONEST LIMIT: the dangerous direction — the engine auto-approving a case a human would REJECT —
+    is NOT computable from stored data. This system records human APPROVALS, not rejections, and
+    under enforcement no human reviews an auto-approve. Measuring the residual false-approve rate
+    requires the shadow PROCESS (humans review a sample of `cases_would_auto_approve` while
+    enforcement stays OFF); this gauge exposes that population and the measurable agreement, and
+    deliberately does not claim the false-approve rate on its own.
+    """
+    counts = session.execute(_AUTOMATION_READINESS_SQL).one()
+    return {
+        "automatic_decisions_by_type": _grouped(
+            session,
+            "SELECT decision, count(*) FROM decisions WHERE manual = false GROUP BY decision",
+        ),
+        "manual_approvals_total": session.execute(
+            text("SELECT count(*) FROM decisions WHERE manual = true")
+        ).scalar_one(),
+        "cases_would_auto_approve": counts.cases_would_auto_approve,
+        "cases_engine_held": counts.cases_engine_held,
+        "human_approved_after_engine_held": counts.human_approved_after_engine_held,
+    }
+
 
 @router.get("/v1/metrics")
 def metrics(request: Request) -> dict:
@@ -121,6 +181,9 @@ def metrics(request: Request) -> dict:
                 "SELECT task_type, count(*) FROM review_tasks WHERE status='open' GROUP BY task_type",
             ),
             "adapter_latency": adapter_latency,
+            # Shadow-mode automation-readiness: measure the engine's decisions vs. human approvals
+            # WITHOUT enforcing, to inform a staged rollout. Read-only; enforces nothing.
+            "automation_readiness": _automation_readiness(session),
             "event_to_decision_seconds": {
                 "avg": float(decision_latency.avg_s or 0),
                 "p95": float(decision_latency.p95_s or 0),
