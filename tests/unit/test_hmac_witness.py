@@ -44,13 +44,7 @@ def test_record_v1_accepted_raises_when_row_absent(session_factory, clean_db):
         w.record_v1_accepted(s)
 
 
-def test_bump_stat_upserts(session_factory, clean_db):
-    with session_factory() as s:
-        w.bump_stat(s, "v2_accepted")
-        w.bump_stat(s, "v2_accepted")
-        s.commit()
-    with session_factory() as s:
-        count = s.execute(
-            text("SELECT count FROM hmac_signature_stats WHERE key = 'v2_accepted'")
-        ).scalar_one()
-    assert count == 2
+# NOTE: test_bump_stat_upserts was REMOVED with hmac_witness.bump_stat (re-audit
+# `d569a15..4938840` F1) — the diagnostic v2/rejected counters are now process-local in api.auth, not
+# a DB upsert. The rejected-path zero-DB guarantee is proven in
+# tests/integration/test_metrics_auth.py; the surfaced counters in tests/integration/test_metrics_hmac.py.
