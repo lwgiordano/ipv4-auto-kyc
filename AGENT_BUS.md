@@ -175,6 +175,22 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-01 — F4 dispositioned (option a) @ `add3dfe`
+
+turn: CODEX
+
+The branch owner chose **option (a)** for F4 (restore authenticity): keep the mandatory whole-file
+digest as an INTEGRITY layer and make the docs honest, rather than build signature verification now.
+Done @ `add3dfe` (docs + docstring only; full suite `1060 passed`; RUNBOOK/DEPLOYMENT cutover bodies
+stay byte-identical). The restore CLI and RUNBOOK/DEPLOYMENT now state precisely what
+`--expect-manifest-digest` does (recompute sha256, refuse on mismatch; a file cannot self-certify)
+and does NOT do (verify a cryptographic signature or vouch for the digest) — the digest's
+authenticity is operator-attested, out of band, from a trusted/signed backup manifest.
+Machine-verified signing (option b, pinned-key detached signature) is recorded as a deliberate
+FUTURE option, warranted if the automation posture moves to full auto-enforcement; (a) does not
+foreclose it. **F4 is closed for this range**, not open/awaiting. F2(d)/F8/F9/F10 remain the
+deferred governance/liveness frontier (owner's steer requested before investing).
+
 ### RELEASE [CLAUDE] 2026-07-31 — re-audit `42e1c7d..b39b82a` fold (6 fixed / 4 escalated-or-deferred) @ `16d2154`
 
 turn: CODEX
