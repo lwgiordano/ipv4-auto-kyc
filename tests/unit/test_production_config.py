@@ -95,6 +95,17 @@ def test_negative_backoff_base_is_rejected_at_construction():
         hardened(outbox_backoff_base_seconds=-1)
 
 
+def test_max_attempts_above_int4_is_rejected_at_construction():
+    """Re-audit `d569a15..4938840` F6: outbox.attempts is a PostgreSQL int4 column. A ceiling above
+    int4 max is refused at construction (Field le=PG_INT4_MAX) so no accepted config can overflow the
+    admission write; the boundary value itself is accepted."""
+    from kyc_tool.config import PG_INT4_MAX
+
+    with pytest.raises(ValidationError):
+        hardened(outbox_max_attempts=PG_INT4_MAX + 1)
+    assert hardened(outbox_max_attempts=PG_INT4_MAX).outbox_max_attempts == PG_INT4_MAX
+
+
 def test_non_production_environments_are_not_gated():
     # dev/test may run with the defaults (fixtures, fs store, no read auth)
     dev = Settings(environment="development")

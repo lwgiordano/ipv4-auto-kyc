@@ -383,6 +383,26 @@ def test_restore_refuses_a_non_regular_evidence_input_without_blocking(pg, tmp_p
     assert "Traceback" not in proc.stderr
 
 
+def test_restore_refuses_a_symlinked_evidence_path(pg, tmp_path):
+    """Re-audit `d569a15..4938840` F10: the reader opens with O_NOFOLLOW and fstat's the SAME
+    descriptor, so a symlinked evidence path — the vector a stat()-then-open() TOCTOU relied on to
+    swap a regular target to a FIFO after the check — is refused outright, with no swap window."""
+    import os as _os
+
+    url = _fresh_db(pg, "kyc_restore_symlink")
+    command.upgrade(_config(url), "012")
+    real = tmp_path / "real.json"
+    real.write_text("{}")
+    link = tmp_path / "evidence.json"
+    _os.symlink(real, link)
+
+    proc = _cli(url, "--evidence", str(link), "--expect-original-id", "1",
+                "--expect-manifest-digest", "0" * 64)
+    assert proc.returncode == 1
+    assert "could not be opened" in proc.stderr or "regular file" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
 def test_schema_refusal_never_echoes_an_unknown_evidence_key(pg, tmp_path):
     """Re-audit `d3c0852..23e005e` F8: an extra (unknown) JSON key is attacker-controlled; the schema
     refusal must COUNT it, never print it. Only declared field names may ever appear in a refusal."""

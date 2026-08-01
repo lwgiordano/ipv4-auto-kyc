@@ -48,6 +48,32 @@ def test_repair_restarts_divergent_sequence_and_next_allocation_is_exact(pg):
     engine.dispose()
 
 
+def test_repair_refuses_an_unknown_alembic_stamp_without_mutating(pg):
+    """Re-audit `d569a15..4938840` F8: repair supplies no floor/exact revision, so bind()'s graph
+    resolution was skipped and an unknown '999' stamp let it mutate. bind() now ALWAYS resolves the
+    singleton stamp through the migration graph; an unknown revision is refused with the governed
+    sentinel and the divergent sequence is left untouched."""
+    url = _fresh_db(pg, "kyc_seq_unknown_stamp")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    _seed_rows(engine, 3)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER SEQUENCE outbox_id_seq RESTART WITH 1"))    # divergent; would repair
+        conn.execute(text("UPDATE alembic_version SET version_num='999'"))   # unknown stamp
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "kyc_tool.ops.repair_outbox_sequence"],
+        env={**os.environ, "KYC_DATABASE_URL": url}, capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode != 0
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in (proc.stdout + proc.stderr)
+    assert "999" in (proc.stdout + proc.stderr)
+    assert "Traceback" not in proc.stderr
+    with engine.begin() as conn:      # NOT mutated — the sequence is still rewound to 1
+        assert conn.execute(text("SELECT nextval('outbox_id_seq')")).scalar_one() == 1
+    engine.dispose()
+
+
 def test_repair_is_fail_closed_on_a_bad_readback(pg, monkeypatch):
     """The read-back is the whole safety property: if the sequence is not exactly where the
     repair intended, it must RAISE and roll back rather than report success. The earlier psql

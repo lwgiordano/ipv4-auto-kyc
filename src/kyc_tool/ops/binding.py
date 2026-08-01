@@ -50,6 +50,26 @@ class BindingRefused(RuntimeError):
     stable, traceback-free, non-mutating exit (re-audit `538e55e..42e1c7d` F4)."""
 
 
+def _revision_is_known(version: str) -> bool:
+    """True iff `version` is a revision that EXISTS in the checked-out Alembic graph (re-audit
+    `d569a15..4938840` F8). Graph resolution previously ran ONLY when a caller supplied a floor/exact
+    revision, so a no-floor command (`repair_outbox_sequence`) would happily mutate a DB stamped with
+    an unknown revision like '999'. Every command now resolves the stamp through the graph. Unknown →
+    False (fail closed)."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    from kyc_tool.config import REPO_ROOT
+
+    cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    script = ScriptDirectory.from_config(cfg)
+    try:
+        return script.get_revision(version) is not None
+    except Exception:
+        return False
+
+
 def _revision_is_at_or_after(version: str, floor: str) -> bool:
     """True iff `version` is `floor` or a descendant of it in the CHECKED-OUT Alembic graph — real
     lineage, not string ordering (re-audit `b39b82a..b53daf4` F8). A spoofed/unknown revision like
@@ -148,6 +168,14 @@ def bind(
             "or mutation. Resolve the migration heads first."
         )
     version = versions[0]
+    # ALWAYS resolve the singleton stamp through the graph — not only when a floor/exact is given
+    # (re-audit `d569a15..4938840` F8). A valid label string is not a valid schema.
+    if not _revision_is_known(version):
+        raise BindingRefused(
+            f"{SCHEMA_REFUSED_SENTINEL}: public.alembic_version={version!r} is not a revision known "
+            "to this build's migration graph — refusing to operate on an unknown/spoofed schema "
+            "stamp (every ops command resolves the stamp through the graph, not just gated ones)"
+        )
     if exact_revision is not None and version != exact_revision:
         raise BindingRefused(
             f"{SCHEMA_REFUSED_SENTINEL}: public.alembic_version={version!r} is not the required "

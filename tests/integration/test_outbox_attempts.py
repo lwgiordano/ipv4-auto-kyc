@@ -599,6 +599,38 @@ def test_max1_crash_reclaim_dead_letters_without_a_second_send(session_factory, 
     assert len(_attempts(session_factory, "gm-r1")) == 1  # no second attempt row
 
 
+def test_malformed_int4_max_attempts_row_dead_letters_with_no_send_no_overflow(
+    session_factory, clean_db, settings
+):
+    """Re-audit `d569a15..4938840` F6: a row whose attempts is already at the int4 boundary (only
+    reachable via a malformed import) is dead-lettered by the pre-admission ceiling check with ZERO
+    external sends and no `integer out of range` — it is NOT admitted, incremented and wedged."""
+    from kyc_tool.config import PG_INT4_MAX
+
+    _seed_decisions(session_factory, "ov", [1])
+    _enqueue_cb(session_factory, "ov", 1)
+    with session_factory() as s:
+        s.execute(
+            text("UPDATE outbox SET attempts=:a, next_attempt_at=now() - interval '1 minute' "
+                 "WHERE run_id='ov-r1'"),
+            {"a": PG_INT4_MAX},
+        )
+        s.commit()
+    prod = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 8})
+    sends: list[int] = []
+    pub = OutboxPublisher(
+        session_factory, prod,
+        http_client=httpx.Client(transport=httpx.MockTransport(
+            lambda r: (sends.append(1), httpx.Response(500))[1])),
+    )
+
+    assert pub.process_once() is True            # ceiling check dead-letters before admission
+    assert sends == []                           # zero external sends
+    with session_factory() as s:
+        st = s.execute(text("SELECT status, attempts FROM outbox WHERE run_id='ov-r1'")).one()
+    assert (st.status, st.attempts) == ("dead", PG_INT4_MAX)   # unchanged — no increment, no overflow
+
+
 def test_max2_crash_reclaim_backs_off_then_a_later_cycle_sends_attempt_2(
     session_factory, clean_db, settings
 ):

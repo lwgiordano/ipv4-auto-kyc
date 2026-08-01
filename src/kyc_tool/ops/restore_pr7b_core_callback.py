@@ -59,6 +59,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import stat
 import sys
 from pathlib import Path
@@ -68,7 +69,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from kyc_tool.config import get_settings
+from kyc_tool.config import PG_INT4_MAX, get_settings
 from kyc_tool.db.session import make_engine, make_session_factory, uow
 from kyc_tool.ops import binding
 
@@ -127,7 +128,9 @@ class _Evidence(BaseModel):
     original_delivered_at: str  # delivered ⇒ non-null (Literal status forces it)
     original_next_attempt_at: str | None
     original_last_error: str | None
-    original_attempts: int = Field(ge=0)
+    # le=int4 max: outbox.attempts is int4; an import above the domain would overflow the INSERT
+    # (re-audit `d569a15..4938840` F6). Refuse at validation, not at the database.
+    original_attempts: int = Field(ge=0, le=PG_INT4_MAX)
     original_created_at: str
     payload_json: str = Field(min_length=1)
 
@@ -202,37 +205,43 @@ def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
     """Verify the MANDATORY out-of-band manifest digest over the whole file, then strictly parse and
     validate it. Every file/JSON/shape error becomes a payload-free `_Refused` — never a traceback,
     never an echo of the evidence values (re-audit `538e55e..42e1c7d` F2/F3)."""
-    # F7: reject a non-regular input (FIFO/device/socket) BEFORE opening — a FIFO would otherwise
-    # block on read with no writer — and stream at most _MAX_EVIDENCE_BYTES+1 in bounded chunks,
-    # hashing as we go, so an oversize (or growing) artifact is refused WITHOUT allocating the whole
-    # file first (`Path.read_bytes()` allocated all of it before any ceiling applied).
+    # F7/F10: open ONCE and fstat the SAME descriptor — no stat()-then-open() window a barrier-timed
+    # symlink→FIFO swap could exploit (re-audit `d569a15..4938840` F10). O_NOFOLLOW refuses a
+    # symlinked final component outright (prefer refusing symlinks); O_NONBLOCK means opening a FIFO
+    # returns immediately instead of blocking for a writer, so the fstat can reject it. Then stream at
+    # most _MAX_EVIDENCE_BYTES+1 in bounded chunks, hashing as we go, so an oversize (or growing)
+    # artifact is refused WITHOUT allocating the whole file first.
+    open_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
     try:
-        file_stat = path.stat()
+        fd = os.open(path, open_flags)
     except OSError as exc:
-        raise _Refused(f"evidence file could not be read ({type(exc).__name__})") from exc
-    if not stat.S_ISREG(file_stat.st_mode):
-        raise _Refused(
-            "evidence path is not a regular file — a FIFO/device/socket can block or is not a backup"
-        )
+        # ELOOP (symlinked component), ENXIO (special w/o reader), ENOENT, EACCES → uniform refusal
+        raise _Refused(f"evidence file could not be opened ({type(exc).__name__})") from exc
     hasher = hashlib.sha256()
     parts: list[bytes] = []
     total = 0
     try:
-        with path.open("rb") as handle:
-            while True:
-                chunk = handle.read(65536)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > _MAX_EVIDENCE_BYTES:
-                    raise _Refused(
-                        f"evidence file exceeds the {_MAX_EVIDENCE_BYTES}-byte ceiling — an evidence "
-                        "file is a single outbox row; a larger file is refused without reading on"
-                    )
-                hasher.update(chunk)
-                parts.append(chunk)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise _Refused(
+                "evidence path is not a regular file — a FIFO/device/socket can block or is not a "
+                "backup"
+            )
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_EVIDENCE_BYTES:
+                raise _Refused(
+                    f"evidence file exceeds the {_MAX_EVIDENCE_BYTES}-byte ceiling — an evidence "
+                    "file is a single outbox row; a larger file is refused without reading on"
+                )
+            hasher.update(chunk)
+            parts.append(chunk)
     except OSError as exc:
         raise _Refused(f"evidence file could not be read ({type(exc).__name__})") from exc
+    finally:
+        os.close(fd)
     raw_bytes = b"".join(parts)
     # F2: the manifest anchor is checked FIRST and binds the ENTIRE file byte-for-byte. The operator
     # obtains sha256(evidence.json) from a trusted/signed backup manifest and passes it here; a file

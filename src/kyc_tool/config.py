@@ -55,6 +55,10 @@ _MIN_HMAC_SECRET_LEN = 32
 # accumulate.
 OUTBOX_ATTEMPT_DEADLINE_PHASES = 4
 
+# PostgreSQL int4 (signed 32-bit) upper bound — the storage domain of counter columns like
+# outbox.attempts. Config ceilings that feed those columns must not exceed it (re-audit F6).
+PG_INT4_MAX = 2_147_483_647
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="KYC_", env_file=".env", extra="ignore")
@@ -172,7 +176,12 @@ class Settings(BaseSettings):
     # STARTED with; the ceiling is process-local, so LOWERING it fleet-wide is a DRAINED publisher
     # cutover, never a rolling restart (an overlapping old publisher could send once past the new
     # value — re-audit `d3c0852..23e005e` F4; see DEPLOYMENT §8). Raising it is rolling-safe.
-    outbox_max_attempts: int = Field(default=8, ge=1)
+    # le=int4 max: outbox.attempts is a PostgreSQL int4 column. A ceiling above int4 max would let a
+    # row's attempts climb past the column domain, overflowing the admission increment mid-write and
+    # wedging the row claimed (re-audit `d569a15..4938840` F6). With the ceiling <= int4 max the
+    # per-cycle "attempts >= ceiling ⇒ dead-letter before admission" check terminates the row at a
+    # value that always fits, so no accepted config can overflow.
+    outbox_max_attempts: int = Field(default=8, ge=1, le=PG_INT4_MAX)
     # ge=0: a zero base means "retry when due, no backoff growth" — a valid dev/test value that
     # production refuses below. Negative was accepted before and produced immediate unthrottled
     # re-sends (re-audit `d3c0852..23e005e` F5). The publisher saturates the exponential schedule so
