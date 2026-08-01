@@ -50,6 +50,29 @@ class BindingRefused(RuntimeError):
     stable, traceback-free, non-mutating exit (re-audit `538e55e..42e1c7d` F4)."""
 
 
+def _revision_is_at_or_after(version: str, floor: str) -> bool:
+    """True iff `version` is `floor` or a descendant of it in the CHECKED-OUT Alembic graph — real
+    lineage, not string ordering (re-audit `b39b82a..b53daf4` F8). A spoofed/unknown revision like
+    '999' string-compares `>= '013'` yet is not a descendant of 013, so the old `version < floor`
+    let it satisfy a floor it never reached and a phase-specific command then hit columns that do
+    not exist. Loaded the same way `api/app.py` resolves the head; unknown/unreachable → False
+    (fail closed)."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    from kyc_tool.config import REPO_ROOT
+
+    cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    script = ScriptDirectory.from_config(cfg)
+    try:
+        # `version` down to base; if `floor` appears in that ancestry, version is floor-or-later.
+        ancestry = {rev.revision for rev in script.iterate_revisions(version, "base")}
+    except Exception:
+        return False  # `version` is not a known revision in this graph
+    return floor in ancestry
+
+
 def bind(
     session,
     *,
@@ -129,10 +152,12 @@ def bind(
             f"{SCHEMA_REFUSED_SENTINEL}: public.alembic_version={version!r} is not the required "
             f"revision {exact_revision!r} (this command is phase-specific)"
         )
-    if min_revision is not None and version < min_revision:
+    if min_revision is not None and not _revision_is_at_or_after(version, min_revision):
         raise BindingRefused(
-            f"{SCHEMA_REFUSED_SENTINEL}: public.alembic_version={version!r} is below the required "
-            f"revision {min_revision!r}"
+            f"{SCHEMA_REFUSED_SENTINEL}: public.alembic_version={version!r} is not revision "
+            f"{min_revision!r} or a descendant of it in the migration graph — this command needs "
+            f"the {min_revision!r} schema (string ordering is not lineage; an unknown/spoofed "
+            f"revision is refused here rather than tracebacking on a missing column)"
         )
     backing = session.execute(
         text("SELECT pg_get_serial_sequence('public.outbox', 'id')")

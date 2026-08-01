@@ -55,6 +55,33 @@ def test_reset_refuses_pre_013_and_preserves_next_attempt_subprocess(pg):
     engine.dispose()
 
 
+def test_reset_refuses_a_spoofed_unknown_revision_that_string_sorts_above_013_subprocess(pg):
+    """F8 (`b39b82a..b53daf4`): a spoofed/unknown alembic_version like '999' string-compares
+    >= '013' but is NOT a descendant of 013 in the migration graph. The old `version < min_revision`
+    string test let it through, so the reset then tracebacked on the claim columns 012 lacks. bind()
+    now checks real lineage: '999' is refused as a governed sentinel, nothing written, no crash."""
+    url = _fresh_db(pg, "kyc_reset_spoof999")
+    command.upgrade(_config(url), "012")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE alembic_version SET version_num='999'"))  # spoof a high revision
+        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
+        conn.execute(text("INSERT INTO outbox (kind, case_id, payload_json, status, next_attempt_at) "
+                          "VALUES ('poc_email','c1','{}'::jsonb,'pending', now() + interval '7 minutes')"))
+        before = [r.next_attempt_at for r in conn.execute(
+            text("SELECT next_attempt_at FROM outbox ORDER BY id"))]
+
+    proc = _run_reset(url)
+    assert proc.returncode != 0
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in proc.stderr           # governed lineage refusal
+    assert "Traceback" not in proc.stderr                        # not a crash on a missing column
+    with engine.connect() as conn:
+        after = [r.next_attempt_at for r in conn.execute(
+            text("SELECT next_attempt_at FROM outbox ORDER BY id"))]
+    assert after == before                                       # nothing written
+    engine.dispose()
+
+
 def test_reset_clears_only_claimed_preserves_next_attempt_subprocess(pg):
     url = _fresh_db(pg, "kyc_reset_013")
     command.upgrade(_config(url), "013")
