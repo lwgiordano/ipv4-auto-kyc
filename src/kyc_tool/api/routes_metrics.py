@@ -3,15 +3,11 @@ these counters are the dashboard's source: runs, decision distribution,
 queue/outbox health (dead-letters alert!), review-queue depth, adapter latency.
 """
 
-import json
-from dataclasses import fields
-
 from fastapi import APIRouter, Request
 from sqlalchemy import text
 
 from kyc_tool.api import hmac_witness
 from kyc_tool.api.auth import require_read_access
-from kyc_tool.domain.models import BuyEnablement, Decision, Gates
 
 router = APIRouter()
 
@@ -26,135 +22,27 @@ LIVE_OUTBOX_SQL = (
     "SELECT status, count(*) FROM outbox WHERE status IN ('pending','dead') GROUP BY status"
 )
 
-# The "all five hard gates pass" JSONB predicate, built from the Gates dataclass fields so it is a
-# single source of truth with the domain model: add/rename a gate and this predicate follows
-# automatically. JSONB @> requires every key present AND true, so an empty or partial gates_json
-# can never read as vacuously all-pass. AUDIT:A2 — five gates, not the prose's four.
-_ALL_GATES_PASS_JSON = json.dumps({f.name: True for f in fields(Gates)}, sort_keys=True)
-
-# Reconstruct the engine's COMPUTED decision from IMMUTABLE stamped facts — the fix for the shadow
-# gauge's core defect (re-audit `b39b82a..b53daf4` F1). The production default is
-# enforce_positive_decisions=false (M2 frozen): the pipeline HOLDS a computed positive as
-# manual_review_insufficient but preserves score/gates/buy_enablement UNCHANGED
-# (domain.decision.hold_positive_for_manual_review). Reading decisions.decision therefore counts the
-# emitted hold, not the engine's real decision, and the "would auto-approve" population reads ~zero
-# in production. A manual=false row is a computed positive iff all five gates pass; buy_enablement
-# splits approve vs approve_buy_locked. A stored reject is authoritative — broker BLOCKED
-# short-circuits decide() before the gate test and evaluate_gates sets broker_ok=false for a blocked
-# broker, so a real reject is never all-pass; the `decision <> :d_reject` guard also refuses to
-# reinterpret a pathological all-pass reject row. This deliberately does NOT read audit_log (which
-# retention deletes); it uses only the immutable decision row. Label strings are parameterised from
-# the domain enums so they cannot drift from what the engine writes.
-_COMPUTED_DECISION_CASE = (
-    "CASE WHEN decision <> :d_reject AND gates_json @> CAST(:all_pass AS jsonb) "
-    "          AND buy_enablement = :buy_enabled THEN :d_approve "
-    "     WHEN decision <> :d_reject AND gates_json @> CAST(:all_pass AS jsonb) THEN :d_buy_locked "
-    "     ELSE decision END"
-)
-_COMPUTED_PARAMS = {
-    "all_pass": _ALL_GATES_PASS_JSON,
-    "buy_enabled": BuyEnablement.ENABLED.value,
-    "d_approve": Decision.APPROVE.value,
-    "d_buy_locked": Decision.APPROVE_BUY_LOCKED.value,
-    "d_reject": Decision.REJECT.value,
-}
-
-_AUTOMATION_READINESS_SQL = text(
-    f"""
-    WITH latest_auto AS (
-        SELECT DISTINCT ON (case_id) case_id, ({_COMPUTED_DECISION_CASE}) AS computed_decision
-        FROM decisions WHERE manual = false
-        ORDER BY case_id, decision_sequence DESC
-    )
-    SELECT
-        count(*) FILTER (WHERE computed_decision IN (:d_approve, :d_buy_locked))
-            AS cases_would_auto_approve,
-        count(*) FILTER (WHERE computed_decision NOT IN (:d_approve, :d_buy_locked))
-            AS cases_engine_held,
-        count(*) FILTER (WHERE computed_decision NOT IN (:d_approve, :d_buy_locked) AND EXISTS (
-            SELECT 1 FROM decisions m
-            WHERE m.case_id = latest_auto.case_id AND m.manual = true))
-            AS cases_engine_nonpositive_with_manual_history
-    FROM latest_auto
-    """
-)
-
-# The engine's COMPUTED decision mix (same reconstruction), not the enforcement-held labels.
-_AUTOMATIC_DECISIONS_BY_TYPE_SQL = text(
-    f"SELECT ({_COMPUTED_DECISION_CASE}) AS computed_decision, count(*) "
-    f"FROM decisions WHERE manual = false GROUP BY computed_decision"
-)
-
-
-def _automation_readiness(session) -> dict:
-    """Read-only, NON-GATING shadow-mode gauge: the engine ALREADY renders these decisions — this
-    only MEASURES them, it enforces nothing, and it CANNOT by itself authorise enforcement (M2). It
-    is the "measure before you enforce" surface for a staged rollout. Every count below is the
-    engine's COMPUTED decision, reconstructed from immutable stamped facts (see
-    `_COMPUTED_DECISION_CASE`); with the enforcement kill switch off (the production default) the
-    stored label is a hold, so counting the stored label would measure the overlay, not the engine.
-
-    - `automatic_decisions_by_type`: the mix of decisions the engine COMPUTED (manual=false). A
-      sudden shift in the approve share is an early fraud/regression signal.
-    - `manual_approvals_total`: human `manual_approve` decisions (manual=true).
-    - `cases_would_auto_approve`: cases whose LATEST computed automatic decision is approve-class —
-      the population that would auto-approve WITHOUT a human under enforcement. This is the set to
-      SAMPLE and human-review to measure the residual false-approve rate.
-    - `cases_engine_held`: cases whose latest computed automatic decision is NOT approve-class
-      (genuine insufficient-evidence holds AND automatic rejects) — the conservative direction.
-    - `cases_engine_nonpositive_with_manual_history`: of those non-positive cases, how many carry
-      ANY manual approval anywhere in their history. This is a WEAK, NON-GATING signal, deliberately
-      named for exactly what it measures: it has no "after" ordering and is NOT bound to the reviewed
-      decision/run, so it is NOT a proven engine-vs-human disagreement. A real reviewed-outcome
-      binding (approve AND reject) is future review/activation-unit work.
-
-    HONEST LIMIT: the dangerous direction — the engine auto-approving a case a human would REJECT —
-    is NOT computable from stored data. This system records human APPROVALS, not rejections, and
-    under enforcement no human reviews an auto-approve. Measuring the residual false-approve rate
-    requires the shadow PROCESS (humans review a sample of `cases_would_auto_approve` while
-    enforcement stays OFF); this gauge exposes that population and deliberately does not claim the
-    false-approve rate on its own. It also mixes engine builds/policy eras and carries no window or
-    denominator (versioned-contract hardening is deferred to the rollout observation unit), so it is
-    an operator signal, not a rollout decision record.
-    """
-    counts = session.execute(_AUTOMATION_READINESS_SQL, _COMPUTED_PARAMS).one()
-    return {
-        "automatic_decisions_by_type": {
-            row[0]: row[1]
-            for row in session.execute(_AUTOMATIC_DECISIONS_BY_TYPE_SQL, _COMPUTED_PARAMS)
-        },
-        "manual_approvals_total": session.execute(
-            text("SELECT count(*) FROM decisions WHERE manual = true")
-        ).scalar_one(),
-        "cases_would_auto_approve": counts.cases_would_auto_approve,
-        "cases_engine_held": counts.cases_engine_held,
-        "cases_engine_nonpositive_with_manual_history": (
-            counts.cases_engine_nonpositive_with_manual_history
-        ),
-    }
-
 
 @router.get("/v1/metrics")
 def metrics(request: Request) -> dict:
     """Auth-gated HTTP metrics surface (re-audit `b39b82a..b53daf4` F4). Read auth
     (`require_read_access` — off in dev, forced on in production) is checked BEFORE any DB access, so
     an unauthenticated caller cannot even open a session against this business-sensitive endpoint.
-    This route (and ONLY this route) carries the automation-readiness block — it is the authenticated
-    surface for rollout observers."""
+    The payload is built by `collect_metrics`, which the `/ui` overview reuses in-process."""
     require_read_access(request.app.state.settings, request)
-    return collect_metrics(request, include_readiness=True)
+    return collect_metrics(request)
 
 
-def collect_metrics(request: Request, *, include_readiness: bool = False) -> dict:
-    """Build the metrics payload. INTERNAL — performs NO auth of its own.
+def collect_metrics(request: Request) -> dict:
+    """Build the metrics payload. INTERNAL — performs NO auth of its own; the HTTP route above gates
+    read auth before this runs, and the `/ui` overview reuses it in-process.
 
-    HONEST TRUST NOTE (re-audit `d3c0852..23e005e` F1): the `/ui/api/overview` route reuses this and
-    is CURRENTLY UNAUTHENTICATED (the UI read-GET auth sweep is PR 1.1). So the automation-readiness
-    block — sensitive rollout intelligence, and an expensive query (re-audit F5) — is NOT built here
-    by default; only the read-auth-gated `/v1/metrics` route requests it (`include_readiness=True`).
-    That keeps the sensitive/expensive gauge off the unauthenticated, 5-second-polled UI path until
-    PR 1.1 gates every UI read GET. The remaining operational counters below are the same ones the
-    console has always shown."""
+    NOTE (re-audit `d569a15..4938840` F2/F3/F4): the shadow-mode `automation_readiness` gauge was
+    REMOVED from this payload. It was an unreleased, non-gating diagnostic that could not satisfy a
+    consumer contract — a history-unbounded query (F2), a mixed-era population that could mask a
+    current-engine regression (F3), and three statements under READ COMMITTED that were not one
+    snapshot (F4). It is rebuilt properly in the rollout observation unit (see ROADMAP) with a single
+    versioned population/denominator per metric and a snapshot-consistent read."""
     with request.app.state.session_factory() as session:
         adapter_latency = [
             {
@@ -252,12 +140,8 @@ def collect_metrics(request: Request, *, include_readiness: bool = False) -> dic
                 "SELECT task_type, count(*) FROM review_tasks WHERE status='open' GROUP BY task_type",
             ),
             "adapter_latency": adapter_latency,
-            # Shadow-mode automation-readiness: measure the engine's decisions vs. human approvals
-            # WITHOUT enforcing, to inform a staged rollout. Read-only; enforces nothing. Included
-            # ONLY for the read-auth-gated /v1/metrics route (include_readiness), never on the
-            # currently-unauthenticated /ui overview path (re-audit F1) — and it is the expensive
-            # query, so keeping it off the 5s-polled UI path also addresses F5.
-            **({"automation_readiness": _automation_readiness(session)} if include_readiness else {}),
+            # (Shadow-mode automation_readiness removed here — re-audit d569a15..4938840 F2/F3/F4;
+            #  rebuilt with a versioned contract in the rollout observation unit. See collect_metrics.)
             "event_to_decision_seconds": {
                 "avg": float(decision_latency.avg_s or 0),
                 "p95": float(decision_latency.p95_s or 0),

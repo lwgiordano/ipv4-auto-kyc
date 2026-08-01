@@ -377,6 +377,18 @@ requeue endpoint; metrics windowing (index exists) + Prometheus + alerts; pin de
 base image `@sha256`; `ruff format --check` in CI; wire `core.hooksPath` durably in
 `manage.sh`.
 
+**Rollout observation unit (was the shadow `automation_readiness` gauge; removed from
+`/v1/metrics` in the `d569a15..4938840` re-audit fold — F2/F3/F4).** Rebuild it as a
+CONTRACTED surface, not a raw diagnostic: a dedicated authenticated endpoint with (a)
+one versioned population + explicit denominator per metric (`schema_version`,
+`non_gating=true`, `as_of`, fixed window, engine/policy cohort, zero-filled enum
+categories, an explicit unknown/legacy-provenance bucket); (b) set-based single-statement
+aggregation with a purpose-built index and a statement-time budget (the removed version
+sequentially scanned full history and ran a correlated manual subplan per case); (c) a
+snapshot-consistent read (one SQL statement with shared CTEs, or a `REPEATABLE READ`
+read-only transaction) so one response is one database snapshot. This is the
+"measure-before-enforce" input to M2; it must not ship until it meets this contract.
+
 ---
 
 ## H. Program-level sequencing risks
