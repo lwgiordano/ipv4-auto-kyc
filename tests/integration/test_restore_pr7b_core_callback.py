@@ -5,9 +5,10 @@ The pasted-SQL restore procedure was circular: the diagnostic stayed red until t
 the sequence repair was documented as reachable only after cutover step 2, and the repair knew
 only current max(id) — so max=10 / missing id=100 "repaired" to next=11 and the restored row
 collided later. These tests drive the REAL subprocess entry point end-to-end on schema 012, and
-pin the authenticity anchor (`--expect-manifest-digest`, mandatory) and the strict versioned
-evidence schema (unknown fields, naive timestamps, non-object bodies, malformed shapes all refuse
-cleanly, never a traceback, never an echo of the payload).
+pin the INTEGRITY anchor (`--expect-manifest-digest`, mandatory — an operator-supplied digest, NOT
+a verified signature) and the strict versioned evidence schema (unknown fields, naive timestamps,
+non-object bodies, malformed shapes all refuse cleanly, never a traceback, never an echo of the
+payload).
 """
 
 import hashlib
@@ -27,8 +28,9 @@ pytestmark = pytest.mark.postgres
 
 
 def _manifest(path):
-    """sha256 of the evidence FILE — the out-of-band anchor an operator obtains from a signed
-    backup manifest. Recomputed from whatever bytes are on disk at call time (an authentic run)."""
+    """sha256 of the evidence FILE — the out-of-band INTEGRITY digest an operator obtains from a
+    backup manifest. Recomputed from whatever bytes are on disk at call time (the matching digest for
+    an untampered file); the tool checks integrity against it, it does not verify a signature."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -42,8 +44,8 @@ def _cli(url, *args):
 
 def _restore(url, path, *extra, manifest=None):
     """Invoke restore with the MANDATORY --expect-manifest-digest, defaulting to the digest of the
-    file as it is on disk now (an authentic invocation). Pass `manifest=` to simulate a STALE
-    signed digest against a tampered file."""
+    file as it is on disk now (the matching integrity digest). Pass `manifest=` to simulate a STALE
+    out-of-band digest against a tampered file."""
     digest = _manifest(path) if manifest is None else manifest
     return _cli(url, "--evidence", str(path), "--expect-manifest-digest", digest, *extra)
 
@@ -138,9 +140,9 @@ def test_restore_above_high_water_floors_the_sequence_and_greens_the_diagnostic(
 
 
 # Machine-refused components: id (double entry), kind/status/lifecycle, the body's case/run
-# tuple, the body digest, and the decision linkage. Each here rides an AUTHENTIC file (manifest
-# recomputed after the mutation), so what is proven is the SEMANTIC guard, independent of the
-# authenticity anchor. The remaining lifecycle VALUES are attested backup inputs — but a delivered
+# tuple, the body digest, and the decision linkage. Each here rides an integrity-matched file
+# (manifest recomputed after the mutation), so what is proven is the SEMANTIC guard, independent of
+# the integrity anchor. The remaining lifecycle VALUES are attested backup inputs — but a delivered
 # row is TERMINAL, so a falsified value there can never make the row sendable.
 @pytest.mark.parametrize("mutation", [
     {"original_outbox_id": 999},          # fails the double-entry against --expect
@@ -261,14 +263,14 @@ def test_apply_requires_the_manifest_digest(pg, tmp_path):
 
 
 def test_stale_manifest_refuses_a_tampered_file(pg, tmp_path):
-    """F2 (Codex's exact repro): the file is NOT self-authenticating. An attacker who rewrites the
-    delivered body and recomputes the file's OWN body_digest cannot forge the out-of-band signed
-    manifest; passing the original (signed) digest against the tampered file refuses before any DB
+    """F2 (Codex's exact repro): the file is NOT self-certifying. An attacker who rewrites the
+    delivered body and recomputes the file's OWN body_digest cannot match the out-of-band integrity
+    digest; passing the original integrity digest against the tampered file refuses before any DB
     work, so a falsified backup cannot be committed as immutable delivered evidence."""
     url = _fresh_db(pg, "kyc_restore_stale_manifest")
     command.upgrade(_config(url), "012")
     evidence, path = _seed_and_prune(url, tmp_path)
-    signed = _manifest(path)  # the operator's out-of-band, signed digest of the AUTHENTIC file
+    integrity_digest = _manifest(path)  # the operator's out-of-band integrity digest of the file
 
     engine = create_engine(url)
     tampered_body = json.dumps({"case_id": "c1", "run_id": "rA", "decision": "reject",
@@ -278,11 +280,11 @@ def test_stale_manifest_refuses_a_tampered_file(pg, tmp_path):
             "SELECT encode(sha256(convert_to(CAST(:p AS jsonb)::text,'UTF8')),'hex')"),
             {"p": tampered_body}).scalar_one()
     engine.dispose()
-    # internally consistent (body_digest matches the new body), but the signed manifest is unchanged
+    # internally consistent (body_digest matches the new body), but the out-of-band digest is unchanged
     path.write_text(json.dumps({**evidence, "payload_json": tampered_body, "body_digest": new_digest}))
 
     proc = _restore(url, path, "--expect-original-id", str(evidence["original_outbox_id"]),
-                    "--apply", manifest=signed)
+                    "--apply", manifest=integrity_digest)
     assert proc.returncode != 0 and "manifest" in proc.stderr.lower()
     engine = create_engine(url)
     with engine.connect() as conn:
@@ -320,14 +322,32 @@ def _corrupt_not_json(ev):
     return "{ this is not valid json"
 
 
+def _corrupt_deep_payload(ev):
+    # F9: payload_json is valid JSON syntax but deeply nested — json.loads raises RecursionError,
+    # which must be translated to a payload-free refusal, not escape as a traceback.
+    return json.dumps({**ev, "payload_json": "[" * 20000 + "]" * 20000})
+
+
+def _corrupt_deep_outer(ev):
+    # F9: the OUTER evidence JSON is deeply nested (and not an object) — same RecursionError boundary.
+    return "[" * 20000 + "]" * 20000
+
+
+def _corrupt_oversize(ev):
+    # F9: the file exceeds the byte ceiling — refused before parsing, so nesting/parse cost is bounded.
+    return json.dumps({**ev, "original_last_error": "a" * (1 << 20)})
+
+
 @pytest.mark.parametrize("corruptor", [
     _corrupt_payload_list, _corrupt_top_level_array, _corrupt_naive_timestamp,
     _corrupt_extra_field, _corrupt_missing_version, _corrupt_digest_shape, _corrupt_not_json,
+    _corrupt_deep_payload, _corrupt_deep_outer, _corrupt_oversize,
 ])
 def test_malformed_evidence_refuses_cleanly_in_both_modes(pg, tmp_path, corruptor):
-    """F3: every malformed shape (non-object body, top-level array, naive timestamp, unknown field,
-    missing version, bad digest, non-JSON) is a stable payload-free refusal in BOTH dry-run and
-    apply — never a traceback (the old `payload_json="[]"` → AttributeError), never a DB change."""
+    """F3 + F9: every malformed shape (non-object body, top-level array, naive timestamp, unknown
+    field, missing version, bad digest, non-JSON, deeply nested payload/outer JSON, oversize file) is
+    a stable payload-free refusal in BOTH dry-run and apply — never a traceback (the old
+    `payload_json="[]"` → AttributeError, or a deep-nesting RecursionError), never a DB change."""
     url = _fresh_db(pg, f"kyc_restore_bad_{corruptor.__name__[9:]}")
     command.upgrade(_config(url), "012")
     evidence, path = _seed_and_prune(url, tmp_path)
@@ -340,6 +360,31 @@ def test_malformed_evidence_refuses_cleanly_in_both_modes(pg, tmp_path, corrupto
         assert "REFUSED" in proc.stderr, proc.stderr
         assert "Traceback" not in proc.stderr, proc.stderr
         assert "José" not in proc.stderr  # never echo the evidence body
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM outbox")).scalar_one() == 0
+    engine.dispose()
+
+
+def test_semantic_refusal_never_echoes_an_evidence_field_value(pg, tmp_path):
+    """F10: a digest-matched file whose decision_id carries a unique marker must refuse (no matching
+    automatic decision) WITHOUT printing that marker — or any candidate evidence value — anywhere.
+    An attacker controls the evidence fields; echoing them into the operator log is a leak and a
+    log-injection vector. The refusal names only the failed invariant/fields."""
+    url = _fresh_db(pg, "kyc_restore_no_echo")
+    command.upgrade(_config(url), "012")
+    evidence, path = _seed_and_prune(url, tmp_path)
+    marker = "MARKER-do-not-log-Ω-42"
+    # case_id/run_id stay c1/rA so the body-match passes; the decision lookup then fails on the
+    # marker decision_id (no such automatic decision), reaching the semantic refusal.
+    path.write_text(json.dumps({**evidence, "decision_id": marker}))
+    oid = str(evidence["original_outbox_id"])
+
+    for extra in ([], ["--apply"]):
+        proc = _restore(url, path, "--expect-original-id", oid, *extra)
+        assert proc.returncode == 1
+        assert marker not in (proc.stdout + proc.stderr), "refusal echoed an evidence field value"
+        assert "no automatic" in proc.stderr.lower()  # the failed invariant IS named
     engine = create_engine(url)
     with engine.connect() as conn:
         assert conn.execute(text("SELECT count(*) FROM outbox")).scalar_one() == 0

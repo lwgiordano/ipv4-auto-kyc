@@ -81,9 +81,22 @@ def _reject_nonfinite(value: str):
     raise ValueError(f"non-finite JSON constant not allowed: {value}")
 
 
+# An evidence file is a SINGLE schema-012 outbox row plus a digest; a legitimate one is a few KiB.
+# The ceiling bounds memory and, with the recursion translation below, the parse cost of a hostile
+# file (re-audit `b39b82a..b53daf4` F9).
+_MAX_EVIDENCE_BYTES = 1 << 20  # 1 MiB
+
+
 def _loads_strict(raw) -> object:
-    """json.loads that refuses NaN/Infinity/-Infinity — for every untrusted evidence parse."""
-    return json.loads(raw, parse_constant=_reject_nonfinite)
+    """json.loads that refuses NaN/Infinity/-Infinity AND deeply nested JSON — for every untrusted
+    evidence parse. Deep nesting otherwise raises RecursionError (NOT a ValueError), which escapes
+    the parse-boundary handlers as an uncaught traceback in both dry-run and apply (re-audit
+    `b39b82a..b53daf4` F9). Python's recursion limit is the effective nesting ceiling; the overflow
+    is translated into the same ValueError every caller already refuses on, payload-free."""
+    try:
+        return json.loads(raw, parse_constant=_reject_nonfinite)
+    except RecursionError as exc:
+        raise ValueError("JSON nesting exceeds the allowed depth") from exc
 
 
 class _Evidence(BaseModel):
@@ -187,15 +200,23 @@ def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
         raw_bytes = path.read_bytes()
     except OSError as exc:
         raise _Refused(f"evidence file could not be read ({type(exc).__name__})") from exc
+    if len(raw_bytes) > _MAX_EVIDENCE_BYTES:
+        raise _Refused(
+            f"evidence file exceeds the {_MAX_EVIDENCE_BYTES}-byte ceiling — an evidence file is a "
+            "single outbox row; a larger file is not a backup row and is refused before parsing"
+        )
     # F2: the manifest anchor is checked FIRST and binds the ENTIRE file byte-for-byte. The operator
-    # obtains sha256(evidence.json) from a signed/detached backup manifest and passes it here; a file
+    # obtains sha256(evidence.json) from a trusted/signed backup manifest and passes it here; a file
     # that self-certifies cannot pass, and altering ANY field (body OR any lifecycle field) changes
-    # this digest and refuses before any parsing or DB work.
+    # this digest and refuses before any parsing or DB work. F4/F13: this is an INTEGRITY digest, not
+    # a cryptographic signature — the tool does not verify the digest is genuine (that authenticity
+    # is operator-attested), so the refusal names only integrity, never "authenticated".
     actual = hashlib.sha256(raw_bytes).hexdigest()
     if actual != expect_manifest_digest.strip().lower():
         raise _Refused(
-            "the evidence file's sha256 does not match --expect-manifest-digest (the out-of-band "
-            "signed-manifest value) — the file is not the authenticated backup, or a field was altered"
+            "the evidence file's sha256 does not match --expect-manifest-digest (the operator-"
+            "supplied integrity digest) — the file is not the one that digest was taken over, or a "
+            "field was altered"
         )
     try:
         raw = _loads_strict(raw_bytes)  # rejects NaN/Infinity that JSONB would fault on later
@@ -230,8 +251,8 @@ def restore_callback(
     """
     if evidence["original_outbox_id"] != expect_original_id:
         raise _Refused(
-            f"--expect-original-id={expect_original_id} does not match the evidence file's "
-            f"original_outbox_id={evidence['original_outbox_id']} — double-entry failed"
+            "--expect-original-id does not match the evidence file's original_outbox_id — "
+            "double-entry failed"
         )
     with uow(session_factory) as session:
         # bind(exact_revision="012") owns the schema/phase gate: it reads the FULL version set,
@@ -244,7 +265,10 @@ def restore_callback(
 
         oid = evidence["original_outbox_id"]
         if session.execute(text("SELECT 1 FROM public.outbox WHERE id=:i"), {"i": oid}).first():
-            raise _Refused(f"public.outbox id {oid} already exists — nothing to restore")
+            raise _Refused(
+                "an outbox row with the evidence's original_outbox_id already exists — "
+                "nothing to restore"
+            )
         decision_ok = session.execute(
             text(
                 "SELECT 1 FROM public.decisions d WHERE d.id=:d AND d.case_id=:c "
@@ -253,10 +277,11 @@ def restore_callback(
             {"d": evidence["decision_id"], "c": evidence["case_id"], "r": evidence["run_id"]},
         ).first()
         if not decision_ok:
+            # F10: name the failed invariant/fields only — NEVER the candidate values (an attacker
+            # controls decision_id/case_id/run_id in the file; echoing them injects the operator log).
             raise _Refused(
-                "no automatic decision matches the evidence tuple "
-                f"(decision={evidence['decision_id']!r}, case={evidence['case_id']!r}, "
-                f"run={evidence['run_id']!r})"
+                "no automatic (manual=false) decision matches the evidence tuple "
+                "(decision_id/case_id/run_id) — verify the evidence against the target database"
             )
         try:
             candidate_digest = session.execute(
@@ -272,8 +297,8 @@ def restore_callback(
             ) from exc
         if candidate_digest != evidence["body_digest"]:
             raise _Refused(
-                f"candidate body digests to {candidate_digest}, evidence claims "
-                f"{evidence['body_digest']} — the payload is not the backed-up body"
+                "the candidate body does not digest to the evidence's body_digest — the payload is "
+                "not the backed-up body (recompute sha256 over the backup row's payload_json)"
             )
         next_id = session.execute(
             text("SELECT GREATEST(COALESCE(max(id), 0), :oid) + 1 FROM public.outbox"),
