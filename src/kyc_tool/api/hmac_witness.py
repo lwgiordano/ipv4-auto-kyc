@@ -33,16 +33,10 @@ def record_v1_accepted(session: Session) -> None:
         raise WitnessUnavailable("hmac_v1_observation row missing")
 
 
-def bump_stat(session: Session, key: str) -> None:
-    """Best-effort diagnostic counter (v2_accepted | rejected)."""
-    session.execute(
-        text(
-            "INSERT INTO hmac_signature_stats (key, count, last_at) VALUES (:k, 1, now()) "
-            "ON CONFLICT (key) DO UPDATE "
-            "SET count = hmac_signature_stats.count + 1, last_at = now()"
-        ),
-        {"k": key},
-    )
+# NOTE: the diagnostic bump_stat(v2_accepted|rejected) writer was REMOVED (re-audit
+# `d569a15..4938840` F1) — the rejected path must not perform a synchronous DB write. The counter is
+# now process-local in api.auth._DIAGNOSTIC_COUNTS. The hmac_signature_stats table is left in place
+# (frozen migration) and unused; the observation unit may repurpose it behind a bounded async sink.
 
 
 def inbound_v1_zero(session: Session, window_days: int, now: datetime) -> bool:

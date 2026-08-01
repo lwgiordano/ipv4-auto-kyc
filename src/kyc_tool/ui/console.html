@@ -345,7 +345,10 @@ const tbar=(title,desc,actions="")=>`<div class="tbar"><div><h1>${title}</h1>
 const emptyRow=(cols,head,body)=>`<tr><td colspan="${cols}"><div class="empty"><b>${head}</b>${body}</div></td></tr>`;
 
 async function sidebarBadge(){try{
-  const{body:m}=await j("/v1/metrics");
+  // Use the UI's own endpoint, NOT the platform-HMAC-gated /v1/metrics: the console sends no
+  // signature, so polling /v1/metrics under read-auth wrote a "rejected" row per poll (re-audit F1).
+  const{body:o}=await j("/ui/api/overview");
+  const m=o.metrics||{};
   const dead=(m.jobs_by_status?.dead??0)+(m.outbox_by_status?.dead??0);
   const b=$("#deadbadge");b.hidden=!dead;b.textContent=dead;
 }catch(e){/* sidebar badge is best-effort */}}

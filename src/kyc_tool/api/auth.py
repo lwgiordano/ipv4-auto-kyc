@@ -12,6 +12,7 @@ v2 headers:  X-KYC-Timestamp, X-KYC-Key-Id, X-KYC-Signature-V2 = HMAC(secret,
 """
 
 import hmac
+from collections import Counter
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -19,6 +20,13 @@ from fastapi import HTTPException
 from kyc_tool import security
 from kyc_tool.api import hmac_witness
 from kyc_tool.config import Settings, parse_sunset
+
+# Process-local diagnostic counters (v2_accepted | rejected). Deliberately NOT database-backed
+# (re-audit `d569a15..4938840` F1): a rejected (401) request must not open a session or persist
+# telemetry, or an unauthenticated caller — and the browser sidebar polling unsigned — could drive
+# synchronous DB writes on the rejection path. Nothing reads these yet; a future metrics endpoint may
+# expose them. The distinct FAIL-CLOSED v1-acceptance witness (`_record_v1`) stays durable.
+_DIAGNOSTIC_COUNTS: Counter = Counter()
 
 
 def _sunset_passed(iso: str, now: datetime) -> bool:
@@ -69,16 +77,17 @@ def _session_factory(request):
     return getattr(request.app.state, "session_factory", None)
 
 
-def _bump(session_factory, key: str) -> None:
-    """Diagnostic v2/rejected counter — best-effort (never blocks the request)."""
-    if session_factory is None:
-        return
-    try:
-        with session_factory() as s:
-            hmac_witness.bump_stat(s, key)
-            s.commit()
-    except Exception:  # noqa: BLE001 — diagnostics must never fail the request
-        pass
+def _bump(key: str) -> None:
+    """Diagnostic v2/rejected counter — process-local, NO database access (re-audit
+    `d569a15..4938840` F1). Incrementing an in-memory counter cannot be turned into an
+    unauthenticated write amplifier the way the previous session+commit could."""
+    _DIAGNOSTIC_COUNTS[key] += 1
+
+
+def diagnostic_counts() -> dict[str, int]:
+    """Snapshot of this process's diagnostic auth counters (v2_accepted | rejected). Process-local,
+    not a fleet total — /v1/metrics labels them accordingly."""
+    return dict(_DIAGNOSTIC_COUNTS)
 
 
 def _record_v1(session_factory) -> None:
@@ -122,9 +131,9 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
             body=body,
         )
         if not ok:
-            _bump(session_factory, "rejected")
+            _bump("rejected")
             raise HTTPException(status_code=401, detail="invalid v2 signature")
-        _bump(session_factory, "v2_accepted")
+        _bump("v2_accepted")
         return
 
     # v1 path — retired only when the sunset date has passed AND the durable
@@ -146,7 +155,7 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
         headers.get("X-KYC-Signature", ""),
         max_skew_seconds=settings.hmac_max_skew_seconds,
     ):
-        _bump(session_factory, "rejected")
+        _bump("rejected")
         raise HTTPException(status_code=401, detail="invalid signature")
     _record_v1(session_factory)  # FAIL-CLOSED witness write
 
