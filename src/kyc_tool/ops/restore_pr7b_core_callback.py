@@ -22,12 +22,14 @@ writer stopped and attested — it takes `ACCESS EXCLUSIVE` on `public.outbox`):
 - the body must be a decision-callback body whose embedded `case_id`/`run_id` agree with the
   evidence tuple AND the linked automatic decision — a body that names a different case/run is
   refused;
-- `--expect-manifest-digest` (REQUIRED, dry-run AND apply) pins authenticity OUT OF BAND: it is
-  the sha256 of the evidence file taken from a signed/detached backup manifest, and it binds the
-  ENTIRE file byte-for-byte — altering the body OR any lifecycle field changes the digest and
-  refuses before any parsing or DB work. The file is NOT self-authenticating (re-audit
-  `538e55e..42e1c7d` F2): recomputing the file's own digest and omitting a flag no longer applies
-  anything. Obtaining and signing this digest is the operator prerequisite documented in RUNBOOK;
+- `--expect-manifest-digest` (REQUIRED, dry-run AND apply) is a mandatory INTEGRITY check, NOT
+  signature verification (re-audit `42e1c7d..b39b82a` F4): the tool recomputes sha256 over the
+  ENTIRE evidence file and refuses unless it matches this value, before any parsing or DB work — so
+  altering the body OR any lifecycle field is rejected, and a file cannot self-certify by carrying
+  its own digest. What the tool does NOT do is verify a cryptographic signature or vouch for the
+  digest itself; the digest's AUTHENTICITY is the operator's responsibility — source it OUT OF BAND
+  from a trusted/signed backup manifest (the RUNBOOK documents the capture step). A pinned-key
+  signed-manifest verification is a deliberate future option, not yet built;
 - DRY-RUN by default: it runs the EXACT apply path inside a SAVEPOINT and rolls back, so a
   value that would fail on apply (a malformed timestamp, a lifecycle CHECK) fails dry-run too
   — dry-run and apply are the same code, never divergent previews (re-audit `8377440` F2);
@@ -46,8 +48,11 @@ next_attempt_at, last_error, timestamps) are ATTESTED inputs from the backup —
 is terminal so they never affect delivery, and nothing in the target database can contradict a
 falsified backup value. That is why the evidence must come from the authoritative backup by the
 documented capture query, and why the MANDATORY `--expect-manifest-digest` (sha256 of the whole
-evidence file, from a signed manifest) is the sanctioned authenticity anchor — it binds every
-attested field, so a falsified backup value cannot pass without also breaking the signed digest.
+evidence file) binds every attested field for INTEGRITY. Its limit is explicit (F4): the tool
+checks the file matches the digest, but does not verify the digest is genuinely signed — that
+authenticity is operator-attested (source the digest from a trusted/signed backup manifest, out of
+band). Machine-verified authenticity (a pinned-key detached signature) is a deliberate future
+option, not built here.
 """
 
 import argparse

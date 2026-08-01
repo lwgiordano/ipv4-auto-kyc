@@ -299,9 +299,12 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
     pipeline, outbox, `dev_worker`, retention), then run
     `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json>
     --expect-original-id <id> --expect-manifest-digest <sha256>` (dry-run first; add `--apply` to
-    perform). `--expect-manifest-digest` is MANDATORY: it is the sha256 of the evidence file
-    (`sha256sum <file.json>`) taken from — and verified against — your signed/detached backup
-    manifest, so the file cannot self-certify and altering ANY field is refused before any DB work.
+    perform). `--expect-manifest-digest` is MANDATORY and is an INTEGRITY check: the tool recomputes
+    the sha256 of the evidence file (`sha256sum <file.json>`) and refuses unless it matches, so a
+    tampered or wrong file is rejected before any DB work — the file cannot self-certify by carrying
+    its own digest. The tool does NOT verify a cryptographic signature; the digest's authenticity is
+    yours to establish out of band, from a trusted/signed backup manifest (machine-verified signing
+    is a future option).
     It validates the whole
     contract below, inserts the exact original row, floors the sequence past the restored id
     (`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
