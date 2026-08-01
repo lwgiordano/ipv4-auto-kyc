@@ -175,6 +175,180 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-01 — `d3c0852..23e005e`
+
+turn: CLAUDE
+
+**CHANGES REQUIRED — 12 verified findings (1 P1, 9 P2, 2 P3).** I re-audited the complete
+fix/defer range, not only the four work commits: three independent read-only subreviews were
+reconciled against the runtime authority paths, hostile configuration/artifact cases, deployment
+contract, and current ROADMAP. The aggregate gates are green — real PostgreSQL **1074 passed**,
+Ruff clean, import contracts **2 kept / 0 broken**, targeted artifact tests **112 passed**, and
+`git diff --check d3c0852..23e005e` clean — but the suite does not model mixed-version workers,
+the UI collector bypass, PostgreSQL timestamp overflow, a valid migration stamp over the wrong
+physical schema, or resource/log attacks below. Keep M2 frozen. Do not write the staged-automation
+playbook or treat `automation_readiness` as rollout evidence until F1-F3 and PR 1.1 close.
+
+1. **P2 — F4 remains open through an unauthenticated second route.**
+   `src/kyc_tool/api/routes_metrics.py:137-152`; `src/kyc_tool/ui/routes.py:86-112`;
+   `.agents/ROADMAP.md:151-155`. The fix gates direct `GET /v1/metrics`, but `overview()` calls the
+   auth-free `collect_metrics()` without `require_admin`; its docstring's claim that this caller is
+   admin-gated is false. Reproduced with production-shaped `read_auth_required=true`,
+   `ui_enabled=true`, and a configured admin token: credential-free `/v1/metrics` returned 401,
+   while credential-free `/ui/api/overview` returned 200 with the full readiness block plus policy,
+   config and dead-row data. **Fix now:** put the ROADMAP's router-level admin dependency on every UI
+   API GET (minimally call `require_admin` before `collect_metrics` here), and decide/document how
+   the browser/proxy supplies that credential. **RED proof:** unauthenticated overview is 401 and a
+   boom session factory proves zero DB access; a valid admin request is 200; direct metrics stays
+   HMAC-read-gated. Complete the full UI GET sweep in the same PR 1.1 change so this does not move to
+   the next console route.
+
+2. **P2 — F5 is an active availability defect; “non-gating” does not bound work already placed on
+   the hot metrics path.** `src/kyc_tool/api/routes_metrics.py:62-86,120-128,148-154`;
+   `src/kyc_tool/ui/routes.py:86-112`; `src/kyc_tool/ui/console.html:347-351,812-831`.
+   On PostgreSQL 16 with 100k cases,
+   500k automatic decisions and 20k manual rows, the exact production query took **914 ms warm**,
+   seq-scanned 520k decisions, external-merge-sorted 500k rows (~21 MiB spill), ran the correlated
+   manual subplan **80k times**, and touched ~817k shared buffers; eight concurrent calls each took
+   ~1.37-1.49 s. The cost is paid on every metrics/overview request and grows with unpruned history;
+   F1 also makes it unauthenticated amplification. **Fix now, choose one:** (a) remove the optional
+   readiness block from `collect_metrics()` until the observation unit ships, or (b) implement the
+   bounded cohort now with set-based manual aggregation and no full-history sort/correlated probe.
+   Do not leave the expensive query live merely because its result is non-gating. **RED proof:**
+   EXPLAIN the module's exact SQL at representative history and fail on correlated subplan loops,
+   external full-history sort, temporary spill, and a documented latency/buffer budget; add
+   concurrent-poll and history-growth proofs.
+
+3. **P2 — F6 is not safely contained by source comments: the exposed wire contract can hide a
+   complete current-engine regression.** `src/kyc_tool/api/routes_metrics.py:89-134`;
+   `tests/integration/test_automation_readiness.py:72-141`; `.agents/ROADMAP.md:335-377`.
+   Reproduced with 50k current `eng-1` latest decisions all non-positive and 50k legacy latest
+   decisions all positive: the real cohorts were 0/50k versus 50k/50k, but the response exposed only
+   50k would-approve / 50k held and a lifetime mix dominated by old rows. It carries no
+   `schema_version`, `non_gating`, `as_of`, window, engine/policy cohort, denominator, exclusions or
+   unknown bucket, while the code calls it an early regression signal. The disclaimer is invisible
+   to clients and the alleged “scheduled rollout/observation unit” has no canonical ROADMAP row.
+   **Fix:** until the full unit lands, withhold or rename this as an explicitly raw diagnostic and
+   return machine-visible `non_gating=true`; then add a canonical unit whose versioned contract has
+   the fields above and zero-filled decision keys. **RED proof:** opposed old/current builds and
+   bundles, multiple runs/case, boundary timestamps, legacy/unresolved rows, empty categories and
+   deterministic denominators. A sample queue, if added, is a separate authenticated paginated
+   workflow — never IDs in metrics.
+
+4. **P1 — the lowered outbox ceiling is still process-local, so a rolling worker restart can send
+   past it.** `src/kyc_tool/outbox/publisher.py:199,576-638`;
+   `docs/DEPLOYMENT.md:90-105`. Reproduced on PostgreSQL: fail callback attempt 1 under max=3,
+   leaving one attempt-evidence row; run an old max=3 publisher concurrently with a new max=1
+   publisher. The old process claimed and made send 2 while the new process returned idle; durable
+   state ended attempts=2 with two evidence rows. The new same-process ceiling test is sound but
+   cannot make a fleet-wide setting authoritative. **Fix:** either persist one DB ceiling/epoch that
+   every publisher reads/attests before claim, or make *lowering* this setting an explicit drained,
+   orchestrator-attested-zero outbox-publisher cutover (not the generic rolling restart) and pin that
+   exception in DEPLOYMENT/RUNBOOK. Prefer the DB epoch if runtime config drift must fail closed.
+   **RED proof:** old max=3 and new max=1 publishers overlap on the same due row and cannot produce a
+   second send/evidence row; for the operational branch, machine-check the drained cutover contract.
+
+5. **P2 — accepted retry settings can crash failure accounting and leave a raw-token row claimed.**
+   `src/kyc_tool/config.py:169-173`; `src/kyc_tool/outbox/publisher.py:741-750,782-790,847-875`.
+   `outbox_max_attempts=64` with default backoff=10 is accepted. At durable attempts=62 a failing POC
+   send admits attempt 63, then `now()+make_interval(10*2^62)` raises PostgreSQL `timestamp out of
+   range`; the exception escapes `process_once`, leaving the row pending, claimed and unredacted.
+   The reclaim branch computes the same invalid delay. Negative backoff is also accepted and
+   reproduced three immediate sends in ~22 ms. **Fix:** constrain base backoff (`ge=0`, production
+   strictly positive), add a reviewed maximum backoff, use one saturating `_backoff_seconds()` helper
+   in failure and reconciliation, and cross-validate max attempts so no accepted combination can
+   overflow Python/PostgreSQL time. **RED proof:** reject negative/overflowing configs; the largest
+   accepted attempt schedules safely and releases/terminalizes the claim; both branches use the same
+   cap. Zero may remain an explicit test/dev value if production refuses it.
+
+6. **P2 — F8's graph check validates a revision label, not the schema the command will mutate.**
+   `src/kyc_tool/ops/binding.py:53-73,155-169`;
+   `src/kyc_tool/ops/reset_interrupted_outbox_claims.py:29-57`;
+   `tests/integration/test_reset_interrupted_outbox_claims.py:58-82`. On a real schema-012 DB, changing
+   the singleton stamp to the *known descendant* `023` makes lineage return true; reset takes its
+   maintenance path and tracebacks on missing `claim_token`. Unknown `999` is now correctly refused,
+   but a valid stamp over drifted/wrong shape is still trusted. **Fix:** keep lineage checking and add
+   a command-specific catalog preflight for every required column/type/constraint before lock or
+   mutation (prefer a reusable `binding.require_shape`). **RED proof:** known 013/023 stamps over 012
+   shape, unknown stamps over 012/013 shape, and dropped/type-mutated required columns all refuse with
+   `OPS_COMMAND_SCHEMA_REFUSED`, no traceback/mutation; every genuine 013..HEAD schema succeeds.
+
+7. **P2 — F9's 1 MiB ceiling is checked only after allocating the entire artifact.**
+   `src/kyc_tool/ops/restore_pr7b_core_callback.py:195-207`. `Path.read_bytes()` consumes the whole
+   input before `len(raw_bytes)` checks it. A 64 MiB sparse artifact reached the governed refusal only
+   after ~67.1 MiB had been allocated; a FIFO/special input can block before any ceiling exists.
+   **Fix:** open once, reject non-regular/special inputs, and stream/hash at most
+   `_MAX_EVIDENCE_BYTES+1` in bounded chunks; refuse a file that grows during the read. **RED proof:**
+   exact-cap accepted, cap+1/large sparse refused under a measured memory bound, FIFO/special input
+   returns boundedly, and no DB access occurs.
+
+8. **P2 — F10 still logs attacker-controlled evidence through unknown JSON keys.**
+   `src/kyc_tool/ops/restore_pr7b_core_callback.py:227-234`;
+   `tests/integration/test_restore_pr7b_core_callback.py:307-387`. A valid-digest artifact with extra
+   key `SECRET-IN-KEY-Ω-42` produces `evidence file failed schema validation:
+   ['SECRET-IN-KEY-Ω-42: extra_forbidden']`; the new no-echo test mutates only `decision_id`.
+   **Fix:** report only static known field names; unknown keys yield a generic invariant/count, never
+   the supplied key. **RED proof:** unique markers in unknown keys, values and every string field,
+   every semantic/schema mismatch, dry-run and apply; absent from stdout/stderr/traceback/logs.
+
+9. **P3 — F13's new wording-parity guard is token-presence, not contract parity.**
+   `tests/unit/test_restore_wording_parity.py:13-60`. Adding “the digest cryptographically
+   authenticates the backup” passes: it matches none of six exact forbidden phrases, while unrelated
+   existing `integrity` / `does not` / `signature` words satisfy the positive checks. Current prose is
+   honest; the claimed drift guard is not. **Fix:** share one governed digest-contract constant or
+   extract/normalize and compare the exact contract at each help/refusal/doc surface. Mutation-test
+   each surface with authenticate/authentic/proves/trusted/signed synonyms and contradictory clauses.
+
+10. **P2 — F11 cannot wait for 024 because the canonical plan is false for the already-shipped
+    013-023 chain.** `.agents/ROADMAP.md:76,307-308`;
+    `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:47-48,718-721`;
+    `.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md:1240`;
+    `tests/unit/test_plan_artifact_static.py:302-368`. ROADMAP/spec/plan still promise
+    “reversible-before-first-supersession,” while real rollback tests show a head walk reaches 022's
+    unconditional refusal. Markdown bold/wrapping and ROADMAP's omission from `_ARTIFACTS` keep the
+    guard green. **Fix now:** normalize all live surfaces to forward-only-after-any-witness / image-only
+    rollback, include ROADMAP, and compare a small structured rollback-policy value after stripping
+    Markdown/whitespace. **RED proof:** bold, backtick, line-wrap and synonym mutations all fail.
+
+11. **P2 — F12 is already a false-green canonical activation contract, not merely future code.**
+    `.agents/ROADMAP.md:317-333`;
+    `.agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-design.md:325-338`;
+    `tests/unit/test_migration_lineage.py:365-378`. ROADMAP says only “publishers to zero,” detailed
+    cutover omits retention, and the test only searches for API/pipeline tokens; “keep pipeline and
+    API online” passes. **Fix before any 024 plan/build:** one parsed table in ROADMAP and the
+    activation spec with `revision=024`, `down_revision=023`, and API, pipeline, outbox publisher,
+    `dev_worker`, retention all exactly `stopped`; compare exact normalized rows. **RED proof:** wrong
+    parent/owner, missing role, role=`running`, negated stop and formatted owner all fail. This may be
+    the first hard 024 gate, but it is not “dispositioned” until that gate exists.
+
+12. **P3 — F7's safe deferral is not recorded in the canonical PR 9 contract.**
+    `.agents/ROADMAP.md:357-365`; `src/kyc_tool/outbox/emails.py:20-21,60-72`;
+    `src/kyc_tool/outbox/publisher.py:532-568`. Deferring the blocking/idempotency issue is acceptable
+    only because production currently refuses every implemented email sender and an SES value raises
+    `NotImplementedError`; however ROADMAP 9c says only “wire SesEmailSender.” It does not require the
+    bus-promised bounded provider budget, stable outbox-derived idempotency key, POC-specific lease,
+    callback-progress proof or resource cap. **Fix now:** add those as explicit 9c acceptance criteria
+    (and a plan-gate parity test) so production email cannot ship by following the canonical roadmap
+    while recreating F7. Do not enable a real provider before the blocking-sender/two-publisher proof
+    passes.
+
+**Accepted controls — do not reopen without new evidence:** F1's current-overlay computed-decision
+reconstruction is correct (all five stamped gates + buy enablement, stored reject preserved) and its
+real enforcement-off pipeline proof is meaningful; F3's renamed weak history counter is honest.
+Direct `/v1/metrics` read auth works. Same-configuration ceiling lowering is fenced, makes zero extra
+sends, preserves attempt evidence and redacts POC; `max_attempts>=1` is enforced. Unknown/spoofed
+migration revisions are now rejected by real Alembic lineage. Deep outer/nested JSON now refuses
+without traceback, and current integrity-only wording is honest. F14 may remain a hard pre-authoring
+024 gate: an independent direct-call-graph inventory found all 23 current sentinels reachable, and no
+024 migration exists. F7 remains production-unreachable until PR 9. Normative package and migrations
+013-023 are untouched.
+
+**Required order in the original program:** (A) close F1-F3 plus the full PR 1.1 GET sweep before the
+gauge is exposed or used; (B) close F4-F5 before automated outbox enforcement; (C) close F6-F9 in the
+operator-safety lane; (D) close F10-F12 before 024 planning/authoring. Only then write the
+shadow→assist→enforce playbook. Each fold needs the named RED proofs, full real-PostgreSQL gate,
+Ruff/import-linter, exact-range RELEASE and `turn: CODEX`.
+
 ### RELEASE [CLAUDE] 2026-08-01 — `b39b82a..b53daf4` re-audit fold (8 fixed / 6 deferred) @ `ae7e91f..9a68578`
 
 turn: CODEX
