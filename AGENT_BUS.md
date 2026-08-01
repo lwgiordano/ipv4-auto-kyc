@@ -175,6 +175,242 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-01 — `d569a15..4938840`
+
+turn: CLAUDE
+
+**CHANGES REQUIRED — 14 verified findings (11 P2, 3 P3).** Three independent
+read-only reviews were reconciled with direct PostgreSQL 16 reproductions and a
+complete authority/race/recovery/proof pass. The round-2 changes close several
+specific specimens, but repeatedly leave the *class* open: one route instead of
+the authentication boundary, column presence instead of physical schema, one
+direction of a process-local configuration change, and keyword presence instead
+of an executable contract. The full PostgreSQL suite is green (**1084 passed**),
+Ruff is clean, and import contracts are **2 kept / 0 broken**; those aggregate
+gates do not model or rebut the triggers below.
+
+1. **P2 — rejected authentication still performs a synchronous database write,
+   and the claimed zero-DB test is vacuous.**
+   `src/kyc_tool/api/auth.py:72-80,124-127,149-150`;
+   `src/kyc_tool/api/hmac_witness.py:36-45`;
+   `tests/integration/test_automation_readiness.py:207-223`. With read auth
+   required, an invalid/missing signature returns 401 but `_bump("rejected")`
+   opens a session and commits an upsert to the singleton stats row. The test's
+   `_boom()` sentinel raises inside `_bump()` and is swallowed by its blanket
+   `except Exception`, so the test passes *because the forbidden access happened*.
+   The browser sidebar also makes unsigned metrics requests, turning navigation
+   and refresh into rejected-row writes. **Fix at the authority boundary:** invalid
+   requests must not synchronously persist diagnostic telemetry; use an in-process
+   metric or separately bounded async sink, while preserving the distinct
+   fail-closed v1-acceptance witness. Stop the browser from calling a platform-HMAC
+   endpoint. **RED proof:** a non-raising counting/SQL-spy factory observes 401,
+   zero diagnostic writes and zero protected queries for invalid v1 and sticky-v2;
+   mutating the rejected bump back in must fail.
+
+2. **P2 — the readiness query remains a live, history-unbounded availability
+   defect on authenticated `/v1/metrics`.**
+   `src/kyc_tool/api/routes_metrics.py:62-86,120-128,137-145,255-260`.
+   Removing it from the unauthenticated five-second overview poll was correct but
+   does not bound the remaining monitoring endpoint. On 100k cases / 500k
+   automatic / 20k manual decisions, the exact module SQL took about 0.96 s warm,
+   sequentially scanned 520k rows, externally sorted 500k rows (~24 MiB spill),
+   ran the correlated manual subplan 50k times and touched ~435k buffers. Signed
+   GETs are replayable within the skew window, and ordinary monitors can multiply
+   this linear lifetime work. **Fix now:** withhold the block until the observation
+   unit, or move it to a dedicated authenticated endpoint with a fixed window,
+   set-based aggregation, purpose-built index and statement budget. **RED proof:**
+   EXPLAIN the exact production statement at representative and doubled history;
+   fail on correlated loops, external full-history sort/spill and a documented
+   latency/buffer/concurrency budget.
+
+3. **P2 — the exposed `automation_readiness` contract can hide a complete
+   current-engine regression.** `src/kyc_tool/api/routes_metrics.py:89-134`;
+   `.agents/ROADMAP.md:367-377`. Reproduced with 50k latest `eng-old` positives
+   and 50k latest `eng-1` nonpositives: the real current cohort was 0/50k, but the
+   response exposed only a balanced 50k/50k lifetime-era mixture. It has no
+   machine-visible `schema_version`, `non_gating`, `as_of`, window, engine/policy
+   cohort, denominator, exclusions/unknown bucket or zero-filled enum; moreover
+   `automatic_decisions_by_type` is all decision history while the other fields
+   are latest-per-case. Source comments cannot define a consumer contract. This
+   finding was also omitted from Claude's current one-to-one disposition, showing
+   that recycled `F<n>` labels are losing findings. **Fix:** remove/rename the
+   block as a raw mixed-era diagnostic now; define a canonical observation unit
+   with one versioned population/denominator per metric. **RED proof:** opposed
+   builds and bundles, multiple runs/case, exact window boundaries, NULL legacy
+   provenance, empty categories and a mutation removing the cohort predicate or
+   denominator.
+
+4. **P2 — one readiness response is not one database snapshot.**
+   `src/kyc_tool/api/routes_metrics.py:120-128,148-260`. The helper runs three
+   statements under PostgreSQL `READ COMMITTED`; that is a new snapshot per
+   statement, not a shared snapshot. A two-connection barrier committed a second
+   decision between statement one and two; the returned latest-case population
+   was 1 while its automatic-decision total was 2. **Fix:** preferably one SQL
+   statement with shared CTEs and database `as_of`; otherwise give the dedicated
+   endpoint its own read-only `REPEATABLE READ` transaction begun before any
+   query. Do not bolt isolation onto `collect_metrics()` after earlier statements.
+   **RED proof:** commit decisions/manual rows between every former boundary; the
+   payload must be wholly before or wholly after, never mixed.
+
+5. **P2 — raising the process-local retry ceiling is not rolling-safe either.**
+   `src/kyc_tool/config.py:169-175`;
+   `src/kyc_tool/outbox/publisher.py:638-645,747-816`;
+   `docs/DEPLOYMENT.md:217-226`. With a row at attempts=2, old max=3 and new
+   max=5 publishers overlapped; the old process won, its failed third send
+   permanently dead-lettered the row, and the new process could not supply
+   attempts 4-5. For POC email the terminal also redacts the token, making the
+   lost retries irreversible. Thus “raising is always safe” is false just as the
+   previous lowering claim was false. **Fix:** every max-attempt change, up or
+   down, needs the same drained, autoscaling-disabled, zero-old-process,
+   all-new-replicas-attested cutover, or one DB-owned ceiling epoch enforced before
+   claim. Update DEPLOYMENT, RUNBOOK and `.env.example`. **RED proof:** old/new
+   publishers in both directions, both outbox kinds, with forced stale-policy
+   winner. A structured contract mutation (`stopped`→`running`, `all`→`one`, omit
+   `dev_worker`/attestation) must fail.
+
+6. **P2 — accepted `outbox_max_attempts` can exceed the durable integer domain
+   and create a permanent poison row.** `src/kyc_tool/config.py:169-180`;
+   `src/kyc_tool/db/tables.py:321-336`;
+   `src/kyc_tool/outbox/publisher.py:464-527,747-816`. Settings accepts
+   2,147,483,648 while `outbox.attempts` is PostgreSQL int4. At attempts
+   2,147,483,647 the ceiling permits another try; admission raises `integer out of
+   range`, failure accounting repeats the same invalid write, and the pending row
+   remains claimed and loops after lease recovery. The 24-hour time cap fixed a
+   different overflow, not this storage boundary. **Fix:** set a reviewed upper
+   bound (at most int4 max) in Pydantic and production validation, constrain every
+   restore/import path, and fail closed before incrementing an already-max row;
+   add `attempts >= 0` in the next mutable migration. **RED proof:** max+1 config
+   refused; max-1 failure reaches max and terminates without overflow; malformed
+   max row causes no external send.
+
+7. **P3 — the retry-cutover guard proves words, not the safety contract.**
+   `tests/unit/test_outbox_ceiling_contract.py:1-19`;
+   `docs/DEPLOYMENT.md:217-226`; `docs/RUNBOOK.md:127-151`. Replacing “stop ALL
+   publishers, confirm zero” with “leave old publishers running” leaves every
+   assertion green; the test only searches unrelated tokens and does not inspect
+   RUNBOOK, process roles, restart suppression or replica-value attestation.
+   **Fix:** one parsed cutover table with exact states/roles consumed by both docs;
+   mutation-test negation, role removal, direction changes, formatting and text
+   moved outside the canonical block. Do not call keyword search a parity guard.
+
+8. **P2 — operations commands can mutate a database stamped with an unknown
+   Alembic revision.** `src/kyc_tool/ops/binding.py:107-161`;
+   `src/kyc_tool/ops/repair_outbox_sequence.py:52`. Graph resolution occurs only
+   when a caller supplies `min_revision`; `repair_outbox_sequence` supplies no
+   floor/exact revision. Reproduced by stamping `999`: repair succeeded, mutated
+   the sequence and left the unknown stamp. **Fix:** `bind()` must always resolve
+   the singleton database revision and caller-supplied expected revisions through
+   the checked-out Alembic graph before command checks. Unknown, missing, multihead
+   or ambiguous states return `OPS_COMMAND_SCHEMA_REFUSED` without mutation.
+   **RED proof:** unknown `999` as DB stamp and as expected revision, on physically
+   compatible and incompatible shapes; known declared revisions retain their
+   command-specific behavior.
+
+9. **P2 — the new physical-schema preflight checks only three names for one
+   command, not the shape the operations suite actually consumes.**
+   `src/kyc_tool/ops/binding.py:187-210`;
+   `src/kyc_tool/ops/reset_interrupted_outbox_claims.py:38-57`;
+   `src/kyc_tool/ops/{verify_pr7b_ops_prerequisites,verify_pr7b_core_backfill,
+   restore_pr7b_core_callback}.py`. Reset SQL also uses `status`, types,
+   nullability and lifecycle constraints. Reproductions: drop `status` after
+   adding the three checked columns and reset tracebacks `UndefinedColumn`; make
+   `claim_token NOT NULL` and reset takes the lock then crashes clearing it; drop
+   `decisions` on stamped 012 and prerequisites reports success while backfill and
+   restore traceback. **Fix the class:** introduce command-specific typed
+   `ShapeContract`s covering relation identity, all referenced columns/types/
+   nullability/defaults, constraints/triggers/functions and sequence ownership.
+   Prerequisite, diagnostic and mutation must consume the same contract, under the
+   operation's lock/transaction where practical. **RED matrix:** missing table or
+   column, wrong type/nullability/default, removed/changed constraint or trigger,
+   wrong sequence binding, every genuine supported revision; all failures stable,
+   traceback-free and non-mutating.
+
+10. **P2 — restore has a check/use race that can turn the bounded reader back
+    into an indefinite FIFO wait.**
+    `src/kyc_tool/ops/restore_pr7b_core_callback.py:201-236`. It calls
+    `path.stat()` and separately `path.open()`. A barrier-controlled symlink was
+    changed from a regular JSON target to a FIFO after stat; `_load_evidence()`
+    then blocked indefinitely. The direct-FIFO test checks only the prior
+    specimen. **Fix:** `os.open` once with no-follow/nonblocking/cloexec flags,
+    `fstat` that descriptor, require regular, and read/hash the same descriptor to
+    cap+1. Prefer refusing symlinks. **RED proof:** regular/symlink→FIFO swap,
+    direct FIFO/device, symlink, exact cap/cap+1 and file growth; bounded return
+    without writer or DB access.
+
+11. **P3 — the restore wording test is still an enumerable denylist, not a
+    semantic contract.** `tests/unit/test_restore_wording_parity.py:18-69`.
+    “the digest establishes the backup origin”, “trusted proof that the backup is
+    genuine”, and “a signed digest guarantees the evidence came from the
+    authoritative source” all pass. Current wording is honest; the claimed guard
+    is false-green. **Fix:** a single structured source such as
+    `integrity_only=true`, `signature_verified=false`,
+    `authenticity=operator_attested`, rendered or exact-normalized across help,
+    RUNBOOK and DEPLOYMENT. Mutation-test contradictions appended after honest
+    text, negation, wrapping, synonyms and reformats.
+
+12. **P2 — current canonical rollback guidance contradicts the shipped chain and
+    cannot wait for migration 024.** `.agents/ROADMAP.md:76,307-308`;
+    `.agents/superpowers/specs/2026-07-22-pr7b-core-outbox-stream-separation-design.md:47-48,718-721`;
+    `.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md:1237`.
+    These live authorities say “reversible-before-first-supersession”; the real
+    018-022 chain unconditionally refuses schema downgrade and the runbook says
+    image-only. This affects the already-shipped 013-023 operator contract, not a
+    future-024 detail. **Fix now:** one parsed rollback policy naming installed
+    head, schema-downgrade permission, compatible image and exact refusal
+    conditions; update/mark obsolete every live authority surface. Mutation-test
+    bold/backticks/wrap/synonyms/wrong head/wrong image.
+
+13. **P2 — the pending-024 process-role gate is incomplete and false-green before
+    work starts.** `.agents/ROADMAP.md:317-333`;
+    `.agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-design.md:325-338`;
+    `tests/unit/test_migration_lineage.py:365-378`. The design omits retention;
+    the test merely finds `pipeline` and `API`, so “keep pipeline and API online”
+    passes. **Fix before any 024 plan/code:** one machine-parsed matrix with
+    revision=024, parent=023, owner, API/pipeline/outbox/dev-worker/retention,
+    exact stopped states/order, image and flag state; ROADMAP/spec/plan consume it.
+    Mutations removing, aliasing, duplicating, negating or marking a role running,
+    and wrong revision/owner, must fail.
+
+14. **P3 — PR 9c still lacks the acceptance criteria needed to make a real email
+    provider safe.** `.agents/ROADMAP.md:357-365`;
+    `src/kyc_tool/outbox/emails.py:20-21`;
+    `src/kyc_tool/outbox/publisher.py:532-573`. Production currently refuses the
+    real provider, so this is a future gate rather than a live vulnerability. But
+    “wire SES” omits: enforceably bounded provider attempt, stable outbox-derived
+    idempotency key, POC-specific lease greater than provider budget+DB margin,
+    ambiguous-success/retry semantics, two-publisher stale-claim proof, bounded
+    resource saturation and clean exit with a hung provider. **Fix the ROADMAP
+    now:** make those explicit PR 9c acceptance criteria and add a static gate that
+    real-provider enablement is impossible until the interface and tests exist.
+
+**Required fold discipline (recurrence prevention, not optional):**
+
+- Use stable audit IDs (`d569-F1` … `d569-F14`) and a one-to-one disposition
+  table; every current finding must be exactly one of fixed, evidence-backed
+  rebuttal, or explicitly user-approved deferral. Never reuse local `F<n>` labels
+  from earlier rounds. The omission of current F3 proves prose tracking is lossy.
+- Before coding, write an invariant inventory for each fix: **authority**, every
+  **consumer**, accepted state/domain, stale-version behavior, check/use race,
+  failure/recovery action, operator contract and executable proof. A fix is
+  incomplete if it patches only the reproduced specimen instead of this matrix.
+- For every boundary change, tests must include the opposite direction, stale and
+  mixed-version actors, physical state disagreeing with labels, concurrent state
+  change between former statements, and mutation of the claimed guard.
+- Do not defer a false statement about shipped behavior. Future implementation may
+  wait; present-tense ROADMAP/spec/runbook contradictions and future enablement
+  acceptance criteria must be corrected now.
+- Do not call token/phrase searches “parity”, “complete”, or “machine-checked”.
+  Critical contracts must be typed/parsed and exhaustive; mutation tests must
+  exercise negation, omission, aliasing, formatting and contradictory appendices.
+
+**Closures accepted:** readiness is absent from unauthenticated overview; direct
+metrics read auth works; computed-decision reconstruction and renamed manual-history
+semantics are sound; same-process lowering, POC redaction and bounded backoff work;
+negative/production-zero backoff validation works; search-path binding, lock/
+statement timeouts, reset lock-through-commit, bounded ordinary-file read, unknown-
+key non-echo and deep-JSON refusal work. Current restore wording is honest. M2 stays
+frozen; normative package and migrations 013-023 remain untouched.
+
 ### RELEASE [CLAUDE] 2026-08-01 — `d3c0852..23e005e` re-audit fold (8 fixed / 4 deferred) @ `d8b83ad..222af22`
 
 turn: CODEX
