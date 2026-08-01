@@ -217,6 +217,14 @@ def bind(
     # or wrong physical shape passes the lineage check yet would traceback mid-mutation on a missing
     # column. Verify every column the command will actually touch EXISTS before any lock or write —
     # lineage answers "which migration", this answers "does the shape match".
+    #
+    # SCOPE (honest — re-audit `d569a15..4938840` F9): this is COLUMN + relation PRESENCE only. It is
+    # NOT a full typed shape contract — it does not assert types, nullability, defaults, constraints,
+    # triggers or sequence ownership, and each command must still enumerate the columns it consumes
+    # (reset now includes `status`). A per-command typed `ShapeContract` (relation identity + every
+    # referenced column's type/nullability/default + constraint/trigger/function/sequence-owner set),
+    # consumed identically by the prerequisite, diagnostic and mutation paths under the operation's
+    # lock, is deferred to the production-ops-hardening unit (ROADMAP PR 10).
     if require_columns:
         for table, cols in require_columns.items():
             present = {

@@ -173,9 +173,11 @@ class Settings(BaseSettings):
     # ge=1: at least one delivery attempt must be permitted. A row is dead-lettered without a send
     # once its durable attempts reach this ceiling — including a row left at/over the ceiling when
     # this value is LOWERED (re-audit `b39b82a..b53daf4` F2). Each publisher enforces the ceiling it
-    # STARTED with; the ceiling is process-local, so LOWERING it fleet-wide is a DRAINED publisher
-    # cutover, never a rolling restart (an overlapping old publisher could send once past the new
-    # value — re-audit `d3c0852..23e005e` F4; see DEPLOYMENT §8). Raising it is rolling-safe.
+    # STARTED with; the ceiling is process-local, so ANY fleet-wide change — raise OR lower — is a
+    # DRAINED publisher cutover, never a rolling restart (re-audit `d3c0852..23e005e` F4 and
+    # `d569a15..4938840` F5: lowering can send once past the new value; raising lets an old lower-max
+    # publisher dead-letter — and irreversibly redact a POC token — before a new higher-max one
+    # supplies the extra attempts). See DEPLOYMENT §8.
     # le=int4 max: outbox.attempts is a PostgreSQL int4 column. A ceiling above int4 max would let a
     # row's attempts climb past the column domain, overflowing the admission increment mid-write and
     # wedging the row claimed (re-audit `d569a15..4938840` F6). With the ceiling <= int4 max the

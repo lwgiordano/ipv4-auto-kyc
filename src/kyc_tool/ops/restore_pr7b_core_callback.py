@@ -88,6 +88,17 @@ def _reject_nonfinite(value: str):
 # file (re-audit `b39b82a..b53daf4` F9).
 _MAX_EVIDENCE_BYTES = 1 << 20  # 1 MiB
 
+# Machine-readable SINGLE SOURCE OF TRUTH for what `--expect-manifest-digest` is (re-audit
+# `d569a15..4938840` F11). Prose drifts and denylists are enumerable; this structured contract is
+# what the wording guard asserts against. `--expect-manifest-digest` proves the file matches an
+# OPERATOR-SUPPLIED digest (INTEGRITY); it does not verify a cryptographic signature and does not
+# vouch for the digest's provenance (that authenticity is the operator's responsibility).
+INTEGRITY_CONTRACT = {
+    "integrity_only": True,
+    "signature_verified": False,
+    "authenticity": "operator_attested",
+}
+
 
 def _loads_strict(raw) -> object:
     """json.loads that refuses NaN/Infinity/-Infinity AND deeply nested JSON — for every untrusted

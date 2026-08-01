@@ -73,7 +73,7 @@ that lands its migration.
 | PR 5a | 6 | shipped | 010 | drop global idem unique, add per-case unique, `request_nonces` |
 | PR 5b | 11 | — | — | review-record binding |
 | PR 6 | 7A | shipped | 011, 012 | `policy_bundles`, `checks.policy_bundle_hash`, `runs/decisions.engine_build_id` (011); `VALIDATE` those provenance CHECKs (012, audit round 1) |
-| PR 7b-core | 8 | shipped | 013 | `outbox.ordering_stream` (NOT NULL) + `case_id` NOT NULL + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + a **best-effort** local `superseded` guard (higher *locally-stamped* delivery only; send-before-stamp/cross-replica reverts remain for 7b-activation); identity + ordering (`UNIQUE decisions(case_id, decision_sequence)` [per-case namespace] + `UNIQUE(run_id)` + triple FK + partial callback index); fenced claim (`claim_token`); exhaustive per-status lifecycle CHECKs; `ordering_stream`/`case_id` real `SET NOT NULL` (drained cutover, **reversible-before-first-supersession** downgrade) |
+| PR 7b-core | 8 | shipped | 013 | `outbox.ordering_stream` (NOT NULL) + `case_id` NOT NULL + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + a **best-effort** local `superseded` guard (higher *locally-stamped* delivery only; send-before-stamp/cross-replica reverts remain for 7b-activation); identity + ordering (`UNIQUE decisions(case_id, decision_sequence)` [per-case namespace] + `UNIQUE(run_id)` + triple FK + partial callback index); fenced claim (`claim_token`); exhaustive per-status lifecycle CHECKs; `ordering_stream`/`case_id` real `SET NOT NULL` (drained cutover; 013's OWN downgrade is reversible-before-first-supersession, but the shipped 013–023 chain is forward-only after any witness — see the SHIPPED ROLLBACK CONTRACT note below, as 018+ are forward-only) |
 | PR 7b-core repair | 8 | shipped | 014 | `outbox_delivery_attempts` (pre-HTTP attempt authority; created-or-validated because the amended-013 history exists) + insert-only trigger; `outbox.witness_generation` (legacy|attempt_v1, conservative backfill); digest⇒delivered CHECK; `cases.latest_decision_row_id` (trigger-maintained latest-decision authority + composite same-case FK; read API never sorts by `decided_at`); `ix_outbox_live_status` partial index for the exact (pending,dead) alerting predicate; **forward-only-after-any-witness** downgrade |
 | PR 7b-core hardening | 8 | shipped | 015 | witness AUTHORITY: attempt admission trigger (live claim only), `witness_generation` immutable, terminal digest write-once (pending→delivered with matching attempt; never cleared/rewritten), exact-definition re-validation of the adopted attempt table (complete constraint/index/trigger sets, schema-bound), child-first downgrade lock order (no 40P01 vs live writers), forward-only-after-any-witness |
 | PR 7b-core admission | 8 | shipped | 016 | witness ADMISSION provenance: `outbox_delivery_attempts.admission` (`legacy_unverified`\|`admission_v1`, stamped only by the trigger — pre-authority attempts are never promoted into staged-intent evidence); unwitnessed decision delivery refused at the transition; canonical authority functions DROPPED+RECREATED (name-only validation proved gameable); downgrade also refuses on NEGATIVE evidence (`attempt_v1` rows) |
@@ -304,8 +304,14 @@ a missing legacy callback is **restore-from-backup or `BLOCKED_NO_AUTHORITATIVE_
 **terminated + zero-running attested** before any outage. Drained migration cutover (shipped
 `requeue_interrupted_jobs`; **no** pre-013 outbox reset — the claim columns don't exist yet; a
 `reset_interrupted_outbox_claims` CLI is post-013-only; digest-pinned;
-no mutating prod smoke); **reversible-before-first-supersession** downgrade (refuses once a
-`superseded` row exists). Cross-replica authority is 7b-activation.
+no mutating prod smoke); migration 013's OWN downgrade is reversible-before-first-supersession
+(refuses once a `superseded` row exists). Cross-replica authority is 7b-activation.
+
+> **SHIPPED ROLLBACK CONTRACT (013–023) — canonical (re-audit `d569a15..4938840` F12).** Do NOT read
+> any single migration's downgrade property as the chain's rollback policy. Migrations **018 and 022
+> are forward-only**, so once the installed head is at/after 018 the schema **cannot be downgraded** —
+> rollback is **forward-only after any witness; recover by restoring a compatible pre-cutover image**,
+> exactly as RUNBOOK states. 013's conditional downgrade is reachable only before 018 is applied.
 **Ops CLIs + cutover docs (plan Tasks 7-9) SHIPPED 2026-07-30:** `verify_pr7b_core_backfill`,
 `reset_interrupted_outbox_claims`, `repair_outbox_sequence` (all subprocess-tested against real
 Postgres, incl. the SHARE-lock retention race and the schema-012 restore-acceptance contract),
@@ -331,6 +337,15 @@ CAS CLIs (`export_outbox_ordering_manifest`, `begin_outbox_ordering_bootstrap`,
 **forward-only-after-use** downgrade; **two-phase irreversible** rollback (startup refuses
 `phase=active` with flag off). Supplies the ordering guarantee 6b's coordinator callbacks consume; 6b
 may build on 7b-core's primitive but not activate until `phase='active'` (ADR-008).
+
+> **REQUIRED BEFORE ANY 024 PLAN/CODE — activation process-role matrix (re-audit `d569a15..4938840`
+> F13).** "publishers to zero" is incomplete: author ONE machine-parsed matrix (revision=024,
+> parent=023, owner, and the explicit stopped/running state + order for EVERY writer role —
+> API, pipeline, outbox publisher, dev-worker — plus retention, target image and flag state) and have
+> the ROADMAP/spec/plan all consume it. A guard must fail on a removed/aliased/duplicated/negated role,
+> a role left running, or a wrong revision/owner — token-presence ("keep pipeline and API online") is
+> not a contract. Deferred to 024 authoring (024 does not yet exist); recorded here so it gates that
+> unit.
 
 ### PR 6b — Revalidation (item 7B) — PENDING, required for M4
 Migration **025** (`down_revision='024'`). Revalidate immutable evidence under the run's pinned
@@ -364,6 +379,19 @@ currently silently accepted as `ok` — the real gap). 9c: rewrite stale
 close the OCR ownership decision (recommend `TextractOcrEngine`, keep
 `document.uploaded`).
 
+**PR 9c acceptance criteria for a real email provider (re-audit `d569a15..4938840` F14 — a real
+sender must not ship without these; production currently REFUSES the stub, so this is a future gate,
+not a live hole):** (1) an ENFORCEABLY bounded provider attempt (hard per-send timeout, not a
+best-effort client default); (2) a stable, outbox-row-derived idempotency key sent to the provider so
+a retried send cannot double-deliver; (3) a POC-specific claim lease strictly greater than the
+provider budget + DB accounting margin (the existing lease-vs-deadline invariant, applied to the
+email path); (4) explicit ambiguous-success / retry semantics (a timeout after the provider may have
+accepted must not silently double-send); (5) a two-publisher stale-claim proof (no double delivery
+under overlap); (6) bounded resource saturation (connection/handle caps); (7) clean, bounded process
+exit with a HUNG provider. **Plus a static gate:** enabling a non-stub `email_provider` is IMPOSSIBLE
+(production boot refuses) until the provider interface and the tests above exist — the enablement and
+its proof land in the same change.
+
 ### PR 10 — Production ops hardening (item 13)
 Migration 028: broker **full-list immutable snapshots** `(revision, sha256,
 json_bytes, author, timestamp)` — NOT per-entity versioning (6 entities; snapshots
@@ -388,6 +416,16 @@ sequentially scanned full history and ran a correlated manual subplan per case);
 snapshot-consistent read (one SQL statement with shared CTEs, or a `REPEATABLE READ`
 read-only transaction) so one response is one database snapshot. This is the
 "measure-before-enforce" input to M2; it must not ship until it meets this contract.
+
+**Typed ops `ShapeContract` (re-audit `d569a15..4938840` F9).** `binding.bind(require_columns=…)` is
+column/relation PRESENCE only (reset now lists every column it touches, incl. `status`). Build a
+per-command typed contract — relation identity + each referenced column's type/nullability/default +
+the constraint/trigger/function set + sequence ownership — consumed IDENTICALLY by each command's
+prerequisite, diagnostic and mutation paths under its lock, so a diagnostic (e.g.
+`verify_pr7b_ops_prerequisites`) cannot report success on a shape (`decisions` dropped, `claim_token`
+nullability changed) that the mutation then tracebacks or half-applies on. RED matrix: missing
+table/column, wrong type/nullability/default, removed/changed constraint or trigger, wrong sequence
+binding — all refused, stable and non-mutating — against every genuinely supported revision.
 
 ---
 

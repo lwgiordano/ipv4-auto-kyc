@@ -245,6 +245,11 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   `outbox.id` (the under-lock serialization for rows the guard can deliver), a deterministic
   reconstruction, **not** proof of original publication order; a legacy automatic decision without a
   surviving callback is a fail-closed migration refusal.
+<!-- SUPERSEDED for the CHAIN (re-audit `d569a15..4938840` F12): this describes migration 013's OWN
+downgrade, authored before 018/022 existed. The SHIPPED 013–023 chain is forward-only (018 and 022
+are forward-only), so rollback-from-head is forward-only after any witness / image-only restore.
+ROADMAP "SHIPPED ROLLBACK CONTRACT (013–023)" is canonical. 013's downgrade below is reachable only
+before 018 is applied. -->
 - **Downgrade — reversible before first local supersession, race-safe (F3 + rev-2 F2):** the **first
   statement** in `downgrade()` is `LOCK TABLE outbox IN ACCESS EXCLUSIVE MODE` — a bare
   `EXISTS(status='superseded')` preflight is a TOCTOU race (its `ACCESS SHARE` is compatible with a

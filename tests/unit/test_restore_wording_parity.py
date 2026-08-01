@@ -27,6 +27,14 @@ _FORBIDDEN = (
     "proves the backup",
     "verifies the signature",
     "signature proves",
+    # re-audit `d569a15..4938840` F11 — three phrasings that bypassed the earlier list:
+    "establishes the backup origin",
+    "establishes the origin",
+    "trusted proof",
+    "proof that the backup is genuine",
+    "guarantees the evidence came from",
+    "signed digest guarantees",
+    "guarantees the backup",
 )  # NB: "verified signature" is deliberately NOT listed — it matches the honest negation "NOT a
 #     verified signature"; the positive claim is caught by "verifies the signature" instead.
 
@@ -69,6 +77,10 @@ def test_the_denylist_actually_catches_authenticity_claim_synonyms():
         "the tool verifies the signature over the file",
         "the manifest proves the backup is genuine and the signature proves origin",
         "an authentic file, verified against the signed-manifest value",
+        # the three phrasings that bypassed the earlier list (re-audit F11)
+        "the digest establishes the backup origin",
+        "a trusted proof that the backup is genuine",
+        "a signed digest guarantees the evidence came from the authoritative source",
     ]
     for sentence in dishonest:
         assert _hits(sentence.lower()), f"denylist failed to catch a dishonest claim: {sentence!r}"
@@ -82,6 +94,19 @@ def test_the_denylist_actually_catches_authenticity_claim_synonyms():
     ]
     for sentence in honest:
         assert not _hits(sentence.lower()), f"denylist wrongly flagged an honest disclaimer: {sentence!r}"
+
+
+def test_the_structured_integrity_contract_is_the_source_of_truth():
+    """Re-audit `d569a15..4938840` F11: a machine-readable contract (not just prose/denylist) states
+    exactly what --expect-manifest-digest is. Prose and the denylist must agree with it; docs and any
+    rendered help assert against THIS, so a wording drift cannot silently re-scope the feature."""
+    from kyc_tool.ops.restore_pr7b_core_callback import INTEGRITY_CONTRACT
+
+    assert INTEGRITY_CONTRACT == {
+        "integrity_only": True,
+        "signature_verified": False,
+        "authenticity": "operator_attested",
+    }
 
 
 def test_the_digest_is_framed_as_integrity_not_signature_verification():

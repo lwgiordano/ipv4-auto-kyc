@@ -36,10 +36,13 @@ def reset_claims(session_factory, *, lock_timeout_seconds: int = 60,
         # RuntimeError. The claim columns this command clears exist only from 013, and bind()
         # refuses anything below it before taking any lock or reading a row.
         # min_revision gates the migration LINEAGE; require_columns gates the physical SHAPE (a
-        # hand-stamped 013+ over a drifted schema passes lineage but lacks these columns — F6).
+        # hand-stamped 013+ over a drifted schema passes lineage but lacks these columns). This lists
+        # EVERY column the UPDATE/count below reference — including `status` (re-audit
+        # `d569a15..4938840` F9: the prior list omitted it, so a dropped `status` tracebacked
+        # UndefinedColumn instead of a governed refusal).
         binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
                      statement_timeout_seconds=statement_timeout_seconds, min_revision="013",
-                     require_columns={"outbox": ("claim_token", "claim_lease_expires_at",
+                     require_columns={"outbox": ("status", "claim_token", "claim_lease_expires_at",
                                                  "claimed_by")})
         # Held through commit — the read-back below is diagnosis; THIS is the guarantee.
         session.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
