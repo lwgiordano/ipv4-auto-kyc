@@ -170,7 +170,11 @@ class Settings(BaseSettings):
     # once its durable attempts reach this ceiling — including a row left at/over the ceiling when
     # this value is LOWERED (re-audit `b39b82a..b53daf4` F2).
     outbox_max_attempts: int = Field(default=8, ge=1)
-    outbox_backoff_base_seconds: int = 10
+    # ge=0: a zero base means "retry when due, no backoff growth" — a valid dev/test value that
+    # production refuses below. Negative was accepted before and produced immediate unthrottled
+    # re-sends (re-audit `d3c0852..23e005e` F5). The publisher saturates the exponential schedule so
+    # no accepted value can overflow PostgreSQL's timestamptz.
+    outbox_backoff_base_seconds: int = Field(default=10, ge=0)
 
     # POC tokens
     poc_token_ttl_hours: int = 72
@@ -293,6 +297,15 @@ def production_config_violations(settings: Settings) -> list[str]:
         v.append(
             "outbox_lease_margin_seconds must be > 0 (a zero DB-accounting margin leaves no room "
             "for the failure/terminal write between the send deadline and lease expiry)"
+        )
+
+    # A zero base is a valid dev/test value (retry-when-due) but in production it retries with no
+    # throttle growth, so a persistently failing endpoint is re-hit every cycle (re-audit
+    # `d3c0852..23e005e` F5). Production requires a positive base.
+    if settings.outbox_backoff_base_seconds <= 0:
+        v.append(
+            "outbox_backoff_base_seconds must be > 0 in production (a zero base retries a failing "
+            "endpoint every cycle with no exponential throttle)"
         )
 
     attempt_deadline = settings.outbox_http_timeout_seconds * OUTBOX_ATTEMPT_DEADLINE_PHASES

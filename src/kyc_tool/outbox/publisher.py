@@ -60,6 +60,12 @@ _MAX_ORPHAN_SENDS = 8
 # Total (not per-orphan) seconds close() waits for detached sends to finish — bounded shutdown.
 _ORPHAN_DRAIN_SECONDS = 2.0
 
+# Ceiling on a single backoff delay. The schedule is base × 2**(attempts-1); with a large base or
+# attempts that grows unbounded, `now() + make_interval(secs => delay)` would overflow PostgreSQL's
+# timestamptz (µs since epoch, int64) and raise mid-write, leaving the row pending/claimed/unredacted
+# (re-audit `d3c0852..23e005e` F5). 24h is far beyond any real retry cadence and is overflow-safe.
+_MAX_BACKOFF_SECONDS = 86_400
+
 # How much of a callback acknowledgement body the publisher will read to keep the connection
 # reusable. A platform ack is a few hundred bytes; past this it is not an ack we need, and reading
 # further would let the receiver decide how long the tool holds its claim.
@@ -746,7 +752,7 @@ class OutboxPublisher:
         # drive it without admission), which is why the value is computed here too.
         attempts = row.attempts + 1
         dead = attempts >= self.settings.outbox_max_attempts
-        delay = self.settings.outbox_backoff_base_seconds * (2 ** (attempts - 1))
+        delay = self._backoff_seconds(attempts)
         # Fenced on `claim_token` alone — deliberately NOT on a live lease. A failure write is
         # BOOKKEEPING (attempts, backoff, dead-letter), not a witness: the danger the live-lease
         # predicate exists for — a lapsed claimant stamping delivery evidence on a row someone
@@ -795,6 +801,19 @@ class OutboxPublisher:
             log.error("outbox_dead_letter", outbox_id=row.id, kind=row.kind, error=error)
         else:
             log.warning("outbox_retry", outbox_id=row.id, kind=row.kind, attempts=attempts)
+
+    def _backoff_seconds(self, attempts: int) -> int:
+        """Saturating exponential backoff: base × 2**(attempts-1), capped at `_MAX_BACKOFF_SECONDS`
+        so `now() + make_interval(secs => delay)` can never overflow timestamptz (re-audit
+        `d3c0852..23e005e` F5). ONE definition shared by the failure and the reconciliation paths so
+        the two schedules cannot diverge. A zero base (dev/test) yields 0 — retry when due."""
+        base = self.settings.outbox_backoff_base_seconds
+        shift = max(attempts - 1, 0)
+        # base is a Python int, so base * 2**shift never overflows in Python; the cap bounds the
+        # value handed to PostgreSQL. Bound the shift too so no absurd intermediate is materialised.
+        if shift >= 40:
+            return 0 if base == 0 else _MAX_BACKOFF_SECONDS
+        return min(base * (2 ** shift), _MAX_BACKOFF_SECONDS)
 
     def _fenced_dead_letter(self, session, row, token, *, note: str):
         """Terminalise a claimed row to 'dead' fenced on `token`, redacting a POC body — no send, no
@@ -863,7 +882,7 @@ class OutboxPublisher:
                 applied = self._fenced_dead_letter(session, row, token, note=note)
                 marker = "reconcile_dead"
             else:
-                delay = self.settings.outbox_backoff_base_seconds * (2 ** (attempts - 1))
+                delay = self._backoff_seconds(attempts)
                 applied = session.execute(
                     text(
                         "UPDATE outbox SET last_error=:e, "

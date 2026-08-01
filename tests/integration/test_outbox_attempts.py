@@ -701,6 +701,31 @@ def test_lowering_max_attempts_dead_letters_at_ceiling_without_a_send(
     assert len(_attempts(session_factory, "gp-r1")) == 1   # no second attempt-evidence row
 
 
+def test_backoff_saturates_below_timestamptz_overflow(session_factory, clean_db, settings):
+    """Re-audit `d3c0852..23e005e` F5: the backoff schedule (base × 2**(attempts-1)) is CAPPED so
+    `now() + make_interval(secs => delay)` can never overflow PostgreSQL's timestamptz. Previously,
+    a production-valid `outbox_max_attempts=64` / base=10 reached ~10×2**62 s and faulted mid-write,
+    leaving the row pending, claimed and unredacted. One shared helper feeds failure AND reconcile."""
+    from kyc_tool.outbox.publisher import _MAX_BACKOFF_SECONDS
+
+    prod = settings.model_copy(update={"outbox_backoff_base_seconds": 10, "outbox_max_attempts": 64})
+    pub = OutboxPublisher(session_factory, prod, http_client=httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200))))
+    assert pub._backoff_seconds(1) == 10          # base
+    assert pub._backoff_seconds(5) == 160         # 10 × 2**4
+    assert pub._backoff_seconds(63) == _MAX_BACKOFF_SECONDS   # saturated, NOT 10×2**62
+    assert pub._backoff_seconds(9999) == _MAX_BACKOFF_SECONDS
+
+    zero = settings.model_copy(update={"outbox_backoff_base_seconds": 0})
+    pub0 = OutboxPublisher(session_factory, zero, http_client=httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200))))
+    assert pub0._backoff_seconds(50) == 0         # zero base (dev/test) → retry when due
+
+    with session_factory() as s:  # the capped delay is actually accepted by PostgreSQL, no overflow
+        assert s.execute(text("SELECT now() + make_interval(secs => :d)"),
+                         {"d": _MAX_BACKOFF_SECONDS}).scalar_one() is not None
+
+
 class _RaisingEmail:
     def __init__(self) -> None:
         self.calls = 0

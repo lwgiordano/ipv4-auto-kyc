@@ -2,6 +2,7 @@
 unsafe or stub configuration, and accept a fully-hardened one."""
 
 import pytest
+from pydantic import ValidationError
 
 from kyc_tool.config import (
     ProductionConfigError,
@@ -63,6 +64,8 @@ def test_hardened_config_has_no_violations():
         ({"adapters_profile": "fixture"}, "adapters_profile"),
         ({"read_auth_required": False}, "read_auth_required"),
         ({"ui_enabled": True, "ui_admin_token": ""}, "ops console"),
+        # a zero backoff base retries a failing endpoint every cycle (re-audit F5)
+        ({"outbox_backoff_base_seconds": 0}, "outbox_backoff_base_seconds"),
         # HMAC v2 (PR 5a)
         ({"hmac_inbound_secret": ""}, "inbound secret"),
         ({"hmac_outbound_secret": "short"}, "outbound secret"),
@@ -82,6 +85,14 @@ def test_each_unsafe_condition_is_rejected(overrides, needle):
     assert any(needle in v for v in violations), violations
     with pytest.raises(ProductionConfigError):
         validate_for_production(hardened(**overrides))
+
+
+def test_negative_backoff_base_is_rejected_at_construction():
+    """Re-audit `d3c0852..23e005e` F5: a negative backoff base produced immediate unthrottled
+    re-sends. It is now a construction-time validation error (Field ge=0), everywhere, not only in
+    production."""
+    with pytest.raises(ValidationError):
+        hardened(outbox_backoff_base_seconds=-1)
 
 
 def test_non_production_environments_are_not_gated():
