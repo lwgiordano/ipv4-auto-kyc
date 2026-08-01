@@ -166,7 +166,10 @@ class Settings(BaseSettings):
     # publisher before the first terminal write. Raising `outbox_http_timeout_seconds` raises the
     # required lease four-fold, so the two knobs must be moved together.
     outbox_lease_margin_seconds: float = Field(default=1.0, ge=0)
-    outbox_max_attempts: int = 8
+    # ge=1: at least one delivery attempt must be permitted. A row is dead-lettered without a send
+    # once its durable attempts reach this ceiling — including a row left at/over the ceiling when
+    # this value is LOWERED (re-audit `b39b82a..b53daf4` F2).
+    outbox_max_attempts: int = Field(default=8, ge=1)
     outbox_backoff_base_seconds: int = 10
 
     # POC tokens

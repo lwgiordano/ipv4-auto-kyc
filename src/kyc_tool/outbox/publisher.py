@@ -629,6 +629,15 @@ class OutboxPublisher:
             self._reconcile_expired_claim(row, token)
             return True
 
+        # Ceiling guard (re-audit `b39b82a..b53daf4` F2): never make another external call for a row
+        # whose DURABLE attempts already meet the CURRENT max. Reconciliation above covers an
+        # expired-but-uncleared claim; this covers a cleanly-released pending row left at/over the
+        # ceiling when an operator LOWERS outbox_max_attempts. Terminalise here, not in _CLAIM_SQL,
+        # so the row is dead-lettered rather than stranded pending forever.
+        if row.attempts >= self.settings.outbox_max_attempts:
+            self._dead_letter_over_ceiling(row, token)
+            return True
+
         try:
             receipt = self._deliver(row.kind, row.payload_json, outbox_id=row.id, token=token)
         except _StaleClaim:
@@ -787,6 +796,39 @@ class OutboxPublisher:
         else:
             log.warning("outbox_retry", outbox_id=row.id, kind=row.kind, attempts=attempts)
 
+    def _fenced_dead_letter(self, session, row, token, *, note: str):
+        """Terminalise a claimed row to 'dead' fenced on `token`, redacting a POC body — no send, no
+        attempts increment. Shared by the expired-claim reconciliation and the on-claim ceiling
+        guard so the terminal write (columns cleared, POC redaction) stays defined once. Returns the
+        applied row, or None if a straggler already moved it (caller logs the stale claim)."""
+        redacted_payload = json.dumps({"redacted": True})
+        return session.execute(
+            text(
+                "UPDATE outbox SET status='dead', last_error=:e, "
+                "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL, "
+                "payload_json = CASE WHEN :redact_payload THEN CAST(:redacted AS jsonb) "
+                "ELSE payload_json END "
+                "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
+            ),
+            {"id": row.id, "e": note, "token": token,
+             "redact_payload": row.kind == POC_EMAIL, "redacted": redacted_payload},
+        ).first()
+
+    def _dead_letter_over_ceiling(self, row, token) -> None:
+        """Fenced dead-letter a freshly-claimed row whose DURABLE attempts already meet/exceed the
+        CURRENT outbox_max_attempts, before any transport (re-audit `b39b82a..b53daf4` F2). The
+        expired-claim reconciliation only fires for a non-NULL prev_claim_token; a cleanly-released
+        pending row left at/over the ceiling when an operator LOWERS outbox_max_attempts would
+        otherwise take the ordinary admit+send path and make one more external call past the new
+        ceiling. No increment, no send (POC body redacted)."""
+        note = "attempts at/above max_attempts on claim (ceiling lowered)"
+        with uow(self.session_factory) as session:
+            applied = self._fenced_dead_letter(session, row, token, note=note)
+        if applied is None:
+            log.warning("outbox_stale_claim_completion", outbox_id=row.id, attempted="ceiling_dead")
+            return
+        log.error("outbox_dead_letter", outbox_id=row.id, kind=row.kind, error=note)
+
     def _reconcile_expired_claim(self, row, token) -> None:
         """Reconcile a row reclaimed from an EXPIRED-but-UNCLEARED claim WITHOUT sending again
         (re-audit `42e1c7d..b39b82a` F1). The predecessor either admitted an attempt (attempts was
@@ -818,18 +860,7 @@ class OutboxPublisher:
                 ).first()
                 marker = "reconcile_release"
             elif attempts >= self.settings.outbox_max_attempts:
-                redacted_payload = json.dumps({"redacted": True})
-                applied = session.execute(
-                    text(
-                        "UPDATE outbox SET status='dead', last_error=:e, "
-                        "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL, "
-                        "payload_json = CASE WHEN :redact_payload THEN CAST(:redacted AS jsonb) "
-                        "ELSE payload_json END "
-                        "WHERE id=:id AND status='pending' AND claim_token=:token RETURNING id"
-                    ),
-                    {"id": row.id, "e": note, "token": token,
-                     "redact_payload": row.kind == POC_EMAIL, "redacted": redacted_payload},
-                ).first()
+                applied = self._fenced_dead_letter(session, row, token, note=note)
                 marker = "reconcile_dead"
             else:
                 delay = self.settings.outbox_backoff_base_seconds * (2 ** (attempts - 1))

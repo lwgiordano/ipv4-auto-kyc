@@ -660,3 +660,89 @@ def test_admission_never_shortens_a_healthy_claim(session_factory, clean_db, set
         after = s.execute(text("SELECT claim_lease_expires_at FROM outbox WHERE id=:i"),
                           {"i": rowA.id}).scalar_one()
     assert after >= before  # healthy 300s lease not shortened to the smaller attempt budget
+
+
+# --- F2: lowering outbox_max_attempts must not permit one more send (`b39b82a..b53daf4`) --------
+
+
+def test_lowering_max_attempts_dead_letters_at_ceiling_without_a_send(
+    session_factory, clean_db, settings
+):
+    """Re-audit `b39b82a..b53daf4` F2: a cleanly-released pending row left at/over the ceiling when
+    an operator LOWERS outbox_max_attempts is dead-lettered on the next claim WITHOUT another
+    external call. The normal claim path (prev_claim_token NULL) skipped the ceiling before this fix
+    and would send once more past the new max — expired-claim reconciliation only covers a crash."""
+    _seed_decisions(session_factory, "gp", [1])
+    _enqueue_cb(session_factory, "gp", 1)
+    sends: list[int] = []
+    transport = httpx.MockTransport(lambda r: (sends.append(1), httpx.Response(500))[1])
+
+    # max=3 world: one real send fails → clean release at attempts=1 (pending, claim cleared).
+    hi = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 3})
+    OutboxPublisher(session_factory, hi, http_client=httpx.Client(transport=transport)).process_once()
+    assert sends == [1]
+    with session_factory() as s:
+        st = s.execute(text(
+            "SELECT status, attempts, claim_token FROM outbox WHERE run_id='gp-r1'")).one()
+    assert (st.status, st.attempts, st.claim_token) == ("pending", 1, None)  # cleanly released
+
+    with session_factory() as s:  # operator makes it due AND lowers the ceiling to 1
+        s.execute(text("UPDATE outbox SET next_attempt_at=now() WHERE run_id='gp-r1'"))
+        s.commit()
+    lo = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 1})
+    assert OutboxPublisher(
+        session_factory, lo, http_client=httpx.Client(transport=transport)
+    ).process_once() is True                      # claim → ceiling guard → dead, no send
+
+    assert sends == [1]                            # still exactly ONE send total — none past the max
+    with session_factory() as s:
+        st = s.execute(text("SELECT status, attempts FROM outbox WHERE run_id='gp-r1'")).one()
+    assert (st.status, st.attempts) == ("dead", 1)         # terminalised, not stranded pending
+    assert len(_attempts(session_factory, "gp-r1")) == 1   # no second attempt-evidence row
+
+
+class _RaisingEmail:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def send(self, to: str, subject: str, body: str) -> None:
+        self.calls += 1
+        raise RuntimeError("smtp down")
+
+
+def test_ceiling_dead_letter_redacts_a_poc_body_and_does_not_resend(
+    session_factory, clean_db, settings
+):
+    """Re-audit `b39b82a..b53daf4` F2 (POC arm): the on-claim ceiling dead-letter redacts a POC
+    email body (it carries the raw token) exactly like every other terminal, and calls the provider
+    ZERO more times."""
+    from kyc_tool.outbox.publisher import enqueue_poc_email
+
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('gq')"))
+        enqueue_poc_email(s, case_id="gq", to="a@x", subject="s", body="raw-secret-token")
+        s.commit()
+    sender = _RaisingEmail()
+
+    # max=2 world: one send fails → clean release at attempts=1 (body NOT yet redacted — not dead).
+    hi = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 2})
+    OutboxPublisher(session_factory, hi, email_sender=sender).process_once()
+    assert sender.calls == 1
+    with session_factory() as s:
+        st = s.execute(text("SELECT status, attempts, payload_json FROM outbox "
+                            "WHERE case_id='gq'")).one()
+    assert (st.status, st.attempts) == ("pending", 1)
+    assert "raw-secret-token" in str(st.payload_json)   # still present pre-terminal
+
+    with session_factory() as s:  # due + ceiling lowered to 1
+        s.execute(text("UPDATE outbox SET next_attempt_at=now() WHERE case_id='gq'"))
+        s.commit()
+    lo = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 1})
+    OutboxPublisher(session_factory, lo, email_sender=sender).process_once()
+
+    assert sender.calls == 1                              # ZERO additional provider calls
+    with session_factory() as s:
+        st = s.execute(text("SELECT status, payload_json FROM outbox WHERE case_id='gq'")).one()
+    assert st.status == "dead"
+    assert "raw-secret-token" not in str(st.payload_json)  # POC body redacted on the terminal
+    assert st.payload_json == {"redacted": True}
