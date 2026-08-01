@@ -190,6 +190,20 @@ def test_enforcement_off_real_pipeline_holds_positive_yet_gauge_counts_it(
     assert ar["automatic_decisions_by_type"] == {"approve_buy_locked": 1}
 
 
+def test_readiness_is_not_served_on_the_unauthenticated_ui_overview(engine, client, clean_db):
+    """Re-audit `d3c0852..23e005e` F1: the sensitive + expensive readiness block must NOT ride the
+    `/ui/api/overview` path (which reuses collect_metrics and is UNAUTHENTICATED until the PR 1.1 UI
+    read-GET sweep). It is exposed only on the read-auth-gated `/v1/metrics` route."""
+    with engine.begin() as conn:
+        _seed_case(conn, "ov-a")
+        _auto_decision(conn, "ov-a", "ov-a-r1", 1, "manual_review_insufficient",
+                       gates=_ALL_PASS, buy="enabled")
+
+    overview_metrics = client.get("/ui/api/overview").json()["metrics"]
+    assert "automation_readiness" not in overview_metrics          # off the unauth / 5s-polled path
+    assert "automation_readiness" in client.get("/v1/metrics").json()  # only the authed route
+
+
 def test_metrics_route_checks_read_auth_before_opening_a_db_session(
     session_factory, dual_accept_settings, policy, clean_db
 ):

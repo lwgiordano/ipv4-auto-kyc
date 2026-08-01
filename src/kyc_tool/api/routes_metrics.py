@@ -139,17 +139,22 @@ def metrics(request: Request) -> dict:
     """Auth-gated HTTP metrics surface (re-audit `b39b82a..b53daf4` F4). Read auth
     (`require_read_access` — off in dev, forced on in production) is checked BEFORE any DB access, so
     an unauthenticated caller cannot even open a session against this business-sensitive endpoint.
-    The payload itself is built by `collect_metrics`, which the admin-gated `/ui` overview reuses
-    in-process — separating the two keeps UI reuse from silently bypassing the route dependency."""
+    This route (and ONLY this route) carries the automation-readiness block — it is the authenticated
+    surface for rollout observers."""
     require_read_access(request.app.state.settings, request)
-    return collect_metrics(request)
+    return collect_metrics(request, include_readiness=True)
 
 
-def collect_metrics(request: Request) -> dict:
-    """Build the metrics payload. INTERNAL — performs NO auth of its own; every caller MUST already
-    be authorised (the HTTP route above gates read auth; the `/ui` overview is admin-gated). Kept
-    separate from the route so the auth check runs before the session opens and so authorised
-    in-process reuse needs no second HTTP hop."""
+def collect_metrics(request: Request, *, include_readiness: bool = False) -> dict:
+    """Build the metrics payload. INTERNAL — performs NO auth of its own.
+
+    HONEST TRUST NOTE (re-audit `d3c0852..23e005e` F1): the `/ui/api/overview` route reuses this and
+    is CURRENTLY UNAUTHENTICATED (the UI read-GET auth sweep is PR 1.1). So the automation-readiness
+    block — sensitive rollout intelligence, and an expensive query (re-audit F5) — is NOT built here
+    by default; only the read-auth-gated `/v1/metrics` route requests it (`include_readiness=True`).
+    That keeps the sensitive/expensive gauge off the unauthenticated, 5-second-polled UI path until
+    PR 1.1 gates every UI read GET. The remaining operational counters below are the same ones the
+    console has always shown."""
     with request.app.state.session_factory() as session:
         adapter_latency = [
             {
@@ -248,8 +253,11 @@ def collect_metrics(request: Request) -> dict:
             ),
             "adapter_latency": adapter_latency,
             # Shadow-mode automation-readiness: measure the engine's decisions vs. human approvals
-            # WITHOUT enforcing, to inform a staged rollout. Read-only; enforces nothing.
-            "automation_readiness": _automation_readiness(session),
+            # WITHOUT enforcing, to inform a staged rollout. Read-only; enforces nothing. Included
+            # ONLY for the read-auth-gated /v1/metrics route (include_readiness), never on the
+            # currently-unauthenticated /ui overview path (re-audit F1) — and it is the expensive
+            # query, so keeping it off the 5s-polled UI path also addresses F5.
+            **({"automation_readiness": _automation_readiness(session)} if include_readiness else {}),
             "event_to_decision_seconds": {
                 "avg": float(decision_latency.avg_s or 0),
                 "p95": float(decision_latency.p95_s or 0),
