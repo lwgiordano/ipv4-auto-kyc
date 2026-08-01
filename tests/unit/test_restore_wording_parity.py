@@ -1,19 +1,20 @@
-"""F13 (`b39b82a..b53daf4`): option (a)'s honest framing must not regress by surface drift.
+"""F13 / re-audit F9: option (a)'s honest framing must not regress by surface drift.
 
 `--expect-manifest-digest` is an operator-supplied INTEGRITY digest, NOT verified authenticity — the
-tool checks the file matches the digest, it does not verify a cryptographic signature. That framing
-was corrected in the module docstring and the operator docs, but the inline comment, the refusal
-string, and the test helper still called the argument a "signed-manifest value" / an "authenticated
-backup" / an "authentic run". This static guard pins the honest framing across every operator-facing
-surface (module + CLI/refusal strings, tests, RUNBOOK, DEPLOYMENT) so it cannot silently drift back.
+tool checks the file matches the digest, it does not verify a cryptographic signature. This is a
+CLAIM-PHRASE DENYLIST (not a full contract extraction): it forbids the family of phrasings that
+assert the tool authenticates/proves the backup, across every operator-facing surface (module +
+CLI/refusal strings, tests, RUNBOOK, DEPLOYMENT), and it is itself mutation-tested so the denylist
+demonstrably has teeth against the obvious synonyms. The honest disclaimers — which use words like
+"authenticity" only to say the tool does NOT do this — are deliberately not matched.
 """
 
 from kyc_tool.config import REPO_ROOT
 
-# Phrasings that CLAIM the tool authenticates the backup — dishonest until pinned-key signature
-# verification exists. These are specific misleading claims, not the honest disclaimers that use the
-# word "authenticity" to say the tool does NOT do this (e.g. "the digest's authenticity is the
-# operator's responsibility"), which must remain allowed.
+# Positive CLAIMS that the tool authenticates/proves the backup — dishonest until pinned-key
+# signature verification exists. Each is an assertion; none appears in an honest disclaimer such as
+# "the digest's authenticity is the operator's responsibility" or "does not verify a cryptographic
+# signature" or "signed-manifest verification is a deliberate future option, not yet built".
 _FORBIDDEN = (
     "authenticated backup",
     "authentic file",
@@ -21,7 +22,13 @@ _FORBIDDEN = (
     "authentic invocation",
     "authenticity anchor",
     "signed-manifest value",
-)
+    "cryptographically authenticates",
+    "authenticates the backup",
+    "proves the backup",
+    "verifies the signature",
+    "signature proves",
+)  # NB: "verified signature" is deliberately NOT listed — it matches the honest negation "NOT a
+#     verified signature"; the positive claim is caught by "verifies the signature" instead.
 
 _ALL_SURFACES = (
     "src/kyc_tool/ops/restore_pr7b_core_callback.py",
@@ -39,14 +46,42 @@ _DIGEST_DESCRIBING_SURFACES = (
 )
 
 
+def _hits(text_lower: str) -> list[str]:
+    return [phrase for phrase in _FORBIDDEN if phrase in text_lower]
+
+
 def test_no_surface_claims_the_tool_authenticates_the_backup():
     for rel in _ALL_SURFACES:
-        text = (REPO_ROOT / rel).read_text().lower()
-        for phrase in _FORBIDDEN:
-            assert phrase not in text, (
-                f"{rel} contains the misleading claim {phrase!r}: --expect-manifest-digest is an "
-                f"INTEGRITY digest, not verified authenticity (re-audit F13)"
-            )
+        hits = _hits((REPO_ROOT / rel).read_text().lower())
+        assert not hits, (
+            f"{rel} contains dishonest authenticity-claim phrase(s) {hits}: "
+            f"--expect-manifest-digest is an INTEGRITY digest, not verified authenticity"
+        )
+
+
+def test_the_denylist_actually_catches_authenticity_claim_synonyms():
+    """The guard has teeth (re-audit F9): Codex's exact bypass example and its synonym family are all
+    caught, so a new dishonest phrasing cannot slip through as it did with a 6-exact-phrase list."""
+    dishonest = [
+        "the digest cryptographically authenticates the backup",
+        "this value authenticates the backup manifest",
+        "pass the authenticated backup digest",
+        "the tool verifies the signature over the file",
+        "the manifest proves the backup is genuine and the signature proves origin",
+        "an authentic file, verified against the signed-manifest value",
+    ]
+    for sentence in dishonest:
+        assert _hits(sentence.lower()), f"denylist failed to catch a dishonest claim: {sentence!r}"
+
+    # ...and it does NOT flag the honest disclaimers (which use the same word stems in the negative).
+    honest = [
+        "the digest's authenticity is the operator's responsibility",
+        "the tool does not verify a cryptographic signature",
+        "machine-verified authenticity is a deliberate future option, not built",
+        "an operator-supplied integrity digest",
+    ]
+    for sentence in honest:
+        assert not _hits(sentence.lower()), f"denylist wrongly flagged an honest disclaimer: {sentence!r}"
 
 
 def test_the_digest_is_framed_as_integrity_not_signature_verification():

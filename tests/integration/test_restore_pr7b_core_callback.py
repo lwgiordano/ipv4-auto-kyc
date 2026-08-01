@@ -366,6 +366,44 @@ def test_malformed_evidence_refuses_cleanly_in_both_modes(pg, tmp_path, corrupto
     engine.dispose()
 
 
+def test_restore_refuses_a_non_regular_evidence_input_without_blocking(pg, tmp_path):
+    """Re-audit `d3c0852..23e005e` F7: a FIFO/special input is refused BEFORE opening — an
+    open-for-read would block forever with no writer. The subprocess returns boundedly (well within
+    its timeout) with a governed refusal and no traceback."""
+    import os
+
+    url = _fresh_db(pg, "kyc_restore_fifo")
+    command.upgrade(_config(url), "012")
+    fifo = tmp_path / "evidence.fifo"
+    os.mkfifo(fifo)
+    proc = _cli(url, "--evidence", str(fifo), "--expect-original-id", "1",
+                "--expect-manifest-digest", "0" * 64)
+    assert proc.returncode == 1
+    assert "regular file" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_schema_refusal_never_echoes_an_unknown_evidence_key(pg, tmp_path):
+    """Re-audit `d3c0852..23e005e` F8: an extra (unknown) JSON key is attacker-controlled; the schema
+    refusal must COUNT it, never print it. Only declared field names may ever appear in a refusal."""
+    url = _fresh_db(pg, "kyc_restore_key_leak")
+    command.upgrade(_config(url), "012")
+    evidence, path = _seed_and_prune(url, tmp_path)
+    marker = "SECRET-IN-KEY-Ω-42"
+    path.write_text(json.dumps({**evidence, marker: "x"}))   # unknown key carries the marker
+    oid = str(evidence["original_outbox_id"])
+
+    for extra in ([], ["--apply"]):
+        proc = _restore(url, path, "--expect-original-id", oid, *extra)
+        assert proc.returncode == 1
+        assert marker not in (proc.stdout + proc.stderr), "schema refusal echoed the attacker's key"
+        assert "unexpected field" in proc.stderr.lower()     # reported as a count instead
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM outbox")).scalar_one() == 0
+    engine.dispose()
+
+
 def test_semantic_refusal_never_echoes_an_evidence_field_value(pg, tmp_path):
     """F10: a digest-matched file whose decision_id carries a unique marker must refuse (no matching
     automatic decision) WITHOUT printing that marker — or any candidate evidence value — anywhere.

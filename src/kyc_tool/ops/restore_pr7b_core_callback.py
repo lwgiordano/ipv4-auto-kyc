@@ -59,6 +59,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import stat
 import sys
 from pathlib import Path
 from typing import Literal
@@ -162,6 +163,11 @@ class _Evidence(BaseModel):
         return v
 
 
+# The declared evidence field names — the ONLY field identifiers safe to name in a refusal. An
+# attacker controls unknown keys and values (re-audit F8), so a schema refusal may echo these names
+# but never the caller's own keys/values.
+_EVIDENCE_FIELDS = frozenset(_Evidence.model_fields)
+
 # Columns the acceptance predicate binds: every evidence field mapping to a public.outbox column
 # (the model minus schema_version and payload_json, which the SQL renders separately).
 _ACCEPTANCE_COLUMNS = (
@@ -196,22 +202,45 @@ def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
     """Verify the MANDATORY out-of-band manifest digest over the whole file, then strictly parse and
     validate it. Every file/JSON/shape error becomes a payload-free `_Refused` — never a traceback,
     never an echo of the evidence values (re-audit `538e55e..42e1c7d` F2/F3)."""
+    # F7: reject a non-regular input (FIFO/device/socket) BEFORE opening — a FIFO would otherwise
+    # block on read with no writer — and stream at most _MAX_EVIDENCE_BYTES+1 in bounded chunks,
+    # hashing as we go, so an oversize (or growing) artifact is refused WITHOUT allocating the whole
+    # file first (`Path.read_bytes()` allocated all of it before any ceiling applied).
     try:
-        raw_bytes = path.read_bytes()
+        file_stat = path.stat()
     except OSError as exc:
         raise _Refused(f"evidence file could not be read ({type(exc).__name__})") from exc
-    if len(raw_bytes) > _MAX_EVIDENCE_BYTES:
+    if not stat.S_ISREG(file_stat.st_mode):
         raise _Refused(
-            f"evidence file exceeds the {_MAX_EVIDENCE_BYTES}-byte ceiling — an evidence file is a "
-            "single outbox row; a larger file is not a backup row and is refused before parsing"
+            "evidence path is not a regular file — a FIFO/device/socket can block or is not a backup"
         )
+    hasher = hashlib.sha256()
+    parts: list[bytes] = []
+    total = 0
+    try:
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _MAX_EVIDENCE_BYTES:
+                    raise _Refused(
+                        f"evidence file exceeds the {_MAX_EVIDENCE_BYTES}-byte ceiling — an evidence "
+                        "file is a single outbox row; a larger file is refused without reading on"
+                    )
+                hasher.update(chunk)
+                parts.append(chunk)
+    except OSError as exc:
+        raise _Refused(f"evidence file could not be read ({type(exc).__name__})") from exc
+    raw_bytes = b"".join(parts)
     # F2: the manifest anchor is checked FIRST and binds the ENTIRE file byte-for-byte. The operator
     # obtains sha256(evidence.json) from a trusted/signed backup manifest and passes it here; a file
     # that self-certifies cannot pass, and altering ANY field (body OR any lifecycle field) changes
     # this digest and refuses before any parsing or DB work. F4/F13: this is an INTEGRITY digest, not
     # a cryptographic signature — the tool does not verify the digest is genuine (that authenticity
     # is operator-attested), so the refusal names only integrity, never "authenticated".
-    actual = hashlib.sha256(raw_bytes).hexdigest()
+    actual = hasher.hexdigest()
     if actual != expect_manifest_digest.strip().lower():
         raise _Refused(
             "the evidence file's sha256 does not match --expect-manifest-digest (the operator-"
@@ -227,10 +256,21 @@ def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
     try:
         model = _Evidence.model_validate(raw)
     except ValidationError as exc:
-        # payload-free: report only field locations + error TYPES, never the offending input values
-        problems = sorted(
-            {f"{'.'.join(str(p) for p in e['loc'])}: {e['type']}" for e in exc.errors()}
-        )
+        # payload-free AND key-safe (re-audit `d3c0852..23e005e` F8): declared field names are static
+        # and safe to name, but an `extra_forbidden` loc is the ATTACKER'S key — echoing it leaks the
+        # supplied data and injects the operator log. Known fields report name + error TYPE (never the
+        # value); unknown keys are reported only as a count, their names withheld.
+        known: set[str] = set()
+        unexpected = 0
+        for e in exc.errors():
+            field = str(e["loc"][0]) if e["loc"] else ""
+            if field in _EVIDENCE_FIELDS:
+                known.add(f"{field}: {e['type']}")
+            else:
+                unexpected += 1
+        problems = sorted(known)
+        if unexpected:
+            problems.append(f"{unexpected} unexpected field(s) [names withheld]")
         raise _Refused(f"evidence file failed schema validation: {problems}") from exc
     data = model.model_dump()
     # F1: the body (a JSON object, model-checked) must name the SAME case/run as the evidence tuple.

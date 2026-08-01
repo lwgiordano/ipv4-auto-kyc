@@ -82,6 +82,34 @@ def test_reset_refuses_a_spoofed_unknown_revision_that_string_sorts_above_013_su
     engine.dispose()
 
 
+def test_reset_refuses_a_known_descendant_stamp_over_a_drifted_012_shape_subprocess(pg):
+    """Re-audit `d3c0852..23e005e` F6: a hand-stamped KNOWN descendant (023) over a schema-012
+    physical shape passes the lineage check but lacks the claim columns. The structural
+    require_columns preflight refuses it (naming the missing column) instead of tracebacking, and
+    writes nothing — a valid revision label is not a valid shape."""
+    url = _fresh_db(pg, "kyc_reset_stamp_drift")
+    command.upgrade(_config(url), "012")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE alembic_version SET version_num='023'"))  # a REAL descendant of 013
+        conn.execute(text("INSERT INTO cases (id) VALUES ('c1')"))
+        conn.execute(text("INSERT INTO outbox (kind, case_id, payload_json, status, next_attempt_at) "
+                          "VALUES ('poc_email','c1','{}'::jsonb,'pending', now() + interval '7 minutes')"))
+        before = [r.next_attempt_at for r in conn.execute(
+            text("SELECT next_attempt_at FROM outbox ORDER BY id"))]
+
+    proc = _run_reset(url)
+    assert proc.returncode != 0
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in proc.stderr
+    assert "claim_token" in proc.stderr          # names the missing column (physical-shape mismatch)
+    assert "Traceback" not in proc.stderr
+    with engine.connect() as conn:
+        after = [r.next_attempt_at for r in conn.execute(
+            text("SELECT next_attempt_at FROM outbox ORDER BY id"))]
+    assert after == before
+    engine.dispose()
+
+
 def test_reset_clears_only_claimed_preserves_next_attempt_subprocess(pg):
     url = _fresh_db(pg, "kyc_reset_013")
     command.upgrade(_config(url), "013")

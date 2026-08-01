@@ -81,6 +81,7 @@ def bind(
     min_revision: str | None = None,
     exact_revision: str | None = None,
     require_sequence_owner: bool = False,
+    require_columns: dict[str, tuple[str, ...]] | None = None,
 ) -> None:
     """Pin the transaction to the governed schema and bound its waits. Call FIRST.
 
@@ -182,6 +183,31 @@ def bind(
                 "ALTER SEQUENCE requires ownership, not merely ALL privileges. Run this command "
                 "as the sequence's owning role (the migration/ops credential; see RUNBOOK)."
             )
+
+    # Structural preflight (re-audit `d3c0852..23e005e` F6): a revision STAMP is not the physical
+    # schema. A DB stamped at a known descendant of the floor (e.g. `023` set by hand) over a drifted
+    # or wrong physical shape passes the lineage check yet would traceback mid-mutation on a missing
+    # column. Verify every column the command will actually touch EXISTS before any lock or write —
+    # lineage answers "which migration", this answers "does the shape match".
+    if require_columns:
+        for table, cols in require_columns.items():
+            present = {
+                r[0]
+                for r in session.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema='public' AND table_name=:t"
+                    ),
+                    {"t": table},
+                )
+            }
+            missing = [c for c in cols if c not in present]
+            if missing:
+                raise BindingRefused(
+                    f"{SCHEMA_REFUSED_SENTINEL}: public.{table} is missing required column(s) "
+                    f"{sorted(missing)} — the alembic_version stamp does not match the physical "
+                    "schema this command mutates (a valid revision label is not a valid shape)"
+                )
 
 
 def _sqlstate(exc: BaseException) -> str | None:
