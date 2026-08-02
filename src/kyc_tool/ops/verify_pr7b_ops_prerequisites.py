@@ -18,7 +18,7 @@ from sqlalchemy import text
 
 from kyc_tool.config import get_settings
 from kyc_tool.db.session import make_engine, make_session_factory
-from kyc_tool.ops import binding
+from kyc_tool.ops import binding, shape
 
 
 def check_prerequisites(
@@ -35,7 +35,7 @@ def check_prerequisites(
     with session_factory() as s:
         binding.bind(s, lock_timeout_seconds=lock_timeout_seconds,
                      statement_timeout_seconds=statement_timeout_seconds,
-                     exact_revision=expect_revision)
+                     exact_revision=expect_revision, shape_contract=shape.PR7B_CORE_PREWINDOW)
         role = s.execute(text("SELECT current_user")).scalar_one()
         owner = s.execute(text(
             "SELECT pg_catalog.pg_get_userbyid(c.relowner) FROM pg_catalog.pg_class c "

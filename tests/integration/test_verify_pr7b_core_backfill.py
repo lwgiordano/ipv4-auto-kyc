@@ -177,3 +177,23 @@ def test_cli_share_lock_blocks_until_legacy_retention_resolves(pg, mode):
         connA.close()
         engineA.dispose()
     engine.dispose()
+
+
+def test_cli_refuses_when_decisions_relation_is_dropped(pg):
+    """Re-audit `8aba2df..2cee937` R3-F7: dropping `decisions` at stamp 012 left the parity matrix to
+    traceback UndefinedTable. The shared PR7B_CORE_PREWINDOW shape contract requires the relation, so
+    the diagnostic now refuses (governed) before taking the SHARE lock or reading data."""
+    url = _fresh_db(pg, "kyc_backfill_no_decisions")
+    command.upgrade(_config(url), "012")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE decisions CASCADE"))
+    engine.dispose()
+
+    proc = _run_cli(url)
+    assert proc.returncode != 0
+    out = proc.stdout + proc.stderr
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in out
+    assert "decisions" in out
+    assert "Traceback" not in proc.stderr
+    assert "UndefinedTable" not in out

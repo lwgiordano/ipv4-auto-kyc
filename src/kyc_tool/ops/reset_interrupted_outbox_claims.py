@@ -23,7 +23,7 @@ from sqlalchemy import text
 
 from kyc_tool.config import get_settings
 from kyc_tool.db.session import make_engine, make_session_factory
-from kyc_tool.ops import binding
+from kyc_tool.ops import binding, shape
 
 
 def reset_claims(session_factory, *, lock_timeout_seconds: int = 60,
@@ -35,17 +35,25 @@ def reset_claims(session_factory, *, lock_timeout_seconds: int = 60,
         # nonzero, no traceback — re-audit `42e1c7d..b39b82a` F6) instead of the old bare
         # RuntimeError. The claim columns this command clears exist only from 013, and bind()
         # refuses anything below it before taking any lock or reading a row.
-        # min_revision gates the migration LINEAGE; require_columns gates the physical SHAPE (a
-        # hand-stamped 013+ over a drifted schema passes lineage but lacks these columns). This lists
-        # EVERY column the UPDATE/count below reference — including `status` (re-audit
-        # `d569a15..4938840` F9: the prior list omitted it, so a dropped `status` tracebacked
-        # UndefinedColumn instead of a governed refusal).
+        # min_revision gates the migration LINEAGE; the shape contract gates the physical SHAPE (a
+        # hand-stamped 013+ over a drifted schema passes lineage but not the shape). RESET_OUTBOX_CLAIMS
+        # asserts `status` exists (NOT NULL) and the three claim columns are NULLABLE — so a
+        # `claim_token` flipped to NOT NULL is refused here, not discovered as a NotNullViolation
+        # mid-clear under ACCESS EXCLUSIVE (re-audit `8aba2df..2cee937` R3-F7).
         binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
                      statement_timeout_seconds=statement_timeout_seconds, min_revision="013",
-                     require_columns={"outbox": ("status", "claim_token", "claim_lease_expires_at",
-                                                 "claimed_by")})
+                     shape_contract=shape.RESET_OUTBOX_CLAIMS)
         # Held through commit — the read-back below is diagnosis; THIS is the guarantee.
         session.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
+        # Re-check the SAME contract under the lock: concurrent DDL between bind() and the lock cannot
+        # slip a shape change past the mutation (re-audit R3-F7 — evaluate under the mutator's lock).
+        under_lock = shape.shape_mismatches(session, shape.RESET_OUTBOX_CLAIMS)
+        if under_lock:
+            session.rollback()
+            raise binding.BindingRefused(
+                f"{binding.SCHEMA_REFUSED_SENTINEL}: outbox shape changed under the maintenance "
+                f"lock: {'; '.join(under_lock)}"
+            )
         count = session.execute(
             text(
                 "UPDATE public.outbox SET claim_token=NULL, claim_lease_expires_at=NULL, "

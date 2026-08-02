@@ -147,3 +147,24 @@ def test_reset_clears_only_claimed_preserves_next_attempt_subprocess(pg):
 # test_reset_fence_blocks_a_claimant_arriving_in_the_readback_window (barrier AFTER the zero
 # read; the late claim lands strictly after commit), alongside the shadow-schema and
 # lock-timeout proofs for every ops command.
+
+
+def test_reset_refuses_a_claim_token_not_null_drift_without_locking(pg):
+    """Re-audit `8aba2df..2cee937` R3-F7: a hand-stamped 013 whose `claim_token` was flipped to
+    NOT NULL passed the old presence-only preflight, then crashed NotNullViolation while clearing the
+    column under ACCESS EXCLUSIVE — the failure discovered INSIDE the outage. The reset shape contract
+    requires claim_token NULLABLE, so it is now a governed refusal before any lock or mutation."""
+    url = _fresh_db(pg, "kyc_reset_nn_drift")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:  # empty table ⇒ SET NOT NULL succeeds, simulating the drift
+        conn.execute(text("ALTER TABLE outbox ALTER COLUMN claim_token SET NOT NULL"))
+    engine.dispose()
+
+    proc = _run_reset(url)
+    assert proc.returncode != 0
+    out = proc.stdout + proc.stderr
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in out
+    assert "claim_token" in out and "NOT NULL" in out
+    assert "Traceback" not in proc.stderr        # governed refusal, not a crash under the lock
+    assert "NotNullViolation" not in out

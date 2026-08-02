@@ -21,7 +21,7 @@ from sqlalchemy import text
 from kyc_tool.config import get_settings
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.migration_contracts.v013_backfill import BLOCKED_SENTINEL, MISSING_CALLBACK, run_parity
-from kyc_tool.ops import binding
+from kyc_tool.ops import binding, shape
 
 
 def verify_backfill(session_factory, *, lock_timeout_seconds: int = 60,
@@ -37,7 +37,8 @@ def verify_backfill(session_factory, *, lock_timeout_seconds: int = 60,
         # On a 013+ DB it would otherwise lock, run, and print "schema-012 parity matrix clean" —
         # certifying a phase it never checked (re-audit `8377440` F12).
         binding.bind(s, lock_timeout_seconds=lock_timeout_seconds,
-                     statement_timeout_seconds=statement_timeout_seconds, exact_revision="012")
+                     statement_timeout_seconds=statement_timeout_seconds, exact_revision="012",
+                     shape_contract=shape.PR7B_CORE_PREWINDOW)
         s.execute(text("LOCK TABLE public.outbox IN SHARE MODE"))  # BEFORE any data SELECT
         violations = run_parity(s)
         s.rollback()  # read-only: never write, never hold the lock past the check

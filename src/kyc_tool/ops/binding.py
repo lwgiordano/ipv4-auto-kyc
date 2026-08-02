@@ -21,8 +21,13 @@ command's transaction:
   nonzero, nothing changed.
 """
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+
+if TYPE_CHECKING:
+    from kyc_tool.ops.shape import ShapeContract
 
 LOCK_TIMEOUT_SENTINEL = "OPS_COMMAND_LOCK_TIMEOUT"
 STATEMENT_TIMEOUT_SENTINEL = "OPS_COMMAND_STATEMENT_TIMEOUT"
@@ -102,6 +107,7 @@ def bind(
     exact_revision: str | None = None,
     require_sequence_owner: bool = False,
     require_columns: dict[str, tuple[str, ...]] | None = None,
+    shape_contract: "ShapeContract | None" = None,
 ) -> None:
     """Pin the transaction to the governed schema and bound its waits. Call FIRST.
 
@@ -244,6 +250,21 @@ def bind(
                     f"{sorted(missing)} — the alembic_version stamp does not match the physical "
                     "schema this command mutates (a valid revision label is not a valid shape)"
                 )
+
+    # Typed shape contract (re-audit `8aba2df..2cee937` R3-F7): the shared per-operation object that
+    # the prerequisite, diagnostic and mutator all check identically — relation existence + each
+    # consumed column's nullability/type, so a diagnostic cannot certify a schema (dropped `decisions`,
+    # `claim_token` flipped NOT NULL) that the mutator then tracebacks or half-applies on.
+    if shape_contract is not None:
+        from kyc_tool.ops.shape import shape_mismatches
+
+        problems = shape_mismatches(session, shape_contract)
+        if problems:
+            raise BindingRefused(
+                f"{SCHEMA_REFUSED_SENTINEL}: physical schema does not satisfy the "
+                f"{shape_contract.name!r} shape contract: {'; '.join(problems)} — the "
+                "alembic_version stamp is not this shape (refusing before any lock or mutation)"
+            )
 
 
 def _sqlstate(exc: BaseException) -> str | None:
