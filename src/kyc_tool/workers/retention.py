@@ -26,7 +26,12 @@ token) is already destroyed at delivery by publisher._record_delivered.
 import structlog
 from sqlalchemy import text
 
-from kyc_tool.config import get_settings
+from kyc_tool.config import (
+    get_settings,
+    numeric_domain_of,
+    numeric_value_violation,
+    validate_for_production,
+)
 from kyc_tool.db.session import make_engine, make_session_factory, uow
 from kyc_tool.outbox.fence import take_shared_fence
 
@@ -34,6 +39,15 @@ log = structlog.get_logger(__name__)
 
 
 def prune(session_factory, retention_days: int) -> dict[str, int]:
+    # Fail closed BEFORE opening a transaction (re-audit `5b0f0b8..b75a320` R4-F2): every statement
+    # below prunes with a `now() - make_interval(days => N)` cutoff, so a NONPOSITIVE, non-integer or
+    # boolean N makes the cutoff the FUTURE and deletes/redacts CURRENT immutable audit/evidence rows
+    # (audit_log, poc_email, callback bodies, attempts, tokens). The Pydantic field and production
+    # validation bound the setting, but prune() is called directly (tests, main()), so this destructive
+    # sink re-checks its own domain via the shared registry checker.
+    violation = numeric_value_violation(numeric_domain_of("retention_days"), retention_days)
+    if violation:
+        raise ValueError(f"retention refuses to prune — {violation}")
     counts: dict[str, int] = {}
     with uow(session_factory) as session:
         # FIRST statement of the transaction, before any DML (re-audit `cbb783b` F4): retention
@@ -115,6 +129,11 @@ def prune(session_factory, retention_days: int) -> dict[str, int]:
 
 def main() -> None:
     settings = get_settings()
+    # Process boundary (re-audit R4-F2): a production retention run validates its whole configuration
+    # BEFORE it opens an engine, exactly like every other worker — so an unsafe production config
+    # (including a nonpositive/aliased retention) refuses to start rather than deleting evidence.
+    if settings.environment == "production":
+        validate_for_production(settings)
     session_factory = make_session_factory(make_engine(settings.database_url))
     counts = prune(session_factory, settings.retention_days)
     log.info("retention_pruned", retention_days=settings.retention_days, **counts)

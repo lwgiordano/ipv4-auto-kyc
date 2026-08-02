@@ -89,6 +89,7 @@ class NumericSetting:
     ceiling: float
     sink: str
     process: str
+    integer: bool = True  # most settings are whole units; the sub-second timers set this False
     require_finite: bool = True
     production_exact: float | None = None  # production must equal exactly this
     production_min: float | None = None  # otherwise production floor (inclusive)
@@ -101,7 +102,7 @@ NUMERIC_SETTINGS: tuple[NumericSetting, ...] = (
                    "signed-request replay window (v1/v2 verify)", "api",
                    production_exact=MAX_HMAC_SKEW_SECONDS),
     NumericSetting("worker_poll_seconds", "seconds", 0.01, 300,
-                   "idle queue-worker sleep", "queue worker", production_min=0.01),
+                   "idle queue-worker sleep", "queue worker", integer=False, production_min=0.01),
     NumericSetting("job_lease_seconds", "seconds", 1, _TS_SAFE_SECONDS,
                    "jobs.claim lease expiry (now()+interval)", "queue worker/reaper",
                    production_min=1),
@@ -112,9 +113,9 @@ NUMERIC_SETTINGS: tuple[NumericSetting, ...] = (
     NumericSetting("outbox_lease_seconds", "seconds", 1, 3600,
                    "outbox claim lease expiry", "outbox publisher", production_min=1),
     NumericSetting("outbox_http_timeout_seconds", "seconds", 0.001, 3600,
-                   "per-attempt HTTPX inactivity phase", "outbox publisher"),
+                   "per-attempt HTTPX inactivity phase", "outbox publisher", integer=False),
     NumericSetting("outbox_lease_margin_seconds", "seconds", 0, 3600,
-                   "DB-accounting margin in the lease rule", "outbox publisher"),
+                   "DB-accounting margin in the lease rule", "outbox publisher", integer=False),
     NumericSetting("outbox_max_attempts", "attempts", 1, PG_INT4_MAX,
                    "outbox.attempts (int4)", "outbox publisher", production_min=1),
     NumericSetting("outbox_backoff_base_seconds", "seconds", 0, _TS_SAFE_SECONDS,
@@ -148,6 +149,8 @@ def numeric_value_violation(ns: NumericSetting, value) -> str | None:
         return f"{ns.name} must be numeric ({ns.unit}), not a bool"
     if not isinstance(value, (int, float)):
         return f"{ns.name} must be numeric ({ns.unit}), got {type(value).__name__}"
+    if ns.integer and not isinstance(value, int):
+        return f"{ns.name} must be a whole number of {ns.unit}, got {value!r}"
     if ns.require_finite and isinstance(value, float) and not math.isfinite(value):
         return f"{ns.name} must be finite ({ns.unit})"
     if not (ns.floor <= value <= ns.ceiling):
