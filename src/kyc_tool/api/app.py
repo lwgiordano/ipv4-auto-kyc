@@ -11,10 +11,11 @@ from kyc_tool.api.routes_metrics import router as metrics_router
 from kyc_tool.api.routes_read import router as read_router
 from kyc_tool.config import (
     REPO_ROOT,
+    ProcessRole,
     Settings,
     get_settings,
     production_config_violations,
-    validate_for_production,
+    validate_process_role,
 )
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.policy.loader import PolicyBundle, load_policy
@@ -37,9 +38,9 @@ def create_app(
     policy: PolicyBundle | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
-    # Production kill switch: refuse to boot on unsafe/stub configuration.
-    if settings.environment == "production":
-        validate_for_production(settings)
+    # Production kill switch via the shared process-role authority (re-audit R5-F1): refuse to boot on
+    # unsafe/stub configuration before any DB/store access.
+    validate_process_role(settings, ProcessRole.API)
     if session_factory is None:
         session_factory = make_session_factory(make_engine(settings.database_url))
     policy = policy or load_policy(settings.policy_dir)

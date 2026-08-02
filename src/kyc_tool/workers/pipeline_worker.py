@@ -17,9 +17,10 @@ from kyc_tool.adapters.website_manual_review import WebsiteManualReviewAdapter
 from kyc_tool.config import (
     STUB_ADAPTERS_PROFILE,
     STUB_OCR_ENGINE,
+    ProcessRole,
     Settings,
     get_settings,
-    validate_for_production,
+    validate_process_role,
 )
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.orchestration.broker_gate import BrokerGate
@@ -78,8 +79,7 @@ def build_adapters(settings: Settings, store: ObjectStore) -> dict:
 
 def build_worker() -> Worker:
     settings = get_settings()
-    if settings.environment == "production":
-        validate_for_production(settings)  # fail-closed on stub/unsafe config
+    validate_process_role(settings, ProcessRole.PIPELINE_WORKER)  # fail-closed before any DB access
     session_factory = make_session_factory(make_engine(settings.database_url))
     policy = load_policy(settings.policy_dir)
     h = seed_and_verify(session_factory, settings.policy_dir)

@@ -2,7 +2,7 @@
 
 import sys
 
-from kyc_tool.config import get_settings, validate_for_production
+from kyc_tool.config import ProcessRole, get_settings, validate_process_role
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.outbox.emails import make_email_sender
 from kyc_tool.outbox.publisher import OutboxPublisher, OutboxSaturated
@@ -15,8 +15,7 @@ SATURATION_EXIT_CODE = 3
 
 def build_publisher() -> OutboxPublisher:
     settings = get_settings()
-    if settings.environment == "production":
-        validate_for_production(settings)  # fail-closed on stub/unsafe config
+    validate_process_role(settings, ProcessRole.OUTBOX_WORKER)  # fail-closed before any DB access
     session_factory = make_session_factory(make_engine(settings.database_url))
     return OutboxPublisher(
         session_factory,

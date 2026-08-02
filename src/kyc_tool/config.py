@@ -8,6 +8,7 @@ any unsafe or stub configuration (see api/app.py, workers/*).
 import math
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
@@ -495,6 +496,39 @@ def validate_for_production(settings: Settings) -> None:
     violations = production_config_violations(settings)
     if violations:
         raise ProductionConfigError("refusing to start in production — fix all of: " + "; ".join(violations))
+
+
+class ProcessRole(StrEnum):
+    """Every executable entry point's role. dev_worker is DEV-ONLY (it always wires fixture adapters);
+    the rest are production roles."""
+
+    API = "api"
+    PIPELINE_WORKER = "pipeline_worker"
+    OUTBOX_WORKER = "outbox_worker"
+    RETENTION = "retention"
+    DEV_WORKER = "dev_worker"
+
+
+_DEV_ONLY_ROLES = frozenset({ProcessRole.DEV_WORKER})
+
+
+def validate_process_role(settings: Settings, role: ProcessRole) -> None:
+    """The single process-role authority (re-audit `03dbfab..bc325e7` R5-F1). Called by EVERY
+    executable entry point BEFORE it creates a database engine, network client, or object store.
+
+    In a production environment a DEV-ONLY role (fixture adapters — synthetic checks/decisions/
+    callbacks, and it would consume real `run_transition` jobs) is refused CATEGORICALLY, independent
+    of whether the rest of the configuration is otherwise valid; a production role runs the full
+    production kill switch. Outside production this is a no-op — dev/staging may run any role."""
+    role = ProcessRole(role)
+    if settings.environment != "production":
+        return
+    if role in _DEV_ONLY_ROLES:
+        raise ProductionConfigError(
+            f"process role {role.value!r} is DEV-ONLY (fixture adapters) and must never run in a "
+            "production environment — refusing before any database/network/store access"
+        )
+    validate_for_production(settings)
 
 
 def get_settings() -> Settings:

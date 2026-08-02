@@ -27,10 +27,11 @@ import structlog
 from sqlalchemy import text
 
 from kyc_tool.config import (
+    ProcessRole,
     get_settings,
     numeric_domain_of,
     numeric_value_violation,
-    validate_for_production,
+    validate_process_role,
 )
 from kyc_tool.db.session import make_engine, make_session_factory, uow
 from kyc_tool.outbox.fence import take_shared_fence
@@ -129,11 +130,10 @@ def prune(session_factory, retention_days: int) -> dict[str, int]:
 
 def main() -> None:
     settings = get_settings()
-    # Process boundary (re-audit R4-F2): a production retention run validates its whole configuration
-    # BEFORE it opens an engine, exactly like every other worker — so an unsafe production config
+    # Process boundary (re-audit R4-F2, via the R5-F1 shared authority): a production retention run
+    # validates its whole configuration BEFORE it opens an engine — so an unsafe production config
     # (including a nonpositive/aliased retention) refuses to start rather than deleting evidence.
-    if settings.environment == "production":
-        validate_for_production(settings)
+    validate_process_role(settings, ProcessRole.RETENTION)
     session_factory = make_session_factory(make_engine(settings.database_url))
     counts = prune(session_factory, settings.retention_days)
     log.info("retention_pruned", retention_days=settings.retention_days, **counts)

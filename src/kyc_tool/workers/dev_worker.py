@@ -24,7 +24,7 @@ from kyc_tool.adapters.ocr import JsonScanOcrEngine
 from kyc_tool.adapters.rir_poc import FixturePocDirectory, RirPocAdapter
 from kyc_tool.adapters.rir_rdap.adapter import FixtureRirStrategy, RirRdapAdapter
 from kyc_tool.adapters.website_manual_review import WebsiteManualReviewAdapter
-from kyc_tool.config import get_settings
+from kyc_tool.config import ProcessRole, get_settings, validate_process_role
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.pipeline import Pipeline
@@ -103,6 +103,10 @@ def build_dev_adapters(store) -> dict:
 
 def main() -> None:
     settings = get_settings()
+    # DEV-ONLY: fixture adapters synthesize checks/decisions/callbacks and this loop would consume
+    # real run_transition jobs. Refuse categorically in production BEFORE touching the database
+    # (re-audit `03dbfab..bc325e7` R5-F1) — a hardened production config does not make it safe.
+    validate_process_role(settings, ProcessRole.DEV_WORKER)
     session_factory = make_session_factory(make_engine(settings.database_url))
     policy = load_policy(settings.policy_dir)
     h = seed_and_verify(session_factory, settings.policy_dir)
