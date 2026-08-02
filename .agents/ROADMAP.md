@@ -393,6 +393,14 @@ exit with a HUNG provider. **Plus a static gate:** enabling a non-stub `email_pr
 its proof land in the same change.
 
 ### PR 10 — Production ops hardening (item 13)
+**Split (2026-08-02, `.agents/superpowers/plans/2026-08-02-pr10a-ops-hardening-core.md`): 10a
+shipped the non-migration core** — `adapters/retry.py` wired into the httpx adapters, bounded+declared
+24h metrics windows, `/v1/metrics.prom` + `docs/ALERTS.md`, RUNBOOK raw-requeue-SQL repair (+
+governance test), base-image digest pin + `requirements.lock` constraints, durable `core.hooksPath`.
+**10b keeps** the reserved migration 028 (broker snapshots + the audit-promised
+`outbox.attempts>=0` / `jobs.attempts>=0` / `jobs.max_attempts>=1` CHECKs), the recalc broker gate +
+ADR-007, `evidence.refresh_requested`, the contracted rollout-observation endpoint, and tree-wide
+format adoption.
 Migration 028: broker **full-list immutable snapshots** `(revision, sha256,
 json_bytes, author, timestamp)` — NOT per-entity versioning (6 entities; snapshots
 reproduce matches AND non-matches, simpler); run records matched entity + snapshot

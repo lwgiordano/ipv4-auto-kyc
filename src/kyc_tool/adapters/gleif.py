@@ -3,6 +3,7 @@
 import httpx
 
 from kyc_tool.adapters.base import AdapterOutput, hash_inputs
+from kyc_tool.adapters.retry import get_with_retry
 from kyc_tool.domain.models import AdapterStatus
 
 BASE_URL = "https://api.gleif.org"
@@ -22,7 +23,8 @@ class GleifAdapter:
         if not name:
             return AdapterOutput(self.adapter_id, AdapterStatus.NOT_APPLICABLE)
 
-        response = self.client.get(
+        response = get_with_retry(
+            self.client,
             "/api/v1/lei-records",
             params={"filter[entity.legalName]": name, "page[size]": 10},
         )

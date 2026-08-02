@@ -12,6 +12,7 @@ import os
 import httpx
 
 from kyc_tool.adapters.base import AdapterOutput, hash_inputs
+from kyc_tool.adapters.retry import get_with_retry
 from kyc_tool.domain.models import AdapterStatus
 
 BASE_URL = "https://api.company-information.service.gov.uk"
@@ -38,7 +39,9 @@ class CompaniesHouseAdapter:
         if not name or (case_snapshot.get("jurisdiction") or "").upper() not in ("GB", "UK", ""):
             return AdapterOutput(self.adapter_id, AdapterStatus.NOT_APPLICABLE)
 
-        response = self.client.get("/search/companies", params={"q": name, "items_per_page": 10})
+        response = get_with_retry(
+            self.client, "/search/companies", params={"q": name, "items_per_page": 10}
+        )
         response.raise_for_status()
         raw = response.content
         items = response.json().get("items", [])

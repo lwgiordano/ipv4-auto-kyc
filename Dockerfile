@@ -1,6 +1,8 @@
 # One image for every process. The API is the default command; migrations and
 # the workers run the same image with the command overridden (see bottom).
-FROM python:3.11-slim-bookworm
+# Base pinned by digest (PR 10a supply-chain): the tag stays for readability, the digest is the
+# authority — a re-tagged upstream image cannot silently change the build. Refresh deliberately.
+FROM python:3.11-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba
 
 # psycopg[binary] bundles libpq, so the slim base needs no apt packages.
 # KYC_POLICY_DIR points the loader at the spec package copied in below; it is
@@ -20,9 +22,12 @@ RUN useradd --system --create-home --uid 10001 app \
 
 # Editable install keeps the code only at /app/src, so REPO_ROOT resolves to
 # /app and alembic's prepend_sys_path=src works. [s3] adds boto3 for prod S3.
-COPY pyproject.toml alembic.ini ./
+COPY pyproject.toml alembic.ini requirements.lock ./
 COPY src/ ./src/
-RUN pip install --no-cache-dir -e '.[s3]'
+# requirements.lock is a CONSTRAINTS file (PR 10a): pyproject declares WHAT installs, the lock pins
+# the exact versions, so two builds of the same commit resolve identical dependency trees.
+# Regenerate with: .venv/bin/pip freeze --exclude-editable > requirements.lock
+RUN pip install --no-cache-dir -e '.[s3]' -c requirements.lock
 
 COPY alembic/ ./alembic/
 COPY KYC_Tool_Build_Package/ ./KYC_Tool_Build_Package/

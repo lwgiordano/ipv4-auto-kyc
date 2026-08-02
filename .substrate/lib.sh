@@ -59,6 +59,11 @@ sub_setup() {
     fi
   done
   [ "$rc" -eq 0 ] || die "setup did not complete — fix the errors above and re-run ./manage.sh setup"
+  # Durable hook wiring (ROADMAP PR 10a): point git at the tracked hooks directory so a fresh clone
+  # gets the pre-commit lint gate from setup alone — no copied files that silently go stale.
+  if [ -d .git ] && [ -d "$SUBSTRATE_DIR/hooks" ]; then
+    git config core.hooksPath "$SUBSTRATE_DIR/hooks" && ok "wired core.hooksPath -> $SUBSTRATE_DIR/hooks"
+  fi
   mkdir -p "$SUBSTRATE_DIR/state"
   {
     echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"

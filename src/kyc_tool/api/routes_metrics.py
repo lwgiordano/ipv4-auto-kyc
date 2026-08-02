@@ -33,6 +33,39 @@ def metrics(request: Request) -> dict:
     return collect_metrics(request)
 
 
+@router.get("/v1/metrics.prom")
+def metrics_prometheus(request: Request):
+    """The SAME gauges as /v1/metrics in Prometheus text exposition format (PR 10a), hand-rendered so
+    no new dependency ships. Same read-auth gate, checked before any DB access. Scalar families only —
+    the nested diagnostic blocks stay JSON-only; alert rules over these series live in docs/ALERTS.md."""
+    from fastapi.responses import PlainTextResponse
+
+    require_read_access(request.app.state.settings, request)
+    payload = collect_metrics(request)
+    lines: list[str] = []
+
+    def gauge(name: str, value, labels: dict | None = None) -> None:
+        label_s = (
+            "{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}" if labels else ""
+        )
+        lines.append(f"kyc_{name}{label_s} {float(value)}")
+
+    for status, count in sorted(payload.get("jobs_by_status", {}).items()):
+        gauge("jobs", count, {"status": status})
+    for status, count in sorted(payload.get("outbox_by_status", {}).items()):
+        gauge("outbox", count, {"status": status})
+    latency = payload.get("event_to_decision_seconds", {})
+    gauge("event_to_decision_seconds_avg", latency.get("avg", 0))
+    gauge("event_to_decision_seconds_p95", latency.get("p95", 0))
+    for row in payload.get("adapter_latency", []):
+        labels = {"adapter": row["adapter_id"]}
+        gauge("adapter_calls", row["calls"], labels)
+        gauge("adapter_error_rate", row["error_rate"], labels)
+        gauge("adapter_latency_p95_ms", row["p95_ms"], labels)
+    gauge("hmac_v1_accepted", payload.get("hmac", {}).get("v1_accepted", 0))
+    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
+
+
 def collect_metrics(request: Request) -> dict:
     """Build the metrics payload. INTERNAL — performs NO auth of its own; the HTTP route above gates
     read auth before this runs, and the `/ui` overview reuses it in-process.
@@ -60,7 +93,9 @@ def collect_metrics(request: Request) -> dict:
                            avg((status = 'upstream_error')::int) AS error_rate,
                            avg(latency_ms) AS avg_ms,
                            percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_ms
-                    FROM adapter_results GROUP BY adapter_id ORDER BY adapter_id
+                    FROM adapter_results
+                    WHERE fetched_at > now() - interval '24 hours'
+                    GROUP BY adapter_id ORDER BY adapter_id
                     """
                 )
             )
@@ -74,6 +109,7 @@ def collect_metrics(request: Request) -> dict:
                 FROM decisions d
                 JOIN runs r ON r.id = d.run_id
                 JOIN events e ON e.id = r.triggering_event_id
+                WHERE d.decided_at > now() - interval '24 hours'
                 """
             )
         ).one()
@@ -142,6 +178,11 @@ def collect_metrics(request: Request) -> dict:
             "adapter_latency": adapter_latency,
             # (Shadow-mode automation_readiness removed here — re-audit d569a15..4938840 F2/F3/F4;
             #  rebuilt with a versioned contract in the rollout observation unit. See collect_metrics.)
+            # Latency aggregates cover a FIXED recent window (PR 10a): unbounded history made the
+            # percentiles progressively staler and the scans progressively slower as the immutable
+            # tables grow (adapter_results/decisions are never pruned). The window is declared here
+            # so a consumer can never mistake a 24h p95 for an all-time one.
+            "latency_window": "24h",
             "event_to_decision_seconds": {
                 "avg": float(decision_latency.avg_s or 0),
                 "p95": float(decision_latency.p95_s or 0),

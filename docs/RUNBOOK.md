@@ -220,17 +220,12 @@ exercises the same binding production enforces rather than bypassing it.
 
 ### Dead-lettered job (`jobs.status = 'dead'`)
 The run is FAILED with the error recorded; the case is untouched (no partial
-writes — transitions are transactional). After fixing the cause, **prefer the
-console requeue** (`POST /ui/api/requeue/job/{id}`, admin-authenticated) — it
-resets both the job and its FAILED run. The equivalent by hand:
-```sql
-UPDATE jobs SET status='queued', attempts=0, run_after=now(), locked_by=NULL,
-       lease_expires_at=NULL, last_error=NULL, updated_at=now() WHERE id = :id;
-UPDATE runs SET state='QUEUED', error=NULL, finished_at=NULL
- WHERE id = :run_id AND state='FAILED';
-```
-(The run reset matters: a requeued job whose run is still FAILED completes
-immediately without doing anything.) `recalculate.requested` also produces a
+writes — transitions are transactional). After fixing the cause, requeue via the
+**console endpoint** (`POST /ui/api/requeue/job/{id}`, admin-authenticated) — it
+resets both the job and its FAILED run atomically. Hand-written SQL is NOT a
+sanctioned path (PR 10a): the run reset is load-bearing (a requeued job whose run
+is still FAILED completes immediately without doing anything), and a hand
+UPDATE skips the endpoint's audit record. `recalculate.requested` also produces a
 fresh decision from current live checks, but it does **not** re-run the broker
 screen — after a blocklist update, re-send the original evidence event instead.
 
@@ -246,19 +241,19 @@ succeed.
 
 ### Dead outbox row (callback undeliverable)
 The run sits in PUBLISH_DECISION (visible, correct). Confirm the platform
-endpoint + HMAC secret, then requeue via the console
-(`POST /ui/api/requeue/outbox/{id}`) or:
-```sql
-UPDATE outbox SET status='pending', attempts=0, next_attempt_at=now() WHERE id = :id;
-```
+endpoint + HMAC secret, then requeue via the console endpoint ONLY
+(`POST /ui/api/requeue/outbox/{id}`, admin-authenticated). A hand
+`UPDATE outbox ...` is NOT a sanctioned path (PR 10a): post-7b-core it would
+leave the claim tuple untouched and bypass the 018+ transition-authority
+validation, stranding or corrupting the row's delivery accounting.
 Redelivery of a decision callback is safe — the platform dedupes on
 (case_id, run_id). **A row whose body has been REDACTED is the exception, for
 either kind** (migration 020+): a POC email's payload is scrubbed the moment it
 dies, because the raw token is never retained, and a decision callback's is
 scrubbed by retention once past `KYC_RETENTION_DAYS`. Either way there is
-nothing deliverable left, so the console endpoint returns 409 — and the raw SQL
-above is refused by the database with *"a redacted outbox row can never be MADE
-sendable again"*. Recovery is a fresh `poc.submitted` (which cancels old tokens
+nothing deliverable left, so the console endpoint returns 409 — and any hand
+`UPDATE ... SET status='pending'` is refused by the database with *"a redacted
+outbox row can never be MADE sendable again"*. Recovery is a fresh `poc.submitted` (which cancels old tokens
 and sends a new email) or, for a callback, `recalculate.requested`, which
 produces a NEW decision under a new `run_id` — it does not restore the old
 body. A pending row that somehow already carries a redacted body is unsendable
