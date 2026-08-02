@@ -37,8 +37,8 @@ writer stopped and attested — it takes `ACCESS EXCLUSIVE` on `public.outbox`):
   `GREATEST(max(id), original_id) + 1` land in ONE transaction, with fail-closed read-backs of
   both the acceptance predicate (exactly one row) and the sequence tuple before commit.
 
-    python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
-        --expect-original-id <id> --expect-manifest-digest <sha256> [--apply]
+    `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json>
+    --expect-original-id <id> --expect-manifest-digest <sha256> [--apply]`
 
 After a green apply, rerun `verify_pr7b_core_backfill`; it is the gate that reopens cutover.
 
@@ -430,12 +430,39 @@ def restore_callback(
         return {"original_outbox_id": oid, "sequence_next": next_id, "applied": apply}
 
 
+def _positive_int(raw: str) -> int:
+    value = int(raw)  # argparse wraps ValueError into a usage error
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value}")
+    return value
+
+
+def _sha256_hex(raw: str) -> str:
+    if len(raw) != 64 or any(c not in "0123456789abcdefABCDEF" for c in raw):
+        raise argparse.ArgumentTypeError("must be a 64-character hex sha256")
+    return raw.lower()
+
+
+class _Singleton(argparse.Action):
+    """Reject a singleton option given more than once (argparse's default is silent last-wins, so a
+    duplicate/conflicting --expect-original-id could smuggle a second value — re-audit
+    `03dbfab..bc325e7` R5-F10)."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if getattr(namespace, self.dest + "_seen", False):
+            parser.error(f"{option_string} given more than once")
+        setattr(namespace, self.dest + "_seen", True)
+        setattr(namespace, self.dest, True if self.const is True else values)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The restore CLI parser. The --expect-manifest-digest trust semantics are RENDERED from
-    INTEGRITY_CONTRACT (re-audit `8aba2df..2cee937` R3-F8), so the contract is the single source of
-    truth its help, docs and tests all derive from — prose cannot silently re-scope the feature."""
+    INTEGRITY_CONTRACT (re-audit `8aba2df..2cee937` R3-F8). allow_abbrev=False + singleton actions +
+    typed values close the ambiguous-grammar surface (re-audit `03dbfab..bc325e7` R5-F10): no option
+    truncation (--expect-manifest-dig), no duplicate/conflicting option, positive-id and 64-hex types."""
     parser = argparse.ArgumentParser(
         prog="restore_pr7b_core_callback",
+        allow_abbrev=False,
         description=(
             "Restore one pruned decision_callback outbox row from backup evidence. "
             f"--expect-manifest-digest is an INTEGRITY check only "
@@ -445,14 +472,14 @@ def build_parser() -> argparse.ArgumentParser:
             "operator-supplied digest, NOT that the digest is genuine."
         ),
     )
-    parser.add_argument("--evidence", required=True, type=Path,
+    parser.add_argument("--evidence", required=True, type=Path, action=_Singleton,
                         help="backup-evidence JSON (every schema-012 outbox column + digest)")
-    parser.add_argument("--expect-original-id", required=True, type=int,
+    parser.add_argument("--expect-original-id", required=True, type=_positive_int, action=_Singleton,
                         help="must equal the evidence file's original_outbox_id (double entry)")
-    parser.add_argument("--expect-manifest-digest", required=True,
+    parser.add_argument("--expect-manifest-digest", required=True, type=_sha256_hex, action=_Singleton,
                         help="sha256 of the evidence file, taken from your signed/detached backup "
                              "manifest (out-of-band; REQUIRED — the file cannot self-certify)")
-    parser.add_argument("--apply", action="store_true",
+    parser.add_argument("--apply", nargs=0, const=True, default=False, action=_Singleton,
                         help="perform the restore; without it, validate the exact path and roll back")
     return parser
 
