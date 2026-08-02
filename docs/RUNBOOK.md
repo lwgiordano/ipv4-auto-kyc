@@ -150,6 +150,19 @@ lists **all** violations at once:
 | `KYC_OUTBOX_LEASE_MARGIN_SECONDS` | DB commit/processing room added to the deadline in the lease rule above |
 | `KYC_OUTBOX_MAX_ATTEMPTS` | delivery-attempt ceiling (1 ≤ n ≤ int4 max). **NOT hot-swappable — ANY change, raise OR lower, is a DRAINED publisher cutover, never a rolling restart** (each publisher enforces the ceiling it started with; overlapping old/new publishers either send once past a lowered value or dead-letter — and irreversibly redact a POC token — before a raised value takes effect). Cutover, in order: disable autoscaling/rolling restart → stop ALL outbox publishers of every role (`outbox_worker` AND `dev_worker`) → attest zero running → attest every new task definition carries the exact new value → start. Canonical record: `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER` (DEPLOYMENT §8) |
 
+`KYC_OUTBOX_MAX_ATTEMPTS` is a both-direction drained publisher cutover — the
+canonical record (rendered from `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER`,
+identical to DEPLOYMENT §8 and `.env.example`):
+
+<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:start -->
+KYC_OUTBOX_MAX_ATTEMPTS: both-direction DRAINED publisher cutover (NOT a rolling restart)
+1. disable autoscaling and rolling restart
+2. stop ALL publishers of roles: outbox_worker, dev_worker
+3. attest zero publishers running of roles: outbox_worker, dev_worker
+4. attest every new task definition carries KYC_OUTBOX_MAX_ATTEMPTS
+5. start publishers of roles: outbox_worker, dev_worker
+<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:end -->
+
 The real OCR/email/adapter providers are not implemented yet (they land with the
 executable-contract work), so a production worker cannot start until they exist —
 that is intentional fail-closed behaviour, not a bug.

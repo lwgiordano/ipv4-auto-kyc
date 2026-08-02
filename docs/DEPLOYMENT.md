@@ -232,11 +232,20 @@ both the job and its failed run. Three limits to know:
   `outbox_worker` and the embedded `dev_worker`; (3) attest zero publishers are
   running (the same attested-stop the reset CLI requires); (4) attest every new
   task definition carries the exact new value; (5) start. This procedure is the
-  canonical record `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER`, which the
-  guard `tests/unit/test_outbox_ceiling_contract.py` validates and which RUNBOOK
-  and `.env.example` mechanically match. (A fleet-wide DB-persisted ceiling epoch
-  enforced before claim is the fail-closed alternative if runtime config drift must
-  be impossible — deferred; the drained cutover is the contract today.)
+  canonical record `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER`, rendered
+  below and validated by `tests/unit/test_outbox_ceiling_contract.py`; RUNBOOK and
+  `.env.example` embed the SAME rendered block. (A fleet-wide DB-persisted ceiling
+  epoch enforced before claim is the fail-closed alternative if runtime config
+  drift must be impossible — deferred; the drained cutover is the contract today.)
+
+<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:start -->
+KYC_OUTBOX_MAX_ATTEMPTS: both-direction DRAINED publisher cutover (NOT a rolling restart)
+1. disable autoscaling and rolling restart
+2. stop ALL publishers of roles: outbox_worker, dev_worker
+3. attest zero publishers running of roles: outbox_worker, dev_worker
+4. attest every new task definition carries KYC_OUTBOX_MAX_ATTEMPTS
+5. start publishers of roles: outbox_worker, dev_worker
+<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:end -->
 
 ## 9. PR 5b cutover — brief full maintenance window
 

@@ -141,39 +141,8 @@ def test_cli_help_is_rendered_from_the_integrity_contract():
     assert f"authenticity={INTEGRITY_CONTRACT['authenticity']}" in help_text
 
 
-def test_documented_restore_argv_parses_and_requires_the_integrity_digest():
-    """Re-audit R3-F8: the documented argv must parse through the REAL parser, and the MANDATORY
-    --expect-manifest-digest cannot be omitted (the plan's example omitted it and exited argparse 2)."""
-    import pytest as _pytest
-
-    from kyc_tool.ops.restore_pr7b_core_callback import build_parser
-
-    parser = build_parser()
-    ns = parser.parse_args(
-        ["--evidence", "f.json", "--expect-original-id", "7", "--expect-manifest-digest", "0" * 64]
-    )
-    assert ns.expect_original_id == 7 and ns.expect_manifest_digest == "0" * 64
-    with _pytest.raises(SystemExit):  # omitting the mandatory integrity digest exits argparse 2
-        parser.parse_args(["--evidence", "f.json", "--expect-original-id", "7"])
-
-
-def test_every_documented_restore_command_includes_the_mandatory_digest_flag():
-    """Re-audit R3-F8: no marked surface (module help, RUNBOOK, DEPLOYMENT, plan) may show a restore
-    invocation missing --expect-manifest-digest — copying it would exit argparse 2."""
-    from kyc_tool.config import REPO_ROOT
-
-    surfaces = [
-        REPO_ROOT / "src/kyc_tool/ops/restore_pr7b_core_callback.py",
-        REPO_ROOT / "docs/DEPLOYMENT.md",
-        REPO_ROOT / "docs/RUNBOOK.md",
-        REPO_ROOT / ".agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md",
-    ]
-    needle = "python -m kyc_tool.ops.restore_pr7b_core_callback"
-    for path in surfaces:
-        body = path.read_text()
-        i = body.find(needle)
-        while i != -1:
-            assert "--expect-manifest-digest" in body[i : i + 400], (
-                f"{path.name}: a documented restore command omits --expect-manifest-digest"
-            )
-            i = body.find(needle, i + 1)
+# The documented-command parse proofs moved to test_restore_cli_contract.py, which EXTRACTS the
+# actual commands from every surface and parses them through the real build_parser() — replacing the
+# earlier hand-coded argv specimen and the 400-char substring guard (re-audit `5b0f0b8..b75a320`
+# R4-F6: the substring guard stayed green when a real command was changed to
+# --expect-manifest-digest-bogus).
