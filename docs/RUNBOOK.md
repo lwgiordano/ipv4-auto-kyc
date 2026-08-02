@@ -148,6 +148,7 @@ lists **all** violations at once:
 | `KYC_OUTBOX_LEASE_SECONDS` | must EXCEED `4 × KYC_OUTBOX_HTTP_TIMEOUT_SECONDS + KYC_OUTBOX_LEASE_MARGIN_SECONDS` — the publisher enforces 4 × timeout as a hard per-attempt deadline, and a lease that expires mid-attempt makes every delivery unwitnessable |
 | `KYC_OUTBOX_HTTP_TIMEOUT_SECONDS` | per HTTPX **inactivity** phase (not a total clock); 4 × this is the enforced whole-attempt deadline. Raising it raises the required lease FOUR-fold — move the two together or production refuses to boot |
 | `KYC_OUTBOX_LEASE_MARGIN_SECONDS` | DB commit/processing room added to the deadline in the lease rule above |
+| `KYC_OUTBOX_MAX_ATTEMPTS` | delivery-attempt ceiling (1 ≤ n ≤ int4 max). **NOT hot-swappable — ANY change, raise OR lower, is a DRAINED publisher cutover, never a rolling restart** (each publisher enforces the ceiling it started with; overlapping old/new publishers either send once past a lowered value or dead-letter — and irreversibly redact a POC token — before a raised value takes effect). Cutover, in order: disable autoscaling/rolling restart → stop ALL outbox publishers of every role (`outbox_worker` AND `dev_worker`) → attest zero running → attest every new task definition carries the exact new value → start. Canonical record: `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER` (DEPLOYMENT §8) |
 
 The real OCR/email/adapter providers are not implemented yet (they land with the
 executable-contract work), so a production worker cannot start until they exist —

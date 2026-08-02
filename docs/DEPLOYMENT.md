@@ -60,7 +60,10 @@ zero-witness never turns green (by design), so v1 can never be sunset.
 2. Generate the shared HMAC secret into AWS Secrets Manager; set the same
    value in the platform's config for that environment.
 3. Set env vars (`KYC_` prefix; full table in `docs/RUNBOOK.md`; sample in
-   `.env.example`). Minimum: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL`,
+   `.env.example`). **Not every setting is hot-swappable by a rolling restart:**
+   `KYC_OUTBOX_MAX_ATTEMPTS` is a both-direction DRAINED cutover (§8) — for those,
+   follow the release/config-specific non-hot procedure, not the default rolling
+   deploy. Minimum: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL`,
    `KYC_OBJECT_STORE=s3`, `KYC_S3_BUCKET`, the two per-environment values from
    §2, and the full **HMAC credential set** — production boot refuses without
    all of it (PR 5a):
@@ -224,12 +227,16 @@ both the job and its failed run. Three limits to know:
     POC email the terminal transition redacts the token, so those lost retries are
     irreversible.
 
-  So for EITHER direction: disable autoscaling, stop ALL outbox publishers, confirm
-  zero old processes are running and all replicas are on the new value (the same
-  attested-stop the reset CLI requires), then start. (A fleet-wide DB-persisted
-  ceiling epoch enforced before claim is the fail-closed alternative if runtime
-  config drift must be impossible — deferred; the drained cutover is the contract
-  today.)
+  So for EITHER direction, in this order: (1) disable autoscaling and rolling
+  restart; (2) stop ALL outbox publishers of EVERY role — both the standalone
+  `outbox_worker` and the embedded `dev_worker`; (3) attest zero publishers are
+  running (the same attested-stop the reset CLI requires); (4) attest every new
+  task definition carries the exact new value; (5) start. This procedure is the
+  canonical record `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER`, which the
+  guard `tests/unit/test_outbox_ceiling_contract.py` validates and which RUNBOOK
+  and `.env.example` mechanically match. (A fleet-wide DB-persisted ceiling epoch
+  enforced before claim is the fail-closed alternative if runtime config drift must
+  be impossible — deferred; the drained cutover is the contract today.)
 
 ## 9. PR 5b cutover — brief full maintenance window
 
