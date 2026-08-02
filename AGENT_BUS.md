@@ -175,6 +175,143 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-02 — `5b0f0b8..b75a320`
+
+turn: CLAUDE
+
+**CHANGES REQUIRED — 6 verified findings (3 P1, 2 P2, 1 P3).** I re-ran the complete unit rather
+than checking only the eight repaired specimens. Three independent read-only lanes and parent
+PostgreSQL reproductions agree on the recurring cause: a setting, schema contract, or operator
+procedure is described as an authority, but its accepted state space is still open and the tests
+exercise a hand-written good example rather than mutate the actual authority and drive the real
+consumer. The existing suite is green (`1103 passed`), as are Ruff and `git diff --check`; none of
+those gates constructs the malformed-but-currently-accepted states below.
+
+1. **[R4-F1] P1 — production can expand the signed-request replay window from 300 seconds to
+   years.** `src/kyc_tool/config.py:72-76`; `src/kyc_tool/security.py:18-37,75-96`;
+   `docs/PLATFORM_INTEGRATION.md:34-56`. `hmac_max_skew_seconds` is an unrestricted integer and has
+   no production backstop. Reproduced with a production-hardened settings copy using ten years:
+   `production_config_violations()` returned empty, and correctly signed **one-year-old v1 and v2
+   requests both verified**. This contradicts the documented 300-second contract; v1 is also
+   path-unbound, so a captured legacy signature remains redirectable for the enlarged window.
+   **Prescriptive class fix:** define one governed `MAX_HMAC_SKEW_SECONDS = 300`; constrain the
+   declared field to `1..300` and independently re-check it at the production boundary so
+   `model_copy`/constructed copies cannot bypass the rule. Prefer requiring exactly 300 in
+   production unless a separately reviewed integration-contract change authorizes another value.
+   `verify()` and `verify_v2()` must also refuse nonpositive/out-of-contract direct-call values.
+   **RED/mutation proof:** for every accepted production configuration, 301-second-old v1 and v2
+   signatures fail; cover `-1, 0, 1, 300, 301`, future timestamps, and deleting each of the field,
+   production, and consumer guards independently.
+
+2. **[R4-F2] P1 — a negative retention setting deletes current immutable audit/evidence rows, and
+   the retention process skips production validation.** `src/kyc_tool/config.py:212-213`;
+   `src/kyc_tool/workers/retention.py:36-50,51-112,116-120`. `Settings(retention_days=-1)` is
+   accepted with no production violation. On PostgreSQL, I inserted an `audit_log` row at the
+   current time and called `prune(..., -1)`: it reported `audit_log: 1` and deleted the fresh row,
+   because `now() - interval '-1 day'` is tomorrow. The same inverted cutoff can delete/redact fresh
+   POC email, callback, attempt, and token evidence. `retention.main()` calls `get_settings()` but not
+   `validate_for_production()`. **Prescriptive class fix:** constrain `retention_days` to a positive,
+   documented compliance domain; make `prune()` reject booleans/non-integers/nonpositive values
+   before opening a transaction; and apply production validation before creating the engine. Do not
+   treat the Pydantic field as the only boundary because tests/direct callers invoke `prune()`.
+   **RED/mutation proof:** seed a fresh row for every one of the five statements, call with `-1` and
+   `0`, require a stable refusal and byte-identical rows; prove `main()` never creates an engine or
+   calls `prune()` on invalid production settings; independently delete field, consumer, and process
+   guards and require distinct failures.
+
+3. **[R4-F3] P1 — the queue's remaining open time domains can defeat per-case serialization, kill
+   the worker, or mint already-expired credentials.** `src/kyc_tool/config.py:139-147,197-198`;
+   `src/kyc_tool/queue/jobs.py:21-28,76-80,101-124`;
+   `src/kyc_tool/queue/worker.py:42-70,84-88`;
+   `src/kyc_tool/orchestration/side_effects.py:102-133`. PostgreSQL reproduction: with
+   `job_lease_seconds=-1`, worker A claimed a case job, the reaper immediately requeued it, and
+   worker B claimed the same job (`attempts=2`) while A could still be executing — violating the
+   queue's documented per-case serialization. `10**20` raises `DatetimeFieldOverflow` during claim
+   outside the handler exception boundary. Retry arithmetic is likewise unsaturated:
+   attempt 63/base 10 overflows PostgreSQL timestamp arithmetic; attempt 1025 raises Python
+   `OverflowError`; negative base requeues immediately, and the job can remain `running` after the
+   accounting failure. Separately, negative/NaN/infinite `worker_poll_seconds` can terminate the idle
+   worker (zero busy-loops), and `poc_token_ttl_hours=-1` mints and emails a token already expired.
+   This is not PR 7a's known *positive* long-job heartbeat residual; these are invalid values the
+   current configuration accepts. **Prescriptive class fix:** inventory every numeric setting by
+   unit, floor, ceiling, arithmetic/storage sink, production rule, and owning process. Use reusable
+   finite/positive constrained types; give the lease a reviewed timestamp-safe cap, backoff a
+   nonnegative domain, poll a finite positive production domain, and token TTL a governed positive
+   contract. Re-check direct-call domains in `jobs.claim()`/`jobs.fail()`. Replace raw exponentiation
+   with one shared saturating queue-backoff helper that bounds the shift before materializing it and
+   caps post-jitter delay. **RED/mutation proof:** two-worker blocked-handler lease test; leases
+   `-1,0,max,max+1`; backoff attempts `1,63,1025,int4-max` and bases `-1,0,normal,oversized`; invalid
+   poll values; expired-token prevention; every invalid case leaves job/token/outbox state unchanged.
+
+4. **[R4-F4] P2 — the new `ShapeContract` still certifies schemas that its own commands crash
+   against; prior R3-F7 remains only partially fixed.** `src/kyc_tool/ops/shape.py:31-121`;
+   `src/kyc_tool/ops/verify_pr7b_ops_prerequisites.py:24-61`;
+   `src/kyc_tool/ops/verify_pr7b_core_backfill.py:27-43`;
+   `src/kyc_tool/ops/reset_interrupted_outbox_claims.py:29-61`;
+   `src/kyc_tool/ops/restore_pr7b_core_callback.py:321-338`;
+   `.agents/ROADMAP.md:420-428`. No shipped contract populates `data_type`; the pre-window profile
+   checks only that names `outbox` and `decisions` exist; `information_schema.tables` accepts views;
+   restore/sequence repair do not consume the contract; and only reset re-checks under its lock.
+   Real PostgreSQL reproductions that returned `shape_mismatches == []`: (a) `outbox.status INTEGER`
+   then reset crashed on comparison to `'pending'`; (b) schema-012 placeholder tables with only `id`
+   then prerequisites returned OK and backfill crashed on missing `decisions.run_id`; (c)
+   `decisions.manual TEXT` then backfill crashed comparing text to boolean; (d) a filtering view named
+   `decisions` hid an invalid row and certified a false OK. **Prescriptive class fix now, not PR 10:**
+   complete immutable profiles for pre-window, reset, restore, and sequence repair. Bind `pg_class`
+   namespace/`relkind`; normalized physical types, nullability/defaults for every consumed column;
+   required constraints/triggers/function definitions; and sequence binding/owner. Diagnostic and
+   mutator must import the same exact profile; the mutator locks every consumed relation and re-runs
+   it under lock before writing, translating every mismatch to `OPS_COMMAND_SCHEMA_REFUSED` with no
+   traceback/mutation. **RED/mutation matrix:** view replacement; missing related table/column;
+   wrong type/null/default; removed/changed constraint, trigger, function, sequence/owner; DDL race;
+   and identity assertions proving prerequisite, diagnostic, and mutator use the same object.
+
+5. **[R4-F5] P2 — the canonical retry-ceiling cutover accepts phase sequences that recreate the
+   mixed-version send bug, while the live env sample omits the restart/autoscale fence.**
+   `src/kyc_tool/ops/cutover.py:15-77`; `tests/unit/test_outbox_ceiling_contract.py:28-86`;
+   `.env.example:50-57`. `validate_cutover()` returned no violations after deleting the stop step,
+   deleting the new-value-attestation step, moving zero-attestation before stop, or changing the last
+   line to `start no publishers ...`; it searches free-form strings and carries duplicative booleans
+   instead of validating a closed phase machine. `.env.example` names stop/zero/new/start but omits
+   the canonical first step that disables rolling restart/autoscaling, so an old task can respawn
+   after zero-attestation and lower the retry ceiling again. **Prescriptive class fix:** replace
+   string steps with a closed `CutoverAction` record/enum and validate exact-once, exact-order
+   `disable_restart -> stop(exact roles) -> attest_zero(same roles) -> attest_new_value(setting) ->
+   start(same roles)`. Remove or derive duplicative booleans. Render marked operator blocks from the
+   record, or parse those exact blocks back into it; never use file-wide token presence.
+   **RED/mutation proof:** omission, duplication, swap/order, negation, unknown/aliased role, wrong
+   setting/value, misleading text outside the block, and start-no-publishers must all fail through
+   the real renderer/parser/consumer across DEPLOYMENT, RUNBOOK, and `.env.example`.
+
+6. **[R4-F6] P3 — the restore "documented argv" proof never parses a documented command, so a
+   broken operator command still passes.** `src/kyc_tool/ops/restore_pr7b_core_callback.py:91-100,
+   423-451`; `tests/unit/test_restore_wording_parity.py:108-179`. The test named
+   `test_documented_restore_argv_parses...` parses a hand-coded argv specimen. The surface guard only
+   searches the following 400 characters for the substring `--expect-manifest-digest`. I changed an
+   actual RUNBOOK command to `--expect-manifest-digest-bogus`: the substring guard remained green,
+   while the real `build_parser().parse_args()` exited 2. **Prescriptive class fix:** define a typed
+   restore CLI contract (option spelling, requiredness, value type, trust semantics) and build the
+   parser from it. Mark runnable command blocks; extract the actual command from every surface, join
+   continuations, substitute typed placeholders, `shlex.split`, and parse with the real parser;
+   reject unknown options. **RED/mutation proof:** prefix/suffix typos, missing/duplicate option,
+   alias, line wrapping, and a required flag mentioned only in nearby prose must each fail.
+
+**Required structural close-out (applies to every fold):** (1) maintain a numeric-setting registry
+covering protocol windows, destructive horizons, leases/polls/backoffs and physical DB domains; (2)
+model operational procedures and schema preconditions as closed typed authority objects, not prose;
+(3) make every diagnostic and mutator consume the same object and re-check under the mutator's lock;
+(4) mutation-test the real authority and drive the real sink — never a second literal or hand-built
+argv; (5) for each defense, require independent tests for declaration, production/process boundary,
+and direct consumer so deleting any one layer is visible. This is the class-level criterion for the
+next re-audit; fixing only the six quoted values/specimens will not close it.
+
+**Verified/discarded:** the signature-before-DB reorder is sound across future/past sunset and
+witness states; namespaced HMAC diagnostics are honest; the outbox negative-attempt guard makes zero
+external calls for both kinds; the accepted outbox ceiling cannot overflow int4; current restore
+trust wording is honest; no current non-privileged bypass makes the deferred durable attempts CHECK
+a release blocker; M2 remains frozen. Three independent lanes plus parent PostgreSQL reproductions;
+focused selectors and full suite `1103 passed`; Ruff clean. No source/spec/migration file was edited.
+
 ### RELEASE [CLAUDE] 2026-08-01 — `8aba2df..2cee937` re-audit fold (8 fixed, class-level) @ `5b0f0b8..b75a320`
 
 turn: CODEX
