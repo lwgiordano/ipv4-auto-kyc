@@ -37,6 +37,9 @@ CUTOVER_SEQUENCE: tuple[CutoverAction, ...] = (
     CutoverAction.START,
 )
 _ROLE_BEARING = {CutoverAction.STOP, CutoverAction.ATTEST_ZERO, CutoverAction.START}
+# The CLOSED set of publisher roles (re-audit `03dbfab..bc325e7` R5-F9): a third "mystery_worker"
+# consistently copied into every role-bearing phase must NOT validate.
+_ALLOWED_ROLES = frozenset({"outbox_worker", "dev_worker"})
 _MARKER = "cutover"  # surfaces delimit the rendered block with "<marker>:<setting>:start|end"
 
 
@@ -82,8 +85,12 @@ def validate_cutover(record: DrainedCutover) -> list[str]:
     problems: list[str] = []
     if not record.both_directions:
         problems.append("both_directions must be true — a raise is not rolling-safe either")
-    if "outbox_worker" not in record.publisher_roles or "dev_worker" not in record.publisher_roles:
-        problems.append("publisher_roles must name every publisher role (outbox_worker, dev_worker)")
+    # EXACT closed role set (not "contains both"): an extra/aliased role is refused.
+    if set(record.publisher_roles) != _ALLOWED_ROLES:
+        problems.append(
+            f"publisher_roles {list(record.publisher_roles)} is not the exact closed set "
+            f"{sorted(_ALLOWED_ROLES)}"
+        )
     if len(set(record.publisher_roles)) != len(record.publisher_roles):
         problems.append("publisher_roles has a duplicated/aliased role")
 
@@ -95,15 +102,49 @@ def validate_cutover(record: DrainedCutover) -> list[str]:
         )
         return problems  # ordering is the spine; role/setting checks below assume it holds
 
+    # Discriminated phase fields (re-audit R5-F9): a role-bearing phase names EXACTLY the roles and
+    # carries no setting; attest_new_value names EXACTLY the setting and carries no roles; the
+    # disable_restart phase carries neither. Inapplicable fields are forbidden, not ignored.
     for phase in record.phases:
-        if phase.action in _ROLE_BEARING and tuple(phase.roles) != record.publisher_roles:
+        role_bearing = phase.action in _ROLE_BEARING
+        is_new_value = phase.action is CutoverAction.ATTEST_NEW_VALUE
+        if role_bearing and tuple(phase.roles) != record.publisher_roles:
             problems.append(
                 f"{phase.action.value} names roles {list(phase.roles)}, not the exact "
                 f"publisher roles {list(record.publisher_roles)}"
             )
-        if phase.action is CutoverAction.ATTEST_NEW_VALUE and phase.setting != record.setting:
+        if not role_bearing and phase.roles:
+            problems.append(f"{phase.action.value} must not carry roles ({list(phase.roles)})")
+        if is_new_value and phase.setting != record.setting:
             problems.append(
                 f"attest_new_value names {phase.setting!r}, not the cutover setting {record.setting!r}"
+            )
+        if not is_new_value and phase.setting is not None:
+            problems.append(f"{phase.action.value} must not carry a setting ({phase.setting!r})")
+    return problems
+
+
+def attest_new_value(record: DrainedCutover, *, target: int, observed: dict[str, object]) -> list[str]:
+    """Executable attestation for the attest_new_value phase (re-audit `03dbfab..bc325e7` R5-F2). The
+    record names only the SETTING; a fleet whose every task carries the variable but the OLD value, or
+    whose two roles disagree, would otherwise be attested and started. `observed` maps each publisher
+    role to the value its new task definition carries (None ⇒ variable absent/unobserved). Returns
+    violations (empty ⇒ every role's new task carries exactly `target`, a valid outbox_max_attempts)."""
+    from kyc_tool.config import numeric_domain_of, numeric_value_violation
+
+    problems: list[str] = []
+    bad_target = numeric_value_violation(numeric_domain_of("outbox_max_attempts"), target)
+    if bad_target:
+        problems.append(f"reviewed target is invalid: {bad_target}")
+    for role in sorted(_ALLOWED_ROLES):
+        if role not in observed:
+            problems.append(f"no task definition observed for role {role!r} (missing task)")
+        elif observed[role] is None:
+            problems.append(f"role {role!r} task does not carry {record.setting} (unobserved value)")
+        elif observed[role] != target:
+            problems.append(
+                f"role {role!r} carries {record.setting}={observed[role]!r}, not the reviewed "
+                f"target {target!r} (stale value or per-role disagreement)"
             )
     return problems
 
@@ -142,10 +183,18 @@ def extract_block(surface_text: str, record: DrainedCutover) -> list[str]:
     render_cutover. Raises if the markers are absent or malformed."""
     start, end = marker(record, "start"), marker(record, "end")
     lines = surface_text.splitlines()
-    si = next((i for i, line in enumerate(lines) if start in line), None)
-    ei = next((i for i, line in enumerate(lines) if end in line), None)
-    if si is None or ei is None or ei <= si:
-        raise ValueError(f"surface is missing a well-formed {start!r}..{end!r} block")
+    starts = [i for i, line in enumerate(lines) if start in line]
+    ends = [i for i, line in enumerate(lines) if end in line]
+    # EXACTLY one block (re-audit `03dbfab..bc325e7` R5-F9): a safe first block followed by a second,
+    # unsafe marked procedure must NOT be silently accepted by matching only the first markers.
+    if len(starts) != 1 or len(ends) != 1:
+        raise ValueError(
+            f"surface must contain exactly one {start!r}..{end!r} block "
+            f"(found {len(starts)} start / {len(ends)} end markers)"
+        )
+    si, ei = starts[0], ends[0]
+    if ei <= si:
+        raise ValueError(f"surface has a malformed {start!r}..{end!r} block (end before start)")
     out: list[str] = []
     for raw in lines[si + 1 : ei]:
         line = raw.strip()

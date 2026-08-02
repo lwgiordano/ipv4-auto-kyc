@@ -11,12 +11,16 @@ render, so the docs are derived, not matched by file-wide token presence.
 
 import dataclasses
 
+import pytest
+
 from kyc_tool.config import REPO_ROOT
 from kyc_tool.ops.cutover import OUTBOX_MAX_ATTEMPTS_CUTOVER as CUT
 from kyc_tool.ops.cutover import (
     CutoverAction,
     CutoverPhase,
+    attest_new_value,
     extract_block,
+    marker,
     render_cutover,
     validate_cutover,
 )
@@ -94,3 +98,61 @@ def test_no_surface_reasserts_the_false_raising_is_safe_claim():
         body = (REPO_ROOT / rel).read_text().lower()
         hits = [c for c in _FALSE_CLAIMS if c in body]
         assert not hits, f"{rel} reasserts a refuted claim {hits}"
+
+
+def test_attest_new_value_requires_every_role_to_carry_the_exact_target():
+    """R5-F2: the record names only the setting; the executable attestation must reject a fleet whose
+    tasks carry the variable but the old value, or whose roles disagree, or whose target is invalid."""
+    assert attest_new_value(CUT, target=12, observed={"outbox_worker": 12, "dev_worker": 12}) == []
+    for bad in (
+        {"outbox_worker": 12, "dev_worker": 8},      # per-role disagreement
+        {"outbox_worker": 8, "dev_worker": 8},       # stale value (both old)
+        {"outbox_worker": 12, "dev_worker": None},   # presence without value
+        {"outbox_worker": 12},                       # missing role/task
+    ):
+        assert attest_new_value(CUT, target=12, observed=bad), bad
+    assert attest_new_value(CUT, target=-1, observed={"outbox_worker": -1, "dev_worker": -1})  # bad target
+
+
+def test_closed_grammar_rejects_extra_role_and_stray_phase_fields():
+    """R5-F9: an extra role copied consistently, a STOP carrying a setting, or an ATTEST_NEW_VALUE
+    carrying roles must all fail — inapplicable fields are forbidden, not ignored."""
+    extra = dataclasses.replace(
+        CUT,
+        publisher_roles=("outbox_worker", "dev_worker", "mystery_worker"),
+        phases=tuple(
+            dataclasses.replace(p, roles=("outbox_worker", "dev_worker", "mystery_worker"))
+            if p.action in {CutoverAction.STOP, CutoverAction.ATTEST_ZERO, CutoverAction.START}
+            else p
+            for p in CUT.phases
+        ),
+    )
+    assert validate_cutover(extra)
+    stop_with_setting = dataclasses.replace(
+        CUT,
+        phases=tuple(
+            dataclasses.replace(p, setting="KYC_OUTBOX_MAX_ATTEMPTS")
+            if p.action is CutoverAction.STOP else p
+            for p in CUT.phases
+        ),
+    )
+    assert validate_cutover(stop_with_setting)
+    new_value_with_roles = dataclasses.replace(
+        CUT,
+        phases=tuple(
+            dataclasses.replace(p, roles=("outbox_worker", "dev_worker"))
+            if p.action is CutoverAction.ATTEST_NEW_VALUE else p
+            for p in CUT.phases
+        ),
+    )
+    assert validate_cutover(new_value_with_roles)
+
+
+def test_extract_block_rejects_a_duplicate_second_marked_procedure():
+    """R5-F9: a safe first block followed by a second, unsafe marked procedure must not pass by
+    matching only the first markers."""
+    s, e = marker(CUT, "start"), marker(CUT, "end")
+    body = "\n".join(render_cutover(CUT))
+    doc = f"{s}\n{body}\n{e}\n\n{s}\nstart no publishers\n{e}\n"
+    with pytest.raises(ValueError):
+        extract_block(doc, CUT)
