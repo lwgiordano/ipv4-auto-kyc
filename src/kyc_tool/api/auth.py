@@ -12,6 +12,7 @@ v2 headers:  X-KYC-Timestamp, X-KYC-Key-Id, X-KYC-Signature-V2 = HMAC(secret,
 """
 
 import hmac
+import os
 from collections import Counter
 from datetime import UTC, datetime
 
@@ -27,6 +28,9 @@ from kyc_tool.config import Settings, parse_sunset
 # synchronous DB writes on the rejection path. Nothing reads these yet; a future metrics endpoint may
 # expose them. The distinct FAIL-CLOSED v1-acceptance witness (`_record_v1`) stays durable.
 _DIAGNOSTIC_COUNTS: Counter = Counter()
+# Process identity + start epoch so a reader can never mistake this replica's counters for a fleet
+# total (re-audit `8aba2df..2cee937` R3-F2). datetime.now at import time is the process start.
+_PROCESS_STARTED_AT = datetime.now(UTC)
 
 
 def _sunset_passed(iso: str, now: datetime) -> bool:
@@ -85,9 +89,25 @@ def _bump(key: str) -> None:
 
 
 def diagnostic_counts() -> dict[str, int]:
-    """Snapshot of this process's diagnostic auth counters (v2_accepted | rejected). Process-local,
-    not a fleet total — /v1/metrics labels them accordingly."""
+    """Raw process-local diagnostic auth counters (v2_accepted | rejected)."""
     return dict(_DIAGNOSTIC_COUNTS)
+
+
+def diagnostics_snapshot() -> dict:
+    """Namespaced, self-describing auth-diagnostics block (re-audit `8aba2df..2cee937` R3-F2). The
+    counters moved from durable fleet totals to process-local under the SAME key names, so exposing
+    them bare let a legacy consumer read a per-replica value as the fleet total. This block carries
+    an explicit scope, this process's identity + start epoch, and zero-filled keys, so it can only be
+    read as what it is."""
+    return {
+        "scope": "process_local",
+        "process_id": os.getpid(),
+        "process_started_at": _PROCESS_STARTED_AT.isoformat(),
+        "counts": {
+            "v2_accepted": int(_DIAGNOSTIC_COUNTS.get("v2_accepted", 0)),  # zero-filled
+            "rejected": int(_DIAGNOSTIC_COUNTS.get("rejected", 0)),
+        },
+    }
 
 
 def _record_v1(session_factory) -> None:

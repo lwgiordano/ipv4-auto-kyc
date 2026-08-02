@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request
 from sqlalchemy import text
 
 from kyc_tool.api import hmac_witness
-from kyc_tool.api.auth import diagnostic_counts, require_read_access
+from kyc_tool.api.auth import diagnostics_snapshot, require_read_access
 
 router = APIRouter()
 
@@ -148,16 +148,15 @@ def collect_metrics(request: Request) -> dict:
             },
             # HMAC witness (PR 5a §6). v1_accepted is the DB-backed FAIL-CLOSED witness that gates the
             # inbound sunset — it aggregates across replicas. The v2_accepted/rejected diagnostics are
-            # PROCESS-LOCAL (re-audit `d569a15..4938840` F1: the rejected path must never do a DB
-            # write), so they report THIS replica's counts and carry a scope marker so a reader never
-            # mistakes them for a fleet total.
+            # PROCESS-LOCAL (re-audit `d569a15..4938840` F1), exposed under a self-describing
+            # `auth_diagnostics` block — NOT bare top-level keys — so a legacy consumer cannot read
+            # this replica's counters as a fleet total (re-audit `8aba2df..2cee937` R3-F2).
             "hmac": {
                 "v1_accepted": session.execute(
                     text("SELECT accepted_count FROM hmac_v1_observation WHERE id = 1")
                 ).scalar()
                 or 0,
-                "diagnostics_scope": "process_local",
-                **{key: int(count) for key, count in diagnostic_counts().items()},
+                "auth_diagnostics": diagnostics_snapshot(),
                 "observation": hmac_witness.observation_state(session),
             },
         }

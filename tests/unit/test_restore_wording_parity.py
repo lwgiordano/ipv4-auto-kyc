@@ -35,6 +35,11 @@ _FORBIDDEN = (
     "guarantees the evidence came from",
     "signed digest guarantees",
     "guarantees the backup",
+    # re-audit `8aba2df..2cee937` R3-F8 — three more that evaded the list:
+    "certifies the backup provenance",
+    "certifies the provenance",
+    "attests that the evidence came from",
+    "proof of provenance",
 )  # NB: "verified signature" is deliberately NOT listed — it matches the honest negation "NOT a
 #     verified signature"; the positive claim is caught by "verifies the signature" instead.
 
@@ -81,6 +86,10 @@ def test_the_denylist_actually_catches_authenticity_claim_synonyms():
         "the digest establishes the backup origin",
         "a trusted proof that the backup is genuine",
         "a signed digest guarantees the evidence came from the authoritative source",
+        # three more that evaded it (re-audit R3-F8)
+        "the checksum certifies the backup provenance",
+        "sha256 attests that the evidence came from the authoritative archive",
+        "the checksum is proof of provenance",
     ]
     for sentence in dishonest:
         assert _hits(sentence.lower()), f"denylist failed to catch a dishonest claim: {sentence!r}"
@@ -118,3 +127,53 @@ def test_the_digest_is_framed_as_integrity_not_signature_verification():
     assert "does not" in module and "signature" in module, (
         "the restore module must explicitly state it does NOT verify a signature"
     )
+
+
+def test_cli_help_is_rendered_from_the_integrity_contract():
+    """Re-audit `8aba2df..2cee937` R3-F8: the CLI help DERIVES its trust semantics from
+    INTEGRITY_CONTRACT, so the contract is a real source of truth consumed by help — not a dict only a
+    test compares to a second literal."""
+    from kyc_tool.ops.restore_pr7b_core_callback import INTEGRITY_CONTRACT, build_parser
+
+    help_text = build_parser().format_help()
+    assert f"integrity_only={INTEGRITY_CONTRACT['integrity_only']}" in help_text
+    assert f"signature_verified={INTEGRITY_CONTRACT['signature_verified']}" in help_text
+    assert f"authenticity={INTEGRITY_CONTRACT['authenticity']}" in help_text
+
+
+def test_documented_restore_argv_parses_and_requires_the_integrity_digest():
+    """Re-audit R3-F8: the documented argv must parse through the REAL parser, and the MANDATORY
+    --expect-manifest-digest cannot be omitted (the plan's example omitted it and exited argparse 2)."""
+    import pytest as _pytest
+
+    from kyc_tool.ops.restore_pr7b_core_callback import build_parser
+
+    parser = build_parser()
+    ns = parser.parse_args(
+        ["--evidence", "f.json", "--expect-original-id", "7", "--expect-manifest-digest", "0" * 64]
+    )
+    assert ns.expect_original_id == 7 and ns.expect_manifest_digest == "0" * 64
+    with _pytest.raises(SystemExit):  # omitting the mandatory integrity digest exits argparse 2
+        parser.parse_args(["--evidence", "f.json", "--expect-original-id", "7"])
+
+
+def test_every_documented_restore_command_includes_the_mandatory_digest_flag():
+    """Re-audit R3-F8: no marked surface (module help, RUNBOOK, DEPLOYMENT, plan) may show a restore
+    invocation missing --expect-manifest-digest — copying it would exit argparse 2."""
+    from kyc_tool.config import REPO_ROOT
+
+    surfaces = [
+        REPO_ROOT / "src/kyc_tool/ops/restore_pr7b_core_callback.py",
+        REPO_ROOT / "docs/DEPLOYMENT.md",
+        REPO_ROOT / "docs/RUNBOOK.md",
+        REPO_ROOT / ".agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md",
+    ]
+    needle = "python -m kyc_tool.ops.restore_pr7b_core_callback"
+    for path in surfaces:
+        body = path.read_text()
+        i = body.find(needle)
+        while i != -1:
+            assert "--expect-manifest-digest" in body[i : i + 400], (
+                f"{path.name}: a documented restore command omits --expect-manifest-digest"
+            )
+            i = body.find(needle, i + 1)

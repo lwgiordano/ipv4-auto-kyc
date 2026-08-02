@@ -420,8 +420,21 @@ def restore_callback(
         return {"original_outbox_id": oid, "sequence_next": next_id, "applied": apply}
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser()
+def build_parser() -> argparse.ArgumentParser:
+    """The restore CLI parser. The --expect-manifest-digest trust semantics are RENDERED from
+    INTEGRITY_CONTRACT (re-audit `8aba2df..2cee937` R3-F8), so the contract is the single source of
+    truth its help, docs and tests all derive from — prose cannot silently re-scope the feature."""
+    parser = argparse.ArgumentParser(
+        prog="restore_pr7b_core_callback",
+        description=(
+            "Restore one pruned decision_callback outbox row from backup evidence. "
+            f"--expect-manifest-digest is an INTEGRITY check only "
+            f"(integrity_only={INTEGRITY_CONTRACT['integrity_only']}, "
+            f"signature_verified={INTEGRITY_CONTRACT['signature_verified']}, "
+            f"authenticity={INTEGRITY_CONTRACT['authenticity']}): it proves the file matches the "
+            "operator-supplied digest, NOT that the digest is genuine."
+        ),
+    )
     parser.add_argument("--evidence", required=True, type=Path,
                         help="backup-evidence JSON (every schema-012 outbox column + digest)")
     parser.add_argument("--expect-original-id", required=True, type=int,
@@ -431,7 +444,11 @@ def main(argv: list[str] | None = None) -> int:
                              "manifest (out-of-band; REQUIRED — the file cannot self-certify)")
     parser.add_argument("--apply", action="store_true",
                         help="perform the restore; without it, validate the exact path and roll back")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     settings = get_settings()
     try:
         evidence = _load_evidence(args.evidence, expect_manifest_digest=args.expect_manifest_digest)

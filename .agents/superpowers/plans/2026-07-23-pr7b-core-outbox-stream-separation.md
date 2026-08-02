@@ -1294,7 +1294,9 @@ higher locally-published automatic sequence to compare). 7b-core does not claim 
     cutover (which 0.4 still gates): pause submissions, hard-stop and attest EVERY writer (API,
     pipeline, outbox, `dev_worker`, retention), then run
     `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json>
-    --expect-original-id <id>` (dry-run first; add `--apply` to perform). It validates the whole
+    --expect-original-id <id> --expect-manifest-digest <sha256>` (dry-run first; add `--apply` to
+    perform — `--expect-manifest-digest` is MANDATORY on both, re-audit `8aba2df..2cee937` R3-F8). It
+    validates the whole
     contract below, inserts the exact original row, floors the sequence past the restored id
     (`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
     the acceptance predicate and the sequence before committing — any mismatch rolls back row and
