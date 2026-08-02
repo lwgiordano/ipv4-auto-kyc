@@ -21,6 +21,7 @@ import structlog
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
+from kyc_tool.adapters import retry
 from kyc_tool.adapters.base import Adapter, AdapterOutput
 from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.config import Settings
@@ -55,6 +56,10 @@ from kyc_tool.validators.build import build_intents
 from kyc_tool.validators.website import website_intent
 
 log = structlog.get_logger(__name__)
+
+# Room between the adapter-plan retry deadline and the job lease for the transition's DB writes
+# (results, checks, decision, completion) — the F2 bound is lease MINUS this, never the whole lease.
+_ADAPTER_PLAN_MARGIN_SECONDS = 10.0
 
 
 class BundleUnavailable(Exception):
@@ -280,6 +285,13 @@ class Pipeline:
             case_id = case.id
 
         # …fetch OUTSIDE any transaction, recording each result in its own txn.
+        # ONE monotonic deadline for the WHOLE adapter plan, strictly below the job lease minus a DB
+        # margin (re-audit `f2929f8..6a4cd87` F2): in-adapter retry sleeps must never outlive the
+        # claim — two adapters honoring Retry-After: 30 across three attempts previously slept the
+        # entire default lease, letting a second worker reclaim mid-execution.
+        plan_deadline = time.monotonic() + max(
+            self.settings.job_lease_seconds - _ADAPTER_PLAN_MARGIN_SECONDS, 1.0
+        )
         for adapter_id in plan.adapters:
             adapter = self.adapters.get(adapter_id)
             if adapter is None:
@@ -292,10 +304,19 @@ class Pipeline:
                     snapshot, adapter_id, recorded_normalized.get(adapter_id, {})
                 )
                 continue
-            self.rate_limiter.acquire(adapter_id)  # per-upstream cap, held outside txns
+            self.rate_limiter.acquire(adapter_id)  # permit for the FIRST physical attempt
             started = time.monotonic()
             try:
-                output = adapter.run(snapshot, event_dict)
+                # Retry attempts inside the adapter re-acquire their own permit and must fit the
+                # plan deadline (F2) — the budget travels via contextvar so adapter signatures
+                # stay unchanged.
+                with retry.budget_scope(
+                    retry.RetryBudget(
+                        deadline_monotonic=plan_deadline,
+                        acquire=lambda a=adapter_id: self.rate_limiter.acquire(a),
+                    )
+                ):
+                    output = adapter.run(snapshot, event_dict)
             except Exception as exc:  # noqa: BLE001 — upstream failure ≠ check failure
                 output = AdapterOutput(
                     adapter_id=adapter_id,
