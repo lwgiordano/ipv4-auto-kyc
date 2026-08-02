@@ -106,6 +106,21 @@ def test_max_attempts_above_int4_is_rejected_at_construction():
     assert hardened(outbox_max_attempts=PG_INT4_MAX).outbox_max_attempts == PG_INT4_MAX
 
 
+def test_job_max_attempts_above_int4_is_rejected_at_construction_and_in_production():
+    """Re-audit `8aba2df..2cee937` R3-F4: jobs.max_attempts is int4 and enqueue() flushes this value
+    into it, so a ceiling above int4 max would roll back a signed inbound event with
+    NumericValueOutOfRange. Refused at construction (Field le=PG_INT4_MAX); the boundary is accepted;
+    and an unvalidated model_copy above the bound is also caught by validate_for_production."""
+    from kyc_tool.config import PG_INT4_MAX, production_config_violations
+
+    with pytest.raises(ValidationError):
+        hardened(job_max_attempts=PG_INT4_MAX + 1)
+    assert hardened(job_max_attempts=PG_INT4_MAX).job_max_attempts == PG_INT4_MAX
+    # model_copy(update=...) bypasses Field validation — production validation is the backstop
+    leaked = hardened().model_copy(update={"job_max_attempts": PG_INT4_MAX + 1})
+    assert any("job_max_attempts" in m for m in production_config_violations(leaked))
+
+
 def test_non_production_environments_are_not_gated():
     # dev/test may run with the defaults (fixtures, fs store, no read auth)
     dev = Settings(environment="development")

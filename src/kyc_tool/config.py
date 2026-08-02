@@ -139,7 +139,11 @@ class Settings(BaseSettings):
     # Queue / workers
     worker_poll_seconds: float = 0.5
     job_lease_seconds: int = 120
-    job_max_attempts: int = 5
+    # le=int4 max: jobs.max_attempts is a PostgreSQL int4 column, and enqueue() flushes this value
+    # into it — a ceiling above int4 max makes a signed inbound event roll back with
+    # NumericValueOutOfRange instead of queuing (re-audit `8aba2df..2cee937` R3-F4, the queue sibling
+    # of the outbox R2 F6 bound). Bounded here AND in validate_for_production for unvalidated copies.
+    job_max_attempts: int = Field(default=5, ge=1, le=PG_INT4_MAX)
     job_backoff_base_seconds: int = 5
 
     # Per-upstream rate limits (requests/second per adapter_id); JSON in env,
@@ -295,6 +299,17 @@ def production_config_violations(settings: Settings) -> list[str]:
             v.append(f"hmac_v1 {label} sunset date is not timezone-aware ISO-8601 ({iso!r})")
     if settings.hmac_v1_observation_window_days < 1:
         v.append("hmac_v1 observation window days must be >= 1")
+
+    # Both retry ceilings are flushed into PostgreSQL int4 counter columns (outbox.attempts,
+    # jobs.max_attempts). The Field bounds enforce this at construction; re-checking here also covers
+    # an unvalidated model_copy(update=...) boundary (re-audit `8aba2df..2cee937` R3-F4). A ceiling
+    # above int4 max overflows the write; below its floor it is not a valid attempt budget.
+    for label, val, floor in (
+        ("outbox_max_attempts", settings.outbox_max_attempts, 1),
+        ("job_max_attempts", settings.job_max_attempts, 1),
+    ):
+        if not (floor <= val <= PG_INT4_MAX):
+            v.append(f"{label}={val} must be in [{floor}, {PG_INT4_MAX}] (PostgreSQL int4 counter)")
 
     # A claim lease shorter than one delivery attempt plus DB/processing margin expires WHILE
     # that attempt is in flight: admission then refuses the terminal for a request the receiver

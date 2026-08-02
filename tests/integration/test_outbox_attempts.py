@@ -631,6 +631,63 @@ def test_malformed_int4_max_attempts_row_dead_letters_with_no_send_no_overflow(
     assert (st.status, st.attempts) == ("dead", PG_INT4_MAX)   # unchanged — no increment, no overflow
 
 
+@pytest.mark.parametrize("bad_attempts", [-1, -2147483648])
+def test_negative_attempts_row_fails_closed_with_no_send(
+    session_factory, clean_db, settings, bad_attempts
+):
+    """Re-audit `8aba2df..2cee937` R3-F3: a malformed NEGATIVE attempts counter is not a sendable
+    state. `outbox.attempts` is int4 with no >= 0 floor, so a negative value made the ceiling check
+    (`attempts >= max`) practically unreachable and licensed sends past the limit (INT4_MIN ⇒ ~2^31).
+    The row is now dead-lettered before any transport, for both int4-min and -1."""
+    _seed_decisions(session_factory, "nv", [1])
+    _enqueue_cb(session_factory, "nv", 1)
+    with session_factory() as s:
+        s.execute(
+            text("UPDATE outbox SET attempts=:a, next_attempt_at=now() - interval '1 minute' "
+                 "WHERE run_id='nv-r1'"),
+            {"a": bad_attempts},
+        )
+        s.commit()
+    prod = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 1})
+    sends: list[int] = []
+    pub = OutboxPublisher(
+        session_factory, prod,
+        http_client=httpx.Client(transport=httpx.MockTransport(
+            lambda r: (sends.append(1), httpx.Response(500))[1])),
+    )
+
+    assert pub.process_once() is True
+    assert sends == []                            # zero external sends, whatever the negative value
+    with session_factory() as s:
+        st = s.execute(text("SELECT status FROM outbox WHERE run_id='nv-r1'")).one()
+    assert st.status == "dead"
+
+
+def test_negative_attempts_poc_email_fails_closed_and_redacts(session_factory, clean_db, settings):
+    """R3-F3 (POC arm): a negative-attempts poc_email is dead-lettered with ZERO provider calls and
+    its raw-token body redacted — fail-closed, not sent."""
+    from kyc_tool.outbox.publisher import enqueue_poc_email
+
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('nq')"))
+        enqueue_poc_email(s, case_id="nq", to="a@x", subject="s", body="raw-secret-token")
+        s.commit()
+    with session_factory() as s:  # separate session so the enqueue is durable before the raw UPDATE
+        s.execute(text("UPDATE outbox SET attempts=-1, next_attempt_at=now() - interval '1 minute' "
+                       "WHERE case_id='nq'"))
+        s.commit()
+    sender = _RaisingEmail()
+    lo = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 1})
+
+    OutboxPublisher(session_factory, lo, email_sender=sender).process_once()
+    assert sender.calls == 0                       # zero provider calls
+    with session_factory() as s:
+        st = s.execute(text("SELECT status, payload_json FROM outbox WHERE case_id='nq'")).one()
+    assert st.status == "dead"
+    assert "raw-secret-token" not in str(st.payload_json)   # POC body redacted on the terminal
+    assert st.payload_json == {"redacted": True}
+
+
 def test_max2_crash_reclaim_backs_off_then_a_later_cycle_sends_attempt_2(
     session_factory, clean_db, settings
 ):

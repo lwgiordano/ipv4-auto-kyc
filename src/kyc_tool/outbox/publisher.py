@@ -604,6 +604,19 @@ class OutboxPublisher:
             return False
         token = row.claim_token
 
+        # Domain floor (re-audit `8aba2df..2cee937` R3-F3): `outbox.attempts` is int4 with no >= 0
+        # constraint, so a malformed/corrupt import with a NEGATIVE count made the ceiling check
+        # (`attempts >= max`) practically unreachable and licensed sends past the limit (INT4_MIN ⇒
+        # ~2^31 sends). Fail closed BEFORE supersession, reconciliation, admission or any transport:
+        # a negative counter is not a sendable state. No increment, no send (POC body redacted). A
+        # DB CHECK `attempts >= 0` is specified for the next mutable migration (ROADMAP PR 10) as the
+        # durable backstop; this runtime guard holds until then and is the fail-closed authority.
+        if row.attempts < 0:
+            self._dead_letter_over_ceiling(
+                row, token, note="attempts is negative (malformed counter) — fail closed"
+            )
+            return True
+
         # Best-effort local superseded guard (NOT an authority): suppress this older
         # decision-stream callback only when a HIGHER-sequence decision for the case already
         # has a locally-stamped published_at. If the higher callback was sent but its
@@ -833,14 +846,16 @@ class OutboxPublisher:
              "redact_payload": row.kind == POC_EMAIL, "redacted": redacted_payload},
         ).first()
 
-    def _dead_letter_over_ceiling(self, row, token) -> None:
-        """Fenced dead-letter a freshly-claimed row whose DURABLE attempts already meet/exceed the
-        CURRENT outbox_max_attempts, before any transport (re-audit `b39b82a..b53daf4` F2). The
-        expired-claim reconciliation only fires for a non-NULL prev_claim_token; a cleanly-released
-        pending row left at/over the ceiling when an operator LOWERS outbox_max_attempts would
-        otherwise take the ordinary admit+send path and make one more external call past the new
-        ceiling. No increment, no send (POC body redacted)."""
-        note = "attempts at/above max_attempts on claim (ceiling lowered)"
+    def _dead_letter_over_ceiling(self, row, token, note=None) -> None:
+        """Fenced dead-letter a freshly-claimed row that is outside the sendable attempts domain,
+        before any transport: DURABLE attempts at/over the CURRENT outbox_max_attempts (re-audit
+        `b39b82a..b53daf4` F2), or a negative/malformed counter (re-audit `8aba2df..2cee937` R3-F3,
+        via the `note` argument). The expired-claim reconciliation only fires for a non-NULL
+        prev_claim_token; a cleanly-released pending row left outside the domain would otherwise take
+        the ordinary admit+send path and make one more external call. No increment, no send (POC body
+        redacted)."""
+        if note is None:
+            note = "attempts at/above max_attempts on claim (ceiling lowered)"
         with uow(self.session_factory) as session:
             applied = self._fenced_dead_letter(session, row, token, note=note)
         if applied is None:
