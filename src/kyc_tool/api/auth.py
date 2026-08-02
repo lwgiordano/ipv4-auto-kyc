@@ -136,16 +136,12 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
         _bump("v2_accepted")
         return
 
-    # v1 path — retired only when the sunset date has passed AND the durable
-    # witness confirms zero v1 across the observation window. The date alone must
-    # never cut off live v1 traffic (ADR-003 / DEPLOYMENT §2): a scheduled date
-    # takes effect only once the witness is green, so the operator's activation +
-    # zero-window is load-bearing, not decorative.
-    now = datetime.now(UTC)
-    if _sunset_passed(settings.hmac_v1_inbound_sunset_at, now) and _inbound_v1_zero(
-        session_factory, settings.hmac_v1_observation_window_days, now
-    ):
-        raise HTTPException(status_code=401, detail="v1 signatures retired (inbound sunset)")
+    # v1 path. VERIFY THE SIGNATURE BEFORE ANY DATABASE ACCESS (re-audit `8aba2df..2cee937` R3-F1):
+    # the durable zero-witness read must never be reachable by an unauthenticated caller. Previously,
+    # once the sunset date had passed, an unsigned/invalid v1 request drove the witness SELECT (and
+    # even received "retired" without its signature being checked) — an unauthenticated DB-availability
+    # amplifier that survived the F1 diagnostics fix. So: reject an unconfigured secret, then verify;
+    # an invalid signature is refused with ZERO DB access.
     if not settings.platform_hmac_secret:
         raise HTTPException(status_code=401, detail="authentication not configured")
     if not security.verify(
@@ -157,6 +153,16 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
     ):
         _bump("rejected")
         raise HTTPException(status_code=401, detail="invalid signature")
+    # Cryptographically valid v1 past this point. v1 is retired only when the sunset date has passed
+    # AND the durable witness confirms zero v1 across the observation window — the date alone must
+    # never cut off live v1 traffic (ADR-003 / DEPLOYMENT §2): a scheduled date takes effect only once
+    # the witness is green, so the operator's activation + zero-window is load-bearing, not decorative.
+    # Only a valid request consults the witness, and only a valid non-retired request is recorded.
+    now = datetime.now(UTC)
+    if _sunset_passed(settings.hmac_v1_inbound_sunset_at, now) and _inbound_v1_zero(
+        session_factory, settings.hmac_v1_observation_window_days, now
+    ):
+        raise HTTPException(status_code=401, detail="v1 signatures retired (inbound sunset)")
     _record_v1(session_factory)  # FAIL-CLOSED witness write
 
 
