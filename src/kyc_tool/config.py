@@ -5,6 +5,8 @@ boots with `environment="production"` runs it at startup and refuses to start on
 any unsafe or stub configuration (see api/app.py, workers/*).
 """
 
+import math
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -59,6 +61,126 @@ OUTBOX_ATTEMPT_DEADLINE_PHASES = 4
 # outbox.attempts. Config ceilings that feed those columns must not exceed it (re-audit F6).
 PG_INT4_MAX = 2_147_483_647
 
+# The ONE governed signed-request replay window (PLATFORM_INTEGRATION §skew). v1/v2 verification and
+# production validation both derive from this constant so the 300-second contract cannot silently
+# widen (re-audit `5b0f0b8..b75a320` R4-F1 — an unbounded skew accepted year-old signatures).
+MAX_HMAC_SKEW_SECONDS = 300
+# Timestamp-safe ceilings for values that flow into `now() + interval 'N'` arithmetic: generous
+# operational maxima far below PostgreSQL timestamptz overflow, so a huge value refuses at config time
+# instead of raising DatetimeFieldOverflow deep inside a claim/mint (re-audit R4-F3).
+_TS_SAFE_SECONDS = 30 * 24 * 3600  # 2_592_000 (30 days)
+_TS_SAFE_HOURS = 10 * 365 * 24  # 87_600 (10 years)
+_TS_SAFE_DAYS = 100 * 365  # 36_500 (100 years)
+
+
+@dataclass(frozen=True)
+class NumericSetting:
+    """One numeric setting's authority (re-audit `5b0f0b8..b75a320` close-out #1): a unit, an inclusive
+    domain [floor, ceiling], the downstream SINK the value flows into (protocol window / destructive
+    horizon / lease-poll-backoff / physical DB column), and the owning PROCESS. The Pydantic field
+    carries the same bounds (declaration), `production_config_violations` re-checks the whole registry
+    so an unvalidated `model_copy` cannot bypass a bound (boundary), and runtime consumers re-check
+    their own domain on direct calls (consumer)."""
+
+    name: str
+    unit: str
+    floor: float
+    ceiling: float
+    sink: str
+    process: str
+    require_finite: bool = True
+    production_exact: float | None = None  # production must equal exactly this
+    production_min: float | None = None  # otherwise production floor (inclusive)
+
+
+# EVERY numeric Settings field appears here exactly once (guarded by a test). Adding a numeric setting
+# without a domain is therefore impossible to ship.
+NUMERIC_SETTINGS: tuple[NumericSetting, ...] = (
+    NumericSetting("hmac_max_skew_seconds", "seconds", 1, MAX_HMAC_SKEW_SECONDS,
+                   "signed-request replay window (v1/v2 verify)", "api",
+                   production_exact=MAX_HMAC_SKEW_SECONDS),
+    NumericSetting("worker_poll_seconds", "seconds", 0.01, 300,
+                   "idle queue-worker sleep", "queue worker", production_min=0.01),
+    NumericSetting("job_lease_seconds", "seconds", 1, _TS_SAFE_SECONDS,
+                   "jobs.claim lease expiry (now()+interval)", "queue worker/reaper",
+                   production_min=1),
+    NumericSetting("job_max_attempts", "attempts", 1, PG_INT4_MAX,
+                   "jobs.max_attempts (int4)", "queue worker", production_min=1),
+    NumericSetting("job_backoff_base_seconds", "seconds", 0, _TS_SAFE_SECONDS,
+                   "queue retry backoff base (saturating)", "queue worker"),
+    NumericSetting("outbox_lease_seconds", "seconds", 1, 3600,
+                   "outbox claim lease expiry", "outbox publisher", production_min=1),
+    NumericSetting("outbox_http_timeout_seconds", "seconds", 0.001, 3600,
+                   "per-attempt HTTPX inactivity phase", "outbox publisher"),
+    NumericSetting("outbox_lease_margin_seconds", "seconds", 0, 3600,
+                   "DB-accounting margin in the lease rule", "outbox publisher"),
+    NumericSetting("outbox_max_attempts", "attempts", 1, PG_INT4_MAX,
+                   "outbox.attempts (int4)", "outbox publisher", production_min=1),
+    NumericSetting("outbox_backoff_base_seconds", "seconds", 0, _TS_SAFE_SECONDS,
+                   "outbox retry backoff base (saturating)", "outbox publisher"),
+    NumericSetting("poc_token_ttl_hours", "hours", 1, _TS_SAFE_HOURS,
+                   "POC token expiry (now()+interval)", "orchestration side-effects",
+                   production_min=1),
+    NumericSetting("ops_lock_timeout_seconds", "seconds", 1, 3600,
+                   "ops maintenance lock wait", "ops CLI", production_min=1),
+    NumericSetting("ops_statement_timeout_seconds", "seconds", 1, 7200,
+                   "ops statement time budget", "ops CLI", production_min=1),
+    NumericSetting("retention_days", "days", 1, _TS_SAFE_DAYS,
+                   "DELETE cutoff for immutable audit/evidence", "retention worker",
+                   production_min=1),
+    NumericSetting("hmac_v1_observation_window_days", "days", 0, _TS_SAFE_DAYS,
+                   "v1 sunset zero-witness observation window", "api", production_min=1),
+)
+
+_NUMERIC_BY_NAME = {ns.name: ns for ns in NUMERIC_SETTINGS}
+
+
+def numeric_domain_of(name: str) -> NumericSetting:
+    """The registered domain for a setting — the shared authority a consumer re-checks against."""
+    return _NUMERIC_BY_NAME[name]
+
+
+def numeric_value_violation(ns: NumericSetting, value) -> str | None:
+    """One value against one domain (bool rejected — it is an int subclass; non-finite rejected).
+    Returns a message or None. This is the SINGLE checker the field, the boundary and consumers share."""
+    if isinstance(value, bool):
+        return f"{ns.name} must be numeric ({ns.unit}), not a bool"
+    if not isinstance(value, (int, float)):
+        return f"{ns.name} must be numeric ({ns.unit}), got {type(value).__name__}"
+    if ns.require_finite and isinstance(value, float) and not math.isfinite(value):
+        return f"{ns.name} must be finite ({ns.unit})"
+    if not (ns.floor <= value <= ns.ceiling):
+        return (f"{ns.name}={value} is outside [{ns.floor}, {ns.ceiling}] {ns.unit} "
+                f"(sink: {ns.sink}; owner: {ns.process})")
+    return None
+
+
+def numeric_domain_violations(settings: "Settings") -> list[str]:
+    """Every registry domain violation for `settings` (independent of environment). Catches an
+    unvalidated `model_copy(update=...)` that bypassed the Pydantic field bounds."""
+    out = []
+    for ns in NUMERIC_SETTINGS:
+        v = numeric_value_violation(ns, getattr(settings, ns.name))
+        if v:
+            out.append(v)
+    return out
+
+
+def production_numeric_violations(settings: "Settings") -> list[str]:
+    """Production-only numeric rules: an exact governed value (skew) or a production floor."""
+    out = []
+    for ns in NUMERIC_SETTINGS:
+        value = getattr(settings, ns.name)
+        if isinstance(value, bool):
+            continue  # already flagged by the domain check
+        if ns.production_exact is not None and value != ns.production_exact:
+            out.append(f"{ns.name} must be exactly {ns.production_exact} {ns.unit} in production "
+                       f"(the governed {ns.sink}); {value} is not separately authorized")
+        elif ns.production_min is not None and value < ns.production_min:
+            out.append(f"{ns.name} must be >= {ns.production_min} {ns.unit} in production "
+                       f"(sink: {ns.sink})")
+    return out
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="KYC_", env_file=".env", extra="ignore")
@@ -73,7 +195,9 @@ class Settings(BaseSettings):
     platform_callback_url: str = "http://localhost:9999"  # decision callbacks POST here
     platform_hmac_secret: str = ""  # shared secret; empty only permitted when auth_disabled
     auth_disabled: bool = False  # test/dev escape hatch — never set in production
-    hmac_max_skew_seconds: int = 300
+    # 1..MAX_HMAC_SKEW_SECONDS; production must equal 300 exactly (see NUMERIC_SETTINGS). An unbounded
+    # skew is a replay-window widener (re-audit R4-F1): a year-old signature verified under a 10y skew.
+    hmac_max_skew_seconds: int = Field(default=MAX_HMAC_SKEW_SECONDS, ge=1, le=MAX_HMAC_SKEW_SECONDS)
 
     # HMAC v2 (PR 5a — path-bound canonical signing). Split inbound/outbound
     # secrets + key_id; v1's shared platform_hmac_secret stays required until
@@ -90,8 +214,9 @@ class Settings(BaseSettings):
     # TechCraft sign-off (never inferred from inbound telemetry).
     hmac_v1_inbound_sunset_at: str = ""
     hmac_v1_outbound_sunset_at: str = ""
-    # Days the durable v1 witness must be silent before the inbound sunset.
-    hmac_v1_observation_window_days: int = 0
+    # Days the durable v1 witness must be silent before the inbound sunset. 0 = disabled (dev/test);
+    # production requires >= 1 (NUMERIC_SETTINGS production_min).
+    hmac_v1_observation_window_days: int = Field(default=0, ge=0, le=_TS_SAFE_DAYS)
 
     # M3 compatibility gate: don't emit the new `event_sequence` callback field
     # until the platform has agreed to consume it. Off until the cutover.
@@ -136,15 +261,19 @@ class Settings(BaseSettings):
     # email is appended as a JSON line so the POC round-trip is testable.
     email_file_path: Path = REPO_ROOT / ".substrate" / "state" / "poc-emails.log"
 
-    # Queue / workers
-    worker_poll_seconds: float = 0.5
-    job_lease_seconds: int = 120
+    # Queue / workers. Every bound below mirrors NUMERIC_SETTINGS (declaration layer); a non-finite or
+    # negative poll can kill the idle worker, and a negative/overflowing lease defeats per-case
+    # serialization or raises DatetimeFieldOverflow at claim (re-audit R4-F3).
+    worker_poll_seconds: float = Field(default=0.5, ge=0.01, le=300)
+    job_lease_seconds: int = Field(default=120, ge=1, le=_TS_SAFE_SECONDS)
     # le=int4 max: jobs.max_attempts is a PostgreSQL int4 column, and enqueue() flushes this value
     # into it — a ceiling above int4 max makes a signed inbound event roll back with
     # NumericValueOutOfRange instead of queuing (re-audit `8aba2df..2cee937` R3-F4, the queue sibling
     # of the outbox R2 F6 bound). Bounded here AND in validate_for_production for unvalidated copies.
     job_max_attempts: int = Field(default=5, ge=1, le=PG_INT4_MAX)
-    job_backoff_base_seconds: int = 5
+    # ge=0 (0 = retry-when-due dev value); ceiling timestamp-safe. The worker uses the shared
+    # saturating backoff helper so no accepted value overflows timestamp arithmetic at high attempts.
+    job_backoff_base_seconds: int = Field(default=5, ge=0, le=_TS_SAFE_SECONDS)
 
     # Per-upstream rate limits (requests/second per adapter_id); JSON in env,
     # e.g. KYC_ADAPTER_RATE_LIMITS='{"rir_rdap": 2, "companies_house": 5}'.
@@ -167,13 +296,13 @@ class Settings(BaseSettings):
     # deadline: HTTPX may spend the scalar budget separately in pool/connect/write/read-header
     # phases, and each resets on activity. It doubles as the publisher's wall-clock budget for
     # draining the acknowledgement body, which IS a real deadline (see `_send_for_status`).
-    outbox_http_timeout_seconds: float = Field(default=10.0, gt=0)
+    outbox_http_timeout_seconds: float = Field(default=10.0, ge=0.001, le=3600)
     # Extra room for DB commit/processing around the HTTPX phase budgets. The production kill
     # switch requires the lease to exceed pool+connect+write+read-header timeout phases plus this
     # margin, otherwise a slow-but-valid response can outlive the claim and be reclaimed by another
     # publisher before the first terminal write. Raising `outbox_http_timeout_seconds` raises the
     # required lease four-fold, so the two knobs must be moved together.
-    outbox_lease_margin_seconds: float = Field(default=1.0, ge=0)
+    outbox_lease_margin_seconds: float = Field(default=1.0, ge=0, le=3600)
     # ge=1: at least one delivery attempt must be permitted. A row is dead-lettered without a send
     # once its durable attempts reach this ceiling — including a row left at/over the ceiling when
     # this value is LOWERED (re-audit `b39b82a..b53daf4` F2). Each publisher enforces the ceiling it
@@ -192,25 +321,27 @@ class Settings(BaseSettings):
     # production refuses below. Negative was accepted before and produced immediate unthrottled
     # re-sends (re-audit `d3c0852..23e005e` F5). The publisher saturates the exponential schedule so
     # no accepted value can overflow PostgreSQL's timestamptz.
-    outbox_backoff_base_seconds: int = Field(default=10, ge=0)
+    outbox_backoff_base_seconds: int = Field(default=10, ge=0, le=_TS_SAFE_SECONDS)
 
-    # POC tokens
-    poc_token_ttl_hours: int = 72
+    # POC tokens. ge=1: a nonpositive TTL mints and emails a token that is already expired (R4-F3).
+    poc_token_ttl_hours: int = Field(default=72, ge=1, le=_TS_SAFE_HOURS)
 
     # One-shot ops commands: how long a maintenance lock may be awaited before the command
     # refuses with the stable OPS_COMMAND_LOCK_TIMEOUT sentinel (nothing changed) instead of
     # hanging a window on an orphan transaction with no diagnosis.
-    ops_lock_timeout_seconds: int = Field(default=60, ge=1)
+    ops_lock_timeout_seconds: int = Field(default=60, ge=1, le=3600)
     # The SEPARATE ceiling on total statement time for a one-shot ops command (its own governed
     # budget, not a constant derived from the lock — re-audit `538e55e..42e1c7d` F11). A statement
     # may legitimately wait most of the lock budget and THEN run its bounded query, so this must
     # exceed ops_lock_timeout_seconds; `binding.bind()` refuses if it does not. A runaway query
     # then refuses with OPS_COMMAND_STATEMENT_TIMEOUT instead of hanging the window. Default 360 =
     # the historical 60s lock + 300s work headroom, so the default behaviour is unchanged.
-    ops_statement_timeout_seconds: int = Field(default=360, ge=1)
+    ops_statement_timeout_seconds: int = Field(default=360, ge=1, le=7200)
 
-    # Retention (compliance default: 7 years)
-    retention_days: int = 7 * 365
+    # Retention (compliance default: 7 years). ge=1 is LOAD-BEARING: retention prunes with a
+    # `now() - interval 'N days'` cutoff, so a nonpositive N makes the cutoff the FUTURE and deletes
+    # CURRENT immutable audit/evidence rows (re-audit R4-F2). prune() re-checks this on direct call.
+    retention_days: int = Field(default=7 * 365, ge=1, le=_TS_SAFE_DAYS)
 
     # Ops console (/ui): debug/ops tooling whose composer + requeue endpoints
     # MUTATE. Disabled by default; when enabled in production it MUST have an
@@ -297,19 +428,13 @@ def production_config_violations(settings: Settings) -> list[str]:
             parse_sunset(iso)
         except ValueError:
             v.append(f"hmac_v1 {label} sunset date is not timezone-aware ISO-8601 ({iso!r})")
-    if settings.hmac_v1_observation_window_days < 1:
-        v.append("hmac_v1 observation window days must be >= 1")
-
-    # Both retry ceilings are flushed into PostgreSQL int4 counter columns (outbox.attempts,
-    # jobs.max_attempts). The Field bounds enforce this at construction; re-checking here also covers
-    # an unvalidated model_copy(update=...) boundary (re-audit `8aba2df..2cee937` R3-F4). A ceiling
-    # above int4 max overflows the write; below its floor it is not a valid attempt budget.
-    for label, val, floor in (
-        ("outbox_max_attempts", settings.outbox_max_attempts, 1),
-        ("job_max_attempts", settings.job_max_attempts, 1),
-    ):
-        if not (floor <= val <= PG_INT4_MAX):
-            v.append(f"{label}={val} must be in [{floor}, {PG_INT4_MAX}] (PostgreSQL int4 counter)")
+    # Numeric-setting registry (re-audit `5b0f0b8..b75a320` R4-F1/F2/F3, close-out #1). The Field
+    # bounds enforce each domain at construction; these two calls re-check EVERY numeric setting at the
+    # production boundary so an unvalidated model_copy(update=...) cannot bypass a bound, and apply the
+    # production-only rules (exact 300s replay window; positive leases/TTLs/retention). This single
+    # loop subsumes the former per-counter int4 checks.
+    v.extend(numeric_domain_violations(settings))
+    v.extend(production_numeric_violations(settings))
 
     # A claim lease shorter than one delivery attempt plus DB/processing margin expires WHILE
     # that attempt is in flight: admission then refuses the terminal for a request the receiver
