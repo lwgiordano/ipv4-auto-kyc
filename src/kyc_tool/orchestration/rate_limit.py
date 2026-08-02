@@ -9,12 +9,19 @@ multiply the effective rate by worker count — set caps accordingly (runbook).
 import threading
 import time
 
+from kyc_tool.config import adapter_rate_violations
+
 
 class RateLimiter:
     def __init__(self, rates_per_second: dict[str, float]) -> None:
-        self._min_interval = {
-            key: 1.0 / rate for key, rate in rates_per_second.items() if rate > 0
-        }
+        # Consumer-layer guard (re-audit `03dbfab..bc325e7` R5-F6): a NaN/negative/Infinite/tiny rate
+        # removes the cap or makes an effectively infinite sleep. Refuse a bad mapping here too, so a
+        # direct constructor (tests, other callers) cannot install one that the field validator would
+        # have caught.
+        problems = adapter_rate_violations(rates_per_second)
+        if problems:
+            raise ValueError("invalid adapter rate limits: " + "; ".join(problems))
+        self._min_interval = {key: 1.0 / rate for key, rate in rates_per_second.items() if rate > 0}
         self._last_call: dict[str, float] = {}
         self._lock = threading.Lock()
 

@@ -68,6 +68,10 @@ def enqueue(
     case_id: str | None = None,
     max_attempts: int = 5,
 ) -> Job:
+    # Consumer-layer domain guard (re-audit `03dbfab..bc325e7` R5-F7): jobs.max_attempts is int4 with
+    # no DB CHECK yet, so a negative/zero/bool max_attempts would otherwise commit an invalid budget.
+    # Refuse before add/flush; the row is never created.
+    require_numeric_domain("job_max_attempts", max_attempts)
     job = Job(kind=kind, case_id=case_id, payload_json=payload, max_attempts=max_attempts)
     session.add(job)
     session.flush()
@@ -99,9 +103,7 @@ def claim(session: Session, kinds: list[str], worker_id: str, lease_seconds: int
 def complete(session: Session, job_id: int) -> None:
     """Mark done — call inside the handler's commit transaction so job
     completion is atomic with the work it performed."""
-    session.execute(
-        text("UPDATE jobs SET status='done', updated_at=now() WHERE id=:id"), {"id": job_id}
-    )
+    session.execute(text("UPDATE jobs SET status='done', updated_at=now() WHERE id=:id"), {"id": job_id})
 
 
 def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: int) -> bool:
@@ -112,9 +114,7 @@ def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: in
     require_numeric_domain("job_backoff_base_seconds", backoff_base_seconds)
     if job.attempts >= job.max_attempts:
         session.execute(
-            text(
-                "UPDATE jobs SET status='dead', last_error=:err, updated_at=now() WHERE id=:id"
-            ),
+            text("UPDATE jobs SET status='dead', last_error=:err, updated_at=now() WHERE id=:id"),
             {"id": job.id, "err": error[:2000]},
         )
         return True

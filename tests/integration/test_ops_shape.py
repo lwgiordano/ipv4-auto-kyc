@@ -106,3 +106,18 @@ def test_prewindow_contract_is_the_same_object_in_both_diagnostics(monkeypatch):
             call()
 
     assert captured[0] is captured[1] is shape.PR7B_CORE_PREWINDOW
+
+
+@pytest.mark.parametrize("bad_lock", [-1, 0, True, 1.5, float("nan"), 3601])
+def test_bind_refuses_out_of_domain_lock_timeout(session_factory, clean_db, bad_lock):
+    """Re-audit `03dbfab..bc325e7` R5-F7: bind() validated timeouts through int() (truncating floats,
+    accepting bool, raising raw on NaN) and let them reach SET LOCAL as a DataError. It now refuses an
+    out-of-domain lock/statement value with the governed OPS_COMMAND_SCHEMA_REFUSED first."""
+    with session_factory() as s, pytest.raises(binding.BindingRefused) as exc:
+        binding.bind(s, lock_timeout_seconds=bad_lock, statement_timeout_seconds=3600)
+    assert binding.SCHEMA_REFUSED_SENTINEL in str(exc.value)
+
+
+def test_bind_refuses_an_out_of_domain_statement_timeout(session_factory, clean_db):
+    with session_factory() as s, pytest.raises(binding.BindingRefused):
+        binding.bind(s, lock_timeout_seconds=60, statement_timeout_seconds=-1)

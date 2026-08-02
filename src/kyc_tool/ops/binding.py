@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
+from kyc_tool.config import require_numeric_domain
+
 if TYPE_CHECKING:
     from kyc_tool.ops.shape import ShapeContract
 
@@ -125,8 +127,23 @@ def bind(
     misclassify the failure, so `bind()` refuses it. When omitted it falls back to
     `lock_timeout_seconds + 300` (the historical headroom) so non-production callers keep working.
     """
-    lock_s = int(lock_timeout_seconds)
-    statement_s = lock_s + 300 if statement_timeout_seconds is None else int(statement_timeout_seconds)
+    # Validate the timeout inputs against their governed domains BEFORE any coercion (re-audit
+    # `03dbfab..bc325e7` R5-F7): int() would silently truncate a float, accept a bool, or raise a raw
+    # error on NaN and let it reach SET LOCAL as a DataError. A bad value is a governed refusal.
+    for name, value in (
+        ("ops_lock_timeout_seconds", lock_timeout_seconds),
+        *(
+            ()
+            if statement_timeout_seconds is None
+            else (("ops_statement_timeout_seconds", statement_timeout_seconds),)
+        ),
+    ):
+        try:
+            require_numeric_domain(name, value)
+        except ValueError as exc:
+            raise BindingRefused(f"{SCHEMA_REFUSED_SENTINEL}: {exc}") from exc
+    lock_s = lock_timeout_seconds
+    statement_s = lock_s + 300 if statement_timeout_seconds is None else statement_timeout_seconds
     if statement_s <= lock_s:
         raise BindingRefused(
             f"{SCHEMA_REFUSED_SENTINEL}: statement_timeout ({statement_s}s) must exceed "
@@ -149,10 +166,7 @@ def bind(
     session.execute(text(f"SET LOCAL lock_timeout = '{lock_s * 1000}ms'"))
     session.execute(text(f"SET LOCAL statement_timeout = '{statement_s * 1000}ms'"))
     has_table = session.execute(
-        text(
-            "SELECT 1 FROM pg_catalog.pg_tables "
-            "WHERE schemaname='public' AND tablename='alembic_version'"
-        )
+        text("SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname='public' AND tablename='alembic_version'")
     ).first()
     # Read the FULL ordered version set and require cardinality one BEFORE any comparison: `.scalar()`
     # reads one arbitrary row, so a multi-head `{012, 999}` would silently satisfy an exact/floor
@@ -194,9 +208,7 @@ def bind(
             f"the {min_revision!r} schema (string ordering is not lineage; an unknown/spoofed "
             f"revision is refused here rather than tracebacking on a missing column)"
         )
-    backing = session.execute(
-        text("SELECT pg_get_serial_sequence('public.outbox', 'id')")
-    ).scalar()
+    backing = session.execute(text("SELECT pg_get_serial_sequence('public.outbox', 'id')")).scalar()
     if backing != "public.outbox_id_seq":
         raise BindingRefused(
             f"{SCHEMA_REFUSED_SENTINEL}: public.outbox.id is backed by {backing!r}, not "

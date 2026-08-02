@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from kyc_tool.security import MAX_HMAC_SKEW_SECONDS
@@ -35,6 +35,7 @@ def parse_sunset(iso: str) -> datetime | None:
     if dt.tzinfo is None:
         raise ValueError(f"sunset timestamp is timezone-naive: {iso!r}")
     return dt
+
 
 # Provider identifiers whose implementation is a dev/test stub. Selecting any of
 # these in production is refused at startup — the real providers land with the
@@ -99,40 +100,140 @@ class NumericSetting:
 # EVERY numeric Settings field appears here exactly once (guarded by a test). Adding a numeric setting
 # without a domain is therefore impossible to ship.
 NUMERIC_SETTINGS: tuple[NumericSetting, ...] = (
-    NumericSetting("hmac_max_skew_seconds", "seconds", 1, MAX_HMAC_SKEW_SECONDS,
-                   "signed-request replay window (v1/v2 verify)", "api",
-                   production_exact=MAX_HMAC_SKEW_SECONDS),
-    NumericSetting("worker_poll_seconds", "seconds", 0.01, 300,
-                   "idle queue-worker sleep", "queue worker", integer=False, production_min=0.01),
-    NumericSetting("job_lease_seconds", "seconds", 1, _TS_SAFE_SECONDS,
-                   "jobs.claim lease expiry (now()+interval)", "queue worker/reaper",
-                   production_min=1),
-    NumericSetting("job_max_attempts", "attempts", 1, PG_INT4_MAX,
-                   "jobs.max_attempts (int4)", "queue worker", production_min=1),
-    NumericSetting("job_backoff_base_seconds", "seconds", 0, _TS_SAFE_SECONDS,
-                   "queue retry backoff base (saturating)", "queue worker"),
-    NumericSetting("outbox_lease_seconds", "seconds", 1, 3600,
-                   "outbox claim lease expiry", "outbox publisher", production_min=1),
-    NumericSetting("outbox_http_timeout_seconds", "seconds", 0.001, 3600,
-                   "per-attempt HTTPX inactivity phase", "outbox publisher", integer=False),
-    NumericSetting("outbox_lease_margin_seconds", "seconds", 0, 3600,
-                   "DB-accounting margin in the lease rule", "outbox publisher", integer=False),
-    NumericSetting("outbox_max_attempts", "attempts", 1, PG_INT4_MAX,
-                   "outbox.attempts (int4)", "outbox publisher", production_min=1),
-    NumericSetting("outbox_backoff_base_seconds", "seconds", 0, _TS_SAFE_SECONDS,
-                   "outbox retry backoff base (saturating)", "outbox publisher"),
-    NumericSetting("poc_token_ttl_hours", "hours", 1, _TS_SAFE_HOURS,
-                   "POC token expiry (now()+interval)", "orchestration side-effects",
-                   production_min=1),
-    NumericSetting("ops_lock_timeout_seconds", "seconds", 1, 3600,
-                   "ops maintenance lock wait", "ops CLI", production_min=1),
-    NumericSetting("ops_statement_timeout_seconds", "seconds", 1, 7200,
-                   "ops statement time budget", "ops CLI", production_min=1),
-    NumericSetting("retention_days", "days", 1, _TS_SAFE_DAYS,
-                   "DELETE cutoff for immutable audit/evidence", "retention worker",
-                   production_min=1),
-    NumericSetting("hmac_v1_observation_window_days", "days", 0, _TS_SAFE_DAYS,
-                   "v1 sunset zero-witness observation window", "api", production_min=1),
+    NumericSetting(
+        "hmac_max_skew_seconds",
+        "seconds",
+        1,
+        MAX_HMAC_SKEW_SECONDS,
+        "signed-request replay window (v1/v2 verify)",
+        "api",
+        production_exact=MAX_HMAC_SKEW_SECONDS,
+    ),
+    NumericSetting(
+        "worker_poll_seconds",
+        "seconds",
+        0.01,
+        300,
+        "idle queue-worker sleep",
+        "queue worker",
+        integer=False,
+        production_min=0.01,
+    ),
+    NumericSetting(
+        "job_lease_seconds",
+        "seconds",
+        1,
+        _TS_SAFE_SECONDS,
+        "jobs.claim lease expiry (now()+interval)",
+        "queue worker/reaper",
+        production_min=1,
+    ),
+    NumericSetting(
+        "job_max_attempts",
+        "attempts",
+        1,
+        PG_INT4_MAX,
+        "jobs.max_attempts (int4)",
+        "queue worker",
+        production_min=1,
+    ),
+    NumericSetting(
+        "job_backoff_base_seconds",
+        "seconds",
+        0,
+        _TS_SAFE_SECONDS,
+        "queue retry backoff base (saturating)",
+        "queue worker",
+    ),
+    NumericSetting(
+        "outbox_lease_seconds",
+        "seconds",
+        1,
+        3600,
+        "outbox claim lease expiry",
+        "outbox publisher",
+        production_min=1,
+    ),
+    NumericSetting(
+        "outbox_http_timeout_seconds",
+        "seconds",
+        0.001,
+        3600,
+        "per-attempt HTTPX inactivity phase",
+        "outbox publisher",
+        integer=False,
+    ),
+    NumericSetting(
+        "outbox_lease_margin_seconds",
+        "seconds",
+        0,
+        3600,
+        "DB-accounting margin in the lease rule",
+        "outbox publisher",
+        integer=False,
+    ),
+    NumericSetting(
+        "outbox_max_attempts",
+        "attempts",
+        1,
+        PG_INT4_MAX,
+        "outbox.attempts (int4)",
+        "outbox publisher",
+        production_min=1,
+    ),
+    NumericSetting(
+        "outbox_backoff_base_seconds",
+        "seconds",
+        0,
+        _TS_SAFE_SECONDS,
+        "outbox retry backoff base (saturating)",
+        "outbox publisher",
+    ),
+    NumericSetting(
+        "poc_token_ttl_hours",
+        "hours",
+        1,
+        _TS_SAFE_HOURS,
+        "POC token expiry (now()+interval)",
+        "orchestration side-effects",
+        production_exact=72,
+    ),  # security/platform contract: exactly 72h (re-audit R5-F8)
+    NumericSetting(
+        "ops_lock_timeout_seconds",
+        "seconds",
+        1,
+        3600,
+        "ops maintenance lock wait",
+        "ops CLI",
+        production_min=1,
+    ),
+    NumericSetting(
+        "ops_statement_timeout_seconds",
+        "seconds",
+        1,
+        7200,
+        "ops statement time budget",
+        "ops CLI",
+        production_min=1,
+    ),
+    NumericSetting(
+        "retention_days",
+        "days",
+        1,
+        _TS_SAFE_DAYS,
+        "DELETE cutoff for immutable audit/evidence",
+        "retention worker",
+        production_min=1,
+    ),
+    NumericSetting(
+        "hmac_v1_observation_window_days",
+        "days",
+        0,
+        _TS_SAFE_DAYS,
+        "v1 sunset zero-witness observation window",
+        "api",
+        production_min=1,
+    ),
 )
 
 _NUMERIC_BY_NAME = {ns.name: ns for ns in NUMERIC_SETTINGS}
@@ -155,8 +256,10 @@ def numeric_value_violation(ns: NumericSetting, value) -> str | None:
     if ns.require_finite and isinstance(value, float) and not math.isfinite(value):
         return f"{ns.name} must be finite ({ns.unit})"
     if not (ns.floor <= value <= ns.ceiling):
-        return (f"{ns.name}={value} is outside [{ns.floor}, {ns.ceiling}] {ns.unit} "
-                f"(sink: {ns.sink}; owner: {ns.process})")
+        return (
+            f"{ns.name}={value} is outside [{ns.floor}, {ns.ceiling}] {ns.unit} "
+            f"(sink: {ns.sink}; owner: {ns.process})"
+        )
     return None
 
 
@@ -181,23 +284,73 @@ def numeric_domain_violations(settings: "Settings") -> list[str]:
 
 
 def production_numeric_violations(settings: "Settings") -> list[str]:
-    """Production-only numeric rules: an exact governed value (skew) or a production floor."""
+    """Production-only numeric rules: an exact governed value (skew, TTL) or a production floor. Skips
+    any setting the domain pass already rejected, so a malformed value (str/None/NaN supplied via
+    model_copy) yields an aggregate ProductionConfigError rather than a raw TypeError from comparing
+    it to a floor (re-audit `03dbfab..bc325e7` R5-F11)."""
     out = []
+    invalid = {ns.name for ns in NUMERIC_SETTINGS if numeric_value_violation(ns, getattr(settings, ns.name))}
     for ns in NUMERIC_SETTINGS:
+        if ns.name in invalid:
+            continue  # comparing a domain-invalid value to exact/min would raise; it is already flagged
         value = getattr(settings, ns.name)
-        if isinstance(value, bool):
-            continue  # already flagged by the domain check
         if ns.production_exact is not None and value != ns.production_exact:
-            out.append(f"{ns.name} must be exactly {ns.production_exact} {ns.unit} in production "
-                       f"(the governed {ns.sink}); {value} is not separately authorized")
+            out.append(
+                f"{ns.name} must be exactly {ns.production_exact} {ns.unit} in production "
+                f"(the governed {ns.sink}); {value} is not separately authorized"
+            )
         elif ns.production_min is not None and value < ns.production_min:
-            out.append(f"{ns.name} must be >= {ns.production_min} {ns.unit} in production "
-                       f"(sink: {ns.sink})")
+            out.append(f"{ns.name} must be >= {ns.production_min} {ns.unit} in production (sink: {ns.sink})")
+    return out
+
+
+# Adapter rate limits are a NESTED numeric sink (dict[str, float]) the flat registry cannot see
+# (re-audit `03dbfab..bc325e7` R5-F6): a NaN/negative rate removes the cap, Infinity gives a zero
+# interval, and a tiny positive rate makes an effectively infinite sleep that dead-letters runs. The
+# reviewed domain is a finite, strictly-positive requests/second in [min, max].
+ADAPTER_RATE_MIN = 0.001
+ADAPTER_RATE_MAX = 10_000.0
+
+
+def adapter_rate_violations(rates) -> list[str]:
+    """Violations for an adapter_rate_limits mapping (empty ⇒ valid). Shared by the field validator,
+    the production boundary, and the RateLimiter consumer."""
+    out = []
+    for key, rate in (rates or {}).items():
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+            out.append(f"adapter_rate_limits[{key!r}] must be a number ({type(rate).__name__})")
+        elif not math.isfinite(rate):
+            out.append(f"adapter_rate_limits[{key!r}] must be finite (got {rate})")
+        elif not (ADAPTER_RATE_MIN <= rate <= ADAPTER_RATE_MAX):
+            out.append(
+                f"adapter_rate_limits[{key!r}]={rate} must be in "
+                f"[{ADAPTER_RATE_MIN}, {ADAPTER_RATE_MAX}] req/s"
+            )
     return out
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="KYC_", env_file=".env", extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_bool_for_numeric(cls, data):
+        # A Python bool is an int subclass; Pydantic coerces True/False to 1/0 for an int field,
+        # silently collapsing a programmatically-supplied numeric horizon (re-audit R5-F6). Reject it
+        # at the raw-input stage; numeric env strings ("2555") are unaffected.
+        if isinstance(data, dict):
+            for ns in NUMERIC_SETTINGS:
+                if isinstance(data.get(ns.name), bool):
+                    raise ValueError(f"{ns.name} must be a number, not a bool")
+        return data
+
+    @field_validator("adapter_rate_limits")
+    @classmethod
+    def _validate_adapter_rates(cls, v):
+        problems = adapter_rate_violations(v)
+        if problems:
+            raise ValueError("; ".join(problems))
+        return v
 
     # Deployment environment. In "production", validate_for_production() runs at
     # process start and refuses to boot on any unsafe/stub configuration.
@@ -397,8 +550,7 @@ def production_config_violations(settings: Settings) -> list[str]:
         # "?"/"#" that urlparse reports as an empty component — would land the
         # suffix inside it and misdirect the signed callback (audit finding 1/2).
         v.append(
-            f"platform_callback_url must not carry a query or fragment "
-            f"({settings.platform_callback_url!r})"
+            f"platform_callback_url must not carry a query or fragment ({settings.platform_callback_url!r})"
         )
 
     if settings.object_store != "s3":
@@ -449,6 +601,7 @@ def production_config_violations(settings: Settings) -> list[str]:
     # loop subsumes the former per-counter int4 checks.
     v.extend(numeric_domain_violations(settings))
     v.extend(production_numeric_violations(settings))
+    v.extend(adapter_rate_violations(settings.adapter_rate_limits))  # nested numeric sink (R5-F6)
 
     # A claim lease shorter than one delivery attempt plus DB/processing margin expires WHILE
     # that attempt is in flight: admission then refuses the terminal for a request the receiver

@@ -19,9 +19,7 @@ def _enqueue(session_factory, *, case_id="c", kind="run_transition"):
 
 
 @pytest.mark.parametrize("bad_lease", [-1, 0, 2_592_001, 10**20])
-def test_claim_refuses_out_of_domain_lease_without_touching_the_job(
-    session_factory, clean_db, bad_lease
-):
+def test_claim_refuses_out_of_domain_lease_without_touching_the_job(session_factory, clean_db, bad_lease):
     _enqueue(session_factory)
     with uow(session_factory) as s, pytest.raises(ValueError):
         jobs.claim(s, ["run_transition"], "w", bad_lease)
@@ -59,8 +57,12 @@ def test_fail_at_a_high_attempt_count_requeues_without_overflow(session_factory,
     with uow(session_factory) as s:
         claimed = jobs.claim(s, ["run_transition"], "w", 120)
     high = jobs.ClaimedJob(
-        id=claimed.id, kind=claimed.kind, case_id=claimed.case_id,
-        payload={}, attempts=63, max_attempts=100,
+        id=claimed.id,
+        kind=claimed.kind,
+        case_id=claimed.case_id,
+        payload={},
+        attempts=63,
+        max_attempts=100,
     )
     with uow(session_factory) as s:
         assert jobs.fail(s, high, "boom", 10) is False  # requeued (no DatetimeFieldOverflow)
@@ -79,28 +81,34 @@ def _seed_case_and_run(session_factory, case_id):
     with session_factory() as s:
         s.execute(text("INSERT INTO cases (id) VALUES (:c)"), {"c": case_id})
         s.execute(
-            text("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
-                 "actor_json, payload_json, event_sequence) VALUES "
-                 "(:e, :c, :k, 'h', 'x', '{}'::jsonb, '{}'::jsonb, 1)"),
+            text(
+                "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                "actor_json, payload_json, event_sequence) VALUES "
+                "(:e, :c, :k, 'h', 'x', '{}'::jsonb, '{}'::jsonb, 1)"
+            ),
             {"e": f"e-{case_id}", "c": case_id, "k": f"k-{case_id}"},
         )
         s.execute(
-            text("INSERT INTO runs (id, case_id, triggering_event_id, state) "
-                 "VALUES (:r, :c, :e, 'PUBLISH_DECISION')"),
+            text(
+                "INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                "VALUES (:r, :c, :e, 'PUBLISH_DECISION')"
+            ),
             {"r": f"r-{case_id}", "c": case_id, "e": f"e-{case_id}"},
         )
         s.commit()
 
 
 _NORMALIZED = {
-    "send_token": True, "poc_handle": "PH", "rir": "arin",
-    "org_handle": "ORG", "resource": "RES", "rir_listed_email": "a@x",
+    "send_token": True,
+    "poc_handle": "PH",
+    "rir": "arin",
+    "org_handle": "ORG",
+    "resource": "RES",
+    "rir_listed_email": "a@x",
 }
 
 
-def test_poc_mint_refuses_a_nonpositive_ttl_without_minting_or_emailing(
-    session_factory, clean_db, settings
-):
+def test_poc_mint_refuses_a_nonpositive_ttl_without_minting_or_emailing(session_factory, clean_db, settings):
     from kyc_tool.db.tables import Case, Run
     from kyc_tool.orchestration.side_effects import SideEffects
 
@@ -134,3 +142,13 @@ def test_poc_mint_with_a_valid_ttl_sets_a_future_expiry(session_factory, clean_d
             text("SELECT expired_at > now() AS f FROM poc_tokens WHERE case_id='pv'")
         ).scalar_one()
     assert future is True
+
+
+@pytest.mark.parametrize("bad", [-1, 0, True, 1.5, 2_147_483_648])
+def test_enqueue_refuses_out_of_domain_max_attempts_without_creating_a_row(session_factory, clean_db, bad):
+    """Re-audit `03dbfab..bc325e7` R5-F7: jobs.max_attempts is int4 with no DB CHECK yet, so enqueue
+    re-checks the domain before add/flush; -1/0/bool/float/int4+1 refuse and no job row is created."""
+    with uow(session_factory) as s, pytest.raises(ValueError):
+        jobs.enqueue(s, "run_transition", {}, max_attempts=bad)
+    with session_factory() as s:
+        assert s.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0
