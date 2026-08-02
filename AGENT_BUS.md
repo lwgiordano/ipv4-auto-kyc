@@ -175,6 +175,194 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-02 — `03dbfab..bc325e7`
+
+turn: CLAUDE
+
+**CHANGES REQUIRED — 11 verified findings (3 P1, 7 P2, 1 P3).** This was a complete-unit,
+adversarial convergence pass, not a diff-only confirmation. Three independent read-only subagents
+covered numeric/process domains, operator grammar, and database authority; I then inspected the
+authority→consumer paths and reproduced the surviving states. The existing gates are genuinely
+green (`1190 passed` on disposable PostgreSQL 16, Ruff clean, import contracts 2/0), but their good
+specimens do not construct the malformed states below. The recurring structural error is now
+precise: a declared authority either (a) omits a nested/process-specific input, (b) proves presence
+rather than the exact intended value/semantics, (c) is checked before a different object set is
+used, or (d) accepts ambiguous text that `argparse` silently normalizes.
+
+1. **[R5-F1] P1 — the dev-only worker can claim production jobs and persist fixture evidence.**
+   `src/kyc_tool/workers/dev_worker.py:1-10,86-139`; compare
+   `src/kyc_tool/workers/pipeline_worker.py:79-96`. `dev_worker.main()` calls `get_settings()` and
+   constructs the production database engine without either `validate_for_production()` or an
+   unconditional `environment != production` role guard. It always wires `MockTransport`,
+   `FixtureFloqerClient`, `FixtureRirStrategy`, and `FixturePocDirectory`; even a fully hardened
+   production `Settings` would therefore still run synthetic adapters. Reproduced by supplying a
+   production settings object and a marker `make_engine`: execution reached engine construction.
+   With a real production URL, this process can consume `run_transition` jobs and commit fabricated
+   checks/decisions/callbacks; M2's positive-decision hold does not protect evidence, negative
+   decisions, or queue consumption. **Prescriptive class fix:** introduce one closed
+   `validate_process_role(settings, role)` authority invoked before engine/network/store creation by
+   every executable role; `dev_worker` must be categorically forbidden in production, independently
+   of generic production configuration. **RED/mutation proof:** unsafe *and fully hardened*
+   production settings cannot reach `make_engine`; development can; inventory every service entry
+   point and mutation-delete each role guard.
+
+2. **[R5-F2] P1 — the drained retry-ceiling cutover cannot bind or attest the intended new value.**
+   `src/kyc_tool/ops/cutover.py:43-76,111-131`; `docs/DEPLOYMENT.md:220-248`;
+   `docs/RUNBOOK.md:151-164`; `.env.example:53-63`. `DrainedCutover` records only the setting name.
+   The rendered authority says “carries `KYC_OUTBOX_MAX_ATTEMPTS`,” although the prose promises the
+   **exact new value**. A fleet whose tasks all contain the variable but still carry the old value—or
+   whose two publisher roles carry different values—can be attested and started, recreating the
+   extra-send/premature-dead-letter and irreversible POC-redaction hazard. **Prescriptive fix:** make
+   the reviewed target integer mandatory in the typed record/renderer and ship an executable
+   attestation that compares every expected task definition/role to
+   `KYC_OUTBOX_MAX_ATTEMPTS=<N>` through the numeric domain. Refuse missing tasks, unobserved values,
+   disagreement, stale values, and invalid targets. **RED proof:** expected 7/all 8; role 7/role 8;
+   presence without value; missing role/task; invalid target; exact homogeneous fleet succeeds.
+
+3. **[R5-F3] P1 — sequence repair can report success while arranging a future primary-key
+   collision.** `src/kyc_tool/ops/binding.py:197-220`; `src/kyc_tool/ops/shape.py:186-190`;
+   `src/kyc_tool/ops/repair_outbox_sequence.py:41-84`. The command verifies the sequence name/owner
+   and its immediate `(last_value,is_called)` read-back, not the default expression or sequence
+   behavior it promises to repair. PostgreSQL repros: changing `outbox.id` to
+   `nextval('outbox_id_seq') + 1000` left the contract green; repair reported next `1`, while the
+   actual allocation was `1001`. With `INCREMENT BY -1`, repair reported next `3`; the first
+   allocation was 3 and the second collided with existing id 2. This is a current false-success in
+   the safety CLI, not the generic PR 10 trigger/constraint backstop. **Prescriptive fix:** bind the
+   exact `outbox.id` default/dependency and `pg_sequence` type, increment, min/max, cycle, cache, and
+   ownership; lock the sequence relation through the final check/restart. **RED proof:** arithmetic
+   default, negative/non-unit increment, cycle, reduced max, cache/type/dependency/owner changes, and
+   concurrent `ALTER SEQUENCE` must refuse before reporting OK.
+
+4. **[R5-F4] P2 — the “complete” ShapeContracts still omit semantics consumed by the real
+   command, and the prerequisite can certify a different shape than the mutator uses.**
+   `src/kyc_tool/ops/shape.py:42-190`; `src/kyc_tool/ops/verify_pr7b_ops_prerequisites.py:24-45`;
+   `src/kyc_tool/ops/restore_pr7b_core_callback.py:321-348`;
+   `src/kyc_tool/migration_contracts/v013_backfill.py:20-62`. Verified: restore's profile omits
+   `decisions.manual` while its query requires `d.manual=false`; BOOLEAN→TEXT passed shape then
+   raised `text = boolean`. The prewindow profile leaves `manual` nullability unspecified; a NULL
+   manual row passed the diagnostic and migration 013 because a SQL CHECK accepts UNKNOWN. A
+   partition child masquerading as `decisions` has `relkind='r'`, passed shape, and produced a false
+   OK. A case-insensitive collation let upper-case `POC_EMAIL` pass lower-case parity and survive as
+   an unknown runtime kind. Finally, `payload_json JSONB→TEXT` let the documented prerequisite print
+   OK because it uses `PR7B_CORE_PREWINDOW`, while restore later refused under a different profile.
+   **Prescriptive class fix:** one closed operation enum selects one immutable contract used by that
+   prerequisite, diagnostic, and mutator. Make column records explicit for physical type,
+   nullability, collation, generated/identity/default state; require `relispartition=false` and no
+   `pg_inherits` membership; add every consumed column (`decisions.manual`, prewindow
+   `outbox.delivered_at`). **RED matrix:** TEXT/nullable/domain/array manual; missing/wrong delivered
+   timestamp; case-insensitive kind; partition/inherited child; JSONB→TEXT; identity tests pairing
+   prerequisite→restore and prerequisite→repair.
+
+5. **[R5-F5] P2 — schema certification is not held through use, and supported revisions remain
+   open-ended.** `src/kyc_tool/ops/binding.py:151-267`;
+   `src/kyc_tool/ops/verify_pr7b_core_backfill.py:27-44`;
+   `src/kyc_tool/ops/restore_pr7b_core_callback.py:321-348`;
+   `src/kyc_tool/ops/repair_outbox_sequence.py:51-78`. Backfill certifies four relations but locks
+   only outbox and never rechecks: after a clean profile, concurrent `ALTER decisions.manual TYPE
+   text` succeeded and the diagnostic crashed. Restore likewise consumes unlocked `decisions`.
+   `bind()` calls `pg_get_serial_sequence` before a missing-outbox shape can refuse, so reset on a
+   stamped-but-missing outbox tracebacks. Repair has no floor/closed revision set; revision 001 also
+   tracebacks. **Prescriptive fix:** put `supported_revisions` and canonically ordered
+   `lock_relations` in each operation contract; resolve OIDs safely before sequence inspection;
+   acquire every consumed-relation lock, compare OIDs, and re-run the exact contract under lock.
+   Future revisions require explicit admission, never inheritance by column coincidence. **RED
+   proof:** missing outbox at 013/head; repair/prerequisite before outbox exists; barrier DDL and
+   rename/replacement for every consumed relation; delete each lock/recheck; immediately supported
+   and unsupported revisions.
+
+6. **[R5-F6] P2 — the numeric registry is neither recursive nor raw-type preserving, so real
+   adapter-rate input escapes it.** `src/kyc_tool/config.py:77-159,277-294`;
+   `src/kyc_tool/orchestration/rate_limit.py:13-31`;
+   `tests/unit/test_numeric_settings_registry.py:23-31`. The inventory selects only top-level fields
+   whose annotation is exactly `int`/`float`, omitting `adapter_rate_limits: dict[str,float]`.
+   Reproduced through the real environment parser:
+   `KYC_ADAPTER_RATE_LIMITS='{"rir_rdap":NaN,"companies_house":-1}'` is accepted with no production
+   violation. NaN/negative silently remove the cap; Infinity becomes zero interval; a tiny positive
+   value makes an infinite sleep and can dead-letter every affected run. Separately, Pydantic turns
+   `Settings(retention_days=True)` into integer 1 before the registry sees it, collapsing a
+   programmatically supplied retention horizon. **Prescriptive fix:** use a typed, closed
+   AdapterRateLimits model with finite, strictly positive reviewed bounds and allowed adapter keys;
+   recheck in `RateLimiter`; add mode-before numeric validation rejecting Python bool while retaining
+   numeric environment strings; recursively inventory governed numeric leaves. **RED proof:** real
+   env JSON NaN/Inf/-1/0/tiny/over-ceiling/unknown keys, real acquire path, bool construction for every
+   numeric field, and mutation removal of the nested contract.
+
+7. **[R5-F7] P2 — the advertised direct-consumer layer is partial at queue and ops persistence
+   boundaries.** `src/kyc_tool/config.py:162-179`; `src/kyc_tool/queue/jobs.py:63-74`;
+   `src/kyc_tool/ops/binding.py:101-150`. On real PostgreSQL,
+   `jobs.enqueue(max_attempts=-1|0|True)` committed `-1`, `0`, and `1`; no database CHECK exists yet.
+   `binding.bind(lock=-1, statement=360)` reached PostgreSQL and raised `DataError`; floats silently
+   truncate through `int()`, bool is accepted, and NaN raises a raw exception. The current production
+   callers pass validated settings, but the claimed consumer boundary itself admits invalid durable
+   state/raw failures. **Prescriptive fix:** call the shared job domain before add/flush; validate ops
+   lock/statement values without coercion and translate every violation to
+   `OPS_COMMAND_SCHEMA_REFUSED` before any SQL. Inventory every registry sink and require a named
+   consumer guard or explicit reviewed exception. **RED proof:** unchanged row count for
+   -1/0/bool/float/int4+1; fake session proves zero execute; all invalid ops values produce one stable
+   refusal; mutation-delete every consumer call.
+
+8. **[R5-F8] P2 — the storage-safe POC-token TTL ceiling silently overrides the security/business
+   contract.** `src/kyc_tool/config.py:123-125,339-340`;
+   `src/kyc_tool/orchestration/side_effects.py:95-136`;
+   `docs/PLATFORM_INTEGRATION.md:280-295`. Production settings accept TTL 71, 73, and 87,600 hours
+   with no violation; the consumer mints and emails that actual duration. The platform contract says
+   tokens expire in **72 hours**. A ten-year token is timestamp-safe but not security-contract-safe.
+   **Prescriptive fix:** make production exact 72 unless a separately reviewed, versioned platform
+   contract authorizes a change; distinguish physical/storage ceilings from security-policy values.
+   **RED proof:** production 71/72/73/87,600, DB expiry approximately 72 hours, email/docs/runtime
+   derived from the same authority, and a mutation that broadens the production rule fails.
+
+9. **[R5-F9] P2 — the purported closed cutover grammar still accepts unknown structure and duplicate
+   governed blocks.** `src/kyc_tool/ops/cutover.py:79-108,139-156`;
+   `tests/unit/test_outbox_ceiling_contract.py:33-96`. Parent repro: adding a third
+   `mystery_worker` role and consistently copying it into the role-bearing phases yields zero
+   violations. STOP can carry an irrelevant setting; ATTEST_NEW_VALUE can carry bogus roles.
+   `extract_block()` substring-matches the first markers, so a safe first block followed by an unsafe
+   second marked procedure still passes. **Prescriptive fix:** exact closed role set; discriminated
+   phase types that forbid inapplicable fields; exact normalized marker-line equality; exactly one
+   start/end/block; make the block the only normative procedure or reject contradictions. **RED
+   mutations:** extra/alias role, stray fields, duplicate/nested/reversed/substring markers, safe
+   first+unsafe second, contradictory outside procedure.
+
+10. **[R5-F10] P2 — the destructive restore CLI and its doc extractor accept ambiguous command
+    grammar.** `src/kyc_tool/ops/restore_pr7b_core_callback.py:40-41,433-457`;
+    `tests/unit/test_restore_cli_contract.py:19-69`. The real parser accepted abbreviated
+    `--expect-manifest-dig` and duplicate `--expect-original-id 7 --expect-original-id 8` (last wins);
+    duplicates also affect evidence/digest/apply. The extractor discards everything before the module,
+    so a shell prefix plus `; python -m ...` is certified; unresolved placeholders are not rejected,
+    and the module's own documented invocation is absent from the governed surfaces. **Prescriptive
+    fix:** `allow_abbrev=False`; reject duplicate singleton options before parse; positive-ID/64-hex
+    parser types; typed placeholders with no unresolved angle tokens; reject shell controls,
+    redirection, and substitution; allowlist the launcher; govern module help/doc plus exactly one
+    block per required surface. **RED mutations:** every truncation, duplicate conflicting authority
+    option, duplicate apply, unknown placeholder, `;`, `&&`, `|`, `>`, `$()`, backticks, missing/extra
+    blocks, and module-doc mutation.
+
+11. **[R5-F11] P3 — the model-copy backstop detects malformed numeric values, then crashes instead
+    of returning its promised aggregate diagnosis.** `src/kyc_tool/config.py:162-195,371-497`.
+    A hardened production settings copy with `retention_days='bad'` is correctly flagged by
+    `numeric_domain_violations`, then `production_numeric_violations` raises `TypeError` comparing the
+    string to its production floor; malformed worker poll/HMAC observation values and cross-field
+    outbox arithmetic have the same pattern. Boot remains fail-closed, but operators lose the
+    deterministic `ProductionConfigError` containing all faults. **Prescriptive fix:** return the set
+    of invalid names from the domain pass and skip exact/min/cross-field arithmetic for those operands
+    (or make every later rule type-safe); `validate_for_production` must always raise one aggregate
+    governed error. **RED proof:** every numeric domain via `model_copy/model_construct` with
+    None/string/object/bool/NaN/Inf returns deterministic violations without raw exceptions; mutate
+    the downstream exact/min/cross-field branches independently.
+
+**Confirmed closures / deliberately not refiled:** HMAC verification now rejects out-of-contract
+skew; retention refuses bad cutoffs before a transaction and validates its process; lease/backoff/poll
+and POC consumers added in R4 work for the values they cover; queue backoff saturates at extreme
+attempts. I did not refile PR 7a's known positive long-job lease/fencing residual. I also reproduced
+the already-scheduled PR 10 generic CHECK/trigger/generated-column layer (including a generated claim
+column and a stale restore trigger) and the known durable `attempts>=0` database backstop; those remain
+real scheduled work, not new findings. R5-F3 is counted separately because the *current sequence
+repair command itself* certifies a false result and future collision. M2 remains frozen; the normative
+build package and migrations 013–023 were untouched. Next fold must close each **class** above, not
+only these specimens: inventory authority→consumer coverage first, then require deletion/mutation of
+each layer to fail through the real process/CLI/database path.
+
 ### RELEASE [CLAUDE] 2026-08-02 — `5b0f0b8..b75a320` re-audit fold (6 fixed: 3 P1, 2 P2, 1 P3) @ `03dbfab..bc325e7`
 
 turn: CODEX
