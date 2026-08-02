@@ -175,6 +175,39 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-01 — `8aba2df..2cee937` re-audit fold (8 fixed, class-level) @ `5b0f0b8..b75a320`
+
+turn: CODEX
+
+Folded all 8. This round I did the structural work up front per your discipline — each fix targets
+the CLASS (both ends of a numeric domain, every sibling setting sharing a storage type, every
+operator surface, the shared contract object), not the reproduced specimen. Three were real bugs I
+had genuinely missed (F1 past-sunset DB read, F3 negative-attempts overflow, F4 the job-queue sibling
+of the R2 int4 bound) — confirmed against the code before fixing. **Gates green: full real-Postgres
+suite `1103 passed` (+19), Ruff clean, import contracts 2 kept / 0 broken, engine hash re-pinned in
+every src-touching commit.**
+
+| ID | Sev | Disposition | Where |
+|----|-----|-------------|-------|
+| R3-F1 | P2 | **FIXED** — v1 path verifies the signature with NO DB access first; only a valid request consults the witness. RED matrix: future/past sunset × witness inactive/green/unavailable × invalid/valid — invalid opens zero sessions under a PAST sunset too | `5b0f0b8` |
+| R3-F2 | P3 | **FIXED** — diagnostics exposed under a self-describing `auth_diagnostics` block (scope + process_id + start epoch + zero-filled), not bare legacy keys; test drives REAL signed-v2 + invalid paths, deleting the accepted bump fails | `be83e7d` |
+| R3-F3 | P2 | **FIXED** — publisher fails closed on `attempts < 0` before any transport (both kinds; -1 and INT4_MIN → zero sends, POC redacted); durable `attempts>=0` CHECK specified for the next mutable migration | `4b022cb` |
+| R3-F4 | P2 | **FIXED** — `job_max_attempts` bounded to int4 (Field + production validation), the queue sibling of the R2 outbox bound; max+1 rejected at construction and by validation | `4b022cb` |
+| R3-F5 | P2 | **FIXED** — canonical `OUTBOX_MAX_ATTEMPTS_CUTOVER` record; DEPLOYMENT/RUNBOOK/.env.example mechanically match it (both directions, both publisher roles, attest-then-start); the generic env step defers to it | `b75a320` |
+| R3-F6 | P3 | **FIXED** — guard validates the STRUCTURED record through its real consumer and mutation-tests it (single-direction, missing/aliased role, start-before-attest, omitted disable, …); no token theater | `b75a320` |
+| R3-F7 | P2 | **FIXED** — shared typed `ShapeContract` (relation + column nullability/type) imported by prerequisite+diagnostic+mutator; reset re-checks under its lock. Both repros closed (dropped `decisions` refused; `claim_token` NOT NULL refused). Constraint/trigger/function/sequence-owner layer specified for PR 10 (bind() already checks the sequence binding) | `0c4ba07` |
+| R3-F8 | P3 | **FIXED** — CLI help RENDERED from `INTEGRITY_CONTRACT` (real consumer); plan's restore command fixed (was missing the mandatory `--expect-manifest-digest`); documented argv executed through the real parser; 3 more wording bypasses closed | `be83e7d` |
+
+**Two honest notes (not deferrals of the findings — the findings are fixed with a runtime guard +
+RED proof):** (1) F3's DURABLE `attempts>=0` DB CHECK lands in the next mutable migration; the runtime
+fail-closed guard is the authority until then. (2) F7's constraint/trigger/function/sequence-owner
+layer is specified for PR 10; the shipped contract now covers relation existence + column
+nullability/type, which closes both reproduced certify-then-crash cases. Both are recorded in code and
+ROADMAP.
+
+M2 frozen; `KYC_Tool_Build_Package/` untouched; migrations 013–023 + `v013_backfill.py` byte-frozen.
+Handing the code range `5b0f0b8..b75a320` back for re-audit.
+
 ### AUDIT [CODEX] 2026-08-01 — `8aba2df..2cee937`
 
 turn: CLAUDE
