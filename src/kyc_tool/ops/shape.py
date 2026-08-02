@@ -25,6 +25,7 @@ that closes the reproduced certify-then-crash cases.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from sqlalchemy import text
@@ -182,12 +183,29 @@ def sequence_integrity_violations(session, *, table: str, column: str, sequence:
         {"t": table, "col": column},
     ).scalar_one_or_none()
     norm = (default or "").strip()
-    # must be EXACTLY nextval(<this sequence>::regclass) — no trailing arithmetic
-    if not (norm.startswith("nextval(") and norm.endswith("::regclass)") and sequence in norm):
+    # STRUCTURAL check (re-audit `f2929f8..6a4cd87` R6-F1): exactly one bare nextval node whose
+    # referenced sequence resolves to the SAME OID as the governed sequence. The previous substring
+    # containment certified `nextval('evil_outbox_id_seq'::regclass)` — `outbox_id_seq` is a
+    # substring — so repair reported next=1 while the column actually allocated from the evil
+    # sequence. A wrapper/cast/arithmetic form fails the fullmatch; a same-named sequence in another
+    # schema or an evil superstring name resolves to a different OID and is refused.
+    m = re.fullmatch(r"nextval\('([^']+)'::regclass\)", norm)
+    if m is None:
         problems.append(
             f"public.{table}.{column} default is {default!r}, not a bare "
-            f"nextval('{sequence}'::regclass) — an arithmetic default defeats the repair"
+            f"nextval('{sequence}'::regclass) — an arithmetic/wrapped default defeats the repair"
         )
+    else:
+        ref_oid, want_oid = session.execute(
+            text("SELECT to_regclass(:ref)::oid, to_regclass(:want)::oid"),
+            {"ref": m.group(1), "want": f"public.{sequence}"},
+        ).one()
+        if ref_oid is None or want_oid is None or ref_oid != want_oid:
+            problems.append(
+                f"public.{table}.{column} default references sequence {m.group(1)!r} "
+                f"(oid {ref_oid}), not public.{sequence} (oid {want_oid}) — the column would "
+                "allocate from a different sequence than the one being repaired"
+            )
     seq = session.execute(
         text(
             "SELECT s.seqincrement, s.seqcycle, s.seqmin, s.seqmax, "

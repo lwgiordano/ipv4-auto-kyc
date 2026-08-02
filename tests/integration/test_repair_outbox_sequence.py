@@ -177,3 +177,24 @@ def test_repair_refuses_a_stamped_but_missing_outbox(pg):
     out = proc.stdout + proc.stderr
     assert "OPS_COMMAND_SCHEMA_REFUSED" in out and "outbox" in out
     assert "Traceback" not in proc.stderr
+
+
+def test_repair_refuses_an_evil_substring_sequence_default(pg):
+    """Re-audit `f2929f8..6a4cd87` F1: the default check was substring containment, so a bare
+    nextval('evil_outbox_id_seq') — which CONTAINS 'outbox_id_seq' — certified clean while the column
+    allocated from the evil sequence. The check now resolves the referenced sequence's OID and
+    compares it to public.outbox_id_seq exactly."""
+    url = _fresh_db(pg, "kyc_seq_evil_substr")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE SEQUENCE evil_outbox_id_seq START 1001"))
+        conn.execute(text(
+            "ALTER TABLE outbox ALTER COLUMN id SET DEFAULT nextval('evil_outbox_id_seq'::regclass)"
+        ))
+    proc = _run_repair(url)
+    engine.dispose()
+    assert proc.returncode != 0
+    out = proc.stdout + proc.stderr
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in out and "evil_outbox_id_seq" in out
+    assert "Traceback" not in proc.stderr
