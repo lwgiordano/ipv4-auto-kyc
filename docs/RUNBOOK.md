@@ -221,7 +221,8 @@ exercises the same binding production enforces rather than bypassing it.
 ### Dead-lettered job (`jobs.status = 'dead'`)
 The run is FAILED with the error recorded; the case is untouched (no partial
 writes — transitions are transactional). After fixing the cause, requeue via the
-**console endpoint** (`POST /ui/api/requeue/job/{id}`, admin-authenticated) — it
+**ops endpoint** (`POST /v1/ops/requeue/job/{id}`, `Authorization: Bearer
+<KYC_UI_ADMIN_TOKEN>`, ALWAYS mounted — the console button calls the same service) — it
 resets both the job and its FAILED run atomically. Hand-written SQL is NOT a
 sanctioned path (PR 10a): the run reset is load-bearing (a requeued job whose run
 is still FAILED completes immediately without doing anything), and a hand
@@ -241,8 +242,10 @@ succeed.
 
 ### Dead outbox row (callback undeliverable)
 The run sits in PUBLISH_DECISION (visible, correct). Confirm the platform
-endpoint + HMAC secret, then requeue via the console endpoint ONLY
-(`POST /ui/api/requeue/outbox/{id}`, admin-authenticated). A hand
+endpoint + HMAC secret, then requeue via the ops endpoint ONLY
+(`POST /v1/ops/requeue/outbox/{id}`, `Authorization: Bearer <KYC_UI_ADMIN_TOKEN>`,
+ALWAYS mounted — available with the console disabled; the console button calls
+the same service). A hand
 `UPDATE outbox ...` is NOT a sanctioned path (PR 10a): post-7b-core it would
 leave the claim tuple untouched and bypass the 018+ transition-authority
 validation, stranding or corrupting the row's delivery accounting.

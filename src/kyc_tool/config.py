@@ -569,8 +569,14 @@ def production_config_violations(settings: Settings) -> list[str]:
 
     if not settings.read_auth_required:
         v.append("read_auth_required is False (the read API would be unauthenticated)")
-    if settings.ui_enabled and not settings.ui_admin_token:
-        v.append("ui_enabled is True but ui_admin_token is empty (unauthenticated ops console)")
+    # The token gates the ALWAYS-mounted /v1/ops requeue endpoints, not just the optional console
+    # (re-audit `f2929f8..6a4cd87` F3): production requires it unconditionally so the RUNBOOK's
+    # dead-letter recovery path exists in the secure configuration.
+    if not settings.ui_admin_token:
+        v.append(
+            "ui_admin_token is empty — it authenticates the always-mounted /v1/ops requeue "
+            "endpoints (and the console when ui_enabled)"
+        )
 
     # HMAC v2 (PR 5a): split secrets/key_ids, both sunset dates, and a positive
     # observation window are all required in production — this is what enforces

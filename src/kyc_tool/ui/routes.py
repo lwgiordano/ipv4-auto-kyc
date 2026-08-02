@@ -19,10 +19,9 @@ from sqlalchemy import text
 from kyc_tool.api.auth import require_admin
 from kyc_tool.api.routes_metrics import collect_metrics
 from kyc_tool.api.schemas import PAYLOAD_MODELS, EventEnvelope
-from kyc_tool.db.audit import audit
-from kyc_tool.db.session import uow
 from kyc_tool.domain import provenance
 from kyc_tool.events.ingest import ingest_event
+from kyc_tool.ops.requeue_service import requeue_dead_job, requeue_dead_outbox
 from kyc_tool.ui import integrations as integrations_report
 from kyc_tool.ui.salesforce_projection import FIELD_SOURCES, project_salesforce_fields
 
@@ -515,71 +514,12 @@ def requeue_job(job_id: int, request: Request) -> dict:
     """Runbook §dead-letter as a button: requeue the job and reset its FAILED
     run to QUEUED — transitions are guarded, adapter fetches resume."""
     require_admin(request.app.state.settings, request.headers)
-    with uow(request.app.state.session_factory) as session:
-        row = session.execute(
-            text("SELECT payload_json, status, case_id FROM jobs WHERE id=:id"), {"id": job_id}
-        ).first()
-        if row is None:
-            raise HTTPException(status_code=404, detail="job not found")
-        if row.status != "dead":
-            raise HTTPException(status_code=409, detail=f"job is {row.status}, not dead")
-        session.execute(
-            text(
-                "UPDATE jobs SET status='queued', attempts=0, run_after=now(), locked_by=NULL, "
-                "lease_expires_at=NULL, last_error=NULL, updated_at=now() WHERE id=:id"
-            ),
-            {"id": job_id},
-        )
-        run_id = (row.payload_json or {}).get("run_id")
-        if run_id:
-            session.execute(
-                text(
-                    "UPDATE runs SET state='QUEUED', error=NULL, finished_at=NULL "
-                    "WHERE id=:run_id AND state='FAILED'"
-                ),
-                {"run_id": run_id},
-            )
-        audit(session, "job.requeued", case_id=row.case_id, run_id=run_id, job_id=job_id)
-    return {"requeued": job_id, "run_reset": run_id}
+    # Shared transaction (re-audit F3): the always-mounted /v1/ops router owns the same service, so
+    # this console button and the production recovery path can never drift apart.
+    return requeue_dead_job(request.app.state.session_factory, job_id)
 
 
 @router.post("/ui/api/requeue/outbox/{outbox_id}")
 def requeue_outbox(outbox_id: int, request: Request) -> dict:
     require_admin(request.app.state.settings, request.headers)
-    with uow(request.app.state.session_factory) as session:
-        row = session.execute(
-            text("SELECT kind, status, case_id, run_id, payload_json FROM outbox WHERE id=:id"),
-            {"id": outbox_id},
-        ).first()
-        if row is None or row.status != "dead":
-            raise HTTPException(status_code=409, detail="outbox row not found or not dead")
-        if (row.payload_json or {}).get("redacted"):
-            # The body was scrubbed — by delivery for a POC token, or by retention past the
-            # window — so there is nothing deliverable left, for EITHER kind. Requeueing would
-            # produce a pending row that fails on every claim and blocks its stream (migration
-            # 020 refuses the transition at the database too; this is the honest 409 above it).
-            remedy = ("re-submit the POC instead" if row.kind == "poc_email"
-                      else "re-emit the decision (recalculate.requested) instead")
-            raise HTTPException(
-                status_code=409,
-                detail=f"dead {row.kind} is redacted (body scrubbed); {remedy}",
-            )
-        # The redaction predicate rides IN the UPDATE, not only in the check above: retention can
-        # commit between that SELECT and this statement, and losing that race used to surface as
-        # a 500 from the database guard rather than the honest 409 (the write is refused either
-        # way — this makes the refusal legible).
-        applied = session.execute(
-            text(
-                "UPDATE outbox SET status='pending', attempts=0, next_attempt_at=now(), "
-                "last_error=NULL WHERE id=:id AND status='dead' "
-                "AND payload_json <> '{\"redacted\": true}'::jsonb"
-            ),
-            {"id": outbox_id},
-        ).rowcount
-        if not applied:
-            raise HTTPException(
-                status_code=409,
-                detail="outbox row changed while requeueing (redacted or no longer dead); retry",
-            )
-        audit(session, "outbox.requeued", case_id=row.case_id, run_id=row.run_id, outbox_id=outbox_id)
-    return {"requeued": outbox_id}
+    return requeue_dead_outbox(request.app.state.session_factory, outbox_id)

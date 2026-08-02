@@ -30,6 +30,7 @@ def _hardened(**overrides):
         adapters_profile="real",
         read_auth_required=True,
         ui_enabled=False,
+        ui_admin_token="t" * 32,
         hmac_inbound_key_id="k-in",
         hmac_inbound_secret="i" * 40,
         hmac_outbound_key_id="k-out",

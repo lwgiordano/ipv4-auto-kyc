@@ -20,11 +20,11 @@ def test_runbook_contains_no_raw_requeue_update_sql():
 
 def test_runbook_points_at_both_console_requeue_endpoints():
     body = (REPO_ROOT / "docs" / "RUNBOOK.md").read_text()
-    assert "/ui/api/requeue/job/{id}" in body
-    assert "/ui/api/requeue/outbox/{id}" in body
+    assert "/v1/ops/requeue/job/{id}" in body
+    assert "/v1/ops/requeue/outbox/{id}" in body
 
 
-def test_the_documented_endpoints_exist_in_the_ui_router():
-    source = (REPO_ROOT / "src/kyc_tool/ui/routes.py").read_text()
-    assert '/ui/api/requeue/job/{job_id}' in source
-    assert '/ui/api/requeue/outbox/{outbox_id}' in source
+def test_the_documented_endpoints_exist_in_the_always_mounted_ops_router():
+    source = (REPO_ROOT / "src/kyc_tool/api/routes_ops.py").read_text()
+    assert '/v1/ops/requeue/job/{job_id}' in source
+    assert '/v1/ops/requeue/outbox/{outbox_id}' in source

@@ -15,6 +15,7 @@ def _hardened(**overrides):
         platform_callback_url="https://platform.example/kyc", object_store="s3",
         s3_bucket="kyc-evidence", ocr_engine="tesseract", email_provider="ses",
         adapters_profile="real", read_auth_required=True, ui_enabled=False,
+        ui_admin_token="t" * 32,
         hmac_inbound_key_id="k-in", hmac_inbound_secret="i" * 40,
         hmac_outbound_key_id="k-out", hmac_outbound_secret="o" * 40,
         hmac_v1_inbound_sunset_at="2030-01-01T00:00:00+00:00",

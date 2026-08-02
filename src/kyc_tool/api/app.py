@@ -8,6 +8,7 @@ from sqlalchemy import text
 from kyc_tool import __version__
 from kyc_tool.api.routes_events import router as events_router
 from kyc_tool.api.routes_metrics import router as metrics_router
+from kyc_tool.api.routes_ops import router as ops_router
 from kyc_tool.api.routes_read import router as read_router
 from kyc_tool.config import (
     REPO_ROOT,
@@ -77,6 +78,9 @@ def create_app(
     app.include_router(events_router)
     app.include_router(read_router)
     app.include_router(metrics_router)
+    # ALWAYS mounted (re-audit `f2929f8..6a4cd87` F3): the RUNBOOK's dead-letter recovery must exist
+    # in the secure production configuration, where the optional /ui console is disabled.
+    app.include_router(ops_router)
     if settings.ui_enabled:
         from kyc_tool.ui.routes import router as ui_router  # deferred: reads console.html
 

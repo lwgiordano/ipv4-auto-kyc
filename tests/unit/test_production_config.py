@@ -25,6 +25,7 @@ def hardened(**overrides) -> Settings:
         adapters_profile="real",
         read_auth_required=True,
         ui_enabled=False,
+        ui_admin_token="t" * 32,
         # HMAC v2 (PR 5a): split secrets + key_ids, both sunset dates, window.
         hmac_inbound_key_id="kyc-platform-1",
         hmac_inbound_secret="i" * 40,
@@ -63,7 +64,8 @@ def test_hardened_config_has_no_violations():
         ({"email_provider": "logging"}, "email_provider"),
         ({"adapters_profile": "fixture"}, "adapters_profile"),
         ({"read_auth_required": False}, "read_auth_required"),
-        ({"ui_enabled": True, "ui_admin_token": ""}, "ops console"),
+        ({"ui_enabled": True, "ui_admin_token": ""}, "ui_admin_token is empty"),
+        ({"ui_admin_token": ""}, "ui_admin_token is empty"),  # required even with the UI off (F3)
         # a zero backoff base retries a failing endpoint every cycle (re-audit F5)
         ({"outbox_backoff_base_seconds": 0}, "outbox_backoff_base_seconds"),
         # HMAC v2 (PR 5a)
