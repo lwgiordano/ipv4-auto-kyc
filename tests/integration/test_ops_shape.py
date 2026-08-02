@@ -3,16 +3,47 @@ detects relation absence, column absence and wrong nullability; and the prerequi
 one operation import the SAME contract object (not two look-alike literals)."""
 
 import pytest
+from sqlalchemy import text
 
 from kyc_tool.ops import binding, shape
 
 pytestmark = pytest.mark.postgres
 
 
-def test_shape_mismatches_is_clean_on_the_governed_schema(session_factory, clean_db):
+def test_every_shipped_contract_is_clean_on_the_governed_schema(session_factory, clean_db):
+    """No false refusals: every shipped profile's relkind/type/nullability assertions match the real
+    HEAD schema. A wrong type string in a contract fails HERE."""
     with session_factory() as s:
-        assert shape.shape_mismatches(s, shape.RESET_OUTBOX_CLAIMS) == []
-        assert shape.shape_mismatches(s, shape.PR7B_CORE_PREWINDOW) == []
+        for contract in (
+            shape.RESET_OUTBOX_CLAIMS,
+            shape.PR7B_CORE_PREWINDOW,
+            shape.RESTORE_OUTBOX_CALLBACK,
+            shape.SEQUENCE_REPAIR,
+        ):
+            assert shape.shape_mismatches(s, contract) == [], contract.name
+
+
+def test_a_view_masquerading_as_a_table_is_refused(session_factory, clean_db):
+    """R4-F4 repro (d): a filtering VIEW named `decisions` lists in information_schema.tables but must
+    be refused by the relkind check — it can hide rows and certify a false OK."""
+    contract = shape.ShapeContract("t", {"decisions": {}})
+    with session_factory() as s:
+        s.execute(text("ALTER TABLE decisions RENAME TO decisions_real"))
+        s.execute(text("CREATE VIEW decisions AS SELECT * FROM decisions_real"))
+        problems = shape.shape_mismatches(s, contract)
+        s.rollback()
+    assert any("decisions" in p and "not an ordinary table" in p for p in problems)
+
+
+def test_a_wrong_column_type_is_detected(session_factory, clean_db):
+    """R4-F4 (repros a/c): a column whose normalized type differs from the contract is refused before
+    the command compares it (an INTEGER status to 'pending', a TEXT manual to a boolean)."""
+    contract = shape.ShapeContract("t", {"shape_probe": {"flag": shape.ColumnShape(data_type="boolean")}})
+    with session_factory() as s:
+        s.execute(text("CREATE TABLE shape_probe (flag text)"))  # real table, wrong column type
+        problems = shape.shape_mismatches(s, contract)
+        s.rollback()
+    assert any("shape_probe.flag" in p and "boolean" in p for p in problems)
 
 
 def test_shape_mismatches_detects_missing_relation(session_factory, clean_db):

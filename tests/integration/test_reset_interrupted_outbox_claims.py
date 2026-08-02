@@ -168,3 +168,22 @@ def test_reset_refuses_a_claim_token_not_null_drift_without_locking(pg):
     assert "claim_token" in out and "NOT NULL" in out
     assert "Traceback" not in proc.stderr        # governed refusal, not a crash under the lock
     assert "NotNullViolation" not in out
+
+
+def test_reset_refuses_a_wrongly_typed_claim_column(pg):
+    """Re-audit R4-F4 (repro a, class): a claim column whose TYPE drifted passed the presence-only
+    check and then crashed mid-reset. The typed contract refuses it up front (claimed_by must be
+    text; status carries a CHECK that blocks retyping it, so this exercises the same typed guard on an
+    unconstrained claim column)."""
+    url = _fresh_db(pg, "kyc_reset_claim_type")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE outbox ALTER COLUMN claimed_by TYPE integer USING NULL"))
+    engine.dispose()
+
+    proc = _run_reset(url)
+    assert proc.returncode != 0
+    out = proc.stdout + proc.stderr
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in out and "claimed_by" in out
+    assert "Traceback" not in proc.stderr

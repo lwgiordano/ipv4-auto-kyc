@@ -71,7 +71,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from kyc_tool.config import PG_INT4_MAX, get_settings
 from kyc_tool.db.session import make_engine, make_session_factory, uow
-from kyc_tool.ops import binding
+from kyc_tool.ops import binding, shape
 
 _SCHEMA_VERSION = "pr7b-core.restore.v1"
 
@@ -320,8 +320,18 @@ def restore_callback(
         # no separate .scalar_one() that would itself traceback on a multi-head state (F4).
         binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
                      statement_timeout_seconds=statement_timeout_seconds,
-                     exact_revision="012", require_sequence_owner=True)
+                     exact_revision="012", require_sequence_owner=True,
+                     shape_contract=shape.RESTORE_OUTBOX_CALLBACK)
         session.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
+        # Re-check the SAME contract under the lock (re-audit R4-F4): a view swap or type/column drift
+        # between bind() and the lock cannot slip past the INSERT.
+        under_lock = shape.shape_mismatches(session, shape.RESTORE_OUTBOX_CALLBACK)
+        if under_lock:
+            session.rollback()
+            raise binding.BindingRefused(
+                f"{binding.SCHEMA_REFUSED_SENTINEL}: outbox/decisions shape changed under the "
+                f"maintenance lock: {'; '.join(under_lock)}"
+            )
 
         oid = evidence["original_outbox_id"]
         if session.execute(text("SELECT 1 FROM public.outbox WHERE id=:i"), {"i": oid}).first():

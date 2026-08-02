@@ -33,7 +33,7 @@ from sqlalchemy import text
 
 from kyc_tool.config import get_settings
 from kyc_tool.db.session import make_engine, make_session_factory, uow
-from kyc_tool.ops import binding
+from kyc_tool.ops import binding, shape
 
 _SEQUENCE = "public.outbox_id_seq"
 
@@ -51,11 +51,21 @@ def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: in
     with uow(session_factory) as session:
         binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
                      statement_timeout_seconds=statement_timeout_seconds,
-                     require_sequence_owner=True)  # ALTER SEQUENCE needs ownership (F13)
+                     require_sequence_owner=True,  # ALTER SEQUENCE needs ownership (F13)
+                     shape_contract=shape.SEQUENCE_REPAIR)
         # The fence. Writers are already stopped by the runbook; this makes that a guarantee
         # rather than an assumption, and ALTER SEQUENCE (unlike setval) excludes concurrent
         # nextval for the duration of the transaction.
         session.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
+        # Re-check the SAME contract under the lock (re-audit R4-F4): outbox must still be a table
+        # with a bigint id before we realign its sequence.
+        under_lock = shape.shape_mismatches(session, shape.SEQUENCE_REPAIR)
+        if under_lock:
+            session.rollback()
+            raise binding.BindingRefused(
+                f"{binding.SCHEMA_REFUSED_SENTINEL}: outbox shape changed under the maintenance "
+                f"lock: {'; '.join(under_lock)}"
+            )
         next_id = session.execute(
             text("SELECT GREATEST(COALESCE(max(id), 0), :f) + 1 FROM public.outbox"),
             {"f": floor},

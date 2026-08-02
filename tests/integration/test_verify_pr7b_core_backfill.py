@@ -197,3 +197,21 @@ def test_cli_refuses_when_decisions_relation_is_dropped(pg):
     assert "decisions" in out
     assert "Traceback" not in proc.stderr
     assert "UndefinedTable" not in out
+
+
+def test_cli_refuses_a_view_masquerading_as_the_decisions_table(pg):
+    """Re-audit R4-F4 (repro d): a filtering VIEW named `decisions` lists in information_schema but
+    is not an ordinary table; the relkind check refuses it before the parity certifies a false OK."""
+    url = _fresh_db(pg, "kyc_backfill_decisions_view")
+    command.upgrade(_config(url), "012")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE decisions RENAME TO decisions_real"))
+        conn.execute(text("CREATE VIEW decisions AS SELECT * FROM decisions_real"))
+    engine.dispose()
+
+    proc = _run_cli(url)
+    assert proc.returncode != 0
+    out = proc.stdout + proc.stderr
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in out and "not an ordinary table" in out
+    assert "Traceback" not in proc.stderr
