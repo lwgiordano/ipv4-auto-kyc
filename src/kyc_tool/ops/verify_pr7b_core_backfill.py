@@ -39,9 +39,21 @@ def verify_backfill(session_factory, *, lock_timeout_seconds: int = 60,
         binding.bind(s, lock_timeout_seconds=lock_timeout_seconds,
                      statement_timeout_seconds=statement_timeout_seconds, exact_revision="012",
                      shape_contract=shape.PR7B_CORE_PREWINDOW)
-        s.execute(text("LOCK TABLE public.outbox IN SHARE MODE"))  # BEFORE any data SELECT
+        # Lock EVERY relation the parity reads, not just outbox (re-audit `03dbfab..bc325e7` R5-F5):
+        # the parity joins decisions/cases/runs, so a concurrent ALTER decisions between bind() and
+        # the read would otherwise crash the diagnostic. SHARE precedes every data SELECT.
+        for relation in shape.PR7B_CORE_PREWINDOW.lock_relations:
+            s.execute(text(f"LOCK TABLE public.{relation} IN SHARE MODE"))
+        # Re-run the exact contract UNDER the locks before reading any data.
+        under_lock = shape.shape_mismatches(s, shape.PR7B_CORE_PREWINDOW)
+        if under_lock:
+            s.rollback()
+            raise binding.BindingRefused(
+                f"{binding.SCHEMA_REFUSED_SENTINEL}: shape changed under the SHARE locks: "
+                f"{'; '.join(under_lock)}"
+            )
         violations = run_parity(s)
-        s.rollback()  # read-only: never write, never hold the lock past the check
+        s.rollback()  # read-only: never write, never hold the locks past the check
     if not violations:
         return 0, []
     offenders: list[str] = []

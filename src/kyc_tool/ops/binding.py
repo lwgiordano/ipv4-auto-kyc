@@ -208,6 +208,21 @@ def bind(
             f"the {min_revision!r} schema (string ordering is not lineage; an unknown/spoofed "
             f"revision is refused here rather than tracebacking on a missing column)"
         )
+    # Resolve outbox existence BEFORE inspecting its sequence (re-audit `03dbfab..bc325e7` R5-F5):
+    # pg_get_serial_sequence('public.outbox','id') raises "relation does not exist" on a
+    # stamped-but-missing outbox (e.g. an early revision), tracebacking instead of refusing cleanly.
+    outbox_relkind = session.execute(
+        text(
+            "SELECT c.relkind FROM pg_catalog.pg_class c "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname='public' AND c.relname='outbox'"
+        )
+    ).scalar_one_or_none()
+    if outbox_relkind != "r":
+        raise BindingRefused(
+            f"{SCHEMA_REFUSED_SENTINEL}: public.outbox is absent or not an ordinary table "
+            f"(relkind={outbox_relkind!r}) — refusing before the sequence-backing check"
+        )
     backing = session.execute(text("SELECT pg_get_serial_sequence('public.outbox', 'id')")).scalar()
     if backing != "public.outbox_id_seq":
         raise BindingRefused(

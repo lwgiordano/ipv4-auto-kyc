@@ -57,6 +57,9 @@ def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: in
         # rather than an assumption, and ALTER SEQUENCE (unlike setval) excludes concurrent
         # nextval for the duration of the transaction.
         session.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
+        # (PostgreSQL sequences cannot be LOCK TABLE'd; the outbox ACCESS EXCLUSIVE lock blocks the
+        # writers that would touch it, and the integrity check + RESTART run in ONE transaction so the
+        # certified definition is the one RESTART acts on — re-audit `03dbfab..bc325e7` R5-F3.)
         # Re-check the SAME contract under the lock (re-audit R4-F4): outbox must still be a table
         # with a bigint id before we realign its sequence.
         under_lock = shape.shape_mismatches(session, shape.SEQUENCE_REPAIR)
@@ -65,6 +68,17 @@ def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: in
             raise binding.BindingRefused(
                 f"{binding.SCHEMA_REFUSED_SENTINEL}: outbox shape changed under the maintenance "
                 f"lock: {'; '.join(under_lock)}"
+            )
+        # Verify the sequence actually allocates monotonically from next_id (re-audit R5-F3): a bare
+        # nextval default with unit increment, no cycle, bigint domain. Otherwise RESTART reports a
+        # success it cannot deliver (an arithmetic default or negative increment recreates collisions).
+        seq_problems = shape.sequence_integrity_violations(
+            session, table="outbox", column="id", sequence="outbox_id_seq"
+        )
+        if seq_problems:
+            session.rollback()
+            raise binding.BindingRefused(
+                f"{binding.SCHEMA_REFUSED_SENTINEL}: outbox_id_seq integrity: {'; '.join(seq_problems)}"
             )
         next_id = session.execute(
             text("SELECT GREATEST(COALESCE(max(id), 0), :f) + 1 FROM public.outbox"),

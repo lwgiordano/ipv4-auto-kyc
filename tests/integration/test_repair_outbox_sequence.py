@@ -125,3 +125,55 @@ def test_repair_takes_the_access_exclusive_fence(pg):
         conn.close()
         blocker.dispose()
         engine.dispose()
+
+
+def _run_repair(url):
+    return subprocess.run(
+        [sys.executable, "-m", "kyc_tool.ops.repair_outbox_sequence"],
+        env={**os.environ, "KYC_DATABASE_URL": url}, capture_output=True, text=True, timeout=60,
+    )
+
+
+def test_repair_refuses_an_arithmetic_id_default(pg):
+    """Re-audit `03dbfab..bc325e7` R5-F3: a `nextval(seq)+1000` default makes RESTART report a
+    success it cannot deliver (next allocation is +1000). Refuse it, mutate nothing."""
+    url = _fresh_db(pg, "kyc_seq_arith")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE outbox ALTER COLUMN id SET DEFAULT nextval('outbox_id_seq') + 1000"))
+    proc = _run_repair(url)
+    engine.dispose()
+    assert proc.returncode != 0
+    out = proc.stdout + proc.stderr
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in out and "arithmetic" in out
+    assert "Traceback" not in proc.stderr
+
+
+def test_repair_refuses_a_negative_increment_sequence(pg):
+    """R5-F3: INCREMENT BY -1 allocates downward and collides — refuse before RESTART."""
+    url = _fresh_db(pg, "kyc_seq_neg")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER SEQUENCE outbox_id_seq INCREMENT BY -1"))
+    proc = _run_repair(url)
+    engine.dispose()
+    assert proc.returncode != 0
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in (proc.stdout + proc.stderr)
+
+
+def test_repair_refuses_a_stamped_but_missing_outbox(pg):
+    """Re-audit R5-F5: bind() resolved the outbox sequence before checking outbox existence, so a
+    stamped-but-missing outbox tracebacked. It now refuses cleanly."""
+    url = _fresh_db(pg, "kyc_seq_no_outbox")
+    command.upgrade(_config(url), "013")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE outbox CASCADE"))
+    proc = _run_repair(url)
+    engine.dispose()
+    assert proc.returncode != 0
+    out = proc.stdout + proc.stderr
+    assert "OPS_COMMAND_SCHEMA_REFUSED" in out and "outbox" in out
+    assert "Traceback" not in proc.stderr

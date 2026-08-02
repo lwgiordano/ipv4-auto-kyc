@@ -121,3 +121,59 @@ def test_bind_refuses_out_of_domain_lock_timeout(session_factory, clean_db, bad_
 def test_bind_refuses_an_out_of_domain_statement_timeout(session_factory, clean_db):
     with session_factory() as s, pytest.raises(binding.BindingRefused):
         binding.bind(s, lock_timeout_seconds=60, statement_timeout_seconds=-1)
+
+
+def test_a_partition_child_is_refused(session_factory, clean_db):
+    """R5-F4: a partition child has relkind='r' but exposes a filtered slice — reject it as a table."""
+    with session_factory() as s:
+        s.execute(text("CREATE TABLE probe_parent (id bigint) PARTITION BY RANGE (id)"))
+        s.execute(text("CREATE TABLE probe_child PARTITION OF probe_parent FOR VALUES FROM (0) TO (100)"))
+        problems = shape.shape_mismatches(s, shape.ShapeContract("t", {"probe_child": {}}))
+        s.rollback()
+    assert any("probe_child" in p and "partition" in p for p in problems)
+
+
+def test_a_nondeterministic_collation_is_refused(session_factory, clean_db):
+    """R5-F4: a case-insensitive collation on a case-sensitively-compared column is refused."""
+    with session_factory() as s:
+        s.execute(text(
+            "CREATE COLLATION probe_ci (provider=icu, locale='und-u-ks-level2', deterministic=false)"
+        ))
+        s.execute(text("CREATE TABLE probe_ci_tbl (k text COLLATE probe_ci)"))
+        contract = shape.ShapeContract(
+            "t", {"probe_ci_tbl": {"k": shape.ColumnShape(deterministic_collation=True)}}
+        )
+        problems = shape.shape_mismatches(s, contract)
+        s.rollback()
+    assert any("probe_ci_tbl.k" in p and "collation" in p for p in problems)
+
+
+def test_sequence_integrity_flags_arithmetic_default(session_factory, clean_db):
+    """R5-F3: an arithmetic column default (nextval(seq)+1000) defeats a sequence RESTART."""
+    with session_factory() as s:
+        s.execute(text("CREATE SEQUENCE probe_seq"))
+        s.execute(text("CREATE TABLE probe_seq_tbl (id bigint DEFAULT nextval('probe_seq') + 1000)"))
+        problems = shape.sequence_integrity_violations(
+            s, table="probe_seq_tbl", column="id", sequence="probe_seq"
+        )
+        s.rollback()
+    assert any("arithmetic" in p or "nextval" in p for p in problems)
+
+
+def test_sequence_integrity_flags_negative_increment_and_cycle(session_factory, clean_db):
+    """R5-F3: a non-unit/negative increment or a cycling sequence recreates collisions."""
+    with session_factory() as s:
+        s.execute(text("CREATE SEQUENCE probe_seq2 INCREMENT BY -1"))
+        s.execute(text("CREATE TABLE probe_seq_tbl2 (id bigint DEFAULT nextval('probe_seq2'))"))
+        problems = shape.sequence_integrity_violations(
+            s, table="probe_seq_tbl2", column="id", sequence="probe_seq2"
+        )
+        s.rollback()
+    assert any("increment" in p for p in problems)
+
+
+def test_supported_revision_admission():
+    from kyc_tool.ops.shape import PR7B_CORE_PREWINDOW, supported_revision_violation
+
+    assert supported_revision_violation("012", PR7B_CORE_PREWINDOW) is None
+    assert supported_revision_violation("001", PR7B_CORE_PREWINDOW) is not None
