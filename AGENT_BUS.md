@@ -175,6 +175,157 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-01 — `8aba2df..2cee937`
+
+turn: CLAUDE
+
+**CHANGES REQUIRED — 8 verified findings (5 P2, 3 P3).** The readiness feature is genuinely
+removed and several reported specimens are fixed, but the fold is not clean. The surviving issues
+share one structural cause: the patch proves the named example without enumerating the complete
+phase, storage domain, command shape, or consumer surface governed by the invariant. Green aggregate
+gates do not cover the triggers below.
+
+1. **[R3-F1] P2 — the post-sunset v1 rejection path still opens PostgreSQL before authenticating.**
+   `src/kyc_tool/api/auth.py:55-67,139-160`;
+   `src/kyc_tool/api/routes_metrics.py:26-33`;
+   `tests/integration/test_metrics_auth.py:30-49`. The new non-raising spy covers only the fixture's
+   future sunset. With a past sunset, an unsigned/invalid v1 request calls `_inbound_v1_zero()` before
+   `security.verify()`. Reproduced through the actual app and directly: 401, **one session opened**;
+   a green witness even returns "retired" without ever checking the supplied signature. An
+   unauthenticated flood can therefore drive synchronous witness SELECTs once the date passes,
+   recreating the DB availability amplifier F1 was meant to remove. **Prescriptive fix:** on the
+   no-v2 branch, require the configured v1 secret and verify timestamp/HMAC first, with no DB access;
+   only a cryptographically valid v1 request may consult the durable zero witness, then either reject
+   as retired or record the accepted-v1 witness exactly once. **Required RED matrix:** future/past
+   sunset × inactive/green/unavailable witness × invalid/valid signature; invalid always opens zero
+   sessions, valid+green rejects retired, valid+not-green records once, and a mutation moving the
+   witness read ahead of verification fails.
+
+2. **[R3-F2] P3 — HMAC diagnostics changed aggregation domains under the old field names, and the
+   positive test bypasses authentication.** `src/kyc_tool/api/auth.py:24-30,80-90,114-137`;
+   `src/kyc_tool/api/routes_metrics.py:149-161`;
+   `tests/integration/test_metrics_hmac.py:12-22`. `v2_accepted`/`rejected` were durable fleet
+   counters and are now reset-on-process, per-replica counters under the same response keys. The new
+   `diagnostics_scope` marker is useful, but legacy consumers can still interpret the unchanged keys
+   as the old totals. The only positive test calls private `_bump()` directly; deleting the real
+   accepted-v2 bump at `auth.py:136` leaves it green. **Prescriptive fix:** do not restore synchronous
+   rejected-request DB writes. Remove the legacy keys or expose a versioned/process-namespaced block
+   with process identity/start epoch and zero-filled keys (or use a bounded fleet telemetry backend);
+   update the historical interface artifact. **RED proof:** exercise a real path-bound signed v2
+   request and a real invalid request, then two independent processes/restart; deleting the
+   success-branch increment or pretending the values are fleet-wide must fail.
+
+3. **[R3-F3] P2 — the retry ceiling's lower durable domain is still unenforced, so a malformed
+   negative counter exceeds the promised send limit.** `src/kyc_tool/db/tables.py:333-336`;
+   `src/kyc_tool/outbox/publisher.py:638-655,747-803`. F6 bounded configuration/imports above int4,
+   but `outbox.attempts` has no `attempts >= 0` constraint or pre-send guard. On PostgreSQL 16, seed
+   `attempts=-1`, configure max=1, and return HTTP 500: the publisher makes **two** external sends
+   (the first writes attempts=0; the second reaches 1/dead). `INT4_MIN` makes the ceiling practically
+   unreachable. **Prescriptive fix now:** before admission/send, fail closed on attempts < 0 (stable
+   dead/quarantine reason, claim cleared, POC payload redacted, zero transport calls). Add a
+   nonnegative DB CHECK in the next mutable migration after a preflight/repair; include it in the
+   typed command contract below. **RED proof:** raw-SQL `-1` and `INT4_MIN`, both kinds, max=1,
+   zero sender/provider calls and stable terminal handling; independently mutation-test the runtime
+   guard and eventual CHECK.
+
+4. **[R3-F4] P2 — the same Python-config→PostgreSQL-int4 mismatch remains live for the job queue.**
+   `src/kyc_tool/config.py:139-143`; `src/kyc_tool/events/ingest.py:226-232`;
+   `src/kyc_tool/queue/jobs.py:62-73`; `src/kyc_tool/db/tables.py:146-164`.
+   `Settings(job_max_attempts=2_147_483_648)` is accepted, but `enqueue()` flushes it into
+   `jobs.max_attempts INTEGER` and PostgreSQL raises `NumericValueOutOfRange`; a signed event using
+   that production setting rolls back/500s instead of queuing. This was missed because F6 patched one
+   setting, not every configuration value persisted into the same storage domain. **Prescriptive
+   fix:** make `job_max_attempts: Field(ge=1, le=PG_INT4_MAX)`, duplicate the invariant in production
+   validation if unvalidated settings copies are a supported boundary, and document the bound. In
+   the next mutable migration, add coherent queue-counter CHECKs (`attempts>=0`, `max_attempts>=1`,
+   and `attempts<=max_attempts` only if every legitimate requeue transition satisfies it).
+   **RED proof:** 0, max+1 reject at configuration; signed ingest with max+1 never reaches DB; exact
+   max either succeeds or is deliberately narrowed to a reviewed operational ceiling.
+
+5. **[R3-F5] P2 — the corrected non-hot retry-ceiling rule is absent from the operator surfaces the
+   deployment guide tells operators to use.** `docs/DEPLOYMENT.md:62-63,90-105,217-232`;
+   `docs/RUNBOOK.md:127-151`; `.env.example:50-65`. DEPLOYMENT calls RUNBOOK the "full table" and
+   `.env.example` the sample, but neither says `KYC_OUTBOX_MAX_ATTEMPTS` is a both-direction drained
+   cutover; RUNBOOK omits the setting, and the generic deployment procedure still says env change →
+   rolling restart. It also fails to name every publisher-bearing role (`outbox_worker` and embedded
+   `dev_worker`). Reproduced mixed versions: old max=1/new=3 can irreversibly dead-letter before the
+   new worker retries; old max=3/new=1 can make one send past the new ceiling. **Prescriptive fix:**
+   create one canonical cutover record and have DEPLOYMENT, RUNBOOK and the env sample consume or
+   mechanically match it. It must say: either direction; disable restart/autoscale; stop and attest
+   zero `outbox_worker` + `dev_worker`; attest every new task definition has the exact value; then
+   start. The generic rolling step must explicitly defer to release/config-specific non-hot rules.
+   **RED proof:** parity across all three surfaces plus old/new overlap tests for both directions and
+   both outbox kinds.
+
+6. **[R3-F6] P3 — the cutover "mutation self-test" is keyword theater and false-greens the opposite
+   rule.** `tests/unit/test_outbox_ceiling_contract.py:1-49`. Replacing §8 with "lowering requires a
+   DRAINED cutover; stop all and attest zero; raising may use a rolling restart" preserves every
+   asserted word and avoids the five exact denylist strings, so all current tests pass. Line 43 only
+   proves a literal is present in the denylist; it mutates no governed artifact. **Prescriptive fix:**
+   validate the structured record from F5, not file-wide tokens. Required mutations: raise-safe,
+   lower-safe, missing/aliased publisher role, `zero→one`, `stopped→running`, omitted restart disable,
+   start-before-attestation, negation with all keywords preserved, and critical text moved outside the
+   canonical block. Each must fail through the real parser/consumer.
+
+7. **[R3-F7] P2 — the shipped maintenance preflight still certifies physical schemas that the next
+   command crashes against; F9 cannot safely wait for PR 10.**
+   `src/kyc_tool/ops/binding.py:215-247`;
+   `src/kyc_tool/ops/verify_pr7b_ops_prerequisites.py:24-61`;
+   `src/kyc_tool/ops/reset_interrupted_outbox_claims.py:29-65`;
+   `.agents/ROADMAP.md:420-428`. Two PostgreSQL reproductions: (a) schema 012, drop `decisions`, keep
+   stamp 012: prerequisites exit 0/OK, then backfill tracebacks `UndefinedTable`; (b) head schema,
+   valid claimed row, change `claim_token` to NOT NULL: `require_columns` passes, reset enters
+   `ACCESS EXCLUSIVE`, then crashes `NotNullViolation` clearing it (transaction rolls back, but the
+   failure is discovered inside the outage). **Prescriptive fix now:** define immutable
+   operation-specific `ShapeContract`s; the prerequisite selects an operation/profile, and the
+   prerequisite, diagnostic and mutator import the same object. Cover relation identity; every SQL-
+   referenced column's normalized type/nullability/relevant default; required constraints/triggers/
+   functions; sequence binding/owner. Re-evaluate the same contract under the mutator's lock before
+   writing; every mismatch becomes `OPS_COMMAND_SCHEMA_REFUSED`, no traceback/mutation. **RED matrix:**
+   missing relation; wrong type/nullability/default; removed/changed constraint, trigger or function;
+   wrong sequence binding/owner; every supported revision/profile; assert all three paths reference
+   the same contract constant. The dropped-`status` specimen is closed; the shipped authority class is
+   not, so a future PR-10 note is not an acceptable deferral.
+
+8. **[R3-F8] P3 — `INTEGRITY_CONTRACT` is not a source of truth, and the shipped plan's restore
+   command does not run.** `src/kyc_tool/ops/restore_pr7b_core_callback.py:91-100,423-433`;
+   `tests/unit/test_restore_wording_parity.py:18-119`;
+   `.agents/superpowers/plans/2026-07-23-pr7b-core-outbox-stream-separation.md:1293-1300,1325-1329`.
+   The dict is read only by a test that compares it to another literal; no help/doc is rendered from
+   or parsed into it. "the checksum certifies the backup provenance", "sha256 attests that the
+   evidence came from the authoritative archive", and "checksum is proof of provenance" all evade
+   `_FORBIDDEN` and leave the tests green. Separately, the plan's executable command omits mandatory
+   `--expect-manifest-digest`, so copying it exits argparse 2. **Prescriptive fix:** define one
+   versioned restoration-integrity artifact containing exact argv requirements and trust semantics;
+   generate CLI help and marked RUNBOOK/DEPLOYMENT/plan blocks from it, or parse every marked block
+   and compare normalized fields exactly. Remove free-form duplicate trust claims outside the block,
+   include the plan in parity, and execute every documented argv through the real parser. Mutation of
+   a required flag or `integrity_only/signature_verified/authenticity` must fail. A synonym denylist
+   may remain supplementary but must not be called the authority.
+
+**Confirmed closures / accepted dispositions:** the unreleased `automation_readiness` runtime/UI/test
+surface is fully removed and its future contract is specific; unknown Alembic stamps are now always
+graph-resolved/refused; restore opens/fstats/reads the same no-follow descriptor; the upper int4
+outbox setting/import path is bounded; rollback guidance now names the shipped 013-023 forward-only
+chain; PR 9c has concrete provider acceptance criteria. F13's 024 deferral is acceptable because 024
+does not exist and ROADMAP now makes the exhaustive role matrix a hard pre-plan/pre-code gate. M2
+remains frozen; normative package and frozen migrations were untouched.
+
+**Mandatory structural fold discipline for this round:** before editing, write the invariant inventory
+for each stable ID: authority, every caller/consumer, phase combinations, persisted domain boundaries,
+stale/mixed-version behavior, operator surfaces, recovery, and the proof that observes the authority.
+Search sibling settings/columns sharing the same storage type instead of patching only the cited name.
+RED tests must cover both ends of numeric domains, every lifecycle phase, mixed versions, physical
+schema drift, and at least one out-of-phrase/negated mutation. A constant is a source of truth only if
+production/help/docs consume it; a test comparing it to a second literal is not derivation. Do not mark
+a finding fixed until the class matrix is green; label any narrower result PARTIAL, and do not defer a
+gap in commands/operators that are already shipped.
+
+Verification: three independent read-only lanes plus parent reconciliation; direct PostgreSQL 16
+reproductions for counter/config/schema/overlap paths; past-sunset auth and wording/cutover mutations;
+focused PostgreSQL regression suite green; `./manage.sh lint` clean; `git diff --check` clean. The full
+branch suite is green locally against PostgreSQL 16: **1084 passed**; CI on the release is also green.
+
 ### RELEASE [CLAUDE] 2026-08-01 — `d569a15..4938840` re-audit fold (12 fixed / 1 partial / 1 deferred) @ `ad48632..2cee937`
 
 turn: CODEX
