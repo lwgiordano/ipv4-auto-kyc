@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from kyc_tool.security import MAX_HMAC_SKEW_SECONDS
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -61,10 +63,9 @@ OUTBOX_ATTEMPT_DEADLINE_PHASES = 4
 # outbox.attempts. Config ceilings that feed those columns must not exceed it (re-audit F6).
 PG_INT4_MAX = 2_147_483_647
 
-# The ONE governed signed-request replay window (PLATFORM_INTEGRATION §skew). v1/v2 verification and
-# production validation both derive from this constant so the 300-second contract cannot silently
-# widen (re-audit `5b0f0b8..b75a320` R4-F1 — an unbounded skew accepted year-old signatures).
-MAX_HMAC_SKEW_SECONDS = 300
+# MAX_HMAC_SKEW_SECONDS (the ONE governed replay window) lives in `security` — the module that
+# enforces it — and is imported above so the field domain and the verifier share a single source
+# (re-audit `5b0f0b8..b75a320` R4-F1).
 # Timestamp-safe ceilings for values that flow into `now() + interval 'N'` arithmetic: generous
 # operational maxima far below PostgreSQL timestamptz overflow, so a huge value refuses at config time
 # instead of raising DatetimeFieldOverflow deep inside a claim/mint (re-audit R4-F3).

@@ -9,6 +9,20 @@ import hmac
 import math
 import time
 
+# The ONE governed signed-request replay window (PLATFORM_INTEGRATION §skew). `config` imports this
+# for the setting domain; `verify`/`verify_v2` fail closed on any skew outside (0, MAX] so a widened
+# window cannot enlarge the acceptance window even on a direct call (re-audit `5b0f0b8..b75a320`
+# R4-F1, consumer layer).
+MAX_HMAC_SKEW_SECONDS = 300
+
+
+def _skew_in_contract(max_skew_seconds) -> bool:
+    return (
+        isinstance(max_skew_seconds, int)
+        and not isinstance(max_skew_seconds, bool)  # bool is an int subclass
+        and 1 <= max_skew_seconds <= MAX_HMAC_SKEW_SECONDS
+    )
+
 
 def sign(secret: str, timestamp: str, body: bytes) -> str:
     message = timestamp.encode() + b"." + body
@@ -21,9 +35,11 @@ def verify(
     body: bytes,
     signature: str,
     *,
-    max_skew_seconds: int = 300,
+    max_skew_seconds: int = MAX_HMAC_SKEW_SECONDS,
     now: float | None = None,
 ) -> bool:
+    if not _skew_in_contract(max_skew_seconds):  # fail closed on an out-of-contract window
+        return False
     try:
         ts = float(timestamp)
     except (TypeError, ValueError):
@@ -76,10 +92,12 @@ def verify_v2(
     secret: str,
     signature: str,
     *,
-    max_skew_seconds: int = 300,
+    max_skew_seconds: int = MAX_HMAC_SKEW_SECONDS,
     now: float | None = None,
     **fields,
 ) -> bool:
+    if not _skew_in_contract(max_skew_seconds):  # fail closed on an out-of-contract window
+        return False
     try:
         ts = float(fields["timestamp"])
     except (TypeError, ValueError, KeyError):
