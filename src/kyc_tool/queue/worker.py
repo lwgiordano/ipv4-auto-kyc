@@ -11,6 +11,7 @@ import uuid
 import structlog
 from sqlalchemy.orm import Session, sessionmaker
 
+from kyc_tool.config import require_numeric_domain
 from kyc_tool.db.session import uow
 from kyc_tool.queue import jobs
 
@@ -31,6 +32,15 @@ class Worker:
         worker_id: str | None = None,
         on_dead_letter: object | None = None,
     ) -> None:
+        # Process boundary (re-audit `5b0f0b8..b75a320` R4-F3): validate the timing knobs at
+        # construction so a nonpositive/non-finite poll cannot kill the idle loop at the first
+        # `time.sleep`, and a bad lease/backoff refuses BEFORE the worker starts claiming — not mid-run.
+        for name, value in (
+            ("worker_poll_seconds", poll_seconds),
+            ("job_lease_seconds", lease_seconds),
+            ("job_backoff_base_seconds", backoff_base_seconds),
+        ):
+            require_numeric_domain(name, value)
         self.session_factory = session_factory
         self.handlers = handlers
         self.lease_seconds = lease_seconds

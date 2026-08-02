@@ -159,6 +159,15 @@ def numeric_value_violation(ns: NumericSetting, value) -> str | None:
     return None
 
 
+def require_numeric_domain(name: str, value) -> None:
+    """Fail closed on a direct-call value outside a registered domain — the CONSUMER layer a queue
+    claim, a retry, a poll or a token mint runs before it reaches PostgreSQL (re-audit R4-F3). Raises
+    ValueError so the caller leaves its durable state unchanged."""
+    violation = numeric_value_violation(numeric_domain_of(name), value)
+    if violation:
+        raise ValueError(violation)
+
+
 def numeric_domain_violations(settings: "Settings") -> list[str]:
     """Every registry domain violation for `settings` (independent of environment). Catches an
     unvalidated `model_copy(update=...)` that bypassed the Pydantic field bounds."""

@@ -40,6 +40,7 @@ from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Outbox
 from kyc_tool.outbox.emails import EmailSender, LoggingEmailSender
 from kyc_tool.outbox.fence import take_shared_fence
+from kyc_tool.queue.backoff import saturating_backoff_seconds
 
 log = structlog.get_logger(__name__)
 
@@ -816,17 +817,14 @@ class OutboxPublisher:
             log.warning("outbox_retry", outbox_id=row.id, kind=row.kind, attempts=attempts)
 
     def _backoff_seconds(self, attempts: int) -> int:
-        """Saturating exponential backoff: base × 2**(attempts-1), capped at `_MAX_BACKOFF_SECONDS`
-        so `now() + make_interval(secs => delay)` can never overflow timestamptz (re-audit
-        `d3c0852..23e005e` F5). ONE definition shared by the failure and the reconciliation paths so
-        the two schedules cannot diverge. A zero base (dev/test) yields 0 — retry when due."""
-        base = self.settings.outbox_backoff_base_seconds
-        shift = max(attempts - 1, 0)
-        # base is a Python int, so base * 2**shift never overflows in Python; the cap bounds the
-        # value handed to PostgreSQL. Bound the shift too so no absurd intermediate is materialised.
-        if shift >= 40:
-            return 0 if base == 0 else _MAX_BACKOFF_SECONDS
-        return min(base * (2 ** shift), _MAX_BACKOFF_SECONDS)
+        """Saturating exponential backoff via the ONE shared queue-backoff helper (re-audit
+        `5b0f0b8..b75a320` R4-F3), so the queue and outbox schedules cannot diverge and no attempt
+        count overflows timestamptz. base × 2**(attempts-1), capped; a zero base yields 0 (retry when
+        due). The outbox schedule carries no jitter (its ordering is per-row FIFO, not thundering-herd
+        sensitive)."""
+        return saturating_backoff_seconds(
+            self.settings.outbox_backoff_base_seconds, attempts, cap_seconds=_MAX_BACKOFF_SECONDS
+        )
 
     def _fenced_dead_letter(self, session, row, token, *, note: str):
         """Terminalise a claimed row to 'dead' fenced on `token`, redacting a POC body — no send, no

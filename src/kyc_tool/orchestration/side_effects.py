@@ -12,7 +12,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from kyc_tool.adapters.base import AdapterOutput
-from kyc_tool.config import Settings
+from kyc_tool.config import Settings, require_numeric_domain
 from kyc_tool.db.audit import audit
 from kyc_tool.db.tables import Case, Check, PocToken, ReviewTask, Run
 from kyc_tool.domain.models import AdapterStatus, CheckStatus
@@ -89,6 +89,10 @@ class SideEffects:
 
     def _poc_effects(self, session: Session, run: Run, case: Case, normalized: dict) -> None:
         if normalized.get("send_token"):
+            # Consumer-layer domain re-check (re-audit `5b0f0b8..b75a320` R4-F3): expired_at is
+            # now() + timedelta(hours=ttl), so a nonpositive TTL would mint and EMAIL a token that is
+            # already expired. Refuse before expiring old tokens or minting a new one.
+            require_numeric_domain("poc_token_ttl_hours", self.settings.poc_token_ttl_hours)
             # a re-submitted POC expires all outstanding tokens (02 §6)
             session.execute(
                 text(

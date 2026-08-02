@@ -10,13 +10,14 @@ Design (validated in the architecture review):
   max_attempts dead-letters (and its run is failed by the caller).
 """
 
-import random
 from dataclasses import dataclass
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from kyc_tool.config import require_numeric_domain
 from kyc_tool.db.tables import Job
+from kyc_tool.queue.backoff import saturating_backoff_seconds
 
 _CLAIM_SQL = text(
     """
@@ -75,6 +76,11 @@ def enqueue(
 
 def claim(session: Session, kinds: list[str], worker_id: str, lease_seconds: int) -> ClaimedJob | None:
     """Claim one runnable job. Caller owns the (short) transaction."""
+    # Consumer-layer domain re-check (re-audit R4-F3): a nonpositive lease mints an ALREADY-EXPIRED
+    # claim the reaper immediately requeues — a second worker then claims the same case job,
+    # defeating per-case serialization; an overflowing lease raises DatetimeFieldOverflow inside
+    # make_interval, outside the handler boundary. Refuse before the UPDATE, leaving the row untouched.
+    require_numeric_domain("job_lease_seconds", lease_seconds)
     row = session.execute(
         _CLAIM_SQL, {"worker_id": worker_id, "lease_seconds": lease_seconds, "kinds": kinds}
     ).first()
@@ -100,6 +106,10 @@ def complete(session: Session, job_id: int) -> None:
 
 def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: int) -> bool:
     """Record a failure. Returns True when the job dead-lettered."""
+    # Consumer-layer domain re-check (re-audit R4-F3): a negative base makes run_after the PAST so the
+    # job requeues immediately with no throttle; a large base × high attempts overflowed
+    # make_interval. Refuse before any write so the job's state is unchanged on a bad base.
+    require_numeric_domain("job_backoff_base_seconds", backoff_base_seconds)
     if job.attempts >= job.max_attempts:
         session.execute(
             text(
@@ -108,8 +118,9 @@ def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: in
             {"id": job.id, "err": error[:2000]},
         )
         return True
-    delay = backoff_base_seconds * (2 ** (job.attempts - 1))
-    delay += random.uniform(0, delay / 4)  # jitter
+    # Saturating schedule (shared with the outbox): the shift is bounded before 2**shift is built and
+    # the post-jitter delay is capped, so no attempt count overflows timestamp arithmetic.
+    delay = saturating_backoff_seconds(backoff_base_seconds, job.attempts, jitter_fraction=0.25)
     session.execute(
         text(
             """
