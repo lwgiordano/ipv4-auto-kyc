@@ -175,6 +175,123 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-03 — `7d1c435..827bc0f` (R8 fold)
+
+turn: CLAUDE
+
+**CHANGES REQUIRED.** I audited the R8 fold adversarially against queue ownership,
+manual recovery, lease revocation, adapter retry budgets, and external I/O containment. The focused
+suite is green (`81 passed` against real Postgres for the queue/retry files), but that green count
+does not prove the new authority is held through use. Seven findings survive reproduction. This is
+not clean enough for 024 activation: do not treat R8 as a safe foundation for a platform ordering
+cutover until the P1s below are fixed and re-audited.
+
+1. **P1 — `assert_live()` proves the nonce once, then lets a stale claimant commit after another
+   worker owns the job.** `src/kyc_tool/queue/jobs.py:147-165` is a plain `SELECT 1` on
+   `id + status='running' + locked_by=<nonce>`; it takes no row lock and does not re-check lease
+   expiry. `src/kyc_tool/pipeline.py:209-219` and `:359-399` rely on that proof before committing
+   state hops, adapter rows, partial flags, object references, review tasks, POC token/email side
+   effects, and related writes. Trigger: in real Postgres, worker A begins a transaction and
+   `assert_live(A)` passes; worker B reaps the expired row and claims it with nonce B; A then commits
+   a protected write. Final row: `('running', '<B nonce>', 'STALE_WRITE_COMMITTED')`. Why this is
+   real: the nonce is a name badge, but the code only looks at it once; it does not lock the door
+   while using it. **Fix:** replace every commit-authorizing proof with one claim-fence primitive
+   that locks or conditionally updates the job row under `id + status='running' + locked_by=<nonce> +
+   lease_expires_at > clock_timestamp()` and holds that authority through commit. Preserve one lock
+   order (`job -> case -> run/task`) across reaper, heartbeat, adapter, and decide paths. Do not hold
+   the job lock over network/object-store I/O; stage content-addressed bytes outside the transaction,
+   then attach the reference inside the fenced transaction with orphan cleanup. Migration 026's
+   dedicated `lease_token` must preserve this transaction-held authority, not merely rename the
+   token. **RED:** two-connection barrier where A passes the fence and pauses while B tries to
+   reap/reclaim; either B blocks until A commits or A rolls back, but never B owns while A commits.
+   Run the same witness through state-hop and POC token/email side-effect paths. Add a mutation that
+   downgrades the fence to plain `SELECT` and prove the test fails.
+
+2. **P1 — `requeue_dead_job()` can erase a newly live claim because recovery is read-then-write and
+   the write has no state CAS.** `src/kyc_tool/ops/requeue_service.py:17-33` pre-reads a row as
+   `dead`, then later runs `UPDATE jobs SET status='queued', locked_by=NULL, ... WHERE id=:id`.
+   Trigger: A reads `dead`; B recovers the job and a worker claims it as `running` with nonce
+   `worker-live:<uuid>`; A executes the production `UPDATE` by id only. Final row:
+   `('queued', NULL, 2, 4)`, so A erased B's live owner. A second race lets two recoveries both grant
+   budget and write duplicate audit evidence. **Fix:** make recovery a single conditional
+   `UPDATE ... WHERE id=:id AND status='dead' ... RETURNING ...`; only the returned winner may reset
+   the run and write audit rows. Losers return a stable 409/no-op. Include the numeric-cap predicate
+   in the same CAS. **RED:** two concurrent recovery callers produce exactly one success, one 409,
+   and one audit record; recovery racing a worker claim cannot clear `locked_by` or change a live job.
+
+3. **P1 — adapter deadlines are phase metadata, not a hard wall-clock boundary, and RIR bypasses
+   them entirely.** `src/kyc_tool/adapters/retry.py:123-176` maps remaining budget into HTTPX
+   connect/read/write/pool phase timeouts; HTTPX read timeout is inactivity between chunks, not total
+   response time. `src/kyc_tool/adapters/rir_rdap/base.py:67-81` still calls `client.get()`
+   directly and never consults the budget. Triggers: a local socket that sends one byte every
+   0.04s returns 10 bytes successfully after about 0.40s under a 0.12s budget; an already-expired
+   `RetryBudget(deadline=0, clock=1)` still allows the RIR path to perform one wire call. **Fix:**
+   create one orchestration-owned external-call authority used by every adapter. It must enforce an
+   absolute wall-clock deadline across rate-limit wait, headers, and streamed body bytes; phase
+   timeouts are secondary. If the product requires an unconditionally killable boundary, move calls
+   into a supervised child process; otherwise use a bounded daemon executor plus hard orphan/socket
+   capacity and fail-closed capacity accounting. Add a static/import guard that bans direct HTTPX
+   calls outside the governed transport, and derive budgets from the durable lease deadline/current
+   renewal authority rather than only the nominal lease interval. **RED:** expired RIR budget yields
+   zero calls; a drip response below inactivity timeout exits within the absolute budget; a lost
+   heartbeat during a stuck call caps orphan count and commits no side effects; adding a direct
+   `client.get()` to an adapter fails the static guard.
+
+4. **P2 — manual recovery grants an unbounded, exponential retry budget and can overflow valid int4
+   values.** `src/kyc_tool/ops/requeue_service.py:24-33` uses `max_attempts = attempts +
+   max_attempts`. Triggers: a valid `dead` row with `attempts=max_attempts=2147483647` raises
+   `integer out of range`; repeated exhaust/recover cycles grow remaining budget `5 -> 10 -> 20 ->
+   40`; concurrent recoveries can grant `5 -> 10 -> 15`. **Fix:** introduce an explicit fixed
+   bounded `recovery_grant` policy/config value (or immutable per-job field) and keep cumulative
+   attempts separate from remaining recovery allowance. Check arithmetic before SQL; return a stable
+   governed refusal at cap with no job/run/audit mutation. Put the durable `attempts >= 0` and cap
+   CHECKs in migration 028 as planned. **RED:** repeated recovery cycles grant exactly N each time;
+   int4 max and max-N+1 cases refuse cleanly; mutation restoring `attempts + max_attempts` fails.
+
+5. **P2 — heartbeat loss during a rate-permit wait still authorizes another upstream call.**
+   `src/kyc_tool/pipeline.py:332-345` checks liveness before the outer permit, while
+   `src/kyc_tool/adapters/retry.py:127-152` can wait for a retry permit and then only re-check
+   remaining time before `client.get()`. Trigger: first call returns 503; the retry permit callback
+   sets `ClaimContext.lost`; code still sends call #2 (`calls=[1,2]`, `lost=True`). **Fix:** collapse
+   first-send and retry-send into one `authorize_send` capability invoked immediately before every
+   physical call. It should acquire the rate permit, re-prove claim liveness against the DB, and
+   re-prove remaining deadline in that order, with no split authority between pipeline and retry
+   helper. **RED:** a permit that sets `lost` while waiting yields no second call; the same test
+   should fail if the post-permit liveness proof is removed.
+
+6. **P2 — registry responses have no byte or decompression cap; eager `client.get()` can buffer an
+   unbounded body.** `src/kyc_tool/adapters/retry.py:151-153`,
+   `src/kyc_tool/adapters/companies_house.py:42-50`,
+   `src/kyc_tool/adapters/gleif.py:26-34`, and `src/kyc_tool/adapters/rir_rdap/base.py:75-81`
+   all accept buffered responses. Trigger: a local socket served a 16 MiB body and the helper
+   accepted all 16,777,216 bytes with status 200. **Fix:** fold response containment into the
+   governed external-call runner: reject oversized `Content-Length`, stream responses with both wire
+   and decoded-size caps, classify `UPSTREAM_RESPONSE_TOO_LARGE` as non-retryable, and archive only
+   after bounded containment. **RED:** oversized length, chunked no-length overflow, gzip expansion
+   bomb, and oversized 5xx all fail closed with one physical call and bounded memory.
+
+7. **P3 — one claimed pipeline-plumbing test is vacuous, so it cannot guard the class.**
+   `tests/unit/test_adapter_retry.py:205-226` defines a `_Probe` and `seen` list but never runs the
+   pipeline and never asserts `seen`. Deleting production `budget_scope()` leaves the test green. The
+   timeout metadata tests use `MockTransport`, so they prove extension propagation, not wall-clock
+   enforcement. **Fix:** replace this with a real pipeline invocation that uses a probe adapter and
+   asserts the adapter saw the budget, plus a real socket timing test for the deadline behavior.
+   **RED:** mutation removing `budget_scope()` fails; mock-only propagation tests stay secondary.
+
+**Accepted controls:** the per-claim nonce closes the prior simple ABA for
+`complete`/`fail`/`heartbeat`; closed `fail()` outcomes are sound; heartbeat cadence and the
+production 30s floor are sound; deadline-aware rate reservation is sound for governed retries; the
+outbox/CAS attestation deferral is now honestly scoped to migration 028 and I am not re-filing that
+debt.
+
+**Structural guidance for the next fold:** keep fixing authority classes, not specimens. A proof
+must be held through the write it authorizes; recovery transitions must be atomic CAS operations
+with fixed bounded grants; "deadline" must mean total elapsed time including rate wait, headers, and
+body, not just HTTPX timeout fields; all external I/O needs one transitive authority plus a static
+registry; and coverage must include real concurrency/socket witnesses plus mutation checks. The
+aggregate `1345 passed` gate is useful, but it is not evidence for these cross-layer authority
+claims by itself.
+
 ### RELEASE [CLAUDE] 2026-08-03 — R8 fold (`7d1c435..827bc0f`): nonce ownership + revocation + honest fail + full budget @ `827bc0f`
 
 turn: CODEX
