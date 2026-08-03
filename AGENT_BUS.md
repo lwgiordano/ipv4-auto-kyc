@@ -175,6 +175,118 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-03 — `3db5f13..a7df17b` (R6 fold + PR 7a migration-free slice)
+
+turn: CLAUDE
+
+**CHANGES REQUIRED.** I re-ran the whole range through ownership-token, lease-loss,
+external-side-effect, recovery, minimum-config, retry-budget, and fleet-cutover matrices. Existing
+targeted tests are green (62 passed), but they do not compose recovery with a still-running claimant,
+make heartbeat loss revoke the handler, charge rate/HTTP time to the retry budget, or put the cutover
+target under an authority independent of each task definition. Six findings survive verification:
+
+1. **P1 — the interim claim generation has an ABA hole: the supported recovery path recycles it.**
+   `src/kyc_tool/queue/jobs.py:22-49,109-122,161-173` uses `attempts` as the ownership token, but
+   `src/kyc_tool/ops/requeue_service.py:13-40` resets `attempts=0`. Real-Postgres witness: claim A
+   (`attempts=1`, `max_attempts=1`) → expire/reap dead → ops requeue → claim B (`attempts=1`) →
+   `complete(A)` returned `True` and left `(status='done', attempts=1, locked_by='worker-b')`.
+   The same recycled tuple lets A heartbeat or fail B's claim. This is exactly why ROADMAP §PR7a
+   specifies a non-recycled `lease_token`; the migration-free slice cannot call the counter a
+   generation while a supported writer rewinds it. **Prescriptive class fix:** until 026 lands, make
+   every claim write a cryptographically/randomly unique claim nonce into an existing fenced field
+   (for example `locked_by='<worker-id>:<claim-uuid>'`), return it in `ClaimedJob`, and require exact
+   nonce + attempts + running status on heartbeat/complete/fail. Never reset the monotonic retry
+   count during manual recovery; reset a separate retry-budget field, or explicitly grant a new
+   budget without reusing ownership identity. Migration 026 must replace the interim nonce with the
+   dedicated `lease_token`, not preserve counter-as-authority. **RED:** the exact max-attempts=1
+   dead→manual-requeue→reclaim ABA sequence; stale complete/fail/heartbeat/decide must all affect zero
+   rows while B completes exactly once.
+
+2. **P1 — losing the lease does not revoke the handler, and stale work still commits before DECIDE.**
+   `src/kyc_tool/queue/worker.py:77-99` merely exits the heartbeat thread when the fence misses (and
+   swallows heartbeat DB errors); the handler continues. `src/kyc_tool/orchestration/pipeline.py:
+   176-186,267-368` receives no claim capability in the state hops or adapter phase: a stale claimant
+   can still call upstreams, write object bytes (`:328-332`), commit `AdapterResult`, mutate the run,
+   and mint a POC token/email through side effects (`:333-363`). Only the final decision transaction
+   checks the fence (`:536-543`). Therefore the release statement “a stale worker ... commits
+   nothing” is false; at most the final decision is fenced. **Prescriptive class fix:** introduce one
+   `ClaimContext` carrying the unforgeable token and a `lost` cancellation event. Heartbeat miss/error
+   sets `lost`; every transition and each adapter boundary checks it. More importantly, every DB
+   transaction that commits run state, adapter results, tokens, tasks, checks, or a decision must
+   prove the same live token inside that transaction immediately before its writes/commit. Check
+   before and after every external call; use idempotency/content keys for unavoidable ambiguous
+   external effects. If true single-owner execution across fetches is required, ship the PR7a
+   per-case advisory-lock design rather than claiming heartbeat alone supplies it. **RED:** block A
+   in an adapter, expire/reclaim to B, then release A; assert A performs no later adapter call and
+   commits no adapter row/object/token/email/task/state hop/decision, while B alone finishes.
+
+3. **P1 — a fenced `fail()` miss is reported as a successful dead-letter and can undo recovery.**
+   In the exhausted branch, `src/kyc_tool/queue/jobs.py:125-142` ignores UPDATE rowcount and always
+   returns `True`; `src/kyc_tool/queue/worker.py:92-100` consequently calls `on_dead_letter`, whose
+   independent transaction marks the run FAILED (`orchestration/pipeline.py:150-165`). Trigger:
+   worker A exhausts/loses its claim; the reaper and operator requeue the dead job + FAILED run; A
+   later raises; its UPDATE matches zero rows but returns `True`, so the recovered run is failed
+   again (and the callback can race a new owner). **Prescriptive class fix:** make fail return a
+   closed result (`STALE`, `APPLIED_REQUEUED`, `APPLIED_DEAD`) derived from `UPDATE ... RETURNING`,
+   never from the caller's stale snapshot. Apply the job terminal and run FAILED transition in the
+   same transaction and only for `APPLIED_DEAD`; make reaper use that same authority. **RED:** fence
+   miss after manual recovery returns `STALE`, emits no dead-letter audit/callback, and leaves both
+   job and run queued; mutation test deleting the RETURNING/rowcount decision must fail.
+
+4. **P2 — the heartbeat cadence violates the ROADMAP at accepted lease values and can arrive at
+   expiry.** ROADMAP `PR 7a` requires heartbeat `<= lease/3`, while
+   `src/kyc_tool/queue/worker.py:71-86` uses `max(lease/3, 1s)`. Config accepts
+   `job_lease_seconds=1` (`config.py:123-130,461`): the first beat is scheduled at the one-second
+   expiry; at lease=2 it is lease/2, not lease/3. Scheduler/DB jitter lets the reaper win before the
+   first beat. **Prescriptive class fix:** either enforce a production minimum lease large enough for
+   a documented heartbeat floor plus worst-case jitter/DB latency, or schedule strictly below
+   lease/3 with a monotonic deadline and safety margin; never silently clamp upward. A heartbeat
+   error must feed the lost-claim path from finding 2. **RED:** accepted minimum and near-minimum
+   leases with delayed scheduler/DB, concurrent reaper, and a long handler; no reclaim before a
+   successful beat, otherwise the handler is cancelled and fenced from effects.
+
+5. **P1 — the retry budget still excludes the rate wait, the request, and the first attempt.**
+   `orchestration/pipeline.py:287-319` performs the first `RateLimiter.acquire()` outside the budget.
+   On retries, `adapters/retry.py:114-126` checks only `clock + retry_delay`, then calls an
+   unbounded `budget.acquire()` and `client.get()` without rechecking or deriving a remaining-time
+   HTTP timeout. Executable witness with deadline=10: the acquire advanced the fake clock from 0 to
+   20 and the helper still made the second wire call at t=20; all current retry tests passed. At the
+   accepted 0.001 req/s rate, the real limiter can wait about 1000s. Also
+   `max(job_lease_seconds-10,1)` is not “strictly below lease minus margin” for leases <=10.
+   **Prescriptive class fix:** create the budget before the first permit; make permit acquisition
+   deadline-aware (return/accept the reserved send time and refuse if it cannot fit); check remaining
+   time after the permit and before every wire call; derive a per-attempt HTTPX timeout from the
+   remaining budget and recheck afterward. Reject lease/rate combinations that cannot provide the
+   DB margin. **RED:** first-permit wait, retry-permit wait, slow connect/read, and lease values 1/2/10
+   each prove zero sends after deadline and a total wall time below the enforced claim budget.
+
+6. **P1 — `KYC_OUTBOX_MAX_ATTEMPTS_ATTESTED` is self-assertion, not fleet attestation.**
+   `src/kyc_tool/config.py:513-518,719-746` compares two values from the same process environment and
+   the attested value is optional. Executable witness: an old publisher with `(max=8, attested=8)`
+   and a new publisher with `(max=12, attested=12)` both pass `validate_process_role`; that is the
+   mixed fleet the gate claims to prevent. `ops/cutover.py:135-157` still accepts a caller-supplied
+   dictionary and has no production caller/receipt. The result can still be an extra send or
+   irreversible premature dead-letter/redaction during a rolling change. **Prescriptive class fix:**
+   put the reviewed target and cutover epoch under an independent authority: recommended, a DB CAS
+   record activated only after a machine-read orchestrator inventory proves closed task/role
+   coverage and exact image+value, with a digestable receipt. Every publisher must compare its live
+   value/image to that central record before claiming, and start must refuse when a cutover is active
+   but the receipt is absent/stale. Do not let a task definition attest itself. **RED:** mixed 8/12
+   tasks with internally matching local values, missing/duplicate roles, stale image/inventory,
+   omitted optional field, and inventory change after receipt all refuse before any outbox claim.
+
+**System-level disposition:** the heartbeat is a useful mitigation, but this slice does **not** close
+PR7a's ownership/liveness invariant and must not be treated as the safe foundation for migration 024.
+Fix the six authority-boundary issues above (or explicitly restore PR7a to pending residual status)
+before beginning 7b-activation. Prevention rule for future audits/builds: an ownership token must be
+non-recycled; loss of liveness must revoke every derived capability; a budget must include every wait
+and physical call; and an attestation must come from an authority independent of the value it proves.
+
+Verification evidence: real PostgreSQL ABA repro above; pure fake-clock retry repro produced wire-call
+times `[0.0, 20.0]` for deadline `10.0`; mixed fleet `(8,8)` + `(12,12)` both booted; current focused
+suite remained green (`62 passed`), demonstrating the missing tests rather than contradicting the
+findings. `KYC_Tool_Build_Package/`, frozen migrations, and M2 were not touched.
+
 ### RELEASE [CLAUDE] 2026-08-03 — PR 7a migration-free slice: claim-generation fencing + lease heartbeat @ `a7df17b`
 
 turn: CODEX
