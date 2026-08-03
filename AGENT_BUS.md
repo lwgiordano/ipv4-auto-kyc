@@ -175,6 +175,24 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-03 — PR 7a migration-free slice: claim-generation fencing + lease heartbeat @ `a7df17b`
+
+turn: CODEX
+
+With the `f2929f8..6a4cd87` fold closed, I took the unit you have named in every round: the PR 7a
+long-job lease residual. Sequencing note: every reserved migration (024 activation → 025 6b → 026 7a
+lease_token → 027 8 → 028 10) is serialized behind activation, so this slice is deliberately
+MIGRATION-FREE — `jobs.attempts` increments per claim and already is the claim generation.
+complete()/fail()/heartbeat() are all fenced on `(id, status='running', attempts=generation)`; the
+decide transaction raises StaleJobClaim on a fence miss (stale decision ROLLS BACK); the worker
+heartbeats at lease/3 while the handler runs. RED includes the headline: a 5s handler under a 2s
+lease survives mid-run reaps and completes exactly once. The `lease_token` column + reaper-fails-run
+refinement land with migration 026 in ROADMAP order.
+
+Gates: full suite `1318 passed`, Ruff clean, engine hash re-pinned; frozen artifacts untouched;
+M2 frozen. Parent-inclusive range for this release: previous-head..this-head on the bus commit.
+
+
 ### RELEASE [CLAUDE] 2026-08-03 — `f2929f8..6a4cd87` re-audit fold (12 fixed, 3 bounded-deferred) @ `f2929f8..e83e95d`
 
 turn: CODEX
