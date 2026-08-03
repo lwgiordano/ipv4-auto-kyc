@@ -100,10 +100,26 @@ def claim(session: Session, kinds: list[str], worker_id: str, lease_seconds: int
     )
 
 
-def complete(session: Session, job_id: int) -> None:
-    """Mark done — call inside the handler's commit transaction so job
-    completion is atomic with the work it performed."""
-    session.execute(text("UPDATE jobs SET status='done', updated_at=now() WHERE id=:id"), {"id": job_id})
+class StaleJobClaim(RuntimeError):
+    """This worker's claim generation is no longer the live one (the reaper requeued the job and
+    another worker claimed it). The caller MUST let its transaction roll back — a stale worker's
+    decision/write must never commit (PR 7a fencing, migration-free slice)."""
+
+
+def complete(session: Session, job: ClaimedJob) -> bool:
+    """Fenced completion — call inside the handler's commit transaction so job completion is atomic
+    with the work it performed. The fence is the CLAIM GENERATION: `attempts` increments on every
+    claim, so a worker that lost its lease (reaped + reclaimed) matches zero rows here and returns
+    False — the decide transaction must then abort via StaleJobClaim rather than commit a duplicate
+    decision (PR 7a, migration-free slice; the dedicated lease_token column lands with migration 026)."""
+    applied = session.execute(
+        text(
+            "UPDATE jobs SET status='done', updated_at=now() "
+            "WHERE id=:id AND status='running' AND attempts=:gen"
+        ),
+        {"id": job.id, "gen": job.attempts},
+    ).rowcount
+    return applied > 0
 
 
 def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: int) -> bool:
@@ -112,10 +128,16 @@ def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: in
     # job requeues immediately with no throttle; a large base × high attempts overflowed
     # make_interval. Refuse before any write so the job's state is unchanged on a bad base.
     require_numeric_domain("job_backoff_base_seconds", backoff_base_seconds)
+    # Both failure writebacks carry the SAME claim-generation fence as complete() (PR 7a slice): an
+    # unfenced fail() from a stale worker would requeue/dead-letter a job another worker now owns,
+    # clobbering the live claim. Zero rows updated = stale; leave the live claim untouched.
     if job.attempts >= job.max_attempts:
         session.execute(
-            text("UPDATE jobs SET status='dead', last_error=:err, updated_at=now() WHERE id=:id"),
-            {"id": job.id, "err": error[:2000]},
+            text(
+                "UPDATE jobs SET status='dead', last_error=:err, updated_at=now() "
+                "WHERE id=:id AND status='running' AND attempts=:gen"
+            ),
+            {"id": job.id, "err": error[:2000], "gen": job.attempts},
         )
         return True
     # Saturating schedule (shared with the outbox): the shift is bounded before 2**shift is built and
@@ -128,12 +150,27 @@ def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: in
             SET status='queued', locked_by=NULL, lease_expires_at=NULL,
                 last_error=:err, run_after = now() + make_interval(secs => :delay),
                 updated_at=now()
-            WHERE id=:id
+            WHERE id=:id AND status='running' AND attempts=:gen
             """
         ),
-        {"id": job.id, "err": error[:2000], "delay": delay},
+        {"id": job.id, "err": error[:2000], "delay": delay, "gen": job.attempts},
     )
     return False
+
+
+def heartbeat(session: Session, job: ClaimedJob, lease_seconds: int) -> bool:
+    """Extend the live claim's lease under the SAME claim-generation fence (PR 7a slice). Returns
+    False when the claim was lost (reaped/reclaimed) — the caller stops heartbeating; the fenced
+    complete()/fail() then guarantee the stale worker commits nothing."""
+    require_numeric_domain("job_lease_seconds", lease_seconds)
+    applied = session.execute(
+        text(
+            "UPDATE jobs SET lease_expires_at = now() + make_interval(secs => :lease), "
+            "updated_at=now() WHERE id=:id AND status='running' AND attempts=:gen"
+        ),
+        {"id": job.id, "lease": lease_seconds, "gen": job.attempts},
+    ).rowcount
+    return applied > 0
 
 
 def reap_expired(session: Session) -> list[ClaimedJob]:

@@ -64,6 +64,9 @@ def test_fail_at_a_high_attempt_count_requeues_without_overflow(session_factory,
         attempts=63,
         max_attempts=100,
     )
+    with uow(session_factory) as s:  # align the row's claim generation with the synthetic claim —
+        # fail() is fenced on it (PR 7a slice), so a mismatched generation would refuse instead
+        s.execute(text("UPDATE jobs SET attempts=63 WHERE id=:i"), {"i": claimed.id})
     with uow(session_factory) as s:
         assert jobs.fail(s, high, "boom", 10) is False  # requeued (no DatetimeFieldOverflow)
     with session_factory() as s:

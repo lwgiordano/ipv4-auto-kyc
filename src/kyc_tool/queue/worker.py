@@ -5,6 +5,7 @@ commit). The loop only wraps claim/fail/reap in small transactions of its own.
 `run_until_idle()` lets tests drive the pipeline synchronously.
 """
 
+import threading
 import time
 import uuid
 
@@ -67,6 +68,25 @@ class Worker:
             return False
 
         handler = self.handlers[claimed.kind]
+        # PR 7a slice: heartbeat the claim while the handler runs, so a job that legitimately
+        # outlives its lease is NOT reaped and double-executed. Cadence lease/3 (floor 1s); stops
+        # the moment the fence is lost (reaped + reclaimed) — fenced complete()/fail() then keep
+        # this stale worker from committing anything.
+        stop_beat = threading.Event()
+
+        def _beat() -> None:
+            cadence = max(self.lease_seconds / 3.0, 1.0)
+            while not stop_beat.wait(cadence):
+                try:
+                    with uow(self.session_factory) as s:
+                        if not jobs.heartbeat(s, claimed, self.lease_seconds):
+                            log.warning("job_heartbeat_lost", job_id=claimed.id)
+                            return
+                except Exception as exc:  # noqa: BLE001 — a beat failure must not kill the worker
+                    log.warning("job_heartbeat_error", job_id=claimed.id, error=str(exc))
+
+        beat_thread = threading.Thread(target=_beat, daemon=True)
+        beat_thread.start()
         try:
             handler(claimed)
         except Exception as exc:  # noqa: BLE001 — worker must survive any handler error
@@ -79,9 +99,13 @@ class Worker:
                     self.on_dead_letter(claimed, str(exc))
             return True
 
-        # Defensive: a handler that returned without completing its job.
+        finally:
+            stop_beat.set()
+            beat_thread.join(timeout=5)
+        # Defensive: a handler that returned without completing its job. Fenced — a stale claim
+        # generation completes nothing.
         with uow(self.session_factory) as session:
-            jobs.complete(session, claimed.id)
+            jobs.complete(session, claimed)
         return True
 
     def run_until_idle(self, max_jobs: int = 1000) -> int:

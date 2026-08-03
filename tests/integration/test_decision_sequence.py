@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import text
 
 from kyc_tool.domain.models import RunState
+from kyc_tool.queue.jobs import ClaimedJob
 
 pytestmark = pytest.mark.postgres
 
@@ -67,7 +68,9 @@ def test_concurrent_decides_serialize_via_case_lock(session_factory, pipeline, p
 
     def decide(run_id, jid):
         try:
-            pipeline._decide_txn(run_id, from_state=RunState.DECIDE, job_id=jid, bundle=policy)
+            claimed = ClaimedJob(id=jid, kind="run_transition", case_id="cc",
+                                 payload={"run_id": run_id}, attempts=0, max_attempts=5)
+            pipeline._decide_txn(run_id, from_state=RunState.DECIDE, job=claimed, bundle=policy)
         except Exception as e:  # noqa: BLE001 — capture a uniqueness race for the assertion
             errors.append(e)
 

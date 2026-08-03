@@ -142,9 +142,9 @@ class Pipeline:
             if state in (RunState.PUBLISH_DECISION, RunState.COMPLETE, RunState.FAILED):
                 # idempotent when the decide txn already completed the job
                 with uow(self.session_factory) as session:
-                    jobs.complete(session, job.id)
+                    jobs.complete(session, job)  # stale fence-miss is fine here: the run is already terminal
                 return
-            self._advance(run_id, state, job_id=job.id, bundle=bundle)
+            self._advance(run_id, state, job=job, bundle=bundle)
         raise RuntimeError(f"run {run_id} did not reach a publishable state (loop bound)")
 
     def on_dead_letter(self, job: ClaimedJob, error: str) -> None:
@@ -173,7 +173,7 @@ class Pipeline:
             ).scalar_one()
         return RunState(state)
 
-    def _advance(self, run_id: str, state: RunState, *, job_id: int, bundle: PolicyBundle) -> None:
+    def _advance(self, run_id: str, state: RunState, *, job: ClaimedJob, bundle: PolicyBundle) -> None:
         if state is RunState.QUEUED:
             self._simple_hop(run_id, RunState.QUEUED, RunState.RESOLVE_INPUTS)
         elif state is RunState.RESOLVE_INPUTS:
@@ -183,7 +183,7 @@ class Pipeline:
         elif state is RunState.RUN_ADAPTERS:
             self._run_adapters(run_id)
         elif state in (RunState.VALIDATE, RunState.DECIDE):
-            self._decide_txn(run_id, from_state=state, job_id=job_id, bundle=bundle)
+            self._decide_txn(run_id, from_state=state, job=job, bundle=bundle)
         else:  # WRITE_CHECKS / SCORE can never be persisted; see module docstring
             raise RuntimeError(f"run {run_id} in unexpected persisted state {state}")
 
@@ -370,7 +370,7 @@ class Pipeline:
     # ------------------------------------------------- the fused decide txn
 
     def _decide_txn(
-        self, run_id: str, from_state: RunState, *, job_id: int, bundle: PolicyBundle
+        self, run_id: str, from_state: RunState, *, job: ClaimedJob, bundle: PolicyBundle
     ) -> None:
         """VALIDATE → WRITE_CHECKS → SCORE → DECIDE → PUBLISH_DECISION in ONE
         commit — a decision always corresponds to an exact set of live checks.
@@ -533,8 +533,14 @@ class Pipeline:
             enqueue_decision_callback(
                 session, case_id=case.id, run_id=run_id, body=body, decision_sequence=decision_sequence
             )
-            # job completion is atomic with the decision commit
-            jobs.complete(session, job_id)
+            # job completion is atomic with the decision commit — and FENCED (PR 7a slice): a
+            # stale worker (reaped + reclaimed) must roll this whole decision back, not commit a
+            # duplicate the platform then has to reconcile.
+            if not jobs.complete(session, job):
+                raise jobs.StaleJobClaim(
+                    f"job {job.id} claim generation {job.attempts} is no longer live — "
+                    "rolling back this decide transaction"
+                )
             audit(
                 session,
                 "run.decided",
