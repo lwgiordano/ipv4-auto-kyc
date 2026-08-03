@@ -484,6 +484,12 @@ class Settings(BaseSettings):
     # per-cycle "attempts >= ceiling ⇒ dead-letter before admission" check terminates the row at a
     # value that always fits, so no accepted config can overflow.
     outbox_max_attempts: int = Field(default=8, ge=1, le=PG_INT4_MAX)
+    # The drained-cutover START GATE (re-audit `f2929f8..6a4cd87` F4): during a
+    # KYC_OUTBOX_MAX_ATTEMPTS cutover the operator sets this to the REVIEWED target in every new
+    # task definition; a publisher-bearing process whose live ceiling differs then REFUSES TO BOOT,
+    # so "attest every new task definition carries the exact value" is executable, not prose.
+    # Unset (None) = no cutover in progress; the gate is inert.
+    outbox_max_attempts_attested: int | None = Field(default=None, ge=1, le=PG_INT4_MAX)
     # ge=0: a zero base means "retry when due, no backoff growth" — a valid dev/test value that
     # production refuses below. Negative was accepted before and produced immediate unthrottled
     # re-sends (re-audit `d3c0852..23e005e` F5). The publisher saturates the exponential schedule so
@@ -669,6 +675,9 @@ class ProcessRole(StrEnum):
 
 
 _DEV_ONLY_ROLES = frozenset({ProcessRole.DEV_WORKER})
+# Roles that run an outbox publisher — the cutover start gate applies to exactly these (the same
+# closed set the cutover record names).
+_PUBLISHER_ROLES = frozenset({ProcessRole.OUTBOX_WORKER, ProcessRole.DEV_WORKER})
 
 
 def validate_process_role(settings: Settings, role: ProcessRole) -> None:
@@ -680,6 +689,25 @@ def validate_process_role(settings: Settings, role: ProcessRole) -> None:
     of whether the rest of the configuration is otherwise valid; a production role runs the full
     production kill switch. Outside production this is a no-op — dev/staging may run any role."""
     role = ProcessRole(role)
+    # Cutover start gate (re-audit `f2929f8..6a4cd87` F4) — enforced in EVERY environment whenever
+    # the operator has set an attested target, because the drained cutover is rehearsed in staging
+    # too. A publisher-bearing process whose live ceiling differs from the attested target would
+    # recreate the mixed-ceiling extra-send / premature-dead-letter hazard the drained cutover
+    # exists to prevent; it refuses BEFORE any engine/store access. Per-process enforcement is the
+    # executable form of the fleet attestation: every publisher that STARTS provably carries the
+    # exact reviewed value.
+    attested = settings.outbox_max_attempts_attested
+    if (
+        role in _PUBLISHER_ROLES
+        and attested is not None
+        and settings.outbox_max_attempts != attested
+    ):
+        raise ProductionConfigError(
+                f"cutover start gate: this {role.value} carries outbox_max_attempts="
+                f"{settings.outbox_max_attempts} but the attested target is "
+                f"{settings.outbox_max_attempts_attested} (KYC_OUTBOX_MAX_ATTEMPTS_ATTESTED) — a "
+                "stale task definition; refusing to start (DEPLOYMENT §8 drained cutover)"
+            )
     if settings.environment != "production":
         return
     if role in _DEV_ONLY_ROLES:

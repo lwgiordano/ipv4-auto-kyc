@@ -75,3 +75,32 @@ def test_production_workers_validate_before_engine(monkeypatch, module, role):
     )
     with pytest.raises(ProductionConfigError):
         getattr(mod, role)()
+
+
+class TestCutoverStartGate:
+    """Re-audit `f2929f8..6a4cd87` F4: the attest-new-value cutover step is an EXECUTABLE start
+    gate — a publisher-bearing process whose live ceiling differs from the attested target refuses
+    to boot, in any environment; non-publisher roles and an unset target are unaffected."""
+
+    def test_mismatched_publisher_refuses_in_production(self):
+        s = _hardened(outbox_max_attempts=8, outbox_max_attempts_attested=12)
+        with pytest.raises(ProductionConfigError, match="start gate"):
+            validate_process_role(s, ProcessRole.OUTBOX_WORKER)
+
+    def test_mismatched_publisher_refuses_in_dev_too(self):
+        s = config.Settings(
+            environment="development", outbox_max_attempts=8, outbox_max_attempts_attested=12
+        )
+        with pytest.raises(ProductionConfigError, match="start gate"):
+            validate_process_role(s, ProcessRole.DEV_WORKER)
+
+    def test_matching_target_starts(self):
+        s = _hardened(outbox_max_attempts=12, outbox_max_attempts_attested=12)
+        validate_process_role(s, ProcessRole.OUTBOX_WORKER)  # no raise
+
+    def test_unset_target_is_inert(self):
+        validate_process_role(_hardened(), ProcessRole.OUTBOX_WORKER)  # no raise
+
+    def test_non_publisher_roles_are_unaffected(self):
+        s = _hardened(outbox_max_attempts=8, outbox_max_attempts_attested=12)
+        validate_process_role(s, ProcessRole.API)  # no raise — the API runs no publisher
