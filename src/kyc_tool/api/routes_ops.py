@@ -26,7 +26,11 @@ def _require_ops_admin(request: Request) -> None:
 @router.post("/v1/ops/requeue/job/{job_id}")
 def ops_requeue_job(job_id: int, request: Request) -> dict:
     _require_ops_admin(request)  # auth BEFORE any DB access
-    return requeue_dead_job(request.app.state.session_factory, job_id)
+    return requeue_dead_job(
+        request.app.state.session_factory,
+        job_id,
+        attempt_grant=request.app.state.settings.job_recovery_attempt_grant,
+    )
 
 
 @router.post("/v1/ops/requeue/outbox/{outbox_id}")

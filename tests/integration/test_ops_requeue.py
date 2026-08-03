@@ -43,7 +43,9 @@ def test_ops_requeue_works_with_the_ui_disabled(settings, session_factory, polic
 
     r = tc.post(f"/v1/ops/requeue/job/{job_id}",
                 headers={"Authorization": f"Bearer {_TOKEN}"})
-    assert r.status_code == 200 and r.json() == {"requeued": job_id, "run_reset": "rq-r"}
+    assert r.status_code == 200
+    # attempts_granted = the fixed bounded recovery grant (R9-F4), default 5
+    assert r.json() == {"requeued": job_id, "run_reset": "rq-r", "attempts_granted": 5}
     with session_factory() as s:
         job = s.execute(text("SELECT status, attempts FROM jobs WHERE id=:i"), {"i": job_id}).one()
         run = s.execute(text("SELECT state, error FROM runs WHERE id='rq-r'")).one()

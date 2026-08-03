@@ -13,6 +13,12 @@ class ObjectStore(Protocol):
 
     def get(self, ref: str) -> bytes: ...
 
+    def delete(self, ref: str) -> None:
+        """Best-effort removal of a staged object whose reference never committed (orphan
+        cleanup — the pipeline stages raw bytes OUTSIDE the fenced transaction). Idempotent:
+        deleting a missing ref is a no-op."""
+        ...
+
     def verify_access(self) -> None:
         """Raise if the backing store is unreachable/misconfigured (for /readyz)."""
         ...
@@ -35,6 +41,11 @@ class FsStore:
         if not ref.startswith("fs://"):
             raise ValueError(f"not an fs ref: {ref}")
         return (self.root / ref.removeprefix("fs://")).read_bytes()
+
+    def delete(self, ref: str) -> None:
+        if not ref.startswith("fs://"):
+            raise ValueError(f"not an fs ref: {ref}")
+        (self.root / ref.removeprefix("fs://")).unlink(missing_ok=True)
 
     def verify_access(self) -> None:
         if not self.root.is_dir():
@@ -60,6 +71,13 @@ class S3Store:
         _, _, rest = ref.partition("s3://")
         bucket, _, key = rest.partition("/")
         return self.client.get_object(Bucket=bucket, Key=key)["Body"].read()
+
+    def delete(self, ref: str) -> None:
+        if not ref.startswith("s3://"):
+            raise ValueError(f"not an s3 ref: {ref}")
+        _, _, rest = ref.partition("s3://")
+        bucket, _, key = rest.partition("/")
+        self.client.delete_object(Bucket=bucket, Key=key)  # idempotent in S3
 
     def verify_access(self) -> None:
         self.client.head_bucket(Bucket=self.bucket)

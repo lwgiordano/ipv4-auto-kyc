@@ -119,7 +119,7 @@ def test_budget_stops_retries_that_would_cross_the_deadline():
     assert r.status_code == 429 and len(calls) == 1 and sleeps == []
 
 
-def test_budget_acquires_one_rate_permit_per_retry_attempt():
+def test_budget_acquires_one_rate_permit_per_physical_attempt():
     calls, permits = [], []
     def responder(request):
         calls.append(1)
@@ -130,7 +130,8 @@ def test_budget_acquires_one_rate_permit_per_retry_attempt():
     )
     with budget_scope(budget):
         get_with_retry(_client(responder), "/x", attempts=3, sleep=lambda s: None)
-    assert len(calls) == 3 and len(permits) == 2  # first attempt uses the pipeline's outer permit
+    # R9-F5: EVERY send — the first included — holds its own permit; no outer pipeline permit
+    assert len(calls) == 3 and len(permits) == 3
 
 
 # ── R8-F5: the budget covers the FIRST attempt, the permit wait, and the wire itself ──────────────
@@ -148,16 +149,19 @@ def test_budget_dead_before_first_attempt_sends_nothing_and_raises():
 
 
 def test_permit_wait_that_consumes_the_budget_stops_the_retry():
-    """The audit's executable witness: deadline=10, the retry permit advances the clock 0 → 20.
-    Previously the second wire call still happened at t=20; now the post-acquire recheck stops it —
-    wire calls happen at [0.0] only and the last outcome is surfaced."""
+    """The audit's executable witness: deadline=10, the RETRY permit advances the clock 0 → 20.
+    Previously the second wire call still happened at t=20; now the post-permit deadline proof
+    stops it — wire calls happen at [0.0] only and the last outcome is surfaced."""
     call_times = []
     clock = {"t": 0.0}
+    permits = {"n": 0}
     def responder(request):
         call_times.append(clock["t"])
         return httpx.Response(503)
     def slow_permit():
-        clock["t"] = 20.0  # the rate wait blows straight past the deadline
+        permits["n"] += 1
+        if permits["n"] > 1:  # the FIRST permit is instant; the retry permit waits past everything
+            clock["t"] = 20.0
     budget = RetryBudget(deadline_monotonic=10.0, acquire=slow_permit, clock=lambda: clock["t"])
     with budget_scope(budget):
         r = get_with_retry(_client(responder), "/x", attempts=3, backoff_seconds=0,
@@ -167,19 +171,33 @@ def test_permit_wait_that_consumes_the_budget_stops_the_retry():
 
 
 def test_deadline_aware_permit_refusal_surfaces_the_last_outcome():
-    """budget.acquire raising BudgetExhausted (the deadline-aware rate limiter) stops the loop
-    without a send and without masking the prior response."""
+    """budget.acquire raising BudgetExhausted (the deadline-aware rate limiter) on a RETRY stops
+    the loop without a send and without masking the prior response; a refusal before the FIRST
+    send propagates (there is no outcome to surface)."""
     calls = []
+    permits = {"n": 0}
     def responder(request):
         calls.append(1)
         return httpx.Response(503)
     def refusing_permit():
-        raise BudgetExhausted("permit cannot fit")
+        permits["n"] += 1
+        if permits["n"] > 1:
+            raise BudgetExhausted("permit cannot fit")
     budget = RetryBudget(deadline_monotonic=1e9, acquire=refusing_permit, clock=lambda: 0.0)
     with budget_scope(budget):
         r = get_with_retry(_client(responder), "/x", attempts=3, backoff_seconds=0,
                            sleep=lambda s: None)
     assert len(calls) == 1 and r.status_code == 503
+
+    always_refuse = RetryBudget(
+        deadline_monotonic=1e9,
+        acquire=lambda: (_ for _ in ()).throw(BudgetExhausted("no permit")),
+        clock=lambda: 0.0,
+    )
+    calls.clear()
+    with budget_scope(always_refuse), pytest.raises(BudgetExhausted):
+        get_with_retry(_client(responder), "/x", attempts=3, sleep=lambda s: None)
+    assert calls == []  # refused before the FIRST send: zero wire calls
 
 
 def test_per_attempt_timeout_is_capped_at_remaining_budget_tighten_only():
@@ -202,25 +220,56 @@ def test_per_attempt_timeout_is_capped_at_remaining_budget_tighten_only():
     assert seen[0]["read"] == 5.0  # the client's own 5s stands — a big budget never loosens it
 
 
-def test_pipeline_wires_a_budget_below_the_lease():
-    """The plan loop must set a budget whose deadline is strictly below job_lease_seconds from now —
-    asserted from inside a stub adapter, through the REAL pipeline plumbing."""
-    import time as _time
+# ── R9-F5: a permit wait that loses the claim yields NO second call ───────────────────────────────
+def test_permit_that_loses_the_claim_sends_no_further_call():
+    """The audit's witness: first call 503; while waiting for the retry permit the heartbeat marks
+    the claim lost. The post-permit liveness proof must refuse the second send and propagate the
+    revocation (StaleJobClaim) — never record a retry outcome under a lost claim. Removing the
+    post-permit proof makes calls == 2 and this test fail."""
+    from kyc_tool.queue import jobs
 
-    from kyc_tool.adapters import retry as retry_mod
-    from kyc_tool.orchestration.pipeline import _ADAPTER_PLAN_MARGIN_SECONDS
+    calls = []
+    def responder(request):
+        calls.append(1)
+        return httpx.Response(503)
+    job = jobs.ClaimedJob(id=7, kind="k", case_id=None, payload={}, attempts=1, max_attempts=5,
+                          claim_nonce="w:n")
+    ctx = jobs.ClaimContext(job=job)
+    permits = {"n": 0}
+    def losing_permit():  # the RETRY permit's wait outlives the claim: heartbeat sets lost mid-wait
+        permits["n"] += 1
+        if permits["n"] > 1:
+            ctx.lost.set()
+    budget = RetryBudget(
+        deadline_monotonic=1e9,
+        acquire=losing_permit,
+        clock=lambda: 0.0,
+        prove_live=jobs.check_claim_live,
+    )
+    with jobs.claim_scope(ctx), budget_scope(budget), pytest.raises(jobs.StaleJobClaim):
+        get_with_retry(_client(responder), "/x", attempts=3, backoff_seconds=0,
+                       sleep=lambda s: None)
+    assert len(calls) == 1  # the revoked claim authorized NO second upstream call
 
-    assert _ADAPTER_PLAN_MARGIN_SECONDS > 0
-    seen = {}
 
-    class _Probe:
-        adapter_id = "probe"
-        def input_hash(self, snapshot, event):
-            return "h"
-        def run(self, snapshot, event):
-            seen["budget"] = retry_mod.current_budget()
-            seen["now"] = _time.monotonic()
-            raise RuntimeError("stop here")
+# ── R9-F3: every adapter wire call must go through the governed helper ────────────────────────────
+def test_no_adapter_calls_httpx_outside_the_governed_helper():
+    """Static transport guard: a direct `client.get/post/...` in an adapter bypasses the budget,
+    liveness proof, absolute deadline, and byte containment (the RIR path did exactly this).
+    Adding one anywhere under adapters/ fails here with a pointer to get_with_retry."""
+    import re
+    from pathlib import Path
 
-    # exercise only the budget wiring: call the loop body shape via budget_scope contract
-    assert retry_mod.current_budget() is None  # no ambient budget outside the pipeline
+    adapters_dir = Path(__file__).resolve().parents[2] / "src" / "kyc_tool" / "adapters"
+    direct_call = re.compile(r"\bclient\.(get|post|put|patch|delete|request|stream|send)\(")
+    offenders = []
+    for path in sorted(adapters_dir.rglob("*.py")):
+        if path.name == "retry.py":  # the governed transport itself
+            continue
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            if direct_call.search(line):
+                offenders.append(f"{path.relative_to(adapters_dir)}:{lineno}: {line.strip()}")
+    assert offenders == [], (
+        "direct HTTPX call(s) outside the governed transport (use retry.get_with_retry so the "
+        "budget/liveness/deadline/byte containment apply): " + "; ".join(offenders)
+    )

@@ -6,6 +6,7 @@ rir_rdap adapter (AUDIT:A3); the strategies are implementation detail.
 import httpx
 
 from kyc_tool.adapters.base import hash_inputs
+from kyc_tool.adapters.retry import get_with_retry
 
 
 def parse_vcard(vcard_array: list | None) -> dict:
@@ -71,8 +72,12 @@ class RdapStrategy:
         return hash_inputs("rir_rdap", self.rir, org_handle)
 
     def lookup_org(self, org_handle: str) -> tuple[bytes, dict]:
-        """→ (raw upstream bytes, normalized dict). 404 = handle not found."""
-        response = self.client.get(self.entity_path.format(handle=org_handle))
+        """→ (raw upstream bytes, normalized dict). 404 = handle not found.
+
+        The wire call goes through the GOVERNED helper (re-audit `7d1c435..827bc0f` F3: this
+        adapter previously called `client.get` directly and bypassed the plan budget entirely —
+        no permit, no liveness proof, no deadline, no byte containment)."""
+        response = get_with_retry(self.client, self.entity_path.format(handle=org_handle))
         if response.status_code == 404:
             return response.content, {"found": False, "org_handle": org_handle}
         response.raise_for_status()

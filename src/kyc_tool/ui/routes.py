@@ -516,7 +516,11 @@ def requeue_job(job_id: int, request: Request) -> dict:
     require_admin(request.app.state.settings, request.headers)
     # Shared transaction (re-audit F3): the always-mounted /v1/ops router owns the same service, so
     # this console button and the production recovery path can never drift apart.
-    return requeue_dead_job(request.app.state.session_factory, job_id)
+    return requeue_dead_job(
+        request.app.state.session_factory,
+        job_id,
+        attempt_grant=request.app.state.settings.job_recovery_attempt_grant,
+    )
 
 
 @router.post("/ui/api/requeue/outbox/{outbox_id}")

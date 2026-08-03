@@ -145,24 +145,59 @@ def check_claim_live() -> None:
 
 
 def assert_live(session: Session) -> None:
-    """In-TRANSACTION liveness proof (F2): called immediately before a committing transaction's
-    writes. Verifies the ambient claim's nonce is still the live one; a miss (reaped/reclaimed/
-    recovered) raises StaleJobClaim so the whole transaction rolls back. No ambient claim = no-op
-    (direct/manual callers own their own fencing)."""
+    """In-TRANSACTION liveness AUTHORITY (F2; hardened per re-audit `7d1c435..827bc0f` F1): a HELD
+    fence, not a peek. `FOR UPDATE` takes the job ROW LOCK under the exact nonce + running status +
+    an UNEXPIRED lease, and PostgreSQL holds that lock until this transaction ends — the reaper, a
+    rival claim, and manual recovery all mutate this same row, so they serialize BEHIND the commit
+    this proof authorizes; "proved live" cannot go stale between the check and the commit. A miss
+    (reaped/reclaimed/recovered/EXPIRED — an expired-but-unreaped claim has no authority either)
+    raises StaleJobClaim so the whole transaction rolls back. No ambient claim = no-op (direct/
+    manual callers own their own fencing).
+
+    LOCK ORDER: call this FIRST in the transaction, before any Case/Run/Task lock — the one order
+    everywhere is job → case → run/task. Never hold this lock over network or object-store I/O."""
     ctx = _CURRENT_CLAIM.get()
     if ctx is None:
         return
     if ctx.lost.is_set():
         raise StaleJobClaim(f"job {ctx.job.id} claim lost (heartbeat) — rolling back")
     live = session.execute(
-        text("SELECT 1 FROM jobs WHERE id=:id AND status='running' AND locked_by=:nonce"),
+        text(
+            "SELECT 1 FROM jobs WHERE id=:id AND status='running' AND locked_by=:nonce "
+            "AND lease_expires_at > clock_timestamp() FOR UPDATE"
+        ),
         {"id": ctx.job.id, "nonce": ctx.job.claim_nonce},
     ).first()
     if live is None:
         ctx.lost.set()
         raise StaleJobClaim(
-            f"job {ctx.job.id} nonce is no longer live — rolling back this transaction"
+            f"job {ctx.job.id} nonce is no longer live (or its lease expired) — "
+            "rolling back this transaction"
         )
+
+
+def prove_live_for_send(session_factory) -> None:
+    """SEND authorization (re-audit `7d1c435..827bc0f` F5): a cheap, lock-free DB re-proof of the
+    ambient claim invoked immediately before every physical upstream call (after the rate permit,
+    which may have waited a long time). Unlike assert_live this holds NOTHING — it authorizes an
+    external side effect, not a commit — so a stale worker stops calling upstreams at the next
+    send even though revocation of its writes still rests on the held in-txn fence. A miss sets
+    `lost` and raises StaleJobClaim; no ambient claim = no-op (direct unit calls)."""
+    check_claim_live()
+    ctx = _CURRENT_CLAIM.get()
+    if ctx is None:
+        return
+    with session_factory() as session:
+        live = session.execute(
+            text(
+                "SELECT 1 FROM jobs WHERE id=:id AND status='running' AND locked_by=:nonce "
+                "AND lease_expires_at > clock_timestamp()"
+            ),
+            {"id": ctx.job.id, "nonce": ctx.job.claim_nonce},
+        ).first()
+    if live is None:
+        ctx.lost.set()
+        raise StaleJobClaim(f"job {ctx.job.id} claim is no longer live — refusing to call upstream")
 
 
 class StaleJobClaim(RuntimeError):

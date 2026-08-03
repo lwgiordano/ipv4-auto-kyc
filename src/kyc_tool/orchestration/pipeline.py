@@ -252,6 +252,7 @@ class Pipeline:
 
     def _resolve_inputs(self, run_id: str) -> None:
         with uow(self.session_factory) as session:
+            jobs.assert_live(session)  # HELD fence FIRST — lock order job → case → run (R9-F1)
             run, case, event = self._load(session, run_id)
             if not self._hop(session, run_id, RunState.RESOLVE_INPUTS, RunState.BROKER_GATE):
                 return
@@ -266,6 +267,7 @@ class Pipeline:
 
     def _broker_gate(self, run_id: str) -> None:
         with uow(self.session_factory) as session:
+            jobs.assert_live(session)  # HELD fence FIRST — lock order job → case → run (R9-F1)
             run, case, event = self._load(session, run_id)
             plan = plan_for(event.event_type)
             status = BrokerStatus(case.broker_status)
@@ -329,19 +331,21 @@ class Pipeline:
                 continue
             started = time.monotonic()
             try:
-                # The budget exists BEFORE the first permit (F5) and every permit is deadline-aware:
-                # the FIRST wait counts against the plan, retries re-acquire their own permit, and
-                # a permit that cannot fit refuses instead of sleeping past the claim. The budget
-                # travels via contextvar so adapter signatures stay unchanged.
+                # The budget exists BEFORE the first permit and EVERY send — the first included —
+                # passes through the helper's single authority: deadline-aware permit → DB claim
+                # re-proof → remaining-deadline proof (re-audit `7d1c435..827bc0f` F5), then a
+                # streamed, byte-capped, absolute-deadline wire call (F3/F6). The budget travels
+                # via contextvar so adapter signatures stay unchanged.
                 with retry.budget_scope(
                     retry.RetryBudget(
                         deadline_monotonic=plan_deadline,
                         acquire=lambda a=adapter_id: self.rate_limiter.acquire(
                             a, deadline_monotonic=plan_deadline
                         ),
+                        prove_live=lambda: jobs.prove_live_for_send(self.session_factory),
+                        max_response_bytes=self.settings.adapter_max_response_bytes,
                     )
                 ):
-                    self.rate_limiter.acquire(adapter_id, deadline_monotonic=plan_deadline)
                     output = adapter.run(snapshot, event_dict)
             except jobs.StaleJobClaim:
                 raise  # revocation is not an upstream error — abort the plan, commit nothing
@@ -352,55 +356,72 @@ class Pipeline:
                     error=str(exc),
                 )
             latency_ms = int((time.monotonic() - started) * 1000)
-            # Post-external-call boundary (F2): a claim lost DURING the fetch must not write object
+            # Post-external-call boundary (F2): a claim lost DURING the fetch must not stage object
             # bytes or open the recording transaction.
             jobs.check_claim_live()
 
-            with uow(self.session_factory) as session:
-                # In-txn liveness proof (F2): the raw-object bytes, AdapterResult, the partial flag,
-                # and every side effect (tasks, POC tokens/emails ride on side_effects) happen only
-                # under a still-live claim nonce — the put sits AFTER the proof so a stale claim
-                # writes no object bytes at all, not even unreferenced ones.
-                jobs.assert_live(session)
-                raw_ref = None
-                if output.raw is not None:
-                    key = f"{case_id}/{run_id}/{adapter_id}/{uuid.uuid4().hex}"
-                    raw_ref = self.object_store.put(key, output.raw)
-                session.add(
-                    AdapterResult(
-                        run_id=run_id,
-                        adapter_id=adapter_id,
-                        status=output.status.value,
-                        raw_ref=raw_ref,
-                        normalized_json=output.normalized,
-                        input_hash=input_hash,
-                        latency_ms=latency_ms,
+            # Stage the raw bytes OUTSIDE the fenced transaction (re-audit `7d1c435..827bc0f` F1:
+            # never hold the job row lock over object-store I/O); the reference is attached only
+            # under the held in-txn fence below, and a stale fence orphan-cleans the staged object.
+            raw_ref = None
+            if output.raw is not None:
+                key = f"{case_id}/{run_id}/{adapter_id}/{uuid.uuid4().hex}"
+                raw_ref = self.object_store.put(key, output.raw)
+            try:
+                with uow(self.session_factory) as session:
+                    # HELD in-txn fence (F1): assert_live locks the job row FIRST (lock order
+                    # job → case → run/task) and PostgreSQL holds it through commit — the
+                    # AdapterResult, partial flag, and every side effect (tasks, POC tokens/emails)
+                    # commit only under an authority no reaper/claimant/recovery can overtake.
+                    jobs.assert_live(session)
+                    self._record_adapter_result(
+                        session, run_id, case_id, adapter_id, output, input_hash, raw_ref, latency_ms
                     )
-                )
-                if output.status.value == "upstream_error":
-                    session.execute(
-                        text("UPDATE runs SET partial=true WHERE id=:id"), {"id": run_id}
-                    )
-                if self.side_effects is not None:
-                    run_row = session.get(Run, run_id)
-                    case_row = session.get(Case, case_id, with_for_update=True)
-                    self.side_effects(session, run_row, case_row, output)
-                audit(
-                    session,
-                    "adapter.recorded",
-                    case_id=case_id,
-                    run_id=run_id,
-                    adapter_id=adapter_id,
-                    status=output.status.value,
-                    latency_ms=latency_ms,
-                    raw_ref=raw_ref,
-                    error=(output.error or None),
-                )
+            except jobs.StaleJobClaim:
+                if raw_ref is not None:
+                    try:
+                        self.object_store.delete(raw_ref)  # orphan cleanup: ref never committed
+                    except Exception:  # noqa: BLE001 — cleanup is best-effort, revocation is not
+                        log.warning("orphan_object_cleanup_failed", ref=raw_ref, run_id=run_id)
+                raise
             snapshot = self._seed_in_run_context(snapshot, adapter_id, output.normalized)
 
         with uow(self.session_factory) as session:
             if self._hop(session, run_id, RunState.RUN_ADAPTERS, RunState.VALIDATE):
                 audit(session, "run.stage", case_id=case_id, run_id=run_id, stage="VALIDATE")
+
+    def _record_adapter_result(
+        self, session, run_id, case_id, adapter_id, output, input_hash, raw_ref, latency_ms
+    ) -> None:
+        """The adapter recording writes — called ONLY under the held assert_live fence above."""
+        session.add(
+            AdapterResult(
+                run_id=run_id,
+                adapter_id=adapter_id,
+                status=output.status.value,
+                raw_ref=raw_ref,
+                normalized_json=output.normalized,
+                input_hash=input_hash,
+                latency_ms=latency_ms,
+            )
+        )
+        if output.status.value == "upstream_error":
+            session.execute(text("UPDATE runs SET partial=true WHERE id=:id"), {"id": run_id})
+        if self.side_effects is not None:
+            run_row = session.get(Run, run_id)
+            case_row = session.get(Case, case_id, with_for_update=True)
+            self.side_effects(session, run_row, case_row, output)
+        audit(
+            session,
+            "adapter.recorded",
+            case_id=case_id,
+            run_id=run_id,
+            adapter_id=adapter_id,
+            status=output.status.value,
+            latency_ms=latency_ms,
+            raw_ref=raw_ref,
+            error=(output.error or None),
+        )
 
     # ------------------------------------------------- the fused decide txn
 
@@ -415,6 +436,11 @@ class Pipeline:
         (same object), so scoring and provenance below stay byte-identical to
         pre-PR6."""
         with uow(self.session_factory) as session:
+            # HELD fence FIRST (R9-F1): the job row lock is taken before the Case FOR UPDATE in
+            # _load — ONE lock order (job → case → run/task) across worker, reaper, and recovery —
+            # and PostgreSQL holds it through this whole fused commit; the fenced complete() at the
+            # end is then the second, terminal proof on the same locked row.
+            jobs.assert_live(session)
             run, case, event = self._load(session, run_id)
             if not self._hop(session, run_id, from_state, RunState.PUBLISH_DECISION):
                 return  # another attempt already decided

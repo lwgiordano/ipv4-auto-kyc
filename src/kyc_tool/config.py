@@ -132,6 +132,31 @@ NUMERIC_SETTINGS: tuple[NumericSetting, ...] = (
         production_min=30,
     ),
     NumericSetting(
+        # Fixed bounded manual-recovery grant (re-audit `7d1c435..827bc0f` F4): the requeue CAS sets
+        # max_attempts = attempts + grant, so every exhaust/recover cycle grants EXACTLY this many
+        # further attempts — never a doubling of whatever the ceiling had grown to.
+        "job_recovery_attempt_grant",
+        "attempts",
+        1,
+        1000,
+        "ops requeue CAS budget grant (jobs.max_attempts = attempts + grant, int4-guarded)",
+        "ops requeue (api/ui)",
+        production_min=1,
+    ),
+    NumericSetting(
+        # Governed adapter response containment (re-audit `7d1c435..827bc0f` F6): both the wire
+        # bytes and the DECODED bytes of every governed upstream response are capped at this —
+        # oversized Content-Length refuses preflight, chunked overflow and gzip expansion fail
+        # closed mid-stream as non-retryable.
+        "adapter_max_response_bytes",
+        "bytes",
+        1024,
+        104_857_600,
+        "governed adapter transport response cap (wire AND decoded)",
+        "pipeline adapters",
+        production_min=1024,
+    ),
+    NumericSetting(
         "job_max_attempts",
         "attempts",
         1,
@@ -467,6 +492,10 @@ class Settings(BaseSettings):
     # NumericValueOutOfRange instead of queuing (re-audit `8aba2df..2cee937` R3-F4, the queue sibling
     # of the outbox R2 F6 bound). Bounded here AND in validate_for_production for unvalidated copies.
     job_max_attempts: int = Field(default=5, ge=1, le=PG_INT4_MAX)
+    # Fixed bounded manual-recovery grant (re-audit `7d1c435..827bc0f` F4) — see NUMERIC_SETTINGS.
+    job_recovery_attempt_grant: int = Field(default=5, ge=1, le=1000)
+    # Governed adapter response cap, wire AND decoded bytes (re-audit `7d1c435..827bc0f` F6).
+    adapter_max_response_bytes: int = Field(default=5_242_880, ge=1024, le=104_857_600)
     # ge=0 (0 = retry-when-due dev value); ceiling timestamp-safe. The worker uses the shared
     # saturating backoff helper so no accepted value overflows timestamp arithmetic at high attempts.
     job_backoff_base_seconds: int = Field(default=5, ge=0, le=_TS_SAFE_SECONDS)
