@@ -311,12 +311,31 @@ def production_numeric_violations(settings: "Settings") -> list[str]:
 ADAPTER_RATE_MIN = 0.001
 ADAPTER_RATE_MAX = 10_000.0
 
+# The ONE canonical adapter registry (re-audit `f2929f8..6a4cd87` F8): rate keys are CLOSED against
+# it, so a typo/case/whitespace variant ("companies_hose", "Companies_House", " gleif ") cannot pass
+# and silently leave the real adapter unlimited.
+ADAPTER_IDS = frozenset({
+    "email_verification", "companies_house", "gleif", "floqer_company_enrichment",
+    "rir_rdap", "rir_poc", "document_ocr", "website_manual_review",
+})
+
 
 def adapter_rate_violations(rates) -> list[str]:
     """Violations for an adapter_rate_limits mapping (empty ⇒ valid). Shared by the field validator,
-    the production boundary, and the RateLimiter consumer."""
+    the production boundary, and the RateLimiter consumer. TOTAL over malformed input (re-audit
+    `f2929f8..6a4cd87` F8): a non-dict container is a violation, never an AttributeError."""
+    if rates is None:
+        return []
+    if not isinstance(rates, dict):
+        return [f"adapter_rate_limits must be a mapping, got {type(rates).__name__}"]
     out = []
-    for key, rate in (rates or {}).items():
+    for key, rate in rates.items():
+        if key not in ADAPTER_IDS:
+            out.append(
+                f"adapter_rate_limits key {key!r} is not a registered adapter id "
+                f"(closed set: {sorted(ADAPTER_IDS)}) — a typo would leave the real adapter unlimited"
+            )
+            continue
         if isinstance(rate, bool) or not isinstance(rate, (int, float)):
             out.append(f"adapter_rate_limits[{key!r}] must be a number ({type(rate).__name__})")
         elif not math.isfinite(rate):
@@ -342,6 +361,13 @@ class Settings(BaseSettings):
             for ns in NUMERIC_SETTINGS:
                 if isinstance(data.get(ns.name), bool):
                     raise ValueError(f"{ns.name} must be a number, not a bool")
+            # Nested rate VALUES too (re-audit `f2929f8..6a4cd87` F8): Pydantic coerces a raw/env-JSON
+            # True to 1.0 before the field validator sees it, silently minting a 1 req/s cap.
+            rates = data.get("adapter_rate_limits")
+            if isinstance(rates, dict):
+                for key, rate in rates.items():
+                    if isinstance(rate, bool):
+                        raise ValueError(f"adapter_rate_limits[{key!r}] must be a number, not a bool")
         return data
 
     @field_validator("adapter_rate_limits")
@@ -614,6 +640,13 @@ def production_config_violations(settings: Settings) -> list[str]:
     v.extend(numeric_domain_violations(settings))
     v.extend(production_numeric_violations(settings))
     v.extend(adapter_rate_violations(settings.adapter_rate_limits))  # nested numeric sink (R5-F6)
+    # Fields the domain pass rejected: every dependent cross-field rule below SKIPS them so a
+    # malformed operand (str/None via model_copy) yields the aggregate diagnosis, never a raw
+    # TypeError mid-arithmetic (re-audit `f2929f8..6a4cd87` F8 extending R5-F11 to cross-field).
+    _invalid = {
+        ns.name for ns in NUMERIC_SETTINGS
+        if numeric_value_violation(ns, getattr(settings, ns.name))
+    }
 
     # A claim lease shorter than one delivery attempt plus DB/processing margin expires WHILE
     # that attempt is in flight: admission then refuses the terminal for a request the receiver
@@ -626,7 +659,7 @@ def production_config_violations(settings: Settings) -> list[str]:
     # A zero DB-accounting margin leaves no room between the send deadline and lease expiry for the
     # failure/terminal write to land, so the admission budget would not actually cover accounting
     # (re-audit `42e1c7d..b39b82a` F2). Production requires a positive margin.
-    if settings.outbox_lease_margin_seconds <= 0:
+    if "outbox_lease_margin_seconds" not in _invalid and settings.outbox_lease_margin_seconds <= 0:
         v.append(
             "outbox_lease_margin_seconds must be > 0 (a zero DB-accounting margin leaves no room "
             "for the failure/terminal write between the send deadline and lease expiry)"
@@ -635,12 +668,15 @@ def production_config_violations(settings: Settings) -> list[str]:
     # A zero base is a valid dev/test value (retry-when-due) but in production it retries with no
     # throttle growth, so a persistently failing endpoint is re-hit every cycle (re-audit
     # `d3c0852..23e005e` F5). Production requires a positive base.
-    if settings.outbox_backoff_base_seconds <= 0:
+    if "outbox_backoff_base_seconds" not in _invalid and settings.outbox_backoff_base_seconds <= 0:
         v.append(
             "outbox_backoff_base_seconds must be > 0 in production (a zero base retries a failing "
             "endpoint every cycle with no exponential throttle)"
         )
 
+    _lease_fields = {"outbox_http_timeout_seconds", "outbox_lease_margin_seconds", "outbox_lease_seconds"}
+    if _lease_fields & _invalid:
+        return v  # operands already diagnosed; the arithmetic below would raise on them
     attempt_deadline = settings.outbox_http_timeout_seconds * OUTBOX_ATTEMPT_DEADLINE_PHASES
     required_lease = attempt_deadline + settings.outbox_lease_margin_seconds
     if settings.outbox_lease_seconds <= required_lease:

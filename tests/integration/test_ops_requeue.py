@@ -75,3 +75,13 @@ def test_ops_requeue_preserves_the_redaction_409(settings, session_factory, poli
     r = tc.post(f"/v1/ops/requeue/outbox/{outbox_id}",
                 headers={"Authorization": f"Bearer {_TOKEN}"})
     assert r.status_code == 409 and "redacted" in r.json()["detail"]
+
+
+def test_ops_requeue_routes_are_mounted_with_the_ui_disabled(settings, session_factory, policy):
+    """F14: executable route semantics — with the UI disabled, the ops requeue routes ANSWER (401
+    for a bad token, not 404-absent) while the /ui variants are absent (404)."""
+    tc = _app(settings, session_factory, policy)
+    assert tc.post("/v1/ops/requeue/job/1", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert tc.post("/v1/ops/requeue/outbox/1", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert tc.post("/ui/api/requeue/job/1").status_code == 404
+    assert tc.post("/ui/api/requeue/outbox/1").status_code == 404

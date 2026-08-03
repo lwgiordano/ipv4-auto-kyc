@@ -40,6 +40,9 @@ _ROLE_BEARING = {CutoverAction.STOP, CutoverAction.ATTEST_ZERO, CutoverAction.ST
 # The CLOSED set of publisher roles (re-audit `03dbfab..bc325e7` R5-F9): a third "mystery_worker"
 # consistently copied into every role-bearing phase must NOT validate.
 _ALLOWED_ROLES = frozenset({"outbox_worker", "dev_worker"})
+# The CLOSED registry of settings governed by a drained cutover (re-audit `f2929f8..6a4cd87` F14):
+# a record whose setting was consistently rewritten (e.g. KYC_WRONG everywhere) must not validate.
+_ALLOWED_SETTINGS = frozenset({"KYC_OUTBOX_MAX_ATTEMPTS"})
 _MARKER = "cutover"  # surfaces delimit the rendered block with "<marker>:<setting>:start|end"
 
 
@@ -83,6 +86,11 @@ def validate_cutover(record: DrainedCutover) -> list[str]:
     """Return the record's violations (empty ⇒ valid). This is the CONSUMER the guard mutation-tests:
     every corruption below must produce at least one violation."""
     problems: list[str] = []
+    if record.setting not in _ALLOWED_SETTINGS:
+        problems.append(
+            f"setting {record.setting!r} is not in the closed cutover registry "
+            f"{sorted(_ALLOWED_SETTINGS)} — a consistently-rewritten record is not a valid machine"
+        )
     if not record.both_directions:
         problems.append("both_directions must be true — a raise is not rolling-safe either")
     # EXACT closed role set (not "contains both"): an extra/aliased role is refused.
@@ -183,8 +191,19 @@ def extract_block(surface_text: str, record: DrainedCutover) -> list[str]:
     render_cutover. Raises if the markers are absent or malformed."""
     start, end = marker(record, "start"), marker(record, "end")
     lines = surface_text.splitlines()
-    starts = [i for i, line in enumerate(lines) if start in line]
-    ends = [i for i, line in enumerate(lines) if end in line]
+    # EXACT normalized marker-line equality (re-audit `f2929f8..6a4cd87` F14): substring matching
+    # accepted a prefixed/suffixed marker line (`cutover:...:start-evil`), letting a decoy block
+    # shadow the governed one. A marker line is the marker alone, modulo the surface's comment
+    # dressing (# for .env, <!-- --> for markdown).
+    def _is_marker(line: str, marker_text: str) -> bool:
+        stripped = line.strip()
+        for token in ("<!--", "-->"):
+            stripped = stripped.replace(token, "")
+        stripped = stripped.lstrip("#").strip()
+        return stripped == marker_text
+
+    starts = [i for i, line in enumerate(lines) if _is_marker(line, start)]
+    ends = [i for i, line in enumerate(lines) if _is_marker(line, end)]
     # EXACTLY one block (re-audit `03dbfab..bc325e7` R5-F9): a safe first block followed by a second,
     # unsafe marked procedure must NOT be silently accepted by matching only the first markers.
     if len(starts) != 1 or len(ends) != 1:

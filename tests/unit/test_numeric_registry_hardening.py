@@ -100,3 +100,30 @@ def test_malformed_numeric_yields_aggregate_not_crash(field):
     assert any(field in m for m in problems)
     with pytest.raises(ProductionConfigError):
         validate_for_production(leaked)
+
+
+# ── R6-F8: closed adapter keys, raw-bool values, total container validation ────────────────────────
+def test_unknown_or_variant_adapter_keys_are_refused():
+    for bad_key in ("companies_hose", "Companies_House", " gleif ", "unknown"):
+        with pytest.raises(ValidationError):
+            Settings(adapter_rate_limits={bad_key: 2.0})
+
+
+def test_raw_bool_rate_value_is_refused_direct_and_env(monkeypatch):
+    with pytest.raises(ValidationError):
+        Settings(adapter_rate_limits={"companies_house": True})
+    monkeypatch.setenv("KYC_ADAPTER_RATE_LIMITS", '{"companies_house": true}')
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_invalid_rate_container_via_model_copy_aggregates_not_crashes():
+    leaked = _hardened().model_copy(update={"adapter_rate_limits": "bad"})
+    problems = production_config_violations(leaked)  # must not raise AttributeError
+    assert any("adapter_rate_limits" in m for m in problems)
+
+
+def test_malformed_cross_field_outbox_operand_aggregates_not_crashes():
+    leaked = _hardened().model_copy(update={"outbox_http_timeout_seconds": "bad"})
+    problems = production_config_violations(leaked)  # must not raise TypeError in the lease rule
+    assert any("outbox_http_timeout_seconds" in m for m in problems)

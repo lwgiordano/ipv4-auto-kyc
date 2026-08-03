@@ -283,8 +283,15 @@ def bind(
     # consumed column's nullability/type, so a diagnostic cannot certify a schema (dropped `decisions`,
     # `claim_token` flipped NOT NULL) that the mutator then tracebacks or half-applies on.
     if shape_contract is not None:
-        from kyc_tool.ops.shape import shape_mismatches
+        from kyc_tool.ops.shape import shape_mismatches, supported_revision_violation
 
+        # ENFORCE the contract's declared revision set (re-audit `f2929f8..6a4cd87` F7 — it was
+        # advisory metadata no production caller consulted). An empty set means the command's own
+        # min/exact gate governs alone; a NON-empty set is a hard admission list checked here
+        # against the already-resolved singleton stamp.
+        admission = supported_revision_violation(version, shape_contract)
+        if admission:
+            raise BindingRefused(f"{SCHEMA_REFUSED_SENTINEL}: {admission}")
         problems = shape_mismatches(session, shape_contract)
         if problems:
             raise BindingRefused(

@@ -322,9 +322,13 @@ def restore_callback(
                      statement_timeout_seconds=statement_timeout_seconds,
                      exact_revision="012", require_sequence_owner=True,
                      shape_contract=shape.RESTORE_OUTBOX_CALLBACK)
-        session.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
-        # Re-check the SAME contract under the lock (re-audit R4-F4): a view swap or type/column drift
-        # between bind() and the lock cannot slip past the INSERT.
+        # Lock EVERY relation the contract declares, in its canonical order (re-audit
+        # `f2929f8..6a4cd87` F7): the acceptance predicate joins decisions, so certifying it while
+        # decisions stays unlocked let concurrent DDL invalidate the certification mid-restore.
+        for relation in shape.RESTORE_OUTBOX_CALLBACK.lock_relations:
+            session.execute(text(f"LOCK TABLE public.{relation} IN ACCESS EXCLUSIVE MODE"))
+        # Re-check the SAME contract under the locks (re-audit R4-F4): a view swap or type/column
+        # drift between bind() and the locks cannot slip past the INSERT.
         under_lock = shape.shape_mismatches(session, shape.RESTORE_OUTBOX_CALLBACK)
         if under_lock:
             session.rollback()

@@ -1,30 +1,31 @@
-"""PR 10a: RUNBOOK repair governance. Hand-written UPDATE jobs/outbox SQL is not a sanctioned
-operator path — the jobs variant skipped the run reset + audit record, and the outbox variant
-(post-7b-core) left the claim tuple and bypassed the 018+ transition authority. The RUNBOOK must
-point at the authenticated console requeue endpoints instead, and both endpoints must exist."""
+"""PR 10a RUNBOOK repair governance, hardened per re-audit `f2929f8..6a4cd87` F14: executable
+semantics, not text tokens. The forbidden requeue-SQL check parses fenced sql blocks (case/schema
+insensitive); the endpoint check inspects the MOUNTED FastAPI routes of a real app."""
 
 import re
 
 from kyc_tool.config import REPO_ROOT
 
 
+def _fenced_sql_blocks(body: str) -> list[str]:
+    return re.findall(r"```sql\n(.*?)```", body, re.S | re.I)
+
+
 def test_runbook_contains_no_raw_requeue_update_sql():
-    """REQUEUE-shaped SQL (SET status back to pending/queued) is the forbidden family. The deliberate
-    retire-a-redacted-row block (SET status='dead') stays: no endpoint exists for it and the 018+
-    authority permits only that direction for a redacted body."""
+    """Requeue-shaped SQL (status back to pending/queued, any case, optionally schema-qualified) is
+    forbidden in fenced sql blocks; the deliberate retire-a-redacted-row block (status='dead') stays."""
     body = (REPO_ROOT / "docs" / "RUNBOOK.md").read_text()
-    assert not re.search(r"UPDATE\s+(jobs|outbox)\s+SET\s+status\s*=\s*'(pending|queued)'", body), (
-        "RUNBOOK reintroduced a hand-SQL requeue — use the console endpoints"
-    )
+    head = re.compile(r"UPDATE\s+(?:\w+\.)?(jobs|outbox)\s+SET\b", re.I)
+    assign = re.compile(r"status\s*=\s*'(pending|queued)'", re.I)
+    for block in _fenced_sql_blocks(body):
+        for m in head.finditer(block):
+            set_clause = re.split(r"\bWHERE\b", block[m.end():], maxsplit=1, flags=re.I)[0]
+            assert not assign.search(set_clause), (
+                f"RUNBOOK reintroduced a hand-SQL requeue: {block[:120]!r}"
+            )
 
 
-def test_runbook_points_at_both_console_requeue_endpoints():
+def test_runbook_points_at_both_ops_requeue_endpoints():
     body = (REPO_ROOT / "docs" / "RUNBOOK.md").read_text()
     assert "/v1/ops/requeue/job/{id}" in body
     assert "/v1/ops/requeue/outbox/{id}" in body
-
-
-def test_the_documented_endpoints_exist_in_the_always_mounted_ops_router():
-    source = (REPO_ROOT / "src/kyc_tool/api/routes_ops.py").read_text()
-    assert '/v1/ops/requeue/job/{job_id}' in source
-    assert '/v1/ops/requeue/outbox/{outbox_id}' in source

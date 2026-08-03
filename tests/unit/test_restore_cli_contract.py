@@ -42,8 +42,11 @@ def _argv(command: str) -> list[str]:
     if "<" in command or ">" in command:
         raise ValueError(f"command has an unresolved placeholder: {command!r}")
     parts = shlex.split(command)
-    idx = next(i for i, p in enumerate(parts) if "restore_pr7b_core_callback" in p)
-    return parts[idx + 1:]
+    # EXACT launcher tokens (re-audit `f2929f8..6a4cd87` F14): substring/startswith matching accepted
+    # `...restore_pr7b_core_callback_evil` — the module token must equal the real module exactly.
+    if parts[:3] != ["python", "-m", "kyc_tool.ops.restore_pr7b_core_callback"]:
+        raise ValueError(f"launcher tokens are not exactly the sanctioned module: {parts[:3]}")
+    return parts[3:]
 
 
 def _documented():
@@ -108,3 +111,10 @@ def test_real_parser_rejects_ambiguous_or_invalid_grammar(argv):
 def test_extractor_rejects_shell_controls_and_unresolved_placeholders(command):
     with pytest.raises(ValueError):
         _argv(command)
+
+
+def test_extractor_rejects_an_evil_module_suffix():
+    """F14: `..._evil` passed startswith matching; exact launcher-token equality refuses it."""
+    bad = _LAUNCHER + "_evil --evidence f.json --expect-original-id 7 --expect-manifest-digest " + _D
+    with pytest.raises(ValueError):
+        _argv(bad)

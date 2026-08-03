@@ -59,6 +59,18 @@ sub_setup() {
     fi
   done
   [ "$rc" -eq 0 ] || die "setup did not complete — fix the errors above and re-run ./manage.sh setup"
+  # Durable hook wiring (PR 10a, corrected per re-audit f2929f8..6a4cd87 F13 — the kit template is
+  # the authority, never the installed copy): the CANONICAL literal `.substrate/hooks` (what doctor
+  # 30-hooks.sh expects), `-e .git` so worktrees (where .git is a file) work, and a pre-existing
+  # NON-KIT hooksPath is preserved rather than clobbered.
+  if [ -e .git ] && [ -d .substrate/hooks ]; then
+    current="$(git config --local --get core.hooksPath 2>/dev/null || true)"
+    if [ -z "$current" ] || [ "$current" = ".substrate/hooks" ]; then
+      git config core.hooksPath .substrate/hooks && ok "wired core.hooksPath -> .substrate/hooks"
+    else
+      info "core.hooksPath already set to '$current' — leaving it (non-kit hooks preserved)"
+    fi
+  fi
   mkdir -p "$SUBSTRATE_DIR/state"
   {
     echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
