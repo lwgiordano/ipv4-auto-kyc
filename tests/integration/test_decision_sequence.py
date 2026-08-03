@@ -27,9 +27,12 @@ def _seed_run_at_decide(session_factory, *, case_id, run_id, ev_seq):
                        "VALUES (:r,:c,:e,'DECIDE', CAST(:p AS jsonb))"),
                   {"r": run_id, "c": case_id, "e": run_id + "-ev",
                    "p": '{"company_legal_name":"X","jurisdiction":"GB"}'})
-        jid = s.execute(text("INSERT INTO jobs (kind, case_id, payload_json, status) VALUES "
-                             "('run_transition',:c, CAST(:p AS jsonb), 'running') RETURNING id"),
-                        {"c": case_id, "p": json.dumps({"run_id": run_id})}).scalar_one()
+        # the decide txn's jobs.complete() fences on the claim NONCE (R8 F1) — seed a live one
+        jid = s.execute(text("INSERT INTO jobs (kind, case_id, payload_json, status, locked_by) "
+                             "VALUES ('run_transition',:c, CAST(:p AS jsonb), 'running', :n) "
+                             "RETURNING id"),
+                        {"c": case_id, "p": json.dumps({"run_id": run_id}),
+                         "n": f"worker-test:{run_id}"}).scalar_one()
         s.commit()
     return jid
 
@@ -69,7 +72,8 @@ def test_concurrent_decides_serialize_via_case_lock(session_factory, pipeline, p
     def decide(run_id, jid):
         try:
             claimed = ClaimedJob(id=jid, kind="run_transition", case_id="cc",
-                                 payload={"run_id": run_id}, attempts=0, max_attempts=5)
+                                 payload={"run_id": run_id}, attempts=0, max_attempts=5,
+                                 claim_nonce=f"worker-test:{run_id}")
             pipeline._decide_txn(run_id, from_state=RunState.DECIDE, job=claimed, bundle=policy)
         except Exception as e:  # noqa: BLE001 — capture a uniqueness race for the assertion
             errors.append(e)

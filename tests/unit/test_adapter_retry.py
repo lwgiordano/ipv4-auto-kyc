@@ -8,6 +8,7 @@ import pytest
 
 from kyc_tool.adapters.retry import (
     _MAX_RETRY_AFTER_SECONDS,
+    BudgetExhausted,
     RetryBudget,
     budget_scope,
     get_with_retry,
@@ -130,6 +131,75 @@ def test_budget_acquires_one_rate_permit_per_retry_attempt():
     with budget_scope(budget):
         get_with_retry(_client(responder), "/x", attempts=3, sleep=lambda s: None)
     assert len(calls) == 3 and len(permits) == 2  # first attempt uses the pipeline's outer permit
+
+
+# ── R8-F5: the budget covers the FIRST attempt, the permit wait, and the wire itself ──────────────
+def test_budget_dead_before_first_attempt_sends_nothing_and_raises():
+    """Zero sends past the deadline includes the FIRST send: a budget already exhausted (e.g. the
+    first rate permit consumed it) must raise BudgetExhausted with zero wire calls, not send once."""
+    calls = []
+    def responder(request):
+        calls.append(1)
+        return httpx.Response(200)
+    budget = RetryBudget(deadline_monotonic=10.0, acquire=None, clock=lambda: 10.0)
+    with budget_scope(budget), pytest.raises(BudgetExhausted):
+        get_with_retry(_client(responder), "/x", attempts=3, sleep=lambda s: None)
+    assert calls == []
+
+
+def test_permit_wait_that_consumes_the_budget_stops_the_retry():
+    """The audit's executable witness: deadline=10, the retry permit advances the clock 0 → 20.
+    Previously the second wire call still happened at t=20; now the post-acquire recheck stops it —
+    wire calls happen at [0.0] only and the last outcome is surfaced."""
+    call_times = []
+    clock = {"t": 0.0}
+    def responder(request):
+        call_times.append(clock["t"])
+        return httpx.Response(503)
+    def slow_permit():
+        clock["t"] = 20.0  # the rate wait blows straight past the deadline
+    budget = RetryBudget(deadline_monotonic=10.0, acquire=slow_permit, clock=lambda: clock["t"])
+    with budget_scope(budget):
+        r = get_with_retry(_client(responder), "/x", attempts=3, backoff_seconds=0,
+                           sleep=lambda s: None)
+    assert call_times == [0.0]  # ZERO sends after the deadline
+    assert r.status_code == 503  # last real outcome surfaced (UPSTREAM_ERROR → partial, G12)
+
+
+def test_deadline_aware_permit_refusal_surfaces_the_last_outcome():
+    """budget.acquire raising BudgetExhausted (the deadline-aware rate limiter) stops the loop
+    without a send and without masking the prior response."""
+    calls = []
+    def responder(request):
+        calls.append(1)
+        return httpx.Response(503)
+    def refusing_permit():
+        raise BudgetExhausted("permit cannot fit")
+    budget = RetryBudget(deadline_monotonic=1e9, acquire=refusing_permit, clock=lambda: 0.0)
+    with budget_scope(budget):
+        r = get_with_retry(_client(responder), "/x", attempts=3, backoff_seconds=0,
+                           sleep=lambda s: None)
+    assert len(calls) == 1 and r.status_code == 503
+
+
+def test_per_attempt_timeout_is_capped_at_remaining_budget_tighten_only():
+    """Each wire call carries an HTTP timeout derived from the remaining budget — capped DOWN to
+    the remaining time, but never loosening the client's own smaller configured phase timeout."""
+    seen = []
+    def responder(request):
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(200)
+    client = httpx.Client(transport=httpx.MockTransport(responder), base_url="https://u.test",
+                          timeout=httpx.Timeout(5.0))
+    budget = RetryBudget(deadline_monotonic=100.0, acquire=None, clock=lambda: 98.0)  # 2s remain
+    with budget_scope(budget):
+        get_with_retry(client, "/x", attempts=1)
+    assert seen[0]["read"] == 2.0 and seen[0]["connect"] == 2.0  # tightened to the budget
+    seen.clear()
+    budget = RetryBudget(deadline_monotonic=100.0, acquire=None, clock=lambda: 0.0)  # 100s remain
+    with budget_scope(budget):
+        get_with_retry(client, "/x", attempts=1)
+    assert seen[0]["read"] == 5.0  # the client's own 5s stands — a big budget never loosens it
 
 
 def test_pipeline_wires_a_budget_below_the_lease():

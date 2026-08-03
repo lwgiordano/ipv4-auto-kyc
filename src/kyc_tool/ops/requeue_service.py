@@ -21,9 +21,13 @@ def requeue_dead_job(session_factory, job_id: int) -> dict:
             raise HTTPException(status_code=404, detail="job not found")
         if row.status != "dead":
             raise HTTPException(status_code=409, detail=f"job is {row.status}, not dead")
+        # Grant a FRESH RETRY BUDGET without rewinding the monotonic attempts counter (re-audit
+        # `3db5f13..a7df17b` F1): resetting attempts recycled the old claim-generation fence (ABA) —
+        # and it also falsifies the audit trail. locked_by=NULL invalidates any outstanding nonce.
         session.execute(
             text(
-                "UPDATE jobs SET status='queued', attempts=0, run_after=now(), locked_by=NULL, "
+                "UPDATE jobs SET status='queued', max_attempts = attempts + max_attempts, "
+                "run_after=now(), locked_by=NULL, "
                 "lease_expires_at=NULL, last_error=NULL, updated_at=now() WHERE id=:id"
             ),
             {"id": job_id},

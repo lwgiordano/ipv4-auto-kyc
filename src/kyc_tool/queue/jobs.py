@@ -10,7 +10,11 @@ Design (validated in the architecture review):
   max_attempts dead-letters (and its run is failed by the caller).
 """
 
-from dataclasses import dataclass
+import threading
+import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -23,7 +27,7 @@ _CLAIM_SQL = text(
     """
     UPDATE jobs
     SET status = 'running',
-        locked_by = :worker_id,
+        locked_by = :claim_nonce,
         lease_expires_at = now() + make_interval(secs => :lease_seconds),
         attempts = attempts + 1,
         updated_at = now()
@@ -45,7 +49,7 @@ _CLAIM_SQL = text(
         FOR UPDATE OF j SKIP LOCKED
         LIMIT 1
     )
-    RETURNING id, kind, case_id, payload_json, attempts, max_attempts
+    RETURNING id, kind, case_id, payload_json, attempts, max_attempts, locked_by
     """
 )
 
@@ -58,6 +62,10 @@ class ClaimedJob:
     payload: dict
     attempts: int
     max_attempts: int
+    # The claim NONCE (re-audit `3db5f13..a7df17b` F1): `locked_by = '<worker>:<uuid4>'`, unique per
+    # claim. `attempts` alone had an ABA hole — the supported ops requeue reset it, recycling the
+    # generation — so ownership is the nonce; attempts stays as the monotonic retry counter.
+    claim_nonce: str = ""
 
 
 def enqueue(
@@ -85,8 +93,9 @@ def claim(session: Session, kinds: list[str], worker_id: str, lease_seconds: int
     # defeating per-case serialization; an overflowing lease raises DatetimeFieldOverflow inside
     # make_interval, outside the handler boundary. Refuse before the UPDATE, leaving the row untouched.
     require_numeric_domain("job_lease_seconds", lease_seconds)
+    claim_nonce = f"{worker_id}:{uuid.uuid4().hex}"  # unique per CLAIM, not per worker (F1)
     row = session.execute(
-        _CLAIM_SQL, {"worker_id": worker_id, "lease_seconds": lease_seconds, "kinds": kinds}
+        _CLAIM_SQL, {"claim_nonce": claim_nonce, "lease_seconds": lease_seconds, "kinds": kinds}
     ).first()
     if row is None:
         return None
@@ -97,7 +106,63 @@ def claim(session: Session, kinds: list[str], worker_id: str, lease_seconds: int
         payload=row.payload_json,
         attempts=row.attempts,
         max_attempts=row.max_attempts,
+        claim_nonce=row.locked_by,
     )
+
+
+@dataclass
+class ClaimContext:
+    """The live claim capability (re-audit `3db5f13..a7df17b` F2): the worker publishes it for the
+    duration of the handler; heartbeat loss/error sets `lost`, and every transition/adapter boundary
+    plus every committing transaction proves liveness through it. A stale claimant is REVOKED at the
+    next boundary instead of running to completion on side effects."""
+
+    job: ClaimedJob
+    lost: threading.Event = field(default_factory=threading.Event)
+
+
+_CURRENT_CLAIM: ContextVar[ClaimContext | None] = ContextVar("queue_claim_context", default=None)
+
+
+@contextmanager
+def claim_scope(ctx: ClaimContext):
+    token = _CURRENT_CLAIM.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _CURRENT_CLAIM.reset(token)
+
+
+def current_claim() -> ClaimContext | None:
+    return _CURRENT_CLAIM.get()
+
+
+def check_claim_live() -> None:
+    """Cheap in-process boundary check (no DB): raises when the heartbeat marked the claim lost."""
+    ctx = _CURRENT_CLAIM.get()
+    if ctx is not None and ctx.lost.is_set():
+        raise StaleJobClaim(f"job {ctx.job.id} claim lost (heartbeat) — revoking before next step")
+
+
+def assert_live(session: Session) -> None:
+    """In-TRANSACTION liveness proof (F2): called immediately before a committing transaction's
+    writes. Verifies the ambient claim's nonce is still the live one; a miss (reaped/reclaimed/
+    recovered) raises StaleJobClaim so the whole transaction rolls back. No ambient claim = no-op
+    (direct/manual callers own their own fencing)."""
+    ctx = _CURRENT_CLAIM.get()
+    if ctx is None:
+        return
+    if ctx.lost.is_set():
+        raise StaleJobClaim(f"job {ctx.job.id} claim lost (heartbeat) — rolling back")
+    live = session.execute(
+        text("SELECT 1 FROM jobs WHERE id=:id AND status='running' AND locked_by=:nonce"),
+        {"id": ctx.job.id, "nonce": ctx.job.claim_nonce},
+    ).first()
+    if live is None:
+        ctx.lost.set()
+        raise StaleJobClaim(
+            f"job {ctx.job.id} nonce is no longer live — rolling back this transaction"
+        )
 
 
 class StaleJobClaim(RuntimeError):
@@ -115,15 +180,19 @@ def complete(session: Session, job: ClaimedJob) -> bool:
     applied = session.execute(
         text(
             "UPDATE jobs SET status='done', updated_at=now() "
-            "WHERE id=:id AND status='running' AND attempts=:gen"
+            "WHERE id=:id AND status='running' AND locked_by=:nonce"
         ),
-        {"id": job.id, "gen": job.attempts},
+        {"id": job.id, "nonce": job.claim_nonce},
     ).rowcount
     return applied > 0
 
 
-def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: int) -> bool:
-    """Record a failure. Returns True when the job dead-lettered."""
+def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: int) -> str:
+    """Record a failure under the claim-nonce fence. Returns a CLOSED result derived from the actual
+    UPDATE (re-audit `3db5f13..a7df17b` F3 — never from the caller's stale snapshot):
+    'dead' (this call dead-lettered it), 'requeued' (retry scheduled), or 'stale' (fence miss — the
+    claim was reaped/recovered/reclaimed; NOTHING was written and the caller must NOT dead-letter
+    the run or emit any terminal side effect)."""
     # Consumer-layer domain re-check (re-audit R4-F3): a negative base makes run_after the PAST so the
     # job requeues immediately with no throttle; a large base × high attempts overflowed
     # make_interval. Refuse before any write so the job's state is unchanged on a bad base.
@@ -132,30 +201,31 @@ def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: in
     # unfenced fail() from a stale worker would requeue/dead-letter a job another worker now owns,
     # clobbering the live claim. Zero rows updated = stale; leave the live claim untouched.
     if job.attempts >= job.max_attempts:
-        session.execute(
+        applied = session.execute(
             text(
-                "UPDATE jobs SET status='dead', last_error=:err, updated_at=now() "
-                "WHERE id=:id AND status='running' AND attempts=:gen"
+                "UPDATE jobs SET status='dead', locked_by=NULL, lease_expires_at=NULL, "
+                "last_error=:err, updated_at=now() "
+                "WHERE id=:id AND status='running' AND locked_by=:nonce RETURNING id"
             ),
-            {"id": job.id, "err": error[:2000], "gen": job.attempts},
-        )
-        return True
+            {"id": job.id, "err": error[:2000], "nonce": job.claim_nonce},
+        ).rowcount
+        return "dead" if applied else "stale"
     # Saturating schedule (shared with the outbox): the shift is bounded before 2**shift is built and
     # the post-jitter delay is capped, so no attempt count overflows timestamp arithmetic.
     delay = saturating_backoff_seconds(backoff_base_seconds, job.attempts, jitter_fraction=0.25)
-    session.execute(
+    applied = session.execute(
         text(
             """
             UPDATE jobs
             SET status='queued', locked_by=NULL, lease_expires_at=NULL,
                 last_error=:err, run_after = now() + make_interval(secs => :delay),
                 updated_at=now()
-            WHERE id=:id AND status='running' AND attempts=:gen
+            WHERE id=:id AND status='running' AND locked_by=:nonce
             """
         ),
-        {"id": job.id, "err": error[:2000], "delay": delay, "gen": job.attempts},
-    )
-    return False
+        {"id": job.id, "err": error[:2000], "delay": delay, "nonce": job.claim_nonce},
+    ).rowcount
+    return "requeued" if applied else "stale"
 
 
 def heartbeat(session: Session, job: ClaimedJob, lease_seconds: int) -> bool:
@@ -166,9 +236,9 @@ def heartbeat(session: Session, job: ClaimedJob, lease_seconds: int) -> bool:
     applied = session.execute(
         text(
             "UPDATE jobs SET lease_expires_at = now() + make_interval(secs => :lease), "
-            "updated_at=now() WHERE id=:id AND status='running' AND attempts=:gen"
+            "updated_at=now() WHERE id=:id AND status='running' AND locked_by=:nonce"
         ),
-        {"id": job.id, "lease": lease_seconds, "gen": job.attempts},
+        {"id": job.id, "lease": lease_seconds, "nonce": job.claim_nonce},
     ).rowcount
     return applied > 0
 

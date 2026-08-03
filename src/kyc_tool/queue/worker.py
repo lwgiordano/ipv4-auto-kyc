@@ -21,6 +21,13 @@ log = structlog.get_logger(__name__)
 Handler = "callable[[Session | None, jobs.ClaimedJob], None]"
 
 
+def heartbeat_cadence_seconds(lease_seconds: float) -> float:
+    """STRICTLY below the ROADMAP's lease/3 ceiling at EVERY accepted lease, never clamped upward
+    (re-audit `3db5f13..a7df17b` F4: max(lease/3, 1s) scheduled the first beat AT expiry for a 1-2s
+    lease). lease/4 leaves at least two further beats of room before expiry after any single one."""
+    return lease_seconds / 4.0
+
+
 class Worker:
     def __init__(
         self,
@@ -57,46 +64,57 @@ class Worker:
                 session, list(self.handlers), self.worker_id, self.lease_seconds
             )
         if claimed is None:
+            # Lease-expiry dead-letters fail their runs IN THE SAME TRANSACTION as the reap
+            # (re-audit `3db5f13..a7df17b` F3): a crash between the two must not leave a dead job
+            # with a live run, and a recovered run must never be re-failed by a later separate txn.
             with uow(self.session_factory) as session:
                 dead = jobs.reap_expired(session)
-            # Lease-expiry dead-letters must fail their runs too, not just the
-            # handler-exception path below — else a crashed run stays a zombie.
-            for job in dead:
-                log.error("job_dead_letter", job_id=job.id, kind=job.kind, reason="lease_expired")
-                if self.on_dead_letter is not None:
-                    self.on_dead_letter(job, "lease expired; attempts exhausted")
+                for job in dead:
+                    log.error("job_dead_letter", job_id=job.id, kind=job.kind, reason="lease_expired")
+                    if self.on_dead_letter is not None:
+                        self.on_dead_letter(job, "lease expired; attempts exhausted", session=session)
             return False
 
         handler = self.handlers[claimed.kind]
         # PR 7a slice: heartbeat the claim while the handler runs, so a job that legitimately
-        # outlives its lease is NOT reaped and double-executed. Cadence lease/3 (floor 1s); stops
-        # the moment the fence is lost (reaped + reclaimed) — fenced complete()/fail() then keep
-        # this stale worker from committing anything.
+        # outlives its lease is NOT reaped and double-executed. Cadence STRICTLY below lease/3 —
+        # lease/4, never clamped upward (re-audit `3db5f13..a7df17b` F4: max(lease/3, 1s) scheduled
+        # the first beat AT expiry for small accepted leases). A fence miss OR a beat error sets
+        # `ctx.lost` (F2): we can no longer PROVE the lease extends, so the claim is revoked at the
+        # handler's next boundary/transaction instead of running to completion on side effects.
+        ctx = jobs.ClaimContext(job=claimed)
         stop_beat = threading.Event()
 
         def _beat() -> None:
-            cadence = max(self.lease_seconds / 3.0, 1.0)
+            cadence = heartbeat_cadence_seconds(self.lease_seconds)
             while not stop_beat.wait(cadence):
                 try:
                     with uow(self.session_factory) as s:
                         if not jobs.heartbeat(s, claimed, self.lease_seconds):
                             log.warning("job_heartbeat_lost", job_id=claimed.id)
+                            ctx.lost.set()
                             return
                 except Exception as exc:  # noqa: BLE001 — a beat failure must not kill the worker
                     log.warning("job_heartbeat_error", job_id=claimed.id, error=str(exc))
+                    ctx.lost.set()  # unprovable extension = lost (F4): revoke, never keep working
+                    return
 
         beat_thread = threading.Thread(target=_beat, daemon=True)
         beat_thread.start()
         try:
-            handler(claimed)
+            with jobs.claim_scope(ctx):
+                handler(claimed)
         except Exception as exc:  # noqa: BLE001 — worker must survive any handler error
             log.error("job_failed", job_id=claimed.id, kind=claimed.kind, error=str(exc))
             with uow(self.session_factory) as session:
-                dead = jobs.fail(session, claimed, str(exc), self.backoff_base_seconds)
-            if dead:
-                log.error("job_dead_letter", job_id=claimed.id, kind=claimed.kind)
-                if self.on_dead_letter is not None:
-                    self.on_dead_letter(claimed, str(exc))
+                outcome = jobs.fail(session, claimed, str(exc), self.backoff_base_seconds)
+                if outcome == "dead":
+                    # run-FAILED rides in the SAME txn as the job terminal (F3)
+                    log.error("job_dead_letter", job_id=claimed.id, kind=claimed.kind)
+                    if self.on_dead_letter is not None:
+                        self.on_dead_letter(claimed, str(exc), session=session)
+            if outcome == "stale":
+                log.warning("job_fail_stale_fence", job_id=claimed.id)  # recovered/reclaimed: no-op
             return True
 
         finally:

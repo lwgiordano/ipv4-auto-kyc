@@ -126,7 +126,10 @@ NUMERIC_SETTINGS: tuple[NumericSetting, ...] = (
         _TS_SAFE_SECONDS,
         "jobs.claim lease expiry (now()+interval)",
         "queue worker/reaper",
-        production_min=1,
+        # Floor 30 in production (re-audit `3db5f13..a7df17b` F4): the heartbeat runs at lease/4,
+        # so a 1-2s lease put the FIRST beat inside scheduler/DB jitter of the reaper — heartbeat
+        # cadence, DB round-trip, and the adapter-plan DB margin all need real room.
+        production_min=30,
     ),
     NumericSetting(
         "job_max_attempts",
@@ -729,9 +732,15 @@ def validate_process_role(settings: Settings, role: ProcessRole) -> None:
     # the operator has set an attested target, because the drained cutover is rehearsed in staging
     # too. A publisher-bearing process whose live ceiling differs from the attested target would
     # recreate the mixed-ceiling extra-send / premature-dead-letter hazard the drained cutover
-    # exists to prevent; it refuses BEFORE any engine/store access. Per-process enforcement is the
-    # executable form of the fleet attestation: every publisher that STARTS provably carries the
-    # exact reviewed value.
+    # exists to prevent; it refuses BEFORE any engine/store access.
+    # SCOPE — PER-PROCESS MITIGATION, NOT FLEET ATTESTATION (re-audit `3db5f13..a7df17b` F6): both
+    # values here come from the SAME process environment, so this catches a task definition that
+    # missed the reviewed pair or disagrees with itself — it CANNOT catch a fleet whose task
+    # definitions are internally consistent but mutually different (old (8,8) next to new (12,12)
+    # both boot). The independent authority — a DB CAS cutover record + orchestrator-inventory
+    # receipt every publisher must match before claiming — needs a table and is reserved into
+    # migration 028 (PR 10b); the drained STOP/ATTEST-ZERO procedure remains the operative control
+    # until then.
     attested = settings.outbox_max_attempts_attested
     if (
         role in _PUBLISHER_ROLES

@@ -398,7 +398,11 @@ shipped the non-migration core** — `adapters/retry.py` wired into the httpx ad
 24h metrics windows, `/v1/metrics.prom` + `docs/ALERTS.md`, RUNBOOK raw-requeue-SQL repair (+
 governance test), base-image digest pin + `requirements.lock` constraints, durable `core.hooksPath`.
 **10b keeps** the reserved migration 028 (broker snapshots + the audit-promised
-`outbox.attempts>=0` / `jobs.attempts>=0` / `jobs.max_attempts>=1` CHECKs), the recalc broker gate +
+`outbox.attempts>=0` / `jobs.attempts>=0` / `jobs.max_attempts>=1` CHECKs + the cutover-attestation
+CAS record — re-audit `3db5f13..a7df17b` F6: a DB record of (setting, reviewed target, epoch) with
+an orchestrator-inventory receipt that every publisher compares its live value/image against before
+claiming; until it lands the env-pair gate is a per-process mitigation and the drained STOP/ATTEST-
+ZERO steps remain the fleet control), the recalc broker gate +
 ADR-007, `evidence.refresh_requested`, the contracted rollout-observation endpoint, and tree-wide
 format adoption.
 Migration 028: broker **full-list immutable snapshots** `(revision, sha256,

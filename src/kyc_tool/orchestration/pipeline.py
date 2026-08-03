@@ -62,6 +62,14 @@ log = structlog.get_logger(__name__)
 _ADAPTER_PLAN_MARGIN_SECONDS = 10.0
 
 
+def plan_budget_seconds(lease_seconds: float) -> float:
+    """The adapter plan's wall-clock budget: STRICTLY below the lease at every accepted value
+    (re-audit `3db5f13..a7df17b` F5 — the old max(lease-10, 1) collapsed the margin to nothing for
+    leases ≤ 10s and returned ≥ the whole lease at lease ≤ 1). Full margin when the lease affords
+    it, else half the lease."""
+    return max(lease_seconds - _ADAPTER_PLAN_MARGIN_SECONDS, lease_seconds * 0.5)
+
+
 class BundleUnavailable(Exception):
     """Raised by Pipeline.resolve_bundle when bundle pinning is enforced and
     the run's creation-pin policy_bundle_hash has no matching row in
@@ -138,6 +146,9 @@ class Pipeline:
             run = session.get(Run, run_id)
             bundle = self.resolve_bundle(session, run)
         for _ in range(32):  # hard bound; a run has ≤ ~8 transitions
+            # Revocation boundary (re-audit `3db5f13..a7df17b` F2): a claim the heartbeat marked
+            # lost stops HERE — before the next transition's reads, writes, or external calls.
+            jobs.check_claim_live()
             state = self._current_state(run_id)
             if state in (RunState.PUBLISH_DECISION, RunState.COMPLETE, RunState.FAILED):
                 # idempotent when the decide txn already completed the job
@@ -147,22 +158,30 @@ class Pipeline:
             self._advance(run_id, state, job=job, bundle=bundle)
         raise RuntimeError(f"run {run_id} did not reach a publishable state (loop bound)")
 
-    def on_dead_letter(self, job: ClaimedJob, error: str) -> None:
+    def on_dead_letter(self, job: ClaimedJob, error: str, *, session: Session | None = None) -> None:
         run_id = (job.payload or {}).get("run_id")
         if not run_id:
             return
+        if session is not None:
+            # SAME-TXN path (re-audit `3db5f13..a7df17b` F3): the worker passes its fail/reap txn so
+            # the job terminal and the run-FAILED transition commit or roll back together.
+            self._fail_run(session, job, run_id, error)
+            return
         with uow(self.session_factory) as session:
-            session.execute(
-                text(
-                    """
-                    UPDATE runs SET state='FAILED', error=:err, finished_at=now()
-                    WHERE id=:id AND state NOT IN ('COMPLETE', 'FAILED')
-                    """
-                ),
-                {"id": run_id, "err": error[:2000]},
-            )
-            audit(session, "run.failed", case_id=job.case_id, run_id=run_id, error=error[:500])
+            self._fail_run(session, job, run_id, error)
         log.error("run_dead_letter", run_id=run_id, error=error)
+
+    def _fail_run(self, session: Session, job: ClaimedJob, run_id: str, error: str) -> None:
+        session.execute(
+            text(
+                """
+                UPDATE runs SET state='FAILED', error=:err, finished_at=now()
+                WHERE id=:id AND state NOT IN ('COMPLETE', 'FAILED')
+                """
+            ),
+            {"id": run_id, "err": error[:2000]},
+        )
+        audit(session, "run.failed", case_id=job.case_id, run_id=run_id, error=error[:500])
 
     # ----------------------------------------------------------- transitions
 
@@ -188,7 +207,11 @@ class Pipeline:
             raise RuntimeError(f"run {run_id} in unexpected persisted state {state}")
 
     def _hop(self, session: Session, run_id: str, from_state: RunState, to_state: RunState) -> bool:
-        """Guarded state move — the idempotency shield for retried transitions."""
+        """Guarded state move — the idempotency shield for retried transitions. Every hop first
+        PROVES the ambient claim nonce is still live INSIDE this transaction (F2): a stale claimant
+        raises StaleJobClaim here and the whole transaction (hop + everything committed with it,
+        including the fused decide writes) rolls back instead of clobbering the new owner's run."""
+        jobs.assert_live(session)
         moved = session.execute(
             text("UPDATE runs SET state=:to WHERE id=:id AND state=:from"),
             {"id": run_id, "to": to_state.value, "from": from_state.value},
@@ -285,14 +308,14 @@ class Pipeline:
             case_id = case.id
 
         # …fetch OUTSIDE any transaction, recording each result in its own txn.
-        # ONE monotonic deadline for the WHOLE adapter plan, strictly below the job lease minus a DB
-        # margin (re-audit `f2929f8..6a4cd87` F2): in-adapter retry sleeps must never outlive the
-        # claim — two adapters honoring Retry-After: 30 across three attempts previously slept the
-        # entire default lease, letting a second worker reclaim mid-execution.
-        plan_deadline = time.monotonic() + max(
-            self.settings.job_lease_seconds - _ADAPTER_PLAN_MARGIN_SECONDS, 1.0
-        )
+        # ONE monotonic deadline for the WHOLE adapter plan, STRICTLY below the job lease minus a DB
+        # margin (re-audit `f2929f8..6a4cd87` F2; formula per `3db5f13..a7df17b` F5 — the old
+        # max(lease-10, 1) collapsed the margin to ~nothing for leases ≤ 10s): in-adapter retry
+        # sleeps and rate waits must never outlive the claim.
+        plan_deadline = time.monotonic() + plan_budget_seconds(self.settings.job_lease_seconds)
         for adapter_id in plan.adapters:
+            # Revocation boundary (F2): a lost claim stops BEFORE the next permit/wire call.
+            jobs.check_claim_live()
             adapter = self.adapters.get(adapter_id)
             if adapter is None:
                 continue  # not built yet (phase gating) or intentionally absent
@@ -304,19 +327,24 @@ class Pipeline:
                     snapshot, adapter_id, recorded_normalized.get(adapter_id, {})
                 )
                 continue
-            self.rate_limiter.acquire(adapter_id)  # permit for the FIRST physical attempt
             started = time.monotonic()
             try:
-                # Retry attempts inside the adapter re-acquire their own permit and must fit the
-                # plan deadline (F2) — the budget travels via contextvar so adapter signatures
-                # stay unchanged.
+                # The budget exists BEFORE the first permit (F5) and every permit is deadline-aware:
+                # the FIRST wait counts against the plan, retries re-acquire their own permit, and
+                # a permit that cannot fit refuses instead of sleeping past the claim. The budget
+                # travels via contextvar so adapter signatures stay unchanged.
                 with retry.budget_scope(
                     retry.RetryBudget(
                         deadline_monotonic=plan_deadline,
-                        acquire=lambda a=adapter_id: self.rate_limiter.acquire(a),
+                        acquire=lambda a=adapter_id: self.rate_limiter.acquire(
+                            a, deadline_monotonic=plan_deadline
+                        ),
                     )
                 ):
+                    self.rate_limiter.acquire(adapter_id, deadline_monotonic=plan_deadline)
                     output = adapter.run(snapshot, event_dict)
+            except jobs.StaleJobClaim:
+                raise  # revocation is not an upstream error — abort the plan, commit nothing
             except Exception as exc:  # noqa: BLE001 — upstream failure ≠ check failure
                 output = AdapterOutput(
                     adapter_id=adapter_id,
@@ -324,13 +352,20 @@ class Pipeline:
                     error=str(exc),
                 )
             latency_ms = int((time.monotonic() - started) * 1000)
-
-            raw_ref = None
-            if output.raw is not None:
-                key = f"{case_id}/{run_id}/{adapter_id}/{uuid.uuid4().hex}"
-                raw_ref = self.object_store.put(key, output.raw)
+            # Post-external-call boundary (F2): a claim lost DURING the fetch must not write object
+            # bytes or open the recording transaction.
+            jobs.check_claim_live()
 
             with uow(self.session_factory) as session:
+                # In-txn liveness proof (F2): the raw-object bytes, AdapterResult, the partial flag,
+                # and every side effect (tasks, POC tokens/emails ride on side_effects) happen only
+                # under a still-live claim nonce — the put sits AFTER the proof so a stale claim
+                # writes no object bytes at all, not even unreferenced ones.
+                jobs.assert_live(session)
+                raw_ref = None
+                if output.raw is not None:
+                    key = f"{case_id}/{run_id}/{adapter_id}/{uuid.uuid4().hex}"
+                    raw_ref = self.object_store.put(key, output.raw)
                 session.add(
                     AdapterResult(
                         run_id=run_id,
@@ -538,7 +573,7 @@ class Pipeline:
             # duplicate the platform then has to reconcile.
             if not jobs.complete(session, job):
                 raise jobs.StaleJobClaim(
-                    f"job {job.id} claim generation {job.attempts} is no longer live — "
+                    f"job {job.id} claim nonce is no longer live — "
                     "rolling back this decide transaction"
                 )
             audit(

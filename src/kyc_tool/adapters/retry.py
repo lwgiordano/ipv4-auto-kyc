@@ -12,11 +12,17 @@ parsed as finite non-negative delta-seconds OR an IMF-fixdate against the inject
 invalid/negative/past values fall back to the bounded exponential; every delay is clamped to
 [0, 30s].
 
-BUDGET (F2): the pipeline sets a per-plan `RetryBudget` (deadline strictly below the job lease minus
-a DB margin + the per-upstream rate authority). Every RETRY attempt first proves the delay fits the
-deadline (else it stops and surfaces the last outcome) and re-acquires the rate permit, so one permit
-never authorizes multiple wire calls and sleeps can never outlive the claim. Without a budget (direct
-unit calls), retries stay bounded by `attempts` alone.
+BUDGET (F2, tightened per re-audit `3db5f13..a7df17b` F5): the pipeline sets a per-plan
+`RetryBudget` (deadline strictly below the job lease minus a DB margin + the per-upstream rate
+authority) BEFORE the first permit, so the budget covers every wait and every physical call:
+- the FIRST attempt proves remaining time > 0 before its wire call (the first permit wait counts);
+- every RETRY proves the delay fits, sleeps, re-acquires a deadline-aware permit, then RE-proves
+  remaining time AFTER the permit (a rate wait may consume the rest of the budget) before sending;
+- every wire call carries a per-attempt HTTP timeout capped at the remaining budget (tighten-only:
+  the client's own configured phase timeouts still apply when smaller).
+`BudgetExhausted` from a deadline-aware permit stops the loop and surfaces the last outcome — the
+run records UPSTREAM_ERROR and completes PARTIAL (G12); zero sends happen past the deadline.
+Without a budget (direct unit calls), retries stay bounded by `attempts` alone.
 """
 
 import math
@@ -43,6 +49,12 @@ class RetryBudget:
 
 
 _BUDGET: ContextVar[RetryBudget | None] = ContextVar("adapter_retry_budget", default=None)
+
+
+class BudgetExhausted(RuntimeError):
+    """The plan budget cannot fit another wait/send (deadline-aware permit refusal or zero remaining
+    time). The adapter records UPSTREAM_ERROR and the run completes PARTIAL — never a send past the
+    deadline, never a sleep that outlives the job claim."""
 
 
 @contextmanager
@@ -120,9 +132,24 @@ def get_with_retry(
                 break  # surface the last outcome; the run records UPSTREAM_ERROR (partial, G12)
             sleep(delay)
             if budget is not None and budget.acquire is not None:
-                budget.acquire()
+                try:
+                    budget.acquire()
+                except BudgetExhausted:
+                    break  # the permit itself cannot fit — surface the last outcome, send nothing
+        send_kwargs = {}
+        if budget is not None:
+            # F5: the permit wait (or the prior attempt) may have consumed the budget — prove
+            # remaining time IMMEDIATELY before the wire call, and bound the call to it so a slow
+            # connect/read cannot outlive the claim either.
+            remaining = budget.deadline_monotonic - budget.clock()
+            if remaining <= 0:
+                if response is None and last_exc is None:
+                    # nothing to surface: the budget died before the FIRST attempt
+                    raise BudgetExhausted(f"plan budget exhausted before first attempt to {url}")
+                break
+            send_kwargs["timeout"] = _attempt_timeout(client, remaining)
         try:
-            response = client.get(url, params=params)
+            response = client.get(url, params=params, **send_kwargs)
             last_exc = None
         except httpx.TransportError as exc:  # connect/read/pool timeouts, DNS, resets
             last_exc = exc
@@ -132,3 +159,18 @@ def get_with_retry(
     if last_exc is not None:
         raise last_exc
     return response  # transient-exhausted: caller's raise_for_status() surfaces it
+
+
+def _attempt_timeout(client: httpx.Client, remaining: float) -> httpx.Timeout | float:
+    """Per-attempt HTTP timeout = the client's own configured phase timeouts capped at the remaining
+    budget (TIGHTEN-only — a large budget never loosens a small configured timeout)."""
+    base = getattr(client, "timeout", None)
+    if base is None:
+        return remaining
+
+    def _cap(phase: float | None) -> float:
+        return remaining if phase is None else min(phase, remaining)
+
+    return httpx.Timeout(
+        connect=_cap(base.connect), read=_cap(base.read), write=_cap(base.write), pool=_cap(base.pool)
+    )

@@ -137,7 +137,14 @@ def attest_new_value(record: DrainedCutover, *, target: int, observed: dict[str,
     record names only the SETTING; a fleet whose every task carries the variable but the OLD value, or
     whose two roles disagree, would otherwise be attested and started. `observed` maps each publisher
     role to the value its new task definition carries (None ⇒ variable absent/unobserved). Returns
-    violations (empty ⇒ every role's new task carries exactly `target`, a valid outbox_max_attempts)."""
+    violations (empty ⇒ every role's new task carries exactly `target`, a valid outbox_max_attempts).
+
+    AUTHORITY SCOPE (re-audit `3db5f13..a7df17b` F6): `observed` is only as strong as its source —
+    it must be read from the ORCHESTRATOR's live task-definition inventory, never from the process
+    environment it is attesting (self-attestation proves nothing about the rest of the fleet).
+    There is no central receipt yet: the DB CAS cutover record + inventory receipt that publishers
+    compare against before claiming is reserved into migration 028 (PR 10b). Until it lands, the
+    drained STOP + ATTEST-ZERO phases are the fleet-level control this check rides behind."""
     from kyc_tool.config import numeric_domain_of, numeric_value_violation
 
     problems: list[str] = []
