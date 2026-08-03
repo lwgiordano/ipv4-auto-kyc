@@ -50,6 +50,11 @@ def metrics_prometheus(request: Request):
         )
         lines.append(f"kyc_{name}{label_s} {float(value)}")
 
+    # runs_by_state zero-safe (re-audit `f2929f8..6a4cd87` F11): a FAILED-run alert needs the
+    # series present even when the count is zero, so absence is never ambiguous with health.
+    run_states = payload.get("runs_by_state", {})
+    for state in sorted({"FAILED", "QUEUED", "PUBLISH_DECISION", *run_states}):
+        gauge("runs", run_states.get(state, 0), {"state": state})
     for status, count in sorted(payload.get("jobs_by_status", {}).items()):
         gauge("jobs", count, {"status": status})
     for status, count in sorted(payload.get("outbox_by_status", {}).items()):
