@@ -344,6 +344,7 @@ class Pipeline:
                         ),
                         prove_live=lambda: jobs.prove_live_for_send(self.session_factory),
                         max_response_bytes=self.settings.adapter_max_response_bytes,
+                        hard_kill=self.settings.adapter_hard_kill_boundary,
                     )
                 ):
                     output = adapter.run(snapshot, event_dict)

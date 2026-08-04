@@ -23,6 +23,7 @@ class _RecordingStore:
         self.calls = []
 
     def get_bounded(self, ref, *, max_bytes):
+        retry.authorize_external_io()  # models the REAL stores' internal proof (PR 10b slice 1)
         self.calls.append((ref, max_bytes))
         if max_bytes is not None and len(self.data) > max_bytes:
             raise ObjectTooLarge(f"{ref} over {max_bytes}")
@@ -142,6 +143,31 @@ def test_budget_spent_during_the_object_read_never_reaches_ocr():
     with retry.budget_scope(budget), pytest.raises(retry.BudgetExhausted):
         adapter.run({}, _EVENT)
     assert engine.calls == []
+
+
+# ── PR 10b slice 1: the authority is TRANSITIVE — the store itself proves ─────────────────────────
+def test_real_store_refuses_a_lost_claim_without_any_adapter_cooperation(tmp_path):
+    """The injected-gateway property: a caller that never heard of the authority still cannot
+    read bytes under a lost claim — FsStore.get_bounded proves the ambient authority INTERNALLY."""
+    from kyc_tool.storage.object_store import FsStore
+
+    store = FsStore(tmp_path / "ev")
+    ref = store.put("uploads/x", b"bytes")
+    ctx, budget = _lost_claim_budget()
+    with jobs.claim_scope(ctx), retry.budget_scope(budget), pytest.raises(jobs.StaleJobClaim):
+        store.get_bounded(ref, max_bytes=100)  # DIRECT call, no adapter in sight
+    store.get_bounded(ref, max_bytes=100)  # ungoverned/ops caller: no ambient budget, works
+
+
+def test_governed_delegate_proves_before_invoking():
+    from kyc_tool.authority import governed_delegate
+
+    calls = []
+    ctx, budget = _lost_claim_budget()
+    with jobs.claim_scope(ctx), retry.budget_scope(budget), pytest.raises(jobs.StaleJobClaim):
+        governed_delegate(lambda: calls.append(1))
+    assert calls == []  # the delegate never ran under the lost claim
+    assert governed_delegate(lambda: 42) == 42  # ungoverned direct use: plain call
 
 
 def test_prove_live_for_send_fails_closed_on_proof_error():

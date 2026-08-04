@@ -50,11 +50,11 @@ class FloqerAdapter:
         name = case_snapshot.get("company_legal_name")
         if not name:
             return AdapterOutput(self.adapter_id, AdapterStatus.NOT_APPLICABLE)
-        # The provider-protocol delegate is external I/O (re-audit `750630c..ca85355` F7): prove
-        # the claim + deadline before delegating — a lost claim places ZERO Floqer calls. The real
-        # client's own wire calls must route through the governed transport when it lands (C4).
-        retry.authorize_external_io()
-        record = self.client.enrich(name, case_snapshot.get("website", ""))
+        # The provider-protocol delegate is external I/O (re-audit `750630c..ca85355` F7): the
+        # governed delegate proves the claim + deadline immediately before invoking it — a lost
+        # claim places ZERO Floqer calls. The real client's own wire calls must additionally
+        # route through the governed transport when it lands (C4).
+        record = retry.governed_delegate(self.client.enrich, name, case_snapshot.get("website", ""))
         if not record:
             return AdapterOutput(
                 self.adapter_id, AdapterStatus.OK, raw=b"{}", normalized={"discovered": False}

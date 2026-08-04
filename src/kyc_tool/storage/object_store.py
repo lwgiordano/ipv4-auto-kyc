@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
+from kyc_tool.authority import authorize_external_io
+
 
 class ObjectTooLarge(RuntimeError):
     """A bounded read (`get_bounded`) refused an object over its byte cap BEFORE materializing it
@@ -63,6 +65,10 @@ class FsStore:
     def get_bounded(self, ref: str, *, max_bytes: int | None) -> bytes:
         if not ref.startswith("fs://"):
             raise ValueError(f"not an fs ref: {ref}")
+        # TRANSITIVE authority (PR 10b slice 1): the store proves the ambient claim + deadline
+        # ITSELF — a caller that never heard of the authority still cannot read bytes under a
+        # lost claim or spent budget. No ambient budget (direct/ops/unit callers) = no-op.
+        authorize_external_io()
         path = self.root / ref.removeprefix("fs://")
         if max_bytes is not None and path.stat().st_size > max_bytes:
             raise ObjectTooLarge(
@@ -109,6 +115,7 @@ class S3Store:
     def get_bounded(self, ref: str, *, max_bytes: int | None) -> bytes:
         if not ref.startswith("s3://"):
             raise ValueError(f"not an s3 ref: {ref}")
+        authorize_external_io()  # transitive authority — see FsStore.get_bounded
         _, _, rest = ref.partition("s3://")
         bucket, _, key = rest.partition("/")
         body = self.client.get_object(Bucket=bucket, Key=key)["Body"]

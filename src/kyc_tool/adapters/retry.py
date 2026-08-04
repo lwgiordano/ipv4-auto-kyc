@@ -33,55 +33,33 @@ budget (direct unit calls), retries stay bounded by `attempts` alone and respons
 import math
 import time
 import zlib
-from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 
 import httpx
 
+# The ambient authority moved to the DEPENDENCY-NEUTRAL kyc_tool.authority module (PR 10b slice 1:
+# the injected-gateway unification) so storage and provider layers prove through the SAME object
+# without import knots. Re-exported here so every existing import keeps working; `noqa: F401` —
+# these names ARE this module's public surface.
+from kyc_tool.authority import (  # noqa: F401
+    BudgetExhausted,
+    RetryBudget,
+    authorize_external_io,
+    budget_scope,
+    current_budget,
+    governed_delegate,
+    governed_response_cap,
+)
+from kyc_tool.authority import remaining_or_spent as _remaining_or_spent
+
 _MAX_RETRY_AFTER_SECONDS = 30.0  # a hostile/buggy header must not stall a worker
 _MAX_SHIFT = 10  # bounds the exponential fallback before clamping
-
-
-@dataclass(frozen=True)
-class RetryBudget:
-    """The pipeline's per-plan authority: a monotonic deadline (strictly below the job lease minus
-    the DB margin), the per-upstream rate acquire, the per-send claim-liveness proof, and the
-    response containment cap — applied around EVERY physical attempt, the first included."""
-
-    deadline_monotonic: float
-    acquire: object | None = None  # zero-arg callable: the deadline-aware upstream rate permit
-    clock: object = time.monotonic
-    prove_live: object | None = None  # zero-arg callable: DB re-proof of the ambient claim (F5)
-    max_response_bytes: int | None = None  # wire AND decoded cap for every governed response (F6)
-
-
-_BUDGET: ContextVar[RetryBudget | None] = ContextVar("adapter_retry_budget", default=None)
-
-
-class BudgetExhausted(RuntimeError):
-    """The plan budget cannot fit another wait/send (deadline-aware permit refusal, zero remaining
-    time, or a streamed body crossing the absolute deadline). The adapter records UPSTREAM_ERROR
-    and the run completes PARTIAL — never a send past the deadline, never a sleep that outlives
-    the job claim."""
 
 
 class UpstreamResponseTooLarge(RuntimeError):
     """A governed response exceeded the containment cap (declared Content-Length, streamed wire
     bytes, or DECODED bytes — gzip expansion counts). NON-RETRYABLE: re-fetching an oversized body
     burns budget for the same outcome; the adapter records UPSTREAM_ERROR (partial, G12)."""
-
-
-def _remaining_or_spent(budget: RetryBudget, what: str) -> float:
-    """THE ONE deadline rule (re-audit `ddbff39..c3884bd` F3): remaining = deadline - clock, and
-    remaining <= 0 — exact equality included — is SPENT. Every boundary (pre-send, post-header,
-    mid-body, post-EOF, external I/O) proves through this helper with a single clock read, so no
-    site can drift back to a `>` comparison."""
-    remaining = budget.deadline_monotonic - budget.clock()
-    if remaining <= 0:
-        raise BudgetExhausted(f"plan budget exhausted at {what} — refusing to proceed")
-    return remaining
 
 
 def _authorize_send(budget: RetryBudget | None) -> float | None:
@@ -96,41 +74,6 @@ def _authorize_send(budget: RetryBudget | None) -> float | None:
     if budget.prove_live is not None:
         budget.prove_live()  # StaleJobClaim propagates: a revoked claim sends NOTHING further
     return _remaining_or_spent(budget, "the wire call")
-
-
-@contextmanager
-def budget_scope(budget: RetryBudget):
-    token = _BUDGET.set(budget)
-    try:
-        yield
-    finally:
-        _BUDGET.reset(token)
-
-
-def current_budget() -> RetryBudget | None:
-    return _BUDGET.get()
-
-
-def authorize_external_io() -> float | None:
-    """Send-authority for NON-HTTP external I/O (re-audit `750630c..ca85355` F7: object-store
-    reads, OCR input fetches, provider-protocol delegates like Floqer sat entirely outside the
-    governed helper). Same order as _authorize_send minus the HTTP rate permit: DB claim liveness
-    re-proof, then the remaining-deadline proof. A lost/unprovable claim or a spent budget places
-    ZERO external calls. No ambient budget = no-op (direct/unit callers). Returns remaining
-    seconds (None ⇒ ungoverned)."""
-    budget = _BUDGET.get()
-    if budget is None:
-        return None
-    if budget.prove_live is not None:
-        budget.prove_live()  # StaleJobClaim propagates — revocation is never an upstream error
-    return _remaining_or_spent(budget, "the external I/O call")
-
-
-def governed_response_cap() -> int | None:
-    """The ambient byte cap for external payloads (object-store documents share the same
-    containment domain as HTTP bodies). None ⇒ ungoverned/direct caller."""
-    budget = _BUDGET.get()
-    return budget.max_response_bytes if budget is not None else None
 
 
 def is_transient(status_code: int) -> bool:
@@ -183,7 +126,7 @@ def get_with_retry(
     bad_backoff = not isinstance(backoff_seconds, (int, float)) or not math.isfinite(backoff_seconds)
     if bad_backoff or backoff_seconds < 0:
         raise ValueError(f"backoff_seconds must be finite and >= 0, got {backoff_seconds!r}")
-    budget = _BUDGET.get()
+    budget = current_budget()
     last_exc: httpx.TransportError | None = None
     response: httpx.Response | None = None
     for attempt in range(attempts):
@@ -206,7 +149,19 @@ def get_with_retry(
         if remaining is not None:
             send_kwargs["timeout"] = _attempt_timeout(client, remaining)
         try:
-            response = _contained_get(client, url, params, budget, send_kwargs)
+            if budget is not None and budget.hard_kill:
+                from kyc_tool.adapters import executor  # lazy: executor imports this module
+
+                if executor.process_portable(client):
+                    # the unconditionally-killable boundary (PR 10b slice 1): the whole physical
+                    # fetch runs in a fork the parent TERMINATES at the absolute deadline
+                    response = executor.supervised_fetch(
+                        client, url, params, budget, send_kwargs.get("timeout")
+                    )
+                else:  # Mock/fixture transports cannot cross a process boundary
+                    response = _contained_get(client, url, params, budget, send_kwargs)
+            else:
+                response = _contained_get(client, url, params, budget, send_kwargs)
             last_exc = None
         except httpx.TransportError as exc:  # connect/read/pool timeouts, DNS, resets
             last_exc = exc

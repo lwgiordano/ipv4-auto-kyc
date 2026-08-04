@@ -496,6 +496,12 @@ class Settings(BaseSettings):
     job_recovery_attempt_grant: int = Field(default=5, ge=1, le=1000)
     # Governed adapter response cap, wire AND decoded bytes (re-audit `7d1c435..827bc0f` F6).
     adapter_max_response_bytes: int = Field(default=5_242_880, ge=1024, le=104_857_600)
+    # PR 10b slice 1: run every governed adapter fetch (real network transports only) in a
+    # fork-per-call child the worker TERMINATES at the absolute plan deadline — the
+    # unconditionally-killable occupancy bound the in-process header/chunk/EOF proofs cannot
+    # give. Off by default: fork-per-call is a real per-fetch cost; enable it where hostile-drip
+    # occupancy matters more than fetch latency.
+    adapter_hard_kill_boundary: bool = False
     # ge=0 (0 = retry-when-due dev value); ceiling timestamp-safe. The worker uses the shared
     # saturating backoff helper so no accepted value overflows timestamp arithmetic at high attempts.
     job_backoff_base_seconds: int = Field(default=5, ge=0, le=_TS_SAFE_SECONDS)
