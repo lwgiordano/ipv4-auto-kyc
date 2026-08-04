@@ -359,7 +359,12 @@ the target validator pair (7b ordering ≠ freshness).
 Migration **026** (`down_revision='025'`): `jobs.lease_token`. Every transition gated on
 `(id, locked_by, lease_token, status='running')`; heartbeat ≤ lease/3; cadence
 reaper fails the run in the **same txn**; fenced complete inside the decide txn
-(stale worker rolls back the decision).
+(stale worker rolls back the decision). The interim nonce's transaction-HELD
+authority (`assert_live` FOR UPDATE, R9 fold) must be preserved, not merely
+renamed. Migration 026 also carries the per-case single-runner DB backstop
+(re-audit `750630c..ca85355` R10-F1): partial unique index
+`jobs(case_id) WHERE status='running'` (NULL case_id exempt), so no future code
+path — recovery included — can put two same-case jobs in `running` again.
 
 ### PR 8 — Object-store containment + immutable evidence (item 10)
 Migration 027. Structured `ObjectRef{key, sha256, size?, content_type?, version_id?}`
@@ -404,7 +409,16 @@ an orchestrator-inventory receipt that every publisher compares its live value/i
 claiming; until it lands the env-pair gate is a per-process mitigation and the drained STOP/ATTEST-
 ZERO steps remain the fleet control), the recalc broker gate +
 ADR-007, `evidence.refresh_requested`, the contracted rollout-observation endpoint, and tree-wide
-format adoption.
+format adoption. 10b also owns two R10 structural residuals (re-audit `750630c..ca85355`):
+(a) the **supervised external-call executor** — an unconditionally-killable wall-clock boundary
+(child process or proven async cancellation scope) around governed upstream calls; until it lands,
+the governed transport proves the absolute deadline after headers, per body chunk, and at EOF, but
+worker OCCUPANCY during a hostile header drip is bounded only by the tightened inactivity phase +
+h11 header caps (nothing past the deadline is returned or persisted); and (b) **ExternalCallAuthority
+unification** — one transitive gateway type that HTTP, object-store, OCR, and provider-protocol
+calls all accept (today the governed helper + `authorize_external_io()` + bounded store reads cover
+every known call site, enforced by the static transport guard, but the authority is per-call-site
+convention rather than a single injected capability).
 Migration 028: broker **full-list immutable snapshots** `(revision, sha256,
 json_bytes, author, timestamp)` — NOT per-entity versioning (6 entities; snapshots
 reproduce matches AND non-matches, simpler); run records matched entity + snapshot

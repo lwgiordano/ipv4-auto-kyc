@@ -365,7 +365,10 @@ class Pipeline:
             # under the held in-txn fence below, and a stale fence orphan-cleans the staged object.
             raw_ref = None
             if output.raw is not None:
-                key = f"{case_id}/{run_id}/{adapter_id}/{uuid.uuid4().hex}"
+                # adapter-raw/ NAMESPACE (R10-F8): staged-by-pipeline objects live under one
+                # prefix so the crash-window sweeper can enumerate ONLY them — platform-uploaded
+                # documents (uploads/…, arbitrary keys) are never sweep candidates.
+                key = f"adapter-raw/{case_id}/{run_id}/{adapter_id}/{uuid.uuid4().hex}"
                 raw_ref = self.object_store.put(key, output.raw)
             try:
                 with uow(self.session_factory) as session:
@@ -377,11 +380,16 @@ class Pipeline:
                     self._record_adapter_result(
                         session, run_id, case_id, adapter_id, output, input_hash, raw_ref, latency_ms
                     )
-            except jobs.StaleJobClaim:
+            except Exception:
+                # EVERY pre-commit failure orphan-cleans the staged bytes, not just a stale fence
+                # (re-audit `750630c..ca85355` F8): the DB rolled back, so no reference exists —
+                # bytes surviving a side-effect/commit error would be untracked evidence. The
+                # crash window (process death between put and commit) is covered by the
+                # staged-evidence sweeper (ops/sweep_staged_evidence.py).
                 if raw_ref is not None:
                     try:
-                        self.object_store.delete(raw_ref)  # orphan cleanup: ref never committed
-                    except Exception:  # noqa: BLE001 — cleanup is best-effort, revocation is not
+                        self.object_store.delete(raw_ref)  # ref never committed
+                    except Exception:  # noqa: BLE001 — cleanup is best-effort, the error is not
                         log.warning("orphan_object_cleanup_failed", ref=raw_ref, run_id=run_id)
                 raise
             snapshot = self._seed_in_run_context(snapshot, adapter_id, output.normalized)

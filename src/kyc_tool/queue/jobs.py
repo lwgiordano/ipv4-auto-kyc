@@ -28,7 +28,7 @@ _CLAIM_SQL = text(
     UPDATE jobs
     SET status = 'running',
         locked_by = :claim_nonce,
-        lease_expires_at = now() + make_interval(secs => :lease_seconds),
+        lease_expires_at = clock_timestamp() + make_interval(secs => :lease_seconds),
         attempts = attempts + 1,
         updated_at = now()
     WHERE id = (
@@ -187,14 +187,26 @@ def prove_live_for_send(session_factory) -> None:
     ctx = _CURRENT_CLAIM.get()
     if ctx is None:
         return
-    with session_factory() as session:
-        live = session.execute(
-            text(
-                "SELECT 1 FROM jobs WHERE id=:id AND status='running' AND locked_by=:nonce "
-                "AND lease_expires_at > clock_timestamp()"
-            ),
-            {"id": ctx.job.id, "nonce": ctx.job.claim_nonce},
-        ).first()
+    try:
+        with session_factory() as session:
+            live = session.execute(
+                text(
+                    "SELECT 1 FROM jobs WHERE id=:id AND status='running' AND locked_by=:nonce "
+                    "AND lease_expires_at > clock_timestamp()"
+                ),
+                {"id": ctx.job.id, "nonce": ctx.job.claim_nonce},
+            ).first()
+    except StaleJobClaim:
+        raise
+    except Exception as exc:
+        # FAIL CLOSED (re-audit `750630c..ca85355` F4): "cannot prove the claim is live" is an
+        # AUTHORITY failure, not evidence about the upstream — it must never be converted into
+        # AdapterStatus.UPSTREAM_ERROR / a partial run by the pipeline's generic handler.
+        ctx.lost.set()
+        raise StaleJobClaim(
+            f"job {ctx.job.id}: claim authority UNAVAILABLE "
+            f"({exc.__class__.__name__}: {exc}) — failing closed, no upstream call"
+        ) from exc
     if live is None:
         ctx.lost.set()
         raise StaleJobClaim(f"job {ctx.job.id} claim is no longer live — refusing to call upstream")
@@ -264,13 +276,29 @@ def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: in
 
 
 def heartbeat(session: Session, job: ClaimedJob, lease_seconds: int) -> bool:
-    """Extend the live claim's lease under the SAME claim-generation fence (PR 7a slice). Returns
+    """Extend the live claim's lease under the SAME claim-nonce fence (PR 7a slice). Returns
     False when the claim was lost (reaped/reclaimed) — the caller stops heartbeating; the fenced
-    complete()/fail() then guarantee the stale worker commits nothing."""
+    complete()/fail() then guarantee the stale worker commits nothing.
+
+    LOCK-THEN-EXTEND (re-audit `750630c..ca85355` F5): `now()` is transaction-start time, so a
+    heartbeat that waited on the row lock longer than the lease "succeeded" while writing an
+    expiry already in the past — and even `clock_timestamp()` in a single UPDATE's SET list is
+    projected BEFORE a lock wait (EvalPlanQual re-checks quals, not volatile SET expressions;
+    measured on real Postgres). The fenced SELECT FOR UPDATE absorbs the wait first; the UPDATE
+    then starts fresh, so its `clock_timestamp()` is genuinely post-wait and the extension is
+    real no matter how long the beat blocked."""
     require_numeric_domain("job_lease_seconds", lease_seconds)
+    held = session.execute(
+        text(
+            "SELECT 1 FROM jobs WHERE id=:id AND status='running' AND locked_by=:nonce FOR UPDATE"
+        ),
+        {"id": job.id, "nonce": job.claim_nonce},
+    ).first()
+    if held is None:
+        return False
     applied = session.execute(
         text(
-            "UPDATE jobs SET lease_expires_at = now() + make_interval(secs => :lease), "
+            "UPDATE jobs SET lease_expires_at = clock_timestamp() + make_interval(secs => :lease), "
             "updated_at=now() WHERE id=:id AND status='running' AND locked_by=:nonce"
         ),
         {"id": job.id, "lease": lease_seconds, "nonce": job.claim_nonce},
@@ -283,12 +311,15 @@ def reap_expired(session: Session) -> list[ClaimedJob]:
     the ones already out of attempts. Returns the dead-lettered jobs so the
     caller can fail their runs — the crash-safety invariant that a dead job's
     run is FAILED."""
+    # clock_timestamp() (R10-F5): expiry is judged against the WALL clock, matching how leases are
+    # minted/extended — a reaper transaction that waited on locks must not judge with stale now().
     session.execute(
         text(
             """
             UPDATE jobs
             SET status='queued', locked_by=NULL, lease_expires_at=NULL, updated_at=now()
-            WHERE status='running' AND lease_expires_at < now() AND attempts < max_attempts
+            WHERE status='running' AND lease_expires_at < clock_timestamp()
+              AND attempts < max_attempts
             """
         )
     )
@@ -299,7 +330,8 @@ def reap_expired(session: Session) -> list[ClaimedJob]:
             SET status='dead', locked_by=NULL, lease_expires_at=NULL,
                 last_error = coalesce(last_error, 'lease expired; attempts exhausted'),
                 updated_at=now()
-            WHERE status='running' AND lease_expires_at < now() AND attempts >= max_attempts
+            WHERE status='running' AND lease_expires_at < clock_timestamp()
+              AND attempts >= max_attempts
             RETURNING id, kind, case_id, payload_json, attempts, max_attempts
             """
         )

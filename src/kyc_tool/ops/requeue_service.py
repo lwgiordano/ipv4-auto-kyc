@@ -22,11 +22,24 @@ def requeue_dead_job(session_factory, job_id: int, *, attempt_grant: int) -> dic
     QUEUED (the run reset is load-bearing: a requeued job whose run stays FAILED completes without
     doing anything). `max_attempts = attempts + grant` leaves exactly `grant` remaining attempts —
     the monotonic attempts counter is never rewound (nonce-ABA, audit honesty), and repeated
-    exhaust/recover cycles grant exactly N each time instead of doubling (re-audit F4)."""
+    exhaust/recover cycles grant exactly N each time instead of doubling (re-audit F4).
+
+    CASE-ORDERING AUTHORITY (re-audit `750630c..ca85355` F1): recovery may only resurrect the
+    LATEST job of its case, and only while nothing for the case is running — a recovered OLDER job
+    passes the claim gate's min(queued,running) check itself, so recovering it beside a newer
+    running/queued sibling produced two concurrent claims and a retrograde replay of frozen old
+    evidence. Old evidence is re-processed by submitting a fresh `recalculate.requested` event,
+    never by replaying its dead job. (DB backstop — partial unique index on jobs(case_id) WHERE
+    status='running' — is reserved into migration 026 with the lease_token column.)
+
+    RUN BINDING (F6): the run reset is verified, not fire-and-forget — the run must EXIST, belong
+    to THIS job's case, and be FAILED; anything else rolls the whole recovery back with a governed
+    409 (a dead job pointing at a COMPLETE run or another case's run recovers nothing)."""
     require_numeric_domain("job_recovery_attempt_grant", attempt_grant)
     with uow(session_factory) as session:
         row = session.execute(
-            text("SELECT status, attempts, case_id FROM jobs WHERE id=:id"), {"id": job_id}
+            text("SELECT status, attempts, case_id, payload_json FROM jobs WHERE id=:id"),
+            {"id": job_id},
         ).first()
         if row is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -38,8 +51,38 @@ def requeue_dead_job(session_factory, job_id: int, *, attempt_grant: int) -> dic
                 detail=f"attempts counter {row.attempts} cannot accept another grant of "
                 f"{attempt_grant} within int4; nothing changed",
             )
-        # THE authority: one CAS. Only the winner mutates the run and writes audit evidence; a
-        # racing recovery/claim makes this match zero rows and refuses with a stable 409.
+        run_id = (row.payload_json or {}).get("run_id")
+        if not run_id:
+            raise HTTPException(
+                status_code=409,
+                detail="job payload carries no run_id (unsupported shape); refusing to requeue "
+                "a job whose run cannot be verified",
+            )
+        if row.case_id is not None:
+            newer = session.execute(
+                text("SELECT id, status FROM jobs WHERE case_id=:c AND id > :id "
+                     "ORDER BY id DESC LIMIT 1"),
+                {"c": row.case_id, "id": job_id},
+            ).first()
+            if newer is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"a newer job ({newer.id}, {newer.status}) exists for case "
+                    f"{row.case_id}; replaying old frozen evidence is retrograde — submit a "
+                    "fresh recalculate.requested event instead",
+                )
+            running = session.execute(
+                text("SELECT id FROM jobs WHERE case_id=:c AND status='running' LIMIT 1"),
+                {"c": row.case_id},
+            ).first()
+            if running is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"job {running.id} for case {row.case_id} is currently running; "
+                    "per-case serialization forbids resurrecting a sibling beside it",
+                )
+        # THE row authority: one CAS. Only the winner mutates the run and writes audit evidence;
+        # a racing recovery/claim makes this match zero rows and refuses with a stable 409.
         won = session.execute(
             text(
                 "UPDATE jobs SET status='queued', max_attempts = attempts + :grant, "
@@ -56,14 +99,20 @@ def requeue_dead_job(session_factory, job_id: int, *, attempt_grant: int) -> dic
                 detail="job changed while requeueing (recovered or claimed concurrently); "
                 "nothing changed — re-inspect and retry if still dead",
             )
-        run_id = (won.payload_json or {}).get("run_id")
-        if run_id:
-            session.execute(
-                text(
-                    "UPDATE runs SET state='QUEUED', error=NULL, finished_at=NULL "
-                    "WHERE id=:run_id AND state='FAILED'"
-                ),
-                {"run_id": run_id},
+        reset = session.execute(
+            text(
+                "UPDATE runs SET state='QUEUED', error=NULL, finished_at=NULL "
+                "WHERE id=:run_id AND case_id=:case_id AND state='FAILED' RETURNING id"
+            ),
+            {"run_id": run_id, "case_id": won.case_id},
+        ).first()
+        if reset is None:
+            # raising rolls the WHOLE recovery back (job stays dead): a run that is missing,
+            # COMPLETE, or under another case must not be lied about or clobbered.
+            raise HTTPException(
+                status_code=409,
+                detail=f"run {run_id} is not a FAILED run of case {won.case_id}; recovery "
+                "refused — nothing changed (investigate the job/run pairing first)",
             )
         audit(session, "job.requeued", case_id=won.case_id, run_id=run_id, job_id=job_id)
     return {"requeued": job_id, "run_reset": run_id, "attempts_granted": attempt_grant}

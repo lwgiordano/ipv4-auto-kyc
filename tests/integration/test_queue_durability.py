@@ -19,9 +19,34 @@ from kyc_tool.queue.worker import Worker
 pytestmark = pytest.mark.postgres
 
 
-def _enqueue(session_factory, *, max_attempts=5):
+def _enqueue(session_factory, *, max_attempts=5, payload=None):
     with uow(session_factory) as s:
-        return jobs.enqueue(s, "run_transition", {}, case_id="dur", max_attempts=max_attempts).id
+        return jobs.enqueue(
+            s, "run_transition", payload or {}, case_id="dur", max_attempts=max_attempts
+        ).id
+
+
+def _seed_failed_run(session_factory, case_id="dur", run_id="dur-r"):
+    """A FAILED run recovery can verifiably bind to (R10-F6: the requeue refuses otherwise)."""
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case_id})
+        s.execute(
+            text(
+                "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                "actor_json, payload_json, event_sequence) VALUES "
+                "(:e, :c, :k, 'h', 'x', '{}'::jsonb, '{}'::jsonb, 1) ON CONFLICT DO NOTHING"
+            ),
+            {"e": f"e-{run_id}", "c": case_id, "k": f"k-{run_id}"},
+        )
+        s.execute(
+            text(
+                "INSERT INTO runs (id, case_id, triggering_event_id, state) "
+                "VALUES (:r, :c, :e, 'FAILED')"
+            ),
+            {"r": run_id, "c": case_id, "e": f"e-{run_id}"},
+        )
+        s.commit()
+    return run_id
 
 
 def _expire_and_reap(session_factory):
@@ -82,7 +107,8 @@ def test_manual_requeue_cannot_recycle_a_dead_claims_ownership(session_factory, 
     """claim A (attempts=1, max_attempts=1) → expire/reap dead → ops requeue → claim B: A's
     complete/heartbeat/fail/assert_live must ALL affect zero rows while B completes exactly once,
     and the monotonic attempts counter is never rewound (the requeue grants budget instead)."""
-    jid = _enqueue(session_factory, max_attempts=1)
+    run_id = _seed_failed_run(session_factory)
+    jid = _enqueue(session_factory, max_attempts=1, payload={"run_id": run_id})
     with uow(session_factory) as s:
         a = jobs.claim(s, ["run_transition"], "worker-a", 120)
     assert (a.attempts, a.max_attempts) == (1, 1)
@@ -130,7 +156,8 @@ def test_stale_fail_after_recovery_emits_no_dead_letter_and_leaves_the_job_queue
     late failure must return 'stale', fire NO dead-letter callback (which would re-fail the
     recovered run), and leave the job queued exactly as recovery left it."""
     dead_letters = []
-    jid = _enqueue(session_factory, max_attempts=1)
+    run_id = _seed_failed_run(session_factory)
+    jid = _enqueue(session_factory, max_attempts=1, payload={"run_id": run_id})
 
     def handler(job):
         # while A runs: its lease dies, the reaper dead-letters, the operator recovers
@@ -315,6 +342,106 @@ def test_lost_claim_stops_the_adapter_plan_and_commits_nothing(
         n = s.execute(text("SELECT count(*) FROM adapter_results WHERE run_id='r-f2'")).scalar_one()
         state = s.execute(text("SELECT state FROM runs WHERE id='r-f2'")).scalar_one()
     assert (n, state) == (0, "RUN_ADAPTERS")  # no adapter row, no state hop
+
+
+# ── R10-F5 RED: a heartbeat that waited on a lock still extends into the FUTURE ───────────────────
+def test_heartbeat_extends_from_the_wall_clock_not_transaction_start(session_factory, clean_db):
+    """The audit's witness: `now()` is transaction-start time, so a heartbeat that blocked ~3s on
+    the job row lock 'succeeded' while writing an expiry already in the past — and the reaper
+    could reclaim a heartbeat-fresh job. clock_timestamp() makes the extension real."""
+    _enqueue(session_factory)
+    with uow(session_factory) as s:
+        claimed = jobs.claim(s, ["run_transition"], "worker-a", 120)
+
+    lock_held = threading.Event()
+
+    def hold_row_lock():
+        with session_factory() as s:
+            s.execute(text("SELECT 1 FROM jobs WHERE id=:i FOR UPDATE"), {"i": claimed.id})
+            lock_held.set()
+            time.sleep(3.0)  # longer than the 2s lease we heartbeat with
+            s.commit()
+
+    holder = threading.Thread(target=hold_row_lock)
+    holder.start()
+    assert lock_held.wait(10)
+    with uow(session_factory) as s:  # blocks behind the held row lock for ~3s, then applies
+        assert jobs.heartbeat(s, claimed, 2) is True
+    holder.join(timeout=10)
+    with session_factory() as s:
+        future = s.execute(
+            text("SELECT lease_expires_at > clock_timestamp() FROM jobs WHERE id=:i"),
+            {"i": claimed.id},
+        ).scalar_one()
+    assert future is True  # the "successful" beat left a LIVE lease, not an expired one
+    with uow(session_factory) as s:
+        jobs.reap_expired(s)
+    with session_factory() as s:
+        assert s.execute(text("SELECT status FROM jobs")).scalar_one() == "running"  # not reaped
+
+
+# ── R10-F8 RED: staged bytes are cleaned on EVERY pre-commit failure ──────────────────────────────
+def test_any_recording_failure_cleans_the_staged_bytes(session_factory, pipeline, monkeypatch, clean_db):
+    """R9 cleaned staged objects only on StaleJobClaim; a side-effect/commit error after put()
+    left untracked raw evidence with no DB reference. Now every pre-commit failure orphan-cleans."""
+    from kyc_tool.adapters.base import AdapterOutput
+    from kyc_tool.domain.models import AdapterStatus
+    from kyc_tool.orchestration.triggers import RunPlan
+
+    with session_factory() as s:
+        s.execute(text("INSERT INTO cases (id) VALUES ('cf8')"))
+        s.execute(
+            text(
+                "INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, "
+                "actor_json, payload_json, event_sequence) "
+                "VALUES ('e-f8', 'cf8', 'k-f8', 'h', 'kyb.run_requested', '{}'::jsonb, "
+                "'{}'::jsonb, 1)"
+            )
+        )
+        s.execute(
+            text(
+                "INSERT INTO runs (id, case_id, triggering_event_id, state, input_snapshot_json) "
+                "VALUES ('r-f8', 'cf8', 'e-f8', 'RUN_ADAPTERS', '{}'::jsonb)"
+            )
+        )
+        s.commit()
+    with uow(session_factory) as s:
+        jobs.enqueue(s, "run_transition", {"run_id": "r-f8"}, case_id="cf8")
+    with uow(session_factory) as s:
+        claimed = jobs.claim(s, ["run_transition"], "worker-a", 120)
+
+    class Probe:
+        adapter_id = "p8"
+
+        def input_hash(self, snapshot, event):
+            return "h-p8"
+
+        def run(self, snapshot, event):
+            return AdapterOutput(adapter_id="p8", status=AdapterStatus.OK, raw=b"bytes")
+
+    monkeypatch.setattr(pipeline, "adapters", {"p8": Probe()})
+    monkeypatch.setattr(
+        "kyc_tool.orchestration.pipeline.plan_for",
+        lambda et: RunPlan(adapters=("p8",), run_broker_gate=False, full=False),
+    )
+    puts, deletes = [], []
+    monkeypatch.setattr(
+        pipeline.object_store, "put", lambda key, data: puts.append(key) or f"ref-{key}"
+    )
+    monkeypatch.setattr(pipeline.object_store, "delete", deletes.append)
+
+    def exploding_side_effects(session, run_row, case_row, output):
+        raise RuntimeError("side effect infrastructure down")
+
+    monkeypatch.setattr(pipeline, "side_effects", exploding_side_effects)
+    ctx = jobs.ClaimContext(job=claimed)
+    with jobs.claim_scope(ctx), pytest.raises(RuntimeError, match="side effect"):
+        pipeline._run_adapters("r-f8")
+
+    assert len(puts) == 1 and deletes == [f"ref-{puts[0]}"]  # staged bytes cleaned, not leaked
+    with session_factory() as s:
+        n = s.execute(text("SELECT count(*) FROM adapter_results WHERE run_id='r-f8'")).scalar_one()
+    assert n == 0  # the rollback left no reference — and now no orphan bytes either
 
 
 # ── R9-F7: the budget probe runs through the REAL pipeline plumbing ───────────────────────────────

@@ -7,6 +7,7 @@ field matching stays in the validator.
 
 import json
 
+from kyc_tool.adapters import retry
 from kyc_tool.adapters.base import AdapterOutput, hash_inputs
 from kyc_tool.adapters.ocr import OcrEngine
 from kyc_tool.domain.models import AdapterStatus
@@ -35,7 +36,12 @@ class DocumentOcrAdapter:
         if not doc:
             return AdapterOutput(self.adapter_id, AdapterStatus.NOT_APPLICABLE)
 
-        data = self.store.get(doc["object_ref"])
+        # This adapter's "upstream" is the object store + OCR engine — the same authority applies
+        # as to an HTTP fetch (re-audit `750630c..ca85355` F7): a lost/unprovable claim or spent
+        # budget places ZERO object/OCR calls, and the document read is byte-capped BEFORE
+        # materialization under the governed containment domain.
+        retry.authorize_external_io()
+        data = self.store.get_bounded(doc["object_ref"], max_bytes=retry.governed_response_cap())
         extracted = self.engine.extract(data, doc.get("doc_type", "unknown"))
         return AdapterOutput(
             self.adapter_id,

@@ -32,6 +32,7 @@ budget (direct unit calls), retries stay bounded by `attempts` alone and respons
 
 import math
 import time
+import zlib
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -100,6 +101,31 @@ def budget_scope(budget: RetryBudget):
 
 def current_budget() -> RetryBudget | None:
     return _BUDGET.get()
+
+
+def authorize_external_io() -> float | None:
+    """Send-authority for NON-HTTP external I/O (re-audit `750630c..ca85355` F7: object-store
+    reads, OCR input fetches, provider-protocol delegates like Floqer sat entirely outside the
+    governed helper). Same order as _authorize_send minus the HTTP rate permit: DB claim liveness
+    re-proof, then the remaining-deadline proof. A lost/unprovable claim or a spent budget places
+    ZERO external calls. No ambient budget = no-op (direct/unit callers). Returns remaining
+    seconds (None ⇒ ungoverned)."""
+    budget = _BUDGET.get()
+    if budget is None:
+        return None
+    if budget.prove_live is not None:
+        budget.prove_live()  # StaleJobClaim propagates — revocation is never an upstream error
+    remaining = budget.deadline_monotonic - budget.clock()
+    if remaining <= 0:
+        raise BudgetExhausted("plan budget exhausted before the external I/O call")
+    return remaining
+
+
+def governed_response_cap() -> int | None:
+    """The ambient byte cap for external payloads (object-store documents share the same
+    containment domain as HTTP bodies). None ⇒ ungoverned/direct caller."""
+    budget = _BUDGET.get()
+    return budget.max_response_bytes if budget is not None else None
 
 
 def is_transient(status_code: int) -> bool:
@@ -194,36 +220,114 @@ def _contained_get(
     budget: RetryBudget | None,
     send_kwargs: dict,
 ) -> httpx.Response:
-    """The governed wire call (re-audit `7d1c435..827bc0f` F3/F6). With a budget, the body is
-    STREAMED: the absolute plan deadline is re-checked on every chunk (a drip-fed body that never
-    trips the inactivity timeout still cannot outlive the claim), the declared Content-Length is
-    pre-checked, and both wire and DECODED bytes are capped. Without a budget (direct unit calls)
-    the buffered path is unchanged."""
+    """The governed wire call (re-audit `7d1c435..827bc0f` F3/F6; hardened per `750630c..ca85355`
+    F2/F3). With a budget:
+    - the absolute deadline is proved immediately AFTER the headers arrive and again AFTER EOF —
+      a header drip or a slow empty-body 200 cannot become a successful result past the deadline
+      (F2). HONEST BOUND: between individual header bytes only the tightened inactivity phase
+      timeout applies (h11 additionally hard-caps header size), so worker OCCUPANCY during a
+      hostile header drip is bounded but can exceed the deadline; nothing is RETURNED or
+      persisted from it. The unconditionally-killable boundary (supervised executor) is PR 10b.
+    - the body is read RAW and decoded INCREMENTALLY with a bounded decoder (F3): wire and
+      decoded caps apply BEFORE allocation (zlib max_length), so a decompression bomb cannot
+      spike memory before the cap fires. Accept-Encoding is pinned to gzip; multiple/unsupported
+      encodings are rejected; truncated/corrupt streams raise DecodingError.
+    Without a budget (direct unit calls) the buffered path is unchanged."""
     if budget is None:
         return client.get(url, params=params, **send_kwargs)
     cap = budget.max_response_bytes
-    with client.stream("GET", url, params=params, **send_kwargs) as streamed:
+    with client.stream(
+        "GET", url, params=params, headers={"Accept-Encoding": "gzip"}, **send_kwargs
+    ) as streamed:
+        if budget.clock() > budget.deadline_monotonic:
+            raise BudgetExhausted(
+                "response headers arrived past the absolute plan deadline — refusing the body"
+            )
         declared = streamed.headers.get("Content-Length", "")
         if cap is not None and declared.isdigit() and int(declared) > cap:
             raise UpstreamResponseTooLarge(
                 f"declared Content-Length {declared} exceeds the {cap}-byte governed cap"
             )
+        encoding = streamed.headers.get("Content-Encoding", "").strip().lower()
+        if encoding in ("", "identity"):
+            decoder = None
+        elif encoding in ("gzip", "x-gzip", "deflate"):
+            decoder = zlib.decompressobj(wbits=47)  # auto gzip/zlib headers, bounded via max_length
+        else:  # br/zstd/multiple encodings: never negotiated (Accept-Encoding: gzip) — refuse
+            raise httpx.DecodingError(
+                f"unsupported Content-Encoding {encoding!r} on the governed transport",
+                request=streamed.request,
+            )
         chunks: list[bytes] = []
         decoded_total = 0
-        for chunk in streamed.iter_bytes():
-            decoded_total += len(chunk)
-            wire_total = streamed.num_bytes_downloaded
-            if cap is not None and (decoded_total > cap or wire_total > cap):
-                raise UpstreamResponseTooLarge(
-                    f"response exceeded the {cap}-byte governed cap "
-                    f"(wire={wire_total}, decoded={decoded_total}); refusing the body"
+        wire_total = 0
+        # Eagerly-constructed responses (unit MockTransport handlers pass content=) have no raw
+        # stream to iterate — their constructor bytes ARE the wire form. Real transports stream.
+        if getattr(streamed, "is_stream_consumed", False):
+            raw_source = iter((streamed.content,))
+        else:
+            raw_source = streamed.iter_raw()
+        try:
+            for raw_chunk in raw_source:
+                wire_total += len(raw_chunk)
+                if cap is not None and wire_total > cap:
+                    raise UpstreamResponseTooLarge(
+                        f"wire bytes exceeded the {cap}-byte governed cap; refusing the body"
+                    )
+                if decoder is None:
+                    piece = raw_chunk
+                else:
+                    # decode at most (cap - decoded_total + 1) bytes: the bomb detonates into a
+                    # bounded buffer, never into memory (R10-F3 — iter_bytes() allocated the whole
+                    # decompressed chunk before any cap could look at it)
+                    allowance = (cap - decoded_total + 1) if cap is not None else 0
+                    piece = decoder.decompress(raw_chunk, allowance)
+                    if decoder.unconsumed_tail:
+                        raise UpstreamResponseTooLarge(
+                            f"decoded stream exceeds the {cap}-byte governed cap "
+                            f"(wire={wire_total}); refusing the body"
+                        )
+                decoded_total += len(piece)
+                if cap is not None and decoded_total > cap:
+                    raise UpstreamResponseTooLarge(
+                        f"decoded bytes exceeded the {cap}-byte governed cap "
+                        f"(wire={wire_total}); refusing the body"
+                    )
+                if budget.clock() > budget.deadline_monotonic:
+                    raise BudgetExhausted(
+                        "response body crossed the absolute plan deadline mid-stream — "
+                        "the claim's time authority is spent; aborting the read"
+                    )
+                if piece:
+                    chunks.append(piece)
+            if decoder is not None:
+                tail = (
+                    decoder.flush(cap - decoded_total + 1) if cap is not None else decoder.flush()
                 )
-            if budget.clock() > budget.deadline_monotonic:
-                raise BudgetExhausted(
-                    "response body crossed the absolute plan deadline mid-stream — "
-                    "the claim's time authority is spent; aborting the read"
-                )
-            chunks.append(chunk)
+                decoded_total += len(tail)
+                if cap is not None and decoded_total > cap:
+                    raise UpstreamResponseTooLarge(
+                        f"decoded bytes exceeded the {cap}-byte governed cap at flush "
+                        f"(wire={wire_total}); refusing the body"
+                    )
+                if tail:
+                    chunks.append(tail)
+                if not decoder.eof:
+                    raise httpx.DecodingError(
+                        "truncated or corrupt encoded body on the governed transport",
+                        request=streamed.request,
+                    )
+        except zlib.error as exc:
+            raise httpx.DecodingError(
+                f"corrupt encoded body on the governed transport: {exc}",
+                request=streamed.request,
+            ) from exc
+        # A response that COMPLETED after the deadline must not become evidence (F2: the slow
+        # empty-body 200 witness — zero body chunks meant zero deadline checks).
+        if budget.clock() > budget.deadline_monotonic:
+            raise BudgetExhausted(
+                "response completed past the absolute plan deadline — refusing the result"
+            )
         # Rebuild a buffered response for the caller. Content-Encoding/Length describe the WIRE
         # form; the chunks are already decoded, so those headers must not survive re-decoding.
         headers = [

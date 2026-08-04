@@ -252,24 +252,79 @@ def test_permit_that_loses_the_claim_sends_no_further_call():
     assert len(calls) == 1  # the revoked claim authorized NO second upstream call
 
 
+# ── R10-F2: a response COMPLETING past the deadline is refused, empty bodies included ─────────────
+def test_slow_empty_body_completing_past_the_deadline_is_refused():
+    """The audit's witness: headers dripped past a 0.2s budget then Content-Length: 0 — zero body
+    chunks meant zero deadline checks, and a 200 was returned at 2.17s. The post-EOF proof must
+    refuse a result that completed after the deadline even with NO body bytes at all."""
+    clocks = iter([0.0, 0.0, 5.0])  # authorize, post-header, post-EOF — time died mid-response
+    last = {"v": 0.0}
+
+    def clock():
+        last["v"] = next(clocks, last["v"])
+        return last["v"]
+
+    budget = RetryBudget(deadline_monotonic=1.0, clock=clock)
+    with budget_scope(budget), pytest.raises(BudgetExhausted):
+        get_with_retry(_client(lambda r: httpx.Response(200, content=b"")), "/x", attempts=1)
+
+
+# ── R10-F4: an unprovable claim is an authority failure, never upstream evidence ──────────────────
+def test_prove_live_db_error_fails_closed_with_zero_wire_calls():
+    """The proof erroring (DB down) must surface as StaleJobClaim — fail closed — not leak through
+    as a generic exception the pipeline would record as AdapterStatus.UPSTREAM_ERROR."""
+    from kyc_tool.queue import jobs
+
+    calls = []
+
+    def broken_factory():
+        raise ConnectionError("claim DB unreachable")
+
+    job = jobs.ClaimedJob(id=9, kind="k", case_id=None, payload={}, attempts=1, max_attempts=5,
+                          claim_nonce="w:n")
+    ctx = jobs.ClaimContext(job=job)
+    budget = RetryBudget(
+        deadline_monotonic=1e9,
+        clock=lambda: 0.0,
+        prove_live=lambda: jobs.prove_live_for_send(broken_factory),
+    )
+    def responder(request):
+        calls.append(1)
+        return httpx.Response(200)
+    with jobs.claim_scope(ctx), budget_scope(budget), pytest.raises(jobs.StaleJobClaim) as exc:
+        get_with_retry(_client(responder), "/x", attempts=3)
+    assert calls == []  # ZERO wire calls under an unprovable claim
+    assert ctx.lost.is_set()
+    assert "UNAVAILABLE" in str(exc.value)
+
+
 # ── R9-F3: every adapter wire call must go through the governed helper ────────────────────────────
 def test_no_adapter_calls_httpx_outside_the_governed_helper():
-    """Static transport guard: a direct `client.get/post/...` in an adapter bypasses the budget,
-    liveness proof, absolute deadline, and byte containment (the RIR path did exactly this).
-    Adding one anywhere under adapters/ fails here with a pointer to get_with_retry."""
+    """Static transport guard: a direct `client.get/post/...`, a raw boto3 import, or an
+    ungoverned `store.get(` in an adapter bypasses the budget, liveness proof, absolute deadline,
+    and byte containment (the RIR path and the document-OCR store read did exactly this).
+    Adding one anywhere under adapters/ fails here with a pointer to the governed surface."""
     import re
     from pathlib import Path
 
     adapters_dir = Path(__file__).resolve().parents[2] / "src" / "kyc_tool" / "adapters"
-    direct_call = re.compile(r"\bclient\.(get|post|put|patch|delete|request|stream|send)\(")
+    banned = [
+        # HTTP verbs on any client object → use retry.get_with_retry
+        re.compile(r"\bclient\.(get|post|put|patch|delete|request|stream|send)\("),
+        # raw AWS SDK in an adapter → storage belongs behind ObjectStore's governed surface
+        re.compile(r"^\s*(import boto3|from boto3)"),
+        # unbounded object read → use store.get_bounded(ref, max_bytes=governed_response_cap())
+        re.compile(r"\bstore\.get\(|\bobject_store\.get\("),
+    ]
     offenders = []
     for path in sorted(adapters_dir.rglob("*.py")):
         if path.name == "retry.py":  # the governed transport itself
             continue
         for lineno, line in enumerate(path.read_text().splitlines(), 1):
-            if direct_call.search(line):
+            if any(pattern.search(line) for pattern in banned):
                 offenders.append(f"{path.relative_to(adapters_dir)}:{lineno}: {line.strip()}")
     assert offenders == [], (
-        "direct HTTPX call(s) outside the governed transport (use retry.get_with_retry so the "
-        "budget/liveness/deadline/byte containment apply): " + "; ".join(offenders)
+        "ungoverned external I/O under adapters/ (route it through retry.get_with_retry / "
+        "retry.authorize_external_io + store.get_bounded so the budget/liveness/deadline/byte "
+        "containment apply): " + "; ".join(offenders)
     )
