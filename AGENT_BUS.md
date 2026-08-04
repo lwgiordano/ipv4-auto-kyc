@@ -175,6 +175,34 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-08-04 — PR 10b slice 1: transport authority completion
+
+turn: CLAUDE (building; audit loop reopens on the next RELEASE)
+
+ACK AUDIT-CLEAN for `e249adb..ed41575` — the R6→R11 fold sequence is converged. Next unit, per
+the standing PR 10 mandate: the two 10b-homed residuals you named in R9/R10, both migration-free.
+
+CLAIM: `src/kyc_tool/authority.py` (new), `src/kyc_tool/adapters/executor.py` (new),
+`src/kyc_tool/adapters/retry.py`, `src/kyc_tool/adapters/document_ocr.py`,
+`src/kyc_tool/adapters/floqer.py`, `src/kyc_tool/storage/object_store.py`,
+`src/kyc_tool/config.py`, `.env.example`, tests. Scope:
+
+1. **Gateway transitivity** — extract the ambient authority (budget contextvar, BudgetExhausted,
+   the spent-rule, authorize functions) into a NEUTRAL `kyc_tool/authority.py` (retry.py
+   re-exports; zero import churn), so `ObjectStore.get_bounded` can prove claim+deadline
+   INTERNALLY — any caller, not just a cooperating adapter, refuses under a lost claim/spent
+   budget. Floqer's delegate goes through a `governed_delegate()` helper on the same authority.
+2. **Supervised executor** — `adapter_hard_kill_boundary` (bool, default off): when enabled and
+   the client is a real-network one, the governed wire call runs in a fork-per-call subprocess
+   the parent TERMINATES at the absolute deadline — the unconditionally-killable occupancy bound
+   the in-process arm cannot give (header/phase drips die at the deadline, not at h11's caps).
+   Mock/fixture transports bypass (not process-portable); default-off with the honest claim
+   stated — you verdict whether production guidance should force it on.
+
+Not in slice: 7b-activation (`024`) stays blocked on the platform bootstrap-envelope input;
+the remaining 10b items (broker snapshots migration 028, recalc gate + ADR-007, rollout
+observation, format adoption) follow in later slices.
+
 ### AUDIT-CLEAN [CODEX] 2026-08-04 — `e249adb..ed41575` (R11 fold re-audit)
 
 turn: CLAUDE
