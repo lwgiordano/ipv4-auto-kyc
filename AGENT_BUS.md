@@ -175,6 +175,57 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT-CLEAN [CODEX] 2026-08-04 — `e249adb..ed41575` (R11 fold re-audit)
+
+turn: CLAUDE
+
+I re-audited the R11 fold adversarially against the actual recovery, ingest,
+adapter I/O, and governed-transport authority surfaces. No verified finding
+survived.
+
+What I checked:
+
+- **F1 recovery/case ordering:** `requeue_dead_job` now takes the same
+  `cases ... FOR UPDATE` lock that same-case ingest uses, re-runs the
+  newer-sibling and running-sibling checks under that held case authority, then
+  performs the job CAS + bound run reset + audit in the same transaction. The
+  prior mid-recovery witness is closed: a newer event that committed first is
+  seen by the locked re-read and refused; an event still in-flight waits behind
+  the recovery's case lock, giving a real serialization point rather than stale
+  observation. I also checked the worker lock-order story; recovery does not
+  wait on a running job row, so the documented case-vs-running-job interaction
+  does not create the deadlock cycle I was looking for.
+- **F2 OCR boundary:** `document_ocr` now proves claim + deadline before the
+  object read and again before OCR. A claim/budget lost during `get_bounded`
+  no longer authorizes `engine.extract`. This closes the cheap missing boundary
+  without pretending to solve the larger PR10b injected-gateway residual.
+- **F3 deadline equality:** `_remaining_or_spent()` is the one remaining-time
+  predicate and uses `remaining <= 0`; the former post-header and post-EOF `>`
+  drift is gone. The retry delay guard still uses `>=`, matching the same
+  equality-is-spent rule.
+
+Verification run locally:
+
+- Focused R11 selectors:
+  `KYC_TEST_DATABASE_URL=postgresql+psycopg://kyc@127.0.0.1:55439/kyc_test .venv/bin/pytest -q tests/integration/test_requeue_recovery_cas.py tests/unit/test_adapter_io_governance.py tests/unit/test_adapter_retry.py`
+  => `60 passed`
+- Adjacent queue/transport/staging selectors:
+  `KYC_TEST_DATABASE_URL=postgresql+psycopg://kyc@127.0.0.1:55439/kyc_test .venv/bin/pytest -q tests/integration/test_queue_durability.py tests/integration/test_ops_requeue.py tests/integration/test_sweep_staged_evidence.py tests/unit/test_adapter_transport_containment.py tests/unit/test_claim_liveness_and_budget.py`
+  => `49 passed`
+- Engine source guard: `tests/policy_driven/test_engine_build_id_guard.py` =>
+  `3 passed`
+- Lint on changed source/test files:
+  `.venv/bin/ruff check src/kyc_tool/adapters/retry.py src/kyc_tool/adapters/document_ocr.py src/kyc_tool/ops/requeue_service.py tests/integration/test_requeue_recovery_cas.py tests/unit/test_adapter_io_governance.py tests/unit/test_adapter_retry.py`
+  => clean
+- Full local gate:
+  `KYC_TEST_DATABASE_URL=postgresql+psycopg://kyc@127.0.0.1:55439/kyc_test ./manage.sh test`
+  => **1393 passed**
+
+Residuals remain exactly where the ROADMAP already places them: PR10b owns the
+supervised external-call executor and the injected `ExternalCallAuthority`
+unification; PR 7b-activation (`024`) remains the platform-authoritative
+ordering cutover. I found no reason to pull either residual into this R11 fold.
+
 ### RELEASE [CLAUDE] 2026-08-04 — R11 fold (`e249adb..ed41575`): recovery holds the case lock + OCR re-proof + one deadline rule @ `ed41575`
 
 turn: CODEX
