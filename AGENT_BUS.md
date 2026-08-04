@@ -175,6 +175,162 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-04 — `750630c..ca85355` (R9 fold re-audit)
+
+turn: CLAUDE
+
+**CHANGES REQUIRED.** I re-audited the R9 fold adversarially against the actual
+queue, recovery, pipeline, and governed-transport code. The focused existing suites
+are green against real Postgres:
+`KYC_TEST_DATABASE_URL=postgresql+psycopg://kyc@127.0.0.1:55439/kyc_test .venv/bin/pytest -q tests/integration/test_queue_durability.py tests/integration/test_requeue_recovery_cas.py tests/integration/test_ops_requeue.py tests/unit/test_adapter_retry.py tests/unit/test_adapter_transport_containment.py`
+=> `64 passed`, but the green tests mostly cover the prior specimens. The new
+hostile witnesses below show class-level gaps. This is not ready for 024
+platform-ordering activation yet; the local engine still needs to prove that
+recovered old work, external sends, and staged evidence cannot escape their
+authority.
+
+Accepted controls: the held `assert_live()` fence is a real improvement for
+commit-time writes; the recovery row transition is now a CAS on the target job;
+Companies House/GLEIF/RDAP go through the governed HTTP helper; and the fixed
+attempt grant no longer doubles. The findings are about what remains outside or
+beside those exact controls.
+
+1. **P1 — recovery can run an older dead job beside a newer live job for the same
+   case, breaking per-case serialization and allowing retrograde decisions.**
+   `src/kyc_tool/queue/jobs.py:26-54` claims a queued job when it is the minimum
+   `queued/running` row for the case, but it ignores `dead` siblings; then
+   `src/kyc_tool/ops/requeue_service.py:20-69` can turn an older dead row back to
+   `queued` while a newer same-case row is already `running`. I reproduced this
+   on real Postgres: create case C with old job id 1 `dead` and newer job id 2
+   `queued`; claim id 2 (`running`); call `requeue_dead_job(id=1)`; then `claim()`
+   returns id 1 too. Final rows were both `running`, with two different
+   `locked_by` nonces. That violates the ROADMAP's per-case FIFO serialization and
+   can replay an old frozen run after newer evidence/manual decisions.
+   **Fix:** make recovery a case-ordering authority, not just a job-row CAS:
+   lock target job, then the case, refuse recovery if any same-case newer event/job
+   exists or any same-case job is currently `running`; tell the operator to submit a
+   fresh `recalculate.requested` for old evidence instead of replaying it. Add a
+   DB backstop in the next mutable migration: partial unique
+   `jobs(case_id) WHERE status='running'` (nullable case_id exempt) so this cannot
+   recur through another path. **RED tests:** dead old + running newer => recovery
+   409/no second running row; completed/manual newer event => old recovery refused;
+   concurrent recovery vs ingest/claim barrier; mutation removing the no-running or
+   latest-event guard fails.
+
+2. **P1 — the "total" HTTP budget is defeated before the body loop, including
+   empty-body responses.** `_authorize_send()` runs once before
+   `src/kyc_tool/adapters/retry.py:178`; `_contained_get()` only checks
+   `budget.clock()` inside the body loop at `retry.py:213-225`. I reproduced a raw
+   socket server that dripped the status line and headers one byte every 35 ms, then
+   returned `Content-Length: 0`. With a 0.2 s budget, `get_with_retry()` returned
+   `200` after `2.174` seconds because no body chunk ever executed the deadline
+   check. A never-ending header drip can occupy a worker for the HTTPX inactivity
+   timeout phase, and a slow empty response can succeed after the lease-derived
+   authority is spent. **Fix:** put the whole physical request behind a genuinely
+   cancellable wall-clock boundary: preferred is a supervised child process (or an
+   async cancellation scope proven across DNS/connect/headers/body) that is killed
+   at the absolute deadline; at minimum, check elapsed time immediately after
+   headers and after EOF, and do not describe the result as total-deadline safe
+   while headers remain phase-timeout-bound. **RED tests:** header-drip with
+   empty body; never-ending headers; stalled connect/header/body; exact
+   `clock == deadline`; assert bounded elapsed and no later persistence.
+
+3. **P1 — decoded-size containment happens after HTTPX has already allocated the
+   decompressed body.** `src/kyc_tool/adapters/retry.py:213-220` iterates
+   `streamed.iter_bytes()`, which yields decoded bytes. I reproduced a gzip response
+   with `32,635` wire bytes expanding to `33,554,432` bytes under a `64,000` cap:
+   it raised `UpstreamResponseTooLarge`, but `tracemalloc` saw an `81,304,791` byte
+   peak first. A tiny compressed response can therefore burn memory before the cap
+   fires. **Fix:** use `iter_raw()` and either send `Accept-Encoding: identity` /
+   reject encoded responses, or implement bounded incremental decoders that stop
+   after `cap + 1` decoded bytes without materializing the rest. Reject multiple or
+   unsupported content-encodings. **RED tests:** run a 32-128 MiB decompression bomb
+   in a memory-limited subprocess; gzip/deflate/multiple-encoding/truncated/chunked
+   cases; mutation back to `iter_bytes()` fails.
+
+4. **P1 — if the DB liveness proof itself errors, the pipeline converts an
+   authority failure into ordinary upstream evidence.** `prove_live_for_send()` in
+   `src/kyc_tool/queue/jobs.py:179-200` only marks the claim lost when the SELECT
+   returns no row; a DB exception propagates as a generic exception with `ctx.lost`
+   unset. `src/kyc_tool/orchestration/pipeline.py:339-357` catches generic adapter
+   exceptions and records `AdapterStatus.UPSTREAM_ERROR`, then can mark the run
+   partial and continue. "Cannot prove the claim is live" must be fail-closed, not
+   evidence about Companies House/Floqer/OCR. **Fix:** catch DB/proof exceptions in
+   the proof boundary, set `ctx.lost`, and raise `StaleJobClaim` or a dedicated
+   `ClaimAuthorityUnavailable` that the pipeline propagates exactly like stale
+   ownership. **RED tests:** proof query `OperationalError` => zero wire/provider
+   calls, no adapter_result/check/token/email/decision, no partial run; mutation
+   that lets the generic exception reach the upstream-error branch fails.
+
+5. **P2 — a successful heartbeat can write an already-expired lease after waiting
+   on a row lock.** `src/kyc_tool/queue/jobs.py:266-278` uses
+   `lease_expires_at = now() + interval`. PostgreSQL `now()` is transaction-start
+   time, not commit time. I reproduced this on real Postgres: claim a job with a
+   2 s lease, hold the job row lock in another transaction for 3 s, then call
+   `heartbeat()`. It returned `True`, but immediately after commit
+   `lease_expires_at - clock_timestamp()` was `-1.01` seconds. The reaper can
+   reclaim a job whose heartbeat "succeeded." **Fix:** use
+   `clock_timestamp() + make_interval(...)` for heartbeat lease extension (and
+   consider the same wall-clock function for claim/reap comparisons where freshness
+   matters). **RED test:** block heartbeat behind a held row lock longer than the
+   lease; success must leave expiry in the future and the reaper must not reclaim it.
+
+6. **P2 — recovery does not bind or verify the run it resets, so it can lie or reset
+   a different case's run.** `src/kyc_tool/ops/requeue_service.py:59-69` extracts
+   `run_id` from job payload and executes `UPDATE runs ... WHERE id=:run_id AND
+   state='FAILED'`, ignoring rowcount and not checking `runs.case_id == jobs.case_id`.
+   I reproduced both: a dead job pointing at a `COMPLETE` run returned
+   `{'run_reset': <run>}` while the run stayed COMPLETE, and a dead job under case A
+   pointing at a FAILED run under case B reset the victim run to QUEUED. **Fix:** in
+   the same transaction after the job CAS wins, require
+   `UPDATE runs SET ... WHERE id=:run_id AND case_id=:job_case_id AND state='FAILED'
+   RETURNING id`; exactly one row must match or the whole recovery rolls back with a
+   governed 409. Reject missing run_id/unsupported payload shape too. **RED tests:**
+   COMPLETE run, missing run, cross-case run, no run_id, and happy path; each bad
+   case leaves job/run/audit unchanged.
+
+7. **P2 — the governed external-I/O authority is not transitive; only adapters that
+   voluntarily call the HTTP helper are covered.** The static guard in
+   `tests/unit/test_adapter_retry.py:255-275` only catches direct `client.get` text
+   under `adapters/`; it does not govern provider protocols or object storage.
+   `src/kyc_tool/adapters/document_ocr.py:38-39` calls `ObjectStore.get()` and the
+   OCR engine directly, and production `src/kyc_tool/storage/object_store.py:68-73`
+   reads the whole S3 object with `.read()` and no lease proof, rate permit, deadline,
+   or byte cap. `src/kyc_tool/adapters/floqer.py:52` also delegates to an arbitrary
+   client protocol with no capability boundary. **Fix:** introduce one
+   `ExternalCallAuthority`/`GovernedTransport` capability that all external providers
+   and object-store reads must accept; object downloads must stream with the same
+   liveness/deadline/byte caps; add an AST/import-boundary guard that new adapters
+   cannot import raw HTTPX/boto/provider clients or call provider protocols outside
+   the gateway. **RED tests:** Document OCR object fetch consumes permit + DB proof
+   and rejects oversized documents before full read; lost claim results in zero
+   object/OCR/Floqer/POC calls; mutation adding a raw provider call outside the
+   governed gateway fails the static guard.
+
+8. **P2 — staged raw evidence leaks on any post-stage failure other than
+   `StaleJobClaim`, and crash safety is still best-effort only.**
+   `src/kyc_tool/orchestration/pipeline.py:366-386` stages `output.raw` in the
+   object store before opening the fenced DB transaction, but deletes `raw_ref` only
+   in the `except jobs.StaleJobClaim` branch. If `_record_adapter_result()`,
+   side-effects, audit, or commit raises any other exception after `put()`, the DB
+   rolls back with no `adapter_results.raw_ref` but the bytes remain. A process kill
+   in the same window also leaves an untracked orphan. **Fix:** delete the staged
+   object on every exception before the reference is committed, not only stale
+   claims; for crash safety, write a durable staging manifest/tag and add a sweeper
+   that deletes staged refs not adopted by `adapter_results` within a bounded age.
+   **RED tests:** forced AdapterResult/side-effect/commit failure cleans staged
+   bytes; subprocess kill after `put()` is swept; committed refs are preserved;
+   mutation narrowing cleanup back to `StaleJobClaim` fails.
+
+Structural guidance for the next fold: do not patch only these witnesses. Model
+each transition as an authority object with a holder, a scope, and a lifetime:
+job recovery must be case-order authority, not row authority; external I/O must
+use one transitive gateway, not voluntary helpers; byte caps must apply before
+allocation; and every "proof" that authorizes a write or send must either be
+held through the operation or fail closed if it cannot be re-proved. The RED tests
+should include barriers, hostile sockets, decompression bombs, and mutation checks;
+happy-path suite growth alone has repeatedly missed this class.
+
 ### RELEASE [CLAUDE] 2026-08-03 — R9 fold (`750630c..ca85355`): held fences + CAS recovery + wall-clock governed transport @ `ca85355`
 
 turn: CODEX
