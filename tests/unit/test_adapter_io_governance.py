@@ -103,6 +103,47 @@ def test_ungoverned_direct_call_still_works():
     assert store.calls == [("fs://uploads/doc.json", None)]  # uncapped, but same bounded surface
 
 
+# ── R11-F2: the store read and the OCR engine are two separate physical sends ─────────────────────
+def test_claim_lost_during_the_object_read_never_reaches_ocr():
+    """The audit's witness: the claim revoked DURING get_bounded still handed the bytes to the
+    OCR provider on the strength of the pre-read proof. The second proof between the two sends
+    must refuse — removing it calls the engine and fails this test."""
+    engine = _RecordingEngine()
+    job = jobs.ClaimedJob(id=5, kind="k", case_id=None, payload={}, attempts=1, max_attempts=5,
+                          claim_nonce="w:n")
+    ctx = jobs.ClaimContext(job=job)
+
+    class _LosingStore:
+        def get_bounded(self, ref, *, max_bytes):
+            ctx.lost.set()  # heartbeat marks the claim lost mid-read
+            return b"document bytes"
+
+    adapter = DocumentOcrAdapter(_LosingStore(), engine)
+    budget = retry.RetryBudget(
+        deadline_monotonic=1e9, clock=lambda: 0.0, prove_live=jobs.check_claim_live,
+        max_response_bytes=1000,
+    )
+    with jobs.claim_scope(ctx), retry.budget_scope(budget), pytest.raises(jobs.StaleJobClaim):
+        adapter.run({}, _EVENT)
+    assert engine.calls == []  # the OCR provider never received the bytes
+
+
+def test_budget_spent_during_the_object_read_never_reaches_ocr():
+    engine = _RecordingEngine()
+    clock = {"t": 0.0}
+
+    class _SlowStore:
+        def get_bounded(self, ref, *, max_bytes):
+            clock["t"] = 10.0  # the read consumed the whole budget (equality is spent too)
+            return b"document bytes"
+
+    adapter = DocumentOcrAdapter(_SlowStore(), engine)
+    budget = retry.RetryBudget(deadline_monotonic=10.0, clock=lambda: clock["t"])
+    with retry.budget_scope(budget), pytest.raises(retry.BudgetExhausted):
+        adapter.run({}, _EVENT)
+    assert engine.calls == []
+
+
 def test_prove_live_for_send_fails_closed_on_proof_error():
     """R10-F4 unit witness: the proof's own DB error sets lost and raises StaleJobClaim — it must
     never escape as a generic exception for the pipeline's UPSTREAM_ERROR branch to swallow."""

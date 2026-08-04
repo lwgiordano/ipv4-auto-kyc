@@ -24,13 +24,15 @@ def requeue_dead_job(session_factory, job_id: int, *, attempt_grant: int) -> dic
     the monotonic attempts counter is never rewound (nonce-ABA, audit honesty), and repeated
     exhaust/recover cycles grant exactly N each time instead of doubling (re-audit F4).
 
-    CASE-ORDERING AUTHORITY (re-audit `750630c..ca85355` F1): recovery may only resurrect the
-    LATEST job of its case, and only while nothing for the case is running — a recovered OLDER job
-    passes the claim gate's min(queued,running) check itself, so recovering it beside a newer
-    running/queued sibling produced two concurrent claims and a retrograde replay of frozen old
-    evidence. Old evidence is re-processed by submitting a fresh `recalculate.requested` event,
-    never by replaying its dead job. (DB backstop — partial unique index on jobs(case_id) WHERE
-    status='running' — is reserved into migration 026 with the lease_token column.)
+    CASE-ORDERING AUTHORITY (re-audit `750630c..ca85355` F1; HELD, not observed, per
+    `ddbff39..c3884bd` F1): recovery may only resurrect the LATEST job of its case, and only while
+    nothing for the case is running — and it proves both UNDER the same case FOR UPDATE lock
+    ingest admits new events through, so a newer event either landed before the lock (refused) or
+    waits behind this recovery's commit. A recovered OLDER job passes the claim gate's
+    min(queued,running) check itself, so recovering it beside newer case state replayed frozen
+    old evidence. Old evidence is re-processed by submitting a fresh `recalculate.requested`
+    event, never by replaying its dead job. (DB backstop — partial unique index on jobs(case_id)
+    WHERE status='running' — is reserved into migration 026 with the lease_token column.)
 
     RUN BINDING (F6): the run reset is verified, not fire-and-forget — the run must EXIST, belong
     to THIS job's case, and be FAILED; anything else rolls the whole recovery back with a governed
@@ -59,6 +61,21 @@ def requeue_dead_job(session_factory, job_id: int, *, attempt_grant: int) -> dic
                 "a job whose run cannot be verified",
             )
         if row.case_id is not None:
+            # HOLD the case-order authority, don't observe it (re-audit `ddbff39..c3884bd` F1):
+            # ingest locks this same case row FOR UPDATE before admitting a new event/job, so
+            # taking it here makes recovery and ingest strictly serial — a newer same-case
+            # event/job either committed BEFORE the lock (the re-checks below see it and refuse)
+            # or waits until this recovery commits. Plain SELECTs allowed a new event to commit
+            # mid-recovery and the resurrected old job to run ahead of it.
+            # Lock order: recovery is case → (dead) job; workers are (running) job → case. No
+            # cycle is possible because the two sides can never contend for the same job row —
+            # recovery's CAS requires status='dead' while a worker only ever holds
+            # status='running' rows, and their run rows belong to different runs.
+            session.execute(
+                text("SELECT 1 FROM cases WHERE id=:c FOR UPDATE"), {"c": row.case_id}
+            )
+            # AUTHORITATIVE re-checks, now under the held lock (the pre-lock reads above are
+            # only message-quality fast paths):
             newer = session.execute(
                 text("SELECT id, status FROM jobs WHERE case_id=:c AND id > :id "
                      "ORDER BY id DESC LIMIT 1"),

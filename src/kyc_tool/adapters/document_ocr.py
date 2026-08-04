@@ -42,6 +42,10 @@ class DocumentOcrAdapter:
         # materialization under the governed containment domain.
         retry.authorize_external_io()
         data = self.store.get_bounded(doc["object_ref"], max_bytes=retry.governed_response_cap())
+        # SECOND proof (re-audit `ddbff39..c3884bd` F2): the store read and the OCR engine are two
+        # separate physical sends — a claim revoked or a budget spent DURING the read must not
+        # hand the bytes to the OCR provider on the strength of the pre-read proof.
+        retry.authorize_external_io()
         extracted = self.engine.extract(data, doc.get("doc_type", "unknown"))
         return AdapterOutput(
             self.adapter_id,

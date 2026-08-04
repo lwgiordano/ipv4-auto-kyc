@@ -269,6 +269,35 @@ def test_slow_empty_body_completing_past_the_deadline_is_refused():
         get_with_retry(_client(lambda r: httpx.Response(200, content=b"")), "/x", attempts=1)
 
 
+# ── R11-F3: exact deadline equality is SPENT at every boundary ────────────────────────────────────
+def test_exact_equality_at_header_completion_refuses():
+    """clock == deadline at header arrival must refuse — the R10 boundary used `>` and let the
+    exact-equality response through (the audit's MockTransport repro)."""
+    clocks = iter([0.0, 1.0])  # authorize passes at 0.0; headers complete exactly AT the deadline
+    last = {"v": 0.0}
+
+    def clock():
+        last["v"] = next(clocks, last["v"])
+        return last["v"]
+
+    budget = RetryBudget(deadline_monotonic=1.0, clock=clock)
+    with budget_scope(budget), pytest.raises(BudgetExhausted):
+        get_with_retry(_client(lambda r: httpx.Response(200, content=b"")), "/x", attempts=1)
+
+
+def test_exact_equality_at_eof_refuses():
+    clocks = iter([0.0, 0.0, 1.0])  # authorize, post-header, EOF exactly AT the deadline
+    last = {"v": 0.0}
+
+    def clock():
+        last["v"] = next(clocks, last["v"])
+        return last["v"]
+
+    budget = RetryBudget(deadline_monotonic=1.0, clock=clock)
+    with budget_scope(budget), pytest.raises(BudgetExhausted):
+        get_with_retry(_client(lambda r: httpx.Response(200, content=b"")), "/x", attempts=1)
+
+
 # ── R10-F4: an unprovable claim is an authority failure, never upstream evidence ──────────────────
 def test_prove_live_db_error_fails_closed_with_zero_wire_calls():
     """The proof erroring (DB down) must surface as StaleJobClaim — fail closed — not leak through

@@ -4,6 +4,7 @@ running beside it, and only onto a verified FAILED run of the SAME case. Anythin
 with a governed 409 and mutates nothing (job stays dead, victim runs untouched, no audit row)."""
 
 import threading
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -205,6 +206,47 @@ def test_recovery_refuses_when_any_newer_sibling_exists_even_done(session_factor
         requeue_dead_job(session_factory, old, attempt_grant=GRANT)
     assert exc.value.status_code == 409
     assert _job_row(session_factory, old).status == "dead"
+
+
+# ── R11-F1: recovery HOLDS the case-order authority, it does not observe it ───────────────────────
+def test_recovery_serializes_behind_ingest_on_the_case_lock(session_factory, clean_db):
+    """The audit's mid-recovery witness: recovery's plain-SELECT checks passed, a newer same-case
+    job committed while recovery was still in its transaction, and the resurrected OLD job ran
+    ahead of the newer one. Recovery now takes the same case FOR UPDATE lock ingest admits events
+    through: with 'ingest' holding the lock and a newer job in flight, recovery BLOCKS, re-reads
+    under the lock, and refuses — the old job never runs ahead of the newer event. Removing the
+    case lock makes recovery succeed before the ingest commit and fails this test's 409."""
+    old = _dead_job(session_factory, case_id="ci", run_id="ci-r1")
+    _seed_case_run(session_factory, "ci", "ci-r2", seq=2)
+
+    ingest_holding = threading.Event()
+
+    def ingest_admits_newer_job():
+        with session_factory() as s:
+            # exactly ingest's authority: case FOR UPDATE, then the new event's job
+            s.execute(text("SELECT 1 FROM cases WHERE id='ci' FOR UPDATE"))
+            s.execute(
+                text(
+                    "INSERT INTO jobs (kind, case_id, payload_json, status, max_attempts) "
+                    "VALUES ('run_transition', 'ci', '{\"run_id\": \"ci-r2\"}'::jsonb, "
+                    "'queued', 5)"
+                )
+            )
+            ingest_holding.set()
+            time.sleep(1.0)  # recovery must WAIT here, not race past on stale reads
+            s.commit()
+
+    ingest = threading.Thread(target=ingest_admits_newer_job)
+    ingest.start()
+    assert ingest_holding.wait(10)
+    with pytest.raises(HTTPException) as exc:  # blocks on the case lock, re-reads, refuses
+        requeue_dead_job(session_factory, old, attempt_grant=GRANT)
+    ingest.join(timeout=10)
+    assert exc.value.status_code == 409 and "recalculate.requested" in exc.value.detail
+    assert _job_row(session_factory, old).status == "dead"
+    with uow(session_factory) as s:
+        claimed = jobs.claim(s, ["run_transition"], "worker-x", 120)
+    assert claimed is not None and claimed.id != old  # the NEWER job runs; the old one never does
 
 
 # ── R10-F6: the run reset is BOUND, not fire-and-forget ───────────────────────────────────────────

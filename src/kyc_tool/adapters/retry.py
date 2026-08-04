@@ -73,6 +73,17 @@ class UpstreamResponseTooLarge(RuntimeError):
     burns budget for the same outcome; the adapter records UPSTREAM_ERROR (partial, G12)."""
 
 
+def _remaining_or_spent(budget: RetryBudget, what: str) -> float:
+    """THE ONE deadline rule (re-audit `ddbff39..c3884bd` F3): remaining = deadline - clock, and
+    remaining <= 0 — exact equality included — is SPENT. Every boundary (pre-send, post-header,
+    mid-body, post-EOF, external I/O) proves through this helper with a single clock read, so no
+    site can drift back to a `>` comparison."""
+    remaining = budget.deadline_monotonic - budget.clock()
+    if remaining <= 0:
+        raise BudgetExhausted(f"plan budget exhausted at {what} — refusing to proceed")
+    return remaining
+
+
 def _authorize_send(budget: RetryBudget | None) -> float | None:
     """THE send authority (re-audit `7d1c435..827bc0f` F5): invoked immediately before EVERY
     physical call. Order is load-bearing — permit first (it may wait), then the DB claim proof
@@ -84,10 +95,7 @@ def _authorize_send(budget: RetryBudget | None) -> float | None:
         budget.acquire()  # BudgetExhausted when the permit cannot fit the deadline
     if budget.prove_live is not None:
         budget.prove_live()  # StaleJobClaim propagates: a revoked claim sends NOTHING further
-    remaining = budget.deadline_monotonic - budget.clock()
-    if remaining <= 0:
-        raise BudgetExhausted("plan budget exhausted before the wire call")
-    return remaining
+    return _remaining_or_spent(budget, "the wire call")
 
 
 @contextmanager
@@ -115,10 +123,7 @@ def authorize_external_io() -> float | None:
         return None
     if budget.prove_live is not None:
         budget.prove_live()  # StaleJobClaim propagates — revocation is never an upstream error
-    remaining = budget.deadline_monotonic - budget.clock()
-    if remaining <= 0:
-        raise BudgetExhausted("plan budget exhausted before the external I/O call")
-    return remaining
+    return _remaining_or_spent(budget, "the external I/O call")
 
 
 def governed_response_cap() -> int | None:
@@ -239,10 +244,7 @@ def _contained_get(
     with client.stream(
         "GET", url, params=params, headers={"Accept-Encoding": "gzip"}, **send_kwargs
     ) as streamed:
-        if budget.clock() > budget.deadline_monotonic:
-            raise BudgetExhausted(
-                "response headers arrived past the absolute plan deadline — refusing the body"
-            )
+        _remaining_or_spent(budget, "header completion")  # a header drip cannot smuggle a result
         declared = streamed.headers.get("Content-Length", "")
         if cap is not None and declared.isdigit() and int(declared) > cap:
             raise UpstreamResponseTooLarge(
@@ -293,11 +295,7 @@ def _contained_get(
                         f"decoded bytes exceeded the {cap}-byte governed cap "
                         f"(wire={wire_total}); refusing the body"
                     )
-                if budget.clock() > budget.deadline_monotonic:
-                    raise BudgetExhausted(
-                        "response body crossed the absolute plan deadline mid-stream — "
-                        "the claim's time authority is spent; aborting the read"
-                    )
+                _remaining_or_spent(budget, "the mid-body chunk boundary")
                 if piece:
                     chunks.append(piece)
             if decoder is not None:
@@ -322,12 +320,9 @@ def _contained_get(
                 f"corrupt encoded body on the governed transport: {exc}",
                 request=streamed.request,
             ) from exc
-        # A response that COMPLETED after the deadline must not become evidence (F2: the slow
+        # A response that COMPLETED at/after the deadline must not become evidence (F2: the slow
         # empty-body 200 witness — zero body chunks meant zero deadline checks).
-        if budget.clock() > budget.deadline_monotonic:
-            raise BudgetExhausted(
-                "response completed past the absolute plan deadline — refusing the result"
-            )
+        _remaining_or_spent(budget, "response completion (EOF)")
         # Rebuild a buffered response for the caller. Content-Encoding/Length describe the WIRE
         # form; the chunks are already decoded, so those headers must not survive re-decoding.
         headers = [
