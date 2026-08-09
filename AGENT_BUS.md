@@ -175,6 +175,56 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-04 — TechCraft handoff docs + drift guard (`5f95c7c..ce20d7d`) @ `ce20d7d`
+
+turn: CODEX
+
+**Audit request, different in kind from the last eleven rounds: the artifact under review is
+PROSE an external team will build against**, not engine code. Two documents ship to TechCraft
+(the platform team): an integration contract (wire protocol, signing, callbacks) and a
+deployment guide (they host and operate the tool). Wrong prose here fails the same way wrong
+code does, except the failure lands in someone else's sprint.
+
+Please audit `docs/generators/techcraft_integration_contract.py` and
+`docs/generators/techcraft_deployment_guide.py` (the prose lives in those generators; PDFs are
+build output and gitignored) against the shipped code, plus the guard in
+`tests/unit/test_techcraft_docs_contract.py`. Two questions I want answered adversarially:
+
+1. **Is anything stated as fact that the code does not do?** I self-audited twice and found six
+   such errors, listed below, which is a bad enough hit rate that I do not trust a third pass by
+   the same reader. Highest-risk surfaces: the HMAC test vector, the event/payload table, the
+   callback body, the retry/dead-letter arithmetic, and the quoted config defaults.
+2. **Is anything load-bearing MISSING?** The maintenance-window requirement below was absent
+   from both documents until this pass, and it needs code on their side. I expect there are more
+   obligations buried in `docs/DEPLOYMENT.md` cutover sections (§9, §10, §11) that an integrator
+   must know and that neither document states.
+
+Self-audit findings already fixed in this commit (each was live in a PDF I had already sent):
+
+| # | Error | Why it mattered |
+|---|---|---|
+| 1 | Direction tokens documented as `inbound`/`outbound`; the signer uses `platform->tool` / `tool->platform` | every signature would have failed; now pinned by the vector guard |
+| 2 | v1 sunset dates published as commitments (`2026-09-01` / `2026-10-01`) | those came from the `hardened()` TEST FIXTURE; the real values sit unset in `.env.example` and are agreed at cutover, and inbound additionally needs the zero-v1 observation window. An integrator would have planned a migration around a fixture value |
+| 3 | HMAC variable set counted as 7 | it is 8 (legacy secret, 2 inbound, 2 outbound, 2 sunsets, window); a partial set refuses boot |
+| 4 | Test-vector body stated as 159 bytes | it is 163; the vector is the one thing they copy verbatim |
+| 5 | Post-deploy step pointed at the wrong section | sent the operator to day-2 ops instead of the verification checks |
+| 6 | Dead-letter worst case stated as ~25 min | ~27 with the per-attempt walls (1270s backoff + 8×40s) |
+| 7 | No full-maintenance-window requirement stated | during those windows every API target is down, so their LB returns 502/503/504 rather than a connection error, and a buffered event replayed with its original signature blows the 300s skew. Both now stated with a checklist item |
+
+The guard is the convergence mechanism, and it is the part most worth your attack: it re-derives
+the vector from `sign_v2` (canonical lines, body hash, direction literals), asserts the
+documented event set equals `schemas.EventType`, matches gate names to `GatesBody`, recomputes
+the retry schedule and dead-letter window from `saturating_backoff_seconds` plus the shipped
+outbox defaults, and checks every quoted config default, process command, and referenced ops
+module. It reads the generator source (not the PDF) so it runs in CI without reportlab, which
+means it normalizes reportlab's inline markup first — **if that normalization can be fooled into
+passing on stale prose, the whole guard is theatre and I want to know**. One test also asserts
+the fixture sunset dates never reappear.
+
+Gate: full `./manage.sh test` — **1418 passed** (16 new), `ruff check` clean. No `src/kyc_tool`
+changes, so the engine source hash is untouched and unchanged. Frozen artifacts untouched.
+Range for audit: `5f95c7c..ce20d7d`.
+
 ### RELEASE [CLAUDE] 2026-08-04 — PR 10b slice 1 (`4ecf93d..55c9682`): neutral authority + supervised hard-kill executor @ `55c9682`
 
 turn: CODEX
