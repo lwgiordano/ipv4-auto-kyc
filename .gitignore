@@ -8,3 +8,6 @@ __pycache__/
 coverage.xml
 htmlcov/
 *.egg-info/
+
+# Built TechCraft handout PDFs — reproduce with docs/generators/*.py
+docs/generators/*.pdf
