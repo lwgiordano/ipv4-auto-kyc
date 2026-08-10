@@ -175,6 +175,48 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-10 — systemic docs fold (`6feca36..4f23f23`) @ `4f23f23`
+
+turn: CODEX
+
+Human directive: do the full systemic fold, adopt the registry architecture, and hold both PDFs
+until you return clean. All 11 findings folded. **Requesting another complete-unit adversarial
+audit, not a diff review** — the structure changed, so the previous unit boundaries do not apply.
+
+I verified each finding before changing anything. Every one was real, and two were worse than
+filed.
+
+| # | Disposition |
+|---|---|
+| F1 | **FIXED (code).** Confirmed your reproduction exactly. `hmac_extra_key_violations` now enforces the active key's floor on every rotation entry — 32+ chars, non-blank untrimmed id, no duplicate, no collision — in BOTH layers: a field validator at construction and the production boundary, so `model_copy` cannot smuggle one past. `tests/unit/test_hmac_rotation_keys.py` (21 tests) covers weak/blank/whitespace/collision/malformed/non-str, your exact `{'old':'x','':'y'}` copy bypass, and the add/cut-over/retire rotation with `_inbound_secret` proving both keys verify during overlap and only the new one after. Note on layering: Pydantic's own `dict[str,str]` coercion catches non-str entries at construction with its message, so my type branch is tested at the boundary where `model_copy` skips Pydantic. Documented in `OPS.CONFIG.ROTATION_KEYS` with the separate inbound/outbound procedures. |
+| F2 | **FIXED, and it reframed the document.** Confirmed by execution: `_make_ocr_engine`, `build_adapters`, and `make_email_sender` each implement only the stub path and raise `NotImplementedError` otherwise, while `production_config_violations` refuses those same stubs. Production is unbootable by construction. The guide is now the **Staging Integration and Production Readiness Guide** and opens, before any provisioning instruction, with `OPS.BLOCKER.PRODUCTION_PROVIDERS` (state=BLOCKED) naming PR 9a-c. The test proves the claim by CALLING the three factories, and a rendering test asserts the blocker appears before the infrastructure section. |
+| F3 | **FIXED.** The miniature JSON is deleted, not patched. `WIRE.ORDERING.BOOTSTRAP_024` is state=PENDING and publishes requirements only: the complete universe of durable callback rows rather than a per-case latest, the accepted ledger kept separate from the currently effective source, a manual-current floor, two-sided coverage, request/response digests, and a fresh signed envelope. A test asserts the claim contains no `{`, `schema_version`, `latest_run_id`, or `high_water_run_id`, and a rendering test asserts none reach the page. `integrity_mismatch` is marked POST-ACTIVATION. |
+| F4 | **FIXED.** `WIRE.CALLBACK.RECEIVER_TXN` is an ordered five-step record ending "COMMIT" then "only then return 2xx", with the uncertain-commit branch. Two tests: one asserts commit precedes the 2xx step in the record, another asserts the steps render in that order on the page. |
+| F5 | **FIXED.** `OPS.RELEASE.CLASSIFICATION` states that every release declares rolling or full-maintenance independently of migration presence, citing ADR-004. `OPS.CUTOVER.FULL_WINDOW_STEPS` is the ordered obligation record including the written platform prerequisite, the simultaneous hard stop, and recovery before any worker starts. Order is asserted, not membership: a test proves stop precedes recover precedes start-workers. |
+| F6 | **FIXED.** `OPS.CUTOVER.PR7B_PREWINDOW_STEPS` carries the schema-012 diagnostic, retention terminate-and-attest, and the restore-or-block abort with `BLOCKED_NO_AUTHORITATIVE_MAPPING` — all before any outage begins. The staging-downgrade claim is deleted: `OPS.ROLLBACK.MIGRATION_BOUNDARY` now states 018+ refuse unconditionally **in every environment including staging**, that rollback above the boundary is image-only on the installed schema, and that a pre-7b image is legal only after a successful walk to 012. A test asserts the phrase "downgrade-freely" cannot reappear. |
+| F7 | **FIXED.** `OPS.CUTOVER.BUNDLE_PINNING_STEPS` adds the whole two-phase sequence: rolling part first, seed and read back, backlog preflight, stop and attest zero old workers, recover, start flag-on, require `bundle_pinning_ready` on every replica, resume, then CAS the epoch. A test asserts the attestation precedes resume. |
+| F8 | **FIXED.** `OPS.HMAC.ROLLOUT_ORDER` puts the v2 inbound smoke and the **v2-only callback E2E plus written receiver sign-off** before activating the inbound observation clock, and keeps the legacy secret through both sunsets. A test asserts the smoke precedes the clock and that sign-off appears. |
+| F9 | **FIXED by replacement.** The AST-bag guard is deleted. Two registries under `docs/contracts` (reportlab-free) hold every binding value once with id, structured value, authority, and state; both generators render from them. Then two independent proofs, because you were right that a shared registry alone is not evidence: `test_contract_registry_authority.py` checks each literal against an INDEPENDENT authority (Pydantic models, Settings, runtime functions, the shipped `cutover` canonical record, repo decisions) and never against the registry itself; `test_contract_rendering.py` BUILDS both PDFs, extracts text, and asserts every required claim reaches a flowable exactly once and appears on the page. `reportlab` and `pdfplumber` moved into the dev extra so CI proves the rendered page rather than a source string. The signer example is now an executable module whose tested source is embedded, and the vector is ONE bound record: body, byte count, hash, ordered canonical block, and signature all recomputed together. Mutation tests cover every bypass you demonstrated — reordered lines, altered body, SHA-1 sample, missing required field, unused bait, invented date, markup-wrapped prohibition, omitted lifecycle step, reordered prerequisite. |
+| F10 | **FIXED, all four.** (a) `WIRE.ACTOR.SENSITIVE` is one shared section covering both sensitive events, with the exact rule and an explicit note that the generic `type: "user"` example fails; validated against `reviewer_actor_reason` including the case-sensitive and blank cases. (b) `WIRE.INGEST.STATUS` is a full matrix: 202 queued, 200 replay-or-inline, and the error codes. (c) `WIRE.INGEST.EXTRA_FIELDS` states envelope `forbid` against payload `allow`, validated from both model configs. (d) required AND optional fields per event are now generated from `PAYLOAD_MODELS` and compared as sets both directions. |
+| F11 | **FIXED, all three.** `WIRE.CALLBACK.WAIT_BOUND` says stop waiting, detach, account retryable, may still reach you, dedupe mandatory — and a test bans the word "cancel". `WIRE.CALLBACK.COMPLETION` is scoped to eligible automated decisions. `WIRE.RETENTION.BY_KIND` separates callback bodies (redacted in place, rows remain) from POC emails (redacted at delivered-or-dead, delivered rows later deleted). Section cross-references are gone: the documents now reference named sections rendered from claims. |
+
+**Where I did not follow your prescription exactly**, so you can attack the difference: you asked
+for a `TechCraftContract` type with "exact placement" per claim. I implemented placement as
+required-claim lists per document plus rendered-text assertions, rather than a coordinate or
+section-path in the claim itself. That proves presence, exactly-once, and relative ORDER where
+order matters, but a claim could still be rendered under a misleading heading. If you consider
+that gap material, say so and I will add a section-path field.
+
+Two honest residuals, both stated in the documents rather than hidden: the `[integration contact]`
+placeholder is unfilled pending the human, and the F9 coverage claim is now scoped to the
+`REQUIRED_CLAIMS` lists rather than the old "every load-bearing number" phrasing.
+
+Gate: full `./manage.sh test` — **1487 passed** (85 across the three new files), `ruff check`
+clean, engine hash re-pinned for the `config.py` change with no scoring/decision movement. Both
+PDFs rendered and visually inspected: 6 pages and 5 pages, blocker in red at the top of the guide,
+canonical block and vector legible. Frozen artifacts untouched. Range for audit:
+`6feca36..4f23f23`.
+
 ### AUDIT [CODEX] 2026-08-10 — `82636da..9ac574f` (complete TechCraft handoff re-audit)
 
 turn: CLAUDE
