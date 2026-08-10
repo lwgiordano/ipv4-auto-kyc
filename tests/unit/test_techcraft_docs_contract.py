@@ -12,6 +12,7 @@ Same idiom as `test_outbox_ceiling_contract.py` (cutover block) and
 `test_runbook_requeue_governance.py` (fenced SQL).
 """
 
+import ast
 import hashlib
 from pathlib import Path
 
@@ -25,19 +26,35 @@ from kyc_tool.security import DIRECTION_INBOUND, MAX_HMAC_SKEW_SECONDS, canonica
 GENERATORS = Path(__file__).resolve().parents[2] / "docs" / "generators"
 
 
-def _as_rendered(source: str) -> str:
-    """The generators carry the prose with reportlab inline markup, so `platform->tool` is stored
-    escaped as `platform-&gt;tool` and bold spans interrupt phrases. Compare against what a READER
-    sees, not the markup: unescape the entities and drop the inline tags. (Deliberately reading
-    the .py source rather than the built PDF — this guard must run in CI, which has no reportlab.)
+def _as_rendered(path: Path) -> str:
+    """What a READER of the PDF sees, recovered from the generator source.
+
+    Three transforms, each closing a way the guard could silently pass on bad prose:
+    1. Collect string constants via `ast` rather than matching raw source. Python joins
+       implicitly-concatenated literals at parse time, so a phrase the author wrapped across two
+       source lines (`"do not flip it from this "` / `"guide"`) reads as one string here. Raw
+       substring matching missed those, which is a FALSE NEGATIVE on a banned phrase: the exact
+       direction a drift guard must never fail in.
+    2. Drop reportlab inline markup, which otherwise splits phrases mid-sentence at `<b>`.
+    3. Unescape the entities the renderer needs, so `platform-&gt;tool` compares as
+       `platform->tool`.
+
+    Reading the source rather than the built PDF is deliberate: this guard runs in CI, which has
+    no reportlab installed.
     """
+    tree = ast.parse(path.read_text())
+    text = "\n".join(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    )
     for tag in ("<b>", "</b>", "<br/>", "<super>", "</super>", "<sub>", "</sub>"):
-        source = source.replace(tag, "")
-    return source.replace("&gt;", ">").replace("&lt;", "<").replace("&amp;", "&")
+        text = text.replace(tag, "")
+    return text.replace("&gt;", ">").replace("&lt;", "<").replace("&amp;", "&")
 
 
-CONTRACT = _as_rendered((GENERATORS / "techcraft_integration_contract.py").read_text())
-DEPLOY = _as_rendered((GENERATORS / "techcraft_deployment_guide.py").read_text())
+CONTRACT = _as_rendered(GENERATORS / "techcraft_integration_contract.py")
+DEPLOY = _as_rendered(GENERATORS / "techcraft_deployment_guide.py")
 
 # The exact inputs the contract publishes as its worked example.
 VECTOR_SECRET = "integration-test-secret-0123456789ab"
@@ -98,15 +115,78 @@ def test_direction_tokens_are_published_verbatim():
     assert DIRECTION_INBOUND in CONTRACT and DIRECTION_OUTBOUND in CONTRACT
 
 
-def test_every_event_type_is_documented_and_no_ghosts_are():
-    """The contract's event table must be the closed set the API accepts, both directions."""
+def _documented_event_rows() -> list[tuple]:
+    """The EVENT_ROWS literal from the generator, read with ast so the guard needs no reportlab
+    (it must run in CI). Returns the table exactly as the document renders it."""
+    tree = ast.parse((GENERATORS / "techcraft_integration_contract.py").read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", None) == "EVENT_ROWS" for t in node.targets
+        ):
+            return [tuple(row) for row in ast.literal_eval(node.value)]
+    raise AssertionError("EVENT_ROWS is gone from the contract generator")
+
+
+def test_documented_event_table_is_the_accepted_set_exactly():
+    """Both directions, as a set comparison (re-audit `5f95c7c..ce20d7d` F4: the previous version
+    only checked that accepted types appeared SOMEWHERE in the prose, so a documented-but-rejected
+    row sailed through — an integrator would have built and shipped an event we 422 on)."""
     accepted = set(EventType.__args__)
     assert accepted == set(PAYLOAD_MODELS), "schemas.py disagrees with itself"
-    for event_type in accepted:
-        assert event_type in CONTRACT, f"{event_type} is accepted but undocumented"
-    # a documented type the API would reject is the more dangerous direction
-    for quoted in ('"kyb.run_requested"', '"recalculate.requested"'):
-        assert quoted.strip('"') in accepted
+    documented = {row[0] for row in _documented_event_rows()}
+    assert documented == accepted, (
+        f"documented but rejected: {sorted(documented - accepted)}; "
+        f"accepted but undocumented: {sorted(accepted - documented)}"
+    )
+
+
+def test_a_ghost_event_row_would_fail_the_closed_set_check():
+    """The mutation the old guard survived. Proves the check above has teeth rather than
+    restating its own premise."""
+    documented = {row[0] for row in _documented_event_rows()} | {"ghost.event"}
+    assert documented != set(EventType.__args__)
+
+
+def test_contract_never_instructs_ordering_by_decided_at():
+    """`decided_at` is a display timestamp: the wire value comes from the deciding worker's wall
+    clock (different workers decide for one case, so host clock skew alone can invert it) and the
+    DB column of that name holds transaction-start time, which inverts against the lock-serialized
+    commit order. AUDIT_FINDINGS D-7bcore and RUNBOOK step 0.5 both forbid falling back to it.
+    Telling TechCraft to sort by it would hand them the exact bug PR 7b-activation exists to close.
+    """
+    banned = ("newest decided_at", "latest decided_at", "order by decided_at",
+              "sort by decided_at", "max(decided_at)", "highest decided_at")
+    for phrase in banned:
+        assert phrase.lower() not in CONTRACT.lower(), (
+            f"the contract tells TechCraft to order by decided_at ({phrase!r}); it is a display "
+            "field only"
+        )
+    assert "not an ordering key" in CONTRACT, "the decided_at warning has gone missing"
+
+
+def test_contract_does_not_claim_exactly_one_callback_delivery():
+    """A6: no component claims exactly-once. A locally-obsolete callback is suppressed with ZERO
+    sends, and a dead-lettered row needs an operator requeue, so 'exactly one callback per
+    decision' is an invariant the platform must never build on."""
+    banned = ("exactly one signed decision callback", "one callback per automated decision",
+              "exactly-once")
+    for phrase in banned:
+        assert phrase.lower() not in CONTRACT.lower(), f"the contract overclaims delivery: {phrase!r}"
+    for required in ("at least once", "zero times", "dead-letter"):
+        assert required in CONTRACT.lower(), f"the delivery contract omits {required!r}"
+
+
+def test_deployment_guide_states_the_real_m2_gate():
+    """The ROADMAP gates KYC_ENFORCE_POSITIVE_DECISIONS on the whole M4 backlog plus real-adapter
+    staging E2E plus platform cutover, and says so deliberately 'rather than a hand-picked subset'.
+    An external guide naming one milestone invites an operator to flip it early."""
+    lowered = DEPLOY.lower()
+    for required in ("m2", "m4", "staging end-to-end", "real adapters", "platform cutover"):
+        assert required in lowered, f"the M2 contract omits {required!r}"
+    assert "validator hardening" not in lowered, (
+        "the guide names validator hardening as the enabling milestone; the gate is broader"
+    )
+    assert "do not flip it from this guide" in lowered
 
 
 def test_callback_gate_names_match_the_wire_model():

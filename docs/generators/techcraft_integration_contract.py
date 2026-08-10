@@ -14,6 +14,30 @@ from reportlab.platypus import (
 
 OUT = "techcraft-integration-contract.pdf"
 
+# The documented event table, as DATA so the drift guard can compare the first column to
+# schemas.EventType as a set, in both directions (re-audit `5f95c7c..ce20d7d` F4: the prose-only
+# version let a documented-but-rejected event type pass unnoticed). The guard ast-parses this
+# literal rather than importing the module, so it runs in CI without reportlab installed.
+EVENT_ROWS = [
+    ("kyb.run_requested", "company_legal_name",
+     "optional: address, registration_number, jurisdiction, website, contact, "
+     "platform_account_id. Incomplete submissions ingest fine; missing evidence simply never "
+     "passes a check."),
+    ("email.verified", "email, domain, verified_at", "you verify the mailbox, we score it"),
+    ("org_id.submitted", "rir, org_handle", "rir is one of arin, ripe, apnic, lacnic, afrinic"),
+    ("poc.submitted", "rir, poc_handle",
+     "optional org_handle, resource. Triggers our verification email to the RIR-listed address."),
+    ("poc.token_verified", "token_id, token, verified_at",
+     "you host the verify page and echo the raw token from the email link; we store only its "
+     "digest. Tokens expire after 72 hours."),
+    ("document.uploaded", "object_ref, doc_type", "ref to the object you wrote (1.4)"),
+    ("website.review_completed", "task_id, result, reviewer_id",
+     "result is pass or fail; the signed actor must be that reviewer, and the task must be an "
+     "open website task on the same case"),
+    ("reviewer.manual_approve", "reviewer_id", "handled inline: no run, no callback"),
+    ("recalculate.requested", "(none)", "re-scores from stored evidence, no new fetches"),
+]
+
 styles = getSampleStyleSheet()
 H1 = ParagraphStyle("H1x", parent=styles["Heading1"], fontSize=15, spaceBefore=16, spaceAfter=6,
                     textColor=colors.HexColor("#1a1a2e"))
@@ -61,12 +85,14 @@ story.append(p("Prepared 2026-08-04, from the shipped code. <b>Audience: TechCra
                "it affects you; hosting and operating the tool is covered separately in the "
                "Deployment Guide."))
 story.append(Paragraph("How it works", H2))
-story.append(p("You POST signed case events to us; events for one case are processed strictly "
-               "serially, in your send order. Each automated run ends in exactly one signed "
-               "decision callback to your /kyc/decision endpoint; manual approvals by your "
-               "reviewers produce no callback. Both directions use the same HMAC-v2 scheme with "
-               "separate key pairs, and callback delivery is at-least-once, so you dedupe on "
-               "(case_id, run_id)."))
+story.append(p("You POST signed case events to us. Events for one case are processed strictly "
+               "serially, in the order we admit them under that case's lock, so send same-case "
+               "events one at a time and wait for acceptance if the order matters to you: two "
+               "submitted concurrently are admitted in lock-acquisition order, which need not "
+               "match your send order. Each automated decision enqueues one signed callback to "
+               "your /kyc/decision endpoint. Manual approvals by your reviewers send nothing at "
+               "all. Both directions use the same HMAC-v2 scheme with separate key pairs, and "
+               "delivery is at-least-once, so you dedupe on (case_id, run_id)."))
 story.append(Paragraph("Send answers to: [integration contact - fill in] by <b>2026-08-18</b>. "
                        "Both the v1 signature sunset and our ordered-delivery milestone sit "
                        "behind these answers.", WHY))
@@ -138,25 +164,7 @@ story.append(p("<b>Compatibility policy, both directions:</b> unknown fields are
                "callbacks. We add fields without notice; we never remove or repurpose one "
                "without a version bump agreed with you."))
 story.append(tbl(
-    [["event_type", "Required payload", "Notes"],
-     ["kyb.run_requested", "company_legal_name",
-      "optional: address, registration_number, jurisdiction, website, contact, "
-      "platform_account_id. Incomplete submissions ingest fine; missing evidence simply never "
-      "passes a check."],
-     ["email.verified", "email, domain, verified_at", "you verify the mailbox, we score it"],
-     ["org_id.submitted", "rir, org_handle", "rir is one of arin, ripe, apnic, lacnic, afrinic"],
-     ["poc.submitted", "rir, poc_handle",
-      "optional org_handle, resource. Triggers our verification email to the RIR-listed "
-      "address."],
-     ["poc.token_verified", "token_id, token, verified_at",
-      "you host the verify page and echo the raw token from the email link; we store only its "
-      "digest. Tokens expire after 72 hours."],
-     ["document.uploaded", "object_ref, doc_type", "ref to the object you wrote (1.4)"],
-     ["website.review_completed", "task_id, result, reviewer_id",
-      "result is pass or fail; the signed actor must be that reviewer, and the task must be an "
-      "open website task on the same case"],
-     ["reviewer.manual_approve", "reviewer_id", "handled inline: no run, no callback"],
-     ["recalculate.requested", "(none)", "re-scores from stored evidence, no new fetches"]],
+    [["event_type", "Required payload", "Notes"], *[list(row) for row in EVENT_ROWS]],
     [1.68 * inch, 1.62 * inch, 3.4 * inch]))
 story.append(Spacer(1, 4))
 story.append(p("Responses: 200 accepted or replayed; 400 missing Idempotency-Key; 401 bad "
@@ -166,7 +174,13 @@ story.append(p("Responses: 200 accepted or replayed; 400 missing Idempotency-Key
 # ---------------------------------------------------------------- section 3
 story.append(Paragraph("3. Callbacks we send you", H1))
 story.append(p("<b>POST &lt;your-base&gt;/kyc/decision</b>, Content-Type application/json, "
-               "signed with our outbound key. One callback per automated decision."))
+               "signed with our outbound key. Each automated decision enqueues one callback row "
+               "in our transactional outbox. What reaches you is a delivery question, and the "
+               "honest contract has three cases: an eligible row is delivered at least once "
+               "until you 2xx it or it dead-letters; a row we can locally prove obsolete is "
+               "suppressed and sends zero times; a dead-lettered row needs an operator requeue "
+               "on our side. Do not assume a one-to-one match between decisions we make and "
+               "callbacks you receive."))
 story.append(Paragraph(
     '{"case_id": "...", "run_id": "...", "event_id": "...",<br/>'
     '&nbsp;"decision": "approve | approve_buy_locked | manual_review_insufficient | reject",<br/>'
@@ -195,9 +209,29 @@ story.append(tbl(
       "27 minutes counting the per-attempt walls. An outage longer than that exhausts the "
       "schedule; tell us and we requeue"],
      ["Duplicates", "possible", "at-least-once delivery; dedupe on (case_id, run_id)"],
-     ["Ordering", "not guaranteed until the 1.1 bootstrap lands",
-      "until then, apply the newest decided_at per case or hold for decision_sequence"]],
+     ["Ordering", "no wire ordering authority until the 1.1 bootstrap lands",
+      "dedupe exact repeats on (case_id, run_id), and do NOT infer order from any field in the "
+      "body. See the note below before writing same-case conflict logic"]],
     [1.3 * inch, 2.35 * inch, 3.05 * inch]))
+story.append(Spacer(1, 4))
+story.append(Paragraph("decided_at is not an ordering key", H2))
+story.append(p("<b>decided_at is a display timestamp. It is not an ordering key, and using it as "
+               "one can apply the wrong decision to a case.</b> Our own migration tooling is "
+               "barred from falling back to it for the same reason. The field is stamped from "
+               "the deciding worker's wall clock, and decisions for one case can be made by "
+               "different workers, so ordinary clock skew between two hosts is enough to make "
+               "the older decision carry the later timestamp. The database column of the same "
+               "name is worse: it holds transaction-start time, which inverts against the "
+               "lock-serialized commit order outright."))
+story.append(p("Until `decision_sequence` and the section 1.1 bootstrap are live, resolve "
+               "same-case conflicts one of two ways: route them through an ordering authority "
+               "you own on the platform side, or hold them for review. Both beat guessing from "
+               "a timestamp. Once the bootstrap lands, your per-case high-water mark becomes the "
+               "authority and the guesswork ends."))
+story.append(p("One residual to handle in the meantime: a reviewer's manual approval sends you "
+               "nothing, and an automatic callback queued before it can arrive after it. If your "
+               "reviewers can approve out of band, treat a manual approval as authoritative over "
+               "any automatic decision that arrives later for that case.", WHY))
 
 # ---------------------------------------------------------------- section 4
 story.append(Paragraph("4. Request signing (HMAC v2), with a worked example", H1))

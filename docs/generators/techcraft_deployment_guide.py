@@ -144,9 +144,14 @@ story.append(tbl(
      ["KYC_READ_AUTH_REQUIRED / KYC_UI_ADMIN_TOKEN", "true / 32+ char token",
       "the admin token guards the always-on ops requeue endpoints, so production requires it "
       "even with the /ui console off"],
-     ["KYC_ENFORCE_POSITIVE_DECISIONS", "false at launch",
-      "temporary safety hold: computed approvals route to manual review until the validator "
-      "hardening milestone; flipping it is a deliberate, coordinated change"],
+     ["KYC_ENFORCE_POSITIVE_DECISIONS", "false in production, and do not flip it from this "
+      "guide",
+      "computed approvals route to manual review while it is false. Flipping it is the M2 hard "
+      "stop and needs an explicit approval gate: the M4 backlog complete, a staging end-to-end "
+      "run on real adapters, and the platform cutovers complete. The gate is deliberately the "
+      "whole backlog rather than a named subset, so no prerequisite gets omitted by reading a "
+      "shorter list somewhere. The flag itself is permanent and enabled per environment; the "
+      "wiring is never removed"],
      ["KYC_JOB_LEASE_SECONDS", "default 120 (floor 30 in production)",
       "the worker heartbeat runs at lease/4; a tiny lease races the reaper"],
      ["KYC_OUTBOX_LEASE_SECONDS + KYC_OUTBOX_HTTP_TIMEOUT_SECONDS + margin",
