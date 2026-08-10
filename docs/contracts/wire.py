@@ -1,0 +1,342 @@
+"""Wire, signing, event, callback, ordering, and retention claims.
+
+Every value below is written out LITERALLY, as the document asserts it to TechCraft. It is not
+computed from the code at import time, because a registry that derives its values from the
+authority makes the authority test tautological: the point is that a human wrote a claim down and
+a test independently proves the running system agrees (re-audit `82636da..9ac574f`, systemic
+requirement). `tests/unit/test_contract_registry_authority.py` holds each literal against its
+authority; `tests/unit/test_contract_rendering.py` proves the rendered PDF displays it.
+"""
+
+from docs.contracts import Claim, ClaimState, Registry
+
+# The published signature vector, bound as ONE record: change any part and the test that recomputes
+# it through kyc_tool.security.sign_v2 fails. The body is stored as bytes so its length and hash
+# are properties of the same object the document prints.
+VECTOR_BODY = (
+    b'{"event_type":"kyb.run_requested","occurred_at":"2026-08-04T12:00:00Z",'
+    b'"actor":{"type":"user","id":"acct-42"},'
+    b'"payload":{"company_legal_name":"ACME NETWORKS LTD"}}'
+)
+
+SIGNATURE_VECTOR = {
+    "secret": "integration-test-secret-0123456789ab",
+    "key_id": "techcraft-inbound-1",
+    "direction": "platform->tool",
+    "method": "POST",
+    "path_qs": "/v1/cases/case-42/events",
+    "timestamp": "1754400000",
+    "slot": "evt-0001",
+    "body": VECTOR_BODY,
+    "body_bytes": 163,
+    "body_sha256": "9beb5e66987b7818d9a0e24cd141d2f94048b1c8785e8d25b02a17303a5fe024",
+    "canonical_lines": (
+        "v2",
+        "techcraft-inbound-1",
+        "platform->tool",
+        "POST",
+        "/v1/cases/case-42/events",
+        "1754400000",
+        "evt-0001",
+        "9beb5e66987b7818d9a0e24cd141d2f94048b1c8785e8d25b02a17303a5fe024",
+    ),
+    "signature": "0dc9ff66f1a9e096b0dcae311efe15799b88f9f7475f3999cee10aaebcbacdba",
+}
+
+# (event_type, required payload fields, optional payload fields, note)
+EVENT_TABLE = (
+    ("kyb.run_requested", ("company_legal_name",),
+     ("address", "contact", "jurisdiction", "platform_account_id", "registration_number",
+      "website"),
+     "First event for a case creates it; there is no registration call. Incomplete submissions "
+     "ingest fine, and missing evidence simply never passes a check."),
+    ("email.verified", ("domain", "email", "verified_at"), (),
+     "You verify the mailbox; we score it."),
+    ("org_id.submitted", ("org_handle", "rir"), (),
+     "rir is one of arin, ripe, apnic, lacnic, afrinic."),
+    ("poc.submitted", ("poc_handle", "rir"), ("org_handle", "resource"),
+     "Triggers our verification email to the RIR-listed address."),
+    ("poc.token_verified", ("token", "token_id", "verified_at"), (),
+     "You host the verify page and echo the raw token from the email link. We store only its "
+     "digest, and tokens expire after 72 hours."),
+    ("document.uploaded", ("doc_type", "object_ref"), (),
+     "object_ref points at the object your side wrote under uploads/."),
+    ("website.review_completed", ("result", "reviewer_id", "task_id"), ("reason_codes",),
+     "result is pass or fail. SENSITIVE EVENT: see the reviewer-actor rule; the task must be an "
+     "open website task on the same case."),
+    ("reviewer.manual_approve", ("reviewer_id",), ("note",),
+     "SENSITIVE EVENT: see the reviewer-actor rule. Handled inline: no run, no callback, and it "
+     "returns 200 rather than 202."),
+    ("recalculate.requested", (), (),
+     "Re-scores from stored evidence with no new fetches, and does not re-run the broker screen."),
+)
+
+WIRE = Registry(
+    name="wire",
+    claims=(
+        # ── ingestion ─────────────────────────────────────────────────────────────────────────
+        Claim(
+            id="WIRE.INGEST.PATH",
+            value="POST /v1/cases/{case_id}/events",
+            authority="kyc_tool.api.routes_events.post_event",
+        ),
+        Claim(
+            id="WIRE.INGEST.HEADERS",
+            value=("Idempotency-Key", "X-KYC-Timestamp", "X-KYC-Key-Id", "X-KYC-Signature-V2"),
+            authority="kyc_tool.api.routes_events.post_event + kyc_tool.api.auth",
+        ),
+        Claim(
+            id="WIRE.INGEST.STATUS",
+            value=(
+                (202, "accepted and queued — the normal result for a new event"),
+                (200, "replay of a seen Idempotency-Key (stored response verbatim), or an inline "
+                      "reviewer.manual_approve, which runs without a queued job"),
+                (400, "Idempotency-Key header missing"),
+                (401, "signature invalid"),
+                (409, "same Idempotency-Key with a different payload, or a review-task state "
+                      "conflict"),
+                (422, "malformed envelope, malformed payload, or an invalid reviewer actor"),
+                (404, "review task not found"),
+            ),
+            authority="kyc_tool.events.ingest.ingest_event",
+            note="A queued event is 202. Treating 200 as the success case would misread every "
+                 "normal submission.",
+        ),
+        Claim(
+            id="WIRE.INGEST.EXTRA_FIELDS",
+            value={
+                "envelope": "forbid",
+                "payload": "allow",
+                "prose": "Unknown fields at the TOP LEVEL of the envelope are rejected with 422. "
+                         "Unknown fields inside payload (and inside actor) are preserved. This is "
+                         "not a symmetric must-ignore contract.",
+            },
+            authority="kyc_tool.api.schemas.EventEnvelope.model_config / PAYLOAD_MODELS",
+        ),
+        Claim(
+            id="WIRE.INGEST.ORDERING",
+            value="Events for one case are serialized by the order we admit them under that "
+                  "case's lock. Send same-case events one at a time and wait for acceptance if "
+                  "order matters: two submitted concurrently are admitted in lock-acquisition "
+                  "order, which need not match your send order.",
+            authority="kyc_tool.events.ingest (Case FOR UPDATE admission)",
+        ),
+        Claim(
+            id="WIRE.ACTOR.SENSITIVE",
+            value={
+                "events": ("website.review_completed", "reviewer.manual_approve"),
+                "actor_type": "reviewer",
+                "rule": "actor.type must equal 'reviewer', and actor.id must equal "
+                        "payload.reviewer_id exactly — case-sensitive, after trimming surrounding "
+                        "whitespace, with neither blank. Anything else is 422.",
+                "trap": "The generic envelope example shows actor.type 'user'. Copying it for "
+                        "either sensitive event fails.",
+            },
+            authority="kyc_tool.events.review_guard.reviewer_actor_reason",
+        ),
+        Claim(
+            id="WIRE.EVENT.TABLE",
+            value=EVENT_TABLE,
+            authority="kyc_tool.api.schemas.EventType / PAYLOAD_MODELS required+optional fields",
+        ),
+        # ── signing ───────────────────────────────────────────────────────────────────────────
+        Claim(
+            id="WIRE.SIGN.CANONICAL",
+            value=("v2", "key_id", "direction", "method", "path?query", "timestamp", "slot",
+                   "sha256(body) hex"),
+            authority="kyc_tool.security.canonical_v2",
+            note="Eight lines, LF-joined, in this order.",
+        ),
+        Claim(
+            id="WIRE.SIGN.DIRECTIONS",
+            value={"platform_to_tool": "platform->tool", "tool_to_platform": "tool->platform"},
+            authority="kyc_tool.security.DIRECTION_INBOUND / DIRECTION_OUTBOUND",
+            note="Literal tokens. Prose like 'inbound' will not verify.",
+        ),
+        Claim(
+            id="WIRE.SIGN.SKEW_SECONDS",
+            value=300,
+            authority="kyc_tool.security.MAX_HMAC_SKEW_SECONDS",
+        ),
+        Claim(
+            id="WIRE.SIGN.VECTOR",
+            value=SIGNATURE_VECTOR,
+            authority="kyc_tool.security.sign_v2 via docs.contracts.signing_example.sign",
+            note="Verify your implementation against this before writing any other code.",
+        ),
+        Claim(
+            id="WIRE.SIGN.V1_SUNSET",
+            value="Both v1 sunset dates are set with you at cutover and are unset in our config "
+                  "today. The inbound date additionally cannot take effect until an observation "
+                  "window records zero v1 traffic, so a date alone never cuts off a live sender. "
+                  "Ship v2 from day one and none of this applies.",
+            authority=".env.example (both sunset vars unset) + docs/DEPLOYMENT.md §2",
+        ),
+        Claim(
+            id="WIRE.SIGN.ROTATION",
+            value="Rotate by adding a second key id, cutting over, then retiring the old one. "
+                  "Rotation secrets are full verification credentials and carry the same floor as "
+                  "the active key: at least 32 characters, a non-blank key id, and no collision "
+                  "with the active id. Inbound and outbound rotate independently.",
+            authority="kyc_tool.config.hmac_extra_key_violations + kyc_tool.api.auth._inbound_secret",
+        ),
+        # ── callbacks ─────────────────────────────────────────────────────────────────────────
+        Claim(
+            id="WIRE.CALLBACK.PATH",
+            value="POST <your-base>/kyc/decision",
+            authority="kyc_tool.outbox.publisher (callback URL + '/kyc/decision')",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.FIELDS",
+            value=("case_id", "run_id", "event_id", "decision", "score", "gates",
+                   "buy_enablement", "checks", "decided_at"),
+            authority="kyc_tool.api.schemas.DecisionCallback (required fields)",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.OPTIONAL_FIELDS",
+            value=("event_sequence", "enforcement_held"),
+            authority="kyc_tool.api.schemas.DecisionCallback (optional fields)",
+            note="Tolerate and preserve both. enforcement_held carries the computed decision "
+                 "while the enforcement hold is active; the outer decision stays authoritative.",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.GATES",
+            value=("score_met", "legal_proof", "control_proof", "broker_ok", "no_hard_conflict"),
+            authority="kyc_tool.api.schemas.GatesBody",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.DECISIONS",
+            value=("approve", "approve_buy_locked", "manual_review_insufficient", "reject"),
+            authority="kyc_tool.api.schemas.DecisionCallback.decision literal",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.DELIVERY",
+            value=(
+                "Each automated decision enqueues one callback row in our transactional outbox.",
+                "An eligible row is delivered AT LEAST ONCE until you return 2xx or it "
+                "dead-letters, so duplicates are expected; dedupe on (case_id, run_id).",
+                "A row we can locally prove obsolete is suppressed and sends ZERO times.",
+                "A dead-lettered row needs an operator requeue on our side.",
+                "Manual approvals by your reviewers send nothing at all.",
+                "Do not assume a one-to-one match between decisions we make and callbacks you "
+                "receive.",
+            ),
+            authority="AUDIT_FINDINGS.md A6 + kyc_tool.outbox.publisher module docstring",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.RECEIVER_TXN",
+            value=(
+                "Verify the signature.",
+                "In ONE transaction: dedupe on (case_id, run_id); apply the decision (or no-op if "
+                "already applied); append it to your accepted ledger.",
+                "COMMIT.",
+                "Only then return 2xx.",
+                "If the commit fails or its outcome is uncertain, return non-2xx or drop the "
+                "connection so we retry.",
+            ),
+            authority="the accepted receiver design (activation design doc) + publisher "
+                      "terminalizes on 2xx",
+            note="A 2xx returned before your commit is unrecoverable: we mark the row delivered "
+                 "and at-least-once cannot help you. This is the single most important "
+                 "requirement on your side.",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.RETRY",
+            value={
+                "attempts": 8,
+                "base_seconds": 10,
+                "delays": (10, 20, 40, 80, 160, 320, 640),
+                "jitter": False,
+                "backoff_total_seconds": 1270,
+                # backoff plus every attempt's 40s hard wall, rounded UP: an operator waiting on a
+                # dead-letter should never be told a shorter window than the real worst case.
+                "worst_case_seconds": 1590,
+                "backoff_total_minutes": 22,
+                "worst_case_minutes": 27,
+            },
+            authority="kyc_tool.queue.backoff.saturating_backoff_seconds + Settings "
+                      "outbox_backoff_base_seconds / outbox_max_attempts",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.WAIT_BOUND",
+            value="Respond within 10 seconds. Each attempt carries a 40-second hard wall (4 x the "
+                  "10s HTTP phase timeout). Past it we STOP WAITING, detach the attempt, and "
+                  "account a retryable failure. We cannot retract a request already in flight, so "
+                  "a detached attempt may still reach you and still take effect. Dedupe is "
+                  "mandatory, not advisory.",
+            authority="kyc_tool.outbox.publisher (detached attempt accounting; no cancellation)",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.COMPLETION",
+            value="For an automated decision that produces an eligible callback, that callback is "
+                  "the completion signal and nothing needs polling. It is not a universal "
+                  "completion signal: manual approvals emit none, and a suppressed or "
+                  "dead-lettered row emits none.",
+            authority="AUDIT_FINDINGS.md A6 + kyc_tool.events.ingest (manual approve is inline)",
+        ),
+        # ── ordering ──────────────────────────────────────────────────────────────────────────
+        Claim(
+            id="WIRE.ORDERING.NO_DECIDED_AT",
+            value="decided_at is a display timestamp and is not an ordering key. The wire value "
+                  "is stamped from the deciding worker's wall clock, and different workers decide "
+                  "for one case, so ordinary clock skew between hosts can give the older decision "
+                  "the later timestamp. The database column of that name is worse: it holds "
+                  "transaction-start time, which inverts against the lock-serialized commit "
+                  "order. Our own migration tooling is barred from falling back to it.",
+            authority="AUDIT_FINDINGS.md D-7bcore + docs/RUNBOOK.md step 0.5 + "
+                      "kyc_tool.db.tables.Case.latest_decision_row_id",
+        ),
+        Claim(
+            id="WIRE.ORDERING.INTERIM",
+            value="Until ordered delivery is activated: dedupe exact repeats on (case_id, "
+                  "run_id), and resolve same-case conflicts either through an ordering authority "
+                  "you own or by holding them for review. A reviewer's manual approval sends you "
+                  "nothing and an automatic callback queued before it can arrive after it, so "
+                  "treat a manual approval as authoritative over any automatic decision that "
+                  "arrives later for that case.",
+            authority="AUDIT_FINDINGS.md A6 residual reverts",
+        ),
+        Claim(
+            id="WIRE.ORDERING.BOOTSTRAP_024",
+            value="Ordered delivery needs a signed bootstrap of per-case high-water marks from "
+                  "your accepted-run ledger, because your ledger is the authority on what you "
+                  "actually applied. The design is accepted but NOT BUILT, and its schema is not "
+                  "final. Do not implement against a draft. What we already know it must carry: "
+                  "the complete universe of durable callback rows rather than a per-case latest; "
+                  "your accepted-run ledger kept separate from the currently effective source "
+                  "per case (an automatic callback versus a manual approval); a floor for "
+                  "manual-current cases; exact two-sided coverage so both sides can prove "
+                  "convergence; request and response digests; and a freshly signed response "
+                  "envelope. We will publish the schema when the activation unit is built.",
+            authority=".agents/ROADMAP.md PR 7b-activation (migration 024, pending)",
+            state=ClaimState.PENDING,
+        ),
+        Claim(
+            id="WIRE.ORDERING.INTEGRITY_MISMATCH",
+            value="integrity_mismatch is a POST-ACTIVATION terminal state. No code path emits it "
+                  "today; it arrives with the activation unit.",
+            authority=".agents/ROADMAP.md PR 7b-activation",
+            state=ClaimState.PENDING,
+        ),
+        # ── retention ─────────────────────────────────────────────────────────────────────────
+        Claim(
+            id="WIRE.RETENTION.BY_KIND",
+            value=(
+                ("decision callbacks",
+                 "Bodies are redacted in place after the retention window; the row and its "
+                 "ordering identity remain."),
+                ("POC verification emails",
+                 "The body is redacted as soon as the row reaches delivered or dead, not at the "
+                 "retention window; delivered rows are DELETED later. A dead POC email cannot be "
+                 "requeued because its token is already gone, so recovery is a fresh "
+                 "poc.submitted."),
+            ),
+            authority="kyc_tool.workers.retention + kyc_tool.outbox.publisher terminal writes",
+        ),
+        Claim(
+            id="WIRE.RETENTION.WINDOW_DAYS",
+            value=2555,
+            authority="kyc_tool.config.Settings.retention_days default",
+        ),
+    ),
+)

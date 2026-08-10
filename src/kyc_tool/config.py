@@ -406,6 +406,18 @@ class Settings(BaseSettings):
             raise ValueError("; ".join(problems))
         return v
 
+    @field_validator("hmac_inbound_extra_keys")
+    @classmethod
+    def _validate_hmac_extra_keys(cls, v, info):
+        # Declaration layer for rotation credentials (re-audit `82636da..9ac574f` F1). The active
+        # key_id is validated against whatever this model already parsed; field order puts
+        # hmac_inbound_key_id first, so the collision check has it in every real construction.
+        active = (info.data or {}).get("hmac_inbound_key_id", "")
+        problems = hmac_extra_key_violations(v, active)
+        if problems:
+            raise ValueError("; ".join(problems))
+        return v
+
     # Deployment environment. In "production", validate_for_production() runs at
     # process start and refuses to boot on any unsafe/stub configuration.
     environment: Literal["development", "test", "production"] = "development"
@@ -659,6 +671,13 @@ def production_config_violations(settings: Settings) -> list[str]:
         v.append("hmac_inbound_key_id is empty")
     if not settings.hmac_outbound_key_id:
         v.append("hmac_outbound_key_id is empty")
+    # Rotation keys are FULL verification credentials (api/auth.py resolves a v2 secret through
+    # them), so they carry the same floor as the active key (re-audit `82636da..9ac574f` F1: the
+    # boundary validated only the active pair, so a one-character secondary secret — or one under
+    # an empty key id — authenticated real requests while the kill switch stayed green). Re-checked
+    # HERE as well as at construction because an unvalidated model_copy(update=...) bypasses the
+    # field validator.
+    v.extend(hmac_extra_key_violations(settings.hmac_inbound_extra_keys, settings.hmac_inbound_key_id))
     for label, iso in (
         ("inbound", settings.hmac_v1_inbound_sunset_at),
         ("outbound", settings.hmac_v1_outbound_sunset_at),
@@ -746,6 +765,56 @@ class ProcessRole(StrEnum):
     OUTBOX_WORKER = "outbox_worker"
     RETENTION = "retention"
     DEV_WORKER = "dev_worker"
+
+
+def hmac_extra_key_violations(extra: object, active_key_id: str) -> list[str]:
+    """Every rotation key must clear the SAME floor as the active key (re-audit
+    `82636da..9ac574f` F1). `api/auth._inbound_secret` resolves a v2 verification secret out of
+    this mapping, so a weak or blank-keyed entry is a live authentication credential, not
+    inert configuration. Returns violations; empty means the mapping is safe to verify against.
+
+    Checked in BOTH layers: the field validator refuses at construction, and
+    `production_config_violations` re-checks so an unvalidated `model_copy(update=...)` cannot
+    slip a mapping past the boundary."""
+    if extra is None or extra == {}:
+        return []
+    if not isinstance(extra, dict):
+        return [f"hmac_inbound_extra_keys must be a mapping of key_id -> secret, got {type(extra).__name__}"]
+    problems: list[str] = []
+    seen: dict[str, str] = {}
+    for key_id, secret in extra.items():
+        if not isinstance(key_id, str) or not isinstance(secret, str):
+            problems.append(
+                f"hmac_inbound_extra_keys entry {key_id!r} must map str -> str "
+                f"(got {type(key_id).__name__} -> {type(secret).__name__})"
+            )
+            continue
+        trimmed = key_id.strip()
+        if not trimmed:
+            problems.append(
+                "hmac_inbound_extra_keys has a blank/whitespace key_id — an empty X-KYC-Key-Id "
+                "header would resolve to its secret"
+            )
+            continue
+        if trimmed != key_id:
+            problems.append(
+                f"hmac_inbound_extra_keys key_id {key_id!r} has surrounding whitespace; the header "
+                "is compared verbatim, so this entry can never match"
+            )
+        if trimmed == (active_key_id or "").strip():
+            problems.append(
+                f"hmac_inbound_extra_keys key_id {trimmed!r} collides with the ACTIVE inbound "
+                "key_id; the active secret wins and this rotation entry is silently dead"
+            )
+        if trimmed in seen:
+            problems.append(f"hmac_inbound_extra_keys key_id {trimmed!r} is duplicated")
+        seen[trimmed] = secret
+        if len(secret) < _MIN_HMAC_SECRET_LEN:
+            problems.append(
+                f"hmac_inbound_extra_keys secret for {trimmed!r} is weak "
+                f"(< {_MIN_HMAC_SECRET_LEN} chars) — rotation keys verify real requests"
+            )
+    return problems
 
 
 _DEV_ONLY_ROLES = frozenset({ProcessRole.DEV_WORKER})
