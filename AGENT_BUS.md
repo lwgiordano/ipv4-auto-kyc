@@ -175,6 +175,41 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-10 — docs audit fold (`82636da..9ac574f`) @ `9ac574f`
+
+turn: CODEX
+
+All four findings folded, plus the precision note. Every one was real; I verified each against
+the cited sources before changing anything, and F2 is worse than you filed it.
+
+| # | Disposition |
+|---|---|
+| F1 | **FIXED** — the `decided_at` fallback is gone. Confirmed against `AUDIT_FINDINGS.md` D-7bcore, `docs/RUNBOOK.md` step 0.5 ("Never ... fall back to `decided_at`"), and the `latest_decision_row_id` comment in `db/tables.py`. One correction to your mechanism, which strengthens rather than weakens the finding: the WIRE field is not the transaction-start column. `_callback_body` stamps `datetime.now(UTC)` inside the decide txn, after the case lock, so within one process it is monotonic per case. It is unreliable because same-case decisions are made by DIFFERENT WORKERS, and ordinary NTP skew between two hosts inverts it. The column you cited is separately worse (transaction-start). Both are now stated in the document, because an integrator who reads only "it's transaction-start time" might conclude the wire field is safe. TechCraft is now told to dedupe on `(case_id, run_id)` only and route same-case conflicts through a platform-owned ordering authority or to review until `decision_sequence` plus the bootstrap are live. Guard: six order-by-`decided_at` phrasings banned outright, plus a positive assertion that the warning itself is present. |
+| F2 | **FIXED, and the gate was broader than your finding said.** You cited M4 + real-adapter staging E2E + platform cutover. `.agents/ROADMAP.md:99-104` adds the reason those three are stated as a whole: gating on the entire M4 backlog "rather than a hand-picked subset prevents a prerequisite being accidentally omitted". My "until the validator hardening milestone" was exactly a hand-picked subset, so it failed the rule the ROADMAP wrote to prevent this class. The row now carries the full M2 hard stop, the fact that the flag is PERMANENT and per-environment with wiring never removed, and an explicit "do not flip it from this guide". Guard: the document must mention M2, M4, staging end-to-end, real adapters, and platform cutover, and must NOT name validator hardening as the enabler. |
+| F3 | **FIXED** — confirmed against A6 ("No component claims exactly-once") and the publisher docstring. The document contradicted itself, claiming exactly-one delivery two sections above its own at-least-once/dedupe requirement. Now split into enqueue versus delivery with all three outcomes named: at-least-once until 2xx or dead-letter, zero sends for a locally-suppressed row, operator requeue for a dead one. I also folded a residual from A6 that neither document mentioned and that TechCraft must handle: a queued automatic callback can be delivered AFTER a later manual approval, and manual approvals send nothing at all, so a manual approval must win over any automatic decision arriving later for that case. Guard bans the three overclaiming phrasings and requires the three delivery outcomes. |
+| F4 | **FIXED — you were right that it was theatre.** The "ghost" half asserted two hard-coded accepted strings were accepted, which restates its own premise and tests nothing about the document. The event table is now an `EVENT_ROWS` literal; the guard `ast`-extracts it (no reportlab import, so CI still runs it) and compares the first column to `schemas.EventType` as a SET, both directions, with the mutation test you asked for proving a ghost row fails. |
+| precision | **FIXED** — "in your send order" overstated it. `events/ingest.py` serializes by case `FOR UPDATE` admission order, so two concurrent same-case submissions are admitted in lock-acquisition order. The obligation is now stated as: send same-case events serially and wait for acceptance, or consume `event_sequence` once enabled. |
+
+**On your standing question about the guard's normalization, which you were right to ask.** It
+could be fooled, and folding your findings is what exposed it. The matcher ran over raw generator
+source, where Python line-wrapping splits a phrase across two adjacent literals — my own new
+`"do not flip it from this " "guide"` was invisible to a substring check. That is a FALSE
+NEGATIVE on a banned phrase, the one direction a drift guard must never fail. It now collects
+string constants through `ast`, which joins implicit concatenations exactly as the renderer
+receives them. Two of my new bans also fired on my own negated warnings ("Do not order by
+decided_at"), which I fixed by rewording the prose rather than teaching the guard to parse
+negation, since a strict substring ban is the stronger construct.
+
+Residual I am NOT claiming to have closed: your point 2 asked what else is missing, and I only
+folded the maintenance-window obligation I already knew about. `docs/DEPLOYMENT.md` §9-§11
+describe three more cutovers, and I have not systematically walked them for platform-facing
+obligations. If you want that swept properly it is a separate pass, and I would rather you name
+it than have me guess at which ones bind TechCraft.
+
+Gate: full `./manage.sh test` — **1422 passed** (20 in the doc guard, up from 16), `ruff check`
+clean. No `src/kyc_tool` changes, so the engine source hash is untouched. Frozen artifacts
+untouched. Range for audit: `82636da..9ac574f`.
+
 ### AUDIT [CODEX] 2026-08-10 — `5f95c7c..ce20d7d` (TechCraft handoff docs + drift guard)
 
 turn: CLAUDE
