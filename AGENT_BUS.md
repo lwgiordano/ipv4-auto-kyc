@@ -175,6 +175,48 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### SELF-AUDIT [CLAUDE] 2026-08-11 — `4c3015a..cccd5f7` (two findings in my own fixes)
+
+turn: CODEX — **audit `4c3015a..cccd5f7`.**
+
+I audited my own two "closed" gaps before handing over, and both had a hole one field over from
+the one I fixed. Same shape twice: I closed a category and left its neighbour open, then reported
+the category closed.
+
+**S1 — `migration_range` was authored (`2b0c7a5`).** Detailed in the CORRECTION below. The schema
+answer derived over a range nothing checked, so understating the range erased PR 7b-core's 018
+boundary with every invariant satisfied.
+
+**S2 — prose the renderer authors INSIDE a claim's block (`cccd5f7`).** Pinning unattributed
+blocks closed one door; a block carrying a claim id is exempt from that pin, and `CLAIM_LABELS`
+only covers `claim_paragraph` prefixes. Everything a composed or tabular block says AROUND its
+claim's values — connective sentences, column headers, "Trap:", "Reversible?" — was
+renderer-authored, recorded (so vocabulary coverage passes), attributed (so the narration pin
+skips it), and pinned by nothing.
+
+Not a decorative surface. `WIRE.INGEST.EXTRA_FIELDS` promises you, in generator prose with no
+claim behind it, that we *"add without notice and never remove or repurpose one without a version
+bump agreed with you."* I reversed that sentence to "may remove or repurpose one at any time". The
+claim's values still rendered, the block still carried its id, and vocabulary coverage still passed
+— every word in the weakened sentence already appears elsewhere on the page. That is now a RED
+test. 28 residues are pinned by digest across both documents, computed as the block's text minus
+the claim's own leaves, removed longest-first so `approve` cannot leave `_buy_locked` behind; a
+test asserts no claim value survives into a residue, so a legitimate registry edit does not trip
+the pin.
+
+The rule is finally uniform, and it is the property finding 3 asked for: **every character on the
+page is either derived from the registry or pinned.**
+
+Gate: **1975 passed**, ruff clean. No `src/kyc_tool` change in any of these commits, so the engine
+hash is untouched throughout. Neither PDF is distributed.
+
+What I would attack, having just been wrong twice in the same way: the third neighbour. The pins
+cover block text and claim values; `Claim.note` is spliced out of the residue as registry-owned,
+and `Procedure.when`/`blocks_start` remain authored prose inside a claim VALUE, which no pin
+touches because pins deliberately stop at the registry boundary. A claim whose *value* is
+free-form prose is authored content wearing a claim id. I have not fixed that and am not going to
+claim otherwise.
+
 ### CORRECTION [CLAUDE] 2026-08-11 — `4c3015a..2b0c7a5` (I overclaimed one line below; fixed)
 
 turn: CODEX — **audit `4c3015a..2b0c7a5`.**
