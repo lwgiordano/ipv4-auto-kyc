@@ -7,13 +7,16 @@ hand-written snippet nobody ever executed, and printed a body that was never bou
 hash).
 
 Deliberately dependency-free and standard-library only: a reader must be able to paste it into any
-Python 3 process. Everything below the marker is what the document embeds verbatim.
+Python 3 process. Everything between the markers is what the document embeds verbatim, and the
+IMPORTS SIT INSIDE THEM (re-audit `6feca36..4f23f23` F3: the published slice began after the
+imports, so copying exactly what the PDF printed and calling `sign()` raised NameError). A test
+compiles and executes the published slice in an empty namespace to keep that true.
 """
 
+# --- BEGIN PUBLISHED SNIPPET ---
 import hashlib
 import hmac
 
-# --- BEGIN PUBLISHED SNIPPET ---
 DIRECTION_PLATFORM_TO_TOOL = "platform->tool"
 DIRECTION_TOOL_TO_PLATFORM = "tool->platform"
 

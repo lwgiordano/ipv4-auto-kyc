@@ -10,7 +10,14 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import (
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+    XPreformatted,
+)
 
 _styles = getSampleStyleSheet()
 H1 = ParagraphStyle("H1x", parent=_styles["Heading1"], fontSize=15, spaceBefore=16, spaceAfter=6,
@@ -71,7 +78,10 @@ class Doc:
         self.p(markup, WHY)
 
     def code(self, text: str):
-        self.story.append(Paragraph(escape(text).replace("\n", "<br/>"), CODE))
+        """Fixed-width block. Uses XPreformatted, not Paragraph: Paragraph collapses leading
+        whitespace, so published Python came out unindented and would not compile when copied off
+        the page (re-audit `6feca36..4f23f23` F3)."""
+        self.story.append(XPreformatted(escape(text), CODE))
 
     def space(self, height: float = 4):
         self.story.append(Spacer(1, height))

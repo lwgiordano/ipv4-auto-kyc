@@ -289,3 +289,73 @@ def test_mutation_reordered_cutover_prerequisite_is_detected():
                  for line in cutover.render_cutover(cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER)[1:]]
     assert documented == canonical
     assert swapped != canonical
+
+
+# ── re-audit `6feca36..4f23f23` F3: the published signer must actually be copyable ────────────────
+def test_published_slice_compiles_and_runs_in_an_empty_namespace():
+    """A reader copies exactly what the markers enclose and nothing else. Executing it must define
+    a working `sign` — the previous slice began AFTER `import hashlib, hmac`, so it raised
+    NameError on first call."""
+    namespace: dict = {}
+    exec(compile(published_snippet(), "<published-snippet>", "exec"), namespace)  # noqa: S102
+    v = WIRE.value("WIRE.SIGN.VECTOR")
+    produced = namespace["sign"](
+        v["secret"], key_id=v["key_id"], direction=v["direction"], method=v["method"],
+        path_qs=v["path_qs"], timestamp=v["timestamp"], slot=v["slot"], body=v["body"],
+    )
+    assert produced == v["signature"]
+
+
+def test_code_on_the_page_keeps_its_indentation(tmp_path):
+    """Paragraph collapsed leading whitespace, so the printed Python could not compile when copied
+    off the page. Rendered code must preserve the x-offset of nested lines."""
+    from docs.generators.render import Doc as _Doc
+
+    doc = _Doc(WIRE)
+    doc.code("def outer():\n    nested = 1\n    return nested")
+    path = str(tmp_path / "indent.pdf")
+    doc.build(path, "indent")
+    with pdfplumber.open(path) as pdf:
+        words = pdf.pages[0].extract_words()
+    offsets = {w["text"]: w["x0"] for w in words}
+    assert offsets["nested"] > offsets["def"], "nested code lost its indentation on the page"
+
+
+def test_page_indentation_structure_matches_the_compilable_source(tmp_path):
+    """The page must carry the SAME indentation structure as the source that compiles.
+
+    Asserted on glyph x-offsets rather than by compiling extracted text: `extract_text()` drops
+    leading whitespace outright, and `layout=True` quantizes columns, so compiling either output
+    would be a test of pdfplumber rather than of the document. Distinct source indent levels must
+    appear as distinct, correspondingly ordered x-offsets on the page."""
+    path = str(tmp_path / "contract.pdf")
+    contract_gen.build().build(path, "t")
+
+    # rebuild rendered LINES (grouped by vertical position), not loose words: the same token
+    # appears elsewhere in the document, so matching by word text alone reads x-offsets from
+    # unrelated paragraphs
+    rendered: list[tuple[float, str]] = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            lines: dict[float, list] = {}
+            for word in page.extract_words():
+                lines.setdefault(round(word["top"], 1), []).append(word)
+            for top in sorted(lines):
+                row = sorted(lines[top], key=lambda w: w["x0"])
+                rendered.append((row[0]["x0"], " ".join(w["text"] for w in row)))
+
+    start = next(i for i, (_x, text) in enumerate(rendered) if text.startswith("import hashlib"))
+    block = rendered[start : start + len([ln for ln in published_snippet().splitlines() if ln.strip()])]
+
+    # map each rendered line back to its source line's indent, in order
+    source_lines = [ln for ln in published_snippet().splitlines() if ln.strip()]
+    by_indent: dict[int, list[float]] = {}
+    for source, (x0, _text) in zip(source_lines, block, strict=False):
+        by_indent.setdefault(len(source) - len(source.lstrip()), []).append(x0)
+
+    levels = sorted(by_indent)
+    assert len(levels) >= 2, "the snippet has no nesting to prove"
+    for shallower, deeper in zip(levels, levels[1:], strict=False):
+        assert min(by_indent[deeper]) > min(by_indent[shallower]), (
+            f"source indent {deeper} does not render right of indent {shallower}"
+        )

@@ -72,9 +72,17 @@ def _inbound_v1_zero(session_factory, window_days: int, now: datetime) -> bool:
 
 
 def _inbound_secret(settings: Settings, key_id: str) -> str:
+    """Resolve the v2 verification secret for a presented key id. FAILS CLOSED to '' on any
+    malformed rotation mapping (re-audit `6feca36..4f23f23` F2): an unvalidated
+    `model_copy(update={...: None})` used to raise AttributeError here, turning a signature check
+    into a 500 instead of a controlled 401."""
     if key_id and key_id == settings.hmac_inbound_key_id:
         return settings.hmac_inbound_secret
-    return settings.hmac_inbound_extra_keys.get(key_id, "")
+    extra = settings.hmac_inbound_extra_keys
+    if not isinstance(extra, dict):
+        return ""
+    secret = extra.get(key_id, "")
+    return secret if isinstance(secret, str) else ""
 
 
 def _session_factory(request):

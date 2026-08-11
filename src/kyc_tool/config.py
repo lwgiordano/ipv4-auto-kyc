@@ -377,7 +377,14 @@ def adapter_rate_violations(rates) -> list[str]:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="KYC_", env_file=".env", extra="ignore")
+    # hide_input_in_errors (re-audit `6feca36..4f23f23` F1): this class holds HMAC secrets, and
+    # Pydantic otherwise embeds the rejected `input_value` in ValidationError text. A deployment
+    # typo in a rotation key id therefore printed a WORKING 32-character credential into startup
+    # logs, CI output, and any incident transcript that captured the boot failure. Field names and
+    # our own violation messages carry key ids only, never secret material.
+    model_config = SettingsConfigDict(
+        env_prefix="KYC_", env_file=".env", extra="ignore", hide_input_in_errors=True
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -677,6 +684,10 @@ def production_config_violations(settings: Settings) -> list[str]:
     # an empty key id — authenticated real requests while the kill switch stayed green). Re-checked
     # HERE as well as at construction because an unvalidated model_copy(update=...) bypasses the
     # field validator.
+    # Both key ids go through the same total grammar (F2): a non-str or whitespace-only active id
+    # previously crashed this function or booted clean.
+    v.extend(hmac_key_id_violations(settings.hmac_inbound_key_id, "hmac_inbound_key_id"))
+    v.extend(hmac_key_id_violations(settings.hmac_outbound_key_id, "hmac_outbound_key_id"))
     v.extend(hmac_extra_key_violations(settings.hmac_inbound_extra_keys, settings.hmac_inbound_key_id))
     for label, iso in (
         ("inbound", settings.hmac_v1_inbound_sunset_at),
@@ -767,7 +778,30 @@ class ProcessRole(StrEnum):
     DEV_WORKER = "dev_worker"
 
 
-def hmac_extra_key_violations(extra: object, active_key_id: str) -> list[str]:
+_KEY_ID_MAX_LEN = 128
+
+
+def hmac_key_id_violations(key_id: object, label: str) -> list[str]:
+    """One TOTAL grammar for every HMAC key id, active or rotation (re-audit `6feca36..4f23f23`
+    F2). Takes `object`, not `str`: `model_copy(update=...)` skips Pydantic, so the boundary
+    receives whatever the caller passed and must return violations rather than raise. A key id is
+    matched verbatim against the X-KYC-Key-Id header, so it must be a non-blank, untrimmed,
+    bounded, printable-ASCII string."""
+    if not isinstance(key_id, str):
+        return [f"{label} must be a string, got {type(key_id).__name__}"]
+    if not key_id.strip():
+        return [f"{label} is blank/whitespace"]
+    problems = []
+    if key_id != key_id.strip():
+        problems.append(f"{label} has surrounding whitespace; the header is compared verbatim")
+    if len(key_id) > _KEY_ID_MAX_LEN:
+        problems.append(f"{label} exceeds {_KEY_ID_MAX_LEN} characters")
+    if any(not (32 <= ord(ch) < 127) for ch in key_id):
+        problems.append(f"{label} contains control or non-ASCII characters")
+    return problems
+
+
+def hmac_extra_key_violations(extra: object, active_key_id: object) -> list[str]:
     """Every rotation key must clear the SAME floor as the active key (re-audit
     `82636da..9ac574f` F1). `api/auth._inbound_secret` resolves a v2 verification secret out of
     this mapping, so a weak or blank-keyed entry is a live authentication credential, not
@@ -776,12 +810,20 @@ def hmac_extra_key_violations(extra: object, active_key_id: str) -> list[str]:
     Checked in BOTH layers: the field validator refuses at construction, and
     `production_config_violations` re-checks so an unvalidated `model_copy(update=...)` cannot
     slip a mapping past the boundary."""
-    if extra is None or extra == {}:
+    # ONLY {} is the empty map. `None` used to short-circuit here as "safe", but
+    # `_inbound_secret` then called `.get` on it and raised AttributeError inside signature
+    # verification — a clean boot followed by a 500 on an authenticated request
+    # (re-audit `6feca36..4f23f23` F2).
+    if extra == {}:
         return []
     if not isinstance(extra, dict):
-        return [f"hmac_inbound_extra_keys must be a mapping of key_id -> secret, got {type(extra).__name__}"]
+        return [
+            "hmac_inbound_extra_keys must be a mapping of key_id -> secret ({} when unused), got "
+            f"{type(extra).__name__}"
+        ]
     problems: list[str] = []
     seen: dict[str, str] = {}
+    active_trimmed = active_key_id.strip() if isinstance(active_key_id, str) else None
     for key_id, secret in extra.items():
         if not isinstance(key_id, str) or not isinstance(secret, str):
             problems.append(
@@ -789,19 +831,16 @@ def hmac_extra_key_violations(extra: object, active_key_id: str) -> list[str]:
                 f"(got {type(key_id).__name__} -> {type(secret).__name__})"
             )
             continue
-        trimmed = key_id.strip()
-        if not trimmed:
+        id_problems = hmac_key_id_violations(key_id, f"hmac_inbound_extra_keys key_id {key_id!r}")
+        if any("blank" in p for p in id_problems):
             problems.append(
                 "hmac_inbound_extra_keys has a blank/whitespace key_id — an empty X-KYC-Key-Id "
                 "header would resolve to its secret"
             )
             continue
-        if trimmed != key_id:
-            problems.append(
-                f"hmac_inbound_extra_keys key_id {key_id!r} has surrounding whitespace; the header "
-                "is compared verbatim, so this entry can never match"
-            )
-        if trimmed == (active_key_id or "").strip():
+        problems.extend(id_problems)
+        trimmed = key_id.strip()
+        if active_trimmed is not None and trimmed == active_trimmed:
             problems.append(
                 f"hmac_inbound_extra_keys key_id {trimmed!r} collides with the ACTIVE inbound "
                 "key_id; the active secret wins and this rotation entry is silently dead"
