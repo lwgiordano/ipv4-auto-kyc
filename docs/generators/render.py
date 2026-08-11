@@ -27,6 +27,8 @@ from reportlab.platypus import (
     XPreformatted,
 )
 
+from docs.contracts import projection
+
 _styles = getSampleStyleSheet()
 H1 = ParagraphStyle("H1x", parent=_styles["Heading1"], fontSize=15, spaceBefore=16, spaceAfter=6,
                     textColor=colors.HexColor("#1a1a2e"))
@@ -236,6 +238,11 @@ class Block:
     lines: tuple[str, ...]
     rows: tuple[tuple[str, ...], ...] = ()  # tables only, header row first
     role: str = "value"  # "value" | "note" — a note is attributed but is not the claim's value
+    # The named projection this block was rendered under. The rendering tests recompute the
+    # expected content from the REGISTRY through `docs.contracts.projection` using this name, so
+    # the renderer never supplies the answer it is checked against (finding 3).
+    projection: str = ""
+    row_fields: tuple[str, ...] = ()
 
 
 @dataclass
@@ -354,12 +361,13 @@ class Doc:
         claim's VALUE for coverage purposes, so it carries role="note".
         """
         claim = self.registry[claim_id]
-        if not claim.note.strip():
-            raise ValueError(f"{claim_id} has no note to render")
-        self.story.append(Paragraph(escape(claim.note), style))
-        self._add(Block(kind="prose", claim_id=claim_id, lines=(claim.note,), role="note"))
+        lines = projection.expected_lines(claim, projection.NOTE)
+        self.story.append(Paragraph(escape(lines[0]), style))
+        self._add(Block(kind="prose", claim_id=claim_id, lines=lines, role="note",
+                        projection=projection.NOTE))
 
-    def _emit(self, claim_id: str, flowables: list, lines, *, kind: str = "prose", rows=()):
+    def _emit(self, claim_id: str, flowables: list, lines, *, kind: str = "prose", rows=(),
+              projection_name: str = "", row_fields: tuple[str, ...] = ()):
         """Append the flowables, record the claim, and record EXACTLY what went on the page.
 
         `lines` is not decoration. Recording an id proves a call happened; recording the visible
@@ -374,7 +382,8 @@ class Doc:
             raise ValueError(f"{claim_id} produced a flowable with no visible text")
         self.story.extend(flowables)
         self.rendered.append(claim_id)
-        self._add(Block(kind=kind, claim_id=claim_id, lines=lines, rows=tuple(rows)))
+        self._add(Block(kind=kind, claim_id=claim_id, lines=lines, rows=tuple(rows),
+                        projection=projection_name, row_fields=row_fields))
         return claim
 
     def claim_paragraph(self, claim_id: str, *, style=BODY, prefix: str = ""):
@@ -385,30 +394,25 @@ class Doc:
         parentheses included, in a document written for people implementing against it.
         """
         claim = self.registry[claim_id]
-        if not isinstance(claim.value, (str, int, float)):
-            raise TypeError(
-                f"{claim_id} holds {type(claim.value).__name__}; rendering it here would publish "
-                f"its Python repr. Use claim_bullets, claim_code, claim_table, or claim_prose."
-            )
-        markup = prefix + escape(claim.value)
-        self._emit(claim_id, [Paragraph(markup, style)], (visible_text(markup),))
+        (line,) = projection.expected_lines(claim, projection.PARAGRAPH)
+        markup = prefix + escape(line)
+        self._emit(claim_id, [Paragraph(markup, style)], (line,),
+                   projection_name=projection.PARAGRAPH)
 
     def claim_bullets(self, claim_id: str, *, style=BODY):
         """Render a claim whose value is a sequence of strings, one paragraph each."""
         claim = self.registry[claim_id]
-        self._emit(
-            claim_id,
-            [Paragraph("\u2013  " + escape(i), style) for i in claim.value],
-            tuple(str(i) for i in claim.value),
-        )
+        lines = projection.expected_lines(claim, projection.BULLETS)
+        self._emit(claim_id, [Paragraph("\u2013  " + escape(line), style) for line in lines],
+                   lines, projection_name=projection.BULLETS)
 
     def _with_heading(self, claim_id: str, heading: str | None, blocks: list, lines, *,
-                      kind: str = "prose"):
+                      kind: str = "prose", projection_name: str = ""):
         if heading:
             self._emit(claim_id, [KeepTogether([Paragraph(escape(heading), H2), *blocks])],
-                       (heading, *lines), kind=kind)
+                       (heading, *lines), kind=kind, projection_name=projection_name)
         else:
-            self._emit(claim_id, blocks, lines, kind=kind)
+            self._emit(claim_id, blocks, lines, kind=kind, projection_name=projection_name)
 
     def claim_steps(self, claim_id: str, *, heading: str | None = None):
         """Render an ORDERED claim as numbered, WRAPPING paragraphs, kept with its heading.
@@ -417,18 +421,28 @@ class Doc:
         block runs the longest one straight off the page (see `_guard_preformatted`).
         """
         claim = self.registry[claim_id]
-        self._with_heading(
-            claim_id, heading,
-            [Paragraph(f"{n}.  {escape(step)}", STEP) for n, step in enumerate(claim.value, 1)],
-            tuple(f"{n}. {step}" for n, step in enumerate(claim.value, 1)),
-        )
+        lines = projection.expected_lines(claim, projection.STEPS)
+        self._with_heading(claim_id, heading,
+                           [Paragraph(escape(line).replace(". ", ".  ", 1), STEP) for line in lines],
+                           lines, projection_name=projection.STEPS)
 
-    def claim_code(self, claim_id: str, *, heading: str | None = None):
-        """Render a claim whose value is a sequence of literals as a fixed-width block."""
+    def claim_code(self, claim_id: str, *, heading: str | None = None, numbered: bool = False,
+                   lead: str | None = None):
+        """Render a claim whose value is a sequence of literals as a fixed-width block.
+
+        `numbered` uses the NUMBERED_CODE projection, so the numbering comes from the registry
+        rather than from an f-string in the caller (finding 3): the canonical signing block was
+        numbered by the generator, which meant the generator authored the very lines the page was
+        checked against.
+        """
         claim = self.registry[claim_id]
-        block = XPreformatted(_guard_preformatted("\n".join(escape(v) for v in claim.value)), CODE)
-        self._with_heading(claim_id, heading, [block], tuple(str(v) for v in claim.value),
-                           kind="code")
+        name = projection.NUMBERED_CODE if numbered else projection.CODE
+        lines = projection.expected_lines(claim, name)
+        block = XPreformatted(_guard_preformatted("\n".join(escape(v) for v in lines)), CODE)
+        flowables = [Paragraph(lead, BODY), block] if lead else [block]
+        self._with_heading(claim_id, heading, flowables,
+                           ((visible_text(lead),) + lines) if lead else lines,
+                           kind="code", projection_name=name)
 
     def claim_prose(self, claim_id: str, markup: str, *, style=BODY):
         """Render a claim as prose the caller composed FROM that claim's value.
@@ -437,11 +451,12 @@ class Doc:
         the other half — they assert the claim's own value reaches the extracted page text, so
         composing a paragraph that omits or contradicts the value fails there.
         """
-        self._emit(claim_id, [Paragraph(markup, style)], (visible_text(markup),))
+        self._emit(claim_id, [Paragraph(markup, style)], (visible_text(markup),),
+                   projection_name=projection.COMPOSED)
 
     _PART_STYLES = {"p": BODY, "why": WHY}
 
-    def claim_mixed(self, claim_id: str, parts):
+    def claim_mixed(self, claim_id: str, parts, *, published_fields: tuple[str, ...] = ()):
         """Render one claim that needs several flowables — prose, then a code block, then more.
 
         `parts` is a sequence of (kind, text) pairs where kind is "p", "why", "code" (fixed-width,
@@ -472,14 +487,16 @@ class Doc:
         for kind, text in parts:
             lines.extend(
                 (text if kind in ("code", "atomic_code", "wrap") else visible_text(text)).split("\n"))
-        self._emit(claim_id, flowables, tuple(lines))
+        self._emit(claim_id, flowables, tuple(lines), projection_name=projection.COMPOSED,
+                   row_fields=published_fields)
 
     def claim_alert(self, claim_id: str):
         """A blocked claim, rendered where a reader would otherwise act on the document."""
         claim = self.registry[claim_id]
-        body = "<br/>".join("\u2013  " + escape(item) for item in claim.value)
-        self._emit(claim_id, [Paragraph(body, ALERT)], tuple(str(i) for i in claim.value),
-                   kind="alert")
+        lines = projection.expected_lines(claim, projection.ALERT)
+        body = "<br/>".join("\u2013  " + escape(line) for line in lines)
+        self._emit(claim_id, [Paragraph(body, ALERT)], lines, kind="alert",
+                   projection_name=projection.ALERT)
 
     def claim_table(
         self,
@@ -489,6 +506,7 @@ class Doc:
         rows=None,
         heading: str | None = None,
         code_columns: tuple[int, ...] = (),
+        row_fields: tuple[str, ...] = (),
     ):
         """Render a claim whose value is a sequence of row tuples.
 
@@ -499,8 +517,13 @@ class Doc:
         (re-audit `6feca36..4f23f23` F10).
         """
         claim = self.registry[claim_id]
+        # TABLE projects the claim's own rows; COMPOSED means the caller assembled them and the
+        # test instead requires every leaf of the claim's value to appear somewhere in the table.
+        name = projection.COMPOSED if rows is not None else projection.TABLE
+        if name == projection.TABLE:
+            rows = projection.expected_rows(claim, projection.TABLE, row_fields)
         data = [[Paragraph(escape(h), CELLB) for h in headers]]
-        for row in rows if rows is not None else claim.value:
+        for row in rows:
             data.append(
                 [
                     _token_cell(cell, widths[index])
@@ -515,12 +538,10 @@ class Doc:
         lines = (heading,) if heading else ()
         if heading:
             flowables = [KeepTogether([Paragraph(escape(heading), H2), table])]
-        body_rows = tuple(
-            tuple(str(cell) for cell in row)
-            for row in (rows if rows is not None else claim.value)
-        )
+        body_rows = tuple(tuple(str(cell) for cell in row) for row in rows)
         self._emit(claim_id, flowables, lines, kind="table",
-                   rows=((tuple(headers),) + body_rows))
+                   rows=((tuple(headers),) + body_rows),
+                   projection_name=name, row_fields=row_fields)
 
     def table(self, headers: tuple[str, ...], rows, widths, code_columns: tuple[int, ...] = ()):
         """A table whose cells are already formatted from claims recorded elsewhere."""

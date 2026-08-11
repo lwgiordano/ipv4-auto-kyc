@@ -21,6 +21,7 @@ from collections import Counter
 
 import pdfplumber
 import pytest
+from docs.contracts import projection
 from docs.contracts.operations import OPERATIONS
 from docs.contracts.wire import WIRE
 from docs.generators import techcraft_deployment_guide as deploy_gen
@@ -40,6 +41,28 @@ def _flat(text: str) -> str:
     return " ".join(str(text).split())
 
 
+def _normalize(text: str) -> str:
+    """Casefolded, alphanumerics only. Tolerates a caller reformatting a leaf for display without
+    tolerating its absence."""
+    return re.sub(r"[^a-z0-9]", "", str(text).casefold())
+
+
+def _expected_block_lines(doc, block) -> tuple[str, ...]:
+    """What this block must display, taken from the REGISTRY wherever the registry owns it.
+
+    Trusting `block.lines` meant trusting the renderer's own account of what it drew (re-audit
+    `4f23f23..122cc67` finding 3). For every projection the registry can compute, the expectation
+    comes from `docs.contracts.projection` instead; only structural prose and caller-composed
+    sentences fall back to the recorded lines, and those are covered by the leaf check.
+    """
+    if block.claim_id and block.projection and block.projection not in (
+            projection.COMPOSED, projection.TABLE):
+        derived = projection.expected_lines(doc.registry[block.claim_id], block.projection)
+        extra = [line for line in block.lines if line not in derived]
+        return (*extra, *derived) if block.lines and extra else derived
+    return block.lines
+
+
 def _verify_page_matches_model(doc, page: str) -> None:
     """Every block line, on the page, at or after the block before it.
 
@@ -51,10 +74,16 @@ def _verify_page_matches_model(doc, page: str) -> None:
     for block in doc.blocks:
         if block.kind == "table":
             continue  # tables are read cell-wise; extract_text interleaves their columns
-        for line in block.lines:
+        for line in _expected_block_lines(doc, block):
             needle = _flat(line)
-            if len(needle) < 12:
-                continue  # too short to locate unambiguously; carried by its neighbours
+            # Registry-derived lines are located in ORDER from the running cursor, so even a short
+            # one is unambiguous — it must appear after the line before it, not merely somewhere.
+            # Codex removed the visible "1. v2" from the canonical block and every check passed,
+            # because "v2" occurs elsewhere on the page and a length threshold skipped it.
+            floor = 3 if block.claim_id and block.projection not in (
+                projection.COMPOSED, projection.TABLE, "") else 12
+            if len(needle) < floor:
+                continue
             found = page.find(needle, cursor)
             if found < 0 and "".join(needle.split()) in squashed:
                 # Content that wraps MID-TOKEN by design — the 163-byte signed body, a hex digest
@@ -381,3 +410,125 @@ def test_no_section_id_is_reused():
         ids = [s.section_id for s in doc.sections]
         assert len(ids) == len(set(ids)), ids
         assert re.match(r"^[a-z0-9()_ -]+$", "".join(ids))
+
+
+# ── the oracle is the REGISTRY, not the renderer ─────────────────────────────────────────────────
+def test_the_page_matches_content_recomputed_from_the_registry(rendered):
+    """Re-audit `4f23f23..122cc67` finding 3. The previous comparison used `block.lines` — the
+    lines the RENDERER had just computed — so editing `claim_paragraph` to display something other
+    than its claim changed the page and the expectation together and the suite stayed green.
+
+    Here the expected content is recomputed FROM THE CLAIM through `docs.contracts.projection`,
+    which the renderer does not author. A renderer that displays anything else is compared against
+    what the claim actually says.
+    """
+    _generator, registry, doc, page, tables = rendered
+    squashed = "".join(page.split())
+
+    for block in doc.blocks:
+        if block.claim_id is None:
+            continue
+        claim = registry[block.claim_id]
+
+        if block.projection == projection.COMPOSED:
+            # The caller wrote the sentence, but every leaf the claim owns must still be printed.
+            # Compared NORMALIZED — casefolded with punctuation removed — because a caller
+            # legitimately reformats a leaf on its way to the page (`job_max_attempts` is printed
+            # as the environment variable `KYC_JOB_MAX_ATTEMPTS`). Omission and contradiction are
+            # still caught; only presentation is tolerated.
+            haystack = _normalize(page)
+            if block.kind == "table":
+                haystack = _normalize(" ".join(
+                    cell for table in tables for row in table for cell in row))
+            for leaf in projection.leaf_strings(claim.value, block.row_fields):
+                needle = _normalize(leaf)
+                if len(needle) < 4:
+                    continue
+                assert needle in haystack, (
+                    f"{block.claim_id}: the page omits a value the claim carries: {leaf[:70]!r}")
+            continue
+
+        if block.projection == projection.TABLE:
+            wanted = projection.expected_rows(claim, projection.TABLE, block.row_fields)
+            header = [_flat(cell) for cell in block.rows[0]]
+            candidates = [t for t in tables if t and t[0] == header]
+            assert candidates, f"{block.claim_id}: no rendered table with header {header}"
+            cells = {cell for table in candidates for row in table for cell in row}
+            for row in wanted:
+                for cell in row:
+                    needle = _flat(cell)
+                    if len(needle) < 12:
+                        continue
+                    assert any(needle == seen or needle.replace(",", "") == seen.replace(",", "")
+                               for seen in cells), (
+                        f"{block.claim_id}: recomputed cell not on the page: {needle[:60]!r}")
+            continue
+
+        wanted = projection.expected_lines(claim, block.projection)
+        assert wanted, f"{block.claim_id}: projection {block.projection!r} produced nothing"
+        for line in wanted:
+            needle = _flat(line)
+            if len(needle) < 4:
+                continue
+            assert needle in page or "".join(needle.split()) in squashed, (
+                f"{block.claim_id}: recomputed line not on the page: {needle[:70]!r}")
+
+
+def test_the_renderer_cannot_author_the_expectation(rendered):
+    """Guard the guard: the recorded block lines must EQUAL what the registry projection says, so
+    the two halves cannot quietly diverge and leave the test above checking the renderer's own
+    answer."""
+    _generator, registry, doc, _page, _tables = rendered
+    for block in doc.blocks:
+        if block.claim_id is None or block.projection in (projection.COMPOSED, projection.TABLE):
+            continue
+        wanted = projection.expected_lines(registry[block.claim_id], block.projection)
+        recorded = tuple(line for line in block.lines if line in wanted)
+        assert set(wanted) <= set(block.lines), (
+            f"{block.claim_id}: recorded {recorded} but the registry projects {wanted}")
+
+
+@pytest.mark.parametrize(
+    ("claim_id", "registry", "generator", "lie"),
+    [
+        ("WIRE.ORDERING.NO_DECIDED_AT", WIRE, contract_gen,
+         "decided_at is the ordering key; sort by it."),
+        ("OPS.PROCESS.DEV_WORKER_BANNED", OPERATIONS, deploy_gen,
+         "dev_worker is fine in production."),
+    ],
+    ids=["contract", "guide"],
+)
+def test_a_renderer_that_displays_something_other_than_the_claim_fails(
+        claim_id, registry, generator, lie, tmp_path, monkeypatch):
+    """The exact mutation: make the renderer print a lie in place of the claim's value. The page
+    and the renderer's own record change together — and the registry-derived expectation does
+    not, so it fails."""
+    from docs.generators import render as render_module
+
+    original = render_module.Doc.claim_paragraph
+
+    def lying_claim_paragraph(self, cid, *, style=render_module.BODY, prefix=""):
+        if cid != claim_id:
+            return original(self, cid, style=style, prefix=prefix)
+        from docs.generators.render import Block, Paragraph, escape
+
+        self.story.append(Paragraph(prefix + escape(lie), style))
+        self.rendered.append(cid)
+        self._add(Block(kind="prose", claim_id=cid, lines=(lie,),
+                        projection=projection.PARAGRAPH))
+        return None
+
+    monkeypatch.setattr(render_module.Doc, "claim_paragraph", lying_claim_paragraph)
+    doc = _build(generator)
+    path = str(tmp_path / "lie.pdf")
+    doc.build(path, "lie")
+    page = body_text(path)
+
+    wanted = projection.expected_lines(registry[claim_id], projection.PARAGRAPH)[0]
+    assert _flat(wanted) not in page, "the mutation did not actually remove the claim's text"
+    with pytest.raises(AssertionError):
+        for block in doc.blocks:
+            if block.claim_id != claim_id:
+                continue
+            for line in projection.expected_lines(registry[block.claim_id], block.projection):
+                assert _flat(line) in page, f"{block.claim_id}: recomputed line not on the page"

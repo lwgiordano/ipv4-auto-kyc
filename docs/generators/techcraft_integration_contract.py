@@ -134,6 +134,8 @@ def build(*, contact: str, due_date: str) -> Doc:
         [0.35 * INCH, 0.8 * INCH, 2.4 * INCH, 1.3 * INCH, 1.85 * INCH],
         rows=[(i.obligation, i.owner, i.question, i.answer_type, i.blocks)
               for i in WIRE.value("WIRE.ORDERING.PENDING_INPUTS")],
+        # `authority` is the internal spec reference; it is checked, not printed.
+        row_fields=("obligation", "owner", "question", "answer_type", "blocks"),
     )
     doc.claim_note("WIRE.ORDERING.PENDING_INPUTS")
     doc.p(
@@ -276,6 +278,9 @@ def build(*, contact: str, due_date: str) -> Doc:
         [0.6 * INCH, 1.85 * INCH, 1.2 * INCH, 1.15 * INCH, 2.15 * INCH],
         rows=[(t.phase, t.condition, t.record, t.effective, t.why)
               for t in WIRE.value("WIRE.CALLBACK.EFFECTIVENESS")],
+        # the booleans are the machine-checkable mirror of `record`/`effective`; the prose is what
+        # the reader gets, and a test asserts the two halves agree
+        row_fields=("phase", "condition", "record", "effective", "why"),
     )
 
     doc.h2("Timing")
@@ -295,15 +300,14 @@ def build(*, contact: str, due_date: str) -> Doc:
     # ── 4. signing ─────────────────────────────────────────────────────────────────────────────
     doc.section("signing", "4. Request signing (HMAC v2)")
     canonical = WIRE.value("WIRE.SIGN.CANONICAL")
-    doc.claim_mixed(
+    # Numbered by the REGISTRY projection, not by an f-string here: the generator numbering its
+    # own lines meant the generator authored the very content the page was checked against
+    # (re-audit `4f23f23..122cc67` finding 3).
+    doc.claim_code(
         "WIRE.SIGN.CANONICAL",
-        [
-            (
-                "p",
-                f"Signature = hex HMAC-SHA256 over these {len(canonical)} lines, LF-joined, in this order:",
-            ),
-            ("code", "\n".join(f"{n}. {line}" for n, line in enumerate(canonical, 1))),
-        ],
+        numbered=True,
+        lead=f"Signature = hex HMAC-SHA256 over these {len(canonical)} lines, LF-joined, in "
+             "this order:",
     )
     directions = WIRE["WIRE.SIGN.DIRECTIONS"]
     doc.claim_prose(

@@ -139,7 +139,9 @@ def build() -> Doc:
         parts.append(("why", "<b>Rolling back:</b> " + "  ".join(
             f"({n}) {escape(fact)}" for n, fact in enumerate(procedure.rollback, 1))))
         parts.append(("why", f"<b>Playbook:</b> {escape(procedure.playbook)}"))
-    doc.claim_mixed("OPS.CUTOVER.PROCEDURES", parts)
+    # playbook_digest is checked, not printed: it is the reviewed-body hash.
+    doc.claim_mixed("OPS.CUTOVER.PROCEDURES", parts, published_fields=(
+        "name", "when", "blocks_start", "irreversible", "rollback", "playbook"))
 
     doc.claim_steps("OPS.CUTOVER.OUTBOX_CEILING", heading="Changing the outbox attempt ceiling")
     doc.claim_note("OPS.CUTOVER.OUTBOX_CEILING")
