@@ -816,3 +816,181 @@ def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatc
     with pytest.raises(AssertionError, match="does not"):
         test_the_page_uses_no_vocabulary_the_model_does_not_carry(
             (deploy_gen, OPERATIONS, doc, page, []))
+
+
+# ── prose the renderer authors INSIDE a claim's block ─────────────────────────────────────────
+#
+# Self-audit of the two commits above. Pinning unattributed BLOCKS closed one door and left the
+# adjacent one open: a block that carries a claim id is exempt from the narration pin, and
+# `CLAIM_LABELS` only covers `claim_paragraph` prefixes. Everything a composed or tabular block
+# says AROUND its claim's values — connective sentences, column headers, "Trap:", "Reversible?" —
+# was renderer-authored, recorded (so the vocabulary check passes), attributed (so the narration
+# pin skips it), and pinned by nothing.
+#
+# That is not a decorative surface. `WIRE.INGEST.EXTRA_FIELDS` promises a counterparty in prose
+# that we "add without notice and never remove or repurpose one without a version bump agreed with
+# you" — a binding forward-compatibility commitment with no claim behind it.
+#
+# So the rule becomes uniform, and it is the span-equality property finding 3 actually asked for:
+# EVERY character on the page is either derived from the registry or pinned here.
+
+RENDERER_PROSE = {
+    # ── contract ──────────────────────────────────────────────────────────────────────────────
+    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 0): ("3b14b4a6307e5905", "024 asks table headers"),
+    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 1): ("ad480536ddc86b84",
+                                                      "what 024 cannot be built without"),
+    ("contract", "WIRE.INGEST.HEADERS", 0): ("9e9d62e11f51e35c", "header table headers + why column"),
+    ("contract", "WIRE.INGEST.EXTRA_FIELDS", 0): ("3dbd54f03ecebb08",
+                                                  "the forward-compatibility commitment: we add "
+                                                  "without notice, never remove or repurpose "
+                                                  "without an agreed version bump"),
+    ("contract", "WIRE.ACTOR.SENSITIVE", 0): ("841eed537d25b0f4",
+                                              "actor.type/actor.id equality rule and its trap"),
+    ("contract", "WIRE.EVENT.TABLE", 0): ("a2d3ac04ae2bfc2e", "event table headers"),
+    ("contract", "WIRE.INGEST.STATUS", 0): ("482149e6396f9a45", "status table headers"),
+    ("contract", "WIRE.CALLBACK.FIELDS", 0): ("fd2b8fddb0219846", "required body fields lead-in"),
+    ("contract", "WIRE.CALLBACK.DECISIONS", 0): ("efd06031f9154b80", "decision enumeration lead-in"),
+    ("contract", "WIRE.CALLBACK.GATES", 0): ("60ff773c179a76ed", "gates enumeration lead-in"),
+    ("contract", "WIRE.CALLBACK.OPTIONAL_FIELDS", 0): ("febe3f9a74da208d",
+                                                       "tolerate and preserve; which decision "
+                                                       "stays authoritative under the hold"),
+    ("contract", "WIRE.CALLBACK.EFFECTIVENESS", 0): ("ba7c70bdb4a16c5c",
+                                                     "acknowledging vs applying a callback"),
+    ("contract", "WIRE.CALLBACK.EFFECTIVENESS", 1): ("116c95cbf7ad7f0d",
+                                                     "transition table headers"),
+    ("contract", "WIRE.CALLBACK.RETRY", 0): ("e07949a7ee8f8121",
+                                             "retry schedule lead-in and totals"),
+    ("contract", "WIRE.SIGN.CANONICAL", 0): ("44258b84c7d9f360", "canonical-string lead-in"),
+    ("contract", "WIRE.SIGN.DIRECTIONS", 0): ("689f7fa5982d3d68",
+                                              "direction tokens are literals; prose will not "
+                                              "verify; what slot and path?query are"),
+    ("contract", "WIRE.SIGN.COMPANION", 0): ("62bed443d66d463f", "companion filename + sha256 line"),
+    ("contract", "WIRE.SIGN.VECTOR", 0): ("723d2cc6883b5453", "worked vector lead-in"),
+    ("contract", "WIRE.RETENTION.BY_KIND", 0): ("c5357842f39273b0", "retention table headers"),
+    # ── guide ─────────────────────────────────────────────────────────────────────────────────
+    ("guide", "OPS.PROCESS.COMMANDS", 0): ("2cea52c0e7fb495d", "process table headers"),
+    ("guide", "OPS.INFRA.COMPONENTS", 0): ("de69ec6459140a78", "infrastructure table headers"),
+    ("guide", "OPS.CONFIG.DEFAULTS", 0): ("edfd8a6f27a9d8c4",
+                                          "settings table headers and the KYC_ variable names"),
+    ("guide", "OPS.CONFIG.HMAC_SET", 0): ("eeead37d4b6834fd", "the HMAC set lead-in"),
+    ("guide", "OPS.HEALTH.PROBES", 0): ("7655d03e90ea7729", "health table headers"),
+    ("guide", "OPS.CUTOVER.PROCEDURES", 0): ("b6f317eecb3c7300",
+                                             "per-procedure framing: what must be true before "
+                                             "you start, Reversible?, Rolling back, Playbook"),
+    ("guide", "OPS.CUTOVER.OUTBOX_CEILING", 0): ("1193b2813e8d6c5b", "ceiling cutover heading"),
+    ("guide", "OPS.HMAC.ROLLOUT_ORDER", 0): ("b533fa723b3b1f48", "rollout order heading"),
+}
+
+# Below this, a block's residue is separators and numbering rather than words.
+CONNECTIVE_FLOOR = 6
+
+
+def _connective_text(block, claim) -> str:
+    """What the block draws, minus everything the CLAIM supplies.
+
+    Longest leaf first: `approve` is a substring of `approve_buy_locked`, and removing the short
+    one first would leave `_buy_locked` behind and make the residue depend on iteration order.
+    """
+    parts = list(block.lines)
+    for row in block.rows:
+        parts.extend(row)
+    text = "\n".join(parts)
+    leaves = sorted(
+        (leaf for leaf in projection.leaf_strings(claim.value, block.row_fields) if leaf),
+        key=len, reverse=True,
+    )
+    for leaf in leaves:
+        text = text.replace(leaf, "\x00")
+    if claim.note:
+        text = text.replace(claim.note, "\x00")
+    return re.sub(r"\x00+", "\x00", text)
+
+
+def _renderer_prose(doc, name: str) -> dict:
+    found, seen = {}, Counter()
+    for block in doc.blocks:
+        # PARAGRAPH prefixes are pinned by exact wording in CLAIM_LABELS, which is stricter and
+        # more readable than a digest; pinning them twice would just mean two places to update.
+        if not block.claim_id or block.projection == projection.PARAGRAPH:
+            continue
+        text = _connective_text(block, doc.registry[block.claim_id])
+        if len(_normalize(text)) <= CONNECTIVE_FLOOR:
+            continue
+        key = (name, block.claim_id, seen[block.claim_id])
+        seen[block.claim_id] += 1
+        found[key] = text
+    return found
+
+
+def test_prose_the_renderer_authors_inside_a_claim_is_pinned(rendered):
+    generator, _registry, doc, _page, _tables = rendered
+    name = DOC_NAMES[id(generator)]
+    found = _renderer_prose(doc, name)
+    listed = {k: v for k, v in RENDERER_PROSE.items() if k[0] == name}
+
+    added = sorted(set(found) - set(listed))
+    assert not added, (
+        f"the renderer authors prose nobody reviewed: {added}\n"
+        "A claim id on the block does not make the words around the claim's values authoritative "
+        "— they are the renderer's. Pin them here, which is the act of reviewing them."
+    )
+    removed = sorted(set(listed) - set(found))
+    assert not removed, f"RENDERER_PROSE pins prose no longer rendered: {removed}"
+    for key, text in found.items():
+        pinned, label = listed[key]
+        actual = hashlib.sha256(text.encode()).hexdigest()[:16]
+        assert actual == pinned, (
+            f"{key} ({label}) changed since it was reviewed.\n"
+            f"  reviewed: {pinned}\n  now:      {actual}\n"
+            f"  text:     {' '.join(text.replace(chr(0), '~').split())[:200]!r}\n"
+            "Read it, then re-pin in the SAME commit."
+        )
+
+
+def test_rewriting_a_binding_commitment_in_connective_prose_is_caught(monkeypatch, tmp_path):
+    """The finding, run as an attack.
+
+    `WIRE.INGEST.EXTRA_FIELDS` promises we never repurpose a callback field without an agreed
+    version bump. That sentence is the generator's, not the registry's, so before this pin it
+    could be reversed outright: the claim's values still rendered, the block still carried its
+    claim id, the vocabulary check still passed because every word already appears on the page.
+    """
+    from docs.generators import render as render_module
+
+    original = render_module.Doc.claim_prose
+
+    def weakened(self, cid, markup, *, style=render_module.BODY):
+        if cid == "WIRE.INGEST.EXTRA_FIELDS":
+            markup = markup.replace(
+                "never remove or repurpose one without a version bump agreed with you",
+                "may remove or repurpose one at any time")
+        return original(self, cid, markup, style=style)
+
+    monkeypatch.setattr(render_module.Doc, "claim_prose", weakened)
+    doc = _build(contract_gen)
+
+    found = _renderer_prose(doc, "contract")
+    key = ("contract", "WIRE.INGEST.EXTRA_FIELDS", 0)
+    assert "may remove or repurpose one at any time" in found[key], "the mutation did not land"
+    with pytest.raises(AssertionError, match="changed since it was reviewed"):
+        test_prose_the_renderer_authors_inside_a_claim_is_pinned(
+            (contract_gen, WIRE, doc, "", []))
+
+
+def test_the_connective_residue_is_stable_under_overlapping_leaf_values(rendered):
+    """`approve` is a substring of `approve_buy_locked`. If leaves were removed shortest-first the
+    residue would keep `_buy_locked` and the digest would depend on iteration order rather than on
+    what the renderer wrote."""
+    _generator, registry, doc, _page, _tables = rendered
+    for block in doc.blocks:
+        if not block.claim_id or block.projection == projection.PARAGRAPH:
+            continue
+        claim = registry[block.claim_id]
+        first = _connective_text(block, claim)
+        assert _connective_text(block, claim) == first
+        leaves = [x for x in projection.leaf_strings(claim.value, block.row_fields) if x]
+        for leaf in leaves:
+            assert leaf not in first, (
+                f"{block.claim_id}: the claim value {leaf[:40]!r} survived into the residue, so "
+                "the pin would cover registry-owned content and fail on a legitimate claim edit"
+            )
