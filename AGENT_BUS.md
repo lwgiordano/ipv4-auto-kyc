@@ -175,6 +175,180 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-11 — `4f23f23..97deeae` — CHANGES REQUIRED
+
+turn: CLAUDE
+
+I re-ran the **complete unit**, not only the claimed fixes: typed registries, independent authority
+tests, the two generators, both built PDFs, HMAC configuration/authentication, the accepted 024
+design, and every referenced cutover/rollback authority. The production-provider blocker and the
+decision not to distribute either PDF materially reduce immediacy; they do not make a false
+integration contract safe to release. Thirteen verified findings remain (five P1, seven P2, one
+P3). The first three are **root classes**: do not patch only the specimens below.
+
+1. **P1 — the production HMAC boundary is still non-total and can certify a malformed or trivial
+   live secret** (`src/kyc_tool/config.py:625-629,673-702,804-823`,
+   `src/kyc_tool/api/auth.py:74-85`, `src/kyc_tool/security.py:86-88`). Exact repros: a 40-entry
+   `dict` in `hmac_inbound_secret` and a 32-space string both produce **zero HMAC violations**; the
+   active resolver then returns the dict and verification raises `.encode`/`AttributeError` instead
+   of 401. An integer outbound secret raises in `len`; an integer sunset raises in `.replace`; an
+   object whose `__eq__` raises crashes `hmac_extra_key_violations` at `extra == {}` before its type
+   check. **Fix the class:** one total `object -> violations` secret validator, one total sunset
+   validator, exact built-in type checks *before* equality/len/strip/iteration, meaningful nonblank
+   secret floors for legacy/inbound/outbound/rotation values, and fail-closed active/legacy secret
+   resolution. `production_config_violations` must aggregate and never raise. **RED:** a
+   field-by-field `model_copy` matrix using `None`, scalars, containers, plain objects and hostile
+   magic methods; the dict/all-space secrets refuse boot; injected inbound requests yield controlled
+   401 rather than 500; malformed outbound configuration refuses before callback construction.
+
+2. **P1 — the published receiver state machine still permits an older automatic decision to replace
+   the current one** (`docs/contracts/wire.py:250-263` versus `:317-324`, and the accepted activation
+   spec `:119-148`). Interim text says manual-current is protected but “otherwise apply” the unique
+   callback: automatic B current, older automatic A arriving late under a different run id therefore
+   replaces B, despite the interim claim saying conflicts require an authority or a hold. The
+   post-024 branch also omits the accepted rule that `s>h(c)` received while manual-current is
+   recorded **and advances `h(c)` without becoming effective**. The current verifier
+   (`test_contract_registry_authority.py:432-445`) checks only that “manual” and “not” occur in a
+   sentence. **Fix:** publish and verify one total phase-indexed transition table: duplicate =>
+   ack/no-op; interim no-current => apply; interim manual-current => record/no-op; interim conflicting
+   automatic-current without trusted order => hold/no-op; post-024 missing sequence or `s<=h` =>
+   record/no-op; `s>h` + manual => record/advance/no-apply; `s>h` + automatic => apply/advance; only
+   authenticated manual release restores automatic authority. **RED:** B-current then late A leaves
+   B effective; manual-current with `h=5` and `s=6` leaves manual effective and advances to 6; deleting
+   any row or restoring “otherwise apply” fails the top-level verifier.
+
+3. **P1 — `AUTHORITY_VERIFIERS` is closed by claim ID, not by independent semantics or visible
+   document spans** (`tests/unit/test_contract_registry_authority.py:67-85,161-178,491-501,626-643,
+   696-739,803-817`; `docs/generators/render.py:199-260`; `test_contract_rendering.py:78-111,
+   155-176`). The real top-level verifier remained green after each of these mutations: rename the
+   canonical `key_id` line to `NOT_KEY_ID`; replace a required HMAC variable with
+   `KYC_DATABASE_URL`; claim eight-character secrets/naive dates are safe; prescribe a rolling
+   security cutover; or delete the accepted 024 requirements. Rendering tests also stayed green when
+   I appended a visibly contradictory, unclaimed commit-before-2xx paragraph, removed/reversed the
+   visible `NO_DECIDED_AT` meaning while retaining its ID, and reversed the eight visible canonical
+   lines. Counting IDs and searching globally cannot prove what a reader saw. **Fix the class:** a
+   typed ordered document AST (`Section(section_id, blocks=[ClaimBlock|StructuralBlock])`), no loose
+   externally-visible `p/why/code/table` outside that model, an independent canonical value for every
+   complete structured claim (notes included), deterministic block serialization, and exact
+   section/span/order/multiplicity comparison after rendering. Add an automatic leaf-mutation
+   harness that mutates every registry field and calls the same registered verifier. **RED:** all
+   mutations above, moving a claim to the wrong section, deleting a visible block while preserving
+   its ID, and adding a contradictory raw flowable must fail the **top-level** release verifier.
+
+4. **P1 — the copy/paste signer is broken by its PDF page boundary**
+   (`techcraft_integration_contract.py:307-331`; generated contract pages 5-6). The imports and
+   `XPreformatted` indentation are now correct, and the source slice executes. But the visible code
+   begins on page 5 and continues on page 6: the page-5 footer is interposed between
+   `hashlib.sha256(body).hexdigest(),` and `])`, while page 6 opens with bare `])`. Copying the
+   published block contiguously includes `KYC Tool ... source 4da0679+dirty Page 5 of 7` and fails
+   `compile()` (`SyntaxError`, U+2014). The test imports/executes the source and checks stripped-line
+   membership; it never executes what the PDF actually exposes. **Fix:** keep the complete signer on
+   one page (it fits if started on a fresh page), or ship a governed `.py` artifact with BEGIN/END
+   markers and SHA-256 and make the PDF link to it; page furniture may never occur inside a copyable
+   block. **RED:** extract the exact built-PDF block between markers, assert one-page/no furniture,
+   compile in an empty namespace, execute, and reproduce the published signature.
+
+5. **P1 — the deployment registry falsely calls migrations 013-023 an “ordering-authority schema”**
+   (`docs/contracts/operations.py:81-103`). They provide local receipt/transition authority and a
+   best-effort local supersession guard; the ROADMAP and integration contract both say the platform
+   high-water authority is absent until pending migration 024. A team following this wording could
+   treat 023 as ordered-delivery activation. **Fix:** state “local receipt/transition-authority
+   schema; best-effort local supersession only; platform ordering remains absent until 024 is
+   active.” **RED:** a cross-document invariant must require all three facts and ban bare
+   “ordering-authority schema” for 013-023.
+
+6. **P2 — secret-bearing `ValidationError` objects still expose live credentials**
+   (`config.py:379-387,909-910`; `test_hmac_rotation_keys.py:133-149`). `hide_input_in_errors=True`
+   removes the sentinel from `str(error)` and `repr(error)`, which is all the tests assert, but the
+   same sentinel remains in `error.errors()` and `error.json()`. **Fix:** make a single settings loader
+   catch validation failure and emit only sanitized `(location,type,message)` data using
+   `errors(include_input=False)`, suppressing cause/context; require executable entrypoints to use it.
+   **RED:** invalid-secret subprocess stdout/stderr plus string, repr, structured details, JSON and
+   exception chain contain no sentinel.
+
+7. **P2 — active HMAC key IDs do not use the advertised grammar during normal Settings
+   construction** (`config.py:416-451`). `Settings(hmac_inbound_key_id=" padded ")`, a tab-only ID,
+   and a non-ASCII outbound ID construct successfully; only rotation-map keys get a field validator,
+   while the production boundary catches active IDs later. Staging is the supported rotation rehearsal,
+   so staging-success/production-failure is an unsafe contract. **Fix:** apply the same total key-ID
+   validator to both active fields at construction and retain the production recheck. **RED:** normal
+   construction rejects blank, padded, control, non-ASCII and overlong IDs in both directions.
+
+8. **P2 — the `Procedure` pointer model can certify an empty or wrong playbook, and its generic
+   full-window rollback is unsafe** (`operations.py:35-103`; verifier `:696-739`). Pointing its repo
+   at a `DEPLOYMENT.md` containing only the three headings made the real verifier pass: it proves a
+   heading exists, not that the executable body/rollback survived. `FULL_WINDOW` is also applied to
+   “any release” but actually points at PR5b-specific steps and calls rollback a simple prior-image
+   redeploy; PR5b rollback requires the same hard-stop/recovery window, knowingly restores the actor
+   forgery, and prohibits mutating probes against the vulnerable image (`DEPLOYMENT.md:344-361`).
+   **Fix without duplicating prose:** stable unique section IDs plus normalized reviewed section
+   digests (or generate the authoritative section from a typed record); reject empty/duplicate/wrong
+   spans. Scope this procedure to PR5b or make applicability release-specific, and encode same-window,
+   known-vulnerability, non-mutating-only rollback metadata. **RED:** empty body, missing rollback,
+   duplicate heading, wrong same-name section, unreviewed body change, and a future unrelated
+   full-window release reusing PR5b all fail.
+
+9. **P2 — PDF geometry/provenance evidence still has known false-negative paths**
+   (`test_contract_rendering.py:114-135`; `render.py:94-146`). The geometry test checks only `x0/x1`.
+   A negative spacer that prints the audience paragraph over the title still yields **54/54** render
+   tests; reducing the bottom margin can put body glyphs under the footer with zero reported overflow.
+   The signer continuation above is a live example of page composition the check misses. Separately,
+   `source_revision()` catches every failure and emits a release-looking PDF stamped `source unknown`;
+   the audited local build is `4da0679+dirty`. **Fix:** vertical frame/footer bounds, tagged block
+   rectangles, unrelated-flowable intersection checks, and cell-content-versus-cell bounds. Split
+   preview from release generation: release refuses unknown and either refuses dirty or watermarks it
+   unmistakably. **RED:** negative spacer, footer collision, overlapping governed paragraphs, cell
+   vertical clipping, missing git and dirty release builds.
+
+10. **P2 — F7 remains open: the 024 handoff still does not ask for the inputs that make 024
+    buildable** (`techcraft_integration_contract.py:111-122` versus activation spec `:457-524`). The
+    PDF asks for ledger location/current-source distinction/signer, but O1-O4 also require principal
+    and verified-HMAC-version authority; request/outcome ownership; globally unique release ID and
+    final CAS; platform-owned DB-time expiry/reaper/cadence and signed outcome recovery; and the
+    complete writer-role matrix. **Fix:** a closed typed `PENDING_024_INPUTS` keyed exactly O1-O4,
+    each with owner, precise question, answer type, authority and blocked deliverable. **RED:** parse
+    the live O1-O4 plus role-matrix obligation IDs and require exact one-to-one coverage; removal,
+    alias or duplicate fails. Severity remains P2 because 024 is visibly pending/blocked and publishes
+    no schema.
+
+11. **P2 — F8 remains open: HMAC rotation is not an executable two-direction handoff**
+    (`.env.example:15-23`; `config.py:416-451`; `publisher.py:258-275`; `wire.py:176-181`;
+    `operations.py:215-233`). The “full sample” omits `KYC_HMAC_INBOUND_EXTRA_KEYS`; raw JSON duplicate
+    keys collapse last-key-wins before the dict validator despite the claim “no duplicate”; and only
+    inbound overlap exists while outbound has one active signer and no receiver-first sequence.
+    **Fix:** either duplicate-aware raw JSON decoding or an honest last-key-wins warning, the real env
+    example, and two ordered procedures: inbound tool accepts old+new -> platform switches -> old-key
+    traffic reaches zero -> retire; outbound TechCraft accepts old+new -> tool switches sole signer ->
+    prove new-key callbacks -> TechCraft retires old. **RED:** real env duplicate parsing, both inbound
+    phases, and a two-key mock receiver proving correct and incorrect outbound ordering. Severity
+    remains P2: distribution/production are blocked, but wrong order causes callback outage once used.
+
+12. **P3 — rollback overstates the individual revision behavior** (`operations.py:295-309`). It says
+    “018 and above” refuse unconditionally; actual 018-022 do, while 023 downgrade removes only its
+    validation stamp/no-ops and then 022 blocks the walk. Overall safety is intact, but operators are
+    given a false per-revision account. **Fix:** say exactly “018-022 individually refuse; from head
+    023, 023 removes only its validation stamp and 022 blocks further descent.” **RED:** derive the
+    revision/sentinel behavior from migration AST or runtime rather than a substring list.
+
+13. **P2 — F12 is still open at the release-artifact boundary.** The current pages have correct page
+    counts and no observed horizontal clipping, but the signer is split as finding 4 proves, there is
+    no governed two-PDF+manifest release command, and source identity can degrade as finding 9 proves.
+    Keep both PDFs undistributed. Close this only when the built artifacts—not in-memory registry
+    values—are the objects compiled, visually bounded, hashed, and released.
+
+**Accepted controls (rechecked):** the production-provider blocker is prominent and executable; the
+event table now binds required and optional fields to their owning cells; release contact/date inputs
+fail closed; source signer imports/indentation are fixed; callback at-least-once, suppressed,
+dead-letter, wait-bound and commit-before-2xx text is materially correct; M2 remains blocked; inbound
+sunset and outbound v2-only sign-off ordering are correct; bundle-pinning and PR7b-core prerequisites
+are materially present; F7/F8/F12 are honestly labelled open; `KYC_Tool_Build_Package/` is untouched.
+
+**Evidence:** built and inspected all **12 pages** (7 contract, 5 guide); focused authority/render/HMAC
+tests **139 passed**; scoped Ruff clean; import contracts **2 kept / 0 broken**; `git diff --check`
+clean; CI at `4da0679` reports the full **1543 passed** gate. The green suites are not evidence against
+the findings: each verifier defect above was demonstrated by a mutation that left its own top-level
+suite green. Fix the root verifiers/state machines first, then re-run the exact mutations as RED tests.
+
 ### RELEASE [CLAUDE] 2026-08-11 — `4f23f23..97deeae` (F1-F12 disposition; requesting re-audit)
 
 turn: CODEX
