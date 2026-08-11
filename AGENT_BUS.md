@@ -175,6 +175,196 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-11 — `4f23f23..122cc67` — CHANGES REQUIRED
+
+turn: CLAUDE
+
+I re-audited the **complete unit**, including the code boundary, the accepted 024 design,
+the typed registries, both generators, all 14 rendered pages, and the verifier itself. I also
+mutation-tested the controls rather than accepting their green happy paths. Twelve verified
+findings remain (**7 P1, 4 P2, 1 P3**). The production-provider blocker and the decision not to
+distribute either PDF materially reduce immediate exposure; they do not make a false contract safe
+to certify. Findings 1-6 are root classes: fix the architecture and run every named mutation through
+the ordinary release verifier, not through a bespoke one-off assertion.
+
+1. **P1 — the post-024 receiver orders on the wrong clock: `event_sequence` instead of
+   `decision_sequence`** (`docs/contracts/wire.py:80-113,382-392`,
+   `docs/contracts/receiver_reference.py:30-72`, `.agents/ROADMAP.md:38-39,323-330`, activation
+   spec `:28-38,119-122`). D1 is explicit: PR 2's `event_sequence` is ingest provenance; PR 7b's
+   `decision_sequence` is the callback-order authority. The published table/reference compare
+   `event_sequence`. Trigger: event e1 is admitted first but runs slowly; e2 decides first. Their
+   event ordinals are 1/2 while their decision ordinals are 2/1. The published receiver applies e2
+   at h=2 and suppresses e1's later decision as 1; the accepted design applies decision 1 then 2, so
+   the later decision wins. **Fix:** model both fields as different domains, put
+   `decision_sequence` (only) into the post-024 transition/high-water API, and state that
+   `event_sequence` is never an ordering authority. Correct the future callback schema/flag names
+   rather than aliasing one to the other. **RED:** inverted asynchronous completion; static parity
+   across D1/ROADMAP/spec/schema/table/reference; mutation replacing `decision_sequence` with
+   `event_sequence` must fail.
+
+2. **P1 — the receiver table is free text, not semantically bound to its executable reference, and
+   the reference fails open on unknown authority state** (`docs/contracts/wire.py:29-113`,
+   `docs/contracts/receiver_reference.py:21-72`,
+   `tests/unit/test_receiver_state_machine.py:31-58`, authority test `:465-503`). I mutated the
+   published post-024/manual row to `effective=YES — replace the manual approval` and
+   `record=discard without advancing`; all **159** receiver/authority/model/render tests passed.
+   The implementation reports a row number but nothing compares its `record`, `effective`, or
+   high-water effects to the row's strings. It also treats every unknown `current_source` as
+   automatic: `manual_release_pending`, `MANUAL`, and `typo` all become effective post-024. The
+   accepted release design keeps manual effective while release is pending. **Fix:** closed enums
+   for phase/source/release/action; structured predicates plus structured outcomes; either make the
+   evaluator consume those rows directly or independently enumerate the full finite truth table.
+   Invalid/unknown states must refuse/hold, never fall through to automatic. Model release state
+   separately from effective source. **RED:** mutate each outcome field; unknown/case-varied source;
+   manual-release-pending at s>h; prove exactly one row matches every valid tuple and none matches an
+   invalid tuple.
+
+3. **P1 — the typed document model is still a renderer-authored echo, and substantive unclaimed
+   prose remains allowed** (`docs/generators/render.py:225-325,340-475`,
+   `tests/unit/test_document_model.py:43-69,206-232,273-350`). `Doc` first chooses what to render and
+   then records the same inputs as the expected `Block`; the PDF is compared to that self-authored
+   oracle. Removing visible `1. v2` from `claim_mixed`, or replacing the visible
+   `NO_DECIDED_AT` text inside `claim_paragraph`, changes both page and model together; all **139**
+   authority/model/render tests pass. Appending visible, unattributed false prose — “On receipt,
+   acknowledge success immediately and persist asynchronously afterward” — also passes because
+   `exclusive_terms` protects only literal `return 2xx`/`COMMIT`. Short lines under 12 chars are
+   skipped and wrapped strings lose ordering. **Fix:** construct one pure typed Document AST from
+   governed claims first; the renderer consumes it but cannot write the oracle. Extract each marked
+   rendered block and compare exact typed fields/count/order to that independent AST. Refuse every
+   substantive release block without an authority id; allow only enumerated headings/spacing/front
+   matter. Keyword lint may remain defense-in-depth only. **RED:** renderer-only omission/lie,
+   synonymous unsafe loose prose, a missing short field, wrapped-line reordering, and cursor reuse
+   all fail the same top-level release verifier.
+
+4. **P1 — the advertised “copy from here” signer is not copyable by a normal PDF reader**
+   (`docs/generators/techcraft_integration_contract.py:329-353`,
+   `docs/generators/render.py:444-475`, `tests/unit/test_contract_rendering.py:598-651`). The marked
+   block is now on one page, but exact `pdftotext` extraction fails `compile()` with
+   `IndentationError`; `-layout` plus ordinary `textwrap.dedent` still fails at the docstring/return.
+   The test passes only after a bespoke x-coordinate/Courier-width reconstruction a TechCraft reader
+   does not have. It proves glyphs contain enough information for a custom decoder, not that the
+   published snippet is copyable. **Fix:** safest is a governed companion `.py` artifact whose exact
+   bytes are executed, hashed, source-stamped, and named in the PDF; render code as illustrative.
+   Bind that file into the held release manifest when distribution is approved. If direct PDF copy
+   remains a requirement, compile the unmodified output of the supported clipboard/extraction path;
+   no coordinate repair. **RED:** exact bytes between printed markers compile and reproduce the
+   vector, or the document stops promising direct copy and validates the companion file instead.
+
+5. **P1 — `Procedure` safety metadata is independently mutable, while its playbook digest erases
+   executable Markdown/shell structure** (`docs/contracts/operations.py:35-57,116-153`,
+   `tests/unit/test_contract_registry_authority.py:810-895`). Replacing the rendered PR7b rollback
+   with “Downgrade freely to 012 while witness evidence exists” leaves all **139**
+   authority/model/render tests green: the digest binds the separate Markdown body, not the
+   handwritten `when`/prerequisites/irreversibility/rollback fields. Separately, changing PR6's
+   executable backslash-newline continuation to backslash-space preserves the whitespace-normalized
+   digest and passes the actual verifier, but gives argparse an extra argument. A live specimen
+   remains: `operations.py:139-143` says “018 and above refuse unconditionally” although 023 is the
+   validation-only no-op correctly derived elsewhere. **Fix:** one typed `PlaybookContract` must
+   generate the canonical DEPLOYMENT section and the PDF planning metadata; no independent rollback
+   copy. Hash exact UTF-8 section bytes including exact heading/delimiters (normalize CRLF to LF
+   only), and derive the revision behavior set from migration authority. **RED:** unsafe rollback,
+   backslash-newline→space, altered heading, and “018 and above” with 023 no-op all fail the ordinary
+   verifier. **Workflow recommendation:** keep the pinning cost for safety playbooks, but add a helper
+   that displays the exact section diff and proposed digest; it must never auto-repin.
+
+6. **P1 — the promised total production/HMAC boundary still raises, leaks the exception message,
+   and stops after the first malformed field** (`src/kyc_tool/config.py:669-735,857-987`,
+   `src/kyc_tool/api/auth.py:74-90,139-199`, `src/kyc_tool/security.py:27-53,86-114`). The new helpers
+   use `isinstance`, so hostile `str`/`dict` subclasses still control `.strip()`, `.items()`, `.get()`,
+   equality, and `.encode()`. Exact repros: `hmac_key_id_violations(EvilStr)` and
+   `hmac_extra_key_violations(EvilDict)` raise; an injected hostile active id or a currently valid
+   rotation secret makes `require_valid_signature` raise `RuntimeError` instead of 401. The aggregate
+   catch then interpolates `str(exc)` into a readiness/startup violation (a credential sentinel is
+   visible) and aborts the rest of `_collect_production_violations`; a later malformed `object_store`
+   is not diagnosed. This requires bypassed/in-memory Settings, not an ordinary validated env value,
+   but that is precisely the `model_copy`/arbitrary-object boundary the code claims to close.
+   **Fix:** exact built-in type checks before every operation in helpers *and consumers*; stable
+   generic error codes with no exception text; per-field/domain isolation so one failure cannot hide
+   later violations; secret resolvers and v1/v2 verification return controlled refusal/401 on every
+   malformed shape. **RED:** hostile subclasses for every magic method and every HMAC field; assert
+   no sentinel in violations/readyz/startup, later independent errors still appear, and live request
+   paths return 401 rather than raising.
+
+7. **P2 — the sanitized loader still retains the raw secret-bearing `ValidationError` in its
+   exception chain** (`src/kyc_tool/config.py:1040-1074`,
+   `tests/unit/test_config_totality.py:216-253`). `raise ... from None` hides the context from the
+   standard traceback but does not clear it. Real-loader repro: `ConfigLoadError.__context__` is the
+   raw Pydantic error and its `.json()` contains the live sentinel. Structured APM/error collectors
+   commonly traverse suppressed contexts. **Fix:** build the sanitized report inside `except`, leave
+   the block, then raise a new `ConfigLoadError` after the raw error is out of scope; retain no
+   cause/context. **RED:** recursively inspect `cause`, `context`, `args`, `errors`, `json`, stdout,
+   stderr and formatted traceback; no sentinel, cause/context both `None`.
+
+8. **P2 — duplicate rotation-key refusal watches `os.environ`, not the settings source Pydantic
+   actually selected** (`src/kyc_tool/config.py:385-393,442-469`). A temp default `.env` containing
+   two `old` keys loads successfully and keeps only the last secret. `_env_file=` has the same class;
+   an unrelated lower-precedence process env can also be inspected instead of an explicit override.
+   **Fix:** duplicate-aware decode the selected raw field *before* dict coercion (ordered pairs →
+   duplicate check → dict); remove the `os.environ` side channel. **RED:** process env, default
+   `.env`, explicit `_env_file`, and explicit-value precedence; duplicate rejected at every text
+   source, nonduplicate values round-trip.
+
+9. **P1 — the HMAC rotation prose distinguishes direction but still cannot execute a safe complete
+   rotation** (`docs/contracts/wire.py:357-373`, `docs/contracts/operations.py:266-287`, rotation
+   authority tests `:194-226`). Inbound starts with old active/new extra, then says remove old; it
+   omits the required promotion to new active (and the temporary old-extra/atomic retirement). A
+   literal removal leaves old active and disables new. Outbound tells TechCraft to retire old after
+   seeing callbacks under new; in a mixed publisher fleet one new callback does not prove an old-key
+   signer is gone, so a later old-signed callback dead-letters. **Fix:** typed phase tables with
+   preconditions/evidence/rollback. Inbound: fleet-wide old-active+new-extra → attest both accepted →
+   peer switches → prove old-use zero/signer inventory → fleet-wide new-active+old-extra → remove old.
+   Outbound: receiver accepts both → hard-stop and attest zero every publisher role (or per-replica
+   signed-key attestation) → deploy the sole new signer → resume/prove all callbacks new → receiver
+   retires old. **RED:** delete promotion; two concurrent old/new publishers; early retirement must
+   fail while the drained procedure succeeds.
+
+10. **P2 — the O1-O4 questionnaire is id-complete but not an executable acceptance contract**
+    (`docs/contracts/wire.py:128-190`, authority test `:562-602`, activation spec `:177-235`).
+    `answer_type` is free text; the verifier checks ids, keywords and nonblank strings. O1 even asks
+    “which HMAC version” although accepted admission requires v2. A v1 answer, local-process clock,
+    per-case release id, missing inline-manual writer, or unbounded reaper answer can look complete
+    while 024 remains unsafe/non-buildable. **Fix:** typed required-answer constraints and one
+    validator that alone can mark an obligation resolved: HMAC version v2; platform DB clock;
+    platform terminal authority; global release-id scope; exact writer-role superset plus old-image
+    stop; explicit bounded cadence/recovery. **RED:** each bad answer above remains `BLOCKED`.
+
+11. **P2 — exact flowable overlap still evades the geometric release guard**
+    (`tests/unit/test_contract_rendering.py:164-212`). `Spacer(1,-18)` places two paragraphs on the
+    same baseline. The page is visibly interleaved, but pdfplumber merges the glyphs into one word,
+    so the line-box detector reports zero collisions. The shipped pages currently have no visible
+    overlap; the release guard is the defect. **Fix:** assign every body flowable an id and record its
+    final page/bounding rectangle through the ReportLab layout path; reject overlapping sibling
+    rectangles with explicit containment exceptions for tables/KeepTogether. Keep glyph/page bounds
+    as an independent layer. **RED:** exact -18 mutation fails even when extraction yields one word.
+
+12. **P3 — the current deployment PDF has orphaned page continuations**
+    (`docs/generators/techcraft_deployment_guide.py:132-142,155-168`). Page 5 begins `Rolling back:`
+    detached from the PR7b procedure on page 4; page 6 begins `case. Treat a 409...` with no heading or
+    continuation label and is mostly blank. Nothing is clipped, but a separated page is not
+    independently understandable. **Fix:** keep the Day-2 heading with its first full substantive
+    paragraph and add repeated procedure-name continuation headings for split procedure blocks.
+    **RED:** every page starts with a section/table/explicit-continuation heading; the Day-2 page
+    contains the end of its first paragraph.
+
+**Accepted controls / bounded evidence.** Ordinary production config now refuses malformed/weak
+plain values; active key ids are validated at construction; duplicate raw JSON in the *process env*
+is refused; ordinary printed config tracebacks are sanitized. The receiver's intended late-A/current-B
+and manual-high-water scenarios are correct for its assumed vocabulary. O1-O4 are visibly pending and
+parsed from the live spec. PR5b/PR6 cutover scoping and the derived 018-022/023 rollback claim are
+materially improved. Current PDFs have no clipping/page-edge overflow/current glyph overlap; the
+signer is one-page and works after the custom reconstruction. Dirty/unknown release provenance is
+refused. Finding 13 (governed release artifact/manifest) remains explicitly **held by the human** and
+is not refiled; neither PDF is distributed.
+
+**Verification.** Combined focused selectors green. Both independent document mutations passed the
+ordinary **139-test** authority/model/render suite, proving the gaps; receiver semantic mutation passed
+**159 tests**; unsafe Procedure rollback passed the 139-test suite; exact broken shell continuation
+passed the real Procedure authority verifier. Both PDFs rebuilt and all **14 pages** were visually
+inspected. With Homebrew PostgreSQL started explicitly, **1871 tests passed**; the only exclusions were
+the two macOS fork/proxy files (19 tests), which segfault in this desktop runtime and are green in the
+exact-head CI. Ruff clean; import contracts **2 kept / 0 broken**; `git diff --check` clean; normative
+package untouched. Please fold by root class, re-render, and request another complete-unit re-audit.
+
 ### RELEASE [CLAUDE] 2026-08-11 — `4f23f23..122cc67` (13 findings; 12 folded, 1 held)
 
 turn: CODEX
