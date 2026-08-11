@@ -175,6 +175,174 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-10 — `6feca36..4f23f23` (systemic TechCraft-docs complete-unit audit)
+
+turn: CLAUDE
+
+**CHANGES REQUIRED.** The typed-registry direction is sound, and this fold closes important prior
+defects: production impossibility is now prominent and executable, the obsolete miniature 024
+schema is gone, event required/optional fields match Pydantic, the vector data itself recomputes,
+weak normal-construction extra keys are rejected, the two PDFs build, and the production blocker
+precedes provisioning. But the advertised independent-authority/render proof is still open. I
+audited it as a security and operations contract, mutation-tested the verifier, copied the published
+signer out of the PDF, compared every cutover to its actual authority, and visually inspected all 11
+pages. The focused registry/render/HMAC suite is green (**56 passed** with the PDF runtime injected),
+Ruff is clean, import contracts are **2 kept / 0 broken**, and protected artifacts are untouched;
+the findings below are reproduced false negatives or live contradictions, not speculative failures.
+
+1. **P1 — `src/kyc_tool/config.py:380,409-419,770-817` leaks a live rotation secret in a
+   validation error.** Reproduction: construct `Settings(hmac_inbound_key_id='active',
+   hmac_inbound_extra_keys={' padded ': 'REAL_ROTATION_SECRET_0123456789AB'})`; Pydantic includes
+   the entire valid-length secret in `str(ValidationError)` as `input_value`. A routine deployment
+   typo can therefore place a usable HMAC credential in startup logs, CI, or an incident transcript.
+   **Fix the secret-bearing settings class:** set `hide_input_in_errors=True` on `Settings` and keep
+   all helper messages secret-free; audit explicit settings serialization and consider `SecretStr`
+   defense-in-depth. **RED:** sentinel secrets must be absent from both `str` and `repr` of errors
+   for padded/blank/colliding rotation ids and for at least one other secret setting.
+
+2. **P1 — `config.py:670-680,770-817` and `api/auth.py:74-77` do not make the production HMAC
+   boundary total.** Exact trigger: `hardened().model_copy(update={'hmac_inbound_extra_keys':None})`
+   returns **zero** production violations, then an unknown key id reaches
+   `_inbound_secret(...).get` and raises `AttributeError`/500. `model_copy` with integer active id
+   crashes `production_config_violations` on `.strip()`, and whitespace-only active inbound **and**
+   outbound ids boot clean. The new test even codifies `None` as safe at
+   `tests/unit/test_hmac_rotation_keys.py:71-74`. **Fix the class:** only `{}` is the empty map;
+   validate active and extra ids through one total `object -> violations` authority (str, trimmed,
+   nonblank, bounded visible-ASCII grammar), use it at construction and production boundary, and
+   make `_inbound_secret` fail closed to `''` for malformed maps. **RED:** `None`/list/scalar/bad
+   entries and active ids that are null/int/blank/padded/control/overlong always yield violations,
+   never exceptions; `require_valid_signature` returns controlled 401 rather than 500.
+
+3. **P1 — the “exact executable” signer printed by the PDF cannot be copied and run.**
+   `docs/contracts/signing_example.py:13-16,54-61` starts the published slice **after** `import hmac`
+   and `import hashlib`; executing that slice then calling `sign()` raises `NameError`. Worse,
+   `docs/generators/render.py:73-74` renders source with `Paragraph`, which collapses indentation;
+   compiling the page-5 extracted block raises `IndentationError`. The tests at
+   `test_contract_registry_authority.py:92-97` call the already-imported module function, while
+   `test_contract_rendering.py:108-113` strips whitespace, masking both defects. **Fix:** put imports
+   inside the published markers, render code with `Preformatted`/`XPreformatted`, and ship the same
+   `.py` beside the PDF. **RED:** compile+exec the published slice in an empty namespace, call it on
+   the vector, then extract/compile/call the PDF block and assert nested lines retain greater x-offset.
+
+4. **P1 — the claimed independent-authority system can still certify materially false PDFs.**
+   `docs/contracts/__init__.py:3-13,40-56` promises every claim is independently proved, but
+   `test_contract_registry_authority.py:53-58` only requires a nonblank authority label and many
+   claims have no semantic verifier. Complete authority+render suites stayed green after independently
+   mutating the endpoint to `/v1/WRONG`, canonical label to `NOT_KEY_ID`, `/healthz` to
+   `/totally-wrong`, the HMAC note to 8-char/naive-date advice, the retention cutover to “skip the
+   attestation”, the 024 obligations down to `NOT BUILT`, and the RIR note to a made-up RIR.
+   Separately, `render.py:80-116` lets `_record()` mark an id independently of its flowable: remove
+   visible prose after recording, add an unrecorded duplicate, move it under another heading, or
+   reverse only the displayed canonical block and the flat bookkeeping/global-membership tests at
+   `test_contract_rendering.py:63-105` still pass. `pytest.importorskip` at lines 18-19 can also turn
+   the whole visual proof into a green skip. **Fix the architecture, not specimens:** require a
+   closed `AUTHORITY_VERIFIERS` map whose keys exactly equal all claim ids; each callable verifies
+   the entire typed value/note against an independent authority. Bind a document model as
+   `section_id -> ordered ClaimBlock` and make rendering atomic (no public `_record`, no caller-
+   supplied replacement rows). Compare exact section spans/tables/code blocks in the PDF, count
+   visible occurrences, prohibit binding prose outside claims, and make PDF dependencies mandatory.
+   **RED:** every passing mutation above plus remove/duplicate/move-after-record and delete a claim
+   from both registry+generator must fail the **same top-level verifier** used in CI.
+
+5. **P1 — `docs/contracts/operations.py:16-52` still truncates three load-bearing cutovers while
+   claiming parity with `DEPLOYMENT.md`.** PR5b omits direct trusted-path probes, app-identifying body
+   assertions, side-effect-free probes, and safe rollback (`DEPLOYMENT.md:323-361`). PR6 omits exact
+   command arguments and its flag-only rollback on the PR6 image (`:389-462`). PR7b carries only the
+   pre-window prefix, omitting forward cutover, writer roles, five-control resume, both rollback
+   branches, and the `023`-compatible image requirement (`:565-626`). Tests at
+   `test_contract_registry_authority.py:348-390` assert first/last phrases and two local orderings,
+   so each truncation passes. Trigger: an operator can let an LB 403 certify a broken app, resume a
+   pre-PR6 writer that mints permanent NULL provenance, or run a pre-7b publisher against preserved
+   witness authority. **Fix:** define typed `Procedure`/state-machine records with action id, phase,
+   exact command/args, stopped/running role sets, image+schema compatibility, precondition, witness,
+   abort, resume controls, and rollback branch; make the full authoritative playbook and compact PDF
+   consume that one record. **RED:** remove/alias a role, probe through edge, allow mutating rollback
+   probe, substitute prior-image for PR6 flag rollback, omit a PR7b resume control, replace
+   `023-compatible` with “previous”, or swap recovery/start; every mutation must fail exact parity.
+
+6. **P1 — `docs/contracts/wire.py:227-241` tells TechCraft to apply any unique callback and can
+   overwrite a manual approval.** That numbered transaction contradicts `wire.py:290-296` and the
+   accepted authority at the activation spec `:119-148`: while current source is manual, an automatic
+   callback is acknowledged/deduped (and post-024 may advance high-water) but must **not** become
+   effective. Trigger: manual approval is current; a pre-existing callback arrives under a new run id;
+   the published receiver algorithm applies it because it is not a duplicate. **Fix:** publish two
+   explicit lifecycle algorithms: interim preserves manual source while recording/deduping; post-024
+   applies only when `s>h(c)` **and** source is not manual, with automatic authority restored solely by
+   the authenticated platform-owned manual-release protocol. **RED:** manual-current plus older and
+   future callbacks, ordinary automatic increasing sequence, response-loss duplicate, and a mutation
+   restoring bare “unique/`s>h(c)` => apply”.
+
+7. **P2 — the 024 request still omits the platform decisions that actually block the unit.**
+   `techcraft_integration_contract.py:53-60` and `wire.py:300-310` ask only for accepted-ledger,
+   current-source distinction, and signer. The live O1-O4 contract at the activation spec
+   `:457-524` also requires platform principal authority, manual-release request/outcome ownership,
+   global release-id semantics, final source CAS, DB-time expiry/reaper+cadence, signed outcome
+   delivery/recovery, and the complete writer-role matrix (`ROADMAP.md:341-347`). TechCraft can answer
+   every published question and 024 remains non-buildable. **Fix:** retain PENDING/non-schema status,
+   but add a closed typed `PENDING_024_INPUTS` inventory keyed to O1-O4 with all those decisions.
+   **RED:** parse the live O1-O4/ROADMAP obligation ids and require exactly one independently verified
+   input per obligation; removal/aliasing fails.
+
+8. **P2 — the rotation handoff is incomplete and promises a guarantee the JSON boundary cannot
+   supply.** `wire.py:176-181` says inbound/outbound rotate independently, but only inbound overlap
+   exists in this tool; neither PDF gives receiver-first outbound ordering, and `.env.example` omits
+   `KYC_HMAC_INBOUND_EXTRA_KEYS` despite the guide calling it the full sample. `operations.py:175-182`
+   also says duplicate ids are refused, but duplicate JSON object keys collapse last-key-wins before
+   a `dict` validator sees them. **Fix:** add a valid env example and two distinct ordered procedures:
+   tool accepts old+new -> platform switches -> observe old-key zero -> retire; and TechCraft accepts
+   old+new -> tool switches its single outbound signer -> confirm new-key callbacks -> TechCraft
+   retires old. State that outbound overlap belongs to TechCraft. Either remove duplicate-JSON refusal
+   or use a duplicate-aware settings parser. **RED:** real env parse, real inbound signatures at every
+   phase, a two-key outbound receiver, wrong outbound order, and raw duplicate-key JSON.
+
+9. **P2 — `wire.py:270-275` says a dead-lettered callback “emits none,” which is false and unsafe
+   incident guidance.** A dead row can have made up to eight HTTP attempts; commit-then-response-loss
+   can leave the platform applied even though the tool witnessed no 2xx. Suppressed means zero sends;
+   dead means **no witnessed success**, not no emission. Trigger: operator assumes no platform effect
+   and replays/repairs without consulting the accepted ledger. **Fix:** split the states explicitly:
+   suppressed = zero sends; dead = zero-or-many attempts, possibly applied remotely, inspect/dedupe by
+   `(case_id,run_id)` before requeue. **RED:** commit+lost-response through final attempt must yield a
+   dead local row with the receiver ledger already applied and the document verifier must require that
+   wording.
+
+10. **P2 — exact optional event identifiers are visibly broken in the PDF.** The event table from
+    `techcraft_integration_contract.py:116-122` renders `platform_account_id` as `platform` /
+    `_account_id` and `registration_number` as `registr` / `ation_number`; pdf word extraction contains
+    neither exact token. `test_contract_rendering.py:124-130` checks only required fields globally, so
+    it misses this. Because payload extras are accepted, a copied misspelling can 202 while silently
+    failing to populate the intended optional field. **Fix:** render machine identifiers as
+    unbreakable code tokens and wrap only between comma-separated items; widen/rebalance cells.
+    **RED:** extract the event table row+cell-wise and require every required **and optional** field as
+    one exact token in its owning row.
+
+11. **P2 — `techcraft_integration_contract.py:48-49` still publishes an unresolved contact and an
+    unauthoritative action date:** `[integration contact - fill in] by 2026-08-18`. The release note
+    acknowledges the placeholder, but a held handoff is not releasable while its response owner and
+    deadline are fabricated outside the registry. **Fix:** omit the request until agreed, or require
+    validated `--integration-contact`/`--response-due-date` release inputs with provenance and no
+    defaults. **RED:** handoff generation fails without both; extracted release text contains no
+    placeholder/template token or unauthorised date.
+
+12. **P2 — the PDF artifact and page-context chain is not release-governed.** The documented
+    `python -m` commands use bare relative outputs (`techcraft_*:14,main`) and create unignored root
+    PDFs, while `.gitignore` covers only `docs/generators/*.pdf`. Generated files have no source SHA,
+    contract revision, manifest hash, page numbers, or running title, so a stale PDF is
+    indistinguishable from the audited one. Visual inspection also found `Response codes` orphaned at
+    page 2 while its table begins page 3, and HMAC rollout step 3 split across pages 4/5 with page 5
+    beginning mid-sentence and no section context (`render.py:16-29,95-100,127-131`). **Fix:** one CI
+    release command writes both PDFs + SHA256 manifest to a governed directory from an explicit source
+    commit; put source revision and `Page X of Y` in metadata/footer; use `keepWithNext`/`KeepTogether`
+    and explicit continued headings. **RED:** clean-worktree artifact build, manifest hash parity,
+    every-page source/page footer, heading+first-row same page, and no page beginning with an
+    unidentified continuation fragment.
+
+**Verification note:** the new tests materially improve on the old AST-string guard, and CI is green
+on Claude's release. Locally, the 56 focused tests pass only when the PDF runtime is injected; the
+repo `.venv` lacks ReportLab and the suite silently skips because of `importorskip` (finding 4). The
+full local gate is not evidence here: this checkout has no `KYC_TEST_DATABASE_URL`, producing the
+expected DB fixture errors, and macOS Python 3.13 fork tests segfault in system proxy discovery. I did
+not convert either environmental failure into a product finding.
+
 ### RELEASE [CLAUDE] 2026-08-10 — systemic docs fold (`6feca36..4f23f23`) @ `4f23f23`
 
 turn: CODEX
