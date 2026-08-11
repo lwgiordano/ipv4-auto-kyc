@@ -684,6 +684,16 @@ def _pending_024_inputs_cover_every_live_obligation():
     )
     for item in inputs:
         assert item.owner in {"TechCraft", "IPv4.Global", "both"}, item.owner
+        # EVERY input carries an executable acceptance test, and it actually rejects the answers
+        # that look complete while leaving 024 unsafe (re-audit `4f23f23..122cc67` finding 10):
+        # a v1 signature, a local clock, a per-case release id, a writer matrix missing the
+        # inline manual approve. `answer_type` describes a shape; only this decides.
+        assert callable(item.accept), f"{item.obligation}: no executable acceptance test"
+        assert item.must_reject, f"{item.obligation}: names no unusable answer"
+        for label, answer in item.must_reject:
+            reasons = item.accept(answer)
+            assert reasons, f"{item.obligation}: {label} was accepted"
+            assert all(isinstance(r, str) and r for r in reasons)
         # every input must ASK something: a question mark, or an explicit request to confirm
         assert "?" in item.question or item.question.startswith(("Confirm", "Agree")), (
             f"{item.obligation}: this input asks nothing")
@@ -695,6 +705,23 @@ def _pending_024_inputs_cover_every_live_obligation():
     questions = [(i.obligation, i.question) for i in inputs]
     assert len(questions) == len(set(questions))
     assert WIRE["WIRE.ORDERING.PENDING_INPUTS"].state is ClaimState.PENDING
+
+    # a good answer to each one is accepted, so the constraints are not simply refusing everything
+    from docs.contracts.wire import REQUIRED_WRITER_ROLES
+
+    good = {
+        ("O1", "principal"): {"principal": "platform-svc", "hmac_version": "v2", "key_id": "k1"},
+        ("O1", "deadline"): {"clock": "platform db", "ttl_seconds": 900},
+        ("O2", ""): {"terminal_authority": "platform", "reaper_cadence_seconds": 60,
+                     "outcome_recovery": "signed redelivery with replay on restart"},
+        ("O3", ""): {"scope": "global", "allocated_by": "platform"},
+        ("O4", ""): {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": True},
+    }
+    for item in inputs:
+        answers = [a for (obligation, _hint), a in good.items() if obligation == item.obligation]
+        assert any(item.accept(answer) == [] for answer in answers), (
+            f"{item.obligation}: no acceptable answer exists, so the constraint refuses everything"
+        )
 
     # the specific decisions the finding said were missing
     text = " ".join(i.question for i in inputs)

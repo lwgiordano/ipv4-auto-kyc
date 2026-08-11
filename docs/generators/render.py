@@ -128,7 +128,7 @@ def source_revision() -> str:
         return "unknown"
 
 
-def _stamped_canvas(title: str, revision: str):
+def _stamped_canvas(title: str, revision: str, page_sections: dict | None = None):
     """A canvas that holds each finished page until `save()`, then stamps the footer.
 
     The total page count is not known while a page is being drawn, so the footer cannot be
@@ -151,7 +151,10 @@ def _stamped_canvas(title: str, revision: str):
                 self.saveState()
                 self.setFont("Helvetica", 7)
                 self.setFillColor(colors.HexColor("#666666"))
-                self.drawString(0.75 * inch, 0.45 * inch, f"{title}  ·  source {revision}")
+                section = (page_sections or {}).get(number, "")
+                left = f"{title}  ·  {section}  ·  source {revision}" if section else (
+                    f"{title}  ·  source {revision}")
+                self.drawString(0.75 * inch, 0.45 * inch, left)
                 self.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {number} of {total}")
                 self.restoreState()
                 super().showPage()
@@ -272,6 +275,7 @@ class Doc:
         self.rendered: list[str] = []
         self.sections: list[Section] = []
         self.placements: list[dict] = []  # filled by build(): where each flowable landed
+        self.page_sections: dict[int, str] = {}  # filled by build(): page -> section title
         self._total_pages = 0
         self._open_section("(front matter)", "")
 
@@ -284,7 +288,12 @@ class Doc:
         if any(s.section_id == section_id for s in self.sections):
             raise ValueError(f"duplicate section id {section_id!r}")
         self._open_section(section_id, title)
-        self.story.append(Paragraph(escape(title), H1))
+        heading = Paragraph(escape(title), H1)
+        # Tagged so the layout pass can tell which section each PAGE belongs to and stamp it in
+        # the footer: a page that opens mid-sentence is otherwise unlocatable on its own
+        # (re-audit `4f23f23..122cc67` finding 12).
+        heading._kyc_section = title
+        self.story.append(heading)
         self._add(Block(kind="heading", claim_id=None, lines=(title,)))
 
     def _add(self, block) -> None:
@@ -590,6 +599,8 @@ class Doc:
                     "would not reproduce these pages. Commit first, then rebuild."
                 )
         placements = self.placements
+        page_sections: dict[int, str] = {}
+        self.page_sections = page_sections
 
         class _Recording(SimpleDocTemplate):
             """Records where each flowable actually landed.
@@ -601,6 +612,12 @@ class Doc:
             """
 
             def afterFlowable(self, flowable):  # noqa: N802 — reportlab's spelling
+                section = getattr(flowable, "_kyc_section", None)
+                if section is not None:
+                    page_sections[self.page] = section
+                elif self.page not in page_sections and self.page > 1:
+                    # a page that opens with a continuation inherits the section it continues
+                    page_sections[self.page] = page_sections.get(self.page - 1, "")
                 frame = getattr(self, "frame", None)
                 if frame is None:
                     return
@@ -627,7 +644,7 @@ class Doc:
             author="IPv4.Global",
             subject=f"source revision {revision}",
         )
-        template.build(self.story, canvasmaker=_stamped_canvas(title, revision))
+        template.build(self.story, canvasmaker=_stamped_canvas(title, revision, page_sections))
         self._total_pages = template.page
         return path
 

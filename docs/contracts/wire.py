@@ -153,7 +153,15 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
 
 @dataclass(frozen=True)
 class PendingInput:
-    """One decision 024 cannot be built without."""
+    """One decision 024 cannot be built without.
+
+    `accept` is what makes this an acceptance contract rather than a questionnaire (re-audit
+    `4f23f23..122cc67` finding 10). `answer_type` is free text describing the SHAPE of an answer;
+    it cannot tell a usable answer from an unusable one. A v1 HMAC version, a local process clock,
+    a per-case release id, a writer-role list missing the inline manual approve — each looks like
+    a complete answer and each leaves 024 unsafe. `accept` decides, and until it returns true the
+    obligation stays blocked.
+    """
 
     obligation: str  # O1-O4, as the live spec names them
     owner: str
@@ -161,6 +169,86 @@ class PendingInput:
     answer_type: str
     authority: str
     blocks: str  # the deliverable that cannot be built until this is answered
+    accept: object = None  # Callable[[dict], list[str]] -> reasons it is NOT acceptable
+    must_reject: tuple[tuple[str, dict], ...] = ()  # named unusable answers, for the RED tests
+
+
+
+# ── what makes each answer USABLE, not merely present ─────────────────────────────────────────────
+#
+# Each returns the reasons an answer is unacceptable; empty means the obligation is satisfied.
+# These are the constraints the accepted design already fixes, written where a reviewer can see
+# them rather than left implicit in a spec paragraph.
+
+
+def _accept_principal(answer: dict) -> list[str]:
+    problems = []
+    if not str(answer.get("principal", "")).strip():
+        problems.append("no platform principal named; production requires a non-blank principal")
+    if str(answer.get("hmac_version", "")).lower() != "v2":
+        problems.append(
+            "admission requires HMAC v2; a v1 signature is path-unbound and cannot authorise a "
+            "release request")
+    if not str(answer.get("key_id", "")).strip():
+        problems.append("no key id named, so the principal cannot be bound to a verified signature")
+    return problems
+
+
+def _accept_deadline(answer: dict) -> list[str]:
+    problems = []
+    if str(answer.get("clock", "")).lower() not in {"platform db", "platform database"}:
+        problems.append(
+            "the deadline must be measured against the PLATFORM DATABASE clock; a local process "
+            "clock cannot expire a request during a restart with no traffic")
+    seconds = answer.get("ttl_seconds")
+    if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds <= 0:
+        problems.append("the TTL must be a positive whole number of seconds")
+    return problems
+
+
+def _accept_terminal_authority(answer: dict) -> list[str]:
+    problems = []
+    if str(answer.get("terminal_authority", "")).lower() != "platform":
+        problems.append(
+            "the platform must be the SOLE terminal and expiry authority; two systems cannot both "
+            "own the final state under one lock")
+    cadence = answer.get("reaper_cadence_seconds")
+    if not isinstance(cadence, int) or isinstance(cadence, bool) or cadence <= 0:
+        problems.append("the reaper needs an explicit bounded cadence in seconds")
+    if not str(answer.get("outcome_recovery", "")).strip():
+        problems.append("no recovery path for a lost manual.release_outcome")
+    return problems
+
+
+def _accept_release_id(answer: dict) -> list[str]:
+    problems = []
+    if str(answer.get("scope", "")).lower() != "global":
+        problems.append(
+            "release_id must be GLOBALLY unique; a per-case scope admits the same id on a second "
+            "case, which the design requires to be rejected")
+    if not str(answer.get("allocated_by", "")).strip():
+        problems.append("nobody is named as allocating the id")
+    return problems
+
+
+# The writer roles that must ALL be fenced. The inline manual approve is the one a quiescence
+# preflight cannot see, so a matrix that omits it reads complete and is not.
+REQUIRED_WRITER_ROLES = frozenset({
+    "pipeline decide", "api inline reviewer.manual_approve", "outbox publisher",
+})
+
+
+def _accept_writer_matrix(answer: dict) -> list[str]:
+    problems = []
+    declared = {str(role).strip().lower() for role in answer.get("writer_roles", ())}
+    missing = sorted(REQUIRED_WRITER_ROLES - declared)
+    if missing:
+        problems.append(f"the writer-role matrix omits {missing}")
+    if answer.get("old_image_full_stop") is not True:
+        problems.append(
+            "the full maintenance stop during an old-image transition is not agreed; an old-image "
+            "writer does not take the admission fence, so the fence proves nothing about it")
+    return problems
 
 
 PENDING_024_INPUTS: tuple[PendingInput, ...] = (
@@ -173,6 +261,12 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
         answer_type="principal identifier + key id + which HMAC version it signs with",
         authority="activation spec O1 (manual-release authority, executable and relationally bound)",
         blocks="the manual.release_requested request model and its admission gate",
+        accept=_accept_principal,
+        must_reject=(
+            ("a v1 signature", {"principal": "platform-svc", "hmac_version": "v1", "key_id": "k1"}),
+            ("no principal", {"principal": "", "hmac_version": "v2", "key_id": "k1"}),
+            ("no key id", {"principal": "platform-svc", "hmac_version": "v2", "key_id": " "}),
+        ),
     ),
     PendingInput(
         obligation="O1",
@@ -183,6 +277,12 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
         authority="activation spec O1 (request model: release id, requested manual event, "
                   "authoritative deadline/TTL)",
         blocks="the release request model and the expiry reaper",
+        accept=_accept_deadline,
+        must_reject=(
+            ("a local process clock", {"clock": "local process", "ttl_seconds": 900}),
+            ("no TTL", {"clock": "platform db", "ttl_seconds": None}),
+            ("a zero TTL", {"clock": "platform db", "ttl_seconds": 0}),
+        ),
     ),
     PendingInput(
         obligation="O2",
@@ -194,6 +294,17 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
         answer_type="written confirmation + reaper cadence + outcome redelivery/recovery contract",
         authority="activation spec O2 (two-system convergence; no-traffic expiry)",
         blocks="the outcome mirror, the expiry path, and every convergence test",
+        accept=_accept_terminal_authority,
+        must_reject=(
+            ("shared terminal authority", {"terminal_authority": "both",
+                                           "reaper_cadence_seconds": 60,
+                                           "outcome_recovery": "retry"}),
+            ("an unbounded reaper", {"terminal_authority": "platform",
+                                     "reaper_cadence_seconds": None,
+                                     "outcome_recovery": "retry"}),
+            ("no outcome recovery", {"terminal_authority": "platform",
+                                     "reaper_cadence_seconds": 60, "outcome_recovery": ""}),
+        ),
     ),
     PendingInput(
         obligation="O3",
@@ -203,6 +314,11 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
         answer_type="written confirmation of global uniqueness + who allocates the id",
         authority="activation spec O3 (release-id scope and governance)",
         blocks="the UNIQUE(release_id) constraint and its 409 path",
+        accept=_accept_release_id,
+        must_reject=(
+            ("a per-case scope", {"scope": "per case", "allocated_by": "platform"}),
+            ("no allocator", {"scope": "global", "allocated_by": ""}),
+        ),
     ),
     PendingInput(
         obligation="O4",
@@ -214,6 +330,14 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
         answer_type="role list per side + written agreement on the old-image stop",
         authority="activation spec O4 (both decision writers fenced) + .agents/ROADMAP.md",
         blocks="the activation migration's admission fence and its preflight",
+        accept=_accept_writer_matrix,
+        must_reject=(
+            ("the inline manual approve omitted",
+             {"writer_roles": ("pipeline decide", "outbox publisher"),
+              "old_image_full_stop": True}),
+            ("no old-image stop",
+             {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": False}),
+        ),
     ),
 )
 

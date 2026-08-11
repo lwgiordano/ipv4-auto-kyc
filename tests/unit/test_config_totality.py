@@ -381,3 +381,62 @@ def test_a_malformed_active_secret_yields_401_for_hostile_subclasses_too():
     with pytest.raises(HTTPException) as excinfo:
         auth.require_valid_signature(settings, _Req(), b"{}")
     assert excinfo.value.status_code == 401
+
+
+# ── duplicate rotation key ids, at every text source ─────────────────────────────────────────────
+_SECRET_A, _SECRET_B = "a" * 34, "b" * 34
+DUPLICATE_JSON = f'{{"old": "{_SECRET_A}", "old": "{_SECRET_B}"}}'
+SINGLE_JSON = f'{{"old": "{_SECRET_A}"}}'
+
+
+def test_a_duplicate_key_in_the_process_environment_is_refused(monkeypatch):
+    from kyc_tool.config import get_settings
+
+    monkeypatch.setenv("KYC_HMAC_INBOUND_EXTRA_KEYS", DUPLICATE_JSON)
+    with pytest.raises(Exception) as excinfo:  # noqa: B017 — pydantic-settings wraps it
+        Settings()
+    assert "repeats key" in str(excinfo.value.__cause__)
+    # and the OPERATOR-facing loader says why, not just "error parsing value"
+    with pytest.raises(ConfigLoadError, match="repeats key"):
+        get_settings()
+
+
+def test_a_duplicate_key_in_a_dotenv_file_is_refused(tmp_path, monkeypatch):
+    """The case the previous `os.environ` check missed entirely — and a `.env` file is the
+    documented way to configure this (re-audit `4f23f23..122cc67` finding 8)."""
+    monkeypatch.delenv("KYC_HMAC_INBOUND_EXTRA_KEYS", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"KYC_HMAC_INBOUND_EXTRA_KEYS={DUPLICATE_JSON}\n")
+    with pytest.raises(Exception) as excinfo:  # noqa: B017
+        Settings(_env_file=str(env_file))
+    assert "repeats key" in str(excinfo.value.__cause__)
+
+
+def test_a_non_duplicate_value_still_round_trips(tmp_path, monkeypatch):
+    """Guard the guard: a check that refused everything would pass the two tests above."""
+    monkeypatch.delenv("KYC_HMAC_INBOUND_EXTRA_KEYS", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"KYC_HMAC_INBOUND_EXTRA_KEYS={SINGLE_JSON}\n")
+    assert Settings(_env_file=str(env_file)).hmac_inbound_extra_keys == {"old": "a" * 34}
+
+    monkeypatch.setenv("KYC_HMAC_INBOUND_EXTRA_KEYS", SINGLE_JSON)
+    assert Settings().hmac_inbound_extra_keys == {"old": "a" * 34}
+
+
+def test_the_duplicate_check_reads_the_selected_source_not_the_process_environment(
+        tmp_path, monkeypatch):
+    """An explicit env file takes precedence over the process environment, so a duplicate there
+    must be caught even when an unrelated clean value is exported."""
+    monkeypatch.setenv("KYC_HMAC_INBOUND_EXTRA_KEYS", SINGLE_JSON)
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"KYC_HMAC_INBOUND_EXTRA_KEYS={DUPLICATE_JSON}\n")
+    with pytest.raises(Exception) as excinfo:  # noqa: B017
+        Settings(_env_file=str(env_file))
+    assert "repeats key" in str(excinfo.value.__cause__)
+
+
+def test_the_helper_is_total_over_junk():
+    from kyc_tool.config import _refuse_duplicate_json_keys
+
+    for value in (None, 5, [], {}, "not json", "{malformed", b"{}"):
+        _refuse_duplicate_json_keys("field", value)  # must not raise

@@ -7,7 +7,6 @@ any unsafe or stub configuration (see api/app.py, workers/*).
 
 import json
 import math
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -16,7 +15,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import Field, ValidationError, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict, SettingsError
 
 from kyc_tool.security import MAX_HMAC_SKEW_SECONDS
 
@@ -439,34 +438,24 @@ class Settings(BaseSettings):
             raise ValueError("; ".join(problems))
         return v
 
-    @model_validator(mode="after")
-    def _refuse_duplicate_rotation_key_ids(self):
-        """Duplicate key ids in the RAW JSON, which `dict` has already collapsed.
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, init_settings, env_settings,
+                                   dotenv_settings, file_secret_settings):
+        """Wrap every TEXT source so duplicate JSON keys are refused wherever the value came from.
 
-        `OPS.CONFIG.ROTATION_KEYS` promises duplicates are refused, and the dict validator cannot
-        keep that promise: `{"old": "A", "old": "B"}` is last-key-wins before any validator runs
-        (re-audit `4f23f23..97deeae` finding 11). An operator who pastes a key twice with two
-        different secrets silently ends up verifying against only one of them, and the other —
-        which the peer may still be signing with — is simply gone.
-
-        Re-parsing the environment string is the only place the duplicate is still visible. A
-        value set programmatically rather than through the environment cannot be checked this way,
-        which is why the dict-level rules above remain the primary layer.
+        The previous check read `os.environ` directly (re-audit `4f23f23..122cc67` finding 8),
+        which is the wrong place twice over: a duplicate in a `.env` file — the documented way to
+        configure this — sailed through, and an unrelated lower-precedence process variable could
+        be inspected instead of the value Pydantic actually selected. Decoding is the only moment
+        the duplicate still exists; by the time a `dict` reaches a validator, JSON's last-key-wins
+        has already discarded the earlier secret while the peer may still be signing with it.
         """
-        raw = os.environ.get("KYC_HMAC_INBOUND_EXTRA_KEYS")
-        if raw and raw.strip().startswith("{"):
-            seen: list[str] = []
-            try:
-                json.loads(raw, object_pairs_hook=lambda pairs: seen.extend(k for k, _ in pairs))
-            except ValueError:
-                return self  # malformed JSON is already Pydantic's to report
-            duplicates = sorted({k for k in seen if seen.count(k) > 1})
-            if duplicates:
-                raise ValueError(
-                    f"KYC_HMAC_INBOUND_EXTRA_KEYS repeats key_id(s) {duplicates}; JSON keeps only "
-                    "the last, so the earlier secret would be silently dropped"
-                )
-        return self
+        return (
+            init_settings,
+            _duplicate_aware(env_settings),
+            _duplicate_aware(dotenv_settings),
+            file_secret_settings,
+        )
 
     @field_validator("hmac_inbound_extra_keys")
     @classmethod
@@ -659,6 +648,45 @@ class Settings(BaseSettings):
     # admin token (validate_for_production enforces this) and the mutations are
     # gated by that token (api/auth.require_admin).
     ui_enabled: bool = False
+
+
+class DuplicateKeyError(ValueError):
+    """A JSON object in configuration repeated a key. JSON keeps only the last one."""
+
+
+def _refuse_duplicate_json_keys(field_name: str, value) -> None:
+    """Raise if a raw JSON object repeats a key. Decoding is the only moment it is still visible."""
+    if not isinstance(value, str) or not value.strip().startswith("{"):
+        return
+    seen: list[str] = []
+    try:
+        json.loads(value, object_pairs_hook=lambda pairs: seen.extend(k for k, _ in pairs))
+    except ValueError:
+        return  # malformed JSON is the settings source's own error to report
+    duplicates = sorted({key for key in seen if seen.count(key) > 1})
+    if duplicates:
+        raise DuplicateKeyError(
+            f"{field_name} repeats key(s) {duplicates}; JSON keeps only the last, so the earlier "
+            "value would be silently dropped"
+        )
+
+
+def _duplicate_aware(source):
+    """Patch a pydantic-settings source so its own decode path performs the check.
+
+    The bound method is replaced rather than the object wrapped: the source calls
+    `self.decode_complex_value` internally, so a delegating wrapper is never consulted (the first
+    attempt at this did exactly that and silently checked nothing). Patching also survives the
+    several source classes pydantic-settings uses, which do not share a constructor.
+    """
+    original = source.decode_complex_value
+
+    def checked(field_name, field, value):
+        _refuse_duplicate_json_keys(field_name, value)
+        return original(field_name, field, value)
+
+    source.decode_complex_value = checked
+    return source
 
 
 class ProductionConfigError(RuntimeError):
@@ -1112,6 +1140,16 @@ def get_settings() -> Settings:
         return Settings()
     except ValidationError as error:
         report = _sanitized_validation_report(error)
+    except SettingsError as error:
+        # pydantic-settings wraps a source-decode failure in a message that names the field and
+        # the source but drops the REASON, so a duplicated rotation key id reached the operator as
+        # "error parsing value" with no hint what to fix. The cause is surfaced only when it is
+        # our own duplicate-key error, whose message names keys and never values.
+        cause = error.__cause__
+        report = (
+            str(cause) if isinstance(cause, DuplicateKeyError)
+            else f"{error} (the value itself is not shown)"
+        )
     # RAISED OUTSIDE THE except BLOCK, deliberately (re-audit `4f23f23..122cc67` finding 7).
     # `raise ... from None` inside the handler suppresses the PRINTING of `__context__`, but the
     # raw Pydantic error stays attached — and its `.json()` still carries the live secret, which

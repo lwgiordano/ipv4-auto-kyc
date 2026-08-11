@@ -792,3 +792,37 @@ def test_the_layout_overlap_guard_catches_the_exact_baseline_case(tmp_path):
     assert _sibling_overlaps(doc), (
         "the negative spacer produced no detected overlap, so the guard above proves nothing"
     )
+
+
+# ── a separated page is still locatable ──────────────────────────────────────────────────────────
+@pytest.mark.parametrize("generator", [contract_gen, deploy_gen])
+def test_every_page_names_the_section_it_belongs_to(generator, tmp_path):
+    """Re-audit `4f23f23..122cc67` finding 12. Pages opened mid-sentence — `Rolling back:` split
+    from the procedure it belongs to, `case. Treat a 409...` with no heading — so a page read on
+    its own could not be placed. Forbidding a paragraph from crossing a page boundary would be
+    fighting typography; naming the section on every page fixes what the finding is actually
+    about, which is that a separated page was not independently understandable."""
+    path = str(tmp_path / "sections.pdf")
+    doc = _build(generator)
+    doc.build(path, "sections")
+
+    with pdfplumber.open(path) as pdf:
+        pages = [(n, page.extract_text() or "") for n, page in enumerate(pdf.pages, 1)]
+    for number, text in pages:
+        footer = _flat(text.strip().split("\n")[-1])
+        assert "source" in footer and f"Page {number} of" in footer, (
+            f"page {number} has no provenance footer: {footer[:80]!r}")
+        if number == 1:
+            continue  # the title page is self-identifying
+        section = doc.page_sections.get(number, "")
+        assert section, f"page {number} belongs to no section"
+        assert _flat(section) in footer, (
+            f"page {number} does not name its section: {footer[:100]!r}")
+
+
+def test_the_section_footer_tracks_section_changes(tmp_path):
+    """Guard the guard: if every page reported the same section the test above would pass while
+    telling a reader nothing."""
+    doc = _build(deploy_gen)
+    doc.build(str(tmp_path / "track.pdf"), "track")
+    assert len(set(doc.page_sections.values())) > 1, doc.page_sections
