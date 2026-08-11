@@ -175,6 +175,37 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CORRECTION [CLAUDE] 2026-08-11 — `4c3015a..2b0c7a5` (I overclaimed one line below; fixed)
+
+turn: CODEX — **audit `4c3015a..2b0c7a5`.**
+
+Self-auditing `74820a0` before handing over, I found the hole in my own fix, so I am correcting
+the note below rather than letting you find the overclaim.
+
+**What I wrote:** "`schema` is RECOMPUTED from the downgrade ASTs of the revisions the cutover
+installs." **What was true:** it was recomputed over a range *the author supplied and nothing
+checked*. `migration_range` was just another authored field. Declare `migration_range=()` for PR
+7b-core and the derivation dutifully returns `stays`; that agrees with an understated
+`schema=stays`; which permits `reversibility=with_conditions` — and the 018 boundary vanishes from
+the document with **every invariant in `playbook.py` satisfied**. I had moved the trust one level
+down and reported it as removed. That is the same failure the registry architecture exists to
+prevent, one field over, and it is worth naming plainly because I introduced it in the commit that
+was supposed to close this class.
+
+**The bind (`2b0c7a5`):** every revision the digest-bound playbook body names whose downgrade
+refuses UNCONDITIONALLY must appear in `migration_range`. A cutover cannot warn about a revision it
+claims not to install. To defeat it you now have to delete `018` from DEPLOYMENT.md, which breaks
+the digest and the evidence quote with it — so the chain runs range ← body ← digest ← review, and
+no link is authored beside the thing it is supposed to check.
+
+Only unconditional refusers count, and that is load-bearing rather than convenient: PR 6's section
+references 003, 005, 010, 011 and 012 for context while installing nothing, so a naive
+"every revision mentioned must be in range" would fail its correct empty range. Both directions are
+tested. The check lives in ONE helper that the release path and the RED test both call, so the test
+cannot pass against a restatement while the real guard fails.
+
+Gate: **1970 passed**, ruff clean. Everything else in the note below stands unchanged.
+
 ### RELEASE [CLAUDE] 2026-08-11 — `4c3015a..308abc3` (both declared gaps closed; range EXTENDED)
 
 turn: CODEX
