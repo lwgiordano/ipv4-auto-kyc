@@ -6,11 +6,17 @@ restates a value the registry owns. `Doc.claim()` records which claim ids reache
 text from the built PDF.
 """
 
+import os
+import subprocess
+
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen import canvas as pdfcanvas
 from reportlab.platypus import (
+    KeepTogether,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -26,10 +32,13 @@ H2 = ParagraphStyle("H2x", parent=_styles["Heading2"], fontSize=12, spaceBefore=
                     textColor=colors.HexColor("#1a1a2e"))
 BODY = ParagraphStyle("Bodyx", parent=_styles["Normal"], fontSize=9.5, leading=13, spaceAfter=5)
 WHY = ParagraphStyle("Why", parent=BODY, leftIndent=10, textColor=colors.HexColor("#444444"),
-                     fontSize=9, leading=12)
+                     fontSize=9, leading=12, splitLongWords=0)
 CODE = ParagraphStyle("Code", parent=_styles["Code"], fontSize=8, leading=10.5, leftIndent=8,
                       spaceAfter=5, backColor=colors.HexColor("#f4f4f4"))
-CELL = ParagraphStyle("Cell", parent=BODY, fontSize=8.5, leading=11, spaceAfter=0)
+# splitLongWords=0: prose in a narrow column still wraps, but a long identifier moves to the next
+# line WHOLE instead of being cut in half. A cell rendered `BLOCKE` / `D_NO_AUTHORITATIVE_MAPPING`
+# publishes a sentinel nobody can grep for.
+CELL = ParagraphStyle("Cell", parent=BODY, fontSize=8.5, leading=11, spaceAfter=0, splitLongWords=0)
 CELLB = ParagraphStyle("CellB", parent=CELL, fontName="Helvetica-Bold")
 ALERT = ParagraphStyle("Alert", parent=BODY, fontSize=10, leading=14, spaceAfter=6,
                        textColor=colors.HexColor("#7a1010"), backColor=colors.HexColor("#fdf0f0"),
@@ -46,6 +55,141 @@ _TABLE_STYLE = TableStyle([
 ])
 
 
+TOKEN = ParagraphStyle("Token", parent=CELL, fontName="Courier", fontSize=7.6, leading=10,
+                       splitLongWords=0, wordWrap=None)
+STEP = ParagraphStyle("Step", parent=BODY, leftIndent=18, firstLineIndent=-14, spaceAfter=3)
+# Fixed-width text that MUST wrap: wordWrap="CJK" breaks between characters, which is the only way
+# a 163-byte JSON body with no spaces fits a page at all.
+WRAPCODE = ParagraphStyle("WrapCode", parent=CODE, wordWrap="CJK", splitLongWords=1)
+
+# Usable text width: letter minus the 0.75in margins, minus CODE's left indent.
+FRAME_WIDTH = letter[0] - 2 * 0.75 * inch
+_CODE_ROOM = FRAME_WIDTH - CODE.leftIndent
+
+
+def _guard_preformatted(text: str) -> str:
+    """XPreformatted does NOT wrap and does NOT honour `<br/>`.
+
+    Both were live defects. Joining steps with `<br/>` produced one run-on line (the tag is
+    silently dropped), and that line then ran off the right edge of the page — the receiver's
+    commit-before-2xx contract, the single most important requirement in the integration document,
+    was printed unreadable. Extraction tests did not catch it because pdfplumber happily reports
+    glyphs positioned outside the page box.
+
+    So: preformatted content is line-split on real newlines and every line must fit. Anything that
+    needs to wrap belongs in `wrapcode()` or an ordinary paragraph.
+    """
+    if "<br/>" in text:
+        raise ValueError("XPreformatted ignores <br/>; join preformatted lines with a newline")
+    for line in text.split("\n"):
+        width = stringWidth(line, CODE.fontName, CODE.fontSize)
+        if width > _CODE_ROOM:
+            raise ValueError(
+                f"preformatted line needs {width:.0f}pt but the frame allows {_CODE_ROOM:.0f}pt, "
+                f"so it would run off the page: {line[:60]!r}..."
+            )
+    return text
+
+
+def source_revision() -> str:
+    """The commit these pages were rendered from, plus a dirty marker. Printed in the footer so a
+    stale PDF is distinguishable from the audited one years later."""
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        ).stdout.strip()
+        return f"{head}{'+dirty' if dirty else ''}"
+    except Exception:  # noqa: BLE001 — provenance is best-effort; never block a render
+        return "unknown"
+
+
+def _stamped_canvas(title: str, revision: str):
+    """A canvas that holds each finished page until `save()`, then stamps the footer.
+
+    The total page count is not known while a page is being drawn, so the footer cannot be
+    written by a page callback. Deferring every page to save time makes `Page N of M` honest.
+    """
+
+    class _Stamped(pdfcanvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._pending: list[dict] = []
+
+        def showPage(self):
+            self._pending.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total = len(self._pending)
+            for number, state in enumerate(self._pending, 1):
+                self.__dict__.update(state)
+                self.saveState()
+                self.setFont("Helvetica", 7)
+                self.setFillColor(colors.HexColor("#666666"))
+                self.drawString(0.75 * inch, 0.45 * inch, f"{title}  ·  source {revision}")
+                self.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {number} of {total}")
+                self.restoreState()
+                super().showPage()
+            super().save()
+
+    return _Stamped
+
+
+_CELL_PADDING = 10  # LEFTPADDING + RIGHTPADDING in _TABLE_STYLE
+
+
+def _token_cell(text: str, width: float | None = None):
+    """A cell of machine identifiers that must never break mid-token. Items separate at commas,
+    each on its own line, so a reader copies `platform_account_id` whole.
+
+    RAISES when a token cannot fit the column. `wordWrap=None` with `splitLongWords=0` does not
+    wrap an over-wide token — it CLIPS it, silently. That printed `website.review_completed` as
+    `website.review_complete`, a value that 422s on arrival and reads as correct on the page. A
+    document is worse than useless when it is confidently wrong, so an unfittable token is a build
+    failure rather than a layout artefact a reviewer is expected to catch by eye.
+    """
+    items = [part.strip() for part in str(text).split(",") if part.strip()]
+    if width is not None:
+        room = width - _CELL_PADDING
+        for item in items or [str(text)]:
+            needed = stringWidth(item, TOKEN.fontName, TOKEN.fontSize)
+            if needed > room:
+                raise ValueError(
+                    f"{item!r} needs {needed:.1f}pt but its column allows {room:.1f}pt; it would "
+                    f"be clipped on the page. Widen the column or reduce the token font."
+                )
+    return Paragraph("<br/>".join(escape(i) for i in items) or escape(text), TOKEN)
+
+
+def _prose_cell(text: str, width: float):
+    """A wrapping prose cell that never cuts a word in half.
+
+    CELL sets `splitLongWords=0`, so an over-wide word is not split — it is CLIPPED instead, which
+    is the silent failure `_token_cell` already refuses. Same rule here: the longest word must fit
+    its column, or the build stops.
+    """
+    room = width - _CELL_PADDING
+    for word in str(text).split():
+        needed = stringWidth(word, CELL.fontName, CELL.fontSize)
+        if needed > room:
+            raise ValueError(
+                f"{word!r} needs {needed:.1f}pt but its column allows {room:.1f}pt; it would be "
+                f"clipped. Widen the column or rephrase around the term."
+            )
+    return Paragraph(escape(text), CELL)
+
+
 def escape(text: str) -> str:
     """Registry values are plain text; reportlab's Paragraph parses a mini-HTML, so `>` in a
     direction token like `platform->tool` must be escaped or it is swallowed as markup."""
@@ -59,6 +203,7 @@ class Doc:
         self.registry = registry
         self.story: list = []
         self.rendered: list[str] = []
+        self._total_pages = 0
 
     # ---- prose (carries no authoritative value) --------------------------------------------
     def title(self, text: str):
@@ -78,67 +223,201 @@ class Doc:
         self.p(markup, WHY)
 
     def code(self, text: str):
-        """Fixed-width block. Uses XPreformatted, not Paragraph: Paragraph collapses leading
-        whitespace, so published Python came out unindented and would not compile when copied off
-        the page (re-audit `6feca36..4f23f23` F3)."""
-        self.story.append(XPreformatted(escape(text), CODE))
+        """Fixed-width block whose INDENTATION is meaningful — published Python, mainly.
+
+        Uses XPreformatted, not Paragraph: Paragraph collapses leading whitespace, so published
+        Python came out unindented and would not compile when copied off the page (re-audit
+        `6feca36..4f23f23` F3). The cost is that it never wraps, so `_guard_preformatted` refuses
+        a line that would not fit. Use `wrapcode()` for fixed-width text that may wrap.
+        """
+        self.story.append(XPreformatted(_guard_preformatted(escape(text)), CODE))
+
+    def wrapcode(self, text: str):
+        """Fixed-width text that is allowed to wrap anywhere, including mid-token.
+
+        For the signed body: 163 bytes of JSON with no whitespace, which cannot fit a line and has
+        no break opportunity. The document tells the reader it wraps and gives them the byte count
+        and sha256 to check their transcription against.
+        """
+        self.story.append(Paragraph(escape(text), WRAPCODE))
 
     def space(self, height: float = 4):
         self.story.append(Spacer(1, height))
 
     # ---- claims (the registry owns the value) ------------------------------------------------
-    def _record(self, claim_id: str):
+    #
+    # Recording is ATOMIC with appending a flowable (re-audit `6feca36..4f23f23` F4). There is no
+    # public record hook: a caller could otherwise mark a claim rendered and then display nothing,
+    # display something else, or display it twice, and the coverage count would still be 1. Every
+    # method below appends first and records only on success, so `self.rendered` counts flowables
+    # that exist rather than intentions.
+    def _emit(self, claim_id: str, flowables: list):
+        claim = self.registry[claim_id]
+        if not flowables:
+            raise ValueError(f"{claim_id} produced no flowable")
+        self.story.extend(flowables)
         self.rendered.append(claim_id)
-        return self.registry[claim_id]
+        return claim
 
     def claim_paragraph(self, claim_id: str, *, style=BODY, prefix: str = ""):
-        """Render a claim whose value is a single string."""
-        claim = self._record(claim_id)
-        self.story.append(Paragraph(prefix + escape(claim.value), style))
+        """Render a claim whose value is a single string.
+
+        Refuses a non-string: `escape()` would happily stringify a tuple, and the contract shipped
+        `decision is one of: ('approve', 'approve_buy_locked', ...)` — Python repr, quotes and
+        parentheses included, in a document written for people implementing against it.
+        """
+        claim = self.registry[claim_id]
+        if not isinstance(claim.value, (str, int, float)):
+            raise TypeError(
+                f"{claim_id} holds {type(claim.value).__name__}; rendering it here would publish "
+                f"its Python repr. Use claim_bullets, claim_code, claim_table, or claim_prose."
+            )
+        self._emit(claim_id, [Paragraph(prefix + escape(claim.value), style)])
 
     def claim_bullets(self, claim_id: str, *, style=BODY):
         """Render a claim whose value is a sequence of strings, one paragraph each."""
-        claim = self._record(claim_id)
-        for item in claim.value:
-            self.story.append(Paragraph("\u2013  " + escape(item), style))
+        claim = self.registry[claim_id]
+        self._emit(claim_id, [Paragraph("\u2013  " + escape(i), style) for i in claim.value])
 
-    def claim_steps(self, claim_id: str):
-        """Render an ORDERED claim as a numbered block, so the reader sees the order the test
-        asserts."""
-        claim = self._record(claim_id)
-        lines = [f"{n}. {escape(step)}" for n, step in enumerate(claim.value, 1)]
-        self.story.append(Paragraph("<br/>".join(lines), CODE))
+    def _with_heading(self, claim_id: str, heading: str | None, blocks: list):
+        if heading:
+            self._emit(claim_id, [KeepTogether([Paragraph(escape(heading), H2), *blocks])])
+        else:
+            self._emit(claim_id, blocks)
+
+    def claim_steps(self, claim_id: str, *, heading: str | None = None):
+        """Render an ORDERED claim as numbered, WRAPPING paragraphs, kept with its heading.
+
+        One paragraph per step, not one preformatted block: steps are sentences, and a preformatted
+        block runs the longest one straight off the page (see `_guard_preformatted`).
+        """
+        claim = self.registry[claim_id]
+        self._with_heading(claim_id, heading, [
+            Paragraph(f"{n}.  {escape(step)}", STEP) for n, step in enumerate(claim.value, 1)
+        ])
+
+    def claim_code(self, claim_id: str, *, heading: str | None = None):
+        """Render a claim whose value is a sequence of literals as a fixed-width block."""
+        claim = self.registry[claim_id]
+        block = XPreformatted(_guard_preformatted("\n".join(escape(v) for v in claim.value)), CODE)
+        self._with_heading(claim_id, heading, [block])
+
+    def claim_prose(self, claim_id: str, markup: str, *, style=BODY):
+        """Render a claim as prose the caller composed FROM that claim's value.
+
+        Still atomic: the flowable and the record are appended together. The rendering tests are
+        the other half — they assert the claim's own value reaches the extracted page text, so
+        composing a paragraph that omits or contradicts the value fails there.
+        """
+        self._emit(claim_id, [Paragraph(markup, style)])
+
+    _PART_STYLES = {"p": BODY, "why": WHY}
+
+    def claim_mixed(self, claim_id: str, parts):
+        """Render one claim that needs several flowables — prose, then a code block, then more.
+
+        `parts` is a sequence of (kind, text) pairs where kind is "p", "why", "code" (fixed-width,
+        indentation preserved, must fit the line), or "wrap" (fixed-width, wraps anywhere). Prose
+        parts take pre-escaped markup; code and wrap parts take raw text and are escaped here.
+
+        This exists so a composite claim — the signing vector is a body, a canonical string, a
+        digest, and a runnable snippet — stays ONE atomic emit. The alternative was a public
+        record hook beside a pile of loose `p()`/`code()` calls, which is exactly the shape that
+        lets a claim count as covered while displaying something else (re-audit F4).
+        """
+        flowables = []
+        for kind, text in parts:
+            if kind == "code":
+                flowables.append(XPreformatted(_guard_preformatted(escape(text)), CODE))
+            elif kind == "wrap":
+                flowables.append(Paragraph(escape(text), WRAPCODE))
+            else:
+                flowables.append(Paragraph(text, self._PART_STYLES[kind]))
+        self._emit(claim_id, flowables)
 
     def claim_alert(self, claim_id: str):
         """A blocked claim, rendered where a reader would otherwise act on the document."""
-        claim = self._record(claim_id)
+        claim = self.registry[claim_id]
         body = "<br/>".join("\u2013  " + escape(item) for item in claim.value)
-        self.story.append(Paragraph(body, ALERT))
+        self._emit(claim_id, [Paragraph(body, ALERT)])
 
-    def claim_table(self, claim_id: str, headers: tuple[str, ...], widths, rows=None):
-        """Render a claim whose value is a sequence of row tuples."""
-        claim = self._record(claim_id)
+    def claim_table(
+        self,
+        claim_id: str,
+        headers: tuple[str, ...],
+        widths,
+        rows=None,
+        heading: str | None = None,
+        code_columns: tuple[int, ...] = (),
+    ):
+        """Render a claim whose value is a sequence of row tuples.
+
+        `code_columns` marks columns holding machine identifiers. Those render in a fixed-width
+        face and break only between comma-separated items, never inside a token: an identifier
+        split across lines as `platform` / `_account_id` is one a reader copies wrong, and payload
+        extras are accepted, so the misspelling 202s while silently populating nothing
+        (re-audit `6feca36..4f23f23` F10).
+        """
+        claim = self.registry[claim_id]
         data = [[Paragraph(escape(h), CELLB) for h in headers]]
-        for row in (rows if rows is not None else claim.value):
-            data.append([Paragraph(escape(cell), CELL) for cell in row])
+        for row in rows if rows is not None else claim.value:
+            data.append(
+                [
+                    _token_cell(cell, widths[index])
+                    if index in code_columns
+                    else _prose_cell(cell, widths[index])
+                    for index, cell in enumerate(row)
+                ]
+            )
         table = Table(data, colWidths=widths, repeatRows=1)
         table.setStyle(_TABLE_STYLE)
-        self.story.append(table)
+        flowables = [table]
+        if heading:
+            flowables = [KeepTogether([Paragraph(escape(heading), H2), table])]
+        self._emit(claim_id, flowables)
 
-    def table(self, headers: tuple[str, ...], rows, widths):
+    def table(self, headers: tuple[str, ...], rows, widths, code_columns: tuple[int, ...] = ()):
         """A table whose cells are already formatted from claims recorded elsewhere."""
         data = [[Paragraph(escape(h), CELLB) for h in headers]]
         for row in rows:
-            data.append([Paragraph(escape(cell), CELL) for cell in row])
+            data.append(
+                [
+                    _token_cell(cell, widths[index])
+                    if index in code_columns
+                    else _prose_cell(cell, widths[index])
+                    for index, cell in enumerate(row)
+                ]
+            )
         table = Table(data, colWidths=widths, repeatRows=1)
         table.setStyle(_TABLE_STYLE)
         self.story.append(table)
 
     def build(self, path: str, title: str) -> str:
-        SimpleDocTemplate(
-            path, pagesize=letter, leftMargin=0.75 * inch, rightMargin=0.75 * inch,
-            topMargin=0.7 * inch, bottomMargin=0.7 * inch, title=title,
-        ).build(self.story)
+        """Render to `path`, stamping provenance on every page.
+
+        A document read for years without the repo beside it needs to say which commit produced
+        it and how many pages it has, so a stale copy is distinguishable from the audited one and
+        a missing page is visible (re-audit `6feca36..4f23f23` F12, document half).
+
+        "Page N of M" needs the total, which is only known once the last page is laid out. This
+        makes ONE layout pass and defers the furniture to canvas save time. A counting pass over
+        the same story does not work: reportlab mutates flowables as it lays them out (frame
+        binding, split state), so a second build over already-rendered objects raises LayoutError.
+        """
+        revision = source_revision()
+        template = SimpleDocTemplate(
+            path,
+            pagesize=letter,
+            leftMargin=0.75 * inch,
+            rightMargin=0.75 * inch,
+            topMargin=0.7 * inch,
+            bottomMargin=0.8 * inch,
+            title=title,
+            author="IPv4.Global",
+            subject=f"source revision {revision}",
+        )
+        template.build(self.story, canvasmaker=_stamped_canvas(title, revision))
+        self._total_pages = template.page
         return path
 
 

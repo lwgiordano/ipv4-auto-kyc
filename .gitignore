@@ -9,5 +9,10 @@ coverage.xml
 htmlcov/
 *.egg-info/
 
-# Built TechCraft handout PDFs — reproduce with docs/generators/*.py
+# Built TechCraft handout PDFs — reproduce with docs/generators/*.py.
+# The generators write to the working directory, which is normally the repo root, so both
+# locations are covered; a committed PDF would immediately be a stale second copy of a document
+# whose whole point is that it is generated from validated claims.
 docs/generators/*.pdf
+/techcraft-integration-contract.pdf
+/techcraft-deployment-guide.pdf

@@ -215,8 +215,13 @@ WIRE = Registry(
                 "Each automated decision enqueues one callback row in our transactional outbox.",
                 "An eligible row is delivered AT LEAST ONCE until you return 2xx or it "
                 "dead-letters, so duplicates are expected; dedupe on (case_id, run_id).",
-                "A row we can locally prove obsolete is suppressed and sends ZERO times.",
-                "A dead-lettered row needs an operator requeue on our side.",
+                "SUPPRESSED means zero sends: a row we can locally prove obsolete is never put on "
+                "the wire at all.",
+                "DEAD-LETTERED does NOT mean zero sends. A dead row exhausted its attempts "
+                "without us ever witnessing a 2xx, and it may have made up to eight HTTP "
+                "attempts. If one of those committed on your side and the response was lost, you "
+                "have applied a decision we recorded as undelivered. Before we requeue a dead "
+                "row, check your accepted ledger for that (case_id, run_id).",
                 "Manual approvals by your reviewers send nothing at all.",
                 "Do not assume a one-to-one match between decisions we make and callbacks you "
                 "receive.",
@@ -227,8 +232,9 @@ WIRE = Registry(
             id="WIRE.CALLBACK.RECEIVER_TXN",
             value=(
                 "Verify the signature.",
-                "In ONE transaction: dedupe on (case_id, run_id); apply the decision (or no-op if "
-                "already applied); append it to your accepted ledger.",
+                "In ONE transaction: dedupe on (case_id, run_id); decide whether this callback "
+                "becomes EFFECTIVE using the algorithm below; record it in your accepted ledger "
+                "either way.",
                 "COMMIT.",
                 "Only then return 2xx.",
                 "If the commit fails or its outcome is uncertain, return non-2xx or drop the "
@@ -239,6 +245,26 @@ WIRE = Registry(
             note="A 2xx returned before your commit is unrecoverable: we mark the row delivered "
                  "and at-least-once cannot help you. This is the single most important "
                  "requirement on your side.",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.EFFECTIVENESS",
+            value=(
+                "ACKNOWLEDGING a callback and APPLYING it are different decisions. Always "
+                "acknowledge and record; apply only under the rules below.",
+                "Interim, before ordered delivery is activated: if the currently effective source "
+                "for the case is a MANUAL approval, record and dedupe the callback but do NOT let "
+                "it become effective, even though it is not a duplicate and carries a new run id. "
+                "Otherwise apply it as the current automatic decision.",
+                "After activation: apply only when the callback's sequence exceeds your recorded "
+                "high-water mark for that case AND the current source is not manual. Automatic "
+                "authority over a manual-current case returns only through the authenticated "
+                "platform-owned release protocol, never by a callback arriving.",
+                "A duplicate under a run id you already recorded is acknowledged and ignored.",
+            ),
+            authority="AUDIT_FINDINGS.md A6 residual reverts + the accepted receiver design",
+            note="An automatic callback queued before a reviewer's manual approval can arrive "
+                 "after it, under a run id you have never seen. Treated as 'unique, therefore "
+                 "apply', it silently overwrites the manual decision.",
         ),
         Claim(
             id="WIRE.CALLBACK.RETRY",
@@ -270,8 +296,9 @@ WIRE = Registry(
             id="WIRE.CALLBACK.COMPLETION",
             value="For an automated decision that produces an eligible callback, that callback is "
                   "the completion signal and nothing needs polling. It is not a universal "
-                  "completion signal: manual approvals emit none, and a suppressed or "
-                  "dead-lettered row emits none.",
+                  "completion signal: manual approvals produce no callback at all, a suppressed "
+                  "row is never sent, and a dead-lettered row was sent without a witnessed "
+                  "success rather than not sent.",
             authority="AUDIT_FINDINGS.md A6 + kyc_tool.events.ingest (manual approve is inline)",
         ),
         # ── ordering ──────────────────────────────────────────────────────────────────────────

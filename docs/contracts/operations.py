@@ -1,54 +1,105 @@
 """Deployment, cutover, rollback, and activation obligations.
 
 Same discipline as `wire.py`: literal claims, validated against independent authority by
-`tests/unit/test_contract_registry_authority.py`. Cutover step sequences are stored as ORDERED
-tuples so a test can assert both membership and order — a reordered prerequisite is a real defect
-(attesting zero publishers before stopping them proves nothing), and a token-presence check would
-miss it.
+`tests/unit/test_contract_registry_authority.py`. Step sequences that ARE stored here are stored
+as ORDERED tuples so a test can assert both membership and order — a reordered prerequisite is a
+real defect (attesting zero publishers before stopping them proves nothing), and a token-presence
+check would miss it.
 
 The blocker at the top is the reason this document is titled a staging guide.
 """
 
+from dataclasses import dataclass
+
 from docs.contracts import Claim, ClaimState, Registry
 
-# Ordered cutover step records. The canonical outbox-ceiling cutover lives in
-# kyc_tool.ops.cutover and is compared against the shipped record, not restated.
-PR5B_FULL_WINDOW = (
-    "Publish the reviewed image and record its digest; every step below that runs code is pinned "
-    "to that one digest.",
-    "Confirm with the platform team, in writing, that they will pause and buffer EVERY event type "
-    "for the window and re-sign each retry with a fresh timestamp against the same "
-    "Idempotency-Key.",
-    "Pause all platform event submission and edge-block the ops composer.",
-    "Stop the API pool and the pipeline-worker pool together, as one action, with no graceful "
-    "drain; confirm both are at zero before continuing.",
-    "Recover interrupted jobs with the one-shot recovery module from the pinned image, before any "
-    "new worker starts.",
-    "Start the new API replicas with workers still at zero, and probe each one.",
-    "Start the new workers.",
-    "Resume platform submission and drain their buffer.",
+# CUTOVERS ARE NOT SUMMARIZED HERE (re-audit `6feca36..4f23f23` F5).
+#
+# An earlier version carried hand-written step lists for three procedures. Every one of them
+# dropped a control that exists to prevent irreversible damage: the direct trusted-path probes (a
+# load-balancer 403 can otherwise certify a broken app as healthy), the flag-only rollback on the
+# PR6 image (substituting the prior image mints permanent NULL provenance), and the writer-role
+# set plus the 023-compatible image requirement (a pre-7b publisher run against preserved witness
+# authority). Tests that assert a first and last phrase pass over every one of those omissions.
+#
+# A summary of a safety procedure is a second copy that drifts, so these claims now publish what
+# an operator needs in order to PLAN — the procedure exists, what blocks starting it, what makes
+# it irreversible — and send them to the one authoritative playbook to EXECUTE. You cannot
+# truncate what you never restate.
+#
+# The outbox-ceiling cutover below is the exception, and deliberately so: it is rendered from the
+# shipped canonical record in kyc_tool.ops.cutover and validated against it, so it is generated
+# from the authority rather than summarized from prose.
+
+
+@dataclass(frozen=True)
+class Procedure:
+    """A referenced (not restated) operational procedure."""
+
+    name: str
+    when: str
+    blocks_start: tuple[str, ...]
+    irreversible: str
+    playbook: str
+
+
+FULL_WINDOW = Procedure(
+    name="Full maintenance window",
+    when="Any release the notes classify as full-maintenance, regardless of whether it carries a "
+         "migration. The reviewer-actor security release had no migration and still required one, "
+         "because during any overlap an old replica still honours the forgery the release closes.",
+    blocks_start=(
+        "The reviewed image is published and its digest recorded; every step that runs code is "
+        "pinned to that digest, and the recovery module exists only in the new image.",
+        "The platform has confirmed IN WRITING that it will pause and buffer every event type for "
+        "the window, and re-sign each retry with a fresh timestamp against the same "
+        "Idempotency-Key.",
+        "You can probe each new replica directly on its trusted path, not through the load "
+        "balancer: an edge 403 or 503 must never be read as an application answer.",
+    ),
+    irreversible="No. The window is an outage, not a one-way door, and rollback is redeploying "
+                 "the previous image.",
+    playbook="docs/DEPLOYMENT.md, PR 5b cutover",
 )
 
-PR6_BUNDLE_PINNING = (
-    "Deploy the rolling part first: the additive migration and provenance columns, flag still off.",
-    "Seed the policy bundle and read it back.",
-    "Run the pinnable-backlog preflight.",
-    "Stop every old pipeline worker and attest zero are running.",
-    "Recover interrupted rows.",
-    "Start flag-on workers.",
-    "Require the bundle_pinning_ready attestation on every replica before resuming.",
-    "Resume, then CAS the durable epoch.",
+BUNDLE_PINNING = Procedure(
+    name="Bundle-pinning activation",
+    when="Turning on policy-bundle pinning. The migration and provenance columns deploy rolling; "
+         "the flag flip does not.",
+    blocks_start=(
+        "The rolling part is already deployed and the flag is still off.",
+        "The policy bundle is seeded and read back successfully.",
+        "The pinnable-backlog preflight is green: an unavailable historical bundle dead-letters.",
+        "Every old pipeline worker can be stopped and attested at zero. A rolling flip lets peers "
+        "resolve different bundles for the same run.",
+    ),
+    irreversible="Rollback stays ON THE PR6 IMAGE and uses the same drain, flag-off. Substituting "
+                 "an earlier image mints permanent NULL provenance on rows decided under the flag.",
+    playbook="docs/DEPLOYMENT.md, PR 6 cutover",
 )
 
-PR7B_CORE_PREWINDOW = (
-    "Suspend the retention schedule.",
-    "Terminate every active retention task and wait for it to exit.",
-    "Capture orchestrator evidence that zero retention tasks are running.",
-    "Run the pre-window backfill diagnostic while retention stays suspended.",
-    "On failure ABORT before any outage: restore the exact callback row from authoritative backup, "
-    "or remain on the prior revision in BLOCKED_NO_AUTHORITATIVE_MAPPING. Never fabricate a "
-    "callback, delete a decision, or fall back to decided_at.",
-    "Only then stop and attest every writer role and proceed with the window.",
+PR7B_CORE = Procedure(
+    name="Migrations 013-023",
+    when="Moving onto the ordering-authority schema.",
+    blocks_start=(
+        "Retention is suspended, every active retention task has exited, and you hold "
+        "orchestrator evidence that zero are running.",
+        "The pre-window diagnostic has run under that suspension and is green. It runs BEFORE any "
+        "outage precisely so a missing authoritative callback is found while there is still time "
+        "to restore it.",
+        "An authoritative backup is available. On diagnostic failure the only paths are restoring "
+        "the exact callback row or remaining on the prior revision in "
+        "BLOCKED_NO_AUTHORITATIVE_MAPPING. Never fabricate a callback, delete a decision, or fall "
+        "back to decided_at.",
+        "Every writer role can be stopped and attested, including the API and the pipeline "
+        "workers, not only the publishers.",
+    ),
+    irreversible="YES, once any delivery witness exists. Migrations 018 and above refuse "
+                 "downgrade unconditionally in every environment. Above that boundary rollback "
+                 "means redeploying a reviewed 023-COMPATIBLE image against the schema you are "
+                 "already on; an older publisher lacks the receipt contract and must not run "
+                 "against preserved evidence.",
+    playbook="docs/DEPLOYMENT.md, PR 7b-core cutover",
 )
 
 OPERATIONS = Registry(
@@ -221,26 +272,12 @@ OPERATIONS = Registry(
             authority="docs/architecture-decisions.md ADR-004 + docs/DEPLOYMENT.md §9",
         ),
         Claim(
-            id="OPS.CUTOVER.FULL_WINDOW_STEPS",
-            value=PR5B_FULL_WINDOW,
-            authority="docs/DEPLOYMENT.md §9 (ordered)",
-            note="Order is load-bearing: stopping both pools together removes the overlap a "
-                 "sequenced stop leaves open, and recovery runs before any new worker starts.",
-        ),
-        Claim(
-            id="OPS.CUTOVER.BUNDLE_PINNING_STEPS",
-            value=PR6_BUNDLE_PINNING,
-            authority="docs/DEPLOYMENT.md §10 (ordered)",
-            note="Flipping bundle pinning with a rolling pool lets peers resolve different "
-                 "bundles, and an unavailable historical bundle dead-letters.",
-        ),
-        Claim(
-            id="OPS.CUTOVER.PR7B_PREWINDOW_STEPS",
-            value=PR7B_CORE_PREWINDOW,
-            authority="docs/DEPLOYMENT.md §11 step 0 (ordered)",
-            note="The diagnostic runs BEFORE any outage precisely so a missing authoritative "
-                 "callback is discovered while there is still nothing to restore under time "
-                 "pressure.",
+            id="OPS.CUTOVER.PROCEDURES",
+            value=(FULL_WINDOW, BUNDLE_PINNING, PR7B_CORE),
+            authority="docs/DEPLOYMENT.md cutover sections (referenced, never restated)",
+            note="Plan from these entries; EXECUTE from the named playbook. Step summaries are "
+                 "deliberately absent: a second copy of a safety procedure drifts, and every "
+                 "step list we tried dropped a control that prevents irreversible damage.",
         ),
         Claim(
             id="OPS.CUTOVER.OUTBOX_CEILING",
