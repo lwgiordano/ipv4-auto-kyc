@@ -29,6 +29,18 @@ def sign(secret: str, timestamp: str, body: bytes) -> str:
     return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
 
 
+def _exact_text(*values) -> bool:
+    """True only if every value is an EXACT built-in `str`.
+
+    `isinstance` is not sufficient at a verification boundary (re-audit `4c3015a..cccd5f7` F1). A
+    `str` SUBCLASS satisfies isinstance while overriding `__eq__`, `__hash__`, `encode` or `strip`,
+    so the very act of checking it dispatches to attacker-supplied code — and an exception raised
+    there escapes as a 500 on a request that deserved a controlled 401. Exact-type gating is the
+    only form that cannot be subverted by the object being gated.
+    """
+    return all(type(value) is str for value in values)
+
+
 def verify(
     secret: str,
     timestamp: str,
@@ -38,6 +50,10 @@ def verify(
     max_skew_seconds: int = MAX_HMAC_SKEW_SECONDS,
     now: float | None = None,
 ) -> bool:
+    # Defense in depth: the caller is expected to gate these, and this function refuses anyway. A
+    # verification primitive that trusts its inputs makes every future caller a potential 500.
+    if not _exact_text(secret, timestamp, signature) or type(body) is not bytes:
+        return False
     if not _skew_in_contract(max_skew_seconds):  # fail closed on an out-of-contract window
         return False
     try:
@@ -96,6 +112,18 @@ def verify_v2(
     now: float | None = None,
     **fields,
 ) -> bool:
+    # Every canonical field is gated before it reaches `canonical_v2`, which joins them and hashes
+    # the body. A hostile `encode` on any one of them raised RuntimeError out of `sign_v2` and
+    # turned signature verification into a 500 (re-audit `4c3015a..cccd5f7` F1).
+    if not _exact_text(secret, signature):
+        return False
+    if set(fields) != {"key_id", "direction", "method", "path_qs", "timestamp", "slot", "body"}:
+        return False  # an unexpected or missing field would reach canonical_v2 as a TypeError
+    if not _exact_text(*(fields[name] for name in
+                         ("key_id", "direction", "method", "path_qs", "timestamp", "slot"))):
+        return False
+    if type(fields["body"]) is not bytes:
+        return False
     if not _skew_in_contract(max_skew_seconds):  # fail closed on an out-of-contract window
         return False
     try:

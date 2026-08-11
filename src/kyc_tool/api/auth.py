@@ -34,6 +34,13 @@ _PROCESS_STARTED_AT = datetime.now(UTC)
 
 
 def _sunset_passed(iso: str, now: datetime) -> bool:
+    # Exact-type gate BEFORE the parser sees it (re-audit `4c3015a..cccd5f7` F1). A correctly
+    # signed v1 request reaches this line, so anything raised here is a 500 on an AUTHENTICATED
+    # request — the worst place to be non-total. A hostile `str` subclass reaching `parse_sunset`
+    # dispatches its `strip`/`__eq__` inside the parser; a non-str reaches a comparison that has no
+    # defined answer. Neither is a sunset that has passed, so both mean "not passed".
+    if type(iso) is not str:
+        return False
     try:
         dt = parse_sunset(iso)
     except ValueError:
@@ -76,18 +83,27 @@ def _inbound_secret(settings: Settings, key_id: str) -> str:
     malformed rotation mapping (re-audit `6feca36..4f23f23` F2): an unvalidated
     `model_copy(update={...: None})` used to raise AttributeError here, turning a signature check
     into a 500 instead of a controlled 401."""
-    if key_id and key_id == settings.hmac_inbound_key_id:
-        # The ACTIVE secret is resolved through the same str gate as the rotation map
-        # (re-audit `4f23f23..97deeae` F1). A `model_copy(update=...)` dict or int reached
-        # `sign_v2`'s `.encode()` and raised AttributeError inside verification — a 500 on an
-        # authenticated request, where a 401 is the honest answer.
+    # EVERY operand is exact-type gated BEFORE it is compared, hashed, or looked up (re-audit
+    # `4c3015a..cccd5f7` F1). The previous version gated the returned secret but still compared the
+    # presented key id against `settings.hmac_inbound_key_id` with `==`, so a hostile `__eq__` on
+    # either side ran attacker code during the comparison and escaped as a RuntimeError — a 500
+    # where 401 is the honest answer. `isinstance` cannot help here: a `str` subclass passes it and
+    # is exactly the thing being defended against.
+    if type(key_id) is not str or not key_id:
+        return ""
+    active_id = settings.hmac_inbound_key_id
+    if type(active_id) is str and key_id == active_id:
         active = settings.hmac_inbound_secret
         return active if type(active) is str else ""
     extra = settings.hmac_inbound_extra_keys
-    if not isinstance(extra, dict):
+    if type(extra) is not dict:
         return ""
-    secret = extra.get(key_id, "")
-    return secret if isinstance(secret, str) else ""
+    # Not `extra.get(...)`: a hostile mapping's `get`/`__hash__`/`__eq__` would be dispatched by
+    # the lookup itself. Walking items compares only values already proven to be exact `str`.
+    for candidate_id, secret in extra.items():
+        if type(candidate_id) is str and type(secret) is str and candidate_id == key_id:
+            return secret
+    return ""
 
 
 def _session_factory(request):
@@ -175,10 +191,15 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
     # even received "retired" without its signature being checked) — an unauthenticated DB-availability
     # amplifier that survived the F1 diagnostics fix. So: reject an unconfigured secret, then verify;
     # an invalid signature is refused with ZERO DB access.
-    if not settings.platform_hmac_secret:
+    # Exact-type gate the legacy secret before it is truth-tested or hashed. An int reached
+    # `sign`'s `.encode()` and raised AttributeError (re-audit `4c3015a..cccd5f7` F1); a `str`
+    # subclass would run its own `__bool__` on the line below. A secret that is not exactly a
+    # string is not a configured secret.
+    legacy_secret = settings.platform_hmac_secret
+    if type(legacy_secret) is not str or not legacy_secret:
         raise HTTPException(status_code=401, detail="authentication not configured")
     if not security.verify(
-        settings.platform_hmac_secret,
+        legacy_secret,
         headers.get("X-KYC-Timestamp", ""),
         body,
         headers.get("X-KYC-Signature", ""),
