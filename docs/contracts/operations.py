@@ -136,11 +136,16 @@ PR7B_CORE = Procedure(
         "Every writer role can be stopped and attested, including the API and the pipeline "
         "workers, not only the publishers.",
     ),
-    irreversible="YES, once any delivery witness exists. Migrations 018 and above refuse "
-                 "downgrade unconditionally in every environment. Above that boundary rollback "
-                 "means redeploying a reviewed 023-COMPATIBLE image against the schema you are "
-                 "already on; an older publisher lacks the receipt contract and must not run "
-                 "against preserved evidence.",
+    # "018 and above refuse unconditionally" survived here after section 6 was corrected
+    # (re-audit `4f23f23..122cc67` finding 5): 018-022 refuse, and 023 is validation-only, so
+    # stepping down from head removes its stamp before 022 blocks descent. The boundary is the
+    # same either way; the per-revision account was not.
+    irreversible="YES, once any delivery witness exists. Migrations 018 through 022 each refuse "
+                 "downgrade unconditionally in every environment, and 023 — validation-only — "
+                 "drops its stamp and then hits 022. Above that boundary rollback means "
+                 "redeploying a reviewed 023-COMPATIBLE image against the schema you are already "
+                 "on; an older publisher lacks the receipt contract and must not run against "
+                 "preserved evidence.",
     rollback=(
         "Above the 018 boundary the schema does NOT move. Rollback means redeploying a reviewed "
         "023-COMPATIBLE image against the schema you are already on.",

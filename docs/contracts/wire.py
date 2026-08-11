@@ -86,8 +86,8 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
     Transition(
         phase=POST_024,
-        condition="the callback carries no event_sequence, or its sequence is <= your recorded "
-                  "high-water mark for the case",
+        condition="the callback carries no decision_sequence, or its decision_sequence is <= your "
+                  "recorded high-water mark for the case",
         record="the callback",
         effective="NO, and the high-water mark does NOT move",
         why="It is superseded or unordered. Recording it keeps your audit trail complete without "
@@ -95,8 +95,9 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
     Transition(
         phase=POST_024,
-        condition="the sequence exceeds the high-water mark AND the current source is MANUAL",
-        record="the callback, AND advance the high-water mark to its sequence",
+        condition="the decision_sequence exceeds the high-water mark AND the current source is "
+                  "MANUAL",
+        record="the callback, AND advance the high-water mark to its decision_sequence",
         effective="NO",
         why="The manual approval stays in force, but the mark still moves: otherwise every later "
             "automatic decision for the case is compared against a stale mark and the first one "
@@ -104,12 +105,12 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
     Transition(
         phase=POST_024,
-        condition="the sequence exceeds the high-water mark AND the current source is AUTOMATIC "
-                  "or absent",
-        record="the callback, AND advance the high-water mark to its sequence",
+        condition="the decision_sequence exceeds the high-water mark AND the current source is "
+                  "AUTOMATIC or absent",
+        record="the callback, AND advance the high-water mark to its decision_sequence",
         effective="YES",
         why="This is the only row that applies an automatic decision, and it does so on proven "
-            "order rather than on arrival order.",
+            "DECISION order rather than on arrival order.",
     ),
 )
 
@@ -508,6 +509,27 @@ WIRE = Registry(
                   "treat a manual approval as authoritative over any automatic decision that "
                   "arrives later for that case.",
             authority="AUDIT_FINDINGS.md A6 residual reverts",
+        ),
+        Claim(
+            id="WIRE.ORDERING.SEQUENCE_DOMAINS",
+            value=(
+                "event_sequence is INGEST PROVENANCE: the per-case ordinal of the event that "
+                "triggered a run. It is on the wire today. It is NEVER an ordering authority for "
+                "decisions, and you must not sort or dedupe decisions by it.",
+                "decision_sequence is the CALLBACK-ORDER AUTHORITY. It is allocated per case when "
+                "the decision is made, and it goes on the wire with the activation unit (024). "
+                "The post-024 high-water mark in section 3 is a high-water mark over "
+                "decision_sequence and nothing else.",
+                "They differ whenever work completes out of admission order, which is normal: an "
+                "event admitted first can decide second. Order them by event_sequence and the "
+                "later decision loses to the earlier one.",
+            ),
+            authority=".agents/ROADMAP.md D1 (PR 2 event_sequence / PR 7b decision_sequence) + "
+                      "the activation spec wire-emission section",
+            note="Two ordinals for one case, and only one of them orders decisions. Getting this "
+                 "backwards is silent: both are monotonic per case, so a receiver built on the "
+                 "wrong one looks correct until two runs overlap.",
+            exclusive_terms=("INGEST PROVENANCE", "CALLBACK-ORDER AUTHORITY"),
         ),
         Claim(
             id="WIRE.ORDERING.PENDING_INPUTS",

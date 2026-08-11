@@ -60,9 +60,9 @@ def test_the_reference_implementation_uses_every_published_row():
 
 def _scenarios_for(phase):
     seen = frozenset({"run-old"})
-    duplicate = Callback(CASE, "run-old", event_sequence=1)
-    fresh = Callback(CASE, "run-new", event_sequence=9)
-    stale = Callback(CASE, "run-new", event_sequence=1)
+    duplicate = Callback(CASE, "run-old", decision_sequence=1)
+    fresh = Callback(CASE, "run-new", decision_sequence=9)
+    stale = Callback(CASE, "run-new", decision_sequence=1)
     return [
         (LedgerState(seen_run_ids=seen, current_source="automatic", high_water=5), duplicate),
         (LedgerState(), fresh if phase == POST_024 else Callback(CASE, "run-new")),
@@ -92,17 +92,44 @@ def test_a_manual_current_case_is_not_overturned_by_a_callback():
 def test_post_activation_manual_current_advances_the_mark_without_applying():
     """h=5, s=6, manual current: manual stays effective AND the high-water mark moves to 6."""
     state = LedgerState(current_source="manual", high_water=5)
-    outcome = decide(state, Callback(CASE, "run-new", event_sequence=6), phase=POST_024)
+    outcome = decide(state, Callback(CASE, "run-new", decision_sequence=6), phase=POST_024)
     assert outcome.effective is False, "the reviewer's decision must stand"
     assert outcome.advance_high_water is True, "a stale mark misjudges the next decision"
     assert outcome.record is True
 
 
+def test_ordering_uses_decision_sequence_and_never_event_sequence():
+    """ROADMAP D1: event_sequence is PR 2 ingest provenance, decision_sequence is the PR 7b
+    callback-order authority. They invert whenever work completes out of admission order.
+
+    e1 is admitted first (event 1) but runs slowly; e2 is admitted second (event 2) and decides
+    first. Their DECISION ordinals are the other way round: e2 is decision 1, e1 is decision 2. A
+    receiver ordering on event_sequence applies e2 at h=2 and then suppresses e1's later decision
+    as stale (re-audit `4f23f23..122cc67` finding 1)."""
+    state = LedgerState()
+    # e2 decides first: event ordinal 2, decision ordinal 1
+    first = decide(state, Callback(CASE, "run-e2", decision_sequence=1, event_sequence=2),
+                   phase=POST_024)
+    assert first.effective and first.advance_high_water
+    state = LedgerState(seen_run_ids=frozenset({"run-e2"}), current_source="automatic",
+                        high_water=1)
+    # e1 decides second: event ordinal 1, decision ordinal 2 — it is the LATER decision and wins
+    second = decide(state, Callback(CASE, "run-e1", decision_sequence=2, event_sequence=1),
+                    phase=POST_024)
+    assert second.effective, "the later DECISION must win, whatever its event ordinal says"
+    assert second.advance_high_water
+
+    # and event_sequence alone orders nothing: with no decision_sequence it never takes effect
+    unordered = decide(LedgerState(current_source="automatic", high_water=1),
+                       Callback(CASE, "r", event_sequence=99), phase=POST_024)
+    assert unordered.record and not unordered.effective and not unordered.advance_high_water
+
+
 def test_post_activation_applies_only_on_proven_order():
     automatic = LedgerState(current_source="automatic", high_water=5)
-    assert decide(automatic, Callback(CASE, "r", event_sequence=6), phase=POST_024).effective
-    assert not decide(automatic, Callback(CASE, "r", event_sequence=5), phase=POST_024).effective
-    assert not decide(automatic, Callback(CASE, "r", event_sequence=4), phase=POST_024).effective
+    assert decide(automatic, Callback(CASE, "r", decision_sequence=6), phase=POST_024).effective
+    assert not decide(automatic, Callback(CASE, "r", decision_sequence=5), phase=POST_024).effective
+    assert not decide(automatic, Callback(CASE, "r", decision_sequence=4), phase=POST_024).effective
     # no sequence at all is unordered, so it records without taking effect
     unordered = decide(automatic, Callback(CASE, "r"), phase=POST_024)
     assert unordered.record and not unordered.effective and not unordered.advance_high_water
@@ -112,7 +139,7 @@ def test_a_duplicate_is_acknowledged_and_changes_nothing():
     for phase in (INTERIM, POST_024):
         state = LedgerState(seen_run_ids=frozenset({"run-1"}), current_source="automatic",
                             high_water=5)
-        outcome = decide(state, Callback(CASE, "run-1", event_sequence=99), phase=phase)
+        outcome = decide(state, Callback(CASE, "run-1", decision_sequence=99), phase=phase)
         assert outcome == Outcome(row=0, record=False, effective=False, advance_high_water=False)
 
 
@@ -120,7 +147,7 @@ def test_an_ordinary_increasing_automatic_stream_applies_each_time():
     state = LedgerState()
     high_water = None
     for sequence, run_id in enumerate(("r1", "r2", "r3"), start=1):
-        outcome = decide(state, Callback(CASE, run_id, event_sequence=sequence), phase=POST_024)
+        outcome = decide(state, Callback(CASE, run_id, decision_sequence=sequence), phase=POST_024)
         assert outcome.effective, f"{run_id} should apply"
         high_water = sequence if outcome.advance_high_water else high_water
         state = LedgerState(seen_run_ids=state.seen_run_ids | {run_id},
@@ -134,7 +161,7 @@ def test_only_an_authenticated_release_restores_automatic_authority():
     for phase in (INTERIM, POST_024):
         for sequence in (None, 1, 99):
             state = LedgerState(current_source="manual", high_water=5)
-            assert not decide(state, Callback(CASE, "r", event_sequence=sequence),
+            assert not decide(state, Callback(CASE, "r", decision_sequence=sequence),
                               phase=phase).effective
     note = WIRE["WIRE.CALLBACK.EFFECTIVENESS"].note
     assert "authenticated" in note and "release protocol" in note

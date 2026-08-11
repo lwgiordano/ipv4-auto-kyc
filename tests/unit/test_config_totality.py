@@ -16,6 +16,7 @@ So this file asserts both directions over a hostile-value matrix, field by field
 spot-checking the values that happened to be reported.
 """
 
+import contextlib
 import traceback
 
 import pytest
@@ -235,8 +236,25 @@ def test_no_rendering_of_a_load_failure_carries_the_secret(monkeypatch):
     # leaves `__context__` populated and suppresses only its PRINTING.
     rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
     assert SENTINEL not in rendered, "the credential reaches a printed traceback"
+    # The CHAIN, not just the printed form. `raise ... from None` inside the handler suppresses
+    # printing while leaving the raw error attached to `__context__`, and structured collectors
+    # walk that chain (re-audit `4f23f23..122cc67` finding 7). So: nothing attached at all.
     assert error.__cause__ is None
-    assert error.__suppress_context__ is True
+    assert error.__context__ is None, "the raw secret-bearing error is still on the chain"
+
+    # walk everything reachable, the way an APM collector would
+    def _reachable(exc, depth=0):
+        if exc is None or depth > 5:
+            return []
+        blob = [str(exc), repr(exc), str(getattr(exc, "args", ""))]
+        for attribute in ("json", "errors"):
+            method = getattr(exc, attribute, None)
+            if callable(method):
+                with contextlib.suppress(Exception):  # probing, not asserting
+                    blob.append(str(method()))
+        return blob + _reachable(exc.__cause__, depth + 1) + _reachable(exc.__context__, depth + 1)
+
+    assert not any(SENTINEL in part for part in _reachable(error))
     # and it still says something useful
     assert "hmac_inbound" in str(error)
 
@@ -251,3 +269,115 @@ def test_the_raw_validation_error_would_have_leaked_it(monkeypatch):
     assert SENTINEL not in str(excinfo.value)
     # ...and this is the hole F6 reported, which is why nothing may surface a raw one
     assert SENTINEL in excinfo.value.json()
+
+
+# ── hostile SUBCLASSES: isinstance handed the boundary's logic to the value it was judging ────────
+class EvilStr(str):
+    """A `str` subclass that controls every operation the boundary performs on it."""
+
+    def strip(self, *a, **k):
+        raise RuntimeError("hostile strip")
+
+    def __eq__(self, other):
+        raise RuntimeError("hostile eq")
+
+    def __hash__(self):
+        return 0
+
+    def encode(self, *a, **k):
+        raise RuntimeError("hostile encode")
+
+
+class EvilDict(dict):
+    def items(self):
+        raise RuntimeError("hostile items")
+
+    def get(self, *a, **k):
+        raise RuntimeError("hostile get")
+
+    def __eq__(self, other):
+        raise RuntimeError("hostile eq")
+
+    def __hash__(self):
+        return 0
+
+    def __bool__(self):
+        raise RuntimeError("hostile bool")
+
+
+HOSTILE_SUBCLASSES = [EvilStr("x" * 40), EvilDict({"old": "s" * 32})]
+
+
+@pytest.mark.parametrize("value", HOSTILE_SUBCLASSES, ids=["EvilStr", "EvilDict"])
+def test_the_validators_survive_hostile_subclasses(value):
+    """`isinstance` accepts a subclass, so the value's own `strip`/`items`/`__eq__` ran INSIDE the
+    check meant to judge it (re-audit `4f23f23..122cc67` finding 6). Exact type checks refuse it
+    before touching it."""
+    for validator in (hmac_secret_violations, hmac_key_id_violations, hmac_sunset_violations):
+        problems = validator(value, "field")
+        assert isinstance(problems, list) and problems
+    assert hmac_extra_key_violations(value, "active")
+
+
+@pytest.mark.parametrize("field", STRING_FIELDS + ["hmac_inbound_extra_keys"])
+def test_the_boundary_survives_hostile_subclasses_on_every_field(field):
+    hostile = EvilDict({"old": "s" * 32}) if "extra_keys" in field else EvilStr("x" * 40)
+    violations = production_config_violations(hardened().model_copy(update={field: hostile}))
+    assert isinstance(violations, list) and violations
+
+
+def test_no_violation_carries_exception_text():
+    """The aggregate interpolated `str(exc)` — which on a hostile value is that value's own
+    `__str__`, and on a Pydantic failure routinely contains the rejected value itself."""
+    class Talkative:
+        def __len__(self):
+            raise RuntimeError(f"secret is {SENTINEL}")
+
+        def __str__(self):
+            return SENTINEL
+
+        __repr__ = __str__
+
+    violations = production_config_violations(
+        hardened().model_copy(update={"hmac_inbound_secret": Talkative()}))
+    assert violations
+    assert not any(SENTINEL in item for item in violations), violations
+
+
+def test_one_bad_section_does_not_hide_violations_in_another():
+    """A hostile value used to abort the whole aggregate, so a genuinely broken setting later in
+    the list was never reported and the operator fixed one thing at a time across reboots."""
+    smuggled = hardened().model_copy(update={
+        "hmac_inbound_secret": EvilStr("x" * 40),  # breaks the HMAC section
+        "object_store": "fs",                       # an ordinary, unrelated violation
+    })
+    violations = production_config_violations(smuggled)
+    assert any("object_store" in item for item in violations), (
+        f"a later independent violation was hidden by an earlier failure: {violations}"
+    )
+
+
+def test_a_malformed_active_secret_yields_401_for_hostile_subclasses_too():
+    from fastapi import HTTPException
+
+    settings = hardened().model_copy(update={"hmac_inbound_secret": EvilStr("x" * 40)})
+
+    class _App:
+        class state:
+            session_factory = None
+
+    class _Req:
+        headers = {"X-KYC-Key-Id": "kyc-platform-1", "X-KYC-Signature-V2": "deadbeef",
+                   "X-KYC-Timestamp": "1754400000", "Idempotency-Key": "k"}
+        method = "POST"
+        app = _App()
+        scope = {"path": "/v1/cases/c/events", "query_string": b"",
+                 "raw_path": b"/v1/cases/c/events"}
+
+        class url:
+            path = "/v1/cases/c/events"
+            query = ""
+
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_valid_signature(settings, _Req(), b"{}")
+    assert excinfo.value.status_code == 401

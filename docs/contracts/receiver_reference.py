@@ -24,14 +24,25 @@ class LedgerState:
 
     seen_run_ids: frozenset[str] = frozenset()
     current_source: str | None = None  # "manual", "automatic", or None when nothing is effective
-    high_water: int | None = None  # post-024 only
+    high_water: int | None = None  # post-024 only; a mark over decision_sequence
 
 
 @dataclass(frozen=True)
 class Callback:
+    """One delivered decision callback.
+
+    TWO ordinals, and only one of them orders decisions (re-audit `4f23f23..122cc67` finding 1).
+    `event_sequence` is PR 2 ingest provenance — the per-case ordinal of the triggering event —
+    and it is on the wire today. `decision_sequence` is the PR 7b callback-order authority and
+    arrives with the activation unit. They diverge whenever work finishes out of admission order,
+    which is ordinary: an event admitted first can decide second, so their ordinals invert.
+    Ordering by `event_sequence` therefore suppresses the LATER decision as stale.
+    """
+
     case_id: str
     run_id: str
-    event_sequence: int | None = None  # absent until ordered delivery is activated
+    decision_sequence: int | None = None  # the ordering authority; arrives with 024
+    event_sequence: int | None = None  # ingest provenance; NEVER an ordering authority
 
 
 @dataclass(frozen=True)
@@ -62,7 +73,7 @@ def decide(state: LedgerState, callback: Callback, *, phase: str) -> Outcome:
     if phase == POST_024:
         if callback.run_id in state.seen_run_ids:
             return Outcome(row=0, record=False, effective=False, advance_high_water=False)
-        sequence = callback.event_sequence
+        sequence = callback.decision_sequence
         if sequence is None or (state.high_water is not None and sequence <= state.high_water):
             return Outcome(row=1, record=True, effective=False, advance_high_water=False)
         if state.current_source == "manual":

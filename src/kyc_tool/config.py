@@ -360,7 +360,7 @@ def adapter_rate_violations(rates) -> list[str]:
     as "no limits" is the exact fail-open that let `hmac_inbound_extra_keys=None` boot clean and
     then crash: `RateLimiter` clears this check and immediately calls `.items()` on it.
     """
-    if not isinstance(rates, dict):
+    if type(rates) is not dict:
         return [f"adapter_rate_limits must be a mapping, got {type(rates).__name__}"]
     out = []
     for key, rate in rates.items():
@@ -684,23 +684,45 @@ def production_config_violations(settings: Settings) -> list[str]:
     """
     v: list[str] = []
     try:
-        _collect_production_violations(settings, v)
+        _run_isolated_sections(settings, v)
     except Exception as exc:  # noqa: BLE001 — fail closed on ANY unanticipated value
+        # NO EXCEPTION TEXT (re-audit `4f23f23..122cc67` finding 6). `str(exc)` on a hostile value
+        # is that value's own `__str__`, and on a Pydantic/`len`/`strip` failure it routinely
+        # interpolates the offending value — which for this model is a live credential, printed
+        # into a startup log or a /readyz body. The type name alone is enough to diagnose a
+        # boundary bug and cannot carry a secret.
         v.append(
-            f"configuration could not be fully evaluated ({type(exc).__name__}: {exc!s:.200}) — "
-            "refusing production boot; some setting holds a type no check anticipated"
+            f"configuration could not be fully evaluated ({type(exc).__name__}) — refusing "
+            "production boot; some setting holds a type no check anticipated"
         )
     return v
 
 
-def _collect_production_violations(settings: Settings, v: list[str]) -> None:
-    """The checks themselves. Appends to `v`; call it through `production_config_violations`."""
+def _run_isolated_sections(settings: Settings, v: list[str]) -> None:
+    """Run each check group in its own failure domain.
 
+    One malformed field used to abort the whole aggregate (re-audit `4f23f23..122cc67` finding 6):
+    a hostile value in an early section meant a genuinely broken `object_store` later in the list
+    was never diagnosed, so the operator fixed one violation, rebooted, and met the next one.
+    Isolating the groups means a single unanticipated value costs exactly its own section.
+    """
+    for name, section in SECTIONS:
+        try:
+            section(settings, v)
+        except Exception as exc:  # noqa: BLE001 — type name only; see the caller
+            v.append(
+                f"the {name} configuration section could not be evaluated "
+                f"({type(exc).__name__}) — refusing production boot"
+            )
+
+
+def _section_auth(settings: Settings, v: list[str]) -> None:
     if settings.auth_disabled:
         v.append("auth_disabled is True (inbound HMAC verification is off)")
-
     v.extend(hmac_secret_violations(settings.platform_hmac_secret, "platform_hmac_secret"))
 
+
+def _section_callback_url(settings: Settings, v: list[str]) -> None:
     raw_url = settings.platform_callback_url
     if type(raw_url) is not str:
         v.append(f"platform_callback_url must be a string, got {type(raw_url).__name__}")
@@ -719,6 +741,8 @@ def _collect_production_violations(settings: Settings, v: list[str]) -> None:
             f"platform_callback_url must not carry a query or fragment ({settings.platform_callback_url!r})"
         )
 
+
+def _section_providers_and_storage(settings: Settings, v: list[str]) -> None:
     # Type first for every string-declared setting these identity checks read (F1): `!=`/`not`
     # are satisfied by a list or an object, so the check below is only meaningful once the value
     # is known to be a string.
@@ -751,6 +775,8 @@ def _collect_production_violations(settings: Settings, v: list[str]) -> None:
             "endpoints (and the console when ui_enabled)"
         )
 
+
+def _section_hmac(settings: Settings, v: list[str]) -> None:
     # HMAC v2 (PR 5a): split secrets/key_ids, both sunset dates, and a positive
     # observation window are all required in production — this is what enforces
     # the spec's "fixed sunset" (no dual-accept-forever) and the durable witness.
@@ -773,6 +799,8 @@ def _collect_production_violations(settings: Settings, v: list[str]) -> None:
         settings.hmac_v1_inbound_sunset_at, "hmac_v1_inbound_sunset_at"))
     v.extend(hmac_sunset_violations(
         settings.hmac_v1_outbound_sunset_at, "hmac_v1_outbound_sunset_at"))
+
+def _section_numeric(settings: Settings, v: list[str]) -> None:
     # Numeric-setting registry (re-audit `5b0f0b8..b75a320` R4-F1/F2/F3, close-out #1). The Field
     # bounds enforce each domain at construction; these two calls re-check EVERY numeric setting at the
     # production boundary so an unvalidated model_copy(update=...) cannot bypass a bound, and apply the
@@ -833,6 +861,16 @@ def _collect_production_violations(settings: Settings, v: list[str]) -> None:
     return
 
 
+# Each entry is its own failure domain; see `_run_isolated_sections`.
+SECTIONS: tuple[tuple[str, object], ...] = (
+    ("auth", _section_auth),
+    ("callback URL", _section_callback_url),
+    ("providers and storage", _section_providers_and_storage),
+    ("HMAC", _section_hmac),
+    ("numeric", _section_numeric),
+)
+
+
 def validate_for_production(settings: Settings) -> None:
     """Refuse to start a production process on any unsafe configuration."""
     violations = production_config_violations(settings)
@@ -860,7 +898,10 @@ def hmac_key_id_violations(key_id: object, label: str) -> list[str]:
     receives whatever the caller passed and must return violations rather than raise. A key id is
     matched verbatim against the X-KYC-Key-Id header, so it must be a non-blank, untrimmed,
     bounded, printable-ASCII string."""
-    if not isinstance(key_id, str):
+    # EXACT type, not isinstance (re-audit `4f23f23..122cc67` finding 6): a `str` subclass
+    # overriding `__eq__`/`strip` controls every operation below, so `isinstance` hands the
+    # boundary's own logic to the value it is judging.
+    if type(key_id) is not str:
         return [f"{label} must be a string, got {type(key_id).__name__}"]
     if not key_id.strip():
         return [f"{label} is blank/whitespace"]
@@ -947,7 +988,7 @@ def hmac_extra_key_violations(extra: object, active_key_id: object) -> list[str]
     # ONLY {} is the empty map. `None` used to short-circuit here as "safe", but `_inbound_secret`
     # then called `.get` on it and raised AttributeError inside signature verification — a clean
     # boot followed by a 500 on an authenticated request (re-audit `6feca36..4f23f23` F2).
-    if not isinstance(extra, dict):
+    if type(extra) is not dict:
         return [
             "hmac_inbound_extra_keys must be a mapping of key_id -> secret ({} when unused), got "
             f"{type(extra).__name__}"
@@ -956,9 +997,9 @@ def hmac_extra_key_violations(extra: object, active_key_id: object) -> list[str]
         return []
     problems: list[str] = []
     seen: dict[str, str] = {}
-    active_trimmed = active_key_id.strip() if isinstance(active_key_id, str) else None
+    active_trimmed = active_key_id.strip() if type(active_key_id) is str else None
     for key_id, secret in extra.items():
-        if not isinstance(key_id, str) or not isinstance(secret, str):
+        if type(key_id) is not str or type(secret) is not str:
             problems.append(
                 f"hmac_inbound_extra_keys entry {key_id!r} must map str -> str "
                 f"(got {type(key_id).__name__} -> {type(secret).__name__})"
@@ -1066,9 +1107,14 @@ def get_settings() -> Settings:
     transcripts. `from None` matters as much as the message: without it the original error stays
     on the `__context__` chain and Python prints it under "During handling of the above exception".
     """
+    report = None
     try:
         return Settings()
     except ValidationError as error:
-        raise ConfigLoadError(
-            f"invalid configuration — {_sanitized_validation_report(error)}"
-        ) from None
+        report = _sanitized_validation_report(error)
+    # RAISED OUTSIDE THE except BLOCK, deliberately (re-audit `4f23f23..122cc67` finding 7).
+    # `raise ... from None` inside the handler suppresses the PRINTING of `__context__`, but the
+    # raw Pydantic error stays attached — and its `.json()` still carries the live secret, which
+    # structured error collectors read by walking cause/context chains. Leaving the block first
+    # means the new error is created with no implicit context at all.
+    raise ConfigLoadError(f"invalid configuration — {report}")

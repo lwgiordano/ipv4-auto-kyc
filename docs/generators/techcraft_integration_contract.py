@@ -75,6 +75,7 @@ REQUIRED_CLAIMS = (
     "WIRE.CALLBACK.WAIT_BOUND",
     "WIRE.CALLBACK.COMPLETION",
     "WIRE.ORDERING.NO_DECIDED_AT",
+    "WIRE.ORDERING.SEQUENCE_DOMAINS",
     "WIRE.ORDERING.INTERIM",
     "WIRE.ORDERING.BOOTSTRAP_024",
     "WIRE.ORDERING.PENDING_INPUTS",
@@ -356,6 +357,9 @@ def build(*, contact: str, due_date: str) -> Doc:
     # ── 5. ordering ────────────────────────────────────────────────────────────────────────────
     doc.section("ordering", "5. Ordering, and one field you must not sort by")
     doc.claim_paragraph("WIRE.ORDERING.NO_DECIDED_AT")
+    doc.h2("Two per-case ordinals, and only one of them orders decisions")
+    doc.claim_bullets("WIRE.ORDERING.SEQUENCE_DOMAINS")
+    doc.claim_note("WIRE.ORDERING.SEQUENCE_DOMAINS")
     doc.claim_paragraph("WIRE.ORDERING.INTERIM", prefix="<b>Until activation: </b>")
     doc.claim_paragraph("WIRE.ORDERING.INTEGRITY_MISMATCH", prefix="<b>Note: </b>")
 

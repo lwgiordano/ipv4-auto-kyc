@@ -491,7 +491,7 @@ def _effectiveness_table_is_executable_and_total():
 
     manual_current = decide(
         LedgerState(current_source="manual", high_water=5),
-        Callback("c", "r", event_sequence=6), phase=POST_024)
+        Callback("c", "r", decision_sequence=6), phase=POST_024)
     assert not manual_current.effective and manual_current.advance_high_water
 
     # consistent with the interim ordering rule, which is the same rule stated for sorting
@@ -557,6 +557,50 @@ def _bootstrap_is_pending_and_publishes_no_schema():
         assert schema_ish not in claim.value, "the pending claim is publishing a schema again"
     revisions = {p.stem for p in (REPO / "migrations" / "versions").glob("*.py")}
     assert not any(r.startswith("024") for r in revisions), "024 exists; the claim is stale"
+
+
+@verifies("WIRE.ORDERING.SEQUENCE_DOMAINS")
+def _the_two_sequence_domains_match_D1_and_the_activation_spec():
+    """Static parity across D1, the ROADMAP rows, the activation spec, and what we publish.
+
+    Re-audit `4f23f23..122cc67` finding 1. The published post-024 rule ordered on
+    `event_sequence`, which ROADMAP D1 assigns to PR 2 as ingest provenance; the callback-order
+    authority is PR 7b's `decision_sequence`. The two invert whenever work completes out of
+    admission order, so a receiver built on the wrong one suppresses the LATER decision — and
+    both are monotonic per case, so it looks correct until two runs overlap.
+    """
+    roadmap = re.sub(r"\s+", " ", (REPO / ".agents" / "ROADMAP.md").read_text())
+    assert "PR 2 → **`event_sequence`**" in roadmap
+    assert "PR 7b → **`decision_sequence`**" in roadmap
+
+    spec = (REPO / ".agents" / "superpowers" / "specs"
+            / "2026-07-22-pr7b-activation-platform-ordering-design.md").read_text()
+    assert "`decision_sequence` **on the wire**" in spec
+    assert "decision_sequence" in spec.split("Wire emission")[1][:400]
+
+    lines = WIRE.value("WIRE.ORDERING.SEQUENCE_DOMAINS")
+    provenance = next(line for line in lines if line.startswith("event_sequence"))
+    authority = next(line for line in lines if line.startswith("decision_sequence"))
+    assert "INGEST PROVENANCE" in provenance and "NEVER an ordering authority" in provenance
+    assert "CALLBACK-ORDER AUTHORITY" in authority
+    assert "high-water mark" in authority and "decision_sequence and nothing else" in authority
+
+    # event_sequence really is on the wire today, and decision_sequence really is not yet
+    from kyc_tool.api.schemas import DecisionCallback
+
+    assert "event_sequence" in DecisionCallback.model_fields
+    assert "decision_sequence" not in DecisionCallback.model_fields, (
+        "decision_sequence now ships; the claim must stop saying it arrives with 024"
+    )
+    assert "arrives with the activation unit" in " ".join(lines) or "with the activation unit" in authority
+
+    # and the transition table orders on the authority, not the provenance
+    post = [t for t in WIRE.value("WIRE.CALLBACK.EFFECTIVENESS") if t.phase == "post-024"]
+    ordering_rows = " ".join(t.condition + " " + t.record for t in post)
+    assert "decision_sequence" in ordering_rows
+    assert "event_sequence" not in ordering_rows, (
+        "the post-024 rows order on ingest provenance again"
+    )
 
 
 @verifies("WIRE.ORDERING.PENDING_INPUTS")
