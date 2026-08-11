@@ -16,6 +16,7 @@ one is located on the built page, in document order, exactly once, inside its de
 
 import contextlib
 import dataclasses
+import hashlib
 import re
 from collections import Counter
 
@@ -532,3 +533,286 @@ def test_a_renderer_that_displays_something_other_than_the_claim_fails(
                 continue
             for line in projection.expected_lines(registry[block.claim_id], block.projection):
                 assert _flat(line) in page, f"{block.claim_id}: recomputed line not on the page"
+
+
+# ── nothing on the page is unaccounted for ────────────────────────────────────────────────────
+#
+# The tests above prove the MODEL reaches the page. They say nothing about the other direction:
+# a paragraph that belongs to no claim is a fact nothing verifies, and the F3 attack was exactly
+# that — a contradictory commit-before-2xx paragraph appended beside the claim it contradicted.
+# `exclusive_terms` catches that only for subjects somebody thought to declare in advance, which
+# is the wrong shape for a control: it enumerates what to look for instead of what is allowed.
+#
+# So unattributed blocks are a CLOSED, PINNED set. Every one is listed here with a digest over its
+# exact rendered content. Adding prose fails (an unlisted key), deleting it fails (a listed key
+# with nothing behind it), and editing it fails (a digest mismatch). Re-pinning is the review, the
+# same act `playbook_digest` requires of a cutover section.
+#
+# The residual risk is stated plainly: this makes unattributed prose a visible, reviewed decision;
+# it does not make the reviewer read it. What it removes is the SILENT path — prose can no longer
+# arrive on an externally-binding page without a human touching this table.
+
+NARRATION_LABELS = {
+    # ── contract ──────────────────────────────────────────────────────────────────────────────
+    ("contract", "(front matter)", 0): ("b70e26fd070d110c", "Audience + scope of this document"),
+    ("contract", "(front matter)", 1): ("21a2f1b76bd4de4b", "one-paragraph summary of the wire"),
+    ("contract", "(front matter)", 2): ("8fa664ad08807a49",
+                                        "where to send answers; interpolates the release inputs, "
+                                        "which test_the_release_inputs_still_reach_the_page "
+                                        "checks separately"),
+    ("contract", "asks", 0): ("c77063c9a829011c", "1.1 heading + why ordering is asked for"),
+    ("contract", "asks", 1): ("f7662c6b9304e6b7", "1.1 what we need now is not code"),
+    ("contract", "asks", 2): ("d5c7111569ed9c66", "1.1 necessary and not sufficient"),
+    ("contract", "asks", 3): ("3f901c37e3839bdc", "1.2 dedupe commitment"),
+    ("contract", "asks", 4): ("87c2e7c956b36fc0", "1.3 callback URL and key exchange"),
+    ("contract", "asks", 5): ("a6143e1512e363d3", "1.4 document upload path"),
+    ("contract", "events", 0): ("4009c5156c229907", "first event creates the case; no rate limit"),
+    ("contract", "events", 1): ("939d3d69279a82cb", "the label 'Envelope:'"),
+    ("contract", "events", 2): ("4dc71563f2253448", "the worked envelope example"),
+    ("contract", "callbacks", 0): ("c1d5f1bafb61d43a", "content type + which key signs"),
+    ("contract", "signing", 0): ("6651f36142732ce8", "why v2 replaced v1"),
+    ("contract", "checklist", 0): ("bb248f15a20df14d", "the go-live checklist table"),
+    # ── guide ─────────────────────────────────────────────────────────────────────────────────
+    ("guide", "(front matter)", 0): ("f36ddedf7d0de988", "audience + pointer to the contract"),
+    ("guide", "blocker", 0): ("fcecf71459ea67c0", "what this guide does and does not cover"),
+    ("guide", "blocker", 1): ("06389181dce3477d", "who maintains the code and cuts releases"),
+    ("guide", "blocker", 2): ("04ea3b2467e78210", "the three in-release references"),
+    ("guide", "processes", 0): ("7fcf2738c2096c61", "how the image is built"),
+    ("guide", "processes", 1): ("e8b1fd6efdad4dd6", "disable the HTTP healthcheck on workers"),
+    ("guide", "configuration", 0): ("b69bc9148329c468", "where the full config sample lives"),
+    ("guide", "releases", 0): ("fae3434680bd1512", "the rolling-release shape"),
+    ("guide", "day2", 0): ("22a27d96c28fd96c", "three limits worth knowing before an incident"),
+    ("guide", "day2", 1): ("1ca5e9968b5c4a90", "the two crons"),
+}
+
+DOC_NAMES = {id(contract_gen): "contract", id(deploy_gen): "guide"}
+
+
+def _narration_digest(block) -> str:
+    """Over the block's exact rendered content — lines AND table cells.
+
+    Covering only `lines` would leave structural TABLES unpinned, and the contract's go-live
+    checklist is exactly that: a table with no claim behind it whose every word is an obligation.
+    """
+    parts = [block.kind, *block.lines]
+    for row in block.rows:
+        parts.extend(row)
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]
+
+
+def _narration(doc, name: str) -> dict:
+    """Every unattributed, non-heading block, keyed by (document, section, ordinal)."""
+    found, counter = {}, Counter()
+    for section in doc.sections:
+        for block in section.blocks:
+            if block.claim_id is not None or block.kind == "heading":
+                continue
+            key = (name, section.section_id, counter[section.section_id])
+            counter[section.section_id] += 1
+            found[key] = block
+    return found
+
+
+def test_unattributed_prose_is_a_closed_pinned_set(rendered):
+    generator, _registry, doc, _page, _tables = rendered
+    name = DOC_NAMES[id(generator)]
+    found = _narration(doc, name)
+    listed = {k: v for k, v in NARRATION_LABELS.items() if k[0] == name}
+
+    added = sorted(set(found) - set(listed))
+    assert not added, (
+        f"unattributed prose that nobody reviewed: {added}\n"
+        "A block carrying no claim id publishes a fact nothing in the registry verifies. Either "
+        "attach it to a claim, or add it to NARRATION_LABELS with its digest — which is the act "
+        "of reviewing it."
+    )
+    removed = sorted(set(listed) - set(found))
+    assert not removed, (
+        f"NARRATION_LABELS still pins prose that is no longer rendered: {removed}. A stale entry "
+        "silently widens the allowlist for whatever takes its place."
+    )
+    for key, block in found.items():
+        pinned, label = listed[key]
+        actual = _narration_digest(block)
+        assert actual == pinned, (
+            f"{key} ({label}) changed since it was reviewed.\n"
+            f"  reviewed: {pinned}\n  now:      {actual}\n"
+            f"  text:     {' '.join(block.lines)[:160]!r}\n"
+            "Read the new text, then re-pin it in the SAME commit."
+        )
+
+
+def test_every_narration_entry_carries_a_human_label():
+    """A digest alone tells the next reviewer nothing about what they are approving."""
+    for key, (pinned, label) in NARRATION_LABELS.items():
+        assert len(pinned) == 16 and re.fullmatch(r"[0-9a-f]{16}", pinned), key
+        assert len(label.strip()) >= 12, f"{key} has no usable label"
+
+
+def test_appending_unattributed_prose_fails_the_closed_set(tmp_path):
+    """The F3 attack, run against this control: a contradictory paragraph that belongs to no
+    claim. It used to need `exclusive_terms` to name its subject in advance; now it fails simply
+    for being unlisted."""
+    doc = _build(contract_gen)
+    doc.section("smuggled", "Appendix")
+    doc.p("We commit the decision before returning 2xx, so a duplicate cannot occur.")
+    with pytest.raises(AssertionError, match="nobody reviewed"):
+        test_unattributed_prose_is_a_closed_pinned_set(
+            (contract_gen, WIRE, doc, "", []))
+
+
+def test_editing_reviewed_prose_fails_the_pin(monkeypatch):
+    """Rewriting narration in place keeps the key and changes the meaning — the mutation a
+    key-only allowlist waves through."""
+    doc = _build(deploy_gen)
+    found = _narration(doc, "guide")
+    key = ("guide", "releases", 0)
+    original = found[key]
+    tampered = dataclasses.replace(
+        original,
+        lines=("Rolling release: pull the tag and restart everything at once; no drain needed.",),
+    )
+    assert _narration_digest(tampered) != NARRATION_LABELS[key][0]
+
+
+def test_the_page_uses_no_vocabulary_the_model_does_not_carry(rendered):
+    """The other direction: text on the page that the model has never heard of.
+
+    The pinned set above governs what the GENERATOR declares. This governs what the PAGE actually
+    carries, so a renderer that draws its own words — a hardcoded string in a style, a stamped
+    label, a template leaking through — is caught even though no block records it. Words are the
+    unit because layout is not: reportlab wraps prose and pdfplumber interleaves table columns, so
+    any longer span is an artifact of typesetting rather than of content.
+    """
+    generator, _registry, doc, page, _tables = rendered
+    known = set()
+    for section in doc.sections:
+        known.update(_normalize(w) for w in section.title.split())
+        for block in section.blocks:
+            for line in block.lines:
+                known.update(_normalize(w) for w in line.split())
+            for row in block.rows:
+                for cell in row:
+                    known.update(_normalize(w) for w in cell.split())
+    # Wrapping splits a token across two lines, so each half is a prefix or suffix of a known
+    # word rather than a word. Accept only that, and only against the words actually present.
+    unknown = []
+    for word in page.split():
+        needle = _normalize(word)
+        if not needle or needle in known:
+            continue
+        if any(k.startswith(needle) or k.endswith(needle) for k in known):
+            continue
+        unknown.append(word)
+    assert not unknown, (
+        f"{DOC_NAMES[id(generator)]}: the page carries words the document model does not: "
+        f"{sorted(set(unknown))[:20]}"
+    )
+
+
+# ── labels the renderer authors ───────────────────────────────────────────────────────────────
+#
+# `claim_paragraph(prefix=...)` frames a claim's value for the reader: "Compliance window (days):
+# 2555". The value is the registry's and is checked against its authority; the LABEL is the
+# renderer's and has no authority to be checked against. It was also, until this commit, not
+# recorded in the block at all — so it reached the page while the model denied drawing it, and
+# rewriting "(days)" to "(years)" published a false statement with the whole suite green.
+#
+# Recording it fixes the under-description. Pinning it here fixes the rest: a label that the model
+# and the page agree on is still only the renderer agreeing with itself.
+
+CLAIM_LABELS = {
+    ("contract", "WIRE.INGEST.PATH"): "Endpoint:",
+    ("contract", "WIRE.CALLBACK.PATH"): "Endpoint:",
+    ("contract", "WIRE.SIGN.SKEW_SECONDS"): "Skew window (seconds):",
+    ("contract", "WIRE.SIGN.V1_SUNSET"): "On the v1 sunset dates:",
+    ("contract", "WIRE.ORDERING.INTERIM"): "Until activation:",
+    ("contract", "WIRE.ORDERING.INTEGRITY_MISMATCH"): "Note:",
+    ("contract", "WIRE.RETENTION.WINDOW_DAYS"): "Compliance window (days):",
+    ("guide", "OPS.CONFIG.ROTATION_KEYS"): "Rotation keys:",
+}
+
+
+def _claim_labels(doc, name: str) -> dict:
+    """Every block whose recorded lines carry a label ahead of the projected value."""
+    out = {}
+    for block in doc.blocks:
+        if not block.claim_id or block.projection != projection.PARAGRAPH:
+            continue
+        derived = projection.expected_lines(doc.registry[block.claim_id], block.projection)
+        extra = [line for line in block.lines if line not in derived]
+        if extra:
+            out[(name, block.claim_id)] = " ".join(extra)
+    return out
+
+
+def test_renderer_authored_labels_are_pinned(rendered):
+    generator, _registry, doc, page, _tables = rendered
+    name = DOC_NAMES[id(generator)]
+    found = _claim_labels(doc, name)
+    listed = {k: v for k, v in CLAIM_LABELS.items() if k[0] == name}
+    assert set(found) == set(listed), (
+        f"labels added or removed without review: added={sorted(set(found) - set(listed))} "
+        f"removed={sorted(set(listed) - set(found))}"
+    )
+    for key, text in found.items():
+        assert text == listed[key], (
+            f"{key}: the label was reworded.\n  reviewed: {listed[key]!r}\n  now:      {text!r}\n"
+            "A label frames the value beside it; re-read it and re-pin in the SAME commit."
+        )
+        # and it is genuinely on the page, immediately before the value it frames
+        assert _flat(text) in page, f"{key}: the pinned label is not on the page"
+
+
+def test_a_reworded_label_fails_the_pin(monkeypatch, tmp_path):
+    """The 'days' -> 'years' mutation, run end to end.
+
+    Before the label was recorded this changed the page and nothing else — no model line moved, no
+    claim value changed, and the value beside it stayed correct. It is the cheapest way to make an
+    externally-binding document say something false.
+    """
+    from docs.generators import render as render_module
+
+    original = render_module.Doc.claim_paragraph
+
+    def relabelled(self, cid, *, style=render_module.BODY, prefix=""):
+        if cid == "WIRE.RETENTION.WINDOW_DAYS":
+            prefix = "<b>Compliance window (years): </b>"
+        return original(self, cid, style=style, prefix=prefix)
+
+    monkeypatch.setattr(render_module.Doc, "claim_paragraph", relabelled)
+    doc = _build(contract_gen)
+    path = str(tmp_path / "relabelled.pdf")
+    doc.build(path, "relabelled")
+    page = body_text(path)
+
+    assert "Compliance window (years): 2555" in page, "the mutation did not reach the page"
+    with pytest.raises(AssertionError, match="reworded"):
+        test_renderer_authored_labels_are_pinned((contract_gen, WIRE, doc, page, []))
+
+
+def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatch, tmp_path):
+    """Negative control for the page->model direction: text drawn straight onto the page, with no
+    block behind it at all. This is the shape a stamped label or a leaked template takes, and the
+    model-side checks cannot see it because the model does not know it exists."""
+    from docs.generators import render as render_module
+
+    original = render_module.Doc.p
+
+    def also_draw_unrecorded(self, markup, style=render_module.BODY):
+        original(self, markup, style)
+        # appended to the story, deliberately NOT to any block
+        self.story.append(render_module.Paragraph("Superseding addendum: zzyzx.", style))
+        render_module.Doc.p = original  # once is enough
+
+    monkeypatch.setattr(render_module.Doc, "p", also_draw_unrecorded)
+    doc = _build(deploy_gen)
+    monkeypatch.setattr(render_module.Doc, "p", original)
+    path = str(tmp_path / "unrecorded.pdf")
+    doc.build(path, "unrecorded")
+    page = body_text(path)
+
+    assert "zzyzx" in page, "the unrecorded paragraph did not reach the page"
+    with pytest.raises(AssertionError, match="does not"):
+        test_the_page_uses_no_vocabulary_the_model_does_not_carry(
+            (deploy_gen, OPERATIONS, doc, page, []))

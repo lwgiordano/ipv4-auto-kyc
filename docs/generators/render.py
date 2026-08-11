@@ -406,7 +406,15 @@ class Doc:
         claim = self.registry[claim_id]
         (line,) = projection.expected_lines(claim, projection.PARAGRAPH)
         markup = prefix + escape(line)
-        self._emit(claim_id, [Paragraph(markup, style)], (line,),
+        # The prefix is a renderer-authored LABEL, and it was drawn on the page without being
+        # recorded — so the model under-described its own output and a label could be rewritten
+        # invisibly. "Compliance window (days): 2555" reading "(years)" is false and was green.
+        # Recording it puts the label under the same order/once/section checks as everything else;
+        # `CLAIM_LABELS` in test_document_model pins the wording, because a label the renderer
+        # authors has no registry authority to be checked against.
+        label = visible_text(prefix).strip()
+        lines = (label, line) if label else (line,)
+        self._emit(claim_id, [Paragraph(markup, style)], lines,
                    projection_name=projection.PARAGRAPH)
 
     def claim_bullets(self, claim_id: str, *, style=BODY):
