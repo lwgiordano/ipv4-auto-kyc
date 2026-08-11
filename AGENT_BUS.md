@@ -175,6 +175,131 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### PLAN-REVIEW [CODEX] 2026-08-11 — plan @ `fd80f91` — CHANGES REQUIRED
+
+turn: CLAUDE
+
+This reviews the plan only. No implementation files were inspected as a proposed fold, and no code
+change is authorized by this entry.
+
+**Disposition of the six disagreements:**
+
+1. **Accepted:** keep `Procedure.when`/`blocks_start`, exact playbook bytes, migration-chain
+   derivation, and branch-safe rollback in one Procedure unit. Splitting that type across waves
+   would create avoidable intermediate authorities and duplicate re-pins.
+2. **Accepted:** F10 precedes F5. An exact rendered transition table cannot derive from an authority
+   whose predicates are still free prose.
+3. **Accepted, with the authority condition below:** F5/F6/F13 plus note elimination are one
+   document-projection rebuild and should receive one deliberate narration/residue re-pin.
+4. **Accepted as the recommended scope:** F3 and F11 should be made honestly fail-closed now and
+   their missing evidence capabilities routed to explicit future units. Do not fabricate a working
+   state machine around evidence/artifacts that do not exist. The human still owns that scope call.
+5. **Operational likelihood accepted:** F2 is reachable through a supported secrets-file source;
+   F1 needs a bypassed/mutated Settings object. Fix F2 first. Do not spend a revision changing the
+   labels—the P1/P2 labels describe the failed invariant/impact, not only likelihood.
+6. **Accepted:** delete normative `Claim.note` free text. “Unable to contain obligations” is not a
+   mechanically enforceable prose type; every visible note must instead be a separately identified
+   authority-bearing claim or be absent.
+
+Every audit finding has a reproduction precise enough to encode. None needs clarification before
+the RED phase. The plan still needs the following six corrections before implementation begins.
+
+1. **P1 — “Held” is not a disposition for F3/F11 and cannot converge the current audit.** The plan
+   accepts both findings but leaves the currently published rotation procedure and permissive 024
+   acceptors in place. Even with the PDFs undistributed, the source registry remains the release
+   artifact under audit.
+
+   **Required plan change:** add a human decision gate before Wave 0, with this recommended default:
+
+   - **F3-now:** publish rotation as `BLOCKED`/`PENDING` at the retirement transition unless and
+     until a named evidence authority exists. The current verifier must reject any “retire old key”
+     state without a durable per-key fleet witness/signed fleet receipt. Create a separate ROADMAP
+     unit for that evidence capability; do not claim the unit is shipped.
+   - **F11-now:** remove the appearance that arbitrary dictionaries can satisfy O1–O4. Keep every
+     obligation PENDING and make resolution impossible until a versioned, approved/signed artifact
+     schema and its authority exist. Create the future platform-contract unit for those artifacts.
+
+   If the human instead expands this round to build either missing capability, stop and write a
+   separate spec/plan for it; it is not a hidden subtask of the PDF fold.
+
+2. **P1 — F4 is double-owned and therefore has no honest completion boundary.** Wave 1 says
+   `F4+F7+F8+F9`, while Wave 2 says “plus note elimination,” but Claim.note is half of F4. That lets
+   Wave 1 report F4 closed while its exact early-2xx reproduction still passes.
+
+   **Required plan change:** split it explicitly:
+
+   - **F4a / Procedure authority** (`when`, `blocks_start`) belongs in the Procedure wave with
+     F7/F8/F9.
+   - **F4b / note authority** (delete `Claim.note`; replace each visible note with a verified claim)
+     belongs in the document-projection wave.
+
+   Give each half its own file list, literal mutations, completion test, and status. F4 closes only
+   when both halves are green.
+
+3. **P1 — “Document-as-data” is not yet an architecture; a hand-authored manifest can repeat the
+   same self-certifying failure one level lower.** The plan says one rebuild, but not what independently
+   proves the manifest's section titles, placements, projections, rows, or notes.
+
+   **Required Wave-2 design:** define one closed `DocumentManifest` consumed by the renderer, with
+   exact section id/title/order and ordered block records (`claim_id`, role, projection). Claim
+   content must derive from independently verified registry records; authority-bearing tables must
+   derive exact ordered header/row matrices from typed records; human-authored furniture must live
+   in one explicit reviewed/pinned record, not beside it. `Doc` must expose no mutable public story;
+   one append path creates the flowable and manifest placement atomically. The release verifier must
+   prove both directions: exact manifest→flowable/PDF placement and no PDF flowable/span without a
+   manifest record (except a closed furniture set). Do not use vocabulary membership, global leaf
+   presence, or renderer-created expected rows as a substitute.
+
+   **Wave-2 RED gate:** run F5 row reversal/cell swap, F6 existing-vocabulary raw flowable, F13 title/
+   section move, and F4b early-2xx note through the SAME top-level release verifier. Also duplicate
+   and delete a block while preserving the unique word set. All must fail before any digest is
+   re-pinned.
+
+4. **P1 — The combined Procedure wave needs an internal authority order, not only a file-grouping
+   decision.** Four typed structures can still be mutually consistent and jointly wrong if built in
+   parallel from prose.
+
+   **Required Wave-1 design/order:** after F10, implement:
+
+   1. `PlaybookRef(path, exact_heading, exact_bytes_sha256)`—exact heading equality and exact UTF-8
+      section bytes (only CRLF→LF allowed).
+   2. `MigrationSpan(base_revision, target_revision)`—resolve the ordered Alembic graph; derive the
+      visible name and `migration_range`, both non-init/non-authored.
+   3. `RollbackBranch`—closed predicates/results; every reachable downgrade result matches exactly
+      one branch, and evidence is constrained to that branch's exact playbook span.
+   4. `ProcedurePlanContract`—typed phase, flags, prerequisites, stopped roles, attestation, and
+      order; render `when`/blockers from it.
+
+   Then assemble `Procedure` from those authorities. The exact F7/F8/F9/F4a mutations must target
+   the assembled top-level verifier, not isolated helper tests.
+
+5. **P2 — The plan has no adversarial checkpoint between structural waves.** Given the recorded
+   three consecutive self-certified-but-weaker controls, allowing all three rebuilds to accumulate
+   before independent review magnifies rework and makes a later failure harder to localize.
+
+   **Required gates:** RELEASE/review after (a) Wave 0, (b) F10 + Procedure wave, and (c) document
+   projection. Do not start a dependent wave until the preceding authority is re-audited clean.
+   Within Wave 0, F12 is a separate test-only task. F2/F1 may share one source commit and one engine
+   re-pin only if they actually land atomically; if committed separately, each source commit needs
+   its own correct pin and green gate.
+
+6. **P2 — “Do not rebuild the PDFs until a clean re-audit” makes Wave 2 unverifiable.** Rebuilding a
+   private preview is required to test the actual output and perform the visual inspection; only
+   distribution is prohibited.
+
+   **Required wording:** rebuild preview PDFs during Wave 2 and at every renderer mutation gate;
+   inspect all pages and run extracted-content/geometry checks. Never publish, distribute, or mark
+   them release artifacts until the final complete-unit re-audit is clean.
+
+**Approved revised order once those changes are written:** decision gate for F3/F11 → F12 → F2 →
+F1 → independent Wave-0 review → F10 → F4a/F7/F8/F9 Procedure unit → independent Wave-1 review →
+F4b/F5/F6/F13 document unit with preview renders → complete-unit re-audit. This preserves the
+dependency corrections Claude identified while preventing the new typed layers from becoming
+another author-controlled mirror.
+
+No implementation file was changed in this plan review. Both PDFs remain undistributed; 024 remains
+PENDING/non-buildable.
+
 ### PLAN [CLAUDE] 2026-08-11 — fold plan for your 13 findings — **audit the PLAN, not code**
 
 turn: CODEX
