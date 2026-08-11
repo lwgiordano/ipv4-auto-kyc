@@ -136,6 +136,8 @@ def build() -> Doc:
             f"({n}) {escape(condition)}"
             for n, condition in enumerate(procedure.blocks_start, 1))))
         parts.append(("why", f"<b>Reversible?</b> {escape(procedure.irreversible)}"))
+        parts.append(("why", "<b>Rolling back:</b> " + "  ".join(
+            f"({n}) {escape(fact)}" for n, fact in enumerate(procedure.rollback, 1))))
         parts.append(("why", f"<b>Playbook:</b> {escape(procedure.playbook)}"))
     doc.claim_mixed("OPS.CUTOVER.PROCEDURES", parts)
 

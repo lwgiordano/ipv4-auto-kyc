@@ -135,6 +135,105 @@ def test_no_glyph_is_printed_outside_the_page_margins(generator, tmp_path):
     )
 
 
+@pytest.mark.parametrize("generator", [contract_gen, deploy_gen])
+def test_no_body_text_collides_with_the_footer_or_the_page_edges(generator, tmp_path):
+    """Vertical bounds. The x-only check passed while body glyphs sat under the footer.
+
+    Re-audit `4f23f23..97deeae` finding 9: checking `x0`/`x1` only means shrinking the bottom
+    margin puts body text on top of the stamped provenance line with zero reported overflow — and
+    the footer is the one thing on the page that says which commit it came from.
+    """
+    path = str(tmp_path / "vertical.pdf")
+    _build(generator).build(path, "vertical")
+    offenders = []
+    with pdfplumber.open(path) as pdf:
+        for number, page in enumerate(pdf.pages, 1):
+            footer_top = page.height - 0.62 * 72
+            top_margin = 0.7 * 72
+            for char in page.chars:
+                if char["bottom"] > page.height - 0.3 * 72 or char["top"] < 0:
+                    offenders.append((number, "below the page", char["text"]))
+                elif char["top"] < top_margin - 12:
+                    offenders.append((number, "above the top margin", char["text"]))
+                elif char["top"] > footer_top and char["size"] > 7.2:
+                    # the footer itself is 7pt; anything larger down there is body text
+                    offenders.append((number, "in the footer band", char["text"]))
+    assert not offenders, f"{len(offenders)} glyphs out of bounds, first: {offenders[:10]}"
+
+
+@pytest.mark.parametrize("generator", [contract_gen, deploy_gen])
+def test_no_two_rendered_lines_are_drawn_on_top_of_each_other(generator, tmp_path):
+    """Overlap. A negative spacer prints one paragraph over another and every x/y BOUNDS check
+    still passes — both flowables are inside the frame, they are just in the same place."""
+    path = str(tmp_path / "overlap.pdf")
+    _build(generator).build(path, "overlap")
+    collisions = []
+    with pdfplumber.open(path) as pdf:
+        for number, page in enumerate(pdf.pages, 1):
+            rows: dict[float, list] = {}
+            for word in page.extract_words():
+                rows.setdefault(round(word["top"], 1), []).append(word)
+            boxes = sorted(
+                (min(w["top"] for w in ws), max(w["bottom"] for w in ws),
+                 min(w["x0"] for w in ws), max(w["x1"] for w in ws),
+                 " ".join(w["text"] for w in ws)[:40])
+                for ws in rows.values()
+            )
+            for (_top_a, bottom_a, x0_a, x1_a, text_a), (top_b, _b, x0_b, x1_b, text_b) in zip(
+                    boxes, boxes[1:], strict=False):
+                vertical = top_b < bottom_a - 1.0
+                horizontal = x0_b < x1_a and x0_a < x1_b
+                if vertical and horizontal:
+                    collisions.append((number, text_a, text_b))
+    assert not collisions, f"lines drawn over one another: {collisions[:6]}"
+
+
+def test_the_overlap_guard_can_actually_fail(tmp_path):
+    """Codex's exact mutation: a negative spacer that prints one paragraph over another."""
+    from reportlab.platypus import Spacer
+
+    doc = Doc(WIRE)
+    doc.p("The first paragraph, which should be legible on its own line.")
+    doc.story.append(Spacer(1, -24))
+    doc.p("The second paragraph, printed straight over the top of the first.")
+    path = str(tmp_path / "collide.pdf")
+    doc.build(path, "collide")
+
+    with pdfplumber.open(path) as pdf:
+        page = pdf.pages[0]
+        rows: dict[float, list] = {}
+        for word in page.extract_words():
+            rows.setdefault(round(word["top"], 1), []).append(word)
+        boxes = sorted((min(w["top"] for w in ws), max(w["bottom"] for w in ws)) for ws in
+                       rows.values())
+    assert any(top_b < bottom_a - 1.0 for (_a, bottom_a), (top_b, _b) in
+               zip(boxes, boxes[1:], strict=False)), (
+        "the negative spacer did not produce overlapping lines, so the guard above proves nothing"
+    )
+
+
+def test_a_release_build_refuses_unverifiable_provenance(tmp_path, monkeypatch):
+    """`source_revision()` swallows every failure, so a build host without git emitted a
+    release-looking PDF stamped `source unknown` (re-audit finding 9). A preview may; a release
+    may not."""
+    from docs.generators import render
+
+    doc = _build(contract_gen)
+    monkeypatch.setattr(render, "source_revision", lambda: "unknown")
+    with pytest.raises(render.ProvenanceError, match="source commit"):
+        doc.build(str(tmp_path / "release.pdf"), "release", release=True)
+
+    monkeypatch.setattr(render, "source_revision", lambda: "abc1234+dirty")
+    with pytest.raises(render.ProvenanceError, match="uncommitted"):
+        doc.build(str(tmp_path / "release.pdf"), "release", release=True)
+
+    # a clean commit is fine, and a preview never asks
+    monkeypatch.setattr(render, "source_revision", lambda: "abc1234")
+    doc.build(str(tmp_path / "release.pdf"), "release", release=True)
+    monkeypatch.setattr(render, "source_revision", lambda: "unknown")
+    doc.build(str(tmp_path / "preview.pdf"), "preview")
+
+
 def test_the_margin_guard_can_actually_fail():
     """A guard nobody can make fail is not evidence. `code()` refuses an over-wide preformatted
     line at build time, which is the same boundary the geometric test measures after the fact."""
@@ -494,6 +593,62 @@ def test_published_slice_compiles_and_runs_in_an_empty_namespace():
         body=v["body"],
     )
     assert produced == v["signature"]
+
+
+def test_the_published_signer_is_copyable_off_one_page(tmp_path):
+    """Extract what a reader would actually select, and run THAT.
+
+    The snippet's imports and indentation were already correct and the source executed — but the
+    printed block ran across a page boundary, so the page footer sat physically between
+    `hashlib.sha256(body).hexdigest(),` and `])`. Copying contiguously picked up
+    "KYC Tool ... Page 5 of 7" and `compile()` raised SyntaxError on the em dash. The old test
+    executed the module and checked stripped-line membership, so it never touched what the PDF
+    exposes (re-audit `4f23f23..97deeae` finding 4).
+    """
+    from docs.contracts.signing_example import COPY_BEGIN, COPY_END
+
+    path = str(tmp_path / "signer.pdf")
+    _build(contract_gen).build(path, "signer")
+
+    with pdfplumber.open(path) as pdf:
+        pages = [(number, page) for number, page in enumerate(pdf.pages, 1)]
+        holding = [n for n, page in pages if COPY_BEGIN in (page.extract_text() or "")]
+        closing = [n for n, page in pages if COPY_END in (page.extract_text() or "")]
+        assert len(holding) == 1 and holding == closing, (
+            f"the copy region spans pages {holding} to {closing}; page furniture would land "
+            "inside anything a reader copies"
+        )
+        page = dict(pages)[holding[0]]
+        # rebuild lines from words, keeping their x-offsets so indentation survives
+        rows: dict[float, list] = {}
+        for word in page.extract_words():
+            rows.setdefault(round(word["top"], 1), []).append(word)
+        char_width = 4.8  # Courier 8pt
+        raw = []
+        for top in sorted(rows):
+            ordered = sorted(rows[top], key=lambda w: w["x0"])
+            raw.append((ordered[0]["x0"], " ".join(w["text"] for w in ordered)))
+
+    begin = next(i for i, (_x, ln) in enumerate(raw) if COPY_BEGIN in ln)
+    end = next(i for i, (_x, ln) in enumerate(raw) if COPY_END in ln)
+    # Indentation is measured from the copy region's OWN left edge. Measuring from the page's
+    # leftmost glyph instead picks up the body margin, which is a couple of points left of the
+    # code block, and every line comes back indented by two spaces.
+    base = raw[begin][0]
+    block = "\n".join(
+        " " * max(int(round((x0 - base) / char_width)), 0) + text
+        for x0, text in raw[begin : end + 1]
+    )
+
+    assert "Page" not in block and "source" not in block, f"page furniture inside the block:\n{block}"
+    namespace: dict = {}
+    exec(compile(block, "<copied-from-pdf>", "exec"), namespace)  # noqa: S102
+    v = WIRE.value("WIRE.SIGN.VECTOR")
+    produced = namespace["sign"](
+        v["secret"], key_id=v["key_id"], direction=v["direction"], method=v["method"],
+        path_qs=v["path_qs"], timestamp=v["timestamp"], slot=v["slot"], body=v["body"],
+    )
+    assert produced == v["signature"], "the signer copied off the page produces a different digest"
 
 
 def test_code_on_the_page_keeps_its_indentation(tmp_path):

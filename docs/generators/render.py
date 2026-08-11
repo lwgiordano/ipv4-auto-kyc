@@ -93,9 +93,19 @@ def _guard_preformatted(text: str) -> str:
     return text
 
 
+class ProvenanceError(RuntimeError):
+    """A release build could not establish which commit it came from."""
+
+
 def source_revision() -> str:
     """The commit these pages were rendered from, plus a dirty marker. Printed in the footer so a
-    stale PDF is distinguishable from the audited one years later."""
+    stale PDF is distinguishable from the audited one years later.
+
+    Best-effort BY DESIGN, and that is why `build(release=True)` refuses what it returns here when
+    it degrades: swallowing every failure means a git that is missing, broken, or simply not
+    installed on the build host produces a release-looking PDF stamped "source unknown", which is
+    exactly the artifact the footer exists to make impossible (re-audit `4f23f23..97deeae`
+    finding 9)."""
     try:
         head = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -435,8 +445,9 @@ class Doc:
         """Render one claim that needs several flowables — prose, then a code block, then more.
 
         `parts` is a sequence of (kind, text) pairs where kind is "p", "why", "code" (fixed-width,
-        indentation preserved, must fit the line), or "wrap" (fixed-width, wraps anywhere). Prose
-        parts take pre-escaped markup; code and wrap parts take raw text and are escaped here.
+        indentation preserved, must fit the line), "atomic_code" (the same, but never split across
+        a page), or "wrap" (fixed-width, wraps anywhere). Prose parts take pre-escaped markup;
+        the code and wrap kinds take raw text and are escaped here.
 
         This exists so a composite claim — the signing vector is a body, a canonical string, a
         digest, and a runnable snippet — stays ONE atomic emit. The alternative was a public
@@ -447,13 +458,20 @@ class Doc:
         for kind, text in parts:
             if kind == "code":
                 flowables.append(XPreformatted(_guard_preformatted(escape(text)), CODE))
+            elif kind == "atomic_code":
+                # ONE page, always. A copyable block split across pages has the page footer
+                # physically between two statements, so a contiguous copy picks up
+                # "... Page 5 of 7" and fails to compile (re-audit `4f23f23..97deeae` finding 4).
+                flowables.append(
+                    KeepTogether([XPreformatted(_guard_preformatted(escape(text)), CODE)]))
             elif kind == "wrap":
                 flowables.append(Paragraph(escape(text), WRAPCODE))
             else:
                 flowables.append(Paragraph(text, self._PART_STYLES[kind]))
         lines = []
         for kind, text in parts:
-            lines.extend((text if kind in ("code", "wrap") else visible_text(text)).split("\n"))
+            lines.extend(
+                (text if kind in ("code", "atomic_code", "wrap") else visible_text(text)).split("\n"))
         self._emit(claim_id, flowables, tuple(lines))
 
     def claim_alert(self, claim_id: str):
@@ -522,7 +540,7 @@ class Doc:
         self._add(Block(kind="table", claim_id=None, lines=(),
                         rows=(tuple(headers),) + tuple(tuple(str(c) for c in r) for r in rows)))
 
-    def build(self, path: str, title: str) -> str:
+    def build(self, path: str, title: str, *, release: bool = False) -> str:
         """Render to `path`, stamping provenance on every page.
 
         A document read for years without the repo beside it needs to say which commit produced
@@ -535,6 +553,19 @@ class Doc:
         binding, split state), so a second build over already-rendered objects raises LayoutError.
         """
         revision = source_revision()
+        if release:
+            # A preview may be built from anything. A RELEASE artifact is the thing someone will
+            # still be holding in a year, so it must name a commit anyone can check out.
+            if revision == "unknown":
+                raise ProvenanceError(
+                    "release build cannot determine the source commit; refusing to stamp a PDF "
+                    "'source unknown'. Build from a git checkout."
+                )
+            if revision.endswith("+dirty"):
+                raise ProvenanceError(
+                    f"release build has uncommitted changes ({revision}); the stamped commit "
+                    "would not reproduce these pages. Commit first, then rebuild."
+                )
         template = SimpleDocTemplate(
             path,
             pagesize=letter,

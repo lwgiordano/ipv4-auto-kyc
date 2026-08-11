@@ -34,20 +34,38 @@ from docs.contracts import Claim, ClaimState, Registry
 
 @dataclass(frozen=True)
 class Procedure:
-    """A referenced (not restated) operational procedure."""
+    """A referenced (not restated) operational procedure.
+
+    `playbook_digest` is what makes the reference load-bearing (re-audit `4f23f23..97deeae`
+    finding 8). Asserting that a heading EXISTS proves nothing about the body under it: pointing
+    the repo at a DEPLOYMENT.md containing only the three headings passed the verifier. The digest
+    is taken over the normalized body of the referenced section, so an empty body, a wrong
+    same-named section, or an edit nobody re-reviewed all fail. Re-pinning it is the re-review.
+
+    `rollback` carries the facts a one-line "reversible?" answer loses. PR 5b's rollback is not
+    "redeploy the previous image": it mirrors the same maintenance window, it knowingly restores
+    the vulnerability the release closed, and its verification is non-mutating ONLY — the
+    mutation probes would perform the forgery they are meant to detect.
+    """
 
     name: str
     when: str
     blocks_start: tuple[str, ...]
     irreversible: str
     playbook: str
+    playbook_digest: str
+    rollback: tuple[str, ...] = ()
 
 
 FULL_WINDOW = Procedure(
-    name="Full maintenance window",
-    when="Any release the notes classify as full-maintenance, regardless of whether it carries a "
-         "migration. The reviewer-actor security release had no migration and still required one, "
-         "because during any overlap an old replica still honours the forgery the release closes.",
+    # Scoped to PR 5b (re-audit `4f23f23..97deeae` finding 8). It read "any release the notes
+    # classify as full-maintenance" while pointing at PR5b-specific steps and a PR5b-specific
+    # rollback, so a future unrelated full-window release would inherit the wrong procedure.
+    name="PR 5b full maintenance window",
+    when="The PR 5b reviewer-actor security release. It carries no migration and still requires a "
+         "full window, because during any overlap an old replica still honours the forgery the "
+         "release closes. Other releases classified full-maintenance get their own procedure; do "
+         "not reuse this one.",
     blocks_start=(
         "The reviewed image is published and its digest recorded; every step that runs code is "
         "pinned to that digest, and the recovery module exists only in the new image.",
@@ -57,9 +75,20 @@ FULL_WINDOW = Procedure(
         "You can probe each new replica directly on its trusted path, not through the load "
         "balancer: an edge 403 or 503 must never be read as an application answer.",
     ),
-    irreversible="No. The window is an outage, not a one-way door, and rollback is redeploying "
-                 "the previous image.",
+    irreversible="No, but rollback is not a plain redeploy — see the rollback conditions below.",
+    rollback=(
+        "Rollback MIRRORS THE SAME WINDOW: pause submission, stop all processes together, run the "
+        "recovery one-shot pinned to the last image that still contains it, then redeploy the "
+        "prior image for API and workers.",
+        "It KNOWINGLY RESTORES THE VULNERABILITY this release closed. The prior image has no "
+        "actor floor.",
+        "Verification is NON-MUTATING ONLY: /readyz, /healthz, and prior-image digest "
+        "attestation. Do not run the sensitive-mutation probes against the prior image — on that "
+        "image the probe PERFORMS the forgery it is meant to detect rather than finding it.",
+        "Keep all submission and the composer blocked until the non-mutating checks pass.",
+    ),
     playbook="docs/DEPLOYMENT.md, PR 5b cutover",
+    playbook_digest="7ef8d6d7e5939dce09f2dd52876fb8ae41c0af389fff5e2dbe8d9b1dcc394686",
 )
 
 BUNDLE_PINNING = Procedure(
@@ -75,12 +104,25 @@ BUNDLE_PINNING = Procedure(
     ),
     irreversible="Rollback stays ON THE PR6 IMAGE and uses the same drain, flag-off. Substituting "
                  "an earlier image mints permanent NULL provenance on rows decided under the flag.",
+    rollback=(
+        "Rollback stays on the PR 6 image and uses the same drain with the flag off.",
+        "Substituting an earlier image mints permanent NULL provenance on every row decided while "
+        "the flag was on.",
+    ),
     playbook="docs/DEPLOYMENT.md, PR 6 cutover",
+    playbook_digest="7d6ad3c1df2e92ce251244227448ea8fbc64160bc3442369773dd71a3b307f7c",
 )
 
 PR7B_CORE = Procedure(
     name="Migrations 013-023",
-    when="Moving onto the ordering-authority schema.",
+    # NOT "the ordering-authority schema" (re-audit `4f23f23..97deeae` finding 5). These revisions
+    # give the tool local receipt and transition authority plus a best-effort local supersession
+    # guard. Platform-wide ordering does not exist until 024, which is unbuilt — and a team that
+    # read "ordering-authority schema" here could reasonably treat completing 023 as the
+    # activation of ordered delivery and start trusting an order nothing provides.
+    when="Moving onto the local receipt/transition-authority schema. It provides best-effort "
+         "local supersession only; PLATFORM ordering authority remains absent until 024 is built "
+         "and active, and 024 is pending.",
     blocks_start=(
         "Retention is suspended, every active retention task has exited, and you hold "
         "orchestrator evidence that zero are running.",
@@ -99,7 +141,15 @@ PR7B_CORE = Procedure(
                  "means redeploying a reviewed 023-COMPATIBLE image against the schema you are "
                  "already on; an older publisher lacks the receipt contract and must not run "
                  "against preserved evidence.",
+    rollback=(
+        "Above the 018 boundary the schema does NOT move. Rollback means redeploying a reviewed "
+        "023-COMPATIBLE image against the schema you are already on.",
+        "An older publisher lacks the receipt contract and must not run against preserved "
+        "delivery evidence.",
+        "Section 6 states the per-revision downgrade boundary; do not restate it from here.",
+    ),
     playbook="docs/DEPLOYMENT.md, PR 7b-core cutover",
+    playbook_digest="cfb8944983c416fd1052829c25f8c5f4c7400c677102a21d7a5706bf469c51d8",
 )
 
 OPERATIONS = Registry(
@@ -225,11 +275,15 @@ OPERATIONS = Registry(
         Claim(
             id="OPS.CONFIG.ROTATION_KEYS",
             value="KYC_HMAC_INBOUND_EXTRA_KEYS is a JSON object of key_id to secret, used only "
-                  "during a rotation overlap. Each entry is a live verification credential and "
-                  "carries the active key's floor: at least 32 characters, a non-blank key id "
-                  "without surrounding whitespace, no duplicate, and no collision with the active "
-                  "key id. Both construction and the production boundary refuse a violation. "
-                  "Unset it once the old key is retired.",
+                  "during an INBOUND rotation overlap. Each entry is a live verification "
+                  "credential and carries the active key's floor: at least 32 characters, a "
+                  "non-blank key id without surrounding whitespace, and no collision with the "
+                  "active key id. A key id repeated in the raw JSON is refused at load: JSON "
+                  "keeps only the last, so the earlier secret would vanish silently while the "
+                  "peer was still signing with it. Both construction and the production boundary "
+                  "refuse a violation. Unset it once the old key is retired. There is NO outbound "
+                  "equivalent — the tool signs with one outbound key, so outbound overlap is held "
+                  "on the platform's receiver.",
             authority="kyc_tool.config.hmac_extra_key_violations",
         ),
         Claim(
@@ -299,8 +353,12 @@ OPERATIONS = Registry(
                 "Migrations 013 through 023 are forward-only once any delivery witness exists. "
                 "Their downgrades refuse with stable sentinels rather than destroying immutable "
                 "delivery evidence.",
-                "Migrations 018 and above refuse downgrade UNCONDITIONALLY, in every environment "
-                "including staging. There is no downgrade-freely rule anywhere.",
+                "Migrations 018 through 022 each refuse downgrade UNCONDITIONALLY, in every "
+                "environment including staging. There is no downgrade-freely rule anywhere.",
+                "023 is the exception in form only: it is a validation-only revision, so stepping "
+                "down from head removes its validation stamp and does nothing else — and 022 then "
+                "blocks any further descent. The boundary holds; the per-revision account is just "
+                "not 'everything at 018 and above raises'.",
                 "Above that boundary the supported rollback is redeploying the previous reviewed "
                 "image against the schema you are already on. The schema does not move.",
                 "A pre-7b image is legal only after a successful walk down to 012, which is only "

@@ -113,6 +113,84 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
 )
 
+# ── what 024 still needs from the platform, keyed to the live obligations ─────────────────────────
+#
+# Re-audit `4f23f23..97deeae` finding 10. The document asked for three things: where the accepted
+# ledger lives, whether it distinguishes automatic from manual, and who signs. TechCraft could
+# answer all three and 024 would remain non-buildable, because the live O1-O4 contract also needs
+# decisions only the platform can make. Asking the wrong questions politely is still not asking.
+#
+# Keyed to the obligation ids in
+# `.agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-design.md`, and the
+# authority test parses that file's live obligation ids and requires every one of them covered.
+
+
+@dataclass(frozen=True)
+class PendingInput:
+    """One decision 024 cannot be built without."""
+
+    obligation: str  # O1-O4, as the live spec names them
+    owner: str
+    question: str
+    answer_type: str
+    authority: str
+    blocks: str  # the deliverable that cannot be built until this is answered
+
+
+PENDING_024_INPUTS: tuple[PendingInput, ...] = (
+    PendingInput(
+        obligation="O1",
+        owner="TechCraft",
+        question="Which platform principal is authorised to request a manual release, and what "
+                 "identity does it present? Production requires a non-blank principal, and the "
+                 "auth result must carry the verified HMAC VERSION, not just verified/not.",
+        answer_type="principal identifier + key id + which HMAC version it signs with",
+        authority="activation spec O1 (manual-release authority, executable and relationally bound)",
+        blocks="the manual.release_requested request model and its admission gate",
+    ),
+    PendingInput(
+        obligation="O1",
+        owner="TechCraft",
+        question="What is the authoritative deadline or TTL on a release request, and whose clock "
+                 "is it measured against?",
+        answer_type="duration + the clock that owns it (platform DB time, per O2)",
+        authority="activation spec O1 (request model: release id, requested manual event, "
+                  "authoritative deadline/TTL)",
+        blocks="the release request model and the expiry reaper",
+    ),
+    PendingInput(
+        obligation="O2",
+        owner="TechCraft",
+        question="Confirm the platform is the SOLE terminal and expiry authority: its CAS/reaper "
+                 "transaction writes the result and enqueues a signed, retried "
+                 "manual.release_outcome. We mirror that event and never choose expiry ourselves. "
+                 "What is the reaper's cadence, and how is a lost outcome recovered?",
+        answer_type="written confirmation + reaper cadence + outcome redelivery/recovery contract",
+        authority="activation spec O2 (two-system convergence; no-traffic expiry)",
+        blocks="the outcome mirror, the expiry path, and every convergence test",
+    ),
+    PendingInput(
+        obligation="O3",
+        owner="TechCraft",
+        question="Confirm release_id is GLOBALLY unique, not unique per case, and that a reused "
+                 "id is rejected outright rather than admitted on a second case.",
+        answer_type="written confirmation of global uniqueness + who allocates the id",
+        authority="activation spec O3 (release-id scope and governance)",
+        blocks="the UNIQUE(release_id) constraint and its 409 path",
+    ),
+    PendingInput(
+        obligation="O4",
+        owner="both",
+        question="Agree the complete WRITER-ROLE MATRIX for the 024 window: which processes on "
+                 "each side write decisions, and confirm that during any old-image transition the "
+                 "full maintenance stop applies, because an old-image writer does not take the "
+                 "admission fence and the fence proves nothing about it.",
+        answer_type="role list per side + written agreement on the old-image stop",
+        authority="activation spec O4 (both decision writers fenced) + .agents/ROADMAP.md",
+        blocks="the activation migration's admission fence and its preflight",
+    ),
+)
+
 # The published signature vector, bound as ONE record: change any part and the test that recomputes
 # it through kyc_tool.security.sign_v2 fails. The body is stored as bytes so its length and hash
 # are properties of the same object the document prints.
@@ -277,11 +355,22 @@ WIRE = Registry(
         ),
         Claim(
             id="WIRE.SIGN.ROTATION",
-            value="Rotate by adding a second key id, cutting over, then retiring the old one. "
-                  "Rotation secrets are full verification credentials and carry the same floor as "
-                  "the active key: at least 32 characters, a non-blank key id, and no collision "
-                  "with the active id. Inbound and outbound rotate independently.",
-            authority="kyc_tool.config.hmac_extra_key_violations + kyc_tool.api.auth._inbound_secret",
+            value=(
+                "INBOUND (your key, verifying your calls to us): we accept an overlap. Add your "
+                "new key id alongside the old one in our rotation map, switch your signer to the "
+                "new id, wait until no request arrives under the old id, then we remove it. "
+                "Rotation secrets are full verification credentials and carry the same floor as "
+                "the active key: at least 32 characters, a non-blank key id, and no collision "
+                "with the active id.",
+                "OUTBOUND (our key, signing our callbacks to you): THE OVERLAP IS YOURS TO HOLD. "
+                "We sign with exactly one outbound key and have no second-key facility, so the "
+                "order is: you start accepting old and new, THEN we switch our signer, then you "
+                "confirm callbacks are arriving under the new key id, then you retire the old. "
+                "Switching us first means every callback fails verification until you catch up, "
+                "and they dead-letter.",
+            ),
+            authority="kyc_tool.config.hmac_extra_key_violations + kyc_tool.api.auth._inbound_secret "
+                      "+ kyc_tool.outbox.publisher (one outbound signer)",
         ),
         # ── callbacks ─────────────────────────────────────────────────────────────────────────
         Claim(
@@ -419,6 +508,16 @@ WIRE = Registry(
                   "treat a manual approval as authoritative over any automatic decision that "
                   "arrives later for that case.",
             authority="AUDIT_FINDINGS.md A6 residual reverts",
+        ),
+        Claim(
+            id="WIRE.ORDERING.PENDING_INPUTS",
+            value=PENDING_024_INPUTS,
+            authority=".agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-"
+                      "design.md open blockers O1-O4 (parsed live by the authority test)",
+            state=ClaimState.PENDING,
+            note="These are the decisions 024 cannot be built without, and every one of them is "
+                 "the platform's to make. Answering the three questions in section 1.1 alone "
+                 "leaves the unit blocked.",
         ),
         Claim(
             id="WIRE.ORDERING.BOOTSTRAP_024",

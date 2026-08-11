@@ -77,6 +77,7 @@ REQUIRED_CLAIMS = (
     "WIRE.ORDERING.NO_DECIDED_AT",
     "WIRE.ORDERING.INTERIM",
     "WIRE.ORDERING.BOOTSTRAP_024",
+    "WIRE.ORDERING.PENDING_INPUTS",
     "WIRE.ORDERING.INTEGRITY_MISMATCH",
     "WIRE.RETENTION.BY_KIND",
     "WIRE.RETENTION.WINDOW_DAYS",
@@ -120,6 +121,20 @@ def build(*, contact: str, due_date: str) -> Doc:
         "currently effective source for a case, and who signs on your side. You implement once we "
         "publish the schema."
     )
+    doc.p(
+        "Those three answers are necessary and not sufficient. The activation unit is blocked on "
+        "decisions only your side can make, listed below against the obligation each one clears. "
+        "We cannot build 024 without all of them."
+    )
+    doc.claim_table(
+        "WIRE.ORDERING.PENDING_INPUTS",
+        ("#", "Owner", "What we need to know", "Answer shape", "What it unblocks"),
+        # the "unblocks" column has to fit `manual.release_requested` whole
+        [0.35 * INCH, 0.8 * INCH, 2.4 * INCH, 1.3 * INCH, 1.85 * INCH],
+        rows=[(i.obligation, i.owner, i.question, i.answer_type, i.blocks)
+              for i in WIRE.value("WIRE.ORDERING.PENDING_INPUTS")],
+    )
+    doc.claim_note("WIRE.ORDERING.PENDING_INPUTS")
     doc.p(
         "<b>1.2 Dedupe commitment.</b> Confirm you dedupe callbacks on (case_id, run_id) and "
         "drop a late duplicate that arrives after a newer decision."
@@ -308,7 +323,8 @@ def build(*, contact: str, due_date: str) -> Doc:
         "v2 header disables the v1 fallback for that request."
     )
     doc.claim_paragraph("WIRE.SIGN.V1_SUNSET", prefix="<b>On the v1 sunset dates: </b>")
-    doc.claim_paragraph("WIRE.SIGN.ROTATION", prefix="<b>Key rotation: </b>")
+    doc.h2("Key rotation: the two directions are not symmetric")
+    doc.claim_bullets("WIRE.SIGN.ROTATION")
 
     doc.h2("Test vector: verify against this before writing anything else")
     v = WIRE.value("WIRE.SIGN.VECTOR")
@@ -333,7 +349,7 @@ def build(*, contact: str, due_date: str) -> Doc:
                 "Reference implementation. This is the exact source our tests execute against the "
                 "shipped signer to produce the digest above:",
             ),
-            ("code", published_snippet()),
+            ("atomic_code", published_snippet(delimited=True)),
         ],
     )
 

@@ -5,7 +5,9 @@ boots with `environment="production"` runs it at startup and refuses to start on
 any unsafe or stub configuration (see api/app.py, workers/*).
 """
 
+import json
 import math
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -436,6 +438,35 @@ class Settings(BaseSettings):
         if problems:
             raise ValueError("; ".join(problems))
         return v
+
+    @model_validator(mode="after")
+    def _refuse_duplicate_rotation_key_ids(self):
+        """Duplicate key ids in the RAW JSON, which `dict` has already collapsed.
+
+        `OPS.CONFIG.ROTATION_KEYS` promises duplicates are refused, and the dict validator cannot
+        keep that promise: `{"old": "A", "old": "B"}` is last-key-wins before any validator runs
+        (re-audit `4f23f23..97deeae` finding 11). An operator who pastes a key twice with two
+        different secrets silently ends up verifying against only one of them, and the other —
+        which the peer may still be signing with — is simply gone.
+
+        Re-parsing the environment string is the only place the duplicate is still visible. A
+        value set programmatically rather than through the environment cannot be checked this way,
+        which is why the dict-level rules above remain the primary layer.
+        """
+        raw = os.environ.get("KYC_HMAC_INBOUND_EXTRA_KEYS")
+        if raw and raw.strip().startswith("{"):
+            seen: list[str] = []
+            try:
+                json.loads(raw, object_pairs_hook=lambda pairs: seen.extend(k for k, _ in pairs))
+            except ValueError:
+                return self  # malformed JSON is already Pydantic's to report
+            duplicates = sorted({k for k in seen if seen.count(k) > 1})
+            if duplicates:
+                raise ValueError(
+                    f"KYC_HMAC_INBOUND_EXTRA_KEYS repeats key_id(s) {duplicates}; JSON keeps only "
+                    "the last, so the earlier secret would be silently dropped"
+                )
+        return self
 
     @field_validator("hmac_inbound_extra_keys")
     @classmethod

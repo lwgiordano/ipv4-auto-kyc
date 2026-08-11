@@ -54,11 +54,25 @@ _BEGIN = "# --- BEGIN PUBLISHED SNIPPET ---"
 _END = "# --- END PUBLISHED SNIPPET ---"
 
 
-def published_snippet() -> str:
+# What the PDF prints around the snippet. They are Python comments, so a reader can select from
+# one to the other and paste the result straight into a file (re-audit `4f23f23..97deeae` finding
+# 4): the published block used to run across a page boundary with the page footer physically
+# between two statements, so copying it contiguously picked up "KYC Tool ... Page 5 of 7" and
+# failed to compile. Printed delimiters make the copy region unambiguous, and the block is now
+# rendered atomically so the delimiters are always on the same page.
+COPY_BEGIN = "# ===== copy from here ====="
+COPY_END = "# ===== to here ====="
+
+
+def published_snippet(*, delimited: bool = False) -> str:
     """The snippet source, read from THIS file between the markers, so the document can never
-    drift from the code the tests execute."""
+    drift from the code the tests execute.
+
+    `delimited=True` wraps it in the copy markers the PDF prints.
+    """
     from pathlib import Path
 
     text = Path(__file__).read_text()
     start = text.index(_BEGIN) + len(_BEGIN)
-    return text[start : text.index(_END)].strip("\n")
+    body = text[start : text.index(_END)].strip("\n")
+    return f"{COPY_BEGIN}\n{body}\n{COPY_END}" if delimited else body

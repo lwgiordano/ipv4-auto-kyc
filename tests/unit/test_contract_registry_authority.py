@@ -192,13 +192,38 @@ def _skew_window_matches_the_verifier():
 
 
 @verifies("WIRE.SIGN.ROTATION")
-def _rotation_claim_matches_the_enforced_floor():
-    """The prose promises a 32-char floor, non-blank ids, and no collision. Prove each is actually
-    refused rather than merely described."""
+def _rotation_claim_matches_what_each_direction_can_actually_do():
+    """The two directions are NOT symmetric, and the old claim said they were.
+
+    "Inbound and outbound rotate independently" implied the tool could hold an outbound overlap
+    (re-audit `4f23f23..97deeae` finding 11). It cannot: the publisher signs with exactly one
+    outbound key, so if we switch first, every callback fails verification until the receiver
+    catches up and then dead-letters. The order has to be receiver-first, and only the document
+    can tell them that.
+    """
+    lines = WIRE.value("WIRE.SIGN.ROTATION")
+    inbound = next(line for line in lines if line.startswith("INBOUND"))
+    outbound = next(line for line in lines if line.startswith("OUTBOUND"))
+
+    # inbound: the overlap map exists and enforces the active key's floor
     assert hmac_extra_key_violations({"old": "s" * 32}, "active") == []
     assert any("weak" in v for v in hmac_extra_key_violations({"old": "s" * 31}, "active"))
     assert any("blank" in v for v in hmac_extra_key_violations({"": "s" * 32}, "active"))
     assert any("collides" in v for v in hmac_extra_key_violations({"active": "s" * 32}, "active"))
+    assert "32 characters" in inbound and "collision" in inbound
+
+    # outbound: exactly ONE signer in the publisher, so the overlap cannot live here
+    publisher = (SRC / "outbox" / "publisher.py").read_text()
+    assert publisher.count("hmac_outbound_secret") == 1, (
+        "the publisher now references more than one outbound secret; if it can hold an overlap, "
+        "the receiver-first ordering below is no longer the only safe order"
+    )
+    assert "hmac_outbound_extra_keys" not in publisher
+    assert "hmac_outbound_extra_keys" not in set(Settings.model_fields)
+    assert "OVERLAP IS YOURS TO HOLD" in outbound
+    assert "you start accepting old and new" in outbound
+    assert outbound.index("you start accepting") < outbound.index("we switch our signer")
+    assert "dead-letter" in outbound
 
 
 @verifies("WIRE.SIGN.V1_SUNSET")
@@ -534,6 +559,49 @@ def _bootstrap_is_pending_and_publishes_no_schema():
     assert not any(r.startswith("024") for r in revisions), "024 exists; the claim is stale"
 
 
+@verifies("WIRE.ORDERING.PENDING_INPUTS")
+def _pending_024_inputs_cover_every_live_obligation():
+    """One-to-one against the obligation ids PARSED FROM THE LIVE SPEC.
+
+    Re-audit `4f23f23..97deeae` finding 10. The document asked three questions TechCraft could
+    answer completely while 024 stayed non-buildable, because O1-O4 need decisions only the
+    platform can make. Parsing the spec rather than hardcoding the ids means a fifth obligation
+    appearing there fails this test until the document asks for it too.
+    """
+    spec = (REPO / ".agents" / "superpowers" / "specs"
+            / "2026-07-22-pr7b-activation-platform-ordering-design.md").read_text()
+    live = spec[spec.index("## Open blockers"):]
+    live = live[: live.index("\n## ", 1)] if "\n## " in live[1:] else live
+    obligations = set(re.findall(r"\*\*(O\d)\b", live))
+    assert obligations == {"O1", "O2", "O3", "O4"}, f"the live obligation set changed: {obligations}"
+
+    inputs = WIRE.value("WIRE.ORDERING.PENDING_INPUTS")
+    covered = {i.obligation for i in inputs}
+    assert covered == obligations, (
+        f"uncovered obligations {sorted(obligations - covered)}; "
+        f"inputs naming nothing live {sorted(covered - obligations)}"
+    )
+    for item in inputs:
+        assert item.owner in {"TechCraft", "IPv4.Global", "both"}, item.owner
+        # every input must ASK something: a question mark, or an explicit request to confirm
+        assert "?" in item.question or item.question.startswith(("Confirm", "Agree")), (
+            f"{item.obligation}: this input asks nothing")
+        assert item.answer_type.strip() and item.authority.strip() and item.blocks.strip()
+        assert item.obligation in item.authority, (
+            f"{item.obligation}: the authority reference does not name its own obligation"
+        )
+    # no duplicate question under one obligation
+    questions = [(i.obligation, i.question) for i in inputs]
+    assert len(questions) == len(set(questions))
+    assert WIRE["WIRE.ORDERING.PENDING_INPUTS"].state is ClaimState.PENDING
+
+    # the specific decisions the finding said were missing
+    text = " ".join(i.question for i in inputs)
+    for missing in ("principal", "HMAC VERSION", "deadline", "SOLE terminal", "reaper",
+                    "GLOBALLY unique", "WRITER-ROLE MATRIX", "old-image"):
+        assert missing in text, f"the 024 request still does not ask about {missing!r}"
+
+
 @verifies("WIRE.ORDERING.INTEGRITY_MISMATCH")
 def _integrity_mismatch_is_emitted_by_nothing_today():
     """The claim says no code path emits this state yet. Proven structurally: no string CONSTANT
@@ -739,26 +807,48 @@ def _release_classification_matches_the_release_it_cites():
     assert "independently" in claim and "no migration" in claim
 
 
+def _deployment_section_body(section: str) -> str:
+    """The normalized body under a DEPLOYMENT.md heading, up to the next heading."""
+    lines = (REPO / "docs" / "DEPLOYMENT.md").read_text().split("\n")
+    heads = [(i, ln) for i, ln in enumerate(lines) if re.match(r"^#{1,2} ", ln)]
+    matches = [idx for idx, (_i, ln) in enumerate(heads) if section in ln]
+    assert len(matches) == 1, f"{section!r} matches {len(matches)} headings; it must match one"
+    idx = matches[0]
+    start = heads[idx][0]
+    end = heads[idx + 1][0] if idx + 1 < len(heads) else len(lines)
+    return " ".join("\n".join(lines[start + 1:end]).split())
+
+
 @verifies("OPS.CUTOVER.PROCEDURES")
-def _every_procedure_points_at_a_playbook_that_exists():
-    """These claims deliberately do NOT restate steps (see the note in operations.py), which makes
-    the pointer load-bearing: a reference to a section that does not exist is worse than the
-    summary it replaced, because the operator has nothing to fall back to."""
-    deployment = (REPO / "docs" / "DEPLOYMENT.md").read_text()
-    headings = [line for line in deployment.splitlines() if line.startswith("#")]
+def _every_procedure_points_at_a_reviewed_playbook_body():
+    """These claims deliberately do NOT restate steps, which makes the pointer load-bearing.
+
+    Asserting the HEADING exists was not enough (re-audit `4f23f23..97deeae` finding 8): pointing
+    the repo at a DEPLOYMENT.md containing only the three headings passed. So each procedure pins
+    a digest of the REVIEWED BODY under its heading. An empty body, a wrong section with the same
+    name, or an edit nobody re-reviewed all fail here, and re-pinning the digest is the act of
+    re-reviewing.
+    """
     procedures = OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
     assert {p.name for p in procedures} == {
-        "Full maintenance window",
-        "Bundle-pinning activation",
-        "Migrations 013-023",
+        "PR 5b full maintenance window", "Bundle-pinning activation", "Migrations 013-023",
     }
     for procedure in procedures:
         document, _, section = procedure.playbook.partition(", ")
         assert (REPO / document).exists(), f"{procedure.name} points at a missing document"
-        assert any(section in heading for heading in headings), (
-            f"{procedure.name} points at '{section}', which is not a heading in {document}"
+        body = _deployment_section_body(section)
+        assert len(body) > 500, (
+            f"{procedure.name}: the section under {section!r} is {len(body)} chars — a pointer to "
+            "an empty body is worse than the summary it replaced"
+        )
+        digest = hashlib.sha256(body.encode()).hexdigest()
+        assert digest == procedure.playbook_digest, (
+            f"{procedure.name}: {section!r} changed since it was reviewed.\n"
+            f"  reviewed: {procedure.playbook_digest}\n  now:      {digest}\n"
+            "Re-read the section, then re-pin playbook_digest in the SAME commit."
         )
         assert procedure.blocks_start, f"{procedure.name} lists nothing that blocks starting"
+        assert procedure.rollback, f"{procedure.name} publishes no rollback conditions"
         assert procedure.when.strip() and procedure.irreversible.strip()
         # no step numbering: a numbered list here IS the summary this claim exists to avoid
         for prerequisite in procedure.blocks_start:
@@ -767,22 +857,41 @@ def _every_procedure_points_at_a_playbook_that_exists():
             )
 
     by_name = {p.name: p for p in procedures}
-    # order inside the prerequisites still matters: the pre-window diagnostic exists to run UNDER
-    # the retention suspension, and reading it the other way round makes the diagnostic worthless
+
+    # PR 5b is SCOPED, not generic. A future unrelated full-window release must not inherit a
+    # procedure whose rollback knowingly restores THIS release's vulnerability.
+    pr5b = by_name["PR 5b full maintenance window"]
+    assert "PR 5b" in pr5b.when and "do not reuse this one" in pr5b.when.lower()
+    rollback = " ".join(pr5b.rollback).lower()
+    assert "mirrors the same window" in rollback, "PR 5b rollback is not a plain redeploy"
+    assert "restores the vulnerability" in rollback
+    assert "non-mutating only" in rollback and "performs the forgery" in rollback
+    # and the playbook says the same thing, which is what the digest is protecting
+    pr5b_body = _deployment_section_body("PR 5b cutover").lower()
+    assert "non-mutating only" in pr5b_body, "the playbook no longer restricts rollback probes"
+    assert "the forgery it is meant to detect" in pr5b_body
+    assert "rollback mirrors the same window" in pr5b_body
+
+    # order inside the prerequisites still matters
     pr7b = [p.lower() for p in by_name["Migrations 013-023"].blocks_start]
     suspended = next(i for i, p in enumerate(pr7b) if "retention is suspended" in p)
     diagnostic = next(i for i, p in enumerate(pr7b) if "pre-window diagnostic" in p)
     assert suspended < diagnostic
     assert any("backup" in p for p in pr7b)
     assert "unconditionally" in by_name["Migrations 013-023"].irreversible.lower()
+
+    # 013-023 is LOCAL authority; platform ordering waits for 024 (finding 5)
+    when = by_name["Migrations 013-023"].when.lower()
+    assert "receipt/transition-authority" in when
+    assert "best-effort local supersession" in when
+    assert "024" in when and "absent until" in when
+    assert "ordering-authority schema" not in when
+
     # the two controls a step summary kept dropping
-    assert any(
-        "load balancer" in p.lower() or "trusted path" in p.lower()
-        for p in by_name["Full maintenance window"].blocks_start
-    )
-    assert "pr6 image" in by_name["Bundle-pinning activation"].irreversible.lower().replace(
-        "pr6 ", "pr6 "
-    ).replace("the pr6 image", "pr6 image")
+    assert any("load balancer" in p.lower() or "trusted path" in p.lower()
+               for p in pr5b.blocks_start)
+    bundle_rollback = " ".join(by_name["Bundle-pinning activation"].rollback).lower()
+    assert "pr 6 image" in bundle_rollback and "null provenance" in bundle_rollback
 
 
 @verifies("OPS.CUTOVER.OUTBOX_CEILING")
@@ -796,10 +905,41 @@ def _outbox_ceiling_cutover_matches_the_shipped_canonical_record():
 
 
 @verifies("OPS.ROLLBACK.MIGRATION_BOUNDARY")
-def _rollback_claim_forbids_the_staging_downgrade_myth():
-    text = " ".join(OPERATIONS.value("OPS.ROLLBACK.MIGRATION_BOUNDARY")).lower()
-    assert "unconditionally" in text and "including staging" in text
-    assert "downgrade-freely" not in text.replace("there is no downgrade-freely rule anywhere", "")
+def _rollback_claim_matches_each_revision_s_actual_downgrade():
+    """Derived from the migrations, not from a phrase.
+
+    The claim said "018 and above refuse unconditionally". 018-022 do; 023's downgrade is a bare
+    `pass` — it is validation-only, so stepping down from head removes its stamp and 022 blocks
+    the next step. Overall safety is unchanged, but an operator planning a rollback was given a
+    false per-revision account (re-audit `4f23f23..97deeae` finding 12). So the test reads each
+    revision's downgrade body and requires the claim to match what is actually there.
+    """
+    versions = REPO / "alembic" / "versions"
+    refusing, no_op = set(), set()
+    for path in sorted(versions.glob("0*.py")):
+        revision = path.name.split("_", 1)[0]
+        tree = ast.parse(path.read_text())
+        downgrade = next(
+            (n for n in ast.walk(tree)
+             if isinstance(n, ast.FunctionDef) and n.name == "downgrade"), None)
+        if downgrade is None:
+            continue
+        body = [n for n in downgrade.body if not isinstance(n, ast.Expr)]  # drop the docstring
+        if any(isinstance(n, ast.Raise) for n in ast.walk(downgrade)):
+            refusing.add(revision)
+        elif all(isinstance(n, ast.Pass) for n in body) and body:
+            no_op.add(revision)
+
+    assert {"018", "019", "020", "021", "022"} <= refusing, sorted(refusing)
+    assert "023" in no_op, "023 no longer downgrades as a no-op; the claim's exception is stale"
+
+    text = " ".join(OPERATIONS.value("OPS.ROLLBACK.MIGRATION_BOUNDARY"))
+    assert "018 through 022" in text, "the claim is back to an 'and above' account"
+    assert "unconditionally" in text.lower() and "including staging" in text.lower()
+    assert "023" in text and "validation-only" in text and "022 then blocks" in text
+    lowered = text.lower()
+    assert "downgrade-freely" not in lowered.replace(
+        "there is no downgrade-freely rule anywhere", "")
 
 
 @verifies("OPS.HMAC.ROLLOUT_ORDER")
