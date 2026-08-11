@@ -15,7 +15,16 @@ believe correct, in a form they can run.
 
 from dataclasses import dataclass
 
-from docs.contracts.wire import INTERIM, POST_024
+from docs.contracts.wire import (
+    INTERIM,
+    KNOWN_SOURCES,
+    POST_024,
+    SOURCE_MANUAL,
+)
+
+
+class UnknownSourceError(ValueError):
+    """The receiver reported an effective source outside the closed set. Hold, never apply."""
 
 
 @dataclass(frozen=True)
@@ -59,12 +68,22 @@ def decide(state: LedgerState, callback: Callback, *, phase: str) -> Outcome:
     Returns which row decided it, so a test can prove the implementation and the table agree row
     for row rather than merely agreeing on the final answer.
     """
+    if state.current_source is not None and state.current_source not in KNOWN_SOURCES:
+        # FAIL CLOSED (re-audit `4f23f23..122cc67` finding 2). Every unrecognised source —
+        # `manual_release_pending`, `MANUAL`, a typo — used to fall through to the automatic
+        # branch and take effect. A source you cannot classify is precisely the case where you do
+        # not know whether a human decided this, so it holds.
+        raise UnknownSourceError(
+            f"current_source {state.current_source!r} is not one of {sorted(KNOWN_SOURCES)}; "
+            "record the callback and hold the case rather than applying it"
+        )
+
     if phase == INTERIM:
         if callback.run_id in state.seen_run_ids:
             return Outcome(row=0, record=False, effective=False, advance_high_water=False)
         if state.current_source is None:
             return Outcome(row=1, record=True, effective=True, advance_high_water=False)
-        if state.current_source == "manual":
+        if state.current_source == SOURCE_MANUAL:
             return Outcome(row=2, record=True, effective=False, advance_high_water=False)
         # AUTOMATIC current, different run. NOT "otherwise apply": interim has no ordering
         # authority, so an older decision delayed in flight is indistinguishable from a newer one.
@@ -76,7 +95,7 @@ def decide(state: LedgerState, callback: Callback, *, phase: str) -> Outcome:
         sequence = callback.decision_sequence
         if sequence is None or (state.high_water is not None and sequence <= state.high_water):
             return Outcome(row=1, record=True, effective=False, advance_high_water=False)
-        if state.current_source == "manual":
+        if state.current_source == SOURCE_MANUAL:
             # The mark advances even though the decision does not take effect: leaving it stale
             # would judge the first post-release automatic decision against the wrong baseline.
             return Outcome(row=2, record=True, effective=False, advance_high_water=True)

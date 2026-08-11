@@ -192,14 +192,14 @@ def _skew_window_matches_the_verifier():
 
 
 @verifies("WIRE.SIGN.ROTATION")
-def _rotation_claim_matches_what_each_direction_can_actually_do():
-    """The two directions are NOT symmetric, and the old claim said they were.
+def _rotation_publishes_an_executable_procedure_for_each_direction():
+    """Both directions, both orders, and the reason each order is what it is.
 
-    "Inbound and outbound rotate independently" implied the tool could hold an outbound overlap
-    (re-audit `4f23f23..97deeae` finding 11). It cannot: the publisher signs with exactly one
-    outbound key, so if we switch first, every callback fails verification until the receiver
-    catches up and then dead-letters. The order has to be receiver-first, and only the document
-    can tell them that.
+    Re-audit `4f23f23..122cc67` finding 9. The previous version named the asymmetry but was not
+    executable: inbound said "add a second key id, cut over, then retire the old one" and omitted
+    the PROMOTION — a literal reading removes the entry while the old key is still ACTIVE, which
+    leaves no active key at all. Outbound told TechCraft to retire once callbacks appear under the
+    new key, which in a mixed fleet does not prove an old-key signer is gone.
     """
     lines = WIRE.value("WIRE.SIGN.ROTATION")
     inbound = next(line for line in lines if line.startswith("INBOUND"))
@@ -210,20 +210,37 @@ def _rotation_claim_matches_what_each_direction_can_actually_do():
     assert any("weak" in v for v in hmac_extra_key_violations({"old": "s" * 31}, "active"))
     assert any("blank" in v for v in hmac_extra_key_violations({"": "s" * 32}, "active"))
     assert any("collides" in v for v in hmac_extra_key_violations({"active": "s" * 32}, "active"))
-    assert "32 characters" in inbound and "collision" in inbound
 
-    # outbound: exactly ONE signer in the publisher, so the overlap cannot live here
+    # ...and the published order includes the promotion, in the right place
+    assert "PROMOTE" in inbound, "the inbound procedure still omits promoting the new key"
+    assert inbound.index("PROMOTE") < inbound.index("remove the old"), (
+        "the old entry is removed before the new key is promoted"
+    )
+    assert any("no active key" in line for line in lines), (
+        "nothing explains why deleting before promoting is unsafe"
+    )
+
+    # outbound: exactly ONE signer, so the overlap cannot live here and the drain is required
     publisher = (SRC / "outbox" / "publisher.py").read_text()
     assert publisher.count("hmac_outbound_secret") == 1, (
         "the publisher now references more than one outbound secret; if it can hold an overlap, "
-        "the receiver-first ordering below is no longer the only safe order"
+        "the drained procedure below is no longer the only safe one"
     )
-    assert "hmac_outbound_extra_keys" not in publisher
     assert "hmac_outbound_extra_keys" not in set(Settings.model_fields)
     assert "OVERLAP IS YOURS TO HOLD" in outbound
-    assert "you start accepting old and new" in outbound
-    assert outbound.index("you start accepting") < outbound.index("we switch our signer")
-    assert "dead-letter" in outbound
+    assert outbound.index("You start accepting") < outbound.index("attest ZERO publishers")
+    assert outbound.index("attest ZERO publishers") < outbound.index("deploy the sole new signer")
+    assert outbound.index("deploy the sole new signer") < outbound.index("retire the old key")
+    assert any("mixed fleet" in line and "dead-letter" in line for line in lines), (
+        "nothing explains why one new-key callback is not evidence"
+    )
+
+    # the drain is a real, named capability, not an aspiration
+    from kyc_tool.ops import cutover
+
+    assert hasattr(cutover, "OUTBOX_MAX_ATTEMPTS_CUTOVER")
+    assert "attest zero publishers" in " ".join(
+        OPERATIONS.value("OPS.CUTOVER.OUTBOX_CEILING")).lower()
 
 
 @verifies("WIRE.SIGN.V1_SUNSET")

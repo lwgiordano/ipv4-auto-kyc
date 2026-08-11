@@ -13,8 +13,20 @@ branch to the published row it claims to implement.
 """
 
 import pytest
-from docs.contracts.receiver_reference import Callback, LedgerState, Outcome, decide
-from docs.contracts.wire import INTERIM, POST_024, RECEIVER_TRANSITIONS, WIRE
+from docs.contracts.receiver_reference import (
+    Callback,
+    LedgerState,
+    Outcome,
+    UnknownSourceError,
+    decide,
+)
+from docs.contracts.wire import (
+    INTERIM,
+    KNOWN_SOURCES,
+    POST_024,
+    RECEIVER_TRANSITIONS,
+    WIRE,
+)
 
 CASE = "case-42"
 
@@ -195,3 +207,75 @@ def test_deleting_any_row_breaks_totality(dropped):
             break
     else:  # pragma: no cover — one of the two phases always loses a row
         raise AssertionError(f"dropping row {dropped} left both phases complete")
+
+
+# ── the implementation is bound to the row's OUTCOME, not just its index ─────────────────────────
+def test_every_outcome_matches_the_published_row_it_claims(  # noqa: C901
+):
+    """Re-audit `4f23f23..122cc67` finding 2. The implementation reported a row NUMBER and nothing
+    compared its behaviour to that row's words, so rewriting a published row to
+    `effective=YES — replace the manual approval` left the whole suite green: the code kept doing
+    the right thing while the document told TechCraft the opposite."""
+    for phase in (INTERIM, POST_024):
+        rows = _rows(phase)
+        for state, callback in _scenarios_for(phase):
+            outcome = decide(state, callback, phase=phase)
+            row = rows[outcome.row]
+            assert outcome.record == row.records, (
+                f"{phase} row {outcome.row}: implementation records={outcome.record}, "
+                f"table says {row.record!r}")
+            assert outcome.effective == row.becomes_effective, (
+                f"{phase} row {outcome.row}: implementation effective={outcome.effective}, "
+                f"table says {row.effective!r}")
+            assert outcome.advance_high_water == row.advances_high_water, (
+                f"{phase} row {outcome.row}: implementation advance={outcome.advance_high_water}, "
+                f"table says {row.record!r}")
+
+
+def test_the_prose_and_the_structured_outcome_agree():
+    """The booleans are what the tests read; the prose is what TechCraft reads. If they diverge,
+    the machine-checked half is not checking the published half."""
+    for row in RECEIVER_TRANSITIONS:
+        effective = row.effective.upper()
+        says_yes = effective.startswith("YES")
+        assert says_yes == row.becomes_effective, row
+        if not row.records:
+            assert "nothing new" in row.record.lower(), row
+        if row.advances_high_water:
+            assert "advance the high-water mark" in row.record.lower(), row
+        else:
+            assert "advance the high-water mark" not in row.record.lower(), row
+
+
+@pytest.mark.parametrize("source", ["manual_release_pending", "MANUAL", "Automatic", "typo", ""])
+def test_an_unrecognised_current_source_holds_instead_of_applying(source):
+    """Every unknown source used to fall through to the automatic branch and TAKE EFFECT — the one
+    case where you cannot tell whether a human decided this is exactly the case where applying is
+    unsafe."""
+    for phase in (INTERIM, POST_024):
+        with pytest.raises(UnknownSourceError):
+            decide(LedgerState(current_source=source, high_water=1),
+                   Callback(CASE, "r", decision_sequence=9), phase=phase)
+
+
+def test_the_two_known_sources_are_the_only_ones():
+    assert {"manual", "automatic"} == KNOWN_SOURCES
+    for source in (None, "manual", "automatic"):
+        decide(LedgerState(current_source=source), Callback(CASE, "r", decision_sequence=1),
+               phase=POST_024)
+
+
+def test_mutating_any_published_outcome_field_fails_the_binding():
+    """The guard's own failure mode: flip a row's outcome and the binding test must reject it."""
+    import dataclasses
+
+    for index, row in enumerate(RECEIVER_TRANSITIONS):
+        mutated = dataclasses.replace(row, becomes_effective=not row.becomes_effective)
+        rows = [t for t in RECEIVER_TRANSITIONS if t.phase == row.phase]
+        position = rows.index(row)
+        for state, callback in _scenarios_for(row.phase):
+            outcome = decide(state, callback, phase=row.phase)
+            if outcome.row == position:
+                assert outcome.effective != mutated.becomes_effective, (
+                    f"row {index} could be flipped without the binding noticing")
+                break

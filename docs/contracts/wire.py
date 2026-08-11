@@ -26,15 +26,34 @@ from docs.contracts import Claim, ClaimState, Registry
 # scenario tests, so the table cannot drift from a working algorithm.
 
 
+# The only values a receiver may report as the currently effective source. Anything else — a
+# release-pending marker, a case variant, a typo — is UNKNOWN, and unknown must hold, not apply
+# (re-audit `4f23f23..122cc67` finding 2).
+SOURCE_MANUAL = "manual"
+SOURCE_AUTOMATIC = "automatic"
+KNOWN_SOURCES = frozenset({SOURCE_MANUAL, SOURCE_AUTOMATIC})
+
+
 @dataclass(frozen=True)
 class Transition:
-    """One row. `condition` is evaluated in order within its phase; the first match wins."""
+    """One row. `condition` is evaluated in order within its phase; the first match wins.
+
+    The prose fields are what the PDF prints. The three booleans are what the reference
+    implementation is held against: previously the implementation reported which ROW it took and
+    nothing compared its behaviour to that row's words, so rewriting a published row to
+    "effective=YES — replace the manual approval" left 159 tests green while the implementation
+    kept doing the right thing and the document told TechCraft the wrong thing.
+    """
 
     phase: str  # "interim" (today) or "post-024" (after ordered delivery is activated)
     condition: str
     record: str  # what goes into the accepted-run ledger
     effective: str  # whether it becomes the case's current decision
     why: str
+    # structured outcome — the machine-checkable form of `record` and `effective`
+    records: bool = True
+    becomes_effective: bool = False
+    advances_high_water: bool = False
 
 
 INTERIM = "interim"
@@ -46,6 +65,7 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
         condition="the (case_id, run_id) is already in your accepted ledger",
         record="nothing new; the row is already there",
         effective="NO CHANGE — acknowledge with 2xx and stop",
+        records=False,
         why="Delivery is at-least-once, so a duplicate is the expected case, not an error. "
             "Returning non-2xx to a duplicate makes us retry it forever.",
     ),
@@ -54,6 +74,7 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
         condition="the case has no currently effective decision",
         record="the callback",
         effective="YES — it becomes the current automatic decision",
+        becomes_effective=True,
         why="Nothing to conflict with.",
     ),
     Transition(
@@ -82,6 +103,7 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
         condition="the (case_id, run_id) is already in your accepted ledger",
         record="nothing new",
         effective="NO CHANGE — acknowledge with 2xx and stop",
+        records=False,
         why="Same as interim: duplicates are expected.",
     ),
     Transition(
@@ -99,6 +121,7 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
                   "MANUAL",
         record="the callback, AND advance the high-water mark to its decision_sequence",
         effective="NO",
+        advances_high_water=True,
         why="The manual approval stays in force, but the mark still moves: otherwise every later "
             "automatic decision for the case is compared against a stale mark and the first one "
             "after a manual release would be judged by the wrong baseline.",
@@ -109,6 +132,8 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
                   "AUTOMATIC or absent",
         record="the callback, AND advance the high-water mark to its decision_sequence",
         effective="YES",
+        becomes_effective=True,
+        advances_high_water=True,
         why="This is the only row that applies an automatic decision, and it does so on proven "
             "DECISION order rather than on arrival order.",
     ),
@@ -357,21 +382,34 @@ WIRE = Registry(
         Claim(
             id="WIRE.SIGN.ROTATION",
             value=(
-                "INBOUND (your key, verifying your calls to us): we accept an overlap. Add your "
-                "new key id alongside the old one in our rotation map, switch your signer to the "
-                "new id, wait until no request arrives under the old id, then we remove it. "
+                "INBOUND (your key, verifying your calls to us) — five phases, in this order. "
+                "(1) We deploy your NEW key id as a rotation entry alongside the old ACTIVE one, "
+                "fleet-wide. (2) We confirm both are accepted. (3) You switch your signer to the "
+                "new id. (4) We prove no request has arrived under the old id. (5) We PROMOTE the "
+                "new id to active with the old one demoted to a rotation entry, then remove the "
+                "old entry.",
+                "Phase 5 is not optional bookkeeping. Deleting the old entry while it is still "
+                "the ACTIVE key leaves us with no active key and the new id resolvable only as a "
+                "rotation entry — a state that verifies nothing once the entry is dropped. The "
+                "promotion is what makes the new key primary.",
+                "OUTBOUND (our key, signing our callbacks to you) — THE OVERLAP IS YOURS TO HOLD. "
+                "We sign with exactly one outbound key. (1) You start accepting old and new. "
+                "(2) We hard-stop and attest ZERO publishers, so no replica is still signing with "
+                "the old key. (3) We deploy the sole new signer. (4) We resume and you confirm "
+                "callbacks are arriving under the new key id. (5) You retire the old key.",
+                "Phase 2 is why this is a drain and not a rolling deploy. In a mixed fleet, seeing "
+                "one callback under the new key does not prove no replica is still signing with "
+                "the old one; retiring early makes the next old-signed callback fail verification "
+                "and dead-letter.",
                 "Rotation secrets are full verification credentials and carry the same floor as "
                 "the active key: at least 32 characters, a non-blank key id, and no collision "
                 "with the active id.",
-                "OUTBOUND (our key, signing our callbacks to you): THE OVERLAP IS YOURS TO HOLD. "
-                "We sign with exactly one outbound key and have no second-key facility, so the "
-                "order is: you start accepting old and new, THEN we switch our signer, then you "
-                "confirm callbacks are arriving under the new key id, then you retire the old. "
-                "Switching us first means every callback fails verification until you catch up, "
-                "and they dead-letter.",
             ),
             authority="kyc_tool.config.hmac_extra_key_violations + kyc_tool.api.auth._inbound_secret "
-                      "+ kyc_tool.outbox.publisher (one outbound signer)",
+                      "+ kyc_tool.outbox.publisher (one outbound signer) + "
+                      "kyc_tool.ops.cutover (publisher drain/attest)",
+            note="Both directions are ordered, and both orders are the way they are because one "
+                 "side can hold two keys and the other cannot.",
         ),
         # ── callbacks ─────────────────────────────────────────────────────────────────────────
         Claim(
