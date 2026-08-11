@@ -271,6 +271,7 @@ class Doc:
         self.story: list = []
         self.rendered: list[str] = []
         self.sections: list[Section] = []
+        self.placements: list[dict] = []  # filled by build(): where each flowable landed
         self._total_pages = 0
         self._open_section("(front matter)", "")
 
@@ -574,6 +575,7 @@ class Doc:
         binding, split state), so a second build over already-rendered objects raises LayoutError.
         """
         revision = source_revision()
+        self.placements = []
         if release:
             # A preview may be built from anything. A RELEASE artifact is the thing someone will
             # still be holding in a year, so it must name a commit anyone can check out.
@@ -587,7 +589,34 @@ class Doc:
                     f"release build has uncommitted changes ({revision}); the stamped commit "
                     "would not reproduce these pages. Commit first, then rebuild."
                 )
-        template = SimpleDocTemplate(
+        placements = self.placements
+
+        class _Recording(SimpleDocTemplate):
+            """Records where each flowable actually landed.
+
+            Geometry read back from the PAGE cannot see two flowables drawn on the same baseline:
+            the extractor merges their glyphs into a single word, so a line-box detector reports
+            zero collisions on a visibly interleaved page (re-audit `4f23f23..122cc67` finding 11).
+            The layout engine is the only place those rectangles exist.
+            """
+
+            def afterFlowable(self, flowable):  # noqa: N802 — reportlab's spelling
+                frame = getattr(self, "frame", None)
+                if frame is None:
+                    return
+                height = getattr(flowable, "height", 0) or 0
+                width = getattr(flowable, "width", 0) or 0
+                placements.append({
+                    "page": self.page,
+                    "x0": frame._x1,
+                    "x1": frame._x1 + width,
+                    "bottom": frame._y,
+                    "top": frame._y + height,
+                    "what": type(flowable).__name__,
+                    "text": " ".join(str(getattr(flowable, "text", ""))[:40].split()),
+                })
+
+        template = _Recording(
             path,
             pagesize=letter,
             leftMargin=0.75 * inch,

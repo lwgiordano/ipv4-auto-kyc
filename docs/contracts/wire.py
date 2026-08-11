@@ -366,6 +366,19 @@ WIRE = Registry(
             authority="kyc_tool.security.MAX_HMAC_SKEW_SECONDS",
         ),
         Claim(
+            id="WIRE.SIGN.COMPANION",
+            value="The runnable signer ships as a FILE alongside this document: "
+                  "kyc-signer-example.py. Verify it with `shasum -a 256 kyc-signer-example.py` "
+                  "before use. The code printed below is an illustration of that file — a PDF is "
+                  "not a reliable clipboard for indentation-sensitive source, so copying it off "
+                  "the page is not supported and we do not ask you to.",
+            authority="docs.contracts.companion (digest recomputed over the shipped bytes)",
+            note="Our test suite executes the file's exact bytes against the published vector and "
+                 "asserts they reproduce the published signature, so a digest mismatch means the "
+                 "file changed in transit rather than the algorithm changing.",
+            exclusive_terms=("kyc-signer-example.py",),
+        ),
+        Claim(
             id="WIRE.SIGN.VECTOR",
             value=SIGNATURE_VECTOR,
             authority="kyc_tool.security.sign_v2 via docs.contracts.signing_example.sign",

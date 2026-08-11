@@ -595,15 +595,15 @@ def test_published_slice_compiles_and_runs_in_an_empty_namespace():
     assert produced == v["signature"]
 
 
-def test_the_published_signer_is_copyable_off_one_page(tmp_path):
-    """Extract what a reader would actually select, and run THAT.
+def test_the_signer_block_is_whole_and_on_one_page(tmp_path):
+    """The printed block is an ILLUSTRATION, and it still has to be legible in one piece.
 
-    The snippet's imports and indentation were already correct and the source executed — but the
-    printed block ran across a page boundary, so the page footer sat physically between
-    `hashlib.sha256(body).hexdigest(),` and `])`. Copying contiguously picked up
-    "KYC Tool ... Page 5 of 7" and `compile()` raised SyntaxError on the em dash. The old test
-    executed the module and checked stripped-line membership, so it never touched what the PDF
-    exposes (re-audit `4f23f23..97deeae` finding 4).
+    What this test no longer claims is that the block is copyable. The previous version
+    reconstructed indentation from glyph x-offsets and Courier advance widths and then compiled
+    the result — proving the glyphs contain enough information for a custom decoder, not that a
+    reader with a normal PDF viewer can use it (re-audit `4f23f23..122cc67` finding 4). Exact
+    `pdftotext` output does not compile. The runnable copy is the companion file, checked by
+    `test_the_companion_file_is_the_bytes_the_document_names`.
     """
     from docs.contracts.signing_example import COPY_BEGIN, COPY_END
 
@@ -611,44 +611,28 @@ def test_the_published_signer_is_copyable_off_one_page(tmp_path):
     _build(contract_gen).build(path, "signer")
 
     with pdfplumber.open(path) as pdf:
-        pages = [(number, page) for number, page in enumerate(pdf.pages, 1)]
-        holding = [n for n, page in pages if COPY_BEGIN in (page.extract_text() or "")]
-        closing = [n for n, page in pages if COPY_END in (page.extract_text() or "")]
-        assert len(holding) == 1 and holding == closing, (
-            f"the copy region spans pages {holding} to {closing}; page furniture would land "
-            "inside anything a reader copies"
-        )
-        page = dict(pages)[holding[0]]
-        # rebuild lines from words, keeping their x-offsets so indentation survives
-        rows: dict[float, list] = {}
-        for word in page.extract_words():
-            rows.setdefault(round(word["top"], 1), []).append(word)
-        char_width = 4.8  # Courier 8pt
-        raw = []
-        for top in sorted(rows):
-            ordered = sorted(rows[top], key=lambda w: w["x0"])
-            raw.append((ordered[0]["x0"], " ".join(w["text"] for w in ordered)))
-
-    begin = next(i for i, (_x, ln) in enumerate(raw) if COPY_BEGIN in ln)
-    end = next(i for i, (_x, ln) in enumerate(raw) if COPY_END in ln)
-    # Indentation is measured from the copy region's OWN left edge. Measuring from the page's
-    # leftmost glyph instead picks up the body margin, which is a couple of points left of the
-    # code block, and every line comes back indented by two spaces.
-    base = raw[begin][0]
-    block = "\n".join(
-        " " * max(int(round((x0 - base) / char_width)), 0) + text
-        for x0, text in raw[begin : end + 1]
+        pages = [(number, page.extract_text() or "") for number, page in enumerate(pdf.pages, 1)]
+    holding = [n for n, text in pages if COPY_BEGIN in text]
+    closing = [n for n, text in pages if COPY_END in text]
+    assert len(holding) == 1 and holding == closing, (
+        f"the signer block spans pages {holding} to {closing}; page furniture would land inside it"
     )
+    block_page = dict(pages)[holding[0]]
+    for line in published_snippet().splitlines():
+        stripped = " ".join(line.split())
+        if stripped and not stripped.startswith("#"):
+            assert stripped in _flat(block_page), f"snippet line missing from the page: {stripped!r}"
 
-    assert "Page" not in block and "source" not in block, f"page furniture inside the block:\n{block}"
-    namespace: dict = {}
-    exec(compile(block, "<copied-from-pdf>", "exec"), namespace)  # noqa: S102
-    v = WIRE.value("WIRE.SIGN.VECTOR")
-    produced = namespace["sign"](
-        v["secret"], key_id=v["key_id"], direction=v["direction"], method=v["method"],
-        path_qs=v["path_qs"], timestamp=v["timestamp"], slot=v["slot"], body=v["body"],
-    )
-    assert produced == v["signature"], "the signer copied off the page produces a different digest"
+
+def test_the_document_does_not_promise_the_page_is_copyable(contract_text):
+    """A document that says "copy from here" and cannot be copied from is worse than one that
+    points at a file."""
+    flat = _flat(contract_text)
+    from docs.contracts.companion import ARTIFACT_NAME, artifact_digest
+
+    assert ARTIFACT_NAME in flat
+    assert artifact_digest() in flat
+    assert "not supported" in flat
 
 
 def test_code_on_the_page_keeps_its_indentation(tmp_path):
@@ -749,3 +733,62 @@ def test_page_indentation_structure_matches_the_compilable_source(tmp_path):
         assert min(by_indent[deeper]) > min(by_indent[shallower]), (
             f"source indent {deeper} does not render right of indent {shallower}"
         )
+
+
+# ── overlap, measured in the LAYOUT, not on the page ─────────────────────────────────────────────
+def _sibling_overlaps(doc) -> list[tuple]:
+    """Pairs of flowables whose final rectangles intersect.
+
+    Container flowables legitimately contain their children — a KeepTogether's rectangle covers
+    the paragraphs inside it — so only SIBLING rectangles on the same page are compared, and a
+    rectangle wholly containing another is treated as containment rather than collision.
+    """
+    collisions = []
+    by_page: dict[int, list] = {}
+    for placement in doc.placements:
+        if placement["what"] in ("LCActionFlowable", "ActionFlowable", "Spacer"):
+            continue
+        by_page.setdefault(placement["page"], []).append(placement)
+    for items in by_page.values():
+        for i, a in enumerate(items):
+            for b in items[i + 1:]:
+                vertical = a["bottom"] < b["top"] - 0.5 and b["bottom"] < a["top"] - 0.5
+                horizontal = a["x0"] < b["x1"] - 0.5 and b["x0"] < a["x1"] - 0.5
+                if not (vertical and horizontal):
+                    continue
+                # STRICT containment only. A KeepTogether's rectangle is strictly larger than the
+                # paragraphs inside it. Two flowables with the SAME rectangle are not nested —
+                # they are drawn on top of each other, which is precisely the case a
+                # non-strict `<=` comparison waves through.
+                contains = ((a["bottom"] < b["bottom"] and a["top"] > b["top"]) or
+                            (b["bottom"] < a["bottom"] and b["top"] > a["top"]))
+                if contains:
+                    continue
+                collisions.append((a["page"], a["text"], b["text"]))
+    return collisions
+
+
+@pytest.mark.parametrize("generator", [contract_gen, deploy_gen])
+def test_no_two_flowables_are_laid_out_on_top_of_each_other(generator, tmp_path):
+    """Re-audit `4f23f23..122cc67` finding 11. `Spacer(1, -18)` puts two paragraphs on the same
+    baseline; the page is visibly interleaved, but the extractor merges their glyphs into one word
+    so a line-box detector reports zero collisions. The layout engine knows the rectangles."""
+    doc = _build(generator)
+    doc.build(str(tmp_path / "overlap-layout.pdf"), "overlap")
+    collisions = _sibling_overlaps(doc)
+    assert not collisions, f"flowables laid out over one another: {collisions[:6]}"
+
+
+def test_the_layout_overlap_guard_catches_the_exact_baseline_case(tmp_path):
+    """The mutation the page-level check could not see, run against the layout-level one."""
+    from reportlab.platypus import Spacer
+
+    doc = Doc(WIRE)
+    doc.p("The first paragraph, which should be legible on its own line.")
+    doc.story.append(Spacer(1, -18))
+    doc.p("The second paragraph, laid out on the same baseline as the first.")
+    doc.build(str(tmp_path / "collide-layout.pdf"), "collide")
+
+    assert _sibling_overlaps(doc), (
+        "the negative spacer produced no detected overlap, so the guard above proves nothing"
+    )

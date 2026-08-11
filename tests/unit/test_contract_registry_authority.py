@@ -129,6 +129,46 @@ def _vector_fields(vector: dict) -> dict:
     }
 
 
+@verifies("WIRE.SIGN.COMPANION")
+def _the_companion_file_is_the_bytes_the_document_names():
+    """Execute the SHIPPED FILE, not the module it was generated from.
+
+    Re-audit `4f23f23..122cc67` finding 4. The document used to promise the printed block was
+    copyable; the test that "proved" it reconstructed indentation from glyph x-offsets and Courier
+    advance widths, which is a decoder no reader has. Exact `pdftotext` output does not compile.
+    So the document now names a file and its digest, and this executes exactly those bytes.
+    """
+    from docs.contracts.companion import (
+        ARTIFACT_NAME,
+        artifact_digest,
+        artifact_path,
+        artifact_text,
+    )
+
+    path = artifact_path()
+    assert path.exists(), f"{ARTIFACT_NAME} is not in the repo; run docs.contracts.companion"
+    on_disk = path.read_text()
+    assert on_disk == artifact_text(), (
+        f"{ARTIFACT_NAME} has drifted from the snippet it is generated from; regenerate it"
+    )
+
+    # the digest the document prints is over the RUNNABLE BODY, and it is correct
+    body = on_disk.split('"""', 2)[2].lstrip("\n")
+    assert hashlib.sha256(body.encode()).hexdigest() == artifact_digest()
+    assert artifact_digest() in on_disk, "the file does not state its own digest"
+
+    # and the file runs and reproduces the published vector
+    namespace: dict = {}
+    exec(compile(on_disk, str(path), "exec"), namespace)  # noqa: S102
+    v = WIRE.value("WIRE.SIGN.VECTOR")
+    assert namespace["sign"](v["secret"], **_vector_fields(v)) == v["signature"]
+
+    claim = WIRE.value("WIRE.SIGN.COMPANION")
+    assert ARTIFACT_NAME in claim
+    assert "shasum -a 256" in claim
+    assert "not supported" in claim, "the document still promises copying off the page"
+
+
 @verifies("WIRE.SIGN.VECTOR")
 def _vector_is_bound_end_to_end():
     """Body, byte count, body hash, ordered canonical block, signature, and the published snippet

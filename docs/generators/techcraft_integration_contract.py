@@ -11,6 +11,7 @@ import argparse
 import re
 from datetime import date
 
+from docs.contracts.companion import ARTIFACT_NAME, artifact_digest
 from docs.contracts.signing_example import published_snippet
 from docs.contracts.wire import WIRE
 from docs.generators.render import INCH, Doc, escape
@@ -60,6 +61,7 @@ REQUIRED_CLAIMS = (
     "WIRE.SIGN.CANONICAL",
     "WIRE.SIGN.DIRECTIONS",
     "WIRE.SIGN.SKEW_SECONDS",
+    "WIRE.SIGN.COMPANION",
     "WIRE.SIGN.VECTOR",
     "WIRE.SIGN.V1_SUNSET",
     "WIRE.SIGN.ROTATION",
@@ -330,6 +332,13 @@ def build(*, contact: str, due_date: str) -> Doc:
     doc.claim_paragraph("WIRE.SIGN.V1_SUNSET", prefix="<b>On the v1 sunset dates: </b>")
     doc.h2("Key rotation: the two directions are not symmetric")
     doc.claim_bullets("WIRE.SIGN.ROTATION")
+
+    doc.h2("The runnable signer is a file, not the page")
+    doc.claim_mixed("WIRE.SIGN.COMPANION", [
+        ("p", escape(WIRE.value("WIRE.SIGN.COMPANION"))),
+        ("code", f"{ARTIFACT_NAME}\nsha256  {artifact_digest()}"),
+    ])
+    doc.claim_note("WIRE.SIGN.COMPANION")
 
     doc.h2("Test vector: verify against this before writing anything else")
     v = WIRE.value("WIRE.SIGN.VECTOR")
