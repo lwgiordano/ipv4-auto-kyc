@@ -8,7 +8,110 @@ requirement). `tests/unit/test_contract_registry_authority.py` holds each litera
 authority; `tests/unit/test_contract_rendering.py` proves the rendered PDF displays it.
 """
 
+from dataclasses import dataclass
+
 from docs.contracts import Claim, ClaimState, Registry
+
+# ── the receiver's effectiveness decision, as a TOTAL transition table ─────────────────────────────
+#
+# Re-audit `4f23f23..97deeae` F2. The previous version was prose: "if the current source is a
+# manual approval, record but do not apply; otherwise apply it as the current automatic decision."
+# The "otherwise" is the defect. Automatic decision B is current; automatic decision A, older but
+# delayed, arrives under a run id nobody has seen. It is not a duplicate and the current source is
+# not manual, so the published algorithm says apply — and A replaces B. Prose with an "otherwise"
+# branch cannot be checked for totality by reading it, which is why this is a table: every row is
+# a condition, and a test asserts the rows cover the whole space in each phase.
+#
+# `docs/contracts/receiver_reference.py` implements exactly these rows and is driven by the
+# scenario tests, so the table cannot drift from a working algorithm.
+
+
+@dataclass(frozen=True)
+class Transition:
+    """One row. `condition` is evaluated in order within its phase; the first match wins."""
+
+    phase: str  # "interim" (today) or "post-024" (after ordered delivery is activated)
+    condition: str
+    record: str  # what goes into the accepted-run ledger
+    effective: str  # whether it becomes the case's current decision
+    why: str
+
+
+INTERIM = "interim"
+POST_024 = "post-024"
+
+RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
+    Transition(
+        phase=INTERIM,
+        condition="the (case_id, run_id) is already in your accepted ledger",
+        record="nothing new; the row is already there",
+        effective="NO CHANGE — acknowledge with 2xx and stop",
+        why="Delivery is at-least-once, so a duplicate is the expected case, not an error. "
+            "Returning non-2xx to a duplicate makes us retry it forever.",
+    ),
+    Transition(
+        phase=INTERIM,
+        condition="the case has no currently effective decision",
+        record="the callback",
+        effective="YES — it becomes the current automatic decision",
+        why="Nothing to conflict with.",
+    ),
+    Transition(
+        phase=INTERIM,
+        condition="the currently effective source for the case is a MANUAL approval",
+        record="the callback",
+        effective="NO",
+        why="A reviewer decided this case. An automatic callback queued before that approval can "
+            "arrive after it under a run id you have never seen; applying it silently overturns a "
+            "human decision. Automatic authority returns only through the authenticated "
+            "platform-owned release protocol.",
+    ),
+    Transition(
+        phase=INTERIM,
+        condition="the currently effective source is AUTOMATIC and this callback is a different "
+                  "run for the same case",
+        record="the callback",
+        effective="NO — hold the case for review instead",
+        why="This is the row that must not read 'otherwise apply'. Interim has no wire ordering "
+            "authority, so you cannot tell a newer decision from an older one that was delayed. "
+            "decided_at will not tell you either (section 5). Applying the arrival that happens "
+            "to land second silently replaces a newer decision with an older one.",
+    ),
+    Transition(
+        phase=POST_024,
+        condition="the (case_id, run_id) is already in your accepted ledger",
+        record="nothing new",
+        effective="NO CHANGE — acknowledge with 2xx and stop",
+        why="Same as interim: duplicates are expected.",
+    ),
+    Transition(
+        phase=POST_024,
+        condition="the callback carries no event_sequence, or its sequence is <= your recorded "
+                  "high-water mark for the case",
+        record="the callback",
+        effective="NO, and the high-water mark does NOT move",
+        why="It is superseded or unordered. Recording it keeps your audit trail complete without "
+            "letting it take effect.",
+    ),
+    Transition(
+        phase=POST_024,
+        condition="the sequence exceeds the high-water mark AND the current source is MANUAL",
+        record="the callback, AND advance the high-water mark to its sequence",
+        effective="NO",
+        why="The manual approval stays in force, but the mark still moves: otherwise every later "
+            "automatic decision for the case is compared against a stale mark and the first one "
+            "after a manual release would be judged by the wrong baseline.",
+    ),
+    Transition(
+        phase=POST_024,
+        condition="the sequence exceeds the high-water mark AND the current source is AUTOMATIC "
+                  "or absent",
+        record="the callback, AND advance the high-water mark to its sequence",
+        effective="YES",
+        why="This is the only row that applies an automatic decision, and it does so on proven "
+            "order rather than on arrival order.",
+    ),
+)
 
 # The published signature vector, bound as ONE record: change any part and the test that recomputes
 # it through kyc_tool.security.sign_v2 fails. The body is stored as bytes so its length and hash
@@ -242,29 +345,22 @@ WIRE = Registry(
             ),
             authority="the accepted receiver design (activation design doc) + publisher "
                       "terminalizes on 2xx",
+            exclusive_terms=("return 2xx", "COMMIT"),
             note="A 2xx returned before your commit is unrecoverable: we mark the row delivered "
                  "and at-least-once cannot help you. This is the single most important "
                  "requirement on your side.",
         ),
         Claim(
             id="WIRE.CALLBACK.EFFECTIVENESS",
-            value=(
-                "ACKNOWLEDGING a callback and APPLYING it are different decisions. Always "
-                "acknowledge and record; apply only under the rules below.",
-                "Interim, before ordered delivery is activated: if the currently effective source "
-                "for the case is a MANUAL approval, record and dedupe the callback but do NOT let "
-                "it become effective, even though it is not a duplicate and carries a new run id. "
-                "Otherwise apply it as the current automatic decision.",
-                "After activation: apply only when the callback's sequence exceeds your recorded "
-                "high-water mark for that case AND the current source is not manual. Automatic "
-                "authority over a manual-current case returns only through the authenticated "
-                "platform-owned release protocol, never by a callback arriving.",
-                "A duplicate under a run id you already recorded is acknowledged and ignored.",
-            ),
-            authority="AUDIT_FINDINGS.md A6 residual reverts + the accepted receiver design",
-            note="An automatic callback queued before a reviewer's manual approval can arrive "
-                 "after it, under a run id you have never seen. Treated as 'unique, therefore "
-                 "apply', it silently overwrites the manual decision.",
+            value=RECEIVER_TRANSITIONS,
+            authority="AUDIT_FINDINGS.md A6 residual reverts + the accepted receiver design + "
+                      "docs/contracts/receiver_reference.py (executable, scenario-tested)",
+            note="ACKNOWLEDGING a callback and APPLYING it are different decisions: always "
+                 "acknowledge and record, then consult this table for whether it takes effect. "
+                 "Rows are evaluated in order within a phase and the first match wins; the rows "
+                 "are exhaustive, so there is no 'otherwise' branch to fall through to. Automatic "
+                 "authority over a manual-current case returns ONLY through the authenticated "
+                 "platform-owned release protocol, never by a callback arriving.",
         ),
         Claim(
             id="WIRE.CALLBACK.RETRY",
@@ -312,6 +408,7 @@ WIRE = Registry(
                   "order. Our own migration tooling is barred from falling back to it.",
             authority="AUDIT_FINDINGS.md D-7bcore + docs/RUNBOOK.md step 0.5 + "
                       "kyc_tool.db.tables.Case.latest_decision_row_id",
+            exclusive_terms=("ordering key", "decided_at is"),
         ),
         Claim(
             id="WIRE.ORDERING.INTERIM",

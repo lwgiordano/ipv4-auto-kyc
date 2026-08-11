@@ -171,6 +171,14 @@ def _canonical_field_order_matches_the_signer():
         slot="S",
         body=b"",
     ).split("\n")
+    # The published NAMES, exactly and in order. Checking only the count and the literal "v2"
+    # let `key_id` be renamed to `NOT_KEY_ID` on the page (re-audit `4f23f23..97deeae` F3): an
+    # integrator building the canonical string from the document would sign a different message
+    # from the one we verify, and every request would 401 with no way to see why.
+    assert tuple(documented) == (
+        "v2", "key_id", "direction", "method", "path?query", "timestamp", "slot",
+        "sha256(body) hex",
+    ), "the published canonical field names changed"
     assert len(documented) == len(probe) == 8
     assert documented[0] == probe[0] == "v2"
     for position, placeholder in ((1, "K"), (2, DIRECTION_INBOUND), (3, "M"), (4, "P"), (5, "T"), (6, "S")):
@@ -430,17 +438,37 @@ def _receiver_transaction_requires_commit_before_2xx():
 
 
 @verifies("WIRE.CALLBACK.EFFECTIVENESS")
-def _effectiveness_separates_acknowledging_from_applying():
-    """The receiver steps say record every callback. Read alone, that reads as 'apply it', which
-    would let an automatic decision queued before a manual approval overturn that approval on
-    arrival. This claim is the half that says acknowledged is not applied."""
-    lines = WIRE.value("WIRE.CALLBACK.EFFECTIVENESS")
-    text = " ".join(lines).lower()
-    assert "acknowledg" in text and "apply" in text
-    interim = next(line.lower() for line in lines if "interim" in line.lower())
-    assert "manual" in interim and "not" in interim
-    after = next(line.lower() for line in lines if "after activation" in line.lower())
-    assert "high-water" in after and "manual" in after
+def _effectiveness_table_is_executable_and_total():
+    """The authority here is an ALGORITHM, not a sentence.
+
+    The previous verifier checked that "manual" and "not" appeared in some line, which the broken
+    "otherwise apply" version satisfied while replacing a newer decision with an older one
+    (re-audit `4f23f23..97deeae` F2). The table is now held against
+    `docs/contracts/receiver_reference.py`, which implements it and is driven through the findings'
+    own scenarios by `tests/unit/test_receiver_state_machine.py`; here we prove the published rows
+    and that implementation are the same object of study.
+    """
+    from docs.contracts.receiver_reference import Callback, LedgerState, decide
+    from docs.contracts.wire import INTERIM, POST_024, RECEIVER_TRANSITIONS
+
+    rows = WIRE.value("WIRE.CALLBACK.EFFECTIVENESS")
+    assert rows is RECEIVER_TRANSITIONS
+    assert {t.phase for t in rows} == {INTERIM, POST_024}
+    for phase in (INTERIM, POST_024):
+        assert len([t for t in rows if t.phase == phase]) == 4
+    assert not any("otherwise" in t.condition.lower() for t in rows)
+
+    # the two outcomes the finding turns on, executed
+    late_older = decide(
+        LedgerState(seen_run_ids=frozenset({"B"}), current_source="automatic"),
+        Callback("c", "A"), phase=INTERIM)
+    assert late_older.record and not late_older.effective
+
+    manual_current = decide(
+        LedgerState(current_source="manual", high_water=5),
+        Callback("c", "r", event_sequence=6), phase=POST_024)
+    assert not manual_current.effective and manual_current.advance_high_water
+
     # consistent with the interim ordering rule, which is the same rule stated for sorting
     assert "manual approval" in WIRE.value("WIRE.ORDERING.INTERIM").lower()
 
@@ -495,6 +523,11 @@ def _bootstrap_is_pending_and_publishes_no_schema():
     claim = WIRE["WIRE.ORDERING.BOOTSTRAP_024"]
     assert claim.state is ClaimState.PENDING
     assert "NOT BUILT" in claim.value
+    # ...and the REQUIREMENTS survive. Reducing the claim to the bare marker deleted everything an
+    # integrator needs in order to answer, while still passing every check (re-audit F3).
+    for requirement in ("accepted-run ledger", "manual approval", "two-sided coverage",
+                        "response digests", "signed response envelope"):
+        assert requirement in claim.value, f"the 024 requirements no longer mention {requirement!r}"
     for schema_ish in ("{", "}", "schema_version", "latest_run_id", "high_water_run_id"):
         assert schema_ish not in claim.value, "the pending claim is publishing a schema again"
     revisions = {p.stem for p in (REPO / "migrations" / "versions").glob("*.py")}
@@ -625,8 +658,18 @@ def _production_floors_are_actually_enforced():
 
 @verifies("OPS.CONFIG.HMAC_SET")
 def _hmac_variable_set_is_complete_and_enforced():
-    documented = OPERATIONS.value("OPS.CONFIG.HMAC_SET")
+    from kyc_tool.config import _MIN_HMAC_SECRET_LEN
+
+    claim = OPERATIONS["OPS.CONFIG.HMAC_SET"]
+    documented = claim.value
     assert len(documented) == len(set(documented)) == 8
+    # The NOTE is published advice and is therefore authoritative (re-audit F3): it stated a
+    # floor and a date requirement, and nothing compared either to the code, so "at least 8
+    # characters" and "dates may be naive" both rendered happily.
+    assert f"at least {_MIN_HMAC_SECRET_LEN} characters" in claim.note, claim.note
+    assert "timezone-aware ISO-8601" in claim.note
+    assert production_config_violations(hardened(hmac_inbound_secret="x" * 8))
+    assert production_config_violations(hardened(hmac_v1_inbound_sunset_at="2026-09-01T00:00:00"))
     # dropping any one of the v2 values must produce a violation
     for override in (
         {"hmac_inbound_secret": ""},
@@ -637,10 +680,13 @@ def _hmac_variable_set_is_complete_and_enforced():
         {"hmac_v1_outbound_sunset_at": ""},
     ):
         assert production_config_violations(hardened(**override)), override
-    # and every documented name is a real KYC_-prefixed setting
-    fields = set(Settings.model_fields)
-    for name in documented:
-        assert name.removeprefix("KYC_").lower() in fields, f"{name} is not a Settings field"
+    # EXACTLY the HMAC settings. "is a real Settings field" was too weak: swapping one entry for
+    # KYC_DATABASE_URL passed, because database_url is also a real field (re-audit F3). An
+    # operator following that list configures a database URL and omits an authentication secret.
+    fields = {name.removeprefix("KYC_").lower() for name in documented}
+    expected = {f for f in Settings.model_fields if f.startswith("hmac_")} | {"platform_hmac_secret"}
+    expected -= {"hmac_max_skew_seconds", "hmac_inbound_extra_keys"}  # rotation + window are separate claims
+    assert fields == expected, f"documented HMAC set drifted: {fields ^ expected}"
 
 
 @verifies("OPS.CONFIG.ROTATION_KEYS")

@@ -41,7 +41,7 @@ def build() -> Doc:
         "Platform Integration Contract is the companion document and covers the wire protocol."
     )
 
-    doc.h1("Read this before provisioning anything")
+    doc.section("blocker", "Read this before provisioning anything")
     doc.claim_alert("OPS.BLOCKER.PRODUCTION_PROVIDERS")
     doc.p(
         "Everything below stands up a working staging environment and lists what production "
@@ -62,7 +62,7 @@ def build() -> Doc:
     )
 
     # ── processes ──────────────────────────────────────────────────────────────────────────────
-    doc.h1("1. What you run: one image, six commands")
+    doc.section("processes", "1. What you run: one image, six commands")
     doc.p(
         "The repo Dockerfile builds a single image (digest-pinned base, locked dependency tree, "
         "so two builds of one commit resolve identically). Every process is that image with a "
@@ -76,13 +76,13 @@ def build() -> Doc:
     doc.claim_paragraph("OPS.PROCESS.DEV_WORKER_BANNED")
 
     # ── infrastructure ─────────────────────────────────────────────────────────────────────────
-    doc.h1("2. Infrastructure")
+    doc.section("infrastructure", "2. Infrastructure")
     doc.claim_table(
         "OPS.INFRA.COMPONENTS", ("Component", "Requirement", "Why"), [1.05 * INCH, 2.7 * INCH, 2.95 * INCH]
     )
 
     # ── configuration ──────────────────────────────────────────────────────────────────────────
-    doc.h1("3. Configuration (KYC_ prefix)")
+    doc.section("configuration", "3. Configuration (KYC_ prefix)")
     doc.p(
         "The full commented sample is .env.example and the complete table is in RUNBOOK. The "
         "production kill switch validates everything at boot and prints every violation at "
@@ -104,19 +104,19 @@ def build() -> Doc:
         "OPS.CONFIG.HMAC_SET",
         heading=f"The HMAC set: all {len(hmac_set.value)} values are required together",
     )
-    doc.p(escape(hmac_set.note))
+    doc.claim_note("OPS.CONFIG.HMAC_SET")
     doc.claim_paragraph("OPS.CONFIG.ROTATION_KEYS", prefix="<b>Rotation keys: </b>")
     doc.h2("The one flag nobody flips from this guide")
     doc.claim_paragraph("OPS.CONFIG.M2_GATE")
 
     # ── health ─────────────────────────────────────────────────────────────────────────────────
-    doc.h1("4. Health and monitoring")
+    doc.section("health", "4. Health and monitoring")
     doc.claim_table(
         "OPS.HEALTH.PROBES", ("Surface", "Contract", "Action"), [1.5 * INCH, 2.5 * INCH, 2.7 * INCH]
     )
 
     # ── releases ───────────────────────────────────────────────────────────────────────────────
-    doc.h1("5. Releases and cutovers")
+    doc.section("releases", "5. Releases and cutovers")
     doc.claim_paragraph("OPS.RELEASE.CLASSIFICATION")
     doc.p(
         "<b>Rolling release:</b> pull the tag, build, set any new environment variables from "
@@ -124,7 +124,7 @@ def build() -> Doc:
         "restart API then workers, then run the section 4 checks."
     )
     doc.h2("Non-rolling procedures: plan here, execute from the playbook")
-    doc.p(escape(OPERATIONS["OPS.CUTOVER.PROCEDURES"].note))
+    doc.claim_note("OPS.CUTOVER.PROCEDURES")
     # Full-width blocks, not a five-column table. The table was cramped and, worse, unprintable:
     # at every column split that fit the page, BLOCKED_NO_AUTHORITATIVE_MAPPING — a sentinel an
     # operator greps for — was too wide for its cell, and a prose cell clips rather than wraps
@@ -140,17 +140,17 @@ def build() -> Doc:
     doc.claim_mixed("OPS.CUTOVER.PROCEDURES", parts)
 
     doc.claim_steps("OPS.CUTOVER.OUTBOX_CEILING", heading="Changing the outbox attempt ceiling")
-    doc.why(escape(OPERATIONS["OPS.CUTOVER.OUTBOX_CEILING"].note))
+    doc.claim_note("OPS.CUTOVER.OUTBOX_CEILING")
 
     doc.claim_steps("OPS.HMAC.ROLLOUT_ORDER", heading="HMAC v2 rollout order")
-    doc.why(escape(OPERATIONS["OPS.HMAC.ROLLOUT_ORDER"].note))
+    doc.claim_note("OPS.HMAC.ROLLOUT_ORDER")
 
     # ── rollback ───────────────────────────────────────────────────────────────────────────────
-    doc.h1("6. Rollback")
+    doc.section("rollback", "6. Rollback")
     doc.claim_bullets("OPS.ROLLBACK.MIGRATION_BOUNDARY")
 
     # ── day 2 ──────────────────────────────────────────────────────────────────────────────────
-    doc.h1("7. Day-2 operations")
+    doc.section("day2", "7. Day-2 operations")
     doc.claim_paragraph("OPS.RECOVERY.REQUEUE")
     doc.p(
         "<b>Three limits worth knowing before an incident.</b> A dead POC email cannot be "

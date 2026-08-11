@@ -98,17 +98,16 @@ def build(*, contact: str, due_date: str) -> Doc:
     doc.h2("How it works")
     doc.claim_paragraph("WIRE.INGEST.ORDERING")
     doc.p(
-        "Each automated decision enqueues one signed callback to your endpoint. Manual "
-        "approvals by your reviewers send nothing at all. Both directions use the same HMAC-v2 "
-        "scheme with separate key pairs, and delivery is at-least-once, so you dedupe on "
-        "(case_id, run_id)."
+        "Each automated decision enqueues one signed callback to your endpoint. Both directions "
+        "use the same HMAC-v2 scheme with separate key pairs, and delivery is at-least-once, so "
+        "you dedupe on (case_id, run_id). Section 3 is the exact delivery contract."
     )
     doc.why(
         f"Send answers to the section 1 questions to <b>{escape(contact)}</b> by <b>{escape(due_date)}</b>."
     )
 
     # ── 1. asks ────────────────────────────────────────────────────────────────────────────────
-    doc.h1("1. Answers we need from you")
+    doc.section("asks", "1. Answers we need from you")
     doc.p(
         "<b>1.1 Ordered decision delivery.</b> Today there is no wire ordering authority. The "
         "design that fixes it is accepted but unbuilt, and we are not publishing a schema you "
@@ -141,7 +140,7 @@ def build(*, contact: str, due_date: str) -> Doc:
     )
 
     # ── 2. events ──────────────────────────────────────────────────────────────────────────────
-    doc.h1("2. Events you send us")
+    doc.section("events", "2. Events you send us")
     doc.claim_paragraph("WIRE.INGEST.PATH", prefix="<b>Endpoint: </b>")
     doc.p(
         "The first event for a case creates it; there is no registration call. <b>No inbound "
@@ -224,7 +223,7 @@ def build(*, contact: str, due_date: str) -> Doc:
     )
 
     # ── 3. callbacks ───────────────────────────────────────────────────────────────────────────
-    doc.h1("3. Callbacks we send you")
+    doc.section("callbacks", "3. Callbacks we send you")
     doc.claim_paragraph("WIRE.CALLBACK.PATH", prefix="<b>Endpoint: </b>")
     doc.p("Content-Type application/json, signed with our outbound key.")
     fields = WIRE.value("WIRE.CALLBACK.FIELDS")
@@ -251,10 +250,17 @@ def build(*, contact: str, due_date: str) -> Doc:
 
     doc.h2("Your endpoint must commit before it answers")
     doc.claim_steps("WIRE.CALLBACK.RECEIVER_TXN")
-    doc.why(escape(WIRE["WIRE.CALLBACK.RECEIVER_TXN"].note))
+    doc.claim_note("WIRE.CALLBACK.RECEIVER_TXN")
 
     doc.h2("Recording a callback is not the same as acting on it")
-    doc.claim_bullets("WIRE.CALLBACK.EFFECTIVENESS")
+    doc.claim_note("WIRE.CALLBACK.EFFECTIVENESS")
+    doc.claim_table(
+        "WIRE.CALLBACK.EFFECTIVENESS",
+        ("Phase", "When this row applies", "Record", "Effective?", "Why"),
+        [0.6 * INCH, 1.85 * INCH, 1.2 * INCH, 1.15 * INCH, 2.15 * INCH],
+        rows=[(t.phase, t.condition, t.record, t.effective, t.why)
+              for t in WIRE.value("WIRE.CALLBACK.EFFECTIVENESS")],
+    )
 
     doc.h2("Timing")
     doc.claim_paragraph("WIRE.CALLBACK.WAIT_BOUND")
@@ -271,7 +277,7 @@ def build(*, contact: str, due_date: str) -> Doc:
     doc.claim_paragraph("WIRE.CALLBACK.COMPLETION")
 
     # ── 4. signing ─────────────────────────────────────────────────────────────────────────────
-    doc.h1("4. Request signing (HMAC v2)")
+    doc.section("signing", "4. Request signing (HMAC v2)")
     canonical = WIRE.value("WIRE.SIGN.CANONICAL")
     doc.claim_mixed(
         "WIRE.SIGN.CANONICAL",
@@ -332,18 +338,18 @@ def build(*, contact: str, due_date: str) -> Doc:
     )
 
     # ── 5. ordering ────────────────────────────────────────────────────────────────────────────
-    doc.h1("5. Ordering, and one field you must not sort by")
+    doc.section("ordering", "5. Ordering, and one field you must not sort by")
     doc.claim_paragraph("WIRE.ORDERING.NO_DECIDED_AT")
     doc.claim_paragraph("WIRE.ORDERING.INTERIM", prefix="<b>Until activation: </b>")
     doc.claim_paragraph("WIRE.ORDERING.INTEGRITY_MISMATCH", prefix="<b>Note: </b>")
 
     # ── 6. retention ───────────────────────────────────────────────────────────────────────────
-    doc.h1("6. Retention")
+    doc.section("retention", "6. Retention")
     doc.claim_paragraph("WIRE.RETENTION.WINDOW_DAYS", prefix="<b>Compliance window (days): </b>")
     doc.claim_table("WIRE.RETENTION.BY_KIND", ("Kind", "What happens"), [1.5 * INCH, 5.2 * INCH])
 
     # ── 7. checklist ───────────────────────────────────────────────────────────────────────────
-    doc.h1("7. Go-live checklist")
+    doc.section("checklist", "7. Go-live checklist")
     doc.table(
         ("#", "Item", "Owner"),
         (

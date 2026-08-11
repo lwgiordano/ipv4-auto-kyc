@@ -47,6 +47,15 @@ class Claim:
               next auditor) can see WHAT proves this claim rather than trusting the registry
     state     ClaimState
     note      prose the renderer may show alongside the value; never carries authoritative data
+    exclusive_terms
+              subjects that may be discussed only in ATTRIBUTED blocks. A document is not made
+              correct by containing a correct claim: a contradictory paragraph beside it is just
+              as visible, and an unclaimed one was invisible to every check we had (re-audit
+              `4f23f23..97deeae` F3, which appended a contradictory commit-before-2xx paragraph
+              and stayed green). `test_document_model` fails if one of these appears in a block
+              carrying no claim id. Another CLAIM may mention the subject — claims are each held
+              against an executable authority, so a contradiction there fails that test instead —
+              but loose connective prose may not, because nothing verifies it.
     """
 
     id: str
@@ -54,6 +63,7 @@ class Claim:
     authority: str
     state: ClaimState = ClaimState.SHIPPED
     note: str = ""
+    exclusive_terms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

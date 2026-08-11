@@ -7,7 +7,9 @@ text from the built PDF.
 """
 
 import os
+import re
 import subprocess
+from dataclasses import dataclass
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -196,28 +198,107 @@ def escape(text: str) -> str:
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+_TAG = re.compile(r"<[^>]+>")
+
+
+def visible_text(markup: str) -> str:
+    """What a reader actually sees, given the mini-HTML we hand reportlab.
+
+    The document model records this rather than the markup, because the model exists to be
+    compared against the built page — and `<b>` never reaches the page.
+    """
+    text = str(markup).replace("<br/>", "\n")
+    text = _TAG.sub("", text)
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
+@dataclass(frozen=True)
+class Block:
+    """One addressable region of the document, and exactly what it puts on the page.
+
+    `claim_id` is None for structural blocks — headings and connective prose that carry no
+    authoritative value. `kind` decides how the block is located on the built page: prose is found
+    as a contiguous run of text, a table is read back cell by cell.
+    """
+
+    kind: str  # "heading" | "prose" | "code" | "table" | "alert"
+    claim_id: str | None
+    lines: tuple[str, ...]
+    rows: tuple[tuple[str, ...], ...] = ()  # tables only, header row first
+    role: str = "value"  # "value" | "note" — a note is attributed but is not the claim's value
+
+
+@dataclass
+class Section:
+    section_id: str
+    title: str
+    blocks: list
+
+
 class Doc:
-    """A document under construction, tracking which registry claims it rendered."""
+    """A document under construction, as a typed ordered model of what it will display.
+
+    Re-audit `4f23f23..97deeae` F3. The previous version tracked a LIST OF CLAIM IDS. Counting ids
+    and searching the page globally cannot prove what a reader saw: the suite stayed green after
+    the visible meaning of a claim was removed while its id stayed recorded, after the eight
+    canonical signing lines were reversed on the page, and after a contradictory unclaimed
+    paragraph was appended beside the claim it contradicted. All three are invisible to a counter.
+
+    So the document is now a sequence of sections, each a sequence of blocks, each block carrying
+    the exact visible lines it emits. `tests/unit/test_document_model.py` compares that model to
+    the built PDF span by span, in order, once each, inside the declared section.
+    """
 
     def __init__(self, registry) -> None:
         self.registry = registry
         self.story: list = []
         self.rendered: list[str] = []
+        self.sections: list[Section] = []
         self._total_pages = 0
+        self._open_section("(front matter)", "")
 
-    # ---- prose (carries no authoritative value) --------------------------------------------
+    # ---- the document model ------------------------------------------------------------------
+    def _open_section(self, section_id: str, title: str) -> None:
+        self.sections.append(Section(section_id=section_id, title=title, blocks=[]))
+
+    def section(self, section_id: str, title: str):
+        """Start a numbered section. Its heading is a structural block of the new section."""
+        if any(s.section_id == section_id for s in self.sections):
+            raise ValueError(f"duplicate section id {section_id!r}")
+        self._open_section(section_id, title)
+        self.story.append(Paragraph(escape(title), H1))
+        self._add(Block(kind="heading", claim_id=None, lines=(title,)))
+
+    def _add(self, block) -> None:
+        self.sections[-1].blocks.append(block)
+
+    @property
+    def blocks(self) -> list:
+        return [block for section in self.sections for block in section.blocks]
+
+    def section_of(self, claim_id: str) -> str | None:
+        for section in self.sections:
+            if any(b.claim_id == claim_id for b in section.blocks):
+                return section.section_id
+        return None
+
+    # ---- structural prose (carries no authoritative value) ----------------------------------
     def title(self, text: str):
         self.story.append(Paragraph(escape(text), _styles["Title"]))
+        self._add(Block(kind="heading", claim_id=None, lines=(text,)))
 
     def h1(self, text: str):
         self.story.append(Paragraph(escape(text), H1))
+        self._add(Block(kind="heading", claim_id=None, lines=(text,)))
 
     def h2(self, text: str):
         self.story.append(Paragraph(escape(text), H2))
+        self._add(Block(kind="heading", claim_id=None, lines=(text,)))
 
     def p(self, markup: str, style=BODY):
         """Prose. Bold spans are allowed here, so this takes pre-escaped markup."""
         self.story.append(Paragraph(markup, style))
+        self._add(Block(kind="prose", claim_id=None, lines=(visible_text(markup),)))
 
     def why(self, markup: str):
         self.p(markup, WHY)
@@ -231,6 +312,7 @@ class Doc:
         a line that would not fit. Use `wrapcode()` for fixed-width text that may wrap.
         """
         self.story.append(XPreformatted(_guard_preformatted(escape(text)), CODE))
+        self._add(Block(kind="code", claim_id=None, lines=tuple(text.split("\n"))))
 
     def wrapcode(self, text: str):
         """Fixed-width text that is allowed to wrap anywhere, including mid-token.
@@ -240,6 +322,7 @@ class Doc:
         and sha256 to check their transcription against.
         """
         self.story.append(Paragraph(escape(text), WRAPCODE))
+        self._add(Block(kind="code", claim_id=None, lines=(text,)))
 
     def space(self, height: float = 4):
         self.story.append(Spacer(1, height))
@@ -251,12 +334,37 @@ class Doc:
     # display something else, or display it twice, and the coverage count would still be 1. Every
     # method below appends first and records only on success, so `self.rendered` counts flowables
     # that exist rather than intentions.
-    def _emit(self, claim_id: str, flowables: list):
+    def claim_note(self, claim_id: str, *, style=WHY):
+        """Render a claim's NOTE, attributed to that claim.
+
+        Notes were being emitted through `p()`/`why()`, which made them unattributed prose — and
+        unattributed prose is exactly what nothing verifies (re-audit `4f23f23..97deeae` F3). The
+        receiver contract's note, "a 2xx returned before your commit is unrecoverable", is
+        load-bearing guidance sitting outside the claim it belongs to. It does not count as the
+        claim's VALUE for coverage purposes, so it carries role="note".
+        """
+        claim = self.registry[claim_id]
+        if not claim.note.strip():
+            raise ValueError(f"{claim_id} has no note to render")
+        self.story.append(Paragraph(escape(claim.note), style))
+        self._add(Block(kind="prose", claim_id=claim_id, lines=(claim.note,), role="note"))
+
+    def _emit(self, claim_id: str, flowables: list, lines, *, kind: str = "prose", rows=()):
+        """Append the flowables, record the claim, and record EXACTLY what went on the page.
+
+        `lines` is not decoration. Recording an id proves a call happened; recording the visible
+        lines is what lets a test find that content on the built page, in order, once, in the
+        right section (re-audit `4f23f23..97deeae` F3).
+        """
         claim = self.registry[claim_id]
         if not flowables:
             raise ValueError(f"{claim_id} produced no flowable")
+        lines = tuple(line for line in lines if str(line).strip())
+        if not lines and not rows:
+            raise ValueError(f"{claim_id} produced a flowable with no visible text")
         self.story.extend(flowables)
         self.rendered.append(claim_id)
+        self._add(Block(kind=kind, claim_id=claim_id, lines=lines, rows=tuple(rows)))
         return claim
 
     def claim_paragraph(self, claim_id: str, *, style=BODY, prefix: str = ""):
@@ -272,18 +380,25 @@ class Doc:
                 f"{claim_id} holds {type(claim.value).__name__}; rendering it here would publish "
                 f"its Python repr. Use claim_bullets, claim_code, claim_table, or claim_prose."
             )
-        self._emit(claim_id, [Paragraph(prefix + escape(claim.value), style)])
+        markup = prefix + escape(claim.value)
+        self._emit(claim_id, [Paragraph(markup, style)], (visible_text(markup),))
 
     def claim_bullets(self, claim_id: str, *, style=BODY):
         """Render a claim whose value is a sequence of strings, one paragraph each."""
         claim = self.registry[claim_id]
-        self._emit(claim_id, [Paragraph("\u2013  " + escape(i), style) for i in claim.value])
+        self._emit(
+            claim_id,
+            [Paragraph("\u2013  " + escape(i), style) for i in claim.value],
+            tuple(str(i) for i in claim.value),
+        )
 
-    def _with_heading(self, claim_id: str, heading: str | None, blocks: list):
+    def _with_heading(self, claim_id: str, heading: str | None, blocks: list, lines, *,
+                      kind: str = "prose"):
         if heading:
-            self._emit(claim_id, [KeepTogether([Paragraph(escape(heading), H2), *blocks])])
+            self._emit(claim_id, [KeepTogether([Paragraph(escape(heading), H2), *blocks])],
+                       (heading, *lines), kind=kind)
         else:
-            self._emit(claim_id, blocks)
+            self._emit(claim_id, blocks, lines, kind=kind)
 
     def claim_steps(self, claim_id: str, *, heading: str | None = None):
         """Render an ORDERED claim as numbered, WRAPPING paragraphs, kept with its heading.
@@ -292,15 +407,18 @@ class Doc:
         block runs the longest one straight off the page (see `_guard_preformatted`).
         """
         claim = self.registry[claim_id]
-        self._with_heading(claim_id, heading, [
-            Paragraph(f"{n}.  {escape(step)}", STEP) for n, step in enumerate(claim.value, 1)
-        ])
+        self._with_heading(
+            claim_id, heading,
+            [Paragraph(f"{n}.  {escape(step)}", STEP) for n, step in enumerate(claim.value, 1)],
+            tuple(f"{n}. {step}" for n, step in enumerate(claim.value, 1)),
+        )
 
     def claim_code(self, claim_id: str, *, heading: str | None = None):
         """Render a claim whose value is a sequence of literals as a fixed-width block."""
         claim = self.registry[claim_id]
         block = XPreformatted(_guard_preformatted("\n".join(escape(v) for v in claim.value)), CODE)
-        self._with_heading(claim_id, heading, [block])
+        self._with_heading(claim_id, heading, [block], tuple(str(v) for v in claim.value),
+                           kind="code")
 
     def claim_prose(self, claim_id: str, markup: str, *, style=BODY):
         """Render a claim as prose the caller composed FROM that claim's value.
@@ -309,7 +427,7 @@ class Doc:
         the other half — they assert the claim's own value reaches the extracted page text, so
         composing a paragraph that omits or contradicts the value fails there.
         """
-        self._emit(claim_id, [Paragraph(markup, style)])
+        self._emit(claim_id, [Paragraph(markup, style)], (visible_text(markup),))
 
     _PART_STYLES = {"p": BODY, "why": WHY}
 
@@ -333,13 +451,17 @@ class Doc:
                 flowables.append(Paragraph(escape(text), WRAPCODE))
             else:
                 flowables.append(Paragraph(text, self._PART_STYLES[kind]))
-        self._emit(claim_id, flowables)
+        lines = []
+        for kind, text in parts:
+            lines.extend((text if kind in ("code", "wrap") else visible_text(text)).split("\n"))
+        self._emit(claim_id, flowables, tuple(lines))
 
     def claim_alert(self, claim_id: str):
         """A blocked claim, rendered where a reader would otherwise act on the document."""
         claim = self.registry[claim_id]
         body = "<br/>".join("\u2013  " + escape(item) for item in claim.value)
-        self._emit(claim_id, [Paragraph(body, ALERT)])
+        self._emit(claim_id, [Paragraph(body, ALERT)], tuple(str(i) for i in claim.value),
+                   kind="alert")
 
     def claim_table(
         self,
@@ -372,9 +494,15 @@ class Doc:
         table = Table(data, colWidths=widths, repeatRows=1)
         table.setStyle(_TABLE_STYLE)
         flowables = [table]
+        lines = (heading,) if heading else ()
         if heading:
             flowables = [KeepTogether([Paragraph(escape(heading), H2), table])]
-        self._emit(claim_id, flowables)
+        body_rows = tuple(
+            tuple(str(cell) for cell in row)
+            for row in (rows if rows is not None else claim.value)
+        )
+        self._emit(claim_id, flowables, lines, kind="table",
+                   rows=((tuple(headers),) + body_rows))
 
     def table(self, headers: tuple[str, ...], rows, widths, code_columns: tuple[int, ...] = ()):
         """A table whose cells are already formatted from claims recorded elsewhere."""
@@ -391,6 +519,8 @@ class Doc:
         table = Table(data, colWidths=widths, repeatRows=1)
         table.setStyle(_TABLE_STYLE)
         self.story.append(table)
+        self._add(Block(kind="table", claim_id=None, lines=(),
+                        rows=(tuple(headers),) + tuple(tuple(str(c) for c in r) for r in rows)))
 
     def build(self, path: str, title: str) -> str:
         """Render to `path`, stamping provenance on every page.

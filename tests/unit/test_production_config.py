@@ -48,7 +48,7 @@ def test_hardened_config_has_no_violations():
     ("overrides", "needle"),
     [
         ({"auth_disabled": True}, "auth_disabled"),
-        ({"platform_hmac_secret": ""}, "empty"),
+        ({"platform_hmac_secret": ""}, "platform_hmac_secret is blank"),
         ({"platform_hmac_secret": "short"}, "weak"),
         ({"platform_callback_url": "http://platform.example/kyc"}, "HTTPS"),
         ({"platform_callback_url": "https://localhost/kyc"}, "localhost"),
@@ -69,12 +69,12 @@ def test_hardened_config_has_no_violations():
         # a zero backoff base retries a failing endpoint every cycle (re-audit F5)
         ({"outbox_backoff_base_seconds": 0}, "outbox_backoff_base_seconds"),
         # HMAC v2 (PR 5a)
-        ({"hmac_inbound_secret": ""}, "inbound secret"),
-        ({"hmac_outbound_secret": "short"}, "outbound secret"),
+        ({"hmac_inbound_secret": ""}, "hmac_inbound_secret"),
+        ({"hmac_outbound_secret": "short"}, "hmac_outbound_secret"),
         ({"hmac_inbound_key_id": ""}, "hmac_inbound_key_id"),
         ({"hmac_outbound_key_id": ""}, "hmac_outbound_key_id"),
-        ({"hmac_v1_inbound_sunset_at": ""}, "inbound sunset"),
-        ({"hmac_v1_outbound_sunset_at": ""}, "outbound sunset"),
+        ({"hmac_v1_inbound_sunset_at": ""}, "hmac_v1_inbound_sunset_at"),
+        ({"hmac_v1_outbound_sunset_at": ""}, "hmac_v1_outbound_sunset_at"),
         ({"hmac_v1_observation_window_days": 0}, "observation window"),
         # malformed sunset dates must fail the kill switch at boot, not 500 at
         # request/delivery time (audit finding 4): non-date and tz-naive.

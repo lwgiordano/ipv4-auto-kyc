@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from kyc_tool.security import MAX_HMAC_SKEW_SECONDS
@@ -351,9 +351,13 @@ ADAPTER_IDS = frozenset({
 def adapter_rate_violations(rates) -> list[str]:
     """Violations for an adapter_rate_limits mapping (empty ⇒ valid). Shared by the field validator,
     the production boundary, and the RateLimiter consumer. TOTAL over malformed input (re-audit
-    `f2929f8..6a4cd87` F8): a non-dict container is a violation, never an AttributeError."""
-    if rates is None:
-        return []
+    `f2929f8..6a4cd87` F8): a non-dict container is a violation, never an AttributeError.
+
+    `None` is a VIOLATION, not an empty mapping (re-audit `4f23f23..97deeae` F1). The field is
+    `dict[str, float] = {}`, so `None` only arrives by `model_copy(update=...)` — and treating it
+    as "no limits" is the exact fail-open that let `hmac_inbound_extra_keys=None` boot clean and
+    then crash: `RateLimiter` clears this check and immediately calls `.items()` on it.
+    """
     if not isinstance(rates, dict):
         return [f"adapter_rate_limits must be a mapping, got {type(rates).__name__}"]
     out = []
@@ -409,6 +413,26 @@ class Settings(BaseSettings):
     @classmethod
     def _validate_adapter_rates(cls, v):
         problems = adapter_rate_violations(v)
+        if problems:
+            raise ValueError("; ".join(problems))
+        return v
+
+    @field_validator("hmac_inbound_key_id", "hmac_outbound_key_id")
+    @classmethod
+    def _validate_active_key_ids(cls, v, info):
+        """The ACTIVE key ids go through the same grammar as the rotation-map keys, at
+        CONSTRUCTION (re-audit `4f23f23..97deeae` F7).
+
+        Only rotation keys had a field validator, so `Settings(hmac_inbound_key_id=" padded ")`,
+        a tab-only id, and a non-ASCII outbound id all constructed successfully and were caught
+        only at the production boundary. Staging is where a rotation is rehearsed, so a value that
+        works in staging and refuses in production is exactly backwards — the rehearsal has to
+        fail on what production will fail on. An empty id stays legal here because it is the
+        unconfigured default outside production, where the boundary still refuses it.
+        """
+        if v == "":
+            return v
+        problems = hmac_key_id_violations(v, info.field_name)
         if problems:
             raise ValueError("; ".join(problems))
         return v
@@ -612,23 +636,45 @@ class ProductionConfigError(RuntimeError):
 
 
 def production_config_violations(settings: Settings) -> list[str]:
-    """Every reason this configuration is unsafe for production. Empty == safe.
+    """Every reason this configuration is unsafe for production. Empty == safe. TOTAL: NEVER RAISES.
 
-    Pure and side-effect-free so /readyz can report the same list a startup
-    boot would reject on.
+    Pure and side-effect-free so /readyz can report the same list a startup boot would reject on.
+
+    Totality is structural, not a claim about having audited every line (re-audit
+    `4f23f23..97deeae` F1). The individual validators below check exact built-in types before
+    calling `len`/`strip`/`==`/iteration, and this wrapper converts anything they still did not
+    anticipate into a FAIL-CLOSED violation. `model_copy(update=...)` bypasses Pydantic entirely,
+    so this function receives arbitrary objects on every field; an exception escaping here reaches
+    a boot path or `/readyz` as a 500, where a crash reads as an outage rather than as a refusal —
+    and a `/readyz` that cannot answer is indistinguishable from one that answered "unsafe".
+
+    Partial results are kept: whatever was diagnosed before the failure is still reported, so the
+    operator sees the real violations alongside the one the checks could not classify.
     """
     v: list[str] = []
+    try:
+        _collect_production_violations(settings, v)
+    except Exception as exc:  # noqa: BLE001 — fail closed on ANY unanticipated value
+        v.append(
+            f"configuration could not be fully evaluated ({type(exc).__name__}: {exc!s:.200}) — "
+            "refusing production boot; some setting holds a type no check anticipated"
+        )
+    return v
+
+
+def _collect_production_violations(settings: Settings, v: list[str]) -> None:
+    """The checks themselves. Appends to `v`; call it through `production_config_violations`."""
 
     if settings.auth_disabled:
         v.append("auth_disabled is True (inbound HMAC verification is off)")
 
-    secret = settings.platform_hmac_secret or ""
-    if not secret:
-        v.append("platform_hmac_secret is empty")
-    elif len(secret) < _MIN_HMAC_SECRET_LEN:
-        v.append(f"platform_hmac_secret is weak (< {_MIN_HMAC_SECRET_LEN} chars)")
+    v.extend(hmac_secret_violations(settings.platform_hmac_secret, "platform_hmac_secret"))
 
-    parsed = urlparse(settings.platform_callback_url or "")
+    raw_url = settings.platform_callback_url
+    if type(raw_url) is not str:
+        v.append(f"platform_callback_url must be a string, got {type(raw_url).__name__}")
+        raw_url = ""
+    parsed = urlparse(raw_url)
     if parsed.scheme != "https":
         v.append(f"platform_callback_url is not HTTPS ({settings.platform_callback_url!r})")
     if (parsed.hostname or "") in _LOCAL_HOSTS:
@@ -641,6 +687,13 @@ def production_config_violations(settings: Settings) -> list[str]:
         v.append(
             f"platform_callback_url must not carry a query or fragment ({settings.platform_callback_url!r})"
         )
+
+    # Type first for every string-declared setting these identity checks read (F1): `!=`/`not`
+    # are satisfied by a list or an object, so the check below is only meaningful once the value
+    # is known to be a string.
+    for name in ("object_store", "s3_bucket", "ocr_engine", "email_provider", "adapters_profile",
+                 "ui_admin_token"):
+        v.extend(string_setting_violations(getattr(settings, name), name))
 
     if settings.object_store != "s3":
         v.append(f"object_store is {settings.object_store!r}, not s3")
@@ -670,14 +723,10 @@ def production_config_violations(settings: Settings) -> list[str]:
     # HMAC v2 (PR 5a): split secrets/key_ids, both sunset dates, and a positive
     # observation window are all required in production — this is what enforces
     # the spec's "fixed sunset" (no dual-accept-forever) and the durable witness.
-    if not settings.hmac_inbound_secret or len(settings.hmac_inbound_secret) < _MIN_HMAC_SECRET_LEN:
-        v.append("hmac_inbound secret is missing/weak (v2 inbound verification)")
-    if not settings.hmac_outbound_secret or len(settings.hmac_outbound_secret) < _MIN_HMAC_SECRET_LEN:
-        v.append("hmac_outbound secret is missing/weak (v2 callback signing)")
-    if not settings.hmac_inbound_key_id:
-        v.append("hmac_inbound_key_id is empty")
-    if not settings.hmac_outbound_key_id:
-        v.append("hmac_outbound_key_id is empty")
+    v.extend(hmac_secret_violations(
+        settings.hmac_inbound_secret, "hmac_inbound_secret (v2 inbound verification)"))
+    v.extend(hmac_secret_violations(
+        settings.hmac_outbound_secret, "hmac_outbound_secret (v2 callback signing)"))
     # Rotation keys are FULL verification credentials (api/auth.py resolves a v2 secret through
     # them), so they carry the same floor as the active key (re-audit `82636da..9ac574f` F1: the
     # boundary validated only the active pair, so a one-character secondary secret — or one under
@@ -689,17 +738,10 @@ def production_config_violations(settings: Settings) -> list[str]:
     v.extend(hmac_key_id_violations(settings.hmac_inbound_key_id, "hmac_inbound_key_id"))
     v.extend(hmac_key_id_violations(settings.hmac_outbound_key_id, "hmac_outbound_key_id"))
     v.extend(hmac_extra_key_violations(settings.hmac_inbound_extra_keys, settings.hmac_inbound_key_id))
-    for label, iso in (
-        ("inbound", settings.hmac_v1_inbound_sunset_at),
-        ("outbound", settings.hmac_v1_outbound_sunset_at),
-    ):
-        if not iso:
-            v.append(f"hmac_v1 {label} sunset date is unset (dual-accept-forever is not allowed)")
-            continue
-        try:
-            parse_sunset(iso)
-        except ValueError:
-            v.append(f"hmac_v1 {label} sunset date is not timezone-aware ISO-8601 ({iso!r})")
+    v.extend(hmac_sunset_violations(
+        settings.hmac_v1_inbound_sunset_at, "hmac_v1_inbound_sunset_at"))
+    v.extend(hmac_sunset_violations(
+        settings.hmac_v1_outbound_sunset_at, "hmac_v1_outbound_sunset_at"))
     # Numeric-setting registry (re-audit `5b0f0b8..b75a320` R4-F1/F2/F3, close-out #1). The Field
     # bounds enforce each domain at construction; these two calls re-check EVERY numeric setting at the
     # production boundary so an unvalidated model_copy(update=...) cannot bypass a bound, and apply the
@@ -744,7 +786,7 @@ def production_config_violations(settings: Settings) -> list[str]:
 
     _lease_fields = {"outbox_http_timeout_seconds", "outbox_lease_margin_seconds", "outbox_lease_seconds"}
     if _lease_fields & _invalid:
-        return v  # operands already diagnosed; the arithmetic below would raise on them
+        return  # operands already diagnosed; the arithmetic below would raise on them
     attempt_deadline = settings.outbox_http_timeout_seconds * OUTBOX_ATTEMPT_DEADLINE_PHASES
     required_lease = attempt_deadline + settings.outbox_lease_margin_seconds
     if settings.outbox_lease_seconds <= required_lease:
@@ -757,7 +799,7 @@ def production_config_violations(settings: Settings) -> list[str]:
             f"a lease that expires mid-attempt makes every delivery unwitnessable"
         )
 
-    return v
+    return
 
 
 def validate_for_production(settings: Settings) -> None:
@@ -801,6 +843,63 @@ def hmac_key_id_violations(key_id: object, label: str) -> list[str]:
     return problems
 
 
+def string_setting_violations(value: object, label: str) -> list[str]:
+    """A production setting declared `str` really is a non-blank string.
+
+    Most checks on these fields are equality or truthiness — `ocr_engine == STUB_OCR_ENGINE`,
+    `if not s3_bucket` — and a list, dict or object satisfies neither branch, so the boundary
+    certified it and the value crashed later inside the provider factory or the storage client
+    (re-audit `4f23f23..97deeae` F1). Identity checks cannot substitute for a type check.
+    """
+    if type(value) is not str:
+        return [f"{label} must be a string, got {type(value).__name__}"]
+    if not value.strip():
+        return [f"{label} is blank/whitespace"]
+    return []
+
+
+def hmac_secret_violations(secret: object, label: str) -> list[str]:
+    """One TOTAL grammar for every HMAC secret — legacy, inbound, outbound, rotation.
+
+    Takes `object` and checks the exact built-in type FIRST (re-audit `4f23f23..97deeae` F1).
+    `len()` was being called on whatever `model_copy(update=...)` put there: a 40-entry dict has
+    `len` 40 and so cleared the 32-character floor, certifying the configuration, and the resolver
+    then handed that dict to `sign_v2`, which raised `AttributeError` on `.encode` INSIDE signature
+    verification — a clean production boot followed by a 500 on an authenticated request. An int
+    raised in `len()` before the aggregate could even be built.
+
+    The floor is measured on the TRIMMED value: 32 spaces is 32 characters and cleared the old
+    check while being a trivially guessable credential.
+    """
+    if type(secret) is not str:
+        return [f"{label} must be a string, got {type(secret).__name__}"]
+    if not secret.strip():
+        return [f"{label} is blank/whitespace"]
+    problems = []
+    if len(secret.strip()) < _MIN_HMAC_SECRET_LEN:
+        problems.append(f"{label} is weak (< {_MIN_HMAC_SECRET_LEN} non-whitespace chars)")
+    if secret != secret.strip():
+        problems.append(
+            f"{label} has surrounding whitespace, which is part of the key and is almost always a "
+            ".env transcription accident — every signature would differ from the peer's"
+        )
+    return problems
+
+
+def hmac_sunset_violations(iso: object, label: str) -> list[str]:
+    """One TOTAL grammar for both v1 sunset dates. Same reason as the secrets: an int reached
+    `.replace` inside the parser and raised instead of producing a violation."""
+    if type(iso) is not str:
+        return [f"{label} must be a string, got {type(iso).__name__}"]
+    if not iso.strip():
+        return [f"{label} is unset (dual-accept-forever is not allowed)"]
+    try:
+        parse_sunset(iso)
+    except (ValueError, TypeError):
+        return [f"{label} is not timezone-aware ISO-8601 ({iso!r})"]
+    return []
+
+
 def hmac_extra_key_violations(extra: object, active_key_id: object) -> list[str]:
     """Every rotation key must clear the SAME floor as the active key (re-audit
     `82636da..9ac574f` F1). `api/auth._inbound_secret` resolves a v2 verification secret out of
@@ -810,17 +909,20 @@ def hmac_extra_key_violations(extra: object, active_key_id: object) -> list[str]
     Checked in BOTH layers: the field validator refuses at construction, and
     `production_config_violations` re-checks so an unvalidated `model_copy(update=...)` cannot
     slip a mapping past the boundary."""
-    # ONLY {} is the empty map. `None` used to short-circuit here as "safe", but
-    # `_inbound_secret` then called `.get` on it and raised AttributeError inside signature
-    # verification — a clean boot followed by a 500 on an authenticated request
-    # (re-audit `6feca36..4f23f23` F2).
-    if extra == {}:
-        return []
+    # TYPE FIRST, then emptiness (re-audit `4f23f23..97deeae` F1). This read `extra == {}` before
+    # the isinstance check, so an object with a hostile `__eq__` raised out of the comparison and
+    # took the whole aggregate down before it could classify anything.
+    #
+    # ONLY {} is the empty map. `None` used to short-circuit here as "safe", but `_inbound_secret`
+    # then called `.get` on it and raised AttributeError inside signature verification — a clean
+    # boot followed by a 500 on an authenticated request (re-audit `6feca36..4f23f23` F2).
     if not isinstance(extra, dict):
         return [
             "hmac_inbound_extra_keys must be a mapping of key_id -> secret ({} when unused), got "
             f"{type(extra).__name__}"
         ]
+    if not extra:
+        return []
     problems: list[str] = []
     seen: dict[str, str] = {}
     active_trimmed = active_key_id.strip() if isinstance(active_key_id, str) else None
@@ -848,11 +950,9 @@ def hmac_extra_key_violations(extra: object, active_key_id: object) -> list[str]
         if trimmed in seen:
             problems.append(f"hmac_inbound_extra_keys key_id {trimmed!r} is duplicated")
         seen[trimmed] = secret
-        if len(secret) < _MIN_HMAC_SECRET_LEN:
-            problems.append(
-                f"hmac_inbound_extra_keys secret for {trimmed!r} is weak "
-                f"(< {_MIN_HMAC_SECRET_LEN} chars) — rotation keys verify real requests"
-            )
+        problems.extend(hmac_secret_violations(
+            secret, f"hmac_inbound_extra_keys secret for {trimmed!r} (rotation keys verify real "
+                    "requests)"))
     return problems
 
 
@@ -906,5 +1006,38 @@ def validate_process_role(settings: Settings, role: ProcessRole) -> None:
     validate_for_production(settings)
 
 
+class ConfigLoadError(RuntimeError):
+    """Configuration failed to load. Carries locations and reasons, never values."""
+
+
+def _sanitized_validation_report(error: ValidationError) -> str:
+    """Location, type and message for each failure — and nothing else.
+
+    `hide_input_in_errors=True` keeps the offending value out of `str()` and `repr()`, which is
+    where a traceback prints it. It does NOT remove it from `error.errors()` or `error.json()`
+    (re-audit `4f23f23..97deeae` F6), so anything that logs structured validation detail — a JSON
+    log formatter, an error reporter, a CI annotation — still ships the live secret. This builds
+    the report from three fields explicitly rather than filtering a dict, so a future Pydantic
+    version that adds another value-bearing field cannot widen it by default.
+    """
+    lines = []
+    for detail in error.errors(include_input=False, include_url=False):
+        where = ".".join(str(part) for part in detail.get("loc", ())) or "(model)"
+        lines.append(f"{where}: {detail.get('type', 'invalid')}: {detail.get('msg', '')}")
+    return "; ".join(lines) or "invalid configuration"
+
+
 def get_settings() -> Settings:
-    return Settings()
+    """The ONE settings loader. Every executable entry point goes through it.
+
+    A raw `ValidationError` escaping here would print the rejected value — which, for the settings
+    this model holds, is a live credential — into startup logs, CI output, and incident
+    transcripts. `from None` matters as much as the message: without it the original error stays
+    on the `__context__` chain and Python prints it under "During handling of the above exception".
+    """
+    try:
+        return Settings()
+    except ValidationError as error:
+        raise ConfigLoadError(
+            f"invalid configuration — {_sanitized_validation_report(error)}"
+        ) from None

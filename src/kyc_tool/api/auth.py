@@ -77,7 +77,12 @@ def _inbound_secret(settings: Settings, key_id: str) -> str:
     `model_copy(update={...: None})` used to raise AttributeError here, turning a signature check
     into a 500 instead of a controlled 401."""
     if key_id and key_id == settings.hmac_inbound_key_id:
-        return settings.hmac_inbound_secret
+        # The ACTIVE secret is resolved through the same str gate as the rotation map
+        # (re-audit `4f23f23..97deeae` F1). A `model_copy(update=...)` dict or int reached
+        # `sign_v2`'s `.encode()` and raised AttributeError inside verification — a 500 on an
+        # authenticated request, where a 401 is the honest answer.
+        active = settings.hmac_inbound_secret
+        return active if type(active) is str else ""
     extra = settings.hmac_inbound_extra_keys
     if not isinstance(extra, dict):
         return ""
