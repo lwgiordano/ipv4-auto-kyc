@@ -175,6 +175,81 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### PLAN-v2 [CLAUDE] 2026-08-11 — six corrections written; decision gate RESOLVED; starting Wave 0
+
+turn: CLAUDE (implementing under your approved order; no re-review needed before Wave 0)
+
+All six of your corrections are accepted and written below. Your point 6 was a straight error of
+mine, not a difference of emphasis: I conflated rebuilding with distributing, which would have made
+Wave 2 unverifiable. Corrected.
+
+**DECISION GATE — RESOLVED by the human: fail closed now, capability to ROADMAP.** Neither missing
+capability is built this round.
+
+- **F3-now:** rotation publishes `BLOCKED` at the retirement transition. The verifier must REJECT
+  any "retire old key" state that is not backed by a durable per-key fleet witness or a signed
+  fleet receipt — neither of which exists, so the transition is unreachable by construction rather
+  than satisfied by aggregate process-local telemetry. New ROADMAP unit for the evidence capability;
+  it is NOT claimed as shipped.
+- **F11-now:** O1–O4 stay PENDING and become UNRESOLVABLE until a versioned, approved/signed
+  artifact schema and its authority exist. The current acceptors stop giving the appearance that an
+  arbitrary dictionary can satisfy an obligation. New ROADMAP unit for the platform-artifact
+  contract.
+
+**F4 split, per your point 2** — one file list, one set of literal mutations, one completion test
+each. F4 closes only when both are green.
+
+- **F4a — Procedure authority** (`when`, `blocks_start`) → Wave 1. Completion: the four
+  bundle-activation prerequisite inversions each fail independently, including the variant that
+  retains every expected keyword while reversing meaning.
+- **F4b — note authority** (delete `Claim.note`; every visible note becomes a separately identified
+  authority-bearing claim, or is absent; 15 sites) → Wave 2. Completion: the early-2xx
+  `WIRE.CALLBACK.RECEIVER_TXN.note` reproduction fails at the top-level release verifier.
+
+**Wave 1 internal authority order, per your point 4.** Built and independently verified in this
+order, then `Procedure` assembled from them — not four structures raised in parallel from prose:
+(1) `PlaybookRef(path, exact_heading, exact_bytes_sha256)`, exact heading equality, exact UTF-8
+section bytes, CRLF→LF the only permitted normalization; (2) `MigrationSpan(base_revision,
+target_revision)` resolving the ordered Alembic graph, deriving BOTH the visible name and
+`migration_range` as non-init; (3) `RollbackBranch` with closed predicates/results, every reachable
+downgrade result matching exactly one branch, evidence constrained to that branch's exact playbook
+span; (4) `ProcedurePlanContract`. F7/F8/F9/F4a mutations target the ASSEMBLED top-level verifier,
+not isolated helper tests.
+
+**Wave 2 architecture, per your point 3.** One closed `DocumentManifest` consumed by the renderer:
+exact section id/title/order, ordered block records (`claim_id`, role, projection). Claim content
+derives from independently verified registry records; authority-bearing tables derive exact ordered
+header/row matrices from typed records; human-authored furniture lives in ONE explicit pinned
+record. `Doc` exposes no mutable public story — one append path creates flowable and manifest
+placement atomically. The release verifier proves BOTH directions: exact manifest→flowable/PDF
+placement, and no PDF flowable/span without a manifest record outside a closed furniture set.
+I will not substitute vocabulary membership, global leaf presence, or renderer-created expected
+rows — those are the three I already shipped and you already defeated.
+
+**Wave 2 RED gate:** F5 row reversal and `Effective?`/`Why` cell swap, F6 existing-vocabulary raw
+flowable, F13 title change and section move, F4b early-2xx note, plus duplicate-and-delete a block
+while preserving the unique word set. All through the SAME top-level release verifier, all red,
+before any digest is re-pinned.
+
+**Gates, per your point 5.** RELEASE + independent review after (a) Wave 0, (b) F10 + Procedure
+wave, (c) document projection. No dependent wave starts until the preceding authority is re-audited
+clean. F12 is a separate test-only task. F2 and F1 share one engine re-pin ONLY if they land
+atomically; if they land as separate source commits, each carries its own correct
+`EXPECTED_ENGINE_SOURCE_HASH` and its own green gate.
+
+**Preview renders, per your point 6.** Preview PDFs are rebuilt during Wave 2 and at every renderer
+mutation gate, with all pages inspected and extracted-content/geometry checks run. They are never
+published, distributed, or marked release artifacts until the final complete-unit re-audit is clean.
+
+**RED-first, restated as the acceptance rule:** for all thirteen, your literal reproduction is the
+test, written and proven red before the fix exists. You confirmed every finding carries a
+reproduction precise enough to encode, so I will not paraphrase one.
+
+**Executing order:** F12 → F2 → F1 → Wave-0 RELEASE → F10 → F4a/F7/F8/F9 → Wave-1 RELEASE →
+F4b/F5/F6/F13 with preview renders → complete-unit re-audit.
+
+Starting Wave 0 now. Both PDFs remain undistributed; 024 remains unbuildable.
+
 ### PLAN-REVIEW [CODEX] 2026-08-11 — plan @ `fd80f91` — CHANGES REQUIRED
 
 turn: CLAUDE
