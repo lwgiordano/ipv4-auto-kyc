@@ -435,6 +435,96 @@ def test_the_duplicate_check_reads_the_selected_source_not_the_process_environme
     assert "repeats key" in str(excinfo.value.__cause__)
 
 
+def test_a_duplicate_key_in_a_secrets_directory_file_is_refused(tmp_path, monkeypatch):
+    """The source that was left unwrapped while the docstring claimed every text source was
+    covered (re-audit `4c3015a..cccd5f7` F2).
+
+    This is not an exotic path. A secrets directory is how containers and Kubernetes normally
+    deliver credentials, so a file named for the rotation map is the NORMAL way to configure it in
+    the deployment this document describes — and a repeated key id there constructed cleanly while
+    discarding one side of a live rotation. The peer still signing with the dropped secret starts
+    failing verification with nothing in the logs to explain it.
+    """
+    from kyc_tool.config import get_settings
+
+    monkeypatch.delenv("KYC_HMAC_INBOUND_EXTRA_KEYS", raising=False)
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "KYC_HMAC_INBOUND_EXTRA_KEYS").write_text(DUPLICATE_JSON)
+    with pytest.raises(Exception) as excinfo:  # noqa: B017 — pydantic-settings wraps it
+        Settings(_secrets_dir=str(secrets), _env_file=None)
+    assert "repeats key" in str(excinfo.value.__cause__)
+    # the operator-facing reason survives this source too, not just env and dotenv
+    monkeypatch.setattr(Settings, "model_config", {**Settings.model_config,
+                                                  "secrets_dir": str(secrets)})
+    with pytest.raises(ConfigLoadError, match="repeats key"):
+        get_settings()
+
+
+def test_a_clean_secrets_directory_file_still_round_trips(tmp_path, monkeypatch):
+    """Guard the guard on the new source: refusing everything would pass the test above."""
+    monkeypatch.delenv("KYC_HMAC_INBOUND_EXTRA_KEYS", raising=False)
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "KYC_HMAC_INBOUND_EXTRA_KEYS").write_text(SINGLE_JSON)
+    loaded = Settings(_secrets_dir=str(secrets), _env_file=None)
+    assert loaded.hmac_inbound_extra_keys == {"old": "a" * 34}
+
+
+def test_wrapping_the_secrets_source_does_not_change_precedence(tmp_path, monkeypatch):
+    """Wrapping must not reorder sources. Patching a source's own decode path cannot change which
+    source wins, and this pins that it did not.
+
+    Precedence for a complex field is PER KEY, not per source: pydantic-settings merges dict fields
+    across sources, so `init` beating the secrets file on a shared key leaves the file's other keys
+    present. That is pre-existing behaviour — the already-wrapped env source merges identically —
+    not something the wrapper introduced. It is asserted here rather than left implicit because a
+    stale secrets file can therefore keep contributing a retired key id alongside an explicit one.
+    """
+    monkeypatch.delenv("KYC_HMAC_INBOUND_EXTRA_KEYS", raising=False)
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "KYC_HMAC_INBOUND_EXTRA_KEYS").write_text(SINGLE_JSON)  # {"old": "a"*34}
+
+    # same key: the higher-precedence source wins
+    same = Settings(hmac_inbound_extra_keys={"old": "z" * 34},
+                    _secrets_dir=str(secrets), _env_file=None)
+    assert same.hmac_inbound_extra_keys == {"old": "z" * 34}
+
+    # different key: the maps merge, and the file's entry survives
+    merged = Settings(hmac_inbound_extra_keys={"explicit": "z" * 34},
+                      _secrets_dir=str(secrets), _env_file=None)
+    assert merged.hmac_inbound_extra_keys == {"explicit": "z" * 34, "old": "a" * 34}
+
+
+def test_the_duplicate_checked_field_set_is_closed_over_every_complex_field():
+    """The decoder is scoped to a DECLARED set rather than "any value starting with `{`", which is
+    what Codex asked for. Scoping it invites the opposite defect — a complex field added later and
+    silently exempt — so the set is required to equal the model's complex fields exactly.
+
+    `adapter_rate_limits` is in it for the same reason as the HMAC map: a repeated key drops a
+    throttle, and last-key-wins hides which one.
+    """
+    from kyc_tool.config import DUPLICATE_CHECKED_FIELDS
+
+    complex_fields = {
+        name for name, field in Settings.model_fields.items()
+        if getattr(field.annotation, "__origin__", None) in (dict, list)
+    }
+    assert complex_fields == set(DUPLICATE_CHECKED_FIELDS), (
+        "a complex settings field is not duplicate-checked: "
+        f"{sorted(complex_fields ^ set(DUPLICATE_CHECKED_FIELDS))}"
+    )
+
+
+def test_a_duplicate_key_in_the_rate_limit_map_is_refused(monkeypatch):
+    """The second complex field, through the same decoder."""
+    monkeypatch.setenv("KYC_ADAPTER_RATE_LIMITS", '{"rdap": 1.0, "rdap": 2.0}')
+    with pytest.raises(Exception) as excinfo:  # noqa: B017
+        Settings()
+    assert "repeats key" in str(excinfo.value.__cause__)
+
+
 def test_the_helper_is_total_over_junk():
     from kyc_tool.config import _refuse_duplicate_json_keys
 

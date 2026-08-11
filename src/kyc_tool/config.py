@@ -441,7 +441,8 @@ class Settings(BaseSettings):
     @classmethod
     def settings_customise_sources(cls, settings_cls, init_settings, env_settings,
                                    dotenv_settings, file_secret_settings):
-        """Wrap every TEXT source so duplicate JSON keys are refused wherever the value came from.
+        """Wrap every source that decodes text, so duplicate JSON keys are refused wherever the
+        value came from.
 
         The previous check read `os.environ` directly (re-audit `4f23f23..122cc67` finding 8),
         which is the wrong place twice over: a duplicate in a `.env` file — the documented way to
@@ -449,12 +450,19 @@ class Settings(BaseSettings):
         be inspected instead of the value Pydantic actually selected. Decoding is the only moment
         the duplicate still exists; by the time a `dict` reaches a validator, JSON's last-key-wins
         has already discarded the earlier secret while the peer may still be signing with it.
+
+        `file_secret_settings` was then left UNWRAPPED while this docstring claimed to cover every
+        text source (re-audit `4c3015a..cccd5f7` F2). That is not an exotic path: a secrets
+        directory is how containers and Kubernetes normally deliver credentials, so a file named
+        `KYC_HMAC_INBOUND_EXTRA_KEYS` holding a repeated key id constructed cleanly and dropped one
+        side of a live rotation in silence. Source ORDER is unchanged — wrapping patches each
+        source's own decode path and does not touch precedence.
         """
         return (
             init_settings,
             _duplicate_aware(env_settings),
             _duplicate_aware(dotenv_settings),
-            file_secret_settings,
+            _duplicate_aware(file_secret_settings),
         )
 
     @field_validator("hmac_inbound_extra_keys")
@@ -654,8 +662,19 @@ class DuplicateKeyError(ValueError):
     """A JSON object in configuration repeated a key. JSON keeps only the last one."""
 
 
+# The fields whose raw JSON is duplicate-checked. CLOSED and declared, rather than "any value that
+# happens to start with `{`" (re-audit `4c3015a..cccd5f7` F2, which asked for the decoder to be
+# restricted to its intended field). It covers BOTH complex fields, not just the HMAC map: a
+# repeated key in `adapter_rate_limits` silently drops a throttle the same way. A test asserts this
+# set equals the model's complex fields exactly, so adding one forces a decision here instead of
+# quietly escaping the check.
+DUPLICATE_CHECKED_FIELDS = frozenset({"hmac_inbound_extra_keys", "adapter_rate_limits"})
+
+
 def _refuse_duplicate_json_keys(field_name: str, value) -> None:
     """Raise if a raw JSON object repeats a key. Decoding is the only moment it is still visible."""
+    if field_name not in DUPLICATE_CHECKED_FIELDS:
+        return
     if not isinstance(value, str) or not value.strip().startswith("{"):
         return
     seen: list[str] = []
