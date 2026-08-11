@@ -9,9 +9,33 @@ check would miss it.
 The blocker at the top is the reason this document is titled a staging guide.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from docs.contracts import Claim, ClaimState, Registry
+from docs.contracts.playbook import (
+    ENDING,
+    ENDING_RESUMED,
+    IMAGE,
+    IMAGE_CONDITIONAL,
+    IMAGE_PRIOR,
+    IMAGE_SAME_RELEASE,
+    IRREVERSIBLE_PAST_BOUNDARY,
+    RESTORES,
+    RESTORES_NO,
+    RESTORES_YES,
+    REVERSIBILITY,
+    REVERSIBLE_WITH_CONDITIONS,
+    SCHEMA,
+    SCHEMA_CONDITIONAL,
+    SCHEMA_STAYS,
+    VERIFICATION,
+    VERIFY_NON_MUTATING,
+    VERIFY_NOT_STATED,
+    WINDOW,
+    WINDOW_SAME,
+    RollbackContract,
+    RollbackFact,
+)
 
 # CUTOVERS ARE NOT SUMMARIZED HERE (re-audit `6feca36..4f23f23` F5).
 #
@@ -42,19 +66,38 @@ class Procedure:
     is taken over the normalized body of the referenced section, so an empty body, a wrong
     same-named section, or an edit nobody re-reviewed all fail. Re-pinning it is the re-review.
 
-    `rollback` carries the facts a one-line "reversible?" answer loses. PR 5b's rollback is not
-    "redeploy the previous image": it mirrors the same maintenance window, it knowingly restores
-    the vulnerability the release closed, and its verification is non-mutating ONLY — the
-    mutation probes would perform the forgery they are meant to detect.
+    `rollback` and `irreversible` are DERIVED, not authored (re-audit `4c3015a..eaa3f8f`, the gap I
+    declared open when the digest first landed). They used to be hand-written prose sitting beside
+    the digest with nothing tying them to it, so rewriting the rollback text to say "redeploy the
+    previous image" — the one thing PR 6's playbook calls a defect — left the digest matching and
+    every test green. Both now come from `rollback_contract`, whose answers are drawn from a closed
+    domain, whose sentences belong to the answers, and each of whose answers quotes the playbook
+    sentence it was read from. Passing either field explicitly is refused below: there is no
+    free-text rollback field left to mutate.
+
+    `migration_range` is what THIS cutover installs, and it is the executable authority for the
+    schema answer — the tests classify each revision's downgrade AST and recompute the answer
+    rather than trusting it. PR 6's flag flip installs nothing (its migration deployed earlier,
+    rolling), which is why its range is empty.
     """
 
     name: str
     when: str
     blocks_start: tuple[str, ...]
-    irreversible: str
     playbook: str
     playbook_digest: str
-    rollback: tuple[str, ...] = ()
+    rollback_contract: RollbackContract
+    migration_range: tuple[str, ...] = ()
+    rollback: tuple[str, ...] = field(default=(), init=False)
+    irreversible: str = field(default="", init=False)
+
+    def __post_init__(self) -> None:
+        # The reversibility answer is what the page prints under "Reversible?"; the remaining
+        # answers are the rollback conditions. Splitting them here keeps the page from printing
+        # the same derived sentence twice, and `init=False` means neither can be passed in.
+        statements = self.rollback_contract.statements()
+        object.__setattr__(self, "irreversible", statements[0])
+        object.__setattr__(self, "rollback", statements[1:])
 
 
 FULL_WINDOW = Procedure(
@@ -75,18 +118,18 @@ FULL_WINDOW = Procedure(
         "You can probe each new replica directly on its trusted path, not through the load "
         "balancer: an edge 403 or 503 must never be read as an application answer.",
     ),
-    irreversible="No, but rollback is not a plain redeploy — see the rollback conditions below.",
-    rollback=(
-        "Rollback MIRRORS THE SAME WINDOW: pause submission, stop all processes together, run the "
-        "recovery one-shot pinned to the last image that still contains it, then redeploy the "
-        "prior image for API and workers.",
-        "It KNOWINGLY RESTORES THE VULNERABILITY this release closed. The prior image has no "
-        "actor floor.",
-        "Verification is NON-MUTATING ONLY: /readyz, /healthz, and prior-image digest "
-        "attestation. Do not run the sensitive-mutation probes against the prior image — on that "
-        "image the probe PERFORMS the forgery it is meant to detect rather than finding it.",
-        "Keep all submission and the composer blocked until the non-mutating checks pass.",
-    ),
+    rollback_contract=RollbackContract((
+        RollbackFact(REVERSIBILITY, REVERSIBLE_WITH_CONDITIONS,
+                     "pins the recovery one-shot to the last image that still contains it"),
+        RollbackFact(SCHEMA, SCHEMA_STAYS, "No migration ships with this change"),
+        RollbackFact(IMAGE, IMAGE_PRIOR, "redeploy the prior image for API and workers"),
+        RollbackFact(RESTORES, RESTORES_YES,
+                     "accepting that the prior image restores pre-PR-5b behavior"),
+        RollbackFact(VERIFICATION, VERIFY_NON_MUTATING,
+                     "Rollback verification is non-mutating only"),
+        RollbackFact(WINDOW, WINDOW_SAME, "Rollback mirrors the same window"),
+        RollbackFact(ENDING, ENDING_RESUMED, "verify, start workers, resume"),
+    )),
     playbook="docs/DEPLOYMENT.md, PR 5b cutover",
     playbook_digest="7ef8d6d7e5939dce09f2dd52876fb8ae41c0af389fff5e2dbe8d9b1dcc394686",
 )
@@ -102,13 +145,20 @@ BUNDLE_PINNING = Procedure(
         "Every old pipeline worker can be stopped and attested at zero. A rolling flip lets peers "
         "resolve different bundles for the same run.",
     ),
-    irreversible="Rollback stays ON THE PR6 IMAGE and uses the same drain, flag-off. Substituting "
-                 "an earlier image mints permanent NULL provenance on rows decided under the flag.",
-    rollback=(
-        "Rollback stays on the PR 6 image and uses the same drain with the flag off.",
-        "Substituting an earlier image mints permanent NULL provenance on every row decided while "
-        "the flag was on.",
-    ),
+    rollback_contract=RollbackContract((
+        RollbackFact(REVERSIBILITY, REVERSIBLE_WITH_CONDITIONS,
+                     "mint permanent NULLs — a defect, not a safe fallback"),
+        RollbackFact(SCHEMA, SCHEMA_STAYS, "flag-only, no data migration"),
+        RollbackFact(IMAGE, IMAGE_SAME_RELEASE, "disabling the flag on the PR6 image"),
+        RollbackFact(RESTORES, RESTORES_NO, "never means resuming on a pre-PR6 image"),
+        # The PR 6 section restricts nothing about rollback verification. Publishing that silence
+        # is the honest answer; inventing a restriction here would be authoring the playbook from
+        # the document that is supposed to reference it.
+        RollbackFact(VERIFICATION, VERIFY_NOT_STATED),
+        RollbackFact(WINDOW, WINDOW_SAME, "via the same drained shape"),
+        RollbackFact(ENDING, ENDING_RESUMED,
+                     "start workers with KYC_ENFORCE_BUNDLE_PINNING=false"),
+    )),
     playbook="docs/DEPLOYMENT.md, PR 6 cutover",
     playbook_digest="7d6ad3c1df2e92ce251244227448ea8fbc64160bc3442369773dd71a3b307f7c",
 )
@@ -136,23 +186,29 @@ PR7B_CORE = Procedure(
         "Every writer role can be stopped and attested, including the API and the pipeline "
         "workers, not only the publishers.",
     ),
-    # "018 and above refuse unconditionally" survived here after section 6 was corrected
-    # (re-audit `4f23f23..122cc67` finding 5): 018-022 refuse, and 023 is validation-only, so
-    # stepping down from head removes its stamp before 022 blocks descent. The boundary is the
-    # same either way; the per-revision account was not.
-    irreversible="YES, once any delivery witness exists. Migrations 018 through 022 each refuse "
-                 "downgrade unconditionally in every environment, and 023 — validation-only — "
-                 "drops its stamp and then hits 022. Above that boundary rollback means "
-                 "redeploying a reviewed 023-COMPATIBLE image against the schema you are already "
-                 "on; an older publisher lacks the receipt contract and must not run against "
-                 "preserved evidence.",
-    rollback=(
-        "Above the 018 boundary the schema does NOT move. Rollback means redeploying a reviewed "
-        "023-COMPATIBLE image against the schema you are already on.",
-        "An older publisher lacks the receipt contract and must not run against preserved "
-        "delivery evidence.",
-        "Section 6 states the per-revision downgrade boundary; do not restate it from here.",
-    ),
+    # An earlier hand-written "018 and above refuse unconditionally" lived here and was wrong about
+    # 023 (re-audit `4f23f23..122cc67` finding 5). That whole class of defect is now structurally
+    # impossible in this field: the schema answer is CHOSEN from three options and RECOMPUTED by
+    # the tests from every downgrade body in `migration_range`, so a per-revision account cannot
+    # drift because there is no per-revision account here to drift. Section 6 still carries it, and
+    # is still checked against the migrations.
+    migration_range=("013", "014", "015", "016", "017", "018", "019", "020", "021", "022", "023"),
+    rollback_contract=RollbackContract((
+        RollbackFact(REVERSIBILITY, IRREVERSIBLE_PAST_BOUNDARY,
+                     "018 through 022 refuse unconditionally"),
+        RollbackFact(SCHEMA, SCHEMA_CONDITIONAL,
+                     "With 018 or anything above it installed there is no schema-downgrade path"),
+        RollbackFact(IMAGE, IMAGE_CONDITIONAL,
+                     "Rollback after first witness use is a FLAG/IMAGE rollback on the compatible "
+                     "schema, never a schema downgrade"),
+        RollbackFact(RESTORES, RESTORES_NO, "PROHIBIT the pre-7b image outright"),
+        RollbackFact(VERIFICATION, VERIFY_NOT_STATED),
+        RollbackFact(WINDOW, WINDOW_SAME, "as drained as the forward cutover"),
+        # Totality surfaced this one: three hand-written rollback lines published the image rule
+        # and the boundary, and omitted the control this playbook puts in capitals.
+        RollbackFact(ENDING, ENDING_RESUMED,
+                     "never leave the system stopped or retention frozen"),
+    )),
     playbook="docs/DEPLOYMENT.md, PR 7b-core cutover",
     playbook_digest="cfb8944983c416fd1052829c25f8c5f4c7400c677102a21d7a5706bf469c51d8",
 )

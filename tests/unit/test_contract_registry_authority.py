@@ -24,8 +24,8 @@ import time
 from pathlib import Path
 
 import pytest
-from docs.contracts import ClaimState
-from docs.contracts.operations import OPERATIONS
+from docs.contracts import ClaimState, playbook
+from docs.contracts.operations import OPERATIONS, Procedure
 from docs.contracts.signing_example import sign as example_sign
 from docs.contracts.wire import WIRE
 from pydantic import ValidationError as PydanticValidationError
@@ -947,6 +947,68 @@ def _deployment_section_body(section: str) -> str:
     return " ".join("\n".join(lines[start + 1:end]).split())
 
 
+def _playbook_prose(section: str) -> str:
+    """The section body as a reader sees it: markdown emphasis stripped, lowercased.
+
+    The DIGEST is taken over the raw normalized body (emphasis intact), because that is the byte
+    sequence a reviewer read. Evidence quotes are matched against this softer form so a contract
+    can quote a sentence without reproducing its asterisks and backticks.
+    """
+    return re.sub(r"[*`]", "", _deployment_section_body(section)).lower()
+
+
+def _downgrade_kind(path: Path) -> str:
+    """How one revision's downgrade behaves, read from its AST.
+
+    The distinction that matters is structural and unambiguous: a revision that refuses
+    UNCONDITIONALLY opens its body with a bare `raise`, so nothing can run first. A revision that
+    refuses on evidence reaches its `raise` through an `if`, and reverses cleanly when the
+    condition does not hold. `test_rollback_claim...` needs the same split, and getting it from the
+    tree rather than from a phrase is what makes the schema answer derived instead of asserted.
+    """
+    tree = ast.parse(path.read_text())
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "downgrade"), None)
+    if fn is None:
+        return "absent"
+    body = [n for n in fn.body
+            if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+                    and isinstance(n.value.value, str))]
+    if body and isinstance(body[0], ast.Raise):
+        return "refuses_always"
+    if any(isinstance(n, ast.Raise) for n in ast.walk(fn)):
+        return "refuses_conditionally"
+    if body and all(isinstance(n, ast.Pass) for n in body):
+        return "no_op"
+    return "reverses"
+
+
+def _schema_answer_from_migrations(revisions: tuple[str, ...]) -> str:
+    """The schema answer a procedure MUST publish, computed from what its migrations actually do.
+
+    Nothing about this reads the contract. It is the independent authority the contract's `schema`
+    answer is compared against — the registry does not get to tell the test what the migrations do.
+    """
+    if not revisions:
+        return playbook.SCHEMA_STAYS
+    kinds = {}
+    for revision in revisions:
+        matches = sorted((REPO / "alembic" / "versions").glob(f"{revision}_*.py"))
+        assert len(matches) == 1, f"revision {revision} matches {len(matches)} files"
+        kinds[revision] = _downgrade_kind(matches[0])
+    values = set(kinds.values())
+    if values <= {"reverses", "no_op"}:
+        return playbook.SCHEMA_DOWNGRADES
+    if values <= {"refuses_always"}:
+        # Nothing in the range can be walked back at all.
+        return playbook.SCHEMA_FROZEN
+    # Some revision refuses and some does not, so how far the schema got decides whether it moves.
+    # That covers both PR 7b-core's shape (018-022 refuse outright, 013-017 refuse only on
+    # evidence, 023 is a no-op) and a range that refuses only conditionally — which is NOT a clean
+    # downgrade: whether it reverses depends on whether a witness exists.
+    return playbook.SCHEMA_CONDITIONAL
+
+
 @verifies("OPS.CUTOVER.PROCEDURES")
 def _every_procedure_points_at_a_reviewed_playbook_body():
     """These claims deliberately do NOT restate steps, which makes the pointer load-bearing.
@@ -956,6 +1018,13 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
     a digest of the REVIEWED BODY under its heading. An empty body, a wrong section with the same
     name, or an edit nobody re-reviewed all fail here, and re-pinning the digest is the act of
     re-reviewing.
+
+    The digest alone was still not enough, which is the gap Claude declared open in
+    `4c3015a..eaa3f8f`: `rollback` and `irreversible` were hand-written prose sitting BESIDE the
+    digest, so rewriting them to prescribe the exact thing a playbook prohibits left the digest
+    matching. Both are now derived from a typed `RollbackContract`, and this test holds every part
+    of that contract against something outside it — the migrations for the schema answer, the
+    digest-bound body for each quote, the contract's own structure for the rest.
     """
     procedures = OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
     assert {p.name for p in procedures} == {
@@ -976,13 +1045,41 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
             "Re-read the section, then re-pin playbook_digest in the SAME commit."
         )
         assert procedure.blocks_start, f"{procedure.name} lists nothing that blocks starting"
-        assert procedure.rollback, f"{procedure.name} publishes no rollback conditions"
-        assert procedure.when.strip() and procedure.irreversible.strip()
+        assert procedure.when.strip()
         # no step numbering: a numbered list here IS the summary this claim exists to avoid
         for prerequisite in procedure.blocks_start:
             assert not re.match(r"^\s*(?:step\s*)?\d+[.)]", prerequisite.lower()), (
                 f"{procedure.name} is restating numbered steps again"
             )
+
+        contract = procedure.rollback_contract
+        # 1. TOTAL: the contract answers every question, so no control can be omitted by silence.
+        answered = {f.question for f in contract.facts}
+        assert answered == set(playbook.ROLLBACK_QUESTIONS), (
+            f"{procedure.name} leaves {sorted(set(playbook.ROLLBACK_QUESTIONS) - answered)} "
+            "unanswered"
+        )
+        # 2. DERIVED: the published prose is the contract's, not an author's.
+        statements = contract.statements()
+        assert procedure.irreversible == statements[0]
+        assert procedure.rollback == statements[1:]
+        # 3. QUOTED: every non-silent answer points at a sentence in the digest-bound body.
+        prose = _playbook_prose(section)
+        for fact in contract.facts:
+            if fact.answer in playbook.SILENT_ANSWERS:
+                assert not fact.evidence
+                continue
+            assert fact.evidence.lower() in prose, (
+                f"{procedure.name}/{fact.question}: the quote\n  {fact.evidence!r}\n"
+                f"is not in the reviewed body of {section!r}. An answer must come from the "
+                "playbook it claims to summarize."
+            )
+        # 4. INDEPENDENT: the schema answer is recomputed from the downgrade bodies.
+        derived = _schema_answer_from_migrations(procedure.migration_range)
+        assert contract.answer(playbook.SCHEMA) == derived, (
+            f"{procedure.name} publishes schema={contract.answer(playbook.SCHEMA)!r} but its "
+            f"migrations {procedure.migration_range or '(none)'} say {derived!r}"
+        )
 
     by_name = {p.name: p for p in procedures}
 
@@ -990,15 +1087,17 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
     # procedure whose rollback knowingly restores THIS release's vulnerability.
     pr5b = by_name["PR 5b full maintenance window"]
     assert "PR 5b" in pr5b.when and "do not reuse this one" in pr5b.when.lower()
-    rollback = " ".join(pr5b.rollback).lower()
-    assert "mirrors the same window" in rollback, "PR 5b rollback is not a plain redeploy"
-    assert "restores the vulnerability" in rollback
-    assert "non-mutating only" in rollback and "performs the forgery" in rollback
-    # and the playbook says the same thing, which is what the digest is protecting
-    pr5b_body = _deployment_section_body("PR 5b cutover").lower()
-    assert "non-mutating only" in pr5b_body, "the playbook no longer restricts rollback probes"
-    assert "the forgery it is meant to detect" in pr5b_body
-    assert "rollback mirrors the same window" in pr5b_body
+
+    # And the release DID close a hole, which is executable, not editorial: the reviewer-actor
+    # floor is in the shipped code and gates the manual-approve path. So an image-PRIOR rollback
+    # reopens it, and the contract's own invariant then forces non-mutating verification. If the
+    # floor is ever removed from the code, this fails and the answers must be re-derived.
+    ingest = (SRC / "events" / "ingest.py").read_text()
+    assert "reviewer_actor_reason" in ingest, "the PR 5b actor floor is gone from the ingest path"
+    assert (SRC / "events" / "review_guard.py").exists()
+    assert pr5b.rollback_contract.answer(playbook.IMAGE) == playbook.IMAGE_PRIOR
+    assert pr5b.rollback_contract.answer(playbook.RESTORES) == playbook.RESTORES_YES
+    assert pr5b.rollback_contract.answer(playbook.VERIFICATION) == playbook.VERIFY_NON_MUTATING
 
     # order inside the prerequisites still matters
     pr7b = [p.lower() for p in by_name["Migrations 013-023"].blocks_start]
@@ -1006,7 +1105,6 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
     diagnostic = next(i for i, p in enumerate(pr7b) if "pre-window diagnostic" in p)
     assert suspended < diagnostic
     assert any("backup" in p for p in pr7b)
-    assert "unconditionally" in by_name["Migrations 013-023"].irreversible.lower()
 
     # 013-023 is LOCAL authority; platform ordering waits for 024 (finding 5)
     when = by_name["Migrations 013-023"].when.lower()
@@ -1015,11 +1113,12 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
     assert "024" in when and "absent until" in when
     assert "ordering-authority schema" not in when
 
-    # the two controls a step summary kept dropping
+    # the control a step summary kept dropping
     assert any("load balancer" in p.lower() or "trusted path" in p.lower()
                for p in pr5b.blocks_start)
-    bundle_rollback = " ".join(by_name["Bundle-pinning activation"].rollback).lower()
-    assert "pr 6 image" in bundle_rollback and "null provenance" in bundle_rollback
+    # and the one TOTALITY recovered: every procedure must now publish that it ends resumed
+    for procedure in procedures:
+        assert procedure.rollback_contract.answer(playbook.ENDING) == playbook.ENDING_RESUMED
 
 
 @verifies("OPS.CUTOVER.OUTBOX_CEILING")
@@ -1137,3 +1236,206 @@ def test_every_claim_names_an_authority_and_a_known_state():
             assert claim.authority.strip(), f"{claim.id} names no authority"
             assert isinstance(claim.state, ClaimState)
             assert claim.id == claim.id.upper(), f"{claim.id} should be an upper-case id"
+
+
+# ── the rollback contract's guards, proven to bite ─────────────────────────────────────────────
+#
+# Everything below exists because the previous version of this control was assertion-shaped: it
+# stated invariants and never showed one failing. A guard nobody has watched reject something is
+# indistinguishable from a guard that cannot.
+
+
+def _valid_facts(**overrides) -> tuple:
+    """A well-formed contract, with named answers swapped out. The base is deliberately the
+    mildest legal shape, so any rejection below is caused by the override under test."""
+    base = {
+        playbook.REVERSIBILITY: (playbook.REVERSIBLE_WITH_CONDITIONS, "a"),
+        playbook.SCHEMA: (playbook.SCHEMA_STAYS, "b"),
+        playbook.IMAGE: (playbook.IMAGE_PRIOR, "c"),
+        playbook.RESTORES: (playbook.RESTORES_NO, "d"),
+        playbook.VERIFICATION: (playbook.VERIFY_UNRESTRICTED, "e"),
+        playbook.WINDOW: (playbook.WINDOW_LIGHTER, "f"),
+        playbook.ENDING: (playbook.ENDING_RESUMED, "g"),
+    }
+    base.update(overrides)
+    return tuple(
+        playbook.RollbackFact(q, answer, evidence) for q, (answer, evidence) in base.items()
+    )
+
+
+def test_the_baseline_contract_is_actually_valid():
+    """Otherwise every rejection below could be the baseline failing, not the mutation."""
+    assert playbook.RollbackContract(_valid_facts()).statements()
+
+
+ROLLBACK_MUTATIONS = [
+    (
+        "restoring a vulnerability without restricting verification",
+        {playbook.RESTORES: (playbook.RESTORES_YES, "d"),
+         playbook.VERIFICATION: (playbook.VERIFY_UNRESTRICTED, "e")},
+        "non-mutating",
+    ),
+    (
+        "restoring a vulnerability while claiming the playbook is silent on probes",
+        {playbook.RESTORES: (playbook.RESTORES_YES, "d"),
+         playbook.VERIFICATION: (playbook.VERIFY_NOT_STATED, "")},
+        "non-mutating",
+    ),
+    (
+        "staying on this release's image while claiming it reopens the hole",
+        {playbook.IMAGE: (playbook.IMAGE_SAME_RELEASE, "c"),
+         playbook.RESTORES: (playbook.RESTORES_YES, "d"),
+         playbook.VERIFICATION: (playbook.VERIFY_NON_MUTATING, "e")},
+        "cannot restore what this release closed",
+    ),
+    (
+        "a branch-dependent image on a schema that cannot move",
+        {playbook.IMAGE: (playbook.IMAGE_CONDITIONAL, "c")},
+        "no second branch",
+    ),
+    (
+        "a boundary in the schema answer but not in the reversibility answer",
+        {playbook.SCHEMA: (playbook.SCHEMA_CONDITIONAL, "b")},
+        "same boundary seen twice",
+    ),
+    (
+        "an irreversible cutover whose schema answer forgot the boundary",
+        {playbook.REVERSIBILITY: (playbook.IRREVERSIBLE_PAST_BOUNDARY, "a")},
+        "same boundary seen twice",
+    ),
+    (
+        "calling a rollback plain when it reopens a closed hole",
+        {playbook.REVERSIBILITY: (playbook.REVERSIBLE_PLAINLY, "a"),
+         playbook.RESTORES: (playbook.RESTORES_YES, "d"),
+         playbook.VERIFICATION: (playbook.VERIFY_NON_MUTATING, "e")},
+        "not plainly reversible",
+    ),
+    (
+        "calling a rollback plain when it needs the full window",
+        {playbook.REVERSIBILITY: (playbook.REVERSIBLE_PLAINLY, "a"),
+         playbook.WINDOW: (playbook.WINDOW_SAME, "f")},
+        "not plainly reversible",
+    ),
+    (
+        "citing one clause as the evidence for two different answers",
+        {playbook.WINDOW: (playbook.WINDOW_LIGHTER, "g")},
+        "more than one question",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,overrides,needle", ROLLBACK_MUTATIONS, ids=[m[0] for m in ROLLBACK_MUTATIONS]
+)
+def test_rollback_contract_rejects(label, overrides, needle):
+    with pytest.raises(ValueError, match=re.escape(needle)):
+        playbook.RollbackContract(_valid_facts(**overrides))
+
+
+def test_an_incomplete_contract_cannot_be_built():
+    """Totality is the guard that recovered the end-resumed control. A procedure that simply omits
+    a rollback question must not be constructible."""
+    partial = tuple(f for f in _valid_facts() if f.question != playbook.ENDING)
+    with pytest.raises(ValueError, match="does not answer"):
+        playbook.RollbackContract(partial)
+
+
+def test_an_answer_must_quote_the_playbook_and_silence_must_not():
+    with pytest.raises(ValueError, match="must quote the playbook"):
+        playbook.RollbackFact(playbook.WINDOW, playbook.WINDOW_SAME, "")
+    with pytest.raises(ValueError, match="cannot also quote"):
+        playbook.RollbackFact(playbook.VERIFICATION, playbook.VERIFY_NOT_STATED, "something")
+    with pytest.raises(ValueError, match="is not one of"):
+        playbook.RollbackFact(playbook.WINDOW, "whenever_convenient", "x")
+    with pytest.raises(ValueError, match="unknown rollback question"):
+        playbook.RollbackFact("vibes", playbook.WINDOW_SAME, "x")
+
+
+def test_rollback_prose_cannot_be_authored_at_all():
+    """The original attack was editing the rollback text. There is no longer a field to edit: both
+    published fields are `init=False` and computed from the contract."""
+    contract = playbook.RollbackContract(_valid_facts())
+    common = dict(
+        name="x", when="y", blocks_start=("z",), playbook="docs/DEPLOYMENT.md, PR 6 cutover",
+        playbook_digest="0" * 64, rollback_contract=contract,
+    )
+    with pytest.raises(TypeError):
+        Procedure(**common, rollback=("redeploy the previous image",))
+    with pytest.raises(TypeError):
+        Procedure(**common, irreversible="No, just redeploy.")
+    # and what it does publish is exactly the contract's own sentences
+    built = Procedure(**common)
+    assert built.irreversible == contract.statements()[0]
+    assert built.rollback == contract.statements()[1:]
+
+
+def test_an_answer_quoting_a_sentence_the_playbook_does_not_contain_is_caught():
+    """The evidence check is what stops an answer being justified by an invented quote."""
+    fabricated = playbook.RollbackFact(
+        playbook.WINDOW, playbook.WINDOW_SAME, "rollback may be performed at any time"
+    )
+    assert fabricated.evidence.lower() not in _playbook_prose("PR 6 cutover")
+    # every quote the shipped contracts actually use IS present — same check, opposite direction
+    for procedure in OPERATIONS.value("OPS.CUTOVER.PROCEDURES"):
+        prose = _playbook_prose(procedure.playbook.partition(", ")[2])
+        for fact in procedure.rollback_contract.facts:
+            if fact.evidence:
+                assert fact.evidence.lower() in prose
+
+
+def test_downgrade_classifier_separates_unconditional_refusal_from_conditional(tmp_path):
+    """The schema answer is only as good as this split, so it is tested on fixtures where the
+    right answer is known by construction, not just on the repo's own migrations."""
+    cases = {
+        "always.py": "def downgrade():\n    raise RuntimeError('no')\n",
+        "always_with_docstring.py": "def downgrade():\n    '''doc'''\n    raise RuntimeError('no')\n",
+        "conditional.py": "def downgrade():\n    if witnesses():\n        raise RuntimeError('no')\n"
+                          "    op.drop_column('t', 'c')\n",
+        "noop.py": "def downgrade():\n    pass\n",
+        "reverses.py": "def downgrade():\n    op.drop_column('t', 'c')\n",
+    }
+    for name, source in cases.items():
+        (tmp_path / name).write_text(source)
+    assert _downgrade_kind(tmp_path / "always.py") == "refuses_always"
+    assert _downgrade_kind(tmp_path / "always_with_docstring.py") == "refuses_always"
+    assert _downgrade_kind(tmp_path / "conditional.py") == "refuses_conditionally"
+    assert _downgrade_kind(tmp_path / "noop.py") == "no_op"
+    assert _downgrade_kind(tmp_path / "reverses.py") == "reverses"
+
+
+def test_the_repo_s_own_migrations_classify_as_the_contract_needs():
+    """The derivation feeding PR 7b-core's schema answer, read off the real tree."""
+    def kind(revision: str) -> str:
+        return _downgrade_kind(next((REPO / "alembic" / "versions").glob(f"{revision}_*.py")))
+
+    for revision in ("018", "019", "020", "021", "022"):
+        assert kind(revision) == "refuses_always", f"{revision} no longer refuses outright"
+    for revision in ("013", "014", "015", "016", "017"):
+        assert kind(revision) == "refuses_conditionally", f"{revision} changed shape"
+    assert kind("023") == "no_op"
+
+
+def test_schema_answer_is_recomputed_from_migrations_not_trusted():
+    """A procedure that understates its own boundary is caught by the migrations, not by prose.
+
+    The mutation has to be built as a whole legal contract — SCHEMA_STAYS forces the reversibility
+    answer away from the boundary too, which is the point of that invariant — and it still fails,
+    because the revisions it names refuse unconditionally.
+    """
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    assert _schema_answer_from_migrations(pr7b.migration_range) == playbook.SCHEMA_CONDITIONAL
+
+    understated = playbook.RollbackContract(_valid_facts())  # schema=STAYS, reversibility=mild
+    assert understated.answer(playbook.SCHEMA) == playbook.SCHEMA_STAYS
+    assert understated.answer(playbook.SCHEMA) != _schema_answer_from_migrations(
+        pr7b.migration_range
+    ), "a procedure could understate the 018 boundary and the migrations would not notice"
+
+    # and the derivation is total over the shapes the tree can present
+    assert _schema_answer_from_migrations(()) == playbook.SCHEMA_STAYS
+    # refuses only on evidence -> still CONDITIONAL, not a clean downgrade: whether it reverses
+    # depends on whether a witness exists, which is exactly what "conditional" means here
+    assert _schema_answer_from_migrations(("013", "014")) == playbook.SCHEMA_CONDITIONAL
+    assert _schema_answer_from_migrations(("018", "019")) == playbook.SCHEMA_FROZEN
+    assert _schema_answer_from_migrations(("001", "002")) == playbook.SCHEMA_DOWNGRADES
