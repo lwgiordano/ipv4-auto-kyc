@@ -17,6 +17,7 @@ tests, which meant an unverified claim was invisible — it simply had no test, 
 """
 
 import ast
+import dataclasses
 import hashlib
 import math
 import re
@@ -983,6 +984,54 @@ def _downgrade_kind(path: Path) -> str:
     return "reverses"
 
 
+def _revision_file(revision: str) -> Path:
+    matches = sorted((REPO / "alembic" / "versions").glob(f"{revision}_*.py"))
+    assert len(matches) == 1, f"revision {revision} matches {len(matches)} files"
+    return matches[0]
+
+
+def _forward_only_revisions_named_in(body: str) -> set[str]:
+    """Revisions the playbook body mentions whose downgrade refuses UNCONDITIONALLY.
+
+    This is what binds `migration_range` to something outside the author's control. Without it the
+    range is just another authored field, and understating it makes an understated schema answer
+    self-consistent: declare `migration_range=()` alongside `schema=stays` and the derivation
+    agrees, because it derives over the range it was handed. A playbook that names a forward-only
+    revision is describing a cutover that crosses it, so the two cannot disagree. Defeating this
+    means deleting `018` from DEPLOYMENT.md, which breaks the digest and the evidence quote.
+
+    Only UNCONDITIONAL refusers count. Bodies legitimately reference older revisions for context —
+    PR 6's names 003, 005, 010, 011 and 012, none of which are forward-only — and a cutover does
+    not install every revision it mentions.
+    """
+    versions = REPO / "alembic" / "versions"
+    forward_only = set()
+    for revision in set(re.findall(r"\b(0\d{2})\b", body)):
+        # A three-digit token is not necessarily a revision — 024 is named throughout and is
+        # unbuilt. Only numbers with a revision file behind them are classified.
+        if not sorted(versions.glob(f"{revision}_*.py")):
+            continue
+        if _downgrade_kind(_revision_file(revision)) == "refuses_always":
+            forward_only.add(revision)
+    return forward_only
+
+
+def _assert_range_covers_forward_only(procedure, body: str, section: str) -> None:
+    """The one check binding `migration_range` to something the author does not control.
+
+    Factored out so the RED test below runs THIS code against a tampered procedure rather than a
+    hand-copied restatement of it — a second copy of a guard is a guard that can pass while the
+    real one fails.
+    """
+    uncovered = sorted(_forward_only_revisions_named_in(body) - set(procedure.migration_range))
+    assert not uncovered, (
+        f"{procedure.name}: {section!r} warns about forward-only revision(s) {uncovered} that "
+        f"migration_range {procedure.migration_range or '(none)'} does not contain. A cutover "
+        "cannot warn about a revision it claims not to install — that combination understates the "
+        "boundary AND makes the schema answer derive over the understated range."
+    )
+
+
 def _schema_answer_from_migrations(revisions: tuple[str, ...]) -> str:
     """The schema answer a procedure MUST publish, computed from what its migrations actually do.
 
@@ -991,11 +1040,7 @@ def _schema_answer_from_migrations(revisions: tuple[str, ...]) -> str:
     """
     if not revisions:
         return playbook.SCHEMA_STAYS
-    kinds = {}
-    for revision in revisions:
-        matches = sorted((REPO / "alembic" / "versions").glob(f"{revision}_*.py"))
-        assert len(matches) == 1, f"revision {revision} matches {len(matches)} files"
-        kinds[revision] = _downgrade_kind(matches[0])
+    kinds = {revision: _downgrade_kind(_revision_file(revision)) for revision in revisions}
     values = set(kinds.values())
     if values <= {"reverses", "no_op"}:
         return playbook.SCHEMA_DOWNGRADES
@@ -1074,7 +1119,10 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
                 f"is not in the reviewed body of {section!r}. An answer must come from the "
                 "playbook it claims to summarize."
             )
-        # 4. INDEPENDENT: the schema answer is recomputed from the downgrade bodies.
+        # 4. The RANGE is bound to the playbook, so it cannot be understated to make an
+        #    understated schema answer agree with itself.
+        _assert_range_covers_forward_only(procedure, body, section)
+        # 5. INDEPENDENT: the schema answer is recomputed from the downgrade bodies.
         derived = _schema_answer_from_migrations(procedure.migration_range)
         assert contract.answer(playbook.SCHEMA) == derived, (
             f"{procedure.name} publishes schema={contract.answer(playbook.SCHEMA)!r} but its "
@@ -1439,3 +1487,61 @@ def test_schema_answer_is_recomputed_from_migrations_not_trusted():
     assert _schema_answer_from_migrations(("013", "014")) == playbook.SCHEMA_CONDITIONAL
     assert _schema_answer_from_migrations(("018", "019")) == playbook.SCHEMA_FROZEN
     assert _schema_answer_from_migrations(("001", "002")) == playbook.SCHEMA_DOWNGRADES
+
+
+def test_understating_the_migration_range_cannot_erase_the_boundary():
+    """The hole a first pass at this left open, and the reason `migration_range` is not enough on
+    its own.
+
+    Deriving the schema answer from a range the AUTHOR supplies only moves the trust one level
+    down. Declare `migration_range=()` and the derivation dutifully returns `stays`, which then
+    agrees with an understated `schema=stays`, which in turn permits `reversibility=with_conditions`
+    — and PR 7b-core's 018 boundary vanishes from the document with every invariant satisfied.
+
+    The fix is that the playbook body has to agree too. It names 018 and 022 as forward-only, and a
+    cutover cannot warn about a revision it claims not to install.
+    """
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    body = _deployment_section_body(pr7b.playbook.partition(", ")[2])
+
+    assert {"018", "022"} <= _forward_only_revisions_named_in(body)
+
+    # the erased-boundary contract is internally consistent — every invariant in playbook.py
+    # passes, and the derivation agrees with it once the range is empty
+    erased = playbook.RollbackContract(_valid_facts())
+    assert erased.answer(playbook.SCHEMA) == playbook.SCHEMA_STAYS
+    assert erased.answer(playbook.REVERSIBILITY) == playbook.REVERSIBLE_WITH_CONDITIONS
+    assert _schema_answer_from_migrations(()) == erased.answer(playbook.SCHEMA)
+
+    # the shipped procedure passes the bind; the understated one does not. Both run the SAME
+    # check the release runs, not a restatement of it.
+    _assert_range_covers_forward_only(pr7b, body, "PR 7b-core cutover")
+    understated = dataclasses.replace(pr7b, migration_range=(), rollback_contract=erased)
+    with pytest.raises(AssertionError, match="cannot warn about a revision it claims not to"):
+        _assert_range_covers_forward_only(understated, body, "PR 7b-core cutover")
+
+    # and dropping just one revision is caught — the check is per-revision, not a count
+    trimmed = dataclasses.replace(
+        pr7b, migration_range=tuple(r for r in pr7b.migration_range if r != "022"))
+    with pytest.raises(AssertionError, match=r"\['022'\]"):
+        _assert_range_covers_forward_only(trimmed, body, "PR 7b-core cutover")
+
+
+def test_older_revisions_a_playbook_merely_references_are_not_forced_into_the_range():
+    """The bind has to distinguish 'this cutover installs it' from 'this section mentions it'.
+
+    PR 6's body references 003, 005, 010, 011 and 012 for context while installing nothing — its
+    cutover is the flag flip. Requiring every mentioned revision to be in the range would make the
+    correct empty range fail, so only UNCONDITIONAL refusers count.
+    """
+    pr6 = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+               if p.name == "Bundle-pinning activation")
+    body = _deployment_section_body(pr6.playbook.partition(", ")[2])
+    mentioned = set(re.findall(r"\b(0\d{2})\b", body))
+    assert {"003", "005", "010", "011", "012"} <= mentioned, sorted(mentioned)
+    assert not _forward_only_revisions_named_in(body), (
+        "PR 6 references older revisions for context; none of them is forward-only, so its empty "
+        "migration_range is consistent with its playbook"
+    )
+    assert pr6.migration_range == ()
