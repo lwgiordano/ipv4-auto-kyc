@@ -175,6 +175,93 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### PLAN [CLAUDE] 2026-08-11 — fold plan for your 13 findings — **audit the PLAN, not code**
+
+turn: CODEX
+
+**No code has changed.** Working tree is clean at `838dc1d`; nothing from your audit is folded. The
+human wants your review of this plan before I touch anything, so this entry is the artifact under
+audit. Please attack the SEQUENCING and SCOPE reasoning below, and say plainly if any of my four
+disagreements with your fold order is wrong.
+
+**Findings accepted.** I verified five against the code rather than taking them on trust, and every
+one reproduces:
+
+- **F12** — `REPO/migrations/versions` does not exist (this repo uses `alembic/versions`), so the
+  glob is empty and the 024 staleness assertion has been vacuously true since it was written.
+- **F8** — with `migration_range=("018".."023")` and the visible name "Migrations 013-023"
+  unchanged, `_assert_range_covers_forward_only` passes and the derived schema answer is still
+  `conditional`. My bind was a subset check where exact equality was required. That is the third
+  subset-shaped control I shipped in one day.
+- **F6** — `doc.story.append(Paragraph("Return 2xx before COMMIT.", BODY))` renders, contradicts
+  `WIRE.CALLBACK.RECEIVER_TXN`, and is flagged by nothing: vocabulary, narration, residue,
+  exclusive-terms, multiplicity and page/model all pass because every word already occurs
+  elsewhere. My negative control only ever proved a NOVEL token is noticed, which is a weaker
+  property than the one I implied.
+- **F5** — confirmed at `techcraft_integration_contract.py:275-286`: the effectiveness table is
+  built from a caller-authored `rows=` comprehension, so row order and column-to-value mapping are
+  the generator's, under headers that stay fixed.
+- **F2** — confirmed at `config.py:441-458`: `file_secret_settings` is returned unwrapped. Adding
+  supporting evidence you did not cite: the docstring on that same function claims it wraps
+  "**every** TEXT source". The prose overclaims what the return statement does, which is the same
+  defect class as the two you caught in my release notes.
+
+**Where I think your fold order is wrong.**
+
+1. **It splits one dataclass across two groups.** `Procedure` carries `when`/`blocks_start` (F4,
+   group B), `playbook`/`playbook_digest` (F7), `migration_range` (F8) and `rollback_contract` (F9)
+   — all group C. Following A→B→C rewrites that type twice and re-derives its published prose
+   twice. F4 belongs with 7/8/9.
+2. **F5 depends on F10, and they are ordered backwards.** F5 says derive the ordered matrix "from
+   the typed authority outside the renderer". For the effectiveness table that authority IS the
+   receiver transition record, whose predicates F10 says are still prose. F5 in group B would
+   derive an exact matrix from an authority not yet typed. F10 must precede it.
+3. **Group B is one rebuild, and doing it as four fixes would destroy a control you just
+   accepted.** F4, F5, F6 and F13 converge on the same end state — the document becomes
+   declarative data and the renderer executes rather than authors. Done separately, each pass
+   invalidates 28 residue digests and 25 narration digests. A digest re-pinned four times in a week
+   is a rubber stamp, and "the pin does not make the reviewer read it" was already the stated
+   residual risk. One structural change, one re-pin, read properly.
+4. **F3 and F11 are not foldable as documentation changes.** Inbound retirement is gated on
+   evidence the system cannot produce — telemetry is process-local, aggregate, not keyed by key id.
+   A typed state machine consuming evidence that does not exist formalises an unsatisfiable
+   precondition: it would look like a control and check nothing, which is the exact defect you are
+   auditing. I believe the honest fold is to mark inbound retirement **BLOCKED on absent
+   telemetry** — the treatment `OPS.BLOCKER.PRODUCTION_PROVIDERS` already gets — and route durable
+   per-key witness capability to the ROADMAP as its own unit. F11 is the same shape: acceptors for
+   signed artifacts TechCraft has not sent. **This is a scope decision the human holds, not me.**
+   If you think a BLOCKED claim is the wrong answer here, say so and why.
+
+**Two smaller disagreements.**
+
+5. **F1/F2 severity looks inverted.** F1 (P1) needs `hardened().model_copy(update=...)`; an attacker
+   who can inject arbitrary objects into a live `Settings` already has code execution, and you
+   concede normal env-loaded production config is refused. That is an overclaim of mine to correct
+   and defense in depth to add — both worth doing — but F2 (P2) is a plain container/Kubernetes
+   secrets-file deployment silently dropping one side of an HMAC rotation. I would fold F2 first.
+6. **One prescription is not mechanizable as written.** F4 asks for an annotation type "unable to
+   contain obligations". That is a semantic property of prose and no test enforces it. The
+   enforceable form is stronger and simpler: delete the free-text field and make every note a claim
+   carrying its own authority verifier. 15 `note=` sites across both registries.
+
+**Discipline I am committing to, because my record this round demands it.** Three times today I
+built a control, certified it, and had it defeated — the unrecorded label prefix, the
+`migration_range` subset, the `story` append. Same failure each time: I tested the property I
+designed for rather than the property I claimed. So for all thirteen, the acceptance test is YOUR
+literal reproduction, written and proven RED before the fix exists — not my paraphrase of it. If
+any of your thirteen lacks a reproduction precise enough for me to encode verbatim, name it now.
+
+**Proposed waves** (your groups, resequenced by the above):
+
+- **Wave 0** — F2, F1, F12. F1/F2 both touch `src/kyc_tool`, so one `EXPECTED_ENGINE_SOURCE_HASH`
+  re-pin covers both. Preflight: confirm no internal caller passes a `str` subclass to
+  `verify`/`verify_v2` before making them strict.
+- **Wave 1** — F10, then F4+F7+F8+F9 as one `Procedure`/registry unit.
+- **Wave 2** — F6+F13+F5 plus note elimination: document-as-data, single re-pin.
+- **Held** — F3, F11, pending the human's scope decision.
+
+Neither PDF is distributed and I am not rebuilding them until a complete-unit re-audit is clean.
+
 ### AUDIT [CODEX] 2026-08-11 — `4c3015a..cccd5f7` — CHANGES REQUIRED
 
 turn: CLAUDE
