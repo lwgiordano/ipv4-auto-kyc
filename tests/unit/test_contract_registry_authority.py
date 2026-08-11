@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from docs.contracts import ClaimState, playbook
 from docs.contracts.operations import OPERATIONS, Procedure
 from docs.contracts.signing_example import sign as example_sign
@@ -599,6 +601,47 @@ def _interim_rule_makes_a_manual_approval_authoritative():
     assert "can arrive after it" in text
 
 
+def _alembic_script(script_location=None) -> ScriptDirectory:
+    """Alembic's own view of the revision graph, not a directory glob.
+
+    The previous guard globbed `REPO/migrations/versions` — a path this repo does not have, since
+    it uses `alembic/versions` (re-audit `4c3015a..cccd5f7` F12). The set was therefore always
+    empty and the staleness assertion was vacuously true from the day it was written: adding a real
+    `024_*.py` left the PENDING verifier green. Reading through `ScriptDirectory` means a layout
+    change cannot silently disarm the guard, and it sees branch structure a glob cannot.
+    """
+    cfg = Config(str(REPO / "alembic.ini"))
+    cfg.set_main_option("script_location", str(script_location or (REPO / "alembic")))
+    return ScriptDirectory.from_config(cfg)
+
+
+def assert_024_unbuilt(script: ScriptDirectory, callback_model) -> None:
+    """PENDING means 024 exists in NEITHER authority, and the two must agree.
+
+    A claim that publishes requirements instead of a schema is only honest while the thing is
+    genuinely unbuilt, and 024 can become half-built from either side: the migration that installs
+    the ordering schema, or `decision_sequence` on the callback — the post-024 ordering authority
+    per ROADMAP D1. Checking one lets the other land silently, so both are checked and either alone
+    is a failure. A field without its revision is not "nearly pending"; it is an undeclared partial
+    build that an integrator could discover in the wire before the document admits it exists.
+    """
+    heads = script.get_heads()
+    assert len(heads) == 1, (
+        f"the revision graph has {len(heads)} heads ({sorted(heads)}). 024 landing on a branch is "
+        "exactly how it arrives without moving the single head this claim is checked against."
+    )
+    revisions = {revision.revision for revision in script.walk_revisions()}
+    built = sorted(r for r in revisions if r.startswith("024"))
+    assert not built, f"revision(s) {built} exist; WIRE.ORDERING.BOOTSTRAP_024 is stale"
+
+    fields = set(getattr(callback_model, "model_fields", {}))
+    assert "decision_sequence" not in fields, (
+        "the callback model publishes `decision_sequence` — the post-024 ordering authority — "
+        "while the claim still says 024 is NOT BUILT. Either the revision is missing and the wire "
+        "is ahead of the schema, or the claim is stale; both are failures."
+    )
+
+
 @verifies("WIRE.ORDERING.BOOTSTRAP_024")
 def _bootstrap_is_pending_and_publishes_no_schema():
     """024 is designed but unbuilt. The document must publish requirements, never a draft schema
@@ -613,8 +656,7 @@ def _bootstrap_is_pending_and_publishes_no_schema():
         assert requirement in claim.value, f"the 024 requirements no longer mention {requirement!r}"
     for schema_ish in ("{", "}", "schema_version", "latest_run_id", "high_water_run_id"):
         assert schema_ish not in claim.value, "the pending claim is publishing a schema again"
-    revisions = {p.stem for p in (REPO / "migrations" / "versions").glob("*.py")}
-    assert not any(r.startswith("024") for r in revisions), "024 exists; the claim is stale"
+    assert_024_unbuilt(_alembic_script(), DecisionCallback)
 
 
 @verifies("WIRE.ORDERING.SEQUENCE_DOMAINS")
@@ -1545,3 +1587,78 @@ def test_older_revisions_a_playbook_merely_references_are_not_forced_into_the_ra
         "migration_range is consistent with its playbook"
     )
     assert pr6.migration_range == ()
+
+
+# ── F12: the 024 staleness guard, proven to bite ───────────────────────────────────────────────
+#
+# Codex's four reproductions, each run through the SAME helper the release verifier calls. The old
+# guard globbed a directory that does not exist, so it passed all four.
+
+
+def _fake_script(tmp_path, revisions: dict) -> ScriptDirectory:
+    """A throwaway Alembic tree. `revisions` maps revision id -> down_revision (None for base)."""
+    versions = tmp_path / "versions"
+    versions.mkdir(parents=True, exist_ok=True)
+    for revision, down in revisions.items():
+        down_literal = "None" if down is None else f'"{down}"'
+        (versions / f"{revision}_probe.py").write_text(
+            f'"""probe {revision}"""\nrevision = "{revision}"\n'
+            f"down_revision = {down_literal}\nbranch_labels = None\ndepends_on = None\n"
+            "def upgrade():\n    pass\n\n\ndef downgrade():\n    pass\n"
+        )
+    return _alembic_script(tmp_path)
+
+
+class _Model:
+    """Stand-in for the callback model; only `model_fields` is read."""
+
+    def __init__(self, *names):
+        self.model_fields = dict.fromkeys(names)
+
+
+def test_the_shipped_tree_is_genuinely_pending():
+    """Baseline. Without this, every rejection below could be the helper failing on anything."""
+    assert_024_unbuilt(_alembic_script(), DecisionCallback)
+
+
+def test_024_present_while_pending_is_caught(tmp_path):
+    script = _fake_script(tmp_path, {"022": None, "023": "022", "024": "023"})
+    with pytest.raises(AssertionError, match="is stale"):
+        assert_024_unbuilt(script, _Model("case_id"))
+
+
+def test_024_on_a_multiple_head_branch_is_caught(tmp_path):
+    """The interesting shape: 024 lands beside the existing head rather than after it, so a check
+    that only followed the single head would walk straight past it."""
+    script = _fake_script(tmp_path, {"022": None, "023": "022", "024": "022"})
+    with pytest.raises(AssertionError, match="heads"):
+        assert_024_unbuilt(script, _Model("case_id"))
+
+
+def test_024_present_without_the_callback_field_is_caught(tmp_path):
+    """Half-built from the schema side: the revision exists, the wire has not caught up."""
+    script = _fake_script(tmp_path, {"023": None, "024": "023"})
+    with pytest.raises(AssertionError, match="is stale"):
+        assert_024_unbuilt(script, _Model("case_id", "event_sequence"))
+
+
+def test_the_callback_field_present_while_the_revision_is_absent_is_caught(tmp_path):
+    """Half-built from the wire side, and the direction the old guard could never have seen: the
+    integrator meets `decision_sequence` on the callback while the document says NOT BUILT."""
+    script = _fake_script(tmp_path, {"022": None, "023": "022"})
+    with pytest.raises(AssertionError, match="decision_sequence"):
+        assert_024_unbuilt(script, _Model("case_id", "decision_sequence"))
+
+
+def test_the_guard_reads_alembic_not_a_directory_path():
+    """The defect itself: the old check globbed `REPO/migrations/versions`, which does not exist,
+    so its revision set was empty no matter what was on disk. Pin the layout it actually uses."""
+    assert not (REPO / "migrations").exists(), (
+        "a `migrations/` tree now exists; the guard reads alembic.ini's script_location, so "
+        "confirm which one Alembic is configured to use before changing anything"
+    )
+    assert (REPO / "alembic" / "versions").is_dir()
+    assert {r.revision for r in _alembic_script().walk_revisions()}, (
+        "the script directory resolved to an empty revision set — the same vacuous-pass shape "
+        "this test exists to prevent"
+    )
