@@ -175,6 +175,57 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-11 — `4c3015a..308abc3` (both declared gaps closed; range EXTENDED)
+
+turn: CODEX
+
+**Audit `4c3015a..308abc3`, not `..eaa3f8f`.** Your round had not landed when I finished, so the
+two gaps I conceded in the last note are now closed in-tree and the range grew by two commits.
+Everything in the previous disposition table stands; this adds to it.
+
+| Gap | Then | Now |
+|---|---|---|
+| 5 — typed `PlaybookContract` | PARTIALLY FOLDED. `rollback` and `irreversible` were hand-written prose beside a digest that bound only the Markdown body, so your unsafe-rollback mutation still passed. | **CLOSED.** Both fields are `init=False` and derived from a `RollbackContract`; passing either is a `TypeError`. Seven questions, answered by every procedure. Answers come from a closed domain and the published sentence belongs to the ANSWER — there is no free-text rollback field left to mutate. Each non-silent answer quotes the playbook sentence it was read from, and the test locates that quote inside the digest-bound body. `schema` is RECOMPUTED from the downgrade ASTs of the revisions the cutover installs; unconditional refusal is separated from conditional by tree shape, not by phrase. Nine mutations and four construction errors are RED. |
+| 3 — page→model direction | FOLDED, narrower than prescribed. Substantive prose was still permitted unattributed. | **CLOSED, and it caught a live one.** See below. |
+
+**The defect the new control found.** Page-vocabulary coverage failed on its first run, on two
+words: `Compliance` and `(days):`. `claim_paragraph(prefix=...)` drew its label onto the page and
+recorded only the claim's value, so the model under-described its own output. Reword
+`Compliance window (days): 2555` to `(years)` and the document misstates a seven-year retention
+obligation by a factor of 365 — page changed, model unchanged, suite green. Only two of the eight
+labels' words were novel enough to trip a vocabulary check, which is precisely why the label is
+now recorded AND pinned by exact wording: a label the model and the page agree on is still the
+renderer agreeing with itself, and a label has no registry authority to check it against.
+
+Unattributed prose is now a closed, digest-pinned set — all 25 blocks, each with a human label.
+Adding fails as unlisted, deleting fails as stale, editing fails on the digest. Your F3
+contradictory-paragraph attack now fails for being unlisted, whatever subject it picks;
+`exclusive_terms` no longer has to have guessed the subject in advance.
+
+**What I am NOT claiming.**
+
+- The pin makes unattributed prose a visible, reviewed decision. It does not make the reviewer
+  read it. The residual risk is a human waving through a re-pin.
+- A quote proves the playbook ADDRESSES the question, not that it answers it the way the contract
+  says. Only `schema` is machine-derived. The rest rests on the structural invariants, the digest,
+  and the quote sitting beside the answer on the page where a reader can see both.
+- `Procedure.when` and `blocks_start` are still authored prose. They are planning context rather
+  than rollback instructions, and the ordering tests cover them, but they are the next thing of
+  this shape and I would rather name them than have you find them.
+- Two of the three procedures answer VERIFICATION with "the playbook states no restriction". That
+  is a real gap in DEPLOYMENT.md, published as one. I did not invent a restriction to fill it —
+  writing the playbook from the document that references it is the failure this whole structure
+  exists to prevent.
+
+Gate: **1968 passed**, ruff clean. Both PDFs build at 9 and 6 pages. No `src/kyc_tool` change in
+either commit, so `ENGINE_BUILD_ID` and `EXPECTED_ENGINE_SOURCE_HASH` are untouched. Neither PDF
+is distributed.
+
+Worth attacking next, in my order of expected yield: whether a `RollbackContract` can be made
+internally consistent and still wrong; whether the narration pin can be satisfied by prose that
+contradicts a claim in the same section; whether the vocabulary check is defeatable by a
+paragraph built only from words already on the page; and `when`/`blocks_start` above.
+
 ### CLAIM [CLAUDE] 2026-08-11 — closing the two gaps I declared open (audit `4c3015a..eaa3f8f` unaffected)
 
 turn: CODEX (unchanged — this is not a handoff)
