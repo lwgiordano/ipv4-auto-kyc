@@ -471,55 +471,148 @@ def test_a_clean_secrets_directory_file_still_round_trips(tmp_path, monkeypatch)
     assert loaded.hmac_inbound_extra_keys == {"old": "a" * 34}
 
 
-def test_wrapping_the_secrets_source_does_not_change_precedence(tmp_path, monkeypatch):
-    """Wrapping must not reorder sources. Patching a source's own decode path cannot change which
-    source wins, and this pins that it did not.
+def test_an_empty_higher_precedence_map_REVOKES_a_lower_source_key(tmp_path, monkeypatch):
+    """Gate finding 3, and a correction of what this file previously ASSERTED.
 
-    Precedence for a complex field is PER KEY, not per source: pydantic-settings merges dict fields
-    across sources, so `init` beating the secrets file on a shared key leaves the file's other keys
-    present. That is pre-existing behaviour — the already-wrapped env source merges identically —
-    not something the wrapper introduced. It is asserted here rather than left implicit because a
-    stale secrets file can therefore keep contributing a retired key id alongside an explicit one.
+    Pydantic deep-merges dict fields BETWEEN sources. An earlier version of this test recorded that
+    behaviour as expected and called it operationally interesting. It is not merely interesting: for
+    a CREDENTIAL ROTATION MAP it means revocation silently fails. An operator who sets
+    `KYC_HMAC_INBOUND_EXTRA_KEYS={}` to retire a key gets it back from a lower-precedence secrets
+    file, and `_inbound_secret` keeps authenticating requests signed with it. I found the merge,
+    documented it, and blessed it; the auditor was right that an empty higher-precedence map must be
+    able to revoke.
+
+    So this field has WHOLE-FIELD REPLACEMENT semantics: the highest-precedence source that defines
+    it wins outright, and lower sources contribute nothing to it.
     """
+    from kyc_tool.api.auth import _inbound_secret
+
     monkeypatch.delenv("KYC_HMAC_INBOUND_EXTRA_KEYS", raising=False)
     secrets = tmp_path / "secrets"
     secrets.mkdir()
     (secrets / "KYC_HMAC_INBOUND_EXTRA_KEYS").write_text(SINGLE_JSON)  # {"old": "a"*34}
 
-    # same key: the higher-precedence source wins
+    revoked = Settings(hmac_inbound_extra_keys={}, _secrets_dir=str(secrets), _env_file=None)
+    assert revoked.hmac_inbound_extra_keys == {}, "the retired key came back from a lower source"
+    assert _inbound_secret(revoked, "old") == "", "a retired key still resolves to a secret"
+
+
+def test_an_empty_env_map_revokes_a_secrets_file_key(tmp_path, monkeypatch):
+    """The same revocation through the env source, which is how an operator would actually do it."""
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "KYC_HMAC_INBOUND_EXTRA_KEYS").write_text(SINGLE_JSON)
+    monkeypatch.setenv("KYC_HMAC_INBOUND_EXTRA_KEYS", "{}")
+    loaded = Settings(_secrets_dir=str(secrets), _env_file=None)
+    assert loaded.hmac_inbound_extra_keys == {}
+
+
+def test_a_higher_precedence_map_replaces_rather_than_merges(tmp_path, monkeypatch):
+    """New-only at the top must not resurrect the old key underneath it — the exact shape of a
+    completed rotation."""
+    monkeypatch.delenv("KYC_HMAC_INBOUND_EXTRA_KEYS", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"KYC_HMAC_INBOUND_EXTRA_KEYS={SINGLE_JSON}\n")  # {"old": ...}
+    loaded = Settings(hmac_inbound_extra_keys={"new": "n" * 34}, _env_file=str(env_file))
+    assert loaded.hmac_inbound_extra_keys == {"new": "n" * 34}
+
+
+def test_a_same_key_override_still_wins_and_a_lower_source_still_loads(tmp_path, monkeypatch):
+    """Guard the guard: replacement must not become "ignore lower sources entirely". With nothing
+    defined higher, the secrets file is still the value."""
+    monkeypatch.delenv("KYC_HMAC_INBOUND_EXTRA_KEYS", raising=False)
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "KYC_HMAC_INBOUND_EXTRA_KEYS").write_text(SINGLE_JSON)
+    assert Settings(_secrets_dir=str(secrets),
+                    _env_file=None).hmac_inbound_extra_keys == {"old": "a" * 34}
     same = Settings(hmac_inbound_extra_keys={"old": "z" * 34},
                     _secrets_dir=str(secrets), _env_file=None)
     assert same.hmac_inbound_extra_keys == {"old": "z" * 34}
 
-    # different key: the maps merge, and the file's entry survives
-    merged = Settings(hmac_inbound_extra_keys={"explicit": "z" * 34},
+
+def test_rate_limits_keep_their_merge_semantics(tmp_path, monkeypatch):
+    """Replacement is scoped to the credential map. `adapter_rate_limits` is not a revocation
+    surface, and changing its semantics was explicitly out of scope."""
+    monkeypatch.delenv("KYC_ADAPTER_RATE_LIMITS", raising=False)
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "KYC_ADAPTER_RATE_LIMITS").write_text('{"rir_rdap": 1.0}')
+    merged = Settings(adapter_rate_limits={"gleif": 2.0},
                       _secrets_dir=str(secrets), _env_file=None)
-    assert merged.hmac_inbound_extra_keys == {"explicit": "z" * 34, "old": "a" * 34}
+    assert merged.adapter_rate_limits == {"gleif": 2.0, "rir_rdap": 1.0}
 
 
-def test_the_duplicate_checked_field_set_is_closed_over_every_complex_field():
-    """The decoder is scoped to a DECLARED set rather than "any value starting with `{`", which is
-    what Codex asked for. Scoping it invites the opposite defect — a complex field added later and
-    silently exempt — so the set is required to equal the model's complex fields exactly.
+def test_every_mapping_shaped_field_has_a_declared_duplicate_policy():
+    """The closure claim, now actually closed (gate finding 7).
 
-    `adapter_rate_limits` is in it for the same reason as the HMAC map: a repeated key drops a
-    throttle, and last-key-wins hides which one.
+    The first version detected only annotations whose DIRECT `__origin__` was `dict` or `list`, so a
+    synthetic `dict[str, str] | None` satisfied the guard while sitting outside the checked set —
+    the silently-exempt hole that scoping the decoder was meant to avoid. Discovery is now recursive
+    through `get_origin`/`get_args`, and every mapping-shaped field must be either checked or
+    exempt-with-a-reason.
     """
-    from kyc_tool.config import DUPLICATE_CHECKED_FIELDS
+    from kyc_tool.config import (
+        DUPLICATE_CHECKED_FIELDS,
+        DUPLICATE_EXEMPT_FIELDS,
+        mapping_shaped_fields,
+    )
 
-    complex_fields = {
-        name for name, field in Settings.model_fields.items()
-        if getattr(field.annotation, "__origin__", None) in (dict, list)
-    }
-    assert complex_fields == set(DUPLICATE_CHECKED_FIELDS), (
-        "a complex settings field is not duplicate-checked: "
-        f"{sorted(complex_fields ^ set(DUPLICATE_CHECKED_FIELDS))}"
+    classified = set(DUPLICATE_CHECKED_FIELDS) | set(DUPLICATE_EXEMPT_FIELDS)
+    unclassified = mapping_shaped_fields(Settings) - classified
+    assert not unclassified, (
+        f"mapping-shaped settings field(s) with no duplicate policy: {sorted(unclassified)}. "
+        "Add them to DUPLICATE_CHECKED_FIELDS, or to DUPLICATE_EXEMPT_FIELDS with a reason."
+    )
+    stale = classified - mapping_shaped_fields(Settings)
+    assert not stale, f"policy declared for non-mapping field(s): {sorted(stale)}"
+
+
+@pytest.mark.parametrize("annotation,expected", [
+    ("dict[str, str]", True),
+    ("dict[str, str] | None", True),
+    ("Optional[dict[str, str]]", True),
+    ("Annotated[dict[str, str], 'meta']", True),
+    ("Annotated[dict[str, str] | None, 'meta']", True),
+    ("dict[str, dict[str, int]]", True),
+    ("str | int | dict[str, str]", True),
+    ("list[str]", False),
+    ("list[str] | None", False),
+    ("str", False),
+    ("int | None", False),
+])
+def test_mapping_discovery_sees_through_optional_annotated_and_unions(annotation, expected):
+    """Codex's synthetic specimens, plus the negative half. Lists must NOT be swept in: duplicate
+    detection is a policy about repeated OBJECT KEYS, and a JSON array has none."""
+    from typing import Annotated, Optional  # noqa: F401 — referenced by eval'd annotations
+
+    from kyc_tool.config import _carries_mapping
+
+    assert _carries_mapping(eval(annotation)) is expected
+
+
+def test_a_synthetic_optional_mapping_field_would_fail_the_closure_guard():
+    """The guard must FAIL for an undeclared mapping, not merely pass for the current two."""
+    from kyc_tool.config import (
+        DUPLICATE_CHECKED_FIELDS,
+        DUPLICATE_EXEMPT_FIELDS,
+        mapping_shaped_fields,
+    )
+
+    class _Future(Settings):
+        future_map: dict[str, str] | None = None
+
+    discovered = mapping_shaped_fields(_Future)
+    assert "future_map" in discovered, "recursive discovery missed an Optional mapping"
+    classified = set(DUPLICATE_CHECKED_FIELDS) | set(DUPLICATE_EXEMPT_FIELDS)
+    assert discovered - classified == {"future_map"}, (
+        "the closure guard would not have forced a decision on this field"
     )
 
 
 def test_a_duplicate_key_in_the_rate_limit_map_is_refused(monkeypatch):
     """The second complex field, through the same decoder."""
-    monkeypatch.setenv("KYC_ADAPTER_RATE_LIMITS", '{"rdap": 1.0, "rdap": 2.0}')
+    monkeypatch.setenv("KYC_ADAPTER_RATE_LIMITS", '{"rir_rdap": 1.0, "rir_rdap": 2.0}')
     with pytest.raises(Exception) as excinfo:  # noqa: B017
         Settings()
     assert "repeats key" in str(excinfo.value.__cause__)

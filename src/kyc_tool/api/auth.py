@@ -152,8 +152,43 @@ def _record_v1(session_factory) -> None:
         raise HTTPException(status_code=503, detail="v1 witness unavailable") from exc
 
 
+def _authentication_is_disabled(settings: Settings) -> bool:
+    """ONLY exact built-in `True` disables authentication.
+
+    Gate finding 1. This line was `if settings.auth_disabled: return` — Python truthiness on a
+    value that, under the same injected-`Settings` threat model the rest of this module defends
+    against, may be `1`, `{"x": 1}`, or the string `"false"`. All three are truthy, so all three
+    ACCEPTED AN UNSIGNED REQUEST. Wave 0 hardened every key, secret and skew field on the
+    verification path and left untouched the boolean deciding whether that path runs at all, which
+    is strictly worse: those failures refused service, this one grants it.
+
+    `"false"` is the specimen worth remembering — truthy in Python, and it means the opposite of
+    what it says.
+    """
+    return settings.auth_disabled is True
+
+
+def _open_surface_selected(value) -> bool:
+    """ONLY exact built-in `False` selects a deliberately-open path.
+
+    The mirror of the above, for values where FALSE is the permissive answer. A malformed falsey
+    value (`0`, `""`, `{}`, `None`) must not open a surface, and a hostile `__bool__` must not run.
+    Both directions live here so the three gates cannot drift apart.
+    """
+    return value is False
+
+
+def _exact_str(value) -> str:
+    """`value` if it is an exact built-in `str`, else `''` — never the object itself.
+
+    Returning a sentinel rather than the input means no caller can accidentally propagate a
+    subclass past the gate and dispatch its `startswith`/`__eq__` later.
+    """
+    return value if type(value) is str else ""
+
+
 def require_valid_signature(settings: Settings, request, body: bytes) -> None:
-    if settings.auth_disabled:
+    if _authentication_is_disabled(settings):
         return
     headers = request.headers
     session_factory = _session_factory(request)
@@ -225,7 +260,10 @@ def require_read_access(settings: Settings, request, body: bytes = b"") -> None:
     read_auth_required is set — which validate_for_production() forces in
     production — the caller must present a valid platform signature. Reads carry
     an empty v2 slot (no idempotency key)."""
-    if not settings.read_auth_required:
+    # Exactly `False` opens this. A malformed falsey value is not the documented dev state, and
+    # opening a read surface on `0`/`""`/`{}`/`None` would be an authorization decision taken by
+    # accident (gate finding 1).
+    if _open_surface_selected(settings.read_auth_required):
         return
     require_valid_signature(settings, request, body)
 
@@ -237,12 +275,19 @@ def require_admin(settings: Settings, headers) -> None:
     token is configured the console stays open — production forbids
     ui_enabled without a token (validate_for_production), so an empty token can
     only mean dev/test, matching the console's prior local trust model."""
-    if settings.auth_disabled:
+    if _authentication_is_disabled(settings):
         return
+    # Gate finding 1. This endpoint MUTATES, so a malformed token must never resolve to "open".
+    # `if not token` opened the console for an int, a dict, `None`, and anything with a hostile
+    # `__bool__`; only an EXACT empty string is the documented unconfigured dev state. A non-str
+    # token is a misconfiguration, and the safe reading of a misconfigured credential is "deny",
+    # not "no credential required".
     token = settings.ui_admin_token
-    if not token:
+    if type(token) is not str:
+        raise HTTPException(status_code=401, detail="invalid or missing admin credential")
+    if token == "":
         return
-    header = headers.get("Authorization", "")
+    header = _exact_str(headers.get("Authorization", ""))
     provided = header[7:] if header.startswith("Bearer ") else ""
     if not hmac.compare_digest(provided, token):
         raise HTTPException(status_code=401, detail="invalid or missing admin credential")

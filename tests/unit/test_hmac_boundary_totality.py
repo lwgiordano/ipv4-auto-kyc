@@ -24,7 +24,7 @@ import pytest
 from fastapi import HTTPException
 
 from kyc_tool import security
-from kyc_tool.api import auth
+from kyc_tool.api import auth, hmac_witness
 
 from .test_production_config import hardened
 
@@ -211,28 +211,137 @@ def test_a_hostile_presented_key_id_is_gated_before_it_is_compared():
     assert auth._inbound_secret(settings, None) == ""
 
 
-V1_POISON = [
+# ── v1: two DIFFERENT outcome classes, named honestly (gate finding 4) ────────────────────────
+#
+# The previous single test was called `..._is_401_not_500` and then accepted either a 401 or no
+# exception at all, which let two genuinely different policies hide behind one name. They are split
+# here because they answer different questions.
+#
+#   * A malformed VERIFICATION input (the legacy secret) means we cannot check the signature. There
+#     is no honest answer but 401.
+#   * A malformed RETIREMENT input (sunset, observation window) means we cannot prove v1 is retired.
+#     ADR-003 is explicit that a scheduled date takes effect only once the witness is green, so
+#     "cannot read the evidence" is definitionally not proof, and a VALID v1 request is accepted.
+#
+# That second behaviour is a deliberate, human-approved policy, not an accident. The reasoning: the
+# request is cryptographically valid, so accepting it is not an authentication failure; the only way
+# to reach a malformed value at request time is injecting an object into a live Settings, which
+# means code execution — an adversary there has no need to extend v1's life; `production_config_
+# violations` refuses all of these at BOOT, so a normally-loaded config cannot reach the state at
+# all; and failing closed would turn a config typo or a DB blip into an outage on the platform's
+# live traffic, which is exactly what ADR-003 exists to prevent.
+
+V1_VERIFICATION_POISON = [
     ("legacy secret is an int", {"platform_hmac_secret": 12345}),
     ("legacy secret is hostile", {"platform_hmac_secret": HostileStr(SECRET)}),
     ("legacy secret is a dict", {"platform_hmac_secret": {"a": 1}}),
-    ("sunset is hostile", {"hmac_v1_inbound_sunset_at": HostileStr("2020-01-01T00:00:00Z")}),
-    ("sunset is an int", {"hmac_v1_inbound_sunset_at": 20200101}),
-    ("observation window is hostile", {"hmac_v1_observation_window_days": HostileStr("7")}),
 ]
 
 
-@pytest.mark.parametrize("label,update", V1_POISON, ids=[c[0] for c in V1_POISON])
-def test_a_valid_v1_signature_reaching_hostile_config_is_401_not_500(label, update):
-    """The nastiest of the four: the request is CRYPTOGRAPHICALLY VALID, so it is past the point
-    where a caller could be dismissed as unauthenticated, and the poisoned value is consulted
-    afterwards. A raw exception here is a 500 on an authenticated request."""
+@pytest.mark.parametrize("label,update", V1_VERIFICATION_POISON,
+                         ids=[c[0] for c in V1_VERIFICATION_POISON])
+def test_a_malformed_v1_verification_input_is_401(label, update):
+    """Cannot verify => refuse. No availability argument applies: without a usable secret there is
+    no signature check to be lenient about."""
     settings = hardened(platform_hmac_secret=SECRET).model_copy(update=update)
-    try:
+    with pytest.raises(HTTPException) as excinfo:
         auth.require_valid_signature(settings, _Req(_v1_headers()), b"{}")
-    except HTTPException as exc:
-        assert exc.status_code == 401, exc.detail
-    # Reaching here means the request was ACCEPTED, which is correct for a valid v1 signature whose
-    # poisoned sunset simply cannot be read as "passed". What must never happen is anything else.
+    assert excinfo.value.status_code == 401, excinfo.value.detail
+
+
+class _TrivialSession:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def commit(self):
+        return None
+
+
+@pytest.fixture
+def witness(monkeypatch):
+    """Stub only the DATABASE layer, so the real `_inbound_v1_zero`/`_record_v1` logic runs.
+
+    Recording the arguments is the point: gate finding 4 was that the observation-window specimen
+    passed `session_factory=None`, so `_inbound_v1_zero` returned before consulting the poisoned
+    value and the test proved nothing. Capturing what the witness was CALLED WITH turns "the value
+    is consumed" from an assumption into an assertion.
+    """
+    seen = {"windows": [], "recorded": 0, "zero": True}
+
+    def fake_zero(session, window_days, now):
+        seen["windows"].append(window_days)
+        return seen["zero"]
+
+    def fake_record(session):
+        seen["recorded"] += 1
+
+    monkeypatch.setattr(hmac_witness, "inbound_v1_zero", fake_zero)
+    monkeypatch.setattr(hmac_witness, "record_v1_accepted", fake_record)
+    seen["factory"] = lambda: _TrivialSession()
+    return seen
+
+
+def _req_with_session(headers, witness):
+    request = _Req(headers)
+    request.app.state.session_factory = witness["factory"]
+    return request
+
+
+V1_RETIREMENT_POISON = [
+    ("sunset is hostile", {"hmac_v1_inbound_sunset_at": HostileStr("2020-01-01T00:00:00Z")}),
+    ("sunset is an int", {"hmac_v1_inbound_sunset_at": 20200101}),
+    ("sunset is a dict", {"hmac_v1_inbound_sunset_at": {"d": 1}}),
+    ("window is hostile", {"hmac_v1_observation_window_days": HostileStr("7")}),
+    ("window is a dict", {"hmac_v1_observation_window_days": {"d": 1}}),
+]
+
+
+@pytest.mark.parametrize("label,update", V1_RETIREMENT_POISON,
+                         ids=[c[0] for c in V1_RETIREMENT_POISON])
+def test_unreadable_retirement_evidence_accepts_a_valid_v1_request(label, update, witness):
+    """The approved availability policy, asserted POSITIVELY rather than hidden behind an
+    either/or, and with the witness layer live so the window value is genuinely consulted."""
+    settings = hardened(platform_hmac_secret=SECRET).model_copy(update=update)
+    auth.require_valid_signature(settings, _req_with_session(_v1_headers(), witness), b"{}")
+
+
+def test_the_observation_window_value_is_actually_consulted(witness):
+    """Gate finding 4's second half. The old specimen passed `session_factory=None`, so
+    `_inbound_v1_zero` returned before reading the window at all — it could not have detected a
+    poisoned value because it never looked. Here the witness records what it was called with."""
+    settings = hardened(platform_hmac_secret=SECRET,
+                        hmac_v1_inbound_sunset_at="2020-01-01T00:00:00Z",
+                        hmac_v1_observation_window_days=11)
+    witness["zero"] = False  # not retired, so the request is served and recorded
+    auth.require_valid_signature(settings, _req_with_session(_v1_headers(), witness), b"{}")
+    assert witness["windows"] == [11], (
+        "the observation window never reached the witness, so no test of it proves anything"
+    )
+
+
+def test_a_clean_past_sunset_with_a_zero_witness_still_retires_v1(witness):
+    """The control that makes the policy above meaningful. Without it, "accepts a valid v1
+    request" is indistinguishable from "retirement is broken"."""
+    settings = hardened(platform_hmac_secret=SECRET,
+                        hmac_v1_inbound_sunset_at="2020-01-01T00:00:00Z")
+    witness["zero"] = True
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_valid_signature(settings, _req_with_session(_v1_headers(), witness), b"{}")
+    assert excinfo.value.status_code == 401
+    assert "retired" in str(excinfo.value.detail)
+
+
+def test_a_past_sunset_with_LIVE_v1_traffic_does_not_retire(witness):
+    """ADR-003's actual rule: the date alone never cuts off live traffic. A non-zero witness means
+    the window is not clean, so a valid v1 request is still served AND recorded."""
+    settings = hardened(platform_hmac_secret=SECRET,
+                        hmac_v1_inbound_sunset_at="2020-01-01T00:00:00Z")
+    witness["zero"] = False
+    auth.require_valid_signature(settings, _req_with_session(_v1_headers(), witness), b"{}")
+    assert witness["recorded"] == 1
 
 
 # ── the primitives refuse on their own ────────────────────────────────────────────────────────
@@ -272,3 +381,145 @@ def test_no_hostile_method_is_ever_dispatched():
         update={"hmac_inbound_extra_keys": {HostileKeyStr("old"): HostileStr(SECRET)}})
     assert auth._inbound_secret(settings, "old") == ""
     assert auth._sunset_passed(HostileStr("2020-01-01T00:00:00Z"), None) is False
+
+
+# ── gate round: the toggles that decide whether verification runs at all ──────────────────────
+#
+# Wave 0 hardened every key, secret and skew field ON the verification path and never touched the
+# boolean deciding whether that path runs (gate finding 1). `require_valid_signature` opened with
+# `if settings.auth_disabled: return`, so an injected `1`, a truthy `"false"`, or any non-empty
+# mapping ACCEPTED AN UNSIGNED REQUEST. That is strictly worse than the 500s Wave 0 fixed: those
+# refused service, this grants it.
+#
+# The rule is a closed grammar rather than a type check: only exact built-in `True` may disable
+# authentication, and only exact built-in `False` may select the deliberately-open dev read path.
+# Anything else — wrong type, hostile object, or a string that merely looks boolean — takes the
+# controlled-deny path. "false" is the specimen that matters: it is truthy in Python and means the
+# opposite of what it says.
+
+MALFORMED_TOGGLES = [
+    ("int 1", 1),
+    ("int 0", 0),
+    ("str 'false'", "false"),
+    ("str 'true'", "true"),
+    ("str empty", ""),
+    ("dict truthy", {"x": 1}),
+    ("dict empty", {}),
+    ("None", None),
+    ("hostile __bool__", HostileStr("x")),
+]
+
+
+@pytest.mark.parametrize("label,value", MALFORMED_TOGGLES, ids=[c[0] for c in MALFORMED_TOGGLES])
+def test_only_exact_true_disables_signature_checking(label, value):
+    """An UNSIGNED request against a malformed `auth_disabled`. Every case must be denied, and
+    denied cleanly — a raw exception here is the same availability signal Wave 0 removed."""
+    settings = hardened().model_copy(update={"auth_disabled": value})
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_valid_signature(settings, _Req({}), b"{}")
+    assert excinfo.value.status_code == 401, excinfo.value.detail
+
+
+def test_exact_true_still_disables_it():
+    """Guard the guard: the documented dev escape hatch must keep working, or this is not a
+    grammar, it is a removal."""
+    settings = hardened().model_copy(update={"auth_disabled": True})
+    auth.require_valid_signature(settings, _Req({}), b"{}")
+
+
+@pytest.mark.parametrize("label,value", MALFORMED_TOGGLES, ids=[c[0] for c in MALFORMED_TOGGLES])
+def test_only_exact_false_opens_the_dev_read_path(label, value):
+    """`read_auth_required` is the mirror image: it is the value that must be exactly `False` to
+    open a surface, so a malformed falsey value must NOT open it."""
+    settings = hardened().model_copy(update={"read_auth_required": value})
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_read_access(settings, _Req({}), b"{}")
+    assert excinfo.value.status_code == 401, excinfo.value.detail
+
+
+def test_exact_false_still_opens_the_dev_read_path():
+    settings = hardened().model_copy(update={"read_auth_required": False})
+    auth.require_read_access(settings, _Req({}), b"{}")
+
+
+ADMIN_POISON = [
+    ("token is an int", {"ui_admin_token": 12345}),
+    ("token is hostile", {"ui_admin_token": HostileStr("t" * 32)}),
+    ("token is a dict", {"ui_admin_token": {"t": 1}}),
+    ("token is None", {"ui_admin_token": None}),
+]
+
+
+@pytest.mark.parametrize("label,update", ADMIN_POISON, ids=[c[0] for c in ADMIN_POISON])
+def test_a_malformed_admin_gate_denies_rather_than_opening_or_crashing(label, update):
+    """The admin gate mutates through the ops console, so a malformed token must never mean
+    'open'. Only an exact empty string is the documented unconfigured dev state.
+
+    The CORRECT credential is presented, so a denial here is caused by the malformed configured
+    token rather than by a wrong header — the failure being tested is `if not token: return`
+    treating a misconfiguration as "no credential required".
+    """
+    settings = hardened(ui_admin_token="t" * 32).model_copy(update=update)
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_admin(settings, {"Authorization": "Bearer " + "t" * 32})
+    assert excinfo.value.status_code == 401, excinfo.value.detail
+
+
+def test_truthy_junk_in_auth_disabled_does_not_open_the_admin_gate():
+    """Separate from the token matrix: here the TOKEN is fine and `auth_disabled` is the poison,
+    so the credential must still be demanded. Presenting none must be refused."""
+    settings = hardened(ui_admin_token="t" * 32).model_copy(update={"auth_disabled": "false"})
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_admin(settings, {})
+    assert excinfo.value.status_code == 401
+    # and a correct credential still works under the same poisoned toggle
+    auth.require_admin(settings, {"Authorization": "Bearer " + "t" * 32})
+
+
+def test_a_hostile_authorization_header_is_gated_before_startswith():
+    settings = hardened(ui_admin_token="t" * 32)
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_admin(settings, {"Authorization": HostileStr("Bearer x")})
+    assert excinfo.value.status_code == 401
+
+
+def test_the_configured_admin_token_still_authenticates():
+    settings = hardened(ui_admin_token="t" * 32)
+    auth.require_admin(settings, {"Authorization": "Bearer " + "t" * 32})
+
+
+def test_an_exactly_empty_token_still_means_unconfigured_dev():
+    """The documented local trust model. Production forbids ui_enabled without a token."""
+    settings = hardened(ui_admin_token="t" * 32).model_copy(update={"ui_admin_token": ""})
+    auth.require_admin(settings, {})
+
+
+# ── gate round: the int subclass the Wave 0 skew test never reached ───────────────────────────
+class HostileInt(int):
+    """Passes `isinstance(x, int)`. Wave 0's skew case used a hostile STRING, which fails the
+    isinstance check and returns before the comparison — so the accepting branch, where the
+    dispatch actually happens, was never exercised (gate finding 2)."""
+
+    def __ge__(self, other):
+        raise RuntimeError("hostile __ge__")
+
+    def __le__(self, other):
+        raise RuntimeError("hostile __le__")
+
+
+def test_an_int_subclass_cannot_dispatch_from_the_skew_gate():
+    now = str(int(time.time()))
+    good = dict(key_id=ACTIVE_ID, direction=security.DIRECTION_INBOUND, method="POST",
+                path_qs=PATH, timestamp=now, slot="k1", body=b"{}")
+    assert security.verify(SECRET, now, b"{}", "x", max_skew_seconds=HostileInt(300)) is False
+    assert security.verify_v2(SECRET, "x", max_skew_seconds=HostileInt(300), **good) is False
+    settings = hardened(hmac_inbound_key_id=ACTIVE_ID, hmac_inbound_secret=SECRET).model_copy(
+        update={"hmac_max_skew_seconds": HostileInt(300)})
+    _assert_401(settings, _v2_headers())
+
+
+def test_an_exact_int_skew_still_works():
+    """Guard the guard: exact 300 must still verify, or the gate is a removal."""
+    now = str(int(time.time()))
+    assert security.verify(
+        SECRET, now, b"{}", security.sign(SECRET, now, b"{}"), max_skew_seconds=300) is True

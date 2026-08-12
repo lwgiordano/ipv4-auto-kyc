@@ -609,9 +609,16 @@ def _alembic_script(script_location=None) -> ScriptDirectory:
     empty and the staleness assertion was vacuously true from the day it was written: adding a real
     `024_*.py` left the PENDING verifier green. Reading through `ScriptDirectory` means a layout
     change cannot silently disarm the guard, and it sees branch structure a glob cannot.
+
+    Gate finding 5: this used to overwrite `script_location` UNCONDITIONALLY with `REPO/alembic`,
+    which substitutes a convention for the configuration. An `alembic.ini` pointing at a different
+    tree that contains 024 passed while the stale `./alembic` ended at 023 — the guard was watching
+    a directory Alembic would not have used. The production path now takes the configured value
+    verbatim; an explicit location is a TEST-FIXTURE injection only.
     """
     cfg = Config(str(REPO / "alembic.ini"))
-    cfg.set_main_option("script_location", str(script_location or (REPO / "alembic")))
+    if script_location is not None:
+        cfg.set_main_option("script_location", str(script_location))
     return ScriptDirectory.from_config(cfg)
 
 
@@ -1662,3 +1669,29 @@ def test_the_guard_reads_alembic_not_a_directory_path():
         "the script directory resolved to an empty revision set — the same vacuous-pass shape "
         "this test exists to prevent"
     )
+
+
+def test_the_guard_uses_the_CONFIGURED_tree_not_the_conventional_one(tmp_path):
+    """Gate finding 5, as Codex reproduced it: the configured tree contains 024 while a stale
+    `./alembic` does not. Overriding `script_location` with a convention made the guard watch a
+    directory Alembic itself would never have used."""
+    configured = tmp_path / "canonical"
+    (configured / "versions").mkdir(parents=True)
+    for revision, down in (("023", None), ("024", "023")):
+        (configured / "versions" / f"{revision}_probe.py").write_text(
+            f'"""probe"""\nrevision = "{revision}"\ndown_revision = '
+            f'{"None" if down is None else repr(down)}\n'
+            "branch_labels = None\ndepends_on = None\n"
+            "def upgrade():\n    pass\n\n\ndef downgrade():\n    pass\n")
+    ini = tmp_path / "alembic.ini"
+    ini.write_text(f"[alembic]\nscript_location = {configured}\n")
+
+    cfg = Config(str(ini))
+    with pytest.raises(AssertionError, match="is stale"):
+        assert_024_unbuilt(ScriptDirectory.from_config(cfg), _Model("case_id"))
+
+    # and the production helper resolves the path alembic.ini declares, not a hardcoded one
+    resolved = Path(_alembic_script().dir).resolve()
+    declared = Config(str(REPO / "alembic.ini")).get_main_option("script_location")
+    assert resolved == (REPO / declared).resolve() if not Path(declared).is_absolute() else (
+        resolved == Path(declared).resolve())

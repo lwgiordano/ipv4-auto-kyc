@@ -17,11 +17,13 @@ MAX_HMAC_SKEW_SECONDS = 300
 
 
 def _skew_in_contract(max_skew_seconds) -> bool:
-    return (
-        isinstance(max_skew_seconds, int)
-        and not isinstance(max_skew_seconds, bool)  # bool is an int subclass
-        and 1 <= max_skew_seconds <= MAX_HMAC_SKEW_SECONDS
-    )
+    # EXACT type first, before any comparison (gate finding 2). `isinstance` admitted an `int`
+    # SUBCLASS, and the very next line compared it — dispatching the subclass's `__ge__`/`__le__`,
+    # which raised out of verification as a 500. `type(x) is int` also subsumes the old bool
+    # exclusion, since `bool` is a subclass and no longer passes.
+    if type(max_skew_seconds) is not int:
+        return False
+    return 1 <= max_skew_seconds <= MAX_HMAC_SKEW_SECONDS
 
 
 def sign(secret: str, timestamp: str, body: bytes) -> str:

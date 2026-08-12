@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args, get_origin
 from urllib.parse import urlparse
 
 from pydantic import Field, ValidationError, field_validator, model_validator
@@ -458,12 +458,12 @@ class Settings(BaseSettings):
         side of a live rotation in silence. Source ORDER is unchanged — wrapping patches each
         source's own decode path and does not touch precedence.
         """
-        return (
+        return _replace_not_merge((
             init_settings,
             _duplicate_aware(env_settings),
             _duplicate_aware(dotenv_settings),
             _duplicate_aware(file_secret_settings),
-        )
+        ))
 
     @field_validator("hmac_inbound_extra_keys")
     @classmethod
@@ -670,6 +670,44 @@ class DuplicateKeyError(ValueError):
 # quietly escaping the check.
 DUPLICATE_CHECKED_FIELDS = frozenset({"hmac_inbound_extra_keys", "adapter_rate_limits"})
 
+# Mapping-shaped settings fields deliberately EXEMPT from duplicate rejection, each with the reason.
+# Empty today. It exists so an exemption is a written decision rather than a field that quietly
+# escapes discovery (gate finding 7).
+DUPLICATE_EXEMPT_FIELDS: dict[str, str] = {}
+
+
+def mapping_shaped_fields(model) -> frozenset[str]:
+    """Every settings field whose type can carry a JSON OBJECT, found recursively.
+
+    Gate finding 7. The first version tested `annotation.__origin__ in (dict, list)`, which sees
+    only a bare `dict[...]`. A `dict[str, str] | None`, an `Annotated[dict[...], ...]`, an alias, or
+    a nested union all have a different origin, so a future mapping field would satisfy the
+    "closed set" guard while sitting outside it — the exact silently-exempt hole that scoping the
+    decoder was supposed to avoid.
+
+    Lists are NOT swept in. Duplicate detection is a policy about repeated OBJECT KEYS; a JSON array
+    has no keys, so including lists would be padding the set with fields the policy cannot apply to.
+    """
+    found = set()
+    for name, field in model.model_fields.items():
+        if _carries_mapping(field.annotation):
+            found.add(name)
+    return frozenset(found)
+
+
+def _carries_mapping(annotation) -> bool:
+    """True if a JSON object could validate against this annotation, at any depth."""
+    origin = get_origin(annotation)
+    if origin is dict:
+        return True
+    if annotation is dict:
+        return True
+    args = get_args(annotation)
+    # Union, Optional, Annotated, and any other parameterised form: recurse through the arguments.
+    # `Annotated[X, ...]` puts X first and metadata after; recursing over all args is harmless
+    # because metadata objects are not mapping annotations.
+    return any(_carries_mapping(arg) for arg in args)
+
 
 def _refuse_duplicate_json_keys(field_name: str, value) -> None:
     """Raise if a raw JSON object repeats a key. Decoding is the only moment it is still visible."""
@@ -688,6 +726,45 @@ def _refuse_duplicate_json_keys(field_name: str, value) -> None:
             f"{field_name} repeats key(s) {duplicates}; JSON keeps only the last, so the earlier "
             "value would be silently dropped"
         )
+
+
+# Fields where a higher-precedence source REPLACES lower ones outright instead of deep-merging
+# into them. Deliberately just the credential map (gate finding 3).
+#
+# Pydantic deep-merges dict fields between sources, so a secrets-directory entry survived an
+# explicit `{}` set higher up — meaning an operator who emptied the rotation map to RETIRE a key
+# got it back from the file and `_inbound_secret` kept authenticating with it. Revocation silently
+# failed. A rotation map is the one place where "the value I set is the whole value" is the only
+# safe reading; `adapter_rate_limits` is not a revocation surface and keeps merge semantics, so
+# this set stays minimal rather than becoming a blanket policy.
+REPLACE_NOT_MERGE = frozenset({"hmac_inbound_extra_keys"})
+
+
+def _replace_not_merge(sources: tuple) -> tuple:
+    """Strip REPLACE_NOT_MERGE fields from every source below the highest one that defines them.
+
+    Sources are ordered highest-precedence first, matching the tuple pydantic-settings consumes.
+    Each source is called at most once and its output cached, because a settings source is not
+    guaranteed to be free of side effects and the duplicate-key decoder raises from inside one.
+    """
+    outputs: dict[int, dict] = {}
+
+    def output(index: int) -> dict:
+        if index not in outputs:
+            outputs[index] = sources[index]()
+        return outputs[index]
+
+    def bind(index: int):
+        def call() -> dict:
+            data = dict(output(index))
+            for field in REPLACE_NOT_MERGE:
+                if field in data and any(field in output(j) for j in range(index)):
+                    del data[field]
+            return data
+
+        return call
+
+    return tuple(bind(index) for index in range(len(sources)))
 
 
 def _duplicate_aware(source):
