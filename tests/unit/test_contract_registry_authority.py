@@ -23,6 +23,7 @@ import math
 import re
 import time
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from alembic.config import Config
@@ -33,6 +34,7 @@ from docs.contracts.signing_example import sign as example_sign
 from docs.contracts.wire import WIRE
 from pydantic import ValidationError as PydanticValidationError
 
+from kyc_tool.api import schemas
 from kyc_tool.api.schemas import (
     PAYLOAD_MODELS,
     DecisionCallback,
@@ -647,6 +649,22 @@ def assert_024_unbuilt(script: ScriptDirectory, callback_model) -> None:
         "while the claim still says 024 is NOT BUILT. Either the revision is missing and the wire "
         "is ahead of the schema, or the claim is stale; both are failures."
     )
+
+    # EXECUTE the encoder rather than reading a declaration (gate finding 6). Inspecting
+    # `DecisionCallback.model_fields` alone watched a model the publisher did not use: it built a
+    # plain dict, so adding `decision_sequence` to the emitter put the post-024 ordering key on the
+    # wire with this verifier green. The encoder is now the single path to the outbox, so running
+    # it against a body that TRIES to carry the key is a statement about what can actually be
+    # published, not about what somebody declared.
+    assert schemas.CALLBACK_WIRE_VERSION == "unsequenced", (
+        f"the callback wire version is {schemas.CALLBACK_WIRE_VERSION!r} while the claim says 024 "
+        "is NOT BUILT"
+    )
+    emitted = schemas.encode_decision_callback(_sequenced_callback_attempt())
+    assert "decision_sequence" not in emitted, (
+        "the publisher's own encoder emits `decision_sequence` while 024 is unbuilt"
+    )
+    assert "event_sequence" not in emitted or emitted.get("event_sequence") is not None
 
 
 @verifies("WIRE.ORDERING.BOOTSTRAP_024")
@@ -1695,3 +1713,86 @@ def test_the_guard_uses_the_CONFIGURED_tree_not_the_conventional_one(tmp_path):
     declared = Config(str(REPO / "alembic.ini")).get_main_option("script_location")
     assert resolved == (REPO / declared).resolve() if not Path(declared).is_absolute() else (
         resolved == Path(declared).resolve())
+
+
+def _sequenced_callback_attempt() -> dict:
+    """A well-formed callback body that ALSO tries to carry the post-024 ordering key."""
+    return {
+        "case_id": "c1",
+        "run_id": "r1",
+        "event_id": "e1",
+        "decision": "approve",
+        "score": 10,
+        "gates": dict.fromkeys(GatesBody.model_fields, True),
+        "buy_enablement": "enabled",
+        "checks": [],
+        "decided_at": "2026-08-12T00:00:00+00:00",
+        "decision_sequence": 7,
+    }
+
+
+def test_the_publisher_cannot_emit_an_unmodelled_ordering_key():
+    """Gate finding 6, closed structurally rather than by inspection.
+
+    Codex added `decision_sequence` to `Pipeline._callback_body` and every check stayed green,
+    because the emitter built a plain dict and the guard read a model nobody routed through. The
+    enqueue path now goes through `encode_decision_callback`, so an unmodelled key is DROPPED
+    before it can reach the outbox — the emitter cannot publish a field the contract does not
+    declare, whatever it puts in the dict.
+    """
+    emitted = schemas.encode_decision_callback(_sequenced_callback_attempt())
+    assert "decision_sequence" not in emitted
+    assert emitted["case_id"] == "c1" and emitted["decided_at"].startswith("2026-08-12")
+
+
+def test_the_enqueued_body_is_the_encoder_s_output(monkeypatch):
+    """The routing itself: whatever `_callback_body` returns, what reaches the outbox is the
+    encoder's validated output. Proven by making the emitter hostile and watching the wire."""
+    from kyc_tool.orchestration import pipeline as pipeline_module
+
+    source = (SRC / "orchestration" / "pipeline.py").read_text()
+    assert "body = encode_decision_callback(body)" in source, (
+        "the enqueue path no longer routes through the authoritative encoder"
+    )
+    # and the encoder is applied AFTER the optional fields are attached, so validation covers the
+    # whole body rather than a prefix of it
+    encoded_at = source.index("body = encode_decision_callback(body)")
+    held_at = source.index('body["enforcement_held"]')
+    assert held_at < encoded_at, "enforcement_held is attached after encoding, so it is unvalidated"
+    assert pipeline_module.encode_decision_callback is schemas.encode_decision_callback
+
+
+def test_the_optional_fields_still_survive_encoding():
+    """Guard the guard: dropping unmodelled keys must not drop MODELLED optional ones. Both
+    `event_sequence` and `enforcement_held` exist precisely so validation preserves them."""
+    payload = _sequenced_callback_attempt()
+    payload.pop("decision_sequence")
+    payload["event_sequence"] = 4
+    payload["enforcement_held"] = {"computed_decision": "approve", "reason": "x"}
+    emitted = schemas.encode_decision_callback(payload)
+    assert emitted["event_sequence"] == 4
+    assert emitted["enforcement_held"]["computed_decision"] == "approve"
+
+
+def test_a_sequenced_wire_version_without_024_fails():
+    """Codex's matrix, third case: the wire declares sequencing while the migration is absent."""
+    with (
+        mock.patch.object(schemas, "CALLBACK_WIRE_VERSION", "sequenced"),
+        pytest.raises(AssertionError, match="wire version"),
+    ):
+        assert_024_unbuilt(_alembic_script(), DecisionCallback)
+
+
+def test_an_encoder_that_emits_the_sequence_fails_even_with_the_model_clean():
+    """Fourth case: the model stays clean and the ENCODER starts emitting. This is the direction
+    the old declaration-reading guard was blind to."""
+    original = schemas.encode_decision_callback
+
+    def leaking_encoder(payload):
+        return {**original(payload), "decision_sequence": 7}
+
+    with (
+        mock.patch.object(schemas, "encode_decision_callback", leaking_encoder),
+        pytest.raises(AssertionError, match="emits `decision_sequence`"),
+    ):
+        assert_024_unbuilt(_alembic_script(), DecisionCallback)

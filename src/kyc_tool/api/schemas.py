@@ -162,3 +162,27 @@ class DecisionCallback(BaseModel):
     # the authoritative body preserves it on validate instead of silently
     # dropping it (platform behavior depends on it).
     enforcement_held: dict | None = None
+
+
+# The wire's ordering generation. `unsequenced` means the callback carries NO platform ordering
+# key; it becomes `sequenced` only when migration 024 ships and `decision_sequence` joins the
+# authoritative model. Declared here, beside the model, so the pending-024 gate has one authority
+# to interrogate instead of two declarations that can drift (re-audit Wave 0 gate finding 6).
+CALLBACK_WIRE_VERSION = "unsequenced"
+
+
+def encode_decision_callback(payload: dict) -> dict:
+    """The ONE place a decision callback body is produced.
+
+    Gate finding 6: `Pipeline._callback_body` built a plain dict and handed it straight to the
+    outbox, so the authoritative model was a declaration nothing enforced. Adding
+    `decision_sequence` to the emitter while leaving `DecisionCallback` untouched put the post-024
+    ordering key on the wire with every check green — the "joint" 024 guard was watching a model
+    the publisher did not use.
+
+    Routing the body through validation makes the model load-bearing rather than descriptive: an
+    unmodelled key is DROPPED here, so an emitter cannot publish a field the contract does not
+    declare. `mode="json"` keeps `decided_at` an ISO string as the wire requires, and
+    `exclude_none` keeps optional fields absent rather than explicitly null.
+    """
+    return DecisionCallback.model_validate(payload).model_dump(mode="json", exclude_none=True)

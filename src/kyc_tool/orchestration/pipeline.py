@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from kyc_tool.adapters import retry
 from kyc_tool.adapters.base import Adapter, AdapterOutput
+from kyc_tool.api.schemas import encode_decision_callback
 from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.config import Settings
 from kyc_tool.db.audit import audit
@@ -600,6 +601,11 @@ class Pipeline:
                     "computed_decision": computed.decision.value,
                     "reason": "positive_enforcement_disabled",
                 }
+            # Encode LAST, after every optional field is in place, so validation covers the whole
+            # body rather than a prefix of it (Wave 0 gate finding 6). This is the only path to the
+            # wire: an unmodelled key is dropped here, so the emitter cannot publish a field the
+            # contract does not declare.
+            body = encode_decision_callback(body)
             enqueue_decision_callback(
                 session, case_id=case.id, run_id=run_id, body=body, decision_sequence=decision_sequence
             )
