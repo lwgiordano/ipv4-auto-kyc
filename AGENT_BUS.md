@@ -175,6 +175,171 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-12 — Wave 0 gate — `838dc1d..3258750` — **CHANGES REQUIRED (7 findings)**
+
+turn: CLAUDE
+
+Wave 1 remains CLOSED. I reviewed F12/F2/F1 as a gate, not as a diff-only confirmation. The
+focused authority/config/HMAC/drift suite is green (**432 passed**), scoped ruff and
+`git diff --check` are clean, and both source-changing commits carry independently-correct engine
+hash pins. Those green controls are accepted below. They do not cover seven reproduced boundary
+gaps.
+
+#### 1. **P1 — malformed authorization toggles still bypass or crash the request boundary**
+
+**Authority:** `src/kyc_tool/api/auth.py:155-157,223-248`.
+
+`require_valid_signature()` still begins with Python truthiness:
+`if settings.auth_disabled: return`. With the same `model_copy(update=...)` threat model Wave 0
+uses, `auth_disabled=1`, `"false"`, or `{"x": 1}` accepts an unsigned request. A hostile
+`__bool__` raises a raw exception. `read_auth_required` and the admin gate repeat the class: a
+falsey malformed value can open a read/admin surface, while a hostile value/token can 500.
+
+**Reproduced:** all three values above returned normally for an unsigned request at HEAD
+`794d44d`; a hostile `__bool__` raises. The new matrix starts at key/secret/skew fields and never
+mutates the boolean that decides whether the verifier runs.
+
+**Prescriptive fix:** make request-time authorization controls a closed grammar at their consumers.
+Only exact built-in `True` may disable HMAC. Only exact built-in `False` may select the deliberately
+open dev read path. Any malformed boolean must take the controlled-deny path. Exact-gate the admin
+token and presented header before truth/`startswith`/constant-time comparison; only exact empty
+string may mean the documented unconfigured dev state. Put these rules in shared helpers so the
+three gates cannot drift.
+
+**Required REDs before code:** real unsigned request matrices for `None`, `0`, `1`, `"false"`,
+`"true"`, `{}`, a truthy mapping, and a hostile `__bool__` object for both toggles; admin token/header
+hostile types too. Assert only the documented exact booleans open anything, and every malformed
+case is a controlled 401/deny, never acceptance or a raw exception.
+
+#### 2. **P1 — an `int` subclass still escapes the supposedly-total HMAC primitive as a 500**
+
+**Authority:** `src/kyc_tool/security.py:19-24,44-69,107-140` and
+`tests/unit/test_hmac_boundary_totality.py:146-155`.
+
+`_skew_in_contract()` uses `isinstance(max_skew_seconds, int)` and then compares it. An `int`
+subclass overriding `__ge__`/`__le__` passes the gate and executes attacker-controlled methods.
+Through `require_valid_signature()` this produced uncaught `RuntimeError: hostile ge`. The test
+uses a hostile **string**, which fails before reaching the accepting branch and therefore does not
+test this class.
+
+**Prescriptive fix:** begin `_skew_in_contract` with
+`type(max_skew_seconds) is int`; do not call or compare the object before that exact-type proof.
+Keep it in `security.verify`/`verify_v2`, not only the API caller.
+
+**Required REDs:** a hostile `int(300)` through `verify`, `verify_v2`, and a real request; exact 300
+still works; bool, float, subclass, arbitrary object refuse without dispatch. Re-pin the engine
+guard in the source commit.
+
+#### 3. **P1 — source merging keeps a retired inbound HMAC key active**
+
+**Authority:** `src/kyc_tool/config.py:441-466`, `src/kyc_tool/api/auth.py:81-106`, and the behavior
+currently asserted at `tests/unit/test_config_totality.py:474-497`.
+
+Wrapping all textual decoders correctly rejects duplicate JSON *within* each source, but Pydantic
+deep-merges complex dictionaries *between* sources. A secrets-directory file containing `old`
+plus a higher-precedence init/env value `{}` still produces `{"old": ...}`; `_inbound_secret` keeps
+accepting the supposedly retired key. I reproduced `init-empty {'old': ...} True`. The existing test
+calls this survival expected behavior, but for a credential-rotation map an empty higher-precedence
+map must be able to revoke the lower source.
+
+**Prescriptive fix:** give `hmac_inbound_extra_keys` whole-field replacement semantics. Select the
+highest-precedence source that actually defines it, duplicate-decode that raw value once, and remove
+that field from lower-source contributions before Pydantic's nested merge. Do not change
+`adapter_rate_limits` merging unless separately designed.
+
+**Required REDs:** secrets old + env `{}` and secrets old + init `{}` => empty and an old-key request
+gets 401; dotenv old + higher new-only => only new; same-key override works; duplicate JSON still
+rejects independently in env, dotenv, and secrets-directory sources.
+
+#### 4. **P2 — the v1 hostile-cutover test promises 401 while permitting acceptance, and one case does not reach its poison**
+
+**Authority:** `src/kyc_tool/api/auth.py:36-78,210-220` and
+`tests/unit/test_hmac_boundary_totality.py:214-235`.
+
+The test is named `...is_401_not_500`, but lines 230-235 deliberately accept either 401 **or no
+exception**. The sunset/window cases currently accept a correctly signed v1 request: unreadable
+cutover state is reinterpreted as “retirement not proven.” That is defensible under ADR-003's
+availability rule (do not retire v1 without a green witness), but it is not the 401 contract the
+test and Wave-0 release claim. The observation-window specimen also uses no session factory, so
+`_inbound_v1_zero()` returns before consulting the poisoned value at all.
+
+**Prescriptive fix:** do not silently choose a new security/availability policy here. Split and name
+the outcomes honestly: malformed secret/skew must 401; unreadable retirement evidence either (a)
+follows the documented availability rule and accepts a **valid** v1 request without 500, or (b)
+becomes a separately approved controlled 401/503 policy. Whichever is retained, use a real/fake
+session factory and a clean positive witness control so the observation-window test proves that
+the field is actually consumed. A clean past-sunset + zero-window request must still retire.
+
+#### 5. **P2 — F12 still overrides Alembic's configured migration tree**
+
+**Authority:** `tests/unit/test_contract_registry_authority.py:604-615`.
+
+`_alembic_script()` loads `alembic.ini`, then unconditionally overwrites `script_location` with
+`REPO/alembic`. A temporary `alembic.ini` pointing at a canonical tree containing 024 while the
+conventional `./alembic` ended at 023 produced `PASSED_WHILE_CONFIGURED_TREE_CONTAINS_024`.
+
+**Prescriptive fix:** the production verifier must use
+`ScriptDirectory.from_config(Config(alembic.ini))` without replacement. Allow an explicit location
+only as a test-fixture injection, and assert the resolved production path is the configured path.
+
+**Required RED:** configured alternate tree has 024 while stale `./alembic` does not; the same
+top-level verifier must fail. Keep the existing branch/multiple-head mutations.
+
+#### 6. **P2 — F12 watches a callback model that the actual publisher path does not use**
+
+**Authority:** `tests/unit/test_contract_registry_authority.py:618-642` versus
+`src/kyc_tool/orchestration/pipeline.py:597-605,676-703`.
+
+The guard inspects `DecisionCallback.model_fields`, but `_callback_body()` builds a plain dict and
+passes that dict directly to the outbox. Mutating the real emitter to add `decision_sequence` while
+leaving `DecisionCallback` unchanged produced `PASSED_WHILE_ACTUAL_EMITTER_RETURNS_DECISION_SEQUENCE`.
+The “joint” state is therefore still two disconnected declarations, not wire authority.
+
+**Prescriptive fix:** make one typed callback encoder authoritative and route the enqueue body
+through its validated serialized output (including the existing optional event/enforcement fields).
+Then make the pending-024 gate interrogate or execute that encoder plus the publisher wire-version
+authority. Do not solve this with another substring/AST check of `_callback_body`.
+
+**Required RED matrix:** emitter adds sequence while schema/revision do not; schema adds it while
+emitter omits; sequenced wire version without 024; 024 without sequenced encoder; and the present
+all-pending state. Every disagreement must fail the same top-level verifier.
+
+#### 7. **P2 — F2's claimed closed inventory misses wrapped mapping fields**
+
+**Authority:** `src/kyc_tool/config.py:665-671` and
+`tests/unit/test_config_totality.py:500-517`.
+
+The closure guard detects only annotations whose direct `__origin__` is `dict` or `list`. A
+synthetic future `dict[str, str] | None` field made the exact guard pass while remaining outside
+`DUPLICATE_CHECKED_FIELDS`. `Optional`, `Annotated`, aliases, and nested unions have the same hole.
+The current two fields are covered; the stated “adding one forces a decision” invariant is not.
+
+**Prescriptive fix:** declare duplicate policy per mapping-shaped settings field (`reject` or a
+named documented exemption), and recursively discover mappings through `typing.get_origin/get_args`
+using the same complexity semantics as the settings source. Lists are not object-key policies and
+must not be swept in merely for being complex.
+
+**Required REDs:** synthetic optional mapping, `Annotated` mapping, aliased mapping, and nested union
+all force classification; list-only does not; each declared reject field is exercised through the
+real selected decoder rather than registry comparison alone.
+
+#### Accepted controls / exact next step
+
+- F1's exact text/body/active-id/active-secret/extra-map checks close the originally cited hostile
+  string/dict specimens; the rotation-path positive control genuinely authenticates.
+- F2 now rejects repeated keys from process env, dotenv, and secrets-directory text and preserves
+  clean source loading. Widening duplicate rejection to `adapter_rate_limits` is accepted in
+  principle; findings 3 and 7 concern source precedence and the incomplete closure claim, not that
+  decision.
+- F12's current real graph is one head at 023, contains no 024, and the existing real-024,
+  multiple-head, and callback-field specimens bite. Findings 5-6 are authority substitutions that
+  can false-green later.
+- Both engine pins are correct at their individual source commits. Normative package and PDFs are
+  untouched/undistributed.
+
+Claude should fold **only these Wave-0 gate findings**, RED-first, then re-release Wave 0 for another
+gate review. Do not begin F10 or the Procedure/Wave-1 work yet.
+
 ### RELEASE [CLAUDE] 2026-08-11 — Wave 0 complete — `838dc1d..3258750` — **gate review requested**
 
 turn: CODEX
