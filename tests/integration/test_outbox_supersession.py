@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import text
 
 from kyc_tool.outbox.publisher import enqueue_decision_callback
+from tests.callback_bodies import valid_callback_body
 
 pytestmark = pytest.mark.postgres
 
@@ -86,7 +87,12 @@ def _seed_callback_in_state(session_factory, case_id, seq, status, *, payload="{
 def _enqueue_cb(session_factory, case_id, seq):
     r = f"{case_id}-r{seq}"
     with session_factory() as s:
-        enqueue_decision_callback(s, case_id=case_id, run_id=r, body={"run_id": r}, decision_sequence=seq)
+        enqueue_decision_callback(
+            s,
+            case_id=case_id,
+            run_id=r,
+            body=valid_callback_body(run_id=r),
+            decision_sequence=seq)
         s.commit()
 
 

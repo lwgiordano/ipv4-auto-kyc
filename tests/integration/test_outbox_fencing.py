@@ -7,6 +7,8 @@ import pytest
 import structlog
 from sqlalchemy import text
 
+from tests.callback_bodies import valid_callback_body
+
 pytestmark = pytest.mark.postgres
 
 
@@ -69,7 +71,12 @@ def test_stuck_email_does_not_block_decision_callback(
                 "'enabled','{}'::jsonb,false,1)"
             )
         )
-        enqueue_decision_callback(s, case_id="c1", run_id="r1", body={"case_id": "c1"}, decision_sequence=1)
+        enqueue_decision_callback(
+            s,
+            case_id="c1",
+            run_id="r1",
+            body=valid_callback_body(case_id="c1"),
+            decision_sequence=1)
         s.commit()
 
     assert publisher.process_pending() == 1  # the callback delivers; the stuck email is skipped
@@ -208,7 +215,12 @@ def test_stale_decision_loser_cannot_stamp_run_or_published_at(
                        "policy_shas, manual, decision_sequence) VALUES "
                        "('d1','c1','r1','approve',10,'{}'::jsonb,"
                        "'enabled','{}'::jsonb,false,1)"))
-        enqueue_decision_callback(s, case_id="c1", run_id="r1", body={"run_id": "r1"}, decision_sequence=1)
+        enqueue_decision_callback(
+            s,
+            case_id="c1",
+            run_id="r1",
+            body=valid_callback_body(run_id="r1"),
+            decision_sequence=1)
         s.commit()
 
     rowA = _claim(session_factory, "A")
@@ -255,7 +267,11 @@ def test_expired_unreclaimed_owner_stages_no_attempt(session_factory, settings, 
                          seq=1, ev_seq=1)
     with session_factory() as s:
         from kyc_tool.outbox.publisher import enqueue_decision_callback
-        enqueue_decision_callback(s, case_id="c1", run_id="r1", body={"run_id": "r1"},
+        enqueue_decision_callback(
+            s,
+            case_id="c1",
+            run_id="r1",
+            body=valid_callback_body(run_id="r1"),
                                   decision_sequence=1)
         s.commit()
     rowA = _claim(session_factory, "A")
@@ -333,7 +349,7 @@ def test_expired_unreclaimed_claimant_cannot_supersede(session_factory, settings
     )
     with session_factory() as s:
         enqueue_decision_callback(
-            s, case_id="c-expired-supersede", run_id="old-r", body={"run_id": "old-r"},
+            s, case_id="c-expired-supersede", run_id="old-r", body=valid_callback_body(run_id="old-r"),
             decision_sequence=1,
         )
         s.execute(text("UPDATE decisions SET published_at=now() WHERE id='new-d'"))
@@ -409,11 +425,19 @@ def test_same_stream_fifo_holds_under_backoff(
     _seed_decision_chain(session_factory, case_id="cf", run_id="cf-r2", decision_id="cf-d2",
                          seq=2, ev_seq=2)
     with session_factory() as s:  # enqueue seq1 FIRST (lower outbox.id), then seq2
-        enqueue_decision_callback(s, case_id="cf", run_id="cf-r1", body={"run_id": "cf-r1"},
+        enqueue_decision_callback(
+            s,
+            case_id="cf",
+            run_id="cf-r1",
+            body=valid_callback_body(run_id="cf-r1"),
                                   decision_sequence=1)
         s.commit()
     with session_factory() as s:
-        enqueue_decision_callback(s, case_id="cf", run_id="cf-r2", body={"run_id": "cf-r2"},
+        enqueue_decision_callback(
+            s,
+            case_id="cf",
+            run_id="cf-r2",
+            body=valid_callback_body(run_id="cf-r2"),
                                   decision_sequence=2)
         s.commit()
     with session_factory() as s:  # push ONLY seq1 into future backoff; seq2 stays due
@@ -508,7 +532,11 @@ def test_stale_loser_cannot_supersede_reclaimed_row(session_factory, settings, p
 
     _seed_decision_chain(session_factory, case_id="c1", run_id="r1", decision_id="d1", seq=1, ev_seq=1)
     with session_factory() as s:
-        enqueue_decision_callback(s, case_id="c1", run_id="r1", body={"run_id": "r1"},
+        enqueue_decision_callback(
+            s,
+            case_id="c1",
+            run_id="r1",
+            body=valid_callback_body(run_id="r1"),
                                   decision_sequence=1)
         s.commit()
 

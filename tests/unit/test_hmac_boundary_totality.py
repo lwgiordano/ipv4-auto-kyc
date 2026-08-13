@@ -19,6 +19,7 @@ prove it holds at the boundary rather than one layer behind it.
 """
 
 import time
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -31,6 +32,7 @@ from .test_production_config import hardened
 ACTIVE_ID = "kyc-platform-1"
 SECRET = "s" * 40
 PATH = "/v1/cases/c1/events"
+SRC = Path(__file__).resolve().parents[2] / "src" / "kyc_tool"
 
 
 class HostileStr(str):
@@ -488,10 +490,56 @@ def test_the_configured_admin_token_still_authenticates():
     auth.require_admin(settings, {"Authorization": "Bearer " + "t" * 32})
 
 
-def test_an_exactly_empty_token_still_means_unconfigured_dev():
-    """The documented local trust model. Production forbids ui_enabled without a token."""
-    settings = hardened(ui_admin_token="t" * 32).model_copy(update={"ui_admin_token": ""})
-    auth.require_admin(settings, {})
+# Re-gate finding 1: the empty-token allowance was ENVIRONMENT-BLIND, so a production-shaped
+# Settings opened the `/ui` mutation surface with no credential. `/ui` calls `require_admin`
+# directly rather than through the ops wrapper, so the wrapper's production check did not cover it.
+EMPTY_TOKEN_ENVIRONMENTS = [
+    ("production denies", "production", False),
+    ("development opens", "development", True),
+    ("test opens", "test", True),
+]
+
+
+@pytest.mark.parametrize("label,environment,opens", EMPTY_TOKEN_ENVIRONMENTS,
+                         ids=[c[0] for c in EMPTY_TOKEN_ENVIRONMENTS])
+def test_an_empty_admin_token_opens_only_in_an_exact_dev_environment(label, environment, opens):
+    settings = hardened(ui_admin_token="t" * 32).model_copy(
+        update={"ui_admin_token": "", "environment": environment})
+    if opens:
+        auth.require_admin(settings, {})
+        return
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_admin(settings, {})
+    assert excinfo.value.status_code == 401
+
+
+EMPTY_TOKEN_POISON = [
+    ("production", {"environment": "production"}),
+    ("production + ui_enabled", {"environment": "production", "ui_enabled": True}),
+    ("malformed auth_disabled", {"auth_disabled": "false"}),
+    ("unknown environment", {"environment": "staging"}),
+    ("environment is an int", {"environment": 1}),
+    ("environment is hostile", {"environment": HostileStr("development")}),
+]
+
+
+@pytest.mark.parametrize("label,update", EMPTY_TOKEN_POISON, ids=[c[0] for c in EMPTY_TOKEN_POISON])
+def test_an_empty_token_never_opens_a_non_dev_or_malformed_environment(label, update):
+    """Codex's four specimens plus the malformed-environment cases. An environment that is not
+    exactly a known dev value is not a dev environment."""
+    settings = hardened(ui_admin_token="t" * 32).model_copy(
+        update={"ui_admin_token": "", **update})
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_admin(settings, {})
+    assert excinfo.value.status_code == 401
+
+
+def test_the_direct_ui_route_uses_the_same_admin_decision():
+    """The two surfaces must not drift: `/ui` calls `require_admin` directly, while the ops router
+    adds its own production wrapper. If `/ui` ever grew a separate gate this would stop holding."""
+    ui = (SRC / "ui" / "routes.py").read_text()
+    assert "require_admin" in ui, "the /ui routes no longer use the shared admin gate"
+    assert "_require_ops_admin" not in ui, "/ui grew a second, separate admin decision"
 
 
 # ── gate round: the int subclass the Wave 0 skew test never reached ───────────────────────────
@@ -523,3 +571,74 @@ def test_an_exact_int_skew_still_works():
     now = str(int(time.time()))
     assert security.verify(
         SECRET, now, b"{}", security.sign(SECRET, now, b"{}"), max_skew_seconds=300) is True
+
+
+# ── re-gate finding 2: a malformed window must never PROVE zero ───────────────────────────────
+#
+# The Wave 0 fix hardened the direction that ACCEPTS and left the direction that REFUSES. With a
+# past sunset and a real observation row two days old, a window of `True`, `0.5`, `-1` or `0` makes
+# `(now - started).days < window` false and `accepted_within_window` false, so the witness returns
+# "zero proven" and a valid v1 request is RETIRED. That cuts off the platform's live traffic — the
+# outage the approved availability policy exists to prevent, arrived at from the other side.
+#
+# My hostile-window tests could not have caught it: `hardened()` carries a 2026-09-01 sunset, so
+# `_sunset_passed` was False and the poisoned window never reached the witness at all.
+
+PAST_SUNSET = "2020-01-01T00:00:00Z"
+
+MALFORMED_WINDOWS = [
+    ("bool True", True),
+    ("bool False", False),
+    ("float 0.5", 0.5),
+    ("negative", -1),
+    ("zero", 0),
+    ("int subclass", HostileInt(14)),
+    ("string", "14"),
+    ("None", None),
+]
+
+
+@pytest.mark.parametrize("label,window", MALFORMED_WINDOWS, ids=[c[0] for c in MALFORMED_WINDOWS])
+def test_a_malformed_window_never_retires_live_v1(label, window, witness):
+    """Past sunset, valid signature, witness reachable. Unreadable retirement evidence is not
+    proof, so the request must be SERVED — and must not raise."""
+    settings = hardened(platform_hmac_secret=SECRET,
+                        hmac_v1_inbound_sunset_at=PAST_SUNSET).model_copy(
+        update={"hmac_v1_observation_window_days": window})
+    witness["zero"] = True  # the witness would say "zero" if it were consulted at all
+    auth.require_valid_signature(settings, _req_with_session(_v1_headers(), witness), b"{}")
+    assert witness["windows"] == [], (
+        "a malformed window reached the witness; it must be rejected as unreadable evidence "
+        "BEFORE it can be turned into proof of zero"
+    )
+
+
+def test_the_sunset_really_has_passed_in_these_specimens():
+    """Guard the guard, and the exact reason the Wave 0 version was vacuous: `hardened()` supplies
+    a FUTURE sunset, so `_sunset_passed` was False and no poisoned window was ever consulted."""
+    from datetime import UTC, datetime
+
+    assert auth._sunset_passed(PAST_SUNSET, datetime.now(UTC)) is True
+    assert auth._sunset_passed(hardened().hmac_v1_inbound_sunset_at, datetime.now(UTC)) is False
+
+
+def test_a_clean_window_still_retires_and_is_consulted(witness):
+    """The positive control: a governed window IS passed to the witness and DOES retire."""
+    settings = hardened(platform_hmac_secret=SECRET, hmac_v1_inbound_sunset_at=PAST_SUNSET,
+                        hmac_v1_observation_window_days=14)
+    witness["zero"] = True
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_valid_signature(settings, _req_with_session(_v1_headers(), witness), b"{}")
+    assert excinfo.value.status_code == 401 and "retired" in str(excinfo.value.detail)
+    assert witness["windows"] == [14]
+
+
+def test_the_witness_predicate_is_total_on_its_own():
+    """`hmac_witness.inbound_v1_zero` must refuse a malformed window itself, so a future caller
+    that bypasses the API wrapper cannot resurrect this.
+
+    Deliberately NOT using the `witness` fixture: that fixture monkeypatches this very function, so
+    requesting it would test the stub instead of the predicate.
+    """
+    for window in (True, 0.5, -1, 0, "14", None, HostileInt(14)):
+        assert hmac_witness.inbound_v1_zero(_TrivialSession(), window, None) is False, window

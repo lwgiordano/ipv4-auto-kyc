@@ -7,6 +7,7 @@ any unsafe or stub configuration (see api/app.py, workers/*).
 
 import json
 import math
+from collections import abc
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -698,9 +699,12 @@ def mapping_shaped_fields(model) -> frozenset[str]:
 def _carries_mapping(annotation) -> bool:
     """True if a JSON object could validate against this annotation, at any depth."""
     origin = get_origin(annotation)
-    if origin is dict:
+    # Abstract mappings count (re-gate finding 6). `Mapping[str, str]` and `MutableMapping[...]`
+    # have `collections.abc` origins, not `dict`, so a concrete-dict-shaped test left them outside
+    # the "every mapping-shaped field" closure while JSON still parsed last-wins into them.
+    if origin is not None and isinstance(origin, type) and issubclass(origin, abc.Mapping):
         return True
-    if annotation is dict:
+    if isinstance(annotation, type) and issubclass(annotation, abc.Mapping):
         return True
     args = get_args(annotation)
     # Union, Optional, Annotated, and any other parameterised form: recurse through the arguments.
@@ -715,12 +719,22 @@ def _refuse_duplicate_json_keys(field_name: str, value) -> None:
         return
     if not isinstance(value, str) or not value.strip().startswith("{"):
         return
-    seen: list[str] = []
+    # PER OBJECT, not across the whole parse (re-gate finding 7). Collecting every key from every
+    # nested object into one list conflates independent objects: `{"a":{"x":1},"b":{"x":2}}` repeats
+    # nothing, and the global version rejected it. That failure direction is the dangerous one for a
+    # config check — it refuses a LEGAL deployment rather than merely admitting a bad one.
+    duplicates: set[str] = set()
+
+    def _per_object(pairs):
+        keys = [k for k, _ in pairs]
+        duplicates.update(k for k in keys if keys.count(k) > 1)
+        return dict(pairs)
+
     try:
-        json.loads(value, object_pairs_hook=lambda pairs: seen.extend(k for k, _ in pairs))
+        json.loads(value, object_pairs_hook=_per_object)
     except ValueError:
         return  # malformed JSON is the settings source's own error to report
-    duplicates = sorted({key for key in seen if seen.count(key) > 1})
+    duplicates = sorted(duplicates)
     if duplicates:
         raise DuplicateKeyError(
             f"{field_name} repeats key(s) {duplicates}; JSON keeps only the last, so the earlier "

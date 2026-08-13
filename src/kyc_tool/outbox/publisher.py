@@ -34,6 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from kyc_tool import security
+from kyc_tool.api.schemas import encode_decision_callback
 from kyc_tool.config import OUTBOX_ATTEMPT_DEADLINE_PHASES, Settings, parse_sunset
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
@@ -51,7 +52,12 @@ POC_EMAIL = "poc_email"
 # so every attempt it records is 'legacy'; 7b-activation introduces 'sequenced'. The vocabulary is
 # pinned by ck_attempt_wire_vocab, so an unknown value fails at the database rather than silently
 # becoming an uninterpretable witness.
-_WIRE_VERSION = "legacy"
+LEGACY_WIRE = "legacy"
+SEQUENCED_WIRE = "sequenced"
+# The ONE value for callback wire generation. The 024 gate imports this exact attribute, so a
+# mutation here is visible to it — a second declarative constant beside the model was a thing that
+# could drift, and did (re-gate finding 4).
+_WIRE_VERSION = LEGACY_WIRE
 
 # Detached (deadline-overrun) send threads tolerated at once. This is a HARD resource cap, not a
 # log threshold: at capacity the publisher STOPS CLAIMING (circuit breaker), so a pathologically
@@ -176,12 +182,21 @@ _CLAIM_SQL = text(
 def enqueue_decision_callback(
     session: Session, *, case_id: str, run_id: str, body: dict, decision_sequence: int
 ) -> None:
+    """Enqueue a decision callback. THIS is the serialization boundary (re-gate finding 3).
+
+    Validating in the pipeline sanitized one caller's dict and left the boundary open: adding
+    `decision_sequence` after that call, or calling this function directly, stored the ordering key
+    verbatim because the enqueue accepted a raw `dict`. Encoding here means the last thing before
+    `Outbox` is a validated body, whatever the caller assembled — and `DecisionCallback` is
+    `extra="forbid"`, so an unmodelled field is REFUSED rather than silently dropped in one path
+    while leaking through another.
+    """
     session.add(
         Outbox(
             kind=DECISION_CALLBACK,
             case_id=case_id,
             run_id=run_id,
-            payload_json=body,
+            payload_json=encode_decision_callback(body),
             ordering_stream="decision",
             decision_sequence=decision_sequence,
             # created under the record-intent-first regime (014): with this stamp, "no attempt

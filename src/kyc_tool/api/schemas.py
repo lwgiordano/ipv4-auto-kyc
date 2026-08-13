@@ -142,7 +142,15 @@ class CheckSummary(BaseModel):
 
 
 class DecisionCallback(BaseModel):
-    """The authoritative decision body (04 §2)."""
+    """The authoritative decision body (04 §2).
+
+    `extra="forbid"` (re-gate finding 3): permissive extras meant an unknown field was silently
+    DROPPED at the encoder while the same field leaked through any path that skipped it. Refusing
+    is the honest behaviour — a post-024 ordering key arriving before 024 exists is a defect to
+    surface, not a value to quietly discard.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     case_id: str
     run_id: str
@@ -168,7 +176,6 @@ class DecisionCallback(BaseModel):
 # key; it becomes `sequenced` only when migration 024 ships and `decision_sequence` joins the
 # authoritative model. Declared here, beside the model, so the pending-024 gate has one authority
 # to interrogate instead of two declarations that can drift (re-audit Wave 0 gate finding 6).
-CALLBACK_WIRE_VERSION = "unsequenced"
 
 
 def encode_decision_callback(payload: dict) -> dict:

@@ -43,6 +43,12 @@ def inbound_v1_zero(session: Session, window_days: int, now: datetime) -> bool:
     """The sunset zero predicate: safe to reach `hmac_v1_inbound_sunset_at` only
     when observation has run for the full window AND no v1 was accepted within
     it. An absent/unseeded row means "observation never started" (NOT "zero")."""
+    # Total on its own, so a caller that bypasses `api.auth._inbound_v1_zero` cannot resurrect
+    # re-gate finding 2. A malformed window (True, 0.5, -1, 0) is numeric enough for the day
+    # comparisons below and collapses them, turning unreadable evidence into "zero proven" and
+    # retiring live v1 traffic. An unusable window is not a zero window.
+    if type(window_days) is not int or window_days < 1:
+        return False
     row = session.execute(
         text("SELECT observation_started_at, last_accepted_at FROM hmac_v1_observation WHERE id = 1")
     ).one_or_none()

@@ -623,3 +623,65 @@ def test_the_helper_is_total_over_junk():
 
     for value in (None, 5, [], {}, "not json", "{malformed", b"{}"):
         _refuse_duplicate_json_keys("field", value)  # must not raise
+
+
+# ── re-gate finding 6: abstract mappings are mapping-shaped too ───────────────────────────────
+@pytest.mark.parametrize("label,annotation", [
+    ("Mapping", "Mapping[str, str]"),
+    ("MutableMapping", "MutableMapping[str, str]"),
+    ("optional Mapping", "Mapping[str, str] | None"),
+    ("optional MutableMapping", "MutableMapping[str, str] | None"),
+    ("Annotated Mapping", "Annotated[Mapping[str, str], 'meta']"),
+    ("nested union Mapping", "str | Mapping[str, str] | None"),
+])
+def test_abstract_mapping_annotations_are_discovered(label, annotation):
+    """The closure claimed "every mapping-shaped field" and detected concrete `dict` only, so
+    `Mapping`/`MutableMapping` fields would parse last-wins while sitting outside the checked set."""
+    from collections.abc import Mapping, MutableMapping  # noqa: F401 — used by eval
+    from typing import Annotated  # noqa: F401 — used by eval
+
+    from kyc_tool.config import _carries_mapping
+
+    assert _carries_mapping(eval(annotation)) is True
+
+
+def test_a_synthetic_abstract_mapping_field_forces_a_policy_decision():
+    """Mutating the REAL Settings subclass the closure assertion runs over, not `_carries_mapping`
+    in isolation — Codex asked for the assertion itself to bite."""
+    from collections.abc import Mapping
+
+    from kyc_tool.config import (
+        DUPLICATE_CHECKED_FIELDS,
+        DUPLICATE_EXEMPT_FIELDS,
+        mapping_shaped_fields,
+    )
+
+    class _Future(Settings):
+        future_abstract: Mapping[str, str] | None = None
+
+    discovered = mapping_shaped_fields(_Future)
+    assert "future_abstract" in discovered
+    classified = set(DUPLICATE_CHECKED_FIELDS) | set(DUPLICATE_EXEMPT_FIELDS)
+    assert discovered - classified == {"future_abstract"}
+
+
+# ── re-gate finding 7: duplicates are per-object, not per-parse ───────────────────────────────
+@pytest.mark.parametrize("label,payload,refused", [
+    ("separate nested objects", '{"a": {"x": 1}, "b": {"x": 2}}', False),
+    ("same nested object", '{"a": {"x": 1, "x": 2}}', True),
+    ("top level", '{"x": 1, "x": 2}', True),
+    ("same key different depths", '{"x": 1, "a": {"x": 2}}', False),
+    ("deep separate objects", '{"a": {"b": {"x": 1}}, "c": {"d": {"x": 2}}}', False),
+    ("deep same object", '{"a": {"b": {"x": 1, "x": 2}}}', True),
+])
+def test_duplicate_detection_is_per_object(label, payload, refused):
+    """The global `object_pairs_hook` list conflated independent objects, so
+    `{"a":{"x":1},"b":{"x":2}}` — which repeats nothing — was REJECTED. Refusing a legal config is
+    the failure direction that breaks a deployment rather than merely admitting a bad one."""
+    from kyc_tool.config import DuplicateKeyError, _refuse_duplicate_json_keys
+
+    if refused:
+        with pytest.raises(DuplicateKeyError):
+            _refuse_duplicate_json_keys("adapter_rate_limits", payload)
+    else:
+        _refuse_duplicate_json_keys("adapter_rate_limits", payload)

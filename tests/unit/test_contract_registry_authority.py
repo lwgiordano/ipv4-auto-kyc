@@ -54,6 +54,7 @@ from kyc_tool.config import (
     validate_process_role,
 )
 from kyc_tool.ops import cutover
+from kyc_tool.outbox import publisher
 from kyc_tool.queue.backoff import saturating_backoff_seconds
 from kyc_tool.security import (
     DIRECTION_INBOUND,
@@ -603,7 +604,7 @@ def _interim_rule_makes_a_manual_approval_authoritative():
     assert "can arrive after it" in text
 
 
-def _alembic_script(script_location=None) -> ScriptDirectory:
+def _alembic_script(config_path=None, script_location=None) -> ScriptDirectory:
     """Alembic's own view of the revision graph, not a directory glob.
 
     The previous guard globbed `REPO/migrations/versions` — a path this repo does not have, since
@@ -618,9 +619,15 @@ def _alembic_script(script_location=None) -> ScriptDirectory:
     a directory Alembic would not have used. The production path now takes the configured value
     verbatim; an explicit location is a TEST-FIXTURE injection only.
     """
-    cfg = Config(str(REPO / "alembic.ini"))
+    cfg = Config(str(config_path or (REPO / "alembic.ini")))
     if script_location is not None:
         cfg.set_main_option("script_location", str(script_location))
+    # `script_location` in the repo config is RELATIVE, so resolve it against the config's own
+    # directory rather than the process cwd — a cwd-dependent helper would pass or fail by accident.
+    declared = cfg.get_main_option("script_location")
+    if declared and not Path(declared).is_absolute():
+        base = Path(config_path or (REPO / "alembic.ini")).parent
+        cfg.set_main_option("script_location", str((base / declared).resolve()))
     return ScriptDirectory.from_config(cfg)
 
 
@@ -656,15 +663,23 @@ def assert_024_unbuilt(script: ScriptDirectory, callback_model) -> None:
     # wire with this verifier green. The encoder is now the single path to the outbox, so running
     # it against a body that TRIES to carry the key is a statement about what can actually be
     # published, not about what somebody declared.
-    assert schemas.CALLBACK_WIRE_VERSION == "unsequenced", (
-        f"the callback wire version is {schemas.CALLBACK_WIRE_VERSION!r} while the claim says 024 "
-        "is NOT BUILT"
+    # The PUBLISHER's own value, not a second constant beside the model (re-gate finding 4).
+    # `_WIRE_VERSION` is what gets persisted on every delivery attempt, so mutating it alone must
+    # be visible here; a parallel declaration in `schemas` could drift from it, and did.
+    assert publisher._WIRE_VERSION == publisher.LEGACY_WIRE, (
+        f"the publisher advertises {publisher._WIRE_VERSION!r} wire while the claim says 024 is "
+        "NOT BUILT"
     )
-    emitted = schemas.encode_decision_callback(_sequenced_callback_attempt())
-    assert "decision_sequence" not in emitted, (
-        "the publisher's own encoder emits `decision_sequence` while 024 is unbuilt"
+    # REFUSED, not dropped (re-gate finding 3). Silently discarding an unmodelled field made the
+    # same key vanish on one path and leak on another; a post-024 ordering key arriving before 024
+    # exists is a defect to surface.
+    try:
+        emitted = schemas.encode_decision_callback(_sequenced_callback_attempt())
+    except Exception:
+        emitted = None
+    assert emitted is None, (
+        "the publisher's own encoder accepted `decision_sequence` while 024 is unbuilt"
     )
-    assert "event_sequence" not in emitted or emitted.get("event_sequence") is not None
 
 
 @verifies("WIRE.ORDERING.BOOTSTRAP_024")
@@ -1631,7 +1646,7 @@ def _fake_script(tmp_path, revisions: dict) -> ScriptDirectory:
             f"down_revision = {down_literal}\nbranch_labels = None\ndepends_on = None\n"
             "def upgrade():\n    pass\n\n\ndef downgrade():\n    pass\n"
         )
-    return _alembic_script(tmp_path)
+    return _alembic_script(script_location=tmp_path)
 
 
 class _Model:
@@ -1690,9 +1705,11 @@ def test_the_guard_reads_alembic_not_a_directory_path():
 
 
 def test_the_guard_uses_the_CONFIGURED_tree_not_the_conventional_one(tmp_path):
-    """Gate finding 5, as Codex reproduced it: the configured tree contains 024 while a stale
-    `./alembic` does not. Overriding `script_location` with a convention made the guard watch a
-    directory Alembic itself would never have used."""
+    """Re-gate finding 5. The first version built a `ScriptDirectory` directly, so it never routed
+    the divergent config through `_alembic_script()` — restoring the defective unconditional
+    override left every one of these tests green. It now goes through the production helper, and
+    asserts both the resolved path and the discovered revisions come from the CONFIGURED tree.
+    """
     configured = tmp_path / "canonical"
     (configured / "versions").mkdir(parents=True)
     for revision, down in (("023", None), ("024", "023")):
@@ -1704,15 +1721,33 @@ def test_the_guard_uses_the_CONFIGURED_tree_not_the_conventional_one(tmp_path):
     ini = tmp_path / "alembic.ini"
     ini.write_text(f"[alembic]\nscript_location = {configured}\n")
 
-    cfg = Config(str(ini))
+    resolved = _alembic_script(config_path=ini)
+    assert Path(resolved.dir).resolve() == configured.resolve()
+    assert {r.revision for r in resolved.walk_revisions()} == {"023", "024"}
     with pytest.raises(AssertionError, match="is stale"):
-        assert_024_unbuilt(ScriptDirectory.from_config(cfg), _Model("case_id"))
+        assert_024_unbuilt(resolved, _Model("case_id"))
 
-    # and the production helper resolves the path alembic.ini declares, not a hardcoded one
-    resolved = Path(_alembic_script().dir).resolve()
+
+def test_the_helper_resolves_a_relative_script_location_independently_of_cwd(tmp_path):
+    """The repo's own config uses a RELATIVE `script_location`, so a helper that resolved it
+    against the process cwd would pass or fail by accident depending on where pytest ran."""
+    tree = tmp_path / "alembic"
+    (tree / "versions").mkdir(parents=True)
+    (tree / "versions" / "001_probe.py").write_text(
+        '"""probe"""\nrevision = "001"\ndown_revision = None\n'
+        "branch_labels = None\ndepends_on = None\n"
+        "def upgrade():\n    pass\n\n\ndef downgrade():\n    pass\n")
+    ini = tmp_path / "alembic.ini"
+    ini.write_text("[alembic]\nscript_location = alembic\n")
+    resolved = _alembic_script(config_path=ini)
+    assert Path(resolved.dir).resolve() == tree.resolve()
+
+
+def test_the_production_helper_resolves_the_repo_configured_tree():
     declared = Config(str(REPO / "alembic.ini")).get_main_option("script_location")
-    assert resolved == (REPO / declared).resolve() if not Path(declared).is_absolute() else (
-        resolved == Path(declared).resolve())
+    expected = (REPO / declared).resolve() if not Path(declared).is_absolute() else Path(
+        declared).resolve()
+    assert Path(_alembic_script().dir).resolve() == expected
 
 
 def _sequenced_callback_attempt() -> dict:
@@ -1740,8 +1775,11 @@ def test_the_publisher_cannot_emit_an_unmodelled_ordering_key():
     before it can reach the outbox — the emitter cannot publish a field the contract does not
     declare, whatever it puts in the dict.
     """
-    emitted = schemas.encode_decision_callback(_sequenced_callback_attempt())
-    assert "decision_sequence" not in emitted
+    with pytest.raises(PydanticValidationError):
+        schemas.encode_decision_callback(_sequenced_callback_attempt())
+    clean = _sequenced_callback_attempt()
+    clean.pop("decision_sequence")
+    emitted = schemas.encode_decision_callback(clean)
     assert emitted["case_id"] == "c1" and emitted["decided_at"].startswith("2026-08-12")
 
 
@@ -1775,10 +1813,11 @@ def test_the_optional_fields_still_survive_encoding():
 
 
 def test_a_sequenced_wire_version_without_024_fails():
-    """Codex's matrix, third case: the wire declares sequencing while the migration is absent."""
+    """Codex's matrix, third case, now aimed at the PUBLISHER's own value (re-gate finding 4).
+    Patching a parallel constant in `schemas` proved nothing about what gets persisted."""
     with (
-        mock.patch.object(schemas, "CALLBACK_WIRE_VERSION", "sequenced"),
-        pytest.raises(AssertionError, match="wire version"),
+        mock.patch.object(publisher, "_WIRE_VERSION", publisher.SEQUENCED_WIRE),
+        pytest.raises(AssertionError, match="advertises"),
     ):
         assert_024_unbuilt(_alembic_script(), DecisionCallback)
 
@@ -1789,10 +1828,71 @@ def test_an_encoder_that_emits_the_sequence_fails_even_with_the_model_clean():
     original = schemas.encode_decision_callback
 
     def leaking_encoder(payload):
-        return {**original(payload), "decision_sequence": 7}
+        """An encoder that ACCEPTS the ordering key instead of refusing it."""
+        clean = {k: v for k, v in payload.items() if k != "decision_sequence"}
+        return {**original(clean), "decision_sequence": payload.get("decision_sequence", 7)}
 
     with (
         mock.patch.object(schemas, "encode_decision_callback", leaking_encoder),
-        pytest.raises(AssertionError, match="emits `decision_sequence`"),
+        pytest.raises(AssertionError, match="accepted `decision_sequence`"),
     ):
         assert_024_unbuilt(_alembic_script(), DecisionCallback)
+
+
+# ── re-gate finding 3: the ENQUEUE boundary is the serialization authority ─────────────────────
+class _CapturingSession:
+    """Captures what would be persisted, without a database."""
+
+    def __init__(self):
+        self.added = []
+
+    def add(self, obj):
+        self.added.append(obj)
+
+
+def _clean_callback_body() -> dict:
+    body = _sequenced_callback_attempt()
+    body.pop("decision_sequence")
+    return body
+
+
+def test_enqueue_refuses_an_ordering_key_whatever_the_caller_assembled():
+    """Validating in the pipeline sanitized ONE caller's dict. Adding the key after that call, or
+    calling enqueue directly, stored it verbatim because the enqueue accepted a raw dict."""
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    poisoned = {**_clean_callback_body(), "decision_sequence": 7}
+    with pytest.raises(PydanticValidationError):
+        enqueue_decision_callback(
+            _CapturingSession(), case_id="c1", run_id="r1", body=poisoned, decision_sequence=7)
+
+
+def test_enqueue_stores_the_validated_body_and_keeps_modelled_optionals():
+    """Guard the guard: refusing everything would pass the test above. A clean body must persist,
+    with `event_sequence` and `enforcement_held` intact — they exist to survive validation."""
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    body = _clean_callback_body()
+    body["event_sequence"] = 4
+    body["enforcement_held"] = {"computed_decision": "approve", "reason": "x"}
+    session = _CapturingSession()
+    enqueue_decision_callback(session, case_id="c1", run_id="r1", body=body, decision_sequence=9)
+
+    (row,) = session.added
+    assert "decision_sequence" not in row.payload_json
+    assert row.payload_json["event_sequence"] == 4
+    assert row.payload_json["enforcement_held"]["computed_decision"] == "approve"
+    # the ordering column is a COLUMN, not a wire field — it may carry the ordinal
+    assert row.decision_sequence == 9
+
+
+def test_an_unmodelled_field_added_after_the_pipeline_encodes_is_still_refused():
+    """Codex's second bypass: encode in the pipeline, then mutate before enqueue. The enqueue is
+    now the last authority, so the late addition cannot survive."""
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    encoded = schemas.encode_decision_callback(_clean_callback_body())
+    encoded["decision_sequence"] = 7  # added AFTER the pipeline's encode
+    with pytest.raises(PydanticValidationError):
+        enqueue_decision_callback(
+            _CapturingSession(), case_id="c1", run_id="r1", body=encoded, decision_sequence=7)

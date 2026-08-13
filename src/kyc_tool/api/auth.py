@@ -20,6 +20,7 @@ from fastapi import HTTPException
 
 from kyc_tool import security
 from kyc_tool.api import hmac_witness
+from kyc_tool.config import _TS_SAFE_DAYS as _MAX_OBSERVATION_WINDOW_DAYS
 from kyc_tool.config import Settings, parse_sunset
 
 # Process-local diagnostic counters (v2_accepted | rejected). Deliberately NOT database-backed
@@ -31,6 +32,10 @@ _DIAGNOSTIC_COUNTS: Counter = Counter()
 # Process identity + start epoch so a reader can never mistake this replica's counters for a fleet
 # total (re-audit `8aba2df..2cee937` R3-F2). datetime.now at import time is the process start.
 _PROCESS_STARTED_AT = datetime.now(UTC)
+
+# The ONLY environments in which an empty admin token may mean "console open".
+# Exact membership: an unknown or malformed environment is not a dev environment.
+_DEV_OPEN_ENVIRONMENTS = frozenset({"development", "test"})
 
 
 def _sunset_passed(iso: str, now: datetime) -> bool:
@@ -70,6 +75,16 @@ def _inbound_v1_zero(session_factory, window_days: int, now: datetime) -> bool:
     signal — the request then falls through to the fail-closed ``_record_v1``
     write, which 503s if the DB is genuinely down."""
     if session_factory is None:
+        return False
+    # The window must be READABLE before it can prove anything (re-gate finding 2). A malformed
+    # numeric — True, 0.5, -1, 0 — is "numeric enough" for the witness comparisons and collapses
+    # the window, so `(now - started).days < window` and `accepted_within_window` both go false and
+    # the predicate returns "zero proven". A valid v1 request is then RETIRED. That is the outage
+    # the availability policy exists to prevent, reached from the opposite side: Wave 0 hardened
+    # the direction that accepts and left the direction that refuses.
+    #
+    # Unreadable evidence is not proof, so this is False — the request stays served and recorded.
+    if type(window_days) is not int or not 1 <= window_days <= _MAX_OBSERVATION_WINDOW_DAYS:
         return False
     try:
         with session_factory() as s:
@@ -286,7 +301,19 @@ def require_admin(settings: Settings, headers) -> None:
     if type(token) is not str:
         raise HTTPException(status_code=401, detail="invalid or missing admin credential")
     if token == "":
-        return
+        # An empty token is the documented UNCONFIGURED DEV state, and that is only meaningful in
+        # a dev environment (re-gate finding 1). The previous rule was environment-blind, so a
+        # production-shaped Settings — including `ui_enabled=True` — opened the `/ui` mutation
+        # surface on an empty token. Normal construction forbids that combination, but the whole
+        # threat model here is a mutated object reaching consumers, and `/ui` calls this directly
+        # rather than through the ops wrapper. Exact dev vocabulary only; production and any
+        # malformed environment deny.
+        # Exact type before membership: `in frozenset` hashes the value, so a hostile `__hash__`
+        # would run here — the same escape this module gates everywhere else.
+        environment = settings.environment
+        if type(environment) is str and environment in _DEV_OPEN_ENVIRONMENTS:
+            return
+        raise HTTPException(status_code=401, detail="invalid or missing admin credential")
     header = _exact_str(headers.get("Authorization", ""))
     provided = header[7:] if header.startswith("Bearer ") else ""
     if not hmac.compare_digest(provided, token):
