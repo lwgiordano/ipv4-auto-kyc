@@ -65,6 +65,7 @@ REQUIRED_CLAIMS = (
     "WIRE.SIGN.VECTOR",
     "WIRE.SIGN.V1_SUNSET",
     "WIRE.SIGN.ROTATION",
+    "WIRE.SIGN.ROTATION_RETIREMENT",
     "WIRE.CALLBACK.PATH",
     "WIRE.CALLBACK.FIELDS",
     "WIRE.CALLBACK.OPTIONAL_FIELDS",
@@ -332,6 +333,17 @@ def build(*, contact: str, due_date: str) -> Doc:
     doc.claim_paragraph("WIRE.SIGN.V1_SUNSET", prefix="<b>On the v1 sunset dates: </b>")
     doc.h2("Key rotation: the two directions are not symmetric")
     doc.claim_bullets("WIRE.SIGN.ROTATION")
+    doc.claim_table(
+        "WIRE.SIGN.ROTATION_RETIREMENT",
+        ("Direction", "Blocked step", "Why it cannot be exercised today", "What unblocks it"),
+        # "Blocked step" must fit the longer gated clause wrapped; the two prose columns share
+        # the rest of the frame.
+        [0.85 * INCH, 1.45 * INCH, 2.3 * INCH, 2.1 * INCH],
+        rows=[(g.direction, g.transition, g.why_blocked, g.unblocked_by)
+              for g in WIRE.value("WIRE.SIGN.ROTATION_RETIREMENT")],
+        # `refuse`/`must_reject` are the executable gate and its red specimens; checked, not shown.
+        row_fields=("direction", "transition", "why_blocked", "unblocked_by"),
+    )
 
     doc.h2("The runnable signer is a file, not the page")
     doc.claim_mixed("WIRE.SIGN.COMPANION", [

@@ -196,8 +196,14 @@ class PendingInput:
     `4f23f23..122cc67` finding 10). `answer_type` is free text describing the SHAPE of an answer;
     it cannot tell a usable answer from an unusable one. A v1 HMAC version, a local process clock,
     a per-case release id, a writer-role list missing the inline manual approve — each looks like
-    a complete answer and each leaves 024 unsafe. `accept` decides, and until it returns true the
-    obligation stays blocked.
+    a complete answer and each leaves 024 unsafe. `accept` SCREENS those out.
+
+    Passing the screen resolves nothing (audit `4c3015a..cccd5f7` finding 11). A screen judges the
+    CONTENT of a candidate answer; resolving the obligation requires a versioned answer ARTIFACT —
+    approved, signed, validated against a schema by a named authority — and no such schema or
+    authority exists. `resolution_problems` below refuses every artifact until that unit ships
+    (.agents/ROADMAP.md §C, PR 7b-inputs), so O1-O4 stay PENDING no matter how complete an emailed
+    reply looks.
     """
 
     obligation: str  # O1-O4, as the live spec names them
@@ -213,9 +219,20 @@ class PendingInput:
 
 # ── what makes each answer USABLE, not merely present ─────────────────────────────────────────────
 #
-# Each returns the reasons an answer is unacceptable; empty means the obligation is satisfied.
-# These are the constraints the accepted design already fixes, written where a reviewer can see
-# them rather than left implicit in a spec paragraph.
+# Each returns the reasons an answer is unacceptable; empty means the answer's CONTENT screens
+# clean — see `resolution_problems` for why that still resolves nothing. These are the constraints
+# the accepted design already fixes, written where a reviewer can see them rather than left
+# implicit in a spec paragraph.
+#
+# The ceilings and floors marked "sanity screen" below are exactly that (audit `4c3015a..cccd5f7`
+# finding 11): they refuse magnitudes and absences no real agreement could contain — a
+# trillion-second deadline, a one-character recovery contract — and they are NOT the negotiated
+# values. The negotiated finite maxima, closed vocabularies, and governed registries arrive with
+# the versioned answer artifact (PR 7b-inputs) and are deliberately not set here.
+
+_DEADLINE_SCREEN_CEILING_SECONDS = 30 * 24 * 3600  # a request open for a month is not a deadline
+_REAPER_SCREEN_CEILING_SECONDS = 24 * 3600  # a reaper that runs less than daily is not a cadence
+_KNOWN_PARTY_TOKENS = ("platform", "techcraft", "ipv4.global")  # who an allocator can belong to
 
 
 def _accept_principal(answer: dict) -> list[str]:
@@ -240,6 +257,11 @@ def _accept_deadline(answer: dict) -> list[str]:
     seconds = answer.get("ttl_seconds")
     if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds <= 0:
         problems.append("the TTL must be a positive whole number of seconds")
+    elif seconds > _DEADLINE_SCREEN_CEILING_SECONDS:
+        problems.append(
+            f"a TTL of {seconds} seconds is beyond any plausible release window — refused as a "
+            "sanity screen; the negotiated finite maximum arrives with the versioned answer "
+            "artifact, not here")
     return problems
 
 
@@ -252,8 +274,18 @@ def _accept_terminal_authority(answer: dict) -> list[str]:
     cadence = answer.get("reaper_cadence_seconds")
     if not isinstance(cadence, int) or isinstance(cadence, bool) or cadence <= 0:
         problems.append("the reaper needs an explicit bounded cadence in seconds")
-    if not str(answer.get("outcome_recovery", "")).strip():
+    elif cadence > _REAPER_SCREEN_CEILING_SECONDS:
+        problems.append(
+            f"a reaper cadence of {cadence} seconds cannot expire anything in useful time — "
+            "refused as a sanity screen; the negotiated cadence bound arrives with the versioned "
+            "answer artifact, not here")
+    recovery = str(answer.get("outcome_recovery", "")).strip()
+    if not recovery:
         problems.append("no recovery path for a lost manual.release_outcome")
+    elif len(recovery.split()) < 3:
+        problems.append(
+            f"{recovery!r} cannot describe a recovery mechanism — refused as a sanity screen; "
+            "the closed mechanism vocabulary arrives with the versioned answer artifact, not here")
     return problems
 
 
@@ -263,8 +295,14 @@ def _accept_release_id(answer: dict) -> list[str]:
         problems.append(
             "release_id must be GLOBALLY unique; a per-case scope admits the same id on a second "
             "case, which the design requires to be rejected")
-    if not str(answer.get("allocated_by", "")).strip():
+    allocator = str(answer.get("allocated_by", "")).strip()
+    if not allocator:
         problems.append("nobody is named as allocating the id")
+    elif not any(token in allocator.lower() for token in _KNOWN_PARTY_TOKENS):
+        problems.append(
+            f"{allocator!r} is not identifiable as a party to this contract, so neither side can "
+            "bind a governance obligation to it — refused as a sanity screen; the governed "
+            "allocator registry arrives with the versioned answer artifact, not here")
     return problems
 
 
@@ -274,6 +312,16 @@ REQUIRED_WRITER_ROLES = frozenset({
     "pipeline decide", "api inline reviewer.manual_approve", "outbox publisher",
 })
 
+# Our own executable process inventory, and it is OURS to demand a stance on (audit
+# `4c3015a..cccd5f7` finding 11): a matrix naming only the writers reads complete while saying
+# nothing about dev_worker or retention, and an unaccounted role is precisely where an unfenced
+# writer hides. Mirrors kyc_tool.config.ProcessRole so this module stays import-pure; the
+# authority test binds the two exactly, the same bind that holds plan.PLAN_ROLES.
+ACCOUNTED_PROCESS_ROLES = ("api", "pipeline_worker", "outbox_worker", "retention", "dev_worker")
+# The processes hosting the three required writer identities; their stance cannot be non-writer.
+_WRITER_HOST_PROCESSES = ("api", "pipeline_worker", "outbox_worker")
+_ROLE_STANCES = frozenset({"writer", "non-writer"})
+
 
 def _accept_writer_matrix(answer: dict) -> list[str]:
     problems = []
@@ -281,6 +329,29 @@ def _accept_writer_matrix(answer: dict) -> list[str]:
     missing = sorted(REQUIRED_WRITER_ROLES - declared)
     if missing:
         problems.append(f"the writer-role matrix omits {missing}")
+    accounting = answer.get("process_roles")
+    if not isinstance(accounting, dict):
+        problems.append(
+            "no per-process accounting: every process role we run must be declared a decision "
+            "writer or a non-writer for the 024 window; a role the matrix never mentions is "
+            "where an unfenced writer hides")
+    else:
+        names = {str(name) for name in accounting}
+        unaccounted = sorted(set(ACCOUNTED_PROCESS_ROLES) - names)
+        if unaccounted:
+            problems.append(f"the accounting leaves process roles {unaccounted} without a stance")
+        unknown = sorted(names - set(ACCOUNTED_PROCESS_ROLES))
+        if unknown:
+            problems.append(f"the accounting names process roles we do not run: {unknown}")
+        vague = sorted(str(k) for k, v in accounting.items() if v not in _ROLE_STANCES)
+        if vague:
+            problems.append(
+                f"{vague} carry a stance other than 'writer'/'non-writer'; a hedged stance "
+                "accounts for nothing")
+        demoted = sorted(r for r in _WRITER_HOST_PROCESSES if accounting.get(r) == "non-writer")
+        if demoted:
+            problems.append(
+                f"{demoted} host the required writer identities and cannot be non-writers")
     if answer.get("old_image_full_stop") is not True:
         problems.append(
             "the full maintenance stop during an old-image transition is not agreed; an old-image "
@@ -319,6 +390,7 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
             ("a local process clock", {"clock": "local process", "ttl_seconds": 900}),
             ("no TTL", {"clock": "platform db", "ttl_seconds": None}),
             ("a zero TTL", {"clock": "platform db", "ttl_seconds": 0}),
+            ("a trillion-second TTL", {"clock": "platform db", "ttl_seconds": 10**12}),
         ),
     ),
     PendingInput(
@@ -335,12 +407,18 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
         must_reject=(
             ("shared terminal authority", {"terminal_authority": "both",
                                            "reaper_cadence_seconds": 60,
-                                           "outcome_recovery": "retry"}),
+                                           "outcome_recovery": "retry with replay"}),
             ("an unbounded reaper", {"terminal_authority": "platform",
                                      "reaper_cadence_seconds": None,
-                                     "outcome_recovery": "retry"}),
+                                     "outcome_recovery": "retry with signed replay"}),
             ("no outcome recovery", {"terminal_authority": "platform",
                                      "reaper_cadence_seconds": 60, "outcome_recovery": ""}),
+            ("a trillion-second reaper", {"terminal_authority": "platform",
+                                          "reaper_cadence_seconds": 10**12,
+                                          "outcome_recovery": "retry with signed replay"}),
+            ("a one-character recovery", {"terminal_authority": "platform",
+                                          "reaper_cadence_seconds": 60,
+                                          "outcome_recovery": "x"}),
         ),
     ),
     PendingInput(
@@ -355,28 +433,245 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
         must_reject=(
             ("a per-case scope", {"scope": "per case", "allocated_by": "platform"}),
             ("no allocator", {"scope": "global", "allocated_by": ""}),
+            ("an unknown allocator", {"scope": "global", "allocated_by": "somebody"}),
         ),
     ),
     PendingInput(
         obligation="O4",
         owner="both",
         question="Agree the complete WRITER-ROLE MATRIX for the 024 window: which processes on "
-                 "each side write decisions, and confirm that during any old-image transition the "
-                 "full maintenance stop applies, because an old-image writer does not take the "
+                 "each side write decisions — with an explicit writer-or-not stance for EVERY "
+                 "process role we run (api, pipeline_worker, outbox_worker, retention, "
+                 "dev_worker), because a role the matrix never mentions is where an unfenced "
+                 "writer hides — and confirm that during any old-image transition the full "
+                 "maintenance stop applies, because an old-image writer does not take the "
                  "admission fence and the fence proves nothing about it.",
-        answer_type="role list per side + written agreement on the old-image stop",
+        answer_type="role list per side + a stance on every process role + written agreement on "
+                    "the old-image stop",
         authority="activation spec O4 (both decision writers fenced) + .agents/ROADMAP.md",
         blocks="the activation migration's admission fence and its preflight",
         accept=_accept_writer_matrix,
         must_reject=(
             ("the inline manual approve omitted",
              {"writer_roles": ("pipeline decide", "outbox publisher"),
-              "old_image_full_stop": True}),
+              "old_image_full_stop": True,
+              "process_roles": {"api": "writer", "pipeline_worker": "writer",
+                                "outbox_worker": "writer", "retention": "non-writer",
+                                "dev_worker": "non-writer"}}),
             ("no old-image stop",
-             {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": False}),
+             {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": False,
+              "process_roles": {"api": "writer", "pipeline_worker": "writer",
+                                "outbox_worker": "writer", "retention": "non-writer",
+                                "dev_worker": "non-writer"}}),
+            ("dev_worker and retention unaccounted",
+             {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": True,
+              "process_roles": {"api": "writer", "pipeline_worker": "writer",
+                                "outbox_worker": "writer"}}),
         ),
     ),
 )
+
+# ── why a screened answer still resolves nothing ──────────────────────────────────────────────────
+#
+# Audit `4c3015a..cccd5f7` finding 11, folded fail-closed. The acceptors above are content
+# SCREENS. Resolving an obligation requires a versioned answer ARTIFACT — approved, signed,
+# validated against a schema by a named authority — and no such schema or authority exists.
+# `resolution_problems` therefore refuses EVERY artifact, on that absence rather than on content,
+# so nothing in this repository can mark O1-O4 answered. The schema is a reserved unbuilt unit
+# (.agents/ROADMAP.md §C, PR 7b-inputs); shipping it must replace the anchor AND rewrite the gate
+# in the same change — the gate's other branch is a tripwire that says exactly that.
+
+# Absence anchor. While None, resolution is impossible by construction.
+ANSWER_ARTIFACT_SCHEMA: object = None
+
+
+def resolution_problems(item: PendingInput, artifact: object) -> list[str]:
+    """Why `artifact` cannot RESOLVE `item`. Non-empty for every input in the repository's
+    current state — both branches refuse; only the change that ships the schema may open one."""
+    if ANSWER_ARTIFACT_SCHEMA is None:
+        return [
+            f"{item.obligation}: unresolvable — no versioned, approved/signed answer-artifact "
+            "schema or verifying authority exists. Screening an answer's content is not "
+            "resolution; the obligation stays PENDING until the platform-artifact unit ships "
+            "(.agents/ROADMAP.md §C, PR 7b-inputs)."
+        ]
+    return [
+        f"{item.obligation}: an answer-artifact schema has landed but this gate still refuses by "
+        "default — rewrite resolution_problems to validate against it in the same change that "
+        "ships the schema."
+    ]
+
+
+# ── rotation retirement is BLOCKED: the evidence does not exist ───────────────────────────────────
+#
+# Audit `4c3015a..cccd5f7` finding 3, folded fail-closed. The rotation procedure's two retirement
+# steps consume evidence this system cannot produce: nothing durable records WHICH key id an
+# inbound request verified under (the durable witness is version-aggregate; process-local counters
+# reset and see one replica), and the only closed drained-cutover record attests an outbox-ceiling
+# Settings value, not an HMAC signer target. So both steps are published BLOCKED where the reader
+# would act, and each carries an executable gate that refuses every evidence object constructible
+# today. The capability is a reserved unbuilt unit (.agents/ROADMAP.md §C, PR 5c); shipping it
+# trips the gates' anchors and the claim's verifier, forcing this claim forward in the same change.
+
+INBOUND_RETIREMENT_EVIDENCE_KINDS = frozenset(
+    {"durable_per_key_fleet_witness", "signed_fleet_receipt"})
+OUTBOUND_RETIREMENT_EVIDENCE_KINDS = frozenset({"hmac_signer_cutover_record"})
+
+# Absence anchor: no versioned signer-fleet receipt schema exists. Same contract as
+# ANSWER_ARTIFACT_SCHEMA above.
+SIGNED_FLEET_RECEIPT_SCHEMA: object = None
+
+
+def _refuse_inbound_retirement(evidence: object) -> list[str]:
+    """Why `evidence` cannot authorize retiring the old INBOUND key id. Never empty today."""
+    if type(evidence) is not dict:
+        return ["retirement evidence must be a mapping naming its kind"]
+    kind = evidence.get("kind")
+    if kind not in INBOUND_RETIREMENT_EVIDENCE_KINDS:
+        return [
+            f"evidence kind {kind!r} cannot authorize retirement: only a durable fleet-wide "
+            "per-key acceptance witness or a signed signer-fleet receipt can prove the old id "
+            "is quiet. Process-local counters reset and reach one replica, the durable "
+            "observation row is version-aggregate and never keyed by key id, and waiting any "
+            "interval proves nothing about the traffic during it."
+        ]
+    if kind == "durable_per_key_fleet_witness":
+        from kyc_tool.api import hmac_witness
+
+        if getattr(hmac_witness, "inbound_zero_for_key", None) is None:
+            return [
+                "no durable per-key witness is shipped: kyc_tool.api.hmac_witness has no "
+                "inbound_zero_for_key, and hmac_v1_observation records acceptance per HMAC "
+                "version, not per key id (.agents/ROADMAP.md §C, PR 5c — reserved, unbuilt)"
+            ]
+        return [
+            "a per-key witness has landed but this gate still refuses by default — rewrite "
+            "_refuse_inbound_retirement to consume it in the same change that ships the witness"
+        ]
+    if SIGNED_FLEET_RECEIPT_SCHEMA is None:
+        return [
+            "no signed fleet-receipt schema or verifying authority exists "
+            "(.agents/ROADMAP.md §C, PR 5c — reserved, unbuilt)"
+        ]
+    return [
+        "a fleet-receipt schema has landed but this gate still refuses by default — rewrite "
+        "_refuse_inbound_retirement to validate against it in the same change"
+    ]
+
+
+def _refuse_outbound_retirement(evidence: object) -> list[str]:
+    """Why `evidence` cannot authorize TechCraft retiring the old OUTBOUND key. Never empty
+    today."""
+    if type(evidence) is not dict:
+        return ["retirement evidence must be a mapping naming its kind"]
+    kind = evidence.get("kind")
+    if kind not in OUTBOUND_RETIREMENT_EVIDENCE_KINDS:
+        return [
+            f"evidence kind {kind!r} cannot authorize retirement: in a mixed fleet a callback "
+            "observed under the new key id does not prove no replica still signs with the old "
+            "one, and the closed drained-cutover record we can produce attests the outbox "
+            "attempt ceiling — a Settings value, not a signer key target."
+        ]
+    from kyc_tool.ops import cutover as ops_cutover
+
+    if getattr(ops_cutover, "HMAC_SIGNER_CUTOVER", None) is None:
+        return [
+            "no HMAC signer-target cutover record type exists: kyc_tool.ops.cutover's closed "
+            "record attests KYC_OUTBOX_MAX_ATTEMPTS, and no record names a target key id, "
+            "secret digest, and the exact attested publisher roles (.agents/ROADMAP.md §C, "
+            "PR 5c — reserved, unbuilt)"
+        ]
+    return [
+        "a signer-target cutover record has landed but this gate still refuses by default — "
+        "rewrite _refuse_outbound_retirement to consume it in the same change"
+    ]
+
+
+@dataclass(frozen=True)
+class RetirementGate:
+    """One rotation step published BLOCKED, with the executable gate that keeps it blocked.
+
+    `transition` is the exact clause of WIRE.SIGN.ROTATION it gates — the verifier requires it
+    verbatim in that claim's matching direction line, so rewriting the procedure around the gate
+    (finding 3's wait-one-second replacement) breaks the bind instead of passing unnoticed.
+    `refuse` returns the reasons an evidence object cannot authorize the step; it returns a
+    non-empty list for EVERY object constructible in this repository's current state, which is
+    what BLOCKED means here. `must_reject` names the specimens the tests hold red forever.
+    """
+
+    direction: str
+    transition: str
+    why_blocked: str
+    unblocked_by: str
+    refuse: object = None  # Callable[[object], list[str]] — checked, not shown
+    must_reject: tuple[tuple[str, dict], ...] = ()  # checked, not shown
+
+    PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = (
+        "direction", "transition", "why_blocked", "unblocked_by")
+
+
+ROTATION_RETIREMENT_GATES: tuple[RetirementGate, ...] = (
+    RetirementGate(
+        direction="INBOUND",
+        transition="We prove no request has arrived under the old id",
+        why_blocked=(
+            "Nothing durable records WHICH key id a request verified under: the durable "
+            "observation row counts per HMAC version, and process-local counters reset on "
+            "restart and see a single replica. The proof cannot currently be produced, so the "
+            "promote-and-remove step never starts."
+        ),
+        unblocked_by=(
+            "A durable fleet-wide per-key acceptance witness with a defined zero window, or a "
+            "signed signer-fleet cutover receipt with bounded observation — a reserved future "
+            "unit on our roadmap, not shipped. Until then hold the overlap: both entries stay "
+            "deployed and verifying, which is safe indefinitely."
+        ),
+        refuse=_refuse_inbound_retirement,
+        must_reject=(
+            ("aggregate version-level observation",
+             {"kind": "aggregate_v1_observation", "accepted_count": 0, "window_days": 30}),
+            ("process-local counters",
+             {"kind": "process_local_counters", "old_key_hits": 0}),
+            ("waiting one second",
+             {"kind": "wait", "seconds": 1}),
+            ("a perfectly shaped witness claim nothing shipped can back",
+             {"kind": "durable_per_key_fleet_witness",
+              "authority": "kyc_tool.api.hmac_witness.inbound_zero_for_key",
+              "window_days": 30, "zero_confirmed": True}),
+            ("a perfectly shaped receipt nothing shipped can verify",
+             {"kind": "signed_fleet_receipt", "signed_by": "signer-fleet operator",
+              "signature_verified": True, "observation_days": 7}),
+        ),
+    ),
+    RetirementGate(
+        direction="OUTBOUND",
+        transition="You retire the old key",
+        why_blocked=(
+            "Retiring is safe only on our written attestation that zero publishers still sign "
+            "with the old key, bound to that exact key. The hard-stop mechanism exists, but the "
+            "closed cutover record it produces attests the outbox attempt ceiling, not a signer "
+            "key target — no record type names the target key id and the attested publisher "
+            "roles, and a callback observed under the new key id is not fleet attestation."
+        ),
+        unblocked_by=(
+            "An HMAC-specific drained-cutover record naming the target key id, its secret "
+            "digest, and the exact attested publisher roles — the same reserved future unit. "
+            "Until then keep accepting BOTH keys and do not retire on observed traffic."
+        ),
+        refuse=_refuse_outbound_retirement,
+        must_reject=(
+            ("one callback observed under the new key id",
+             {"kind": "observed_new_key_callback", "key_id": "new"}),
+            ("the outbox-ceiling drain record",
+             {"kind": "outbox_ceiling_drain_record", "setting": "KYC_OUTBOX_MAX_ATTEMPTS"}),
+            ("a perfectly shaped signer record no shipped type can be",
+             {"kind": "hmac_signer_cutover_record", "target_key_id": "new",
+              "secret_digest": "0" * 64, "roles": ("outbox_worker", "dev_worker"),
+              "attested_zero": True}),
+        ),
+    ),
+)
+
 
 # The published signature vector, bound as ONE record: change any part and the test that recomputes
 # it through kyc_tool.security.sign_v2 fails. The body is stored as bytes so its length and hash
@@ -559,9 +854,9 @@ WIRE = Registry(
                 "INBOUND (your key, verifying your calls to us) — five phases, in this order. "
                 "(1) We deploy your NEW key id as a rotation entry alongside the old ACTIVE one, "
                 "fleet-wide. (2) We confirm both are accepted. (3) You switch your signer to the "
-                "new id. (4) We prove no request has arrived under the old id. (5) We PROMOTE the "
-                "new id to active with the old one demoted to a rotation entry, then remove the "
-                "old entry.",
+                "new id. (4) We prove no request has arrived under the old id — the step that is "
+                "BLOCKED today; see the gate table directly below. (5) We PROMOTE the new id to "
+                "active with the old one demoted to a rotation entry, then remove the old entry.",
                 "Phase 5 is not optional bookkeeping. Deleting the old entry while it is still "
                 "the ACTIVE key leaves us with no active key and the new id resolvable only as a "
                 "rotation entry — a state that verifies nothing once the entry is dropped. The "
@@ -570,7 +865,9 @@ WIRE = Registry(
                 "We sign with exactly one outbound key. (1) You start accepting old and new. "
                 "(2) We hard-stop and attest ZERO publishers, so no replica is still signing with "
                 "the old key. (3) We deploy the sole new signer. (4) We resume and you confirm "
-                "callbacks are arriving under the new key id. (5) You retire the old key.",
+                "callbacks are arriving under the new key id. (5) You retire the old key — "
+                "BLOCKED today until we can hand you a signer-target attestation record, which "
+                "does not exist yet; see the gate table directly below.",
                 "Phase 2 is why this is a drain and not a rolling deploy. In a mixed fleet, seeing "
                 "one callback under the new key does not prove no replica is still signing with "
                 "the old one; retiring early makes the next old-signed callback fail verification "
@@ -581,9 +878,19 @@ WIRE = Registry(
             ),
             authority="kyc_tool.config.hmac_extra_key_violations + kyc_tool.api.auth._inbound_secret "
                       "+ kyc_tool.outbox.publisher (one outbound signer) + "
-                      "kyc_tool.ops.cutover (publisher drain/attest)",
+                      "WIRE.SIGN.ROTATION_RETIREMENT (both retirement steps gated BLOCKED)",
             note="Both directions are ordered, and both orders are the way they are because one "
-                 "side can hold two keys and the other cannot.",
+                 "side can hold two keys and the other cannot. The overlap phases work today; "
+                 "the retirement steps do not, and the gate table says exactly why.",
+        ),
+        Claim(
+            id="WIRE.SIGN.ROTATION_RETIREMENT",
+            value=ROTATION_RETIREMENT_GATES,
+            authority=".agents/ROADMAP.md §C (PR 5c, reserved unbuilt) + executable absence "
+                      "anchors: kyc_tool.api.hmac_witness closed function inventory, hmac table "
+                      "closed column inventory, kyc_tool.ops.cutover closed record inventory, "
+                      "SIGNED_FLEET_RECEIPT_SCHEMA",
+            state=ClaimState.BLOCKED,
         ),
         # ── callbacks ─────────────────────────────────────────────────────────────────────────
         Claim(
@@ -748,11 +1055,17 @@ WIRE = Registry(
             id="WIRE.ORDERING.PENDING_INPUTS",
             value=PENDING_024_INPUTS,
             authority=".agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-"
-                      "design.md open blockers O1-O4 (parsed live by the authority test)",
+                      "design.md open blockers O1-O4 (parsed live by the authority test) + "
+                      "docs.contracts.wire.resolution_problems (refuses every artifact until the "
+                      "answer-artifact schema ships; .agents/ROADMAP.md §C, PR 7b-inputs)",
             state=ClaimState.PENDING,
             note="These are the decisions 024 cannot be built without, and every one of them is "
                  "the platform's to make. Answering the three questions in section 1.1 alone "
-                 "leaves the unit blocked.",
+                 "leaves the unit blocked. And no reply can RESOLVE an obligation yet: resolution "
+                 "requires a versioned, approved and signed answer artifact, and that schema and "
+                 "its verifying authority are a future unit of ours that has not shipped — so "
+                 "O1-O4 remain PENDING however complete an emailed answer looks. What we can do "
+                 "with your answers today is screen their content and agree them in principle.",
         ),
         Claim(
             id="WIRE.ORDERING.BOOTSTRAP_024",

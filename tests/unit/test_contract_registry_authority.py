@@ -29,6 +29,7 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from docs.contracts import ClaimState, playbook
+from docs.contracts import wire as wire_module
 from docs.contracts.operations import OPERATIONS, Procedure
 from docs.contracts.signing_example import sign as example_sign
 from docs.contracts.wire import WIRE
@@ -63,6 +64,7 @@ from kyc_tool.security import (
     canonical_v2,
     sign_v2,
 )
+from tests import roadmap
 
 from .test_production_config import hardened
 
@@ -266,6 +268,21 @@ def _rotation_publishes_an_executable_procedure_for_each_direction():
         "nothing explains why deleting before promoting is unsafe"
     )
 
+    # audit `4c3015a..cccd5f7` finding 3, folded fail-closed: the two retirement steps are marked
+    # BLOCKED in the procedure text itself, and each gate's transition clause appears verbatim in
+    # its own direction's line. The audit's reproduction — replacing phase 4 with "wait one second
+    # whether or not old-key requests still arrive" — breaks this bind instead of passing.
+    gates = {g.direction: g for g in WIRE.value("WIRE.SIGN.ROTATION_RETIREMENT")}
+    assert set(gates) == {"INBOUND", "OUTBOUND"}
+    assert gates["INBOUND"].transition in inbound, (
+        "the inbound line no longer carries the gated proof clause; the gate binds nothing"
+    )
+    assert "BLOCKED" in inbound, "the inbound proof step reads as available again"
+    assert gates["OUTBOUND"].transition in outbound, (
+        "the outbound line no longer carries the gated retire clause; the gate binds nothing"
+    )
+    assert "BLOCKED" in outbound, "the outbound retire step reads as available again"
+
     # outbound: exactly ONE signer, so the overlap cannot live here and the drain is required
     publisher = (SRC / "outbox" / "publisher.py").read_text()
     assert publisher.count("hmac_outbound_secret") == 1, (
@@ -281,12 +298,86 @@ def _rotation_publishes_an_executable_procedure_for_each_direction():
         "nothing explains why one new-key callback is not evidence"
     )
 
-    # the drain is a real, named capability, not an aspiration
-    from kyc_tool.ops import cutover
-
+    # the drain MECHANISM is a real, named capability — outbound phase 2's hard-stop is not an
+    # aspiration. What does NOT exist is a signer-target attestation RECORD; that absence is held
+    # by the retirement claim's own verifier, which is why phase 5 is BLOCKED above.
     assert hasattr(cutover, "OUTBOX_MAX_ATTEMPTS_CUTOVER")
     assert "attest zero publishers" in " ".join(
         OPERATIONS.value("OPS.CUTOVER.OUTBOX_CEILING")).lower()
+
+
+@verifies("WIRE.SIGN.ROTATION_RETIREMENT")
+def _rotation_retirement_is_unreachable_by_construction():
+    """Audit `4c3015a..cccd5f7` finding 3, folded under the human decision "fail closed now,
+    capability to ROADMAP" (PLAN-v2). The claim publishes BLOCKED where a reader would otherwise
+    act; each gate refuses every evidence object constructible today; and the absence anchors are
+    EXECUTABLE — shipping any part of the per-key evidence capability fails this verifier, which
+    forces the claim, the gates, and the ROADMAP unit forward in the same change."""
+    claim = WIRE["WIRE.SIGN.ROTATION_RETIREMENT"]
+    assert claim.state is ClaimState.BLOCKED, "retirement was quietly promoted out of BLOCKED"
+    gates = claim.value
+    assert [g.direction for g in gates] == ["INBOUND", "OUTBOUND"]
+    rotation = WIRE.value("WIRE.SIGN.ROTATION")
+    for gate in gates:
+        line = next(ln for ln in rotation if ln.startswith(gate.direction))
+        assert gate.transition in line, (
+            f"{gate.direction}: the gated clause is no longer in the published procedure"
+        )
+        assert "BLOCKED" in line
+        assert callable(gate.refuse), f"{gate.direction}: no executable gate"
+        assert gate.must_reject, f"{gate.direction}: names no refused specimen"
+        for label, evidence in gate.must_reject:
+            reasons = gate.refuse(evidence)
+            assert reasons, f"{gate.direction}: {label} was accepted"
+            assert all(isinstance(r, str) and r for r in reasons)
+        assert gate.refuse("not a mapping"), f"{gate.direction}: non-mapping evidence accepted"
+        assert gate.why_blocked.strip() and gate.unblocked_by.strip()
+
+    # the absence anchors, executable. A per-key witness, a per-key schema surface, a receipt
+    # schema, or a signer-target cutover record appearing ANYWHERE below fails this test.
+    from kyc_tool.api import hmac_witness
+    from kyc_tool.db import tables as db_tables
+
+    witness_tree = ast.parse((SRC / "api" / "hmac_witness.py").read_text())
+    witness_functions = {
+        node.name for node in witness_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert witness_functions == {"record_v1_accepted", "inbound_v1_zero", "observation_state"}, (
+        "kyc_tool.api.hmac_witness changed shape; if a per-key witness shipped, this claim, its "
+        "gates, and ROADMAP PR 5c must move in the same change"
+    )
+    for node in ast.walk(witness_tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            arg_names = [a.arg for a in node.args.args + node.args.kwonlyargs]
+            assert "key_id" not in arg_names, f"{node.name} now takes a key_id"
+    assert getattr(hmac_witness, "inbound_zero_for_key", None) is None
+    observation_columns = {c.name for c in db_tables.HmacV1Observation.__table__.columns}
+    assert observation_columns == {
+        "id", "observation_started_at", "accepted_count", "last_accepted_at"}, (
+        "hmac_v1_observation grew columns; a per-key witness must move this claim forward"
+    )
+    hmac_tables = {name for name in db_tables.Base.metadata.tables if name.startswith("hmac")}
+    assert hmac_tables == {"hmac_v1_observation", "hmac_signature_stats"}
+    assert frozenset({"KYC_OUTBOX_MAX_ATTEMPTS"}) == cutover._ALLOWED_SETTINGS, (
+        "the closed cutover record now governs more than the outbox ceiling; a signer-target "
+        "record must move this claim forward"
+    )
+    drained_records = {
+        name for name, value in vars(cutover).items()
+        if isinstance(value, cutover.DrainedCutover)
+    }
+    assert drained_records == {"OUTBOX_MAX_ATTEMPTS_CUTOVER"}
+    assert getattr(cutover, "HMAC_SIGNER_CUTOVER", None) is None
+    assert wire_module.SIGNED_FLEET_RECEIPT_SCHEMA is None
+
+    # the reserved, unbuilt ROADMAP unit — reserved WITHOUT a migration or a shipped/pending state
+    row = next((r for r in roadmap.records() if r[0] == "PR 5c"), None)
+    assert row is not None, "ROADMAP §C reserves no PR 5c unit for the retirement evidence"
+    _unit, state, revisions = row
+    assert state == "—" and revisions == [], (
+        "PR 5c must stay a reservation without a migration until it is actually designed"
+    )
 
 
 @verifies("WIRE.SIGN.V1_SUNSET")
@@ -840,7 +931,7 @@ def _pending_024_inputs_cover_every_live_obligation():
     assert len(questions) == len(set(questions))
     assert WIRE["WIRE.ORDERING.PENDING_INPUTS"].state is ClaimState.PENDING
 
-    # a good answer to each one is accepted, so the constraints are not simply refusing everything
+    # a good answer to each one SCREENS clean, so the screens are not simply refusing everything
     from docs.contracts.wire import REQUIRED_WRITER_ROLES
 
     good = {
@@ -849,19 +940,57 @@ def _pending_024_inputs_cover_every_live_obligation():
         ("O2", ""): {"terminal_authority": "platform", "reaper_cadence_seconds": 60,
                      "outcome_recovery": "signed redelivery with replay on restart"},
         ("O3", ""): {"scope": "global", "allocated_by": "platform"},
-        ("O4", ""): {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": True},
+        ("O4", ""): {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": True,
+                     "process_roles": {"api": "writer", "pipeline_worker": "writer",
+                                       "outbox_worker": "writer", "retention": "non-writer",
+                                       "dev_worker": "non-writer"}},
     }
     for item in inputs:
         answers = [a for (obligation, _hint), a in good.items() if obligation == item.obligation]
         assert any(item.accept(answer) == [] for answer in answers), (
-            f"{item.obligation}: no acceptable answer exists, so the constraint refuses everything"
+            f"{item.obligation}: no screenable answer exists, so the screen refuses everything"
         )
 
     # the specific decisions the finding said were missing
     text = " ".join(i.question for i in inputs)
     for missing in ("principal", "HMAC VERSION", "deadline", "SOLE terminal", "reaper",
-                    "GLOBALLY unique", "WRITER-ROLE MATRIX", "old-image"):
+                    "GLOBALLY unique", "WRITER-ROLE MATRIX", "old-image",
+                    "EVERY process role"):
         assert missing in text, f"the 024 request still does not ask about {missing!r}"
+
+    # audit `4c3015a..cccd5f7` finding 11, folded fail-closed: screening is not resolution. Every
+    # obligation is UNRESOLVABLE — even wrapping the best screenable answer in the most complete
+    # artifact shape imaginable — because no versioned answer-artifact schema or verifying
+    # authority exists. The refusal must cite that ABSENCE, not the content.
+    for item in inputs:
+        best_content = next(
+            a for (obligation, _h), a in good.items() if obligation == item.obligation)
+        artifact = {"schema_version": "1.0.0", "approved_by": "platform release authority",
+                    "signature_verified": True, "answer": best_content}
+        problems = wire_module.resolution_problems(item, artifact)
+        assert problems, f"{item.obligation}: an artifact resolved an obligation"
+        assert any("unresolvable" in p for p in problems), problems
+    assert wire_module.ANSWER_ARTIFACT_SCHEMA is None, (
+        "the answer-artifact schema anchor moved; resolution_problems, the claim note, and "
+        "ROADMAP PR 7b-inputs must all move in the same change"
+    )
+    note = WIRE["WIRE.ORDERING.PENDING_INPUTS"].note
+    assert "RESOLVE" in note and "has not shipped" in note, (
+        "the published note no longer tells the reader that no reply can resolve an obligation"
+    )
+
+    # the accounted role inventory mirrors ProcessRole exactly (the plan.PLAN_ROLES bind, again):
+    # a new executable role cannot appear without the O4 matrix demanding a stance on it.
+    assert set(wire_module.ACCOUNTED_PROCESS_ROLES) == {role.value for role in ProcessRole}
+    assert len(wire_module.ACCOUNTED_PROCESS_ROLES) == len(ProcessRole)
+
+    # the reserved, unbuilt ROADMAP unit for the artifact schema
+    row = next((r for r in roadmap.records() if r[0] == "PR 7b-inputs"), None)
+    assert row is not None, "ROADMAP §C reserves no PR 7b-inputs unit for the answer artifacts"
+    _unit, state, revisions = row
+    assert state == "—" and revisions == [], (
+        "PR 7b-inputs must stay a reservation without a migration until it is actually designed"
+    )
 
 
 @verifies("WIRE.ORDERING.INTEGRITY_MISMATCH")
@@ -2577,3 +2706,301 @@ def test_phase_and_migration_span_cannot_disagree():
                 if p.name == "Migrations 013-023")
     with pytest.raises(ValueError, match="without a migration span"):
         dataclasses.replace(pr7b, migration_span=None)
+
+
+# ── F3-now / F11-now: the fail-closed gates, proven to bite ───────────────────────────────────────
+#
+# Audit `4c3015a..cccd5f7` findings 3 and 11, folded under the human decision recorded in PLAN-v2:
+# "fail closed now, capability to ROADMAP". Neither missing evidence capability is built this
+# round. Instead the published claims stop presenting the capabilities as available — rotation
+# retirement is BLOCKED behind gates that refuse every evidence object constructible today, and
+# O1-O4 are UNRESOLVABLE until a versioned signed answer-artifact schema exists. Each test below
+# is the audit's literal reproduction (or its fail-closed inversion), written red first.
+
+def _this_module():
+    """The mutation tests patch this module's own WIRE global, which is the binding the assembled
+    verifiers read — so `AUTHORITY_VERIFIERS[...]()` runs the real verifier against the mutation."""
+    import sys
+
+    return sys.modules[__name__]
+
+
+def _wire_with(claim_id: str, **changes):
+    """The live WIRE registry with ONE claim's fields replaced — for running the REAL assembled
+    verifier against a mutated registry, per the audit's requirement that mutations target the
+    top-level verifier rather than an isolated helper."""
+    claims = tuple(
+        dataclasses.replace(c, **changes) if c.id == claim_id else c for c in WIRE.claims
+    )
+    return dataclasses.replace(WIRE, claims=claims)
+
+
+def test_f11_codex_specimens_are_refused_by_the_screens():
+    """Finding 11's reproduced specimens: each returned [] from the live acceptors. They are
+    sanity SCREENS, not negotiated values — the negotiated maxima and closed vocabularies arrive
+    with the versioned answer artifact, which is exactly why resolution stays impossible below."""
+    assert wire_module._accept_deadline({"clock": "platform db", "ttl_seconds": 10**12}), (
+        "a trillion-second deadline still screens as usable"
+    )
+    assert wire_module._accept_terminal_authority(
+        {"terminal_authority": "platform", "reaper_cadence_seconds": 10**12,
+         "outcome_recovery": "signed redelivery with replay on restart"}
+    ), "a trillion-second reaper cadence still screens as usable"
+    assert wire_module._accept_terminal_authority(
+        {"terminal_authority": "platform", "reaper_cadence_seconds": 60,
+         "outcome_recovery": "x"}
+    ), "a one-character recovery contract still screens as usable"
+    assert wire_module._accept_release_id({"scope": "global", "allocated_by": "somebody"}), (
+        "an allocator no party to this contract can be bound to still screens as usable"
+    )
+
+
+def test_f11_the_previously_acceptable_o4_answer_is_now_refused():
+    """Finding 11's O4 reproduction verbatim: a writer matrix containing only the pipeline, API,
+    and outbox writers — with no stance on dev_worker or retention — read as complete. Every
+    process role we run must be accounted writer-or-not; an unaccounted role is where an unfenced
+    writer hides. The role inventory is OURS (ProcessRole), not the platform's to negotiate."""
+    from docs.contracts.wire import REQUIRED_WRITER_ROLES
+
+    old_complete_looking = {
+        "writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": True}
+    assert wire_module._accept_writer_matrix(old_complete_looking), (
+        "a matrix with no per-process accounting still screens as complete"
+    )
+    unaccounted = dict(old_complete_looking)
+    unaccounted["process_roles"] = {
+        "api": "writer", "pipeline_worker": "writer", "outbox_worker": "writer"}
+    problems = wire_module._accept_writer_matrix(unaccounted)
+    assert any("dev_worker" in p and "retention" in p for p in problems), (
+        f"dev_worker/retention were left unaccounted without refusal: {problems}"
+    )
+    # guard the guard: the screen reads the stances, not just the key set
+    demoted = dict(old_complete_looking)
+    demoted["process_roles"] = {
+        "api": "non-writer", "pipeline_worker": "writer", "outbox_worker": "writer",
+        "retention": "non-writer", "dev_worker": "non-writer"}
+    assert any("required writer" in p for p in wire_module._accept_writer_matrix(demoted)), (
+        "a required writer host demoted to non-writer was not refused"
+    )
+    unknown = dict(old_complete_looking)
+    unknown["process_roles"] = {
+        "api": "writer", "pipeline_worker": "writer", "outbox_worker": "writer",
+        "retention": "non-writer", "dev_worker": "non-writer", "shadow_worker": "non-writer"}
+    assert any("do not run" in p for p in wire_module._accept_writer_matrix(unknown)), (
+        "a process role we do not run was accepted into the accounting"
+    )
+
+
+def test_f11_a_syntactically_perfect_answer_still_cannot_resolve():
+    """The fail-closed core: take the best answer each screen accepts, wrap it in the most
+    complete artifact shape imaginable — versioned, approved, signature marked verified — and
+    resolution must still refuse, on the ABSENCE of the schema/authority, not on content."""
+    for item in WIRE.value("WIRE.ORDERING.PENDING_INPUTS"):
+        artifact = {
+            "schema_version": "1.0.0",
+            "approved_by": "platform release authority",
+            "signature_verified": True,
+            "answer": {"perfect": "content"},
+        }
+        problems = wire_module.resolution_problems(item, artifact)
+        assert problems, f"{item.obligation}: a bare dict resolved an obligation"
+        assert any("unresolvable" in p for p in problems), problems
+        assert any("schema" in p for p in problems), problems
+    assert wire_module.ANSWER_ARTIFACT_SCHEMA is None
+
+
+def test_f11_the_resolution_gate_reads_its_anchor_not_a_constant_refusal():
+    """Guard the guard: flip the absence anchor and the refusal must CHANGE BRANCH — to the
+    tripwire demanding the gate be rewritten with the schema — proving the gate consults the
+    anchor rather than returning a hardcoded no."""
+    item = WIRE.value("WIRE.ORDERING.PENDING_INPUTS")[0]
+    with mock.patch.object(wire_module, "ANSWER_ARTIFACT_SCHEMA", object()):
+        problems = wire_module.resolution_problems(item, {"schema_version": "1.0.0"})
+        assert problems, "flipping the anchor must not silently resolve anything"
+        assert any("rewrite resolution_problems" in p for p in problems), problems
+        assert not any("unresolvable" in p for p in problems), (
+            "the absence branch fired with a non-None anchor; the gate is not reading it"
+        )
+
+
+def test_f3_the_rotation_claim_no_longer_presents_retirement_as_available():
+    """Finding 3: inbound phase 4 claimed a proof no capability can produce, and outbound cited a
+    cutover record whose subject is the outbox attempt ceiling. Both retirement steps must now be
+    marked BLOCKED in the procedure text itself, where a reader would otherwise act."""
+    lines = WIRE.value("WIRE.SIGN.ROTATION")
+    inbound = next(line for line in lines if line.startswith("INBOUND"))
+    outbound = next(line for line in lines if line.startswith("OUTBOUND"))
+    assert "BLOCKED" in inbound, "the inbound proof step reads as available"
+    assert "BLOCKED" in outbound, "the outbound retire step reads as available"
+
+
+def test_f3_no_constructible_evidence_authorizes_retirement():
+    """Every named specimen — including the perfectly SHAPED witness/receipt/record claims that
+    nothing shipped can back — must be refused with reasons that name the missing capability."""
+    gates = {g.direction: g for g in WIRE.value("WIRE.SIGN.ROTATION_RETIREMENT")}
+    assert set(gates) == {"INBOUND", "OUTBOUND"}
+    for gate in gates.values():
+        assert gate.refuse("not a mapping"), f"{gate.direction}: non-mapping evidence accepted"
+        for label, evidence in gate.must_reject:
+            reasons = gate.refuse(evidence)
+            assert reasons, f"{gate.direction}: {label} was accepted"
+    shaped_witness = {
+        "kind": "durable_per_key_fleet_witness",
+        "authority": "kyc_tool.api.hmac_witness.inbound_zero_for_key",
+        "window_days": 30, "zero_confirmed": True}
+    reasons = gates["INBOUND"].refuse(shaped_witness)
+    assert any("no durable per-key witness is shipped" in r for r in reasons), reasons
+    shaped_receipt = {
+        "kind": "signed_fleet_receipt", "signed_by": "signer-fleet operator",
+        "signature_verified": True, "observation_days": 7}
+    reasons = gates["INBOUND"].refuse(shaped_receipt)
+    assert any("no signed fleet-receipt schema" in r for r in reasons), reasons
+    shaped_record = {
+        "kind": "hmac_signer_cutover_record", "target_key_id": "new",
+        "secret_digest": "0" * 64, "roles": ("outbox_worker", "dev_worker"),
+        "attested_zero": True}
+    reasons = gates["OUTBOUND"].refuse(shaped_record)
+    assert any("no HMAC signer-target cutover record" in r for r in reasons), reasons
+
+
+def test_f3_the_gates_read_their_absence_anchors():
+    """Guard the guard, three anchors: give each absent capability a fake presence and the
+    refusal must change branch to the rewrite-me tripwire — never silently authorize."""
+    from kyc_tool.api import hmac_witness
+
+    gates = {g.direction: g for g in WIRE.value("WIRE.SIGN.ROTATION_RETIREMENT")}
+    witness_evidence = {"kind": "durable_per_key_fleet_witness"}
+    with mock.patch.object(
+        hmac_witness, "inbound_zero_for_key", lambda *a, **k: True, create=True
+    ):
+        reasons = gates["INBOUND"].refuse(witness_evidence)
+        assert reasons and any("rewrite _refuse_inbound_retirement" in r for r in reasons), reasons
+    receipt_evidence = {"kind": "signed_fleet_receipt"}
+    with mock.patch.object(wire_module, "SIGNED_FLEET_RECEIPT_SCHEMA", object()):
+        reasons = gates["INBOUND"].refuse(receipt_evidence)
+        assert reasons and any("rewrite _refuse_inbound_retirement" in r for r in reasons), reasons
+    record_evidence = {"kind": "hmac_signer_cutover_record"}
+    with mock.patch.object(cutover, "HMAC_SIGNER_CUTOVER", object(), create=True):
+        reasons = gates["OUTBOUND"].refuse(record_evidence)
+        assert reasons and any("rewrite _refuse_outbound_retirement" in r for r in reasons), reasons
+
+
+def test_f3_wait_only_phase_mutation_fails_the_assembled_verifier(monkeypatch):
+    """Finding 3's literal reproduction: replace inbound phase 4 with 'wait one second whether or
+    not old-key requests still arrive' and AUTHORITY_VERIFIERS['WIRE.SIGN.ROTATION']() passed.
+    The gate's transition clause is now bound verbatim into the direction line, so the wait-only
+    rewrite breaks the assembled verifier itself."""
+    lines = list(WIRE.value("WIRE.SIGN.ROTATION"))
+    i = next(idx for idx, s in enumerate(lines) if s.startswith("INBOUND"))
+    mutated_line = re.sub(
+        r"\(4\).*?\(5\)",
+        "(4) We wait one second whether or not old-key requests still arrive. (5)",
+        lines[i],
+    )
+    assert mutated_line != lines[i], "the mutation failed to change the line"
+    lines[i] = mutated_line
+    monkeypatch.setattr(
+        _this_module(), "WIRE", _wire_with("WIRE.SIGN.ROTATION", value=tuple(lines)))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION"]()
+
+
+def test_f3_stripping_the_blocked_marker_fails_the_assembled_verifier(monkeypatch):
+    """Keeping the proof sentence while deleting only the BLOCKED marker restores the original
+    overclaim — the procedure reads as executable again — and must fail the same verifier."""
+    lines = list(WIRE.value("WIRE.SIGN.ROTATION"))
+    i = next(idx for idx, s in enumerate(lines) if s.startswith("INBOUND"))
+    mutated_line = re.sub(r" — the step that is BLOCKED[^.]*", "", lines[i])
+    assert mutated_line != lines[i], "the mutation failed to change the line"
+    lines[i] = mutated_line
+    monkeypatch.setattr(
+        _this_module(), "WIRE", _wire_with("WIRE.SIGN.ROTATION", value=tuple(lines)))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION"]()
+
+
+def test_f3_demoting_the_retirement_claim_to_shipped_fails_its_verifier(monkeypatch):
+    """BLOCKED is the published state the whole fold hangs on; a quiet promotion to SHIPPED must
+    fail the claim's own assembled verifier."""
+    monkeypatch.setattr(
+        _this_module(), "WIRE",
+        _wire_with("WIRE.SIGN.ROTATION_RETIREMENT", state=ClaimState.SHIPPED))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION_RETIREMENT"]()
+
+
+# ── Wave 1 closure: representative F7/F8/F9 tampers through the ASSEMBLED verifier ────────────────
+#
+# PLAN-REVIEW point 4: "the exact F7/F8/F9/F4a mutations must target the assembled top-level
+# verifier, not isolated helper tests." The byte-level matrices above run through the same
+# helpers the verifier itself executes, and the F4a/F8 inversions are unconstructable outright.
+# What none of them showed is the assembled verifier REFUSING a tampered procedure OBJECT — the
+# object.__setattr__ route around frozen dataclasses that its docstring claims cannot survive.
+# These three run the real AUTHORITY_VERIFIERS['OPS.CUTOVER.PROCEDURES'] against a mutated
+# OPERATIONS registry and prove the claim.
+
+
+def _operations_with_procedure(tampered) -> object:
+    """The live OPERATIONS registry with the procedure of the same name swapped for `tampered`."""
+    value = tuple(
+        tampered if p.name == tampered.name else p
+        for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+    )
+    claims = tuple(
+        dataclasses.replace(c, value=value) if c.id == "OPS.CUTOVER.PROCEDURES" else c
+        for c in OPERATIONS.claims
+    )
+    return dataclasses.replace(OPERATIONS, claims=claims)
+
+
+def test_f8_an_understated_range_under_the_unchanged_name_fails_the_assembled_verifier(monkeypatch):
+    """The audit's F8 reproduction verbatim: keep the visible name 'Migrations 013-023', shrink
+    the range to start at 018, and the complete authority verifier passed. Now the verifier
+    recomputes the walk from the span and requires exact ordered equality, so even forcing the
+    derived field through object.__setattr__ cannot survive."""
+    import copy
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    tampered = copy.copy(pr7b)
+    object.__setattr__(tampered, "migration_range", pr7b.migration_range[5:])
+    assert tampered.name == "Migrations 013-023", "the visible name must stay unchanged"
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+
+
+def test_f7_a_repinned_digest_nobody_reviewed_fails_the_assembled_verifier(monkeypatch):
+    """A re-pin is only the act of review if it matches the real bytes: pin an arbitrary digest
+    on the ref and the verifier's own read of the live section refuses it."""
+    import copy
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    tampered = copy.copy(pr7b)
+    object.__setattr__(
+        tampered, "playbook_ref", dataclasses.replace(pr7b.playbook_ref, sha256="0" * 64))
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+
+
+def test_f9_an_omitted_branch_fails_the_assembled_verifier(monkeypatch):
+    """Drop the REFUSED branch and keep only SUCCEEDED: the published rollback prose no longer
+    derives from the contract, and the migrations still make refusal reachable — the assembled
+    verifier refuses on the first of those it reaches (the derived-prose bind), with the
+    reachable-outcome coverage behind it for a tamper that also regenerates the prose."""
+    import copy
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    succeeded_only = tuple(
+        b for b in pr7b.rollback_contract.branches if b.outcome == playbook.OUTCOME_SUCCEEDED)
+    assert len(succeeded_only) == 1, "the baseline contract no longer has the expected branches"
+    tampered_contract = copy.copy(pr7b.rollback_contract)
+    object.__setattr__(tampered_contract, "branches", succeeded_only)
+    tampered = copy.copy(pr7b)
+    object.__setattr__(tampered, "rollback_contract", tampered_contract)
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()

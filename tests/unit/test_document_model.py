@@ -837,8 +837,10 @@ def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatc
 RENDERER_PROSE = {
     # ── contract ──────────────────────────────────────────────────────────────────────────────
     ("contract", "WIRE.ORDERING.PENDING_INPUTS", 0): ("3b14b4a6307e5905", "024 asks table headers"),
-    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 1): ("ad480536ddc86b84",
-                                                      "what 024 cannot be built without"),
+    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 1): ("19c2b2f7d5f9a473",
+                                                      "what 024 cannot be built without + no "
+                                                      "reply can RESOLVE an obligation until the "
+                                                      "answer-artifact schema ships"),
     ("contract", "WIRE.INGEST.HEADERS", 0): ("9e9d62e11f51e35c", "header table headers + why column"),
     ("contract", "WIRE.INGEST.EXTRA_FIELDS", 0): ("3dbd54f03ecebb08",
                                                   "the forward-compatibility commitment: we add "
@@ -866,6 +868,8 @@ RENDERER_PROSE = {
                                               "direction tokens are literals; prose will not "
                                               "verify; what slot and path?query are"),
     ("contract", "WIRE.SIGN.COMPANION", 0): ("62bed443d66d463f", "companion filename + sha256 line"),
+    ("contract", "WIRE.SIGN.ROTATION_RETIREMENT", 0): ("f995814ca1e2e5c2",
+                                                       "blocked-retirement gate table headers"),
     ("contract", "WIRE.SIGN.VECTOR", 0): ("723d2cc6883b5453", "worked vector lead-in"),
     ("contract", "WIRE.RETENTION.BY_KIND", 0): ("c5357842f39273b0", "retention table headers"),
     # ── guide ─────────────────────────────────────────────────────────────────────────────────
