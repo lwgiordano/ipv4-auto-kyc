@@ -1675,16 +1675,22 @@ def test_rollback_prose_cannot_be_authored_at_all():
     """The original attack was editing the rollback text. There is no longer a field to edit: both
     published fields are `init=False` and computed from the contract."""
     contract = playbook.RollbackContract(_valid_facts())
-    pr6_ref = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
-                   if p.name == "Bundle-pinning activation").playbook_ref
+    pr6 = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+               if p.name == "Bundle-pinning activation")
     common = dict(
-        name="x", when="y", blocks_start=("z",), playbook_ref=pr6_ref,
+        name="x", plan=pr6.plan, playbook_ref=pr6.playbook_ref,
         rollback_contract=contract,
     )
     with pytest.raises(TypeError):
         Procedure(**common, rollback=("redeploy the previous image",))
     with pytest.raises(TypeError):
         Procedure(**common, irreversible="No, just redeploy.")
+    # F4a: the plan prose is equally unauthorable — a sentence that keeps every keyword while
+    # reversing its meaning has no field to live in.
+    with pytest.raises(TypeError):
+        Procedure(**common, when="Flip the flag while the workers roll; keywords intact.")
+    with pytest.raises(TypeError):
+        Procedure(**common, blocks_start=("The flag may be ON if convenient.",))
     # and what it does publish is exactly the contract's own sentences
     built = Procedure(**common)
     assert built.irreversible == contract.statements()[0]
@@ -2434,3 +2440,140 @@ def test_a_swapped_outcome_cannot_claim_the_other_result():
                 playbook.RollbackFact(playbook.VERIFICATION, playbook.VERIFY_NOT_STATED),
                 playbook.RollbackFact(playbook.ENDING, playbook.ENDING_RESUMED, "d"),
             ))
+
+
+# ── Wave 1 / F4a: the plan's executable bindings and unconstructable inversions ────────────────
+def test_plan_role_vocabulary_equals_the_process_role_enum():
+    """`PLAN_ROLES` mirrors `ProcessRole` so plan.py stays import-pure; this bind is what stops
+    the mirror drifting — a role added to the enum forces a decision in the plan vocabulary."""
+    from docs.contracts.plan import PLAN_ROLES
+
+    assert set(PLAN_ROLES) == {role.value for role in ProcessRole}
+
+
+def test_the_activation_flag_binds_to_the_real_settings_field():
+    """The typed flag slot names KYC_ENFORCE_BUNDLE_PINNING; the Settings field must exist under
+    that env name and default to False — 'the flag is still OFF' is the shipped default, not a
+    hope."""
+    from docs.contracts.plan import FlagStillOff
+
+    pr6 = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+               if p.name == "Bundle-pinning activation")
+    flag = next(p for p in pr6.plan.prerequisites if isinstance(p, FlagStillOff))
+    field_name = flag.flag_env.removeprefix("KYC_").lower()
+    assert field_name in Settings.model_fields, flag.flag_env
+    assert Settings.model_fields[field_name].default is False
+
+
+def test_plan_preflight_and_diagnostic_bind_to_the_ref_commands():
+    """The preflight/diagnostic prerequisites are only honest if the section actually publishes
+    the command an operator would run — bound through the ref's typed command records."""
+    procedures = {p.name: p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")}
+    pr6_argvs = {c.argv for c in procedures["Bundle-pinning activation"].playbook_ref.commands}
+    assert ("python", "-m", "kyc_tool.ops.verify_pinnable_backlog") in pr6_argvs
+    pr7b_argvs = {c.argv for c in procedures["Migrations 013-023"].playbook_ref.commands}
+    assert ("python", "-m", "kyc_tool.ops.verify_pr7b_core_backfill") in pr7b_argvs
+
+
+def test_the_schema_maintenance_when_binds_to_024_pending():
+    """The derived template says '024 is pending'; the wire claim is the authority for that."""
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    assert "024 is pending" in pr7b.when
+    assert WIRE["WIRE.ORDERING.BOOTSTRAP_024"].state is ClaimState.PENDING
+
+
+def test_plan_evidence_quotes_sit_in_the_digest_bound_section():
+    for procedure in OPERATIONS.value("OPS.CUTOVER.PROCEDURES"):
+        prose = _playbook_prose(procedure.playbook_ref)
+        for prerequisite in procedure.plan.prerequisites:
+            assert prerequisite.evidence.lower() in prose, (
+                f"{procedure.name}: {type(prerequisite).__name__} quotes "
+                f"{prerequisite.evidence!r}, which is not in the reviewed section"
+            )
+
+
+def test_the_four_bundle_inversions_are_unconstructable():
+    """Codex's F4a reproduction, kind by kind. Each inversion previously left every verifier
+    green; now none of them can be expressed."""
+    from docs.contracts import plan as plan_module
+
+    pr6 = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+               if p.name == "Bundle-pinning activation")
+    good = pr6.plan.prerequisites
+
+    # 1. "start with the flag on": the kind has no state parameter to invert
+    with pytest.raises(TypeError):
+        plan_module.FlagStillOff(flag_env="KYC_ENFORCE_BUNDLE_PINNING", evidence="x", state="on")
+
+    # 2. skip the seed/read-back
+    with pytest.raises(ValueError, match="requires exactly"):
+        plan_module.ProcedurePlanContract(
+            phase=plan_module.PHASE_FLAG_ACTIVATION, subject="Turning on policy-bundle pinning",
+            prerequisites=tuple(p for p in good
+                                if not isinstance(p, plan_module.SeedAndReadBack)))
+
+    # 3. ignore the backlog preflight
+    with pytest.raises(ValueError, match="requires exactly"):
+        plan_module.ProcedurePlanContract(
+            phase=plan_module.PHASE_FLAG_ACTIVATION, subject="Turning on policy-bundle pinning",
+            prerequisites=tuple(p for p in good
+                                if not isinstance(p, plan_module.BacklogPreflight)))
+
+    # 4. keep the old workers rolling — either drop the stop entirely, or shrink it below floor
+    with pytest.raises(ValueError, match="requires exactly"):
+        plan_module.ProcedurePlanContract(
+            phase=plan_module.PHASE_FLAG_ACTIVATION, subject="Turning on policy-bundle pinning",
+            prerequisites=tuple(p for p in good
+                                if not isinstance(p, plan_module.StoppedAttestedZero)))
+    with pytest.raises(ValueError, match="stop-set to include"):
+        plan_module.ProcedurePlanContract(
+            phase=plan_module.PHASE_FLAG_ACTIVATION, subject="Turning on policy-bundle pinning",
+            prerequisites=tuple(
+                plan_module.StoppedAttestedZero(roles=("retention",), evidence="x")
+                if isinstance(p, plan_module.StoppedAttestedZero) else p for p in good))
+
+
+def test_reordering_retention_after_the_diagnostic_is_unconstructable():
+    """The one ordered-prerequisite defect the old keyword tests DID check, now structural: the
+    phase owns the canonical order, so a reordered tuple refuses."""
+    from docs.contracts import plan as plan_module
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    reordered = (pr7b.plan.prerequisites[1], pr7b.plan.prerequisites[0],
+                 *pr7b.plan.prerequisites[2:])
+    with pytest.raises(ValueError, match="requires exactly"):
+        plan_module.ProcedurePlanContract(
+            phase=plan_module.PHASE_SCHEMA_MAINTENANCE, subject=pr7b.plan.subject,
+            prerequisites=reordered)
+
+
+def test_a_subject_cannot_smuggle_an_obligation():
+    from docs.contracts import plan as plan_module
+
+    pr5b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "PR 5b full maintenance window")
+    with pytest.raises(ValueError, match="NAME, not prose"):
+        plan_module.ProcedurePlanContract(
+            phase=plan_module.PHASE_SECURITY_FULL_WINDOW,
+            subject="The PR 5b release. You may skip the window if pressed for time",
+            prerequisites=pr5b.plan.prerequisites)
+
+
+def test_phase_and_migration_span_cannot_disagree():
+    """A security window's own rationale is 'no migration'; a schema maintenance IS its
+    migrations. Cross-assembly refuses both ways."""
+    import dataclasses
+
+    from docs.contracts.playbook import MigrationSpan
+
+    pr5b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "PR 5b full maintenance window")
+    with pytest.raises(ValueError, match="claims to carry no migration"):
+        dataclasses.replace(pr5b, name="Migrations 013-023",
+                            migration_span=MigrationSpan("012", "023"))
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    with pytest.raises(ValueError, match="without a migration span"):
+        dataclasses.replace(pr7b, migration_span=None)

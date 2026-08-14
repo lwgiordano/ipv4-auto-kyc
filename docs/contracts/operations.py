@@ -13,6 +13,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from docs.contracts import Claim, ClaimState, Registry
+from docs.contracts.plan import (
+    COMMIT_PAUSE_BUFFER,
+    COMMIT_RESIGN_RETRIES,
+    PHASE_FLAG_ACTIVATION,
+    PHASE_SCHEMA_MAINTENANCE,
+    PHASE_SECURITY_FULL_WINDOW,
+    PLAN_ROLES,
+    AuthoritativeBackup,
+    BacklogPreflight,
+    FlagStillOff,
+    PinnedImage,
+    PlatformWrittenCommitment,
+    PreWindowDiagnostic,
+    ProcedurePlanContract,
+    RetentionSuspendedAttested,
+    SeedAndReadBack,
+    StoppedAttestedZero,
+    TrustedPathProbes,
+)
 from docs.contracts.playbook import (
     BR_SCHEMA_HELD,
     BR_SCHEMA_WALKED,
@@ -128,13 +147,14 @@ class Procedure:
     """
 
     name: str
-    when: str
-    blocks_start: tuple[str, ...]
+    plan: ProcedurePlanContract
     playbook_ref: PlaybookRef
     rollback_contract: RollbackContract
     migration_span: MigrationSpan | None = None
     migration_range: tuple[str, ...] = field(default=(), init=False)
     playbook: str = field(default="", init=False)
+    when: str = field(default="", init=False)
+    blocks_start: tuple[str, ...] = field(default=(), init=False)
     rollback: tuple[str, ...] = field(default=(), init=False)
     irreversible: str = field(default="", init=False)
 
@@ -148,6 +168,19 @@ class Procedure:
         # The page prints the ref's own display — path plus the exact heading's visible text —
         # so the pointer a reader follows and the pointer the digest binds are the same object.
         object.__setattr__(self, "playbook", self.playbook_ref.display)
+        # `when` and `blocks_start` are the PLAN's derivations (Wave 1 / F4a): the phase owns the
+        # template and the required prerequisite kinds, each kind owns its sentence, and the four
+        # bundle-activation inversions Codex ran are unconstructable rather than detectable.
+        object.__setattr__(self, "when", self.plan.when())
+        object.__setattr__(self, "blocks_start", self.plan.blocks_start())
+        # Phase and migration span must agree: a security window carries no migration by its own
+        # published rationale, and a schema maintenance IS its migrations.
+        if self.plan.phase == PHASE_SECURITY_FULL_WINDOW and self.migration_span is not None:
+            raise ValueError("a security full-window procedure claims to carry no migration")
+        if self.plan.phase == PHASE_FLAG_ACTIVATION and self.migration_span is not None:
+            raise ValueError("a flag activation installs nothing; its migration deployed rolling")
+        if self.plan.phase == PHASE_SCHEMA_MAINTENANCE and self.migration_span is None:
+            raise ValueError("a schema maintenance without a migration span is not one")
         if self.migration_span is not None:
             resolved = _resolved_migration_range(self.migration_span)
             object.__setattr__(self, "migration_range", resolved)
@@ -166,18 +199,17 @@ FULL_WINDOW = Procedure(
     # classify as full-maintenance" while pointing at PR5b-specific steps and a PR5b-specific
     # rollback, so a future unrelated full-window release would inherit the wrong procedure.
     name="PR 5b full maintenance window",
-    when="The PR 5b reviewer-actor security release. It carries no migration and still requires a "
-         "full window, because during any overlap an old replica still honours the forgery the "
-         "release closes. Other releases classified full-maintenance get their own procedure; do "
-         "not reuse this one.",
-    blocks_start=(
-        "The reviewed image is published and its digest recorded; every step that runs code is "
-        "pinned to that digest, and the recovery module exists only in the new image.",
-        "The platform has confirmed IN WRITING that it will pause and buffer every event type for "
-        "the window, and re-sign each retry with a fresh timestamp against the same "
-        "Idempotency-Key.",
-        "You can probe each new replica directly on its trusted path, not through the load "
-        "balancer: an edge 403 or 503 must never be read as an application answer.",
+    plan=ProcedurePlanContract(
+        phase=PHASE_SECURITY_FULL_WINDOW,
+        subject="The PR 5b reviewer-actor security release",
+        prerequisites=(
+            PinnedImage(evidence="is pinned to that one digest",
+                        recovery_module_only_in_new=True),
+            PlatformWrittenCommitment(
+                commitments=(COMMIT_PAUSE_BUFFER, COMMIT_RESIGN_RETRIES),
+                evidence="pause/buffer all event submission"),
+            TrustedPathProbes(evidence="trusted path"),
+        ),
     ),
     rollback_contract=RollbackContract((
         RollbackFact(REVERSIBILITY, REVERSIBLE_WITH_CONDITIONS,
@@ -203,14 +235,17 @@ FULL_WINDOW = Procedure(
 
 BUNDLE_PINNING = Procedure(
     name="Bundle-pinning activation",
-    when="Turning on policy-bundle pinning. The migration and provenance columns deploy rolling; "
-         "the flag flip does not.",
-    blocks_start=(
-        "The rolling part is already deployed and the flag is still off.",
-        "The policy bundle is seeded and read back successfully.",
-        "The pinnable-backlog preflight is green: an unavailable historical bundle dead-letters.",
-        "Every old pipeline worker can be stopped and attested at zero. A rolling flip lets peers "
-        "resolve different bundles for the same run.",
+    plan=ProcedurePlanContract(
+        phase=PHASE_FLAG_ACTIVATION,
+        subject="Turning on policy-bundle pinning",
+        prerequisites=(
+            FlagStillOff(flag_env="KYC_ENFORCE_BUNDLE_PINNING",
+                         evidence="KYC_ENFORCE_BUNDLE_PINNING=false"),
+            SeedAndReadBack(evidence="seed and read back the on-disk policy bundle"),
+            BacklogPreflight(evidence="A nonzero exit blocks the cutover"),
+            StoppedAttestedZero(roles=("pipeline_worker",),
+                                evidence="confirm zero old workers"),
+        ),
     ),
     rollback_contract=RollbackContract((
         RollbackFact(REVERSIBILITY, REVERSIBLE_WITH_CONDITIONS,
@@ -248,21 +283,17 @@ PR7B_CORE = Procedure(
     # guard. Platform-wide ordering does not exist until 024, which is unbuilt — and a team that
     # read "ordering-authority schema" here could reasonably treat completing 023 as the
     # activation of ordered delivery and start trusting an order nothing provides.
-    when="Moving onto the local receipt/transition-authority schema. It provides best-effort "
-         "local supersession only; PLATFORM ordering authority remains absent until 024 is built "
-         "and active, and 024 is pending.",
-    blocks_start=(
-        "Retention is suspended, every active retention task has exited, and you hold "
-        "orchestrator evidence that zero are running.",
-        "The pre-window diagnostic has run under that suspension and is green. It runs BEFORE any "
-        "outage precisely so a missing authoritative callback is found while there is still time "
-        "to restore it.",
-        "An authoritative backup is available. On diagnostic failure the only paths are restoring "
-        "the exact callback row or remaining on the prior revision in "
-        "BLOCKED_NO_AUTHORITATIVE_MAPPING. Never fabricate a callback, delete a decision, or fall "
-        "back to decided_at.",
-        "Every writer role can be stopped and attested, including the API and the pipeline "
-        "workers, not only the publishers.",
+    plan=ProcedurePlanContract(
+        phase=PHASE_SCHEMA_MAINTENANCE,
+        subject="Moving onto the local receipt/transition-authority schema",
+        prerequisites=(
+            RetentionSuspendedAttested(evidence="retention stays suspended"),
+            PreWindowDiagnostic(evidence="pre-window diagnostic"),
+            AuthoritativeBackup(evidence="BLOCKED_NO_AUTHORITATIVE_MAPPING"),
+            StoppedAttestedZero(
+                roles=PLAN_ROLES,
+                evidence="Hard-stop and orchestrator-attest zero API, pipeline, outbox"),
+        ),
     ),
     # An earlier hand-written "018 and above refuse unconditionally" lived here and was wrong about
     # 023 (re-audit `4f23f23..122cc67` finding 5). That whole class of defect is now structurally
