@@ -167,30 +167,34 @@ def _record_v1(session_factory) -> None:
         raise HTTPException(status_code=503, detail="v1 witness unavailable") from exc
 
 
+def _dev_environment(settings: Settings) -> bool:
+    """True only when `environment` is an EXACT string naming a documented dev environment.
+
+    THE one predicate every dev-open state consults (re-gate-3 finding 1). The three permissive
+    switches — `auth_disabled=True`, `read_auth_required=False`, and the empty admin token — each
+    open a surface, and each was fixed in a different round: the admin token got an environment
+    gate while the two siblings still treated their exact boolean as sufficient by itself. Under
+    this module's threat model (a mutated `Settings` reaching request-time consumers), "the boot
+    validator would have refused this combination" is not a defense, so every dev escape requires
+    the environment to agree — from THIS helper, so the three gates cannot drift apart again.
+
+    Exact type before membership: `in frozenset` hashes the value, so a hostile `__hash__` would
+    run during the test itself. An unknown, malformed, or hostile environment is not a dev
+    environment.
+    """
+    environment = settings.environment
+    return type(environment) is str and environment in _DEV_OPEN_ENVIRONMENTS
+
+
 def _authentication_is_disabled(settings: Settings) -> bool:
-    """ONLY exact built-in `True` disables authentication.
+    """ONLY exact built-in `True`, in an exact dev environment, disables authentication.
 
-    Gate finding 1. This line was `if settings.auth_disabled: return` — Python truthiness on a
-    value that, under the same injected-`Settings` threat model the rest of this module defends
-    against, may be `1`, `{"x": 1}`, or the string `"false"`. All three are truthy, so all three
-    ACCEPTED AN UNSIGNED REQUEST. Wave 0 hardened every key, secret and skew field on the
-    verification path and left untouched the boolean deciding whether that path runs at all, which
-    is strictly worse: those failures refused service, this one grants it.
-
-    `"false"` is the specimen worth remembering — truthy in Python, and it means the opposite of
-    what it says.
+    Gate finding 1 fixed the truthiness half: `if settings.auth_disabled:` accepted an unsigned
+    request for `1`, `{"x": 1}`, or the string `"false"`. Re-gate-3 finding 1 fixed the half that
+    fix left open: exact `True` was still sufficient on a PRODUCTION-shaped object, which is the
+    same environment-blind dev escape the admin token had.
     """
-    return settings.auth_disabled is True
-
-
-def _open_surface_selected(value) -> bool:
-    """ONLY exact built-in `False` selects a deliberately-open path.
-
-    The mirror of the above, for values where FALSE is the permissive answer. A malformed falsey
-    value (`0`, `""`, `{}`, `None`) must not open a surface, and a hostile `__bool__` must not run.
-    Both directions live here so the three gates cannot drift apart.
-    """
-    return value is False
+    return settings.auth_disabled is True and _dev_environment(settings)
 
 
 def _exact_str(value) -> str:
@@ -275,10 +279,10 @@ def require_read_access(settings: Settings, request, body: bytes = b"") -> None:
     read_auth_required is set — which validate_for_production() forces in
     production — the caller must present a valid platform signature. Reads carry
     an empty v2 slot (no idempotency key)."""
-    # Exactly `False` opens this. A malformed falsey value is not the documented dev state, and
-    # opening a read surface on `0`/`""`/`{}`/`None` would be an authorization decision taken by
-    # accident (gate finding 1).
-    if _open_surface_selected(settings.read_auth_required):
+    # Exactly `False`, in an exact dev environment, opens this. A malformed falsey value is not
+    # the documented dev state (gate finding 1), and exact `False` on a production-shaped object
+    # is the same environment-blind escape the admin token had (re-gate-3 finding 1).
+    if settings.read_auth_required is False and _dev_environment(settings):
         return
     require_valid_signature(settings, request, body)
 
@@ -308,10 +312,7 @@ def require_admin(settings: Settings, headers) -> None:
         # threat model here is a mutated object reaching consumers, and `/ui` calls this directly
         # rather than through the ops wrapper. Exact dev vocabulary only; production and any
         # malformed environment deny.
-        # Exact type before membership: `in frozenset` hashes the value, so a hostile `__hash__`
-        # would run here — the same escape this module gates everywhere else.
-        environment = settings.environment
-        if type(environment) is str and environment in _DEV_OPEN_ENVIRONMENTS:
+        if _dev_environment(settings):
             return
         raise HTTPException(status_code=401, detail="invalid or missing admin credential")
     header = _exact_str(headers.get("Authorization", ""))

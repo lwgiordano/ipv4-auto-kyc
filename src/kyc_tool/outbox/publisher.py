@@ -52,12 +52,13 @@ POC_EMAIL = "poc_email"
 # so every attempt it records is 'legacy'; 7b-activation introduces 'sequenced'. The vocabulary is
 # pinned by ck_attempt_wire_vocab, so an unknown value fails at the database rather than silently
 # becoming an uninterpretable witness.
-LEGACY_WIRE = "legacy"
-SEQUENCED_WIRE = "sequenced"
-# The ONE value for callback wire generation. The 024 gate imports this exact attribute, so a
-# mutation here is visible to it — a second declarative constant beside the model was a thing that
-# could drift, and did (re-gate finding 4).
-_WIRE_VERSION = LEGACY_WIRE
+# The active callback wire generation, compared by the pending-024 gate against the pre-024
+# LITERAL held in the verifier itself (re-gate-3 finding 4). The previous arrangement compared this
+# to a sibling alias in this same module, so the natural two-line edit — move the alias and the
+# active value together — passed the gate while every persisted attempt advertised sequenced wire.
+# A name declared beside the thing it checks is not an authority. The vocabulary itself is pinned
+# independently by the ck_attempt_wire_vocab DB constraint.
+_WIRE_VERSION = "legacy"
 
 # Detached (deadline-overrun) send threads tolerated at once. This is a HARD resource cap, not a
 # log threshold: at capacity the publisher STOPS CLAIMING (circuit breaker), so a pathologically
@@ -179,9 +180,7 @@ _CLAIM_SQL = text(
 )
 
 
-def enqueue_decision_callback(
-    session: Session, *, case_id: str, run_id: str, body: dict, decision_sequence: int
-) -> None:
+def enqueue_decision_callback(session: Session, *, body: dict, decision_sequence: int) -> None:
     """Enqueue a decision callback. THIS is the serialization boundary (re-gate finding 3).
 
     Validating in the pipeline sanitized one caller's dict and left the boundary open: adding
@@ -190,13 +189,22 @@ def enqueue_decision_callback(
     `Outbox` is a validated body, whatever the caller assembled — and `DecisionCallback` is
     `extra="forbid"`, so an unmodelled field is REFUSED rather than silently dropped in one path
     while leaking through another.
+
+    The row's `case_id`/`run_id` are DERIVED from the validated body (re-gate-3 finding 2). They
+    used to be separate keyword arguments, so the outbox could account, order, and complete a row
+    under one identity while the wire body named another — and several integration tests were
+    doing exactly that without noticing. One authority now: the platform dedupes on the BODY's
+    `(case_id, run_id)` (A6), so the body is the identity, and the row follows it.
+    `decision_sequence` stays an argument because it is row-only — it is the per-case ordering
+    column, deliberately absent from the pre-024 wire.
     """
+    payload = encode_decision_callback(body)
     session.add(
         Outbox(
             kind=DECISION_CALLBACK,
-            case_id=case_id,
-            run_id=run_id,
-            payload_json=encode_decision_callback(body),
+            case_id=payload["case_id"],
+            run_id=payload["run_id"],
+            payload_json=payload,
             ordering_stream="decision",
             decision_sequence=decision_sequence,
             # created under the record-intent-first regime (014): with this stamp, "no attempt

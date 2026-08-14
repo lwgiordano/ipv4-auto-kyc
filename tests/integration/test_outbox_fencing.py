@@ -73,9 +73,7 @@ def test_stuck_email_does_not_block_decision_callback(
         )
         enqueue_decision_callback(
             s,
-            case_id="c1",
-            run_id="r1",
-            body=valid_callback_body(case_id="c1"),
+            body=valid_callback_body(case_id="c1", run_id="r1"),
             decision_sequence=1)
         s.commit()
 
@@ -217,9 +215,7 @@ def test_stale_decision_loser_cannot_stamp_run_or_published_at(
                        "'enabled','{}'::jsonb,false,1)"))
         enqueue_decision_callback(
             s,
-            case_id="c1",
-            run_id="r1",
-            body=valid_callback_body(run_id="r1"),
+            body=valid_callback_body(case_id="c1", run_id="r1"),
             decision_sequence=1)
         s.commit()
 
@@ -269,10 +265,8 @@ def test_expired_unreclaimed_owner_stages_no_attempt(session_factory, settings, 
         from kyc_tool.outbox.publisher import enqueue_decision_callback
         enqueue_decision_callback(
             s,
-            case_id="c1",
-            run_id="r1",
-            body=valid_callback_body(run_id="r1"),
-                                  decision_sequence=1)
+            body=valid_callback_body(case_id="c1", run_id="r1"),
+            decision_sequence=1)
         s.commit()
     rowA = _claim(session_factory, "A")
     _expire_lease(session_factory, rowA.id)  # nobody reclaims: token intact, status pending
@@ -349,9 +343,9 @@ def test_expired_unreclaimed_claimant_cannot_supersede(session_factory, settings
     )
     with session_factory() as s:
         enqueue_decision_callback(
-            s, case_id="c-expired-supersede", run_id="old-r", body=valid_callback_body(run_id="old-r"),
-            decision_sequence=1,
-        )
+            s,
+            body=valid_callback_body(case_id="c-expired-supersede", run_id="old-r"),
+            decision_sequence=1)
         s.execute(text("UPDATE decisions SET published_at=now() WHERE id='new-d'"))
         s.commit()
     row = _claim(session_factory, "A")
@@ -427,18 +421,14 @@ def test_same_stream_fifo_holds_under_backoff(
     with session_factory() as s:  # enqueue seq1 FIRST (lower outbox.id), then seq2
         enqueue_decision_callback(
             s,
-            case_id="cf",
-            run_id="cf-r1",
-            body=valid_callback_body(run_id="cf-r1"),
-                                  decision_sequence=1)
+            body=valid_callback_body(case_id="cf", run_id="cf-r1"),
+            decision_sequence=1)
         s.commit()
     with session_factory() as s:
         enqueue_decision_callback(
             s,
-            case_id="cf",
-            run_id="cf-r2",
-            body=valid_callback_body(run_id="cf-r2"),
-                                  decision_sequence=2)
+            body=valid_callback_body(case_id="cf", run_id="cf-r2"),
+            decision_sequence=2)
         s.commit()
     with session_factory() as s:  # push ONLY seq1 into future backoff; seq2 stays due
         s.execute(text("UPDATE outbox SET next_attempt_at = now() + interval '1 hour' "
@@ -534,10 +524,8 @@ def test_stale_loser_cannot_supersede_reclaimed_row(session_factory, settings, p
     with session_factory() as s:
         enqueue_decision_callback(
             s,
-            case_id="c1",
-            run_id="r1",
-            body=valid_callback_body(run_id="r1"),
-                                  decision_sequence=1)
+            body=valid_callback_body(case_id="c1", run_id="r1"),
+            decision_sequence=1)
         s.commit()
 
     rowA = _claim(session_factory, "A")

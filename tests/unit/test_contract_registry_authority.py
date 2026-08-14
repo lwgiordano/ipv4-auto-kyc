@@ -663,10 +663,12 @@ def assert_024_unbuilt(script: ScriptDirectory, callback_model) -> None:
     # wire with this verifier green. The encoder is now the single path to the outbox, so running
     # it against a body that TRIES to carry the key is a statement about what can actually be
     # published, not about what somebody declared.
-    # The PUBLISHER's own value, not a second constant beside the model (re-gate finding 4).
-    # `_WIRE_VERSION` is what gets persisted on every delivery attempt, so mutating it alone must
-    # be visible here; a parallel declaration in `schemas` could drift from it, and did.
-    assert publisher._WIRE_VERSION == publisher.LEGACY_WIRE, (
+    # The PUBLISHER's active value against the pre-024 LITERAL held in THIS verifier
+    # (re-gate-3 finding 4). Comparing it to a sibling alias in the publisher's own module let the
+    # natural two-line edit — move the alias and the active value together — pass while every
+    # persisted attempt advertised sequenced wire. The verifier's literal does not move with the
+    # module it checks; the vocabulary itself is pinned independently by ck_attempt_wire_vocab.
+    assert publisher._WIRE_VERSION == "legacy", (
         f"the publisher advertises {publisher._WIRE_VERSION!r} wire while the claim says 024 is "
         "NOT BUILT"
     )
@@ -1816,7 +1818,7 @@ def test_a_sequenced_wire_version_without_024_fails():
     """Codex's matrix, third case, now aimed at the PUBLISHER's own value (re-gate finding 4).
     Patching a parallel constant in `schemas` proved nothing about what gets persisted."""
     with (
-        mock.patch.object(publisher, "_WIRE_VERSION", publisher.SEQUENCED_WIRE),
+        mock.patch.object(publisher, "_WIRE_VERSION", "sequenced"),
         pytest.raises(AssertionError, match="advertises"),
     ):
         assert_024_unbuilt(_alembic_script(), DecisionCallback)
@@ -1863,8 +1865,7 @@ def test_enqueue_refuses_an_ordering_key_whatever_the_caller_assembled():
 
     poisoned = {**_clean_callback_body(), "decision_sequence": 7}
     with pytest.raises(PydanticValidationError):
-        enqueue_decision_callback(
-            _CapturingSession(), case_id="c1", run_id="r1", body=poisoned, decision_sequence=7)
+        enqueue_decision_callback(_CapturingSession(), body=poisoned, decision_sequence=7)
 
 
 def test_enqueue_stores_the_validated_body_and_keeps_modelled_optionals():
@@ -1876,7 +1877,7 @@ def test_enqueue_stores_the_validated_body_and_keeps_modelled_optionals():
     body["event_sequence"] = 4
     body["enforcement_held"] = {"computed_decision": "approve", "reason": "x"}
     session = _CapturingSession()
-    enqueue_decision_callback(session, case_id="c1", run_id="r1", body=body, decision_sequence=9)
+    enqueue_decision_callback(session, body=body, decision_sequence=9)
 
     (row,) = session.added
     assert "decision_sequence" not in row.payload_json
@@ -1886,13 +1887,101 @@ def test_enqueue_stores_the_validated_body_and_keeps_modelled_optionals():
     assert row.decision_sequence == 9
 
 
+def test_row_identity_is_derived_from_the_validated_body():
+    """Re-gate-3 finding 2. `case_id`/`run_id` used to be separate keyword arguments, so the
+    outbox could account, order, and complete a row under one identity while the wire body named
+    another — `ROW row-case row-run / BODY body-case body-run` was Codex's reproduction, and
+    several integration tests were doing it silently. The arguments no longer exist: one
+    authority, the validated body, and the row follows it.
+    """
+    import inspect
+
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    parameters = set(inspect.signature(enqueue_decision_callback).parameters)
+    assert parameters == {"session", "body", "decision_sequence"}, (
+        "enqueue grew identity arguments again; the mismatch class returns with them"
+    )
+
+    body = _clean_callback_body()
+    body["case_id"], body["run_id"] = "case-77", "run-77"
+    session = _CapturingSession()
+    enqueue_decision_callback(session, body=body, decision_sequence=1)
+    (row,) = session.added
+    assert (row.case_id, row.run_id) == ("case-77", "run-77")
+    assert (row.payload_json["case_id"], row.payload_json["run_id"]) == ("case-77", "run-77")
+
+
 def test_an_unmodelled_field_added_after_the_pipeline_encodes_is_still_refused():
     """Codex's second bypass: encode in the pipeline, then mutate before enqueue. The enqueue is
-    now the last authority, so the late addition cannot survive."""
+    the last authority, so the late addition cannot survive."""
     from kyc_tool.outbox.publisher import enqueue_decision_callback
 
     encoded = schemas.encode_decision_callback(_clean_callback_body())
     encoded["decision_sequence"] = 7  # added AFTER the pipeline's encode
     with pytest.raises(PydanticValidationError):
-        enqueue_decision_callback(
-            _CapturingSession(), case_id="c1", run_id="r1", body=encoded, decision_sequence=7)
+        enqueue_decision_callback(_CapturingSession(), body=encoded, decision_sequence=7)
+
+
+# ── re-gate-3 finding 3: strictness reaches every nested wire object ───────────────────────────
+NESTED_UNKNOWNS = [
+    ("root", lambda b: b.__setitem__("decision_sequence", 7)),
+    ("gates", lambda b: b["gates"].__setitem__("future_gate", True)),
+    ("checks item", lambda b: b.__setitem__("checks", [
+        {"type": "x", "status": "pass", "points": 1, "source": "s", "future_provenance": "p"}])),
+    ("enforcement_held", lambda b: b.__setitem__("enforcement_held", {
+        "computed_decision": "approve", "reason": "x", "future": "p"})),
+]
+
+
+@pytest.mark.parametrize("label,mutate", NESTED_UNKNOWNS, ids=[c[0] for c in NESTED_UNKNOWNS])
+def test_an_undeclared_field_is_refused_at_every_nesting_depth(label, mutate):
+    """Root-only strictness left the nested objects permissive: an unknown gate or check field was
+    silently DROPPED at the encoder while leaking through any path that skipped it, and
+    `enforcement_held` — a plain `dict` — was not even dropping, it was PUBLISHING arbitrary keys.
+    Same accepted-here-invisible-there class, one layer down.
+    """
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    body = _clean_callback_body()
+    mutate(body)
+    with pytest.raises(PydanticValidationError):
+        enqueue_decision_callback(_CapturingSession(), body=body, decision_sequence=1)
+
+
+def test_exact_nested_bodies_still_serialize():
+    """The positive half, through the same boundary: every declared nested field survives."""
+    from kyc_tool.outbox.publisher import enqueue_decision_callback
+
+    body = _clean_callback_body()
+    body["checks"] = [{"type": "org_id", "status": "pass", "points": 10, "source": "gleif",
+                       "reason_codes": ["OK"]}]
+    body["event_sequence"] = 2
+    body["enforcement_held"] = {"computed_decision": "approve", "reason": "hold"}
+    session = _CapturingSession()
+    enqueue_decision_callback(session, body=body, decision_sequence=3)
+    (row,) = session.added
+    assert row.payload_json["checks"][0]["reason_codes"] == ["OK"]
+    assert row.payload_json["enforcement_held"] == {
+        "computed_decision": "approve", "reason": "hold"}
+
+
+def test_the_recorder_is_handed_the_active_wire_version():
+    """Re-gate-3 finding 4, second half: the gate's literal proves what `_WIRE_VERSION` IS; this
+    proves it is what `_record_attempt` actually RECEIVES. Both call sites must bind the module
+    global by name — an edit that passes anything else fails here even if the global is clean."""
+    import ast as ast_module
+
+    tree = ast_module.parse((SRC / "outbox" / "publisher.py").read_text())
+    handed = []
+    for node in ast_module.walk(tree):
+        if (isinstance(node, ast_module.Call)
+                and isinstance(node.func, ast_module.Attribute)
+                and node.func.attr == "_record_attempt"):
+            for keyword in node.keywords:
+                if keyword.arg == "wire_version":
+                    handed.append(ast_module.unparse(keyword.value))
+    assert handed and all(value == "_WIRE_VERSION" for value in handed), (
+        f"_record_attempt is handed {handed or 'nothing'} as wire_version; the gate's literal "
+        "then proves nothing about what gets persisted"
+    )

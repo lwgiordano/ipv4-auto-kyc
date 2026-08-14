@@ -606,9 +606,7 @@ class Pipeline:
             # wire: an unmodelled key is dropped here, so the emitter cannot publish a field the
             # contract does not declare.
             body = encode_decision_callback(body)
-            enqueue_decision_callback(
-                session, case_id=case.id, run_id=run_id, body=body, decision_sequence=decision_sequence
-            )
+            enqueue_decision_callback(session, body=body, decision_sequence=decision_sequence)
             # job completion is atomic with the decision commit — and FENCED (PR 7a slice): a
             # stale worker (reaped + reclaimed) must roll this whole decision back, not commit a
             # duplicate the platform then has to reconcile.

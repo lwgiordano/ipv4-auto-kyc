@@ -89,9 +89,7 @@ def _enqueue_cb(session_factory, case_id, seq):
     with session_factory() as s:
         enqueue_decision_callback(
             s,
-            case_id=case_id,
-            run_id=r,
-            body=valid_callback_body(run_id=r),
+            body=valid_callback_body(case_id=case_id, run_id=r),
             decision_sequence=seq)
         s.commit()
 

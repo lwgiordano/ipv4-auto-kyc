@@ -422,10 +422,11 @@ def test_only_exact_true_disables_signature_checking(label, value):
     assert excinfo.value.status_code == 401, excinfo.value.detail
 
 
-def test_exact_true_still_disables_it():
+def test_exact_true_still_disables_it_in_a_dev_environment():
     """Guard the guard: the documented dev escape hatch must keep working, or this is not a
-    grammar, it is a removal."""
-    settings = hardened().model_copy(update={"auth_disabled": True})
+    grammar, it is a removal. In a DEV environment — the production-shaped variant is the re-gate-3
+    finding, tested below."""
+    settings = hardened().model_copy(update={"auth_disabled": True, "environment": "development"})
     auth.require_valid_signature(settings, _Req({}), b"{}")
 
 
@@ -439,9 +440,61 @@ def test_only_exact_false_opens_the_dev_read_path(label, value):
     assert excinfo.value.status_code == 401, excinfo.value.detail
 
 
-def test_exact_false_still_opens_the_dev_read_path():
-    settings = hardened().model_copy(update={"read_auth_required": False})
+def test_exact_false_still_opens_the_dev_read_path_in_a_dev_environment():
+    settings = hardened().model_copy(update={"read_auth_required": False, "environment": "test"})
     auth.require_read_access(settings, _Req({}), b"{}")
+
+
+# ── re-gate-3 finding 1: the dev escapes are environment-bound, like the admin token ──────────
+#
+# The admin-token fix added an environment gate; its two siblings still treated their exact
+# boolean as sufficient by itself, so `auth_disabled=True` and `read_auth_required=False` on a
+# PRODUCTION-shaped mutated Settings accepted unsigned access. Same class, other two switches.
+
+DEV_ESCAPE_POISON = [
+    ("prod-shaped default", {}),
+    ("explicit production", {"environment": "production"}),
+    ("unknown environment", {"environment": "staging"}),
+    ("environment is an int", {"environment": 1}),
+    ("environment is None", {"environment": None}),
+    ("environment is hostile", {"environment": HostileStr("development")}),
+]
+
+
+@pytest.mark.parametrize("label,update", DEV_ESCAPE_POISON, ids=[c[0] for c in DEV_ESCAPE_POISON])
+def test_auth_disabled_true_is_not_enough_outside_an_exact_dev_environment(label, update):
+    """`hardened()` is production-shaped, so the bare case IS the production case. A hostile
+    environment must be rejected without dispatching its `__hash__`/`__eq__`/`__bool__` — the
+    membership test hashes, so the exact-type gate must come first."""
+    settings = hardened().model_copy(update={"auth_disabled": True, **update})
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_valid_signature(settings, _Req({}), b"{}")
+    assert excinfo.value.status_code == 401
+
+
+@pytest.mark.parametrize("label,update", DEV_ESCAPE_POISON, ids=[c[0] for c in DEV_ESCAPE_POISON])
+def test_read_auth_required_false_is_not_enough_outside_an_exact_dev_environment(label, update):
+    settings = hardened().model_copy(update={"read_auth_required": False, **update})
+    with pytest.raises(HTTPException) as excinfo:
+        auth.require_read_access(settings, _Req({}), b"{}")
+    assert excinfo.value.status_code == 401
+
+
+def test_all_three_dev_escapes_consult_the_same_predicate():
+    """One helper, three gates, so they cannot drift apart a THIRD time — the admin token was
+    fixed in one round and its two siblings in the next, which is exactly the drift this pins.
+    AST, not substring: each permissive branch must reference `_dev_environment` by name."""
+    import ast as ast_module
+
+    tree = ast_module.parse((SRC / "api" / "auth.py").read_text())
+    by_name = {node.name: node for node in ast_module.walk(tree)
+               if isinstance(node, ast_module.FunctionDef)}
+    for gate in ("_authentication_is_disabled", "require_read_access", "require_admin"):
+        names = {n.id for n in ast_module.walk(by_name[gate])
+                 if isinstance(n, ast_module.Name)}
+        assert "_dev_environment" in names, (
+            f"{gate} no longer consults the shared dev-environment predicate"
+        )
 
 
 ADMIN_POISON = [

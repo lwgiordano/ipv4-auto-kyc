@@ -558,14 +558,39 @@ def test_every_mapping_shaped_field_has_a_declared_duplicate_policy():
         mapping_shaped_fields,
     )
 
-    classified = set(DUPLICATE_CHECKED_FIELDS) | set(DUPLICATE_EXEMPT_FIELDS)
-    unclassified = mapping_shaped_fields(Settings) - classified
+    _assert_duplicate_policy_partition(
+        mapping_shaped_fields(Settings), DUPLICATE_CHECKED_FIELDS, DUPLICATE_EXEMPT_FIELDS)
+
+
+def _assert_duplicate_policy_partition(discovered, checked, exempt) -> None:
+    """The closure is a PARTITION, not a union (re-gate-3 finding 5). `checked | exempt` covering
+    the discovered set proved nothing about the sets themselves: a field in both was fine, and a
+    blank exemption reason satisfied the prose promise that every exemption carries one. Factored
+    out so the mutation tests below run THIS check, not a restatement of it."""
+    overlap = set(checked) & set(exempt)
+    assert not overlap, f"field(s) both checked and exempt: {sorted(overlap)}"
+    for field, reason in dict(exempt).items():
+        assert isinstance(reason, str) and reason.strip(), (
+            f"exempt field {field!r} carries no reason; an unexplained exemption is a silent hole"
+        )
+    classified = set(checked) | set(exempt)
+    unclassified = set(discovered) - classified
     assert not unclassified, (
         f"mapping-shaped settings field(s) with no duplicate policy: {sorted(unclassified)}. "
         "Add them to DUPLICATE_CHECKED_FIELDS, or to DUPLICATE_EXEMPT_FIELDS with a reason."
     )
-    stale = classified - mapping_shaped_fields(Settings)
+    stale = classified - set(discovered)
     assert not stale, f"policy declared for non-mapping field(s): {sorted(stale)}"
+
+
+def test_an_overlapping_partition_is_refused():
+    with pytest.raises(AssertionError, match="both checked and exempt"):
+        _assert_duplicate_policy_partition({"a", "b"}, {"a", "b"}, {"b": "reason"})
+
+
+def test_a_blank_exemption_reason_is_refused():
+    with pytest.raises(AssertionError, match="no reason"):
+        _assert_duplicate_policy_partition({"a", "b"}, {"a"}, {"b": "   "})
 
 
 @pytest.mark.parametrize("annotation,expected", [
@@ -673,6 +698,14 @@ def test_a_synthetic_abstract_mapping_field_forces_a_policy_decision():
     ("same key different depths", '{"x": 1, "a": {"x": 2}}', False),
     ("deep separate objects", '{"a": {"b": {"x": 1}}, "c": {"d": {"x": 2}}}', False),
     ("deep same object", '{"a": {"b": {"x": 1, "x": 2}}}', True),
+    # Array roots (re-gate-3 finding 5): the old `startswith("{")` guard let a JSON array skip the
+    # check entirely, so a duplicate INSIDE `[{"a":1,"a":2}]` parsed last-key-wins unexamined.
+    ("array root, same object", '[{"a": 1, "a": 2}]', True),
+    ("array root, sibling objects", '[{"a": 1}, {"a": 2}]', False),
+    ("array nested in object", '{"outer": [{"a": 1, "a": 2}]}', True),
+    ("object nested in array in object", '{"o": [[{"a": 1, "a": 2}]]}', True),
+    ("scalar root", '42', False),
+    ("non-JSON string", 'not json at all', False),
 ])
 def test_duplicate_detection_is_per_object(label, payload, refused):
     """The global `object_pairs_hook` list conflated independent objects, so

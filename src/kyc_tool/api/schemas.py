@@ -126,6 +126,13 @@ class EventEnvelope(BaseModel):
 
 
 class GatesBody(BaseModel):
+    # Strict, unlike the INBOUND payload models above (re-gate-3 finding 3). The tolerance
+    # asymmetry is the contract's own: we ignore unknown fields the platform sends us, and we
+    # never emit a field the contract does not declare. Root-only strictness left every nested
+    # outbound object permissive, so a future gate could be silently dropped here while leaking
+    # through any path that skipped the encoder.
+    model_config = ConfigDict(extra="forbid")
+
     score_met: bool
     legal_proof: bool
     control_proof: bool
@@ -134,11 +141,26 @@ class GatesBody(BaseModel):
 
 
 class CheckSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: str
     status: str
     points: int
     source: str
     reason_codes: list[str] = Field(default_factory=list)
+
+
+class EnforcementHeld(BaseModel):
+    """The enforcement-hold block, typed (re-gate-3 finding 3). As a plain `dict` it accepted
+    arbitrary keys — the one nested object that was not merely dropping unknowns but PUBLISHING
+    them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    computed_decision: Literal[
+        "approve", "approve_buy_locked", "manual_review_insufficient", "reject"
+    ]
+    reason: str
 
 
 class DecisionCallback(BaseModel):
@@ -169,7 +191,7 @@ class DecisionCallback(BaseModel):
     # downgraded to manual review carries the computed decision here. Modeled so
     # the authoritative body preserves it on validate instead of silently
     # dropping it (platform behavior depends on it).
-    enforcement_held: dict | None = None
+    enforcement_held: EnforcementHeld | None = None
 
 
 # The wire's ordering generation. `unsequenced` means the callback carries NO platform ordering

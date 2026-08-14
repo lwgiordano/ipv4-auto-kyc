@@ -717,8 +717,12 @@ def _refuse_duplicate_json_keys(field_name: str, value) -> None:
     """Raise if a raw JSON object repeats a key. Decoding is the only moment it is still visible."""
     if field_name not in DUPLICATE_CHECKED_FIELDS:
         return
-    if not isinstance(value, str) or not value.strip().startswith("{"):
+    if not isinstance(value, str):
         return
+    # ANY JSON root, not just objects (re-gate-3 finding 5). The per-object hook below sees every
+    # object wherever it nests, so a duplicate inside `[{"a":1,"a":2}]` is caught — the old
+    # `startswith("{")` guard let an array root skip the check entirely while Pydantic parsed it
+    # last-key-wins. A non-JSON string fails the parse and returns, as before.
     # PER OBJECT, not across the whole parse (re-gate finding 7). Collecting every key from every
     # nested object into one list conflates independent objects: `{"a":{"x":1},"b":{"x":2}}` repeats
     # nothing, and the global version rejected it. That failure direction is the dangerous one for a

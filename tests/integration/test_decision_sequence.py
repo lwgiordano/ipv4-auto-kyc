@@ -145,4 +145,4 @@ def test_enqueue_decision_callback_requires_sequence_kwarg():
     from kyc_tool.outbox.publisher import enqueue_decision_callback
 
     with pytest.raises(TypeError, match="decision_sequence"):
-        enqueue_decision_callback(None, case_id="c1", run_id="r1", body={})
+        enqueue_decision_callback(None, body={})
