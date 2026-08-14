@@ -875,7 +875,7 @@ RENDERER_PROSE = {
                                           "settings table headers and the KYC_ variable names"),
     ("guide", "OPS.CONFIG.HMAC_SET", 0): ("eeead37d4b6834fd", "the HMAC set lead-in"),
     ("guide", "OPS.HEALTH.PROBES", 0): ("7655d03e90ea7729", "health table headers"),
-    ("guide", "OPS.CUTOVER.PROCEDURES", 0): ("b6f317eecb3c7300",
+    ("guide", "OPS.CUTOVER.PROCEDURES", 0): ("33b3260daf6c3302",
                                              "per-procedure framing: what must be true before "
                                              "you start, Reversible?, Rolling back, Playbook"),
     ("guide", "OPS.CUTOVER.OUTBOX_CEILING", 0): ("1193b2813e8d6c5b", "ceiling cutover heading"),

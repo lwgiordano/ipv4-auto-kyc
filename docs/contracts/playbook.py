@@ -83,6 +83,25 @@ WINDOW_LIGHTER = "lighter"
 
 ENDING_RESUMED = "resumed"
 ENDING_MAY_STOP = "may_remain_stopped"
+ENDING_RESUMED_OR_DECLARED_INCIDENT = "resumed_or_declared_incident"
+
+# Branch-level schema results (Wave 1 / F9). A BRANCH is a downgrade outcome already resolved, so
+# its schema answer is a result, not a possibility — the aggregate CONDITIONAL answer names the
+# fork, the branch answers name each side of it. Aggregate facts may not use these, and branch
+# facts may use nothing else for the schema question.
+BR_SCHEMA_HELD = "held"
+BR_SCHEMA_WALKED = "walked"
+BRANCH_SCHEMA_ANSWERS = frozenset({BR_SCHEMA_HELD, BR_SCHEMA_WALKED})
+
+OUTCOME_REFUSED = "downgrade_refused"
+OUTCOME_SUCCEEDED = "downgrade_succeeded"
+BRANCH_OUTCOMES = (OUTCOME_REFUSED, OUTCOME_SUCCEEDED)
+OUTCOME_TITLES = {
+    OUTCOME_REFUSED: "If the downgrade is REFUSED (outcome A)",
+    OUTCOME_SUCCEEDED: "If the downgrade SUCCEEDS all the way to the base (outcome B)",
+}
+
+BRANCH_QUESTIONS = (SCHEMA, IMAGE, RESTORES, VERIFICATION, ENDING)
 
 ANSWERS: dict[str, dict[str, str]] = {
     REVERSIBILITY: {
@@ -138,8 +157,18 @@ ANSWERS: dict[str, dict[str, str]] = {
                         "submissions and the composer unblocked. Ending stopped is not a rollback, "
                         "it is an outage.",
         ENDING_MAY_STOP: "Remaining stopped is an accepted outcome of this procedure.",
+        ENDING_RESUMED_OR_DECLARED_INCIDENT: "End FULLY RESUMED, or in a DELIBERATELY DECLARED "
+                                             "maintenance incident while the forward fix is "
+                                             "applied. Never end silently stopped.",
     },
 }
+
+ANSWERS[SCHEMA][BR_SCHEMA_HELD] = (
+    "the schema STAYS on the witness-authority revision you are already on."
+)
+ANSWERS[SCHEMA][BR_SCHEMA_WALKED] = (
+    "the schema has walked all the way down to the base revision."
+)
 
 # Answers that mean "the playbook is silent". They are the only ones allowed to carry no quote, and
 # they must carry none — otherwise a quote could be attached to a claim of silence.
@@ -187,6 +216,80 @@ class RollbackFact:
 
 
 @dataclass(frozen=True)
+class RollbackBranch:
+    """One resolved downgrade outcome, with its own total answer set (Wave 1 / F9).
+
+    The flat contract was TOTAL but not BRANCH-SAFE: PR 7b's playbook has two mutually exclusive
+    outcomes — R5, downgrade REFUSED (evidence preserved, schema held, pre-7b image PROHIBITED)
+    and R6, downgrade SUCCEEDED (walked to base, prior image legal) — and a flat fact bag could
+    select the prior image on outcome-B evidence while outcome-A's prohibition sat beside it.
+    A branch binds its answers to ONE outcome, its evidence to that outcome's exact span of the
+    playbook (`span_marker`), and the outcome-specific laws are construction refusals:
+
+      * REFUSED means the schema HELD and the prior image is FORBIDDEN — evidence survived, and
+        an older publisher must not run against it.
+      * SUCCEEDED means the schema WALKED; only here may the prior image be selected.
+      * IMAGE_CONDITIONAL is refused in any branch: a branch IS the condition resolved.
+    """
+
+    outcome: str
+    span_marker: str
+    facts: tuple[RollbackFact, ...]
+
+    def __post_init__(self) -> None:
+        if self.outcome not in BRANCH_OUTCOMES:
+            raise ValueError(f"unknown branch outcome {self.outcome!r}")
+        if not self.span_marker.strip():
+            raise ValueError("a branch must name the verbatim marker that opens its span")
+        asked = [f.question for f in self.facts]
+        missing = [q for q in BRANCH_QUESTIONS if q not in asked]
+        extra = [q for q in asked if q not in BRANCH_QUESTIONS]
+        duplicated = {q for q in asked if asked.count(q) > 1}
+        if missing or extra or duplicated:
+            raise ValueError(
+                f"branch {self.outcome}: missing={missing} extra={extra} "
+                f"duplicated={sorted(duplicated)}"
+            )
+        schema_answer = self.answer(SCHEMA)
+        if schema_answer not in BRANCH_SCHEMA_ANSWERS:
+            raise ValueError(
+                f"branch {self.outcome}: schema must be a RESULT ({sorted(BRANCH_SCHEMA_ANSWERS)}),"
+                f" not the aggregate possibility {schema_answer!r}"
+            )
+        if self.answer(IMAGE) == IMAGE_CONDITIONAL:
+            raise ValueError(f"branch {self.outcome}: a branch is the condition resolved; "
+                             "IMAGE_CONDITIONAL has nothing left to depend on")
+        if self.outcome == OUTCOME_REFUSED:
+            if schema_answer != BR_SCHEMA_HELD:
+                raise ValueError("a REFUSED downgrade cannot claim the schema walked")
+            if self.answer(IMAGE) == IMAGE_PRIOR:
+                raise ValueError(
+                    "the prior image on the REFUSED branch: evidence survived, and an older "
+                    "publisher lacks the receipt contract — this is the exact cross-branch "
+                    "confusion the branch model exists to refuse"
+                )
+        if self.outcome == OUTCOME_SUCCEEDED and schema_answer != BR_SCHEMA_WALKED:
+            raise ValueError("a SUCCEEDED downgrade cannot claim the schema held")
+
+    def answer(self, question: str) -> str:
+        for fact in self.facts:
+            if fact.question == question:
+                return fact.answer
+        raise KeyError(question)
+
+    def statements(self) -> tuple[str, ...]:
+        title = OUTCOME_TITLES[self.outcome]
+        return (f"{title}: " + " ".join(
+            self._fact(q).statement for q in BRANCH_QUESTIONS),)
+
+    def _fact(self, question: str):
+        for fact in self.facts:
+            if fact.question == question:
+                return fact
+        raise KeyError(question)  # pragma: no cover — totality enforced above
+
+
+@dataclass(frozen=True)
 class RollbackContract:
     """A TOTAL set of rollback answers for one procedure.
 
@@ -196,6 +299,7 @@ class RollbackContract:
     """
 
     facts: tuple[RollbackFact, ...]
+    branches: tuple[RollbackBranch, ...] = ()
 
     def __post_init__(self) -> None:
         asked = [f.question for f in self.facts]
@@ -205,6 +309,13 @@ class RollbackContract:
         duplicated = {q for q in asked if asked.count(q) > 1}
         if duplicated:
             raise ValueError(f"rollback contract answers {sorted(duplicated)} more than once")
+
+        # The aggregate answers name possibilities; branch schema RESULTS may not appear there.
+        # Checked FIRST: a category error should not be masked by a coupling invariant firing on
+        # the same malformed fact.
+        for fact in self.facts:
+            if fact.question == SCHEMA and fact.answer in BRANCH_SCHEMA_ANSWERS:
+                raise ValueError("the aggregate schema answer cannot be a branch result")
 
         quotes = [f.evidence.strip().lower() for f in self.facts if f.evidence.strip()]
         reused = {q for q in quotes if quotes.count(q) > 1}
@@ -259,6 +370,18 @@ class RollbackContract:
                 "the forward cutover's window"
             )
 
+        # Branches exist exactly when the schema answer is CONDITIONAL: that answer names a fork,
+        # and a fork published without its resolved sides is the F9 gap; branches on an unforked
+        # schema are answers to a question nobody asked.
+        if (self.answer(SCHEMA) == SCHEMA_CONDITIONAL) != bool(self.branches):
+            raise ValueError(
+                "a CONDITIONAL schema requires resolved branches, and branches require a "
+                "CONDITIONAL schema"
+            )
+        outcomes = [b.outcome for b in self.branches]
+        if len(set(outcomes)) != len(outcomes):
+            raise ValueError(f"duplicate branch outcomes: {outcomes}")
+
     def _fact(self, question: str) -> RollbackFact:
         for fact in self.facts:
             if fact.question == question:
@@ -272,8 +395,12 @@ class RollbackContract:
         return self._fact(question).evidence
 
     def statements(self) -> tuple[str, ...]:
-        """The published rollback prose, in question order. Derived, never authored."""
-        return tuple(self._fact(q).statement for q in ROLLBACK_QUESTIONS)
+        """The published rollback prose: the aggregate answers in question order, then one line
+        per resolved branch. Derived, never authored."""
+        aggregate = tuple(self._fact(q).statement for q in ROLLBACK_QUESTIONS)
+        for branch in self.branches:
+            aggregate += branch.statements()
+        return aggregate
 
 
 @dataclass(frozen=True)

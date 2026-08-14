@@ -14,13 +14,18 @@ from pathlib import Path
 
 from docs.contracts import Claim, ClaimState, Registry
 from docs.contracts.playbook import (
+    BR_SCHEMA_HELD,
+    BR_SCHEMA_WALKED,
     ENDING,
     ENDING_RESUMED,
+    ENDING_RESUMED_OR_DECLARED_INCIDENT,
     IMAGE,
     IMAGE_CONDITIONAL,
     IMAGE_PRIOR,
     IMAGE_SAME_RELEASE,
     IRREVERSIBLE_PAST_BOUNDARY,
+    OUTCOME_REFUSED,
+    OUTCOME_SUCCEEDED,
     RESTORES,
     RESTORES_NO,
     RESTORES_YES,
@@ -37,6 +42,7 @@ from docs.contracts.playbook import (
     Command,
     MigrationSpan,
     PlaybookRef,
+    RollbackBranch,
     RollbackContract,
     RollbackFact,
 )
@@ -280,6 +286,38 @@ PR7B_CORE = Procedure(
         # and the boundary, and omitted the control this playbook puts in capitals.
         RollbackFact(ENDING, ENDING_RESUMED,
                      "never leave the system stopped or retention frozen"),
+    ), branches=(
+        # The two sides of the fork the aggregate CONDITIONAL answers name (Wave 1 / F9). Each
+        # branch's evidence must sit inside ITS OWN span of the playbook — R5 for refusal, R6 for
+        # success — so outcome-B evidence can no longer justify outcome-A's image policy.
+        RollbackBranch(
+            outcome=OUTCOME_REFUSED,
+            span_marker="R5. ROLLBACK OUTCOME A",
+            facts=(
+                RollbackFact(SCHEMA, BR_SCHEMA_HELD,
+                             "the DB stays on the witness-authority schema"),
+                RollbackFact(IMAGE, IMAGE_SAME_RELEASE,
+                             "KEEP or redeploy the reviewed 023-COMPATIBLE image"),
+                RollbackFact(RESTORES, RESTORES_NO, "PROHIBIT the pre-7b image outright"),
+                RollbackFact(VERIFICATION, VERIFY_NOT_STATED),
+                RollbackFact(ENDING, ENDING_RESUMED_OR_DECLARED_INCIDENT,
+                             "Do not end stopped"),
+            ),
+        ),
+        RollbackBranch(
+            outcome=OUTCOME_SUCCEEDED,
+            span_marker="R6. ROLLBACK OUTCOME B",
+            facts=(
+                RollbackFact(SCHEMA, BR_SCHEMA_WALKED, "downgrade SUCCEEDED"),
+                RollbackFact(IMAGE, IMAGE_PRIOR, "deploy the recorded prior-image digest"),
+                RollbackFact(RESTORES, RESTORES_NO,
+                             "Redeploying the pre-7b image BEFORE 013 is applied is also safe"),
+                RollbackFact(VERIFICATION, VERIFY_NOT_STATED),
+                RollbackFact(ENDING, ENDING_RESUMED,
+                             "re-enable retention, autoscaling/restarts, and submissions and "
+                             "remove the composer edge block"),
+            ),
+        ),
     )),
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",

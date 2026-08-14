@@ -1335,7 +1335,42 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
                 f"is not in the reviewed body of {ref.heading!r}. An answer must come from the "
                 "playbook it claims to summarize."
             )
-        # 4. The RANGE is bound to the playbook, so it cannot be understated to make an
+        # 4. BRANCH answers bind to their own span of the playbook (Wave 1 / F9): outcome-B
+        #    evidence cannot justify outcome-A's image policy, because each branch's quotes must
+        #    sit between ITS marker and the next. Reachable outcomes must be claimed exactly once
+        #    each — an omitted branch is an unpublished side of a published fork.
+        contract_branches = procedure.rollback_contract.branches
+        if contract_branches:
+            prose = _playbook_prose(ref)
+            spans = {}
+            markers = [b.span_marker for b in contract_branches]
+            for branch in contract_branches:
+                start = prose.find(branch.span_marker.lower())
+                assert start >= 0, f"{procedure.name}: marker {branch.span_marker!r} not in body"
+                ends = [prose.find(m.lower(), start + 1) for m in markers if m != branch.span_marker]
+                ends = [e for e in ends if e > start]
+                spans[branch.outcome] = prose[start:min(ends) if ends else len(prose)]
+            for branch in contract_branches:
+                for fact in branch.facts:
+                    if fact.evidence:
+                        assert fact.evidence.lower() in spans[branch.outcome], (
+                            f"{procedure.name}/{branch.outcome}/{fact.question}: the quote\n"
+                            f"  {fact.evidence!r}\nis not inside this branch's own span — "
+                            "cross-branch evidence is the F9 defect itself"
+                        )
+            kinds = {r: _downgrade_kind(_revision_file(r)) for r in procedure.migration_range}
+            reachable = set()
+            if any(k in ("refuses_always", "refuses_conditionally") for k in kinds.values()):
+                reachable.add(playbook.OUTCOME_REFUSED)
+            if not all(k == "refuses_always" for k in kinds.values()):
+                reachable.add(playbook.OUTCOME_SUCCEEDED)
+            claimed = {b.outcome for b in contract_branches}
+            assert claimed == reachable, (
+                f"{procedure.name}: branches claim {sorted(claimed)} but the migrations make "
+                f"{sorted(reachable)} reachable — an uncovered outcome has no published answer"
+            )
+
+        # 5. The RANGE is bound to the playbook, so it cannot be understated to make an
         #    understated schema answer agree with itself.
         _assert_range_covers_forward_only(procedure, body, ref.heading)
         # 5. The RANGE itself is recomputed through the verifier's own script-directory helper
@@ -2289,3 +2324,113 @@ def test_command_records_reject_prose_roots():
         Command(("sha256sum", "<file.json>"))
     with pytest.raises(ValueError, match="at least an interpreter"):
         Command(("python",))
+
+
+# ── Wave 1 / F9: branch safety, proven to bite ─────────────────────────────────────────────────
+def _pr7b():
+    return next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+
+
+def test_the_prior_image_on_the_refused_branch_is_unconstructable():
+    """Codex's core F9 mutation: publish the prior image while the schema held and evidence
+    survived. Refused at construction, not detected downstream."""
+    with pytest.raises(ValueError, match="prior image on the REFUSED branch"):
+        playbook.RollbackBranch(
+            outcome=playbook.OUTCOME_REFUSED,
+            span_marker="R5. ROLLBACK OUTCOME A",
+            facts=(
+                playbook.RollbackFact(playbook.SCHEMA, playbook.BR_SCHEMA_HELD, "a"),
+                playbook.RollbackFact(playbook.IMAGE, playbook.IMAGE_PRIOR, "b"),
+                playbook.RollbackFact(playbook.RESTORES, playbook.RESTORES_NO, "c"),
+                playbook.RollbackFact(playbook.VERIFICATION, playbook.VERIFY_NOT_STATED),
+                playbook.RollbackFact(playbook.ENDING, playbook.ENDING_RESUMED, "d"),
+            ))
+
+
+def test_cross_branch_evidence_fails_the_span_bind(tmp_path):
+    """Outcome-B's own sentence ('deploy the recorded prior-image digest') cited on the REFUSED
+    branch: the quote exists in the section, but not inside R5's span, so the bind refuses."""
+    import dataclasses
+
+    pr7b = _pr7b()
+    refused = next(b for b in pr7b.rollback_contract.branches
+                   if b.outcome == playbook.OUTCOME_REFUSED)
+    poisoned_facts = tuple(
+        playbook.RollbackFact(f.question, playbook.IMAGE_SAME_RELEASE,
+                              "deploy the recorded prior-image digest")
+        if f.question == playbook.IMAGE else f
+        for f in refused.facts
+    )
+    poisoned = dataclasses.replace(refused, facts=poisoned_facts)
+    prose = _playbook_prose(pr7b.playbook_ref)
+    start = prose.find(poisoned.span_marker.lower())
+    end = prose.find("r6. rollback outcome b", start)
+    span = prose[start:end]
+    bad = [f for f in poisoned.facts if f.evidence and f.evidence.lower() not in span]
+    assert bad, "the cross-branch quote was accepted inside the wrong span"
+    assert "deploy the recorded prior-image digest" in prose, (
+        "control: the quote is genuinely in the section, just in the other branch's span"
+    )
+
+
+def test_a_missing_branch_is_an_uncovered_outcome():
+    """Drop the SUCCEEDED branch: the migrations still make it reachable (a history below the
+    refusing floor walks to 012), so the claimed set no longer equals the reachable set."""
+    kinds = {r: _downgrade_kind(_revision_file(r)) for r in _pr7b().migration_range}
+    reachable = set()
+    if any(k in ("refuses_always", "refuses_conditionally") for k in kinds.values()):
+        reachable.add(playbook.OUTCOME_REFUSED)
+    if not all(k == "refuses_always" for k in kinds.values()):
+        reachable.add(playbook.OUTCOME_SUCCEEDED)
+    assert reachable == {playbook.OUTCOME_REFUSED, playbook.OUTCOME_SUCCEEDED}
+    claimed_without_success = {playbook.OUTCOME_REFUSED}
+    assert claimed_without_success != reachable
+
+
+def test_duplicate_and_misplaced_branches_are_refused():
+    pr7b = _pr7b()
+    branches = pr7b.rollback_contract.branches
+    with pytest.raises(ValueError, match="duplicate branch outcomes"):
+        playbook.RollbackContract(pr7b.rollback_contract.facts,
+                                  branches=(branches[0], branches[0]))
+    # branches on an unforked schema are refused, both ways
+    pr5b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "PR 5b full maintenance window")
+    with pytest.raises(ValueError, match="CONDITIONAL schema requires resolved branches"):
+        playbook.RollbackContract(pr5b.rollback_contract.facts, branches=branches)
+
+
+def test_branch_schema_answers_are_results_and_stay_out_of_the_aggregate():
+    """A branch cannot claim the aggregate's 'conditional' (the branch IS the resolution), and
+    the aggregate cannot claim a branch's 'held'/'walked' (the aggregate names the fork)."""
+    with pytest.raises(ValueError, match="schema must be a RESULT"):
+        playbook.RollbackBranch(
+            outcome=playbook.OUTCOME_REFUSED, span_marker="R5. ROLLBACK OUTCOME A",
+            facts=(
+                playbook.RollbackFact(playbook.SCHEMA, playbook.SCHEMA_CONDITIONAL, "a"),
+                playbook.RollbackFact(playbook.IMAGE, playbook.IMAGE_SAME_RELEASE, "b"),
+                playbook.RollbackFact(playbook.RESTORES, playbook.RESTORES_NO, "c"),
+                playbook.RollbackFact(playbook.VERIFICATION, playbook.VERIFY_NOT_STATED),
+                playbook.RollbackFact(playbook.ENDING, playbook.ENDING_RESUMED, "d"),
+            ))
+    aggregate = tuple(
+        playbook.RollbackFact(playbook.SCHEMA, playbook.BR_SCHEMA_HELD, "b")
+        if f.question == playbook.SCHEMA else f
+        for f in _pr7b().rollback_contract.facts
+    )
+    with pytest.raises(ValueError, match="aggregate schema answer cannot be a branch result"):
+        playbook.RollbackContract(aggregate)
+
+
+def test_a_swapped_outcome_cannot_claim_the_other_result():
+    with pytest.raises(ValueError, match="SUCCEEDED downgrade cannot claim the schema held"):
+        playbook.RollbackBranch(
+            outcome=playbook.OUTCOME_SUCCEEDED, span_marker="R6. ROLLBACK OUTCOME B",
+            facts=(
+                playbook.RollbackFact(playbook.SCHEMA, playbook.BR_SCHEMA_HELD, "a"),
+                playbook.RollbackFact(playbook.IMAGE, playbook.IMAGE_PRIOR, "b"),
+                playbook.RollbackFact(playbook.RESTORES, playbook.RESTORES_NO, "c"),
+                playbook.RollbackFact(playbook.VERIFICATION, playbook.VERIFY_NOT_STATED),
+                playbook.RollbackFact(playbook.ENDING, playbook.ENDING_RESUMED, "d"),
+            ))
