@@ -1081,14 +1081,85 @@ def _deployment_section_body(section: str) -> str:
     return " ".join("\n".join(lines[start + 1:end]).split())
 
 
-def _playbook_prose(section: str) -> str:
+def _section_bytes(ref, root=None) -> str:
+    """The EXACT text of the referenced section (Wave 1 / F7).
+
+    The heading is matched by full-line equality against exactly one line — a substring match
+    accepted any same-named section. The body runs from the character after the heading's newline
+    to the start of the next heading of the same or higher level, byte-exact; CRLF→LF is the ONLY
+    normalization. The old digest collapsed all whitespace first, so a shell continuation
+    rewritten from backslash-newline to backslash-space — which hands the shell a literal
+    backslash argument and breaks the command — hashed identically and passed review.
+    """
+    text = ((root or REPO) / ref.path).read_bytes().decode("utf-8").replace("\r\n", "\n")
+    lines = text.split("\n")
+    matches = [i for i, line in enumerate(lines) if line == ref.heading]
+    assert len(matches) == 1, (
+        f"heading {ref.heading!r} matches {len(matches)} lines; the reference must name exactly "
+        "one section by its exact heading line"
+    )
+    level = len(ref.heading) - len(ref.heading.lstrip("#"))
+    start = matches[0] + 1
+    end = len(lines)
+    for i in range(start, len(lines)):
+        stripped = lines[i]
+        if stripped.startswith("#"):
+            depth = len(stripped) - len(stripped.lstrip("#"))
+            if 0 < depth <= level and stripped[depth:depth + 1] == " ":
+                end = i
+                break
+    return "\n".join(lines[start:end])
+
+
+def _section_commands(section_text: str) -> list[tuple[str, ...]]:
+    """Every executable command the section publishes, independently parsed to argv.
+
+    Backtick spans may wrap across lines (the playbook wraps long commands), so whitespace runs
+    inside a span collapse to single spaces before shlex. Only python/alembic-rooted spans count —
+    prose backticks (`dev_worker`, `--apply`, sentinels) are not commands.
+    """
+    import shlex
+
+    def parse(candidate: str):
+        flat = " ".join(candidate.split())
+        try:
+            argv = tuple(shlex.split(flat))
+        except ValueError:
+            return None
+        return argv if argv and argv[0] in ("python", "alembic") else None
+
+    commands = []
+    # Fenced blocks FIRST, then removed: a ``` fence corrupts single-backtick pairing (three
+    # backticks pair as one-and-a-half spans), which silently mis-paired every span after the
+    # first fence — the verifier caught its own parser missing a command that is plainly on the
+    # page. Inside a fence, a trailing backslash continues the command onto the next line.
+    fenced, remainder, fence_lines = False, [], []
+    for line in section_text.split("\n"):
+        if line.strip().startswith("```"):
+            fenced = not fenced
+            continue
+        (fence_lines if fenced else remainder).append(line)
+    joined_fence = "\n".join(fence_lines).replace("\\\n", " ")
+    for candidate in joined_fence.split("\n"):
+        argv = parse(candidate)
+        if argv:
+            commands.append(argv)
+    joined = "\n".join(remainder).replace("\\\n", " ")
+    for span in re.findall(r"`([^`]+)`", joined, re.DOTALL):
+        argv = parse(span)
+        if argv:
+            commands.append(argv)
+    return commands
+
+
+def _playbook_prose(ref) -> str:
     """The section body as a reader sees it: markdown emphasis stripped, lowercased.
 
     The DIGEST is taken over the raw normalized body (emphasis intact), because that is the byte
     sequence a reviewer read. Evidence quotes are matched against this softer form so a contract
     can quote a sentence without reproducing its asterisks and backticks.
     """
-    return re.sub(r"[*`]", "", _deployment_section_body(section)).lower()
+    return re.sub(r"[*`]", "", " ".join(_section_bytes(ref).split())).lower()
 
 
 def _downgrade_kind(path: Path) -> str:
@@ -1209,19 +1280,31 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
         "PR 5b full maintenance window", "Bundle-pinning activation", "Migrations 013-023",
     }
     for procedure in procedures:
-        document, _, section = procedure.playbook.partition(", ")
-        assert (REPO / document).exists(), f"{procedure.name} points at a missing document"
-        body = _deployment_section_body(section)
+        ref = procedure.playbook_ref
+        assert (REPO / ref.path).exists(), f"{procedure.name} points at a missing document"
+        assert procedure.playbook == ref.display, "the printed pointer drifted from the ref"
+        body = _section_bytes(ref)
         assert len(body) > 500, (
-            f"{procedure.name}: the section under {section!r} is {len(body)} chars — a pointer to "
-            "an empty body is worse than the summary it replaced"
+            f"{procedure.name}: the section under {ref.heading!r} is {len(body)} chars — a "
+            "pointer to an empty body is worse than the summary it replaced"
         )
         digest = hashlib.sha256(body.encode()).hexdigest()
-        assert digest == procedure.playbook_digest, (
-            f"{procedure.name}: {section!r} changed since it was reviewed.\n"
-            f"  reviewed: {procedure.playbook_digest}\n  now:      {digest}\n"
-            "Re-read the section, then re-pin playbook_digest in the SAME commit."
+        assert digest == ref.sha256, (
+            f"{procedure.name}: {ref.heading!r} changed since it was reviewed.\n"
+            f"  reviewed: {ref.sha256}\n  now:      {digest}\n"
+            "Re-read the section EXACTLY — every byte is a reviewed byte — then re-pin sha256 "
+            "in the SAME commit."
         )
+        # The section's own commands, parsed independently, must reproduce every typed record
+        # argv-for-argv (Wave 1 / F7): a command edit someone re-pins the digest over is still
+        # caught unless the record moves too, which is a second, visible act.
+        parsed = _section_commands(body)
+        for command in ref.commands:
+            assert command.argv in parsed, (
+                f"{procedure.name}: the section no longer publishes "
+                f"`{' '.join(command.argv)}` — its command record does not match any parsed "
+                f"backtick span"
+            )
         assert procedure.blocks_start, f"{procedure.name} lists nothing that blocks starting"
         assert procedure.when.strip()
         # no step numbering: a numbered list here IS the summary this claim exists to avoid
@@ -1242,19 +1325,19 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
         assert procedure.irreversible == statements[0]
         assert procedure.rollback == statements[1:]
         # 3. QUOTED: every non-silent answer points at a sentence in the digest-bound body.
-        prose = _playbook_prose(section)
+        prose = _playbook_prose(ref)
         for fact in contract.facts:
             if fact.answer in playbook.SILENT_ANSWERS:
                 assert not fact.evidence
                 continue
             assert fact.evidence.lower() in prose, (
                 f"{procedure.name}/{fact.question}: the quote\n  {fact.evidence!r}\n"
-                f"is not in the reviewed body of {section!r}. An answer must come from the "
+                f"is not in the reviewed body of {ref.heading!r}. An answer must come from the "
                 "playbook it claims to summarize."
             )
         # 4. The RANGE is bound to the playbook, so it cannot be understated to make an
         #    understated schema answer agree with itself.
-        _assert_range_covers_forward_only(procedure, body, section)
+        _assert_range_covers_forward_only(procedure, body, ref.heading)
         # 5. INDEPENDENT: the schema answer is recomputed from the downgrade bodies.
         derived = _schema_answer_from_migrations(procedure.migration_range)
         assert contract.answer(playbook.SCHEMA) == derived, (
@@ -1536,9 +1619,11 @@ def test_rollback_prose_cannot_be_authored_at_all():
     """The original attack was editing the rollback text. There is no longer a field to edit: both
     published fields are `init=False` and computed from the contract."""
     contract = playbook.RollbackContract(_valid_facts())
+    pr6_ref = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                   if p.name == "Bundle-pinning activation").playbook_ref
     common = dict(
-        name="x", when="y", blocks_start=("z",), playbook="docs/DEPLOYMENT.md, PR 6 cutover",
-        playbook_digest="0" * 64, rollback_contract=contract,
+        name="x", when="y", blocks_start=("z",), playbook_ref=pr6_ref,
+        rollback_contract=contract,
     )
     with pytest.raises(TypeError):
         Procedure(**common, rollback=("redeploy the previous image",))
@@ -1555,10 +1640,12 @@ def test_an_answer_quoting_a_sentence_the_playbook_does_not_contain_is_caught():
     fabricated = playbook.RollbackFact(
         playbook.WINDOW, playbook.WINDOW_SAME, "rollback may be performed at any time"
     )
-    assert fabricated.evidence.lower() not in _playbook_prose("PR 6 cutover")
+    pr6 = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+               if p.name == "Bundle-pinning activation")
+    assert fabricated.evidence.lower() not in _playbook_prose(pr6.playbook_ref)
     # every quote the shipped contracts actually use IS present — same check, opposite direction
     for procedure in OPERATIONS.value("OPS.CUTOVER.PROCEDURES"):
-        prose = _playbook_prose(procedure.playbook.partition(", ")[2])
+        prose = _playbook_prose(procedure.playbook_ref)
         for fact in procedure.rollback_contract.facts:
             if fact.evidence:
                 assert fact.evidence.lower() in prose
@@ -1636,7 +1723,7 @@ def test_understating_the_migration_range_cannot_erase_the_boundary():
     """
     pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
                 if p.name == "Migrations 013-023")
-    body = _deployment_section_body(pr7b.playbook.partition(", ")[2])
+    body = " ".join(_section_bytes(pr7b.playbook_ref).split())
 
     assert {"018", "022"} <= _forward_only_revisions_named_in(body)
 
@@ -1670,7 +1757,7 @@ def test_older_revisions_a_playbook_merely_references_are_not_forced_into_the_ra
     """
     pr6 = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
                if p.name == "Bundle-pinning activation")
-    body = _deployment_section_body(pr6.playbook.partition(", ")[2])
+    body = " ".join(_section_bytes(pr6.playbook_ref).split())
     mentioned = set(re.findall(r"\b(0\d{2})\b", body))
     assert {"003", "005", "010", "011", "012"} <= mentioned, sorted(mentioned)
     assert not _forward_only_revisions_named_in(body), (
@@ -2034,3 +2121,126 @@ def test_the_recorder_is_handed_the_active_wire_version():
         f"_record_attempt is handed {handed or 'nothing'} as wire_version; the gate's literal "
         "then proves nothing about what gets persisted"
     )
+
+
+# ── Wave 1 / F7: the exact-bytes reference, proven to bite ─────────────────────────────────────
+def _copy_deployment(tmp_path, mutate) -> Path:
+    """A repo-shaped copy of DEPLOYMENT.md with one byte-level mutation applied."""
+    root = tmp_path / "repo" / "docs"
+    root.mkdir(parents=True)
+    text = (REPO / "docs" / "DEPLOYMENT.md").read_text()
+    (root / "DEPLOYMENT.md").write_text(mutate(text))
+    return tmp_path / "repo"
+
+
+BYTE_MUTATIONS = [
+    ("shell continuation becomes backslash-space",
+     lambda t: t.replace("kyc_tool.ops.activate_bundle_pinning_epoch \\\n    --expect-bundle-hash",
+                         "kyc_tool.ops.activate_bundle_pinning_epoch \\ --expect-bundle-hash", 1)),
+    ("indentation change",
+     lambda t: t.replace("\n    --expect-revision 012`", "\n  --expect-revision 012`", 1)),
+    ("blank line removed",
+     lambda t: t.replace("### Rollback\n\nRollback mirrors the same window",
+                         "### Rollback\nRollback mirrors the same window", 1)),
+    ("code fence dropped",
+     lambda t: t.replace("```\npython -m kyc_tool.ops.seed_policy_bundle",
+                         "python -m kyc_tool.ops.seed_policy_bundle", 1)),
+    ("list nesting change",
+     lambda t: t.replace("\n1. **Preflight.** `python -m kyc_tool.ops.verify_pinnable_backlog`",
+                         "\n   1. **Preflight.** `python -m kyc_tool.ops.verify_pinnable_backlog`",
+                         1)),
+]
+
+
+@pytest.mark.parametrize("label,mutate", BYTE_MUTATIONS, ids=[m[0] for m in BYTE_MUTATIONS])
+def test_every_byte_level_playbook_edit_requires_a_re_pin(label, mutate, tmp_path):
+    """The old digest collapsed all whitespace before hashing, so every one of these edits — the
+    continuation rewrite that hands the shell a literal backslash argument included — hashed
+    identically and passed review. Exact bytes make each one a digest mismatch, i.e. a forced,
+    visible re-review. Routed through the SAME reader the release verifier uses."""
+    root = _copy_deployment(tmp_path, mutate)
+    changed = 0
+    for procedure in OPERATIONS.value("OPS.CUTOVER.PROCEDURES"):
+        ref = procedure.playbook_ref
+        body = _section_bytes(ref, root=root)
+        if hashlib.sha256(body.encode()).hexdigest() != ref.sha256:
+            changed += 1
+    assert changed >= 1, f"{label}: no procedure's digest moved — the edit was invisible"
+
+
+def test_the_old_collapsed_digest_would_have_passed_the_continuation_rewrite(tmp_path):
+    """The defect itself, kept as a specimen: whitespace-collapse hashes the broken continuation
+    identically. This is why the digest moved to exact bytes."""
+    original = (REPO / "docs" / "DEPLOYMENT.md").read_text()
+    broken = BYTE_MUTATIONS[0][1](original)
+    assert broken != original
+
+    def collapsed(text):
+        return hashlib.sha256(" ".join(text.split()).encode()).hexdigest()
+
+    assert collapsed(broken) == collapsed(original), (
+        "the collapsed digest now distinguishes them; update this specimen"
+    )
+
+
+def test_a_substring_heading_is_refused(tmp_path):
+    """Exact full-line equality: 'PR 5b cutover' alone must not resolve. A substring match is how
+    a wrong same-named section satisfied the old pointer."""
+    from docs.contracts.playbook import PlaybookRef
+
+    vague = PlaybookRef(path="docs/DEPLOYMENT.md", heading="## 9. PR 5b cutover",
+                        sha256="0" * 64)
+    with pytest.raises(AssertionError, match="matches 0 lines"):
+        _section_bytes(vague)
+
+
+def test_a_duplicated_heading_is_refused(tmp_path):
+    from docs.contracts.playbook import PlaybookRef
+
+    heading = "## 9. PR 5b cutover — brief full maintenance window"
+    root = _copy_deployment(tmp_path, lambda t: t + "\n" + heading + "\n\nimpostor body\n")
+    ref = PlaybookRef(path="docs/DEPLOYMENT.md", heading=heading, sha256="0" * 64)
+    with pytest.raises(AssertionError, match="matches 2 lines"):
+        _section_bytes(ref, root=root)
+
+
+def test_a_command_edit_is_caught_even_after_a_digest_re_pin(tmp_path):
+    """The record's whole value: the digest proves the section was re-read; the typed command
+    records prove the commands still parse to what the operator needs. Rename an option, re-pin
+    the digest over it, and the argv comparison still fails until the RECORD moves too — a
+    second, visible act."""
+    root = _copy_deployment(
+        tmp_path, lambda t: t.replace("--expect-revision 012", "--expect-rev 012", 1))
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    body = _section_bytes(pr7b.playbook_ref, root=root)
+    # simulate the re-pin: the digest matches the edited body by construction
+    repinned = hashlib.sha256(body.encode()).hexdigest()
+    assert repinned != pr7b.playbook_ref.sha256  # the edit DID move the digest
+    parsed = _section_commands(body)
+    missing = [c for c in pr7b.playbook_ref.commands if c.argv not in parsed]
+    assert missing and any("--expect-revision" in c.argv for c in missing), (
+        "the option rename was invisible to the command records"
+    )
+
+
+def test_the_parser_reads_fenced_and_inline_commands_alike():
+    """Guard the guard, and a fossil of a real near-miss: ``` fences corrupt single-backtick
+    pairing (three backticks pair as one and a half spans), and the first parser silently
+    mis-paired every span after a fence — the verifier failed on a command plainly on the page.
+    Fenced blocks are parsed line-wise first, then removed."""
+    pr6 = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+               if p.name == "Bundle-pinning activation")
+    parsed = _section_commands(_section_bytes(pr6.playbook_ref))
+    assert ("python", "-m", "kyc_tool.ops.seed_policy_bundle",
+            "--expect-hash", "<sha256>") in parsed  # fenced, continuation-joined
+    assert ("python", "-m", "kyc_tool.ops.verify_pinnable_backlog") in parsed  # inline backtick
+
+
+def test_command_records_reject_prose_roots():
+    from docs.contracts.playbook import Command
+
+    with pytest.raises(ValueError, match="unrecognised command root"):
+        Command(("sha256sum", "<file.json>"))
+    with pytest.raises(ValueError, match="at least an interpreter"):
+        Command(("python",))

@@ -274,3 +274,54 @@ class RollbackContract:
     def statements(self) -> tuple[str, ...]:
         """The published rollback prose, in question order. Derived, never authored."""
         return tuple(self._fact(q).statement for q in ROLLBACK_QUESTIONS)
+
+
+@dataclass(frozen=True)
+class Command:
+    """One executable command the referenced playbook section MUST contain, as parsed argv.
+
+    Wave 1 / F7's second half. The exact-bytes digest proves the section was re-reviewed after ANY
+    edit; it cannot prove the command inside it still parses to what the operator needs. These
+    records are compared against an INDEPENDENT parse of the section's backtick spans — argv by
+    argv — so a command edit that someone re-pins the digest over is still caught unless the typed
+    record moves with it, which is a second, visible act.
+    """
+
+    argv: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.argv) < 2:
+            raise ValueError("a command record needs at least an interpreter and a target")
+        if self.argv[0] not in ("python", "alembic"):
+            raise ValueError(f"unrecognised command root {self.argv[0]!r}")
+
+
+@dataclass(frozen=True)
+class PlaybookRef:
+    """An exact reference into an operational playbook (Wave 1 / F7).
+
+    `heading` is the FULL heading line, matched by exact string equality against exactly one line
+    of the document — a substring match accepted any same-named section, which is how a wrong
+    section could satisfy the old pointer. `sha256` is over the EXACT UTF-8 bytes of the section
+    body (heading line excluded, up to the next same-or-higher-level heading), with CRLF→LF the
+    only permitted normalization. The old digest collapsed ALL whitespace first, so a shell
+    continuation rewritten from a backslash-newline to a backslash-space — which hands the shell a
+    literal backslash argument and breaks the command — hashed identically and passed review.
+    Exact bytes make every byte a reviewed byte.
+    """
+
+    path: str
+    heading: str
+    sha256: str
+    commands: tuple[Command, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.heading.startswith("#") or "\n" in self.heading:
+            raise ValueError("heading must be the exact single heading line, hashes included")
+        if len(self.sha256) != 64 or set(self.sha256) - set("0123456789abcdef"):
+            raise ValueError("sha256 must be 64 lowercase hex characters")
+
+    @property
+    def display(self) -> str:
+        """What the page prints: the path plus the heading's visible text."""
+        return f"{self.path} § {self.heading.lstrip('#').strip()}"

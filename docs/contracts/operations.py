@@ -33,6 +33,8 @@ from docs.contracts.playbook import (
     VERIFY_NOT_STATED,
     WINDOW,
     WINDOW_SAME,
+    Command,
+    PlaybookRef,
     RollbackContract,
     RollbackFact,
 )
@@ -60,11 +62,16 @@ from docs.contracts.playbook import (
 class Procedure:
     """A referenced (not restated) operational procedure.
 
-    `playbook_digest` is what makes the reference load-bearing (re-audit `4f23f23..97deeae`
-    finding 8). Asserting that a heading EXISTS proves nothing about the body under it: pointing
-    the repo at a DEPLOYMENT.md containing only the three headings passed the verifier. The digest
-    is taken over the normalized body of the referenced section, so an empty body, a wrong
-    same-named section, or an edit nobody re-reviewed all fail. Re-pinning it is the re-review.
+    `playbook_ref` is what makes the reference load-bearing (re-audit `4f23f23..97deeae` finding
+    8, tightened by Wave 1 / F7). Asserting that a heading EXISTS proves nothing about the body
+    under it, and the first digest — taken over a whitespace-COLLAPSED body — proved less than it
+    claimed: a shell continuation rewritten from backslash-newline to backslash-space, which
+    breaks the command, hashed identically. The ref now binds the exact heading LINE (full-line
+    equality, unique) and the exact section BYTES (CRLF→LF the only normalization), and carries
+    typed `Command` records that an independent parse of the section's backtick spans must
+    reproduce argv-for-argv — so a command edit is caught even if someone re-pins the digest over
+    it. Re-pinning is still the act of re-review; it is just no longer the only witness.
+    `playbook`, the printed pointer, is DERIVED from the ref.
 
     `rollback` and `irreversible` are DERIVED, not authored (re-audit `4c3015a..eaa3f8f`, the gap I
     declared open when the digest first landed). They used to be hand-written prose sitting beside
@@ -84,10 +91,10 @@ class Procedure:
     name: str
     when: str
     blocks_start: tuple[str, ...]
-    playbook: str
-    playbook_digest: str
+    playbook_ref: PlaybookRef
     rollback_contract: RollbackContract
     migration_range: tuple[str, ...] = ()
+    playbook: str = field(default="", init=False)
     rollback: tuple[str, ...] = field(default=(), init=False)
     irreversible: str = field(default="", init=False)
 
@@ -98,6 +105,9 @@ class Procedure:
         statements = self.rollback_contract.statements()
         object.__setattr__(self, "irreversible", statements[0])
         object.__setattr__(self, "rollback", statements[1:])
+        # The page prints the ref's own display — path plus the exact heading's visible text —
+        # so the pointer a reader follows and the pointer the digest binds are the same object.
+        object.__setattr__(self, "playbook", self.playbook_ref.display)
 
 
 FULL_WINDOW = Procedure(
@@ -130,8 +140,14 @@ FULL_WINDOW = Procedure(
         RollbackFact(WINDOW, WINDOW_SAME, "Rollback mirrors the same window"),
         RollbackFact(ENDING, ENDING_RESUMED, "verify, start workers, resume"),
     )),
-    playbook="docs/DEPLOYMENT.md, PR 5b cutover",
-    playbook_digest="7ef8d6d7e5939dce09f2dd52876fb8ae41c0af389fff5e2dbe8d9b1dcc394686",
+    playbook_ref=PlaybookRef(
+        path="docs/DEPLOYMENT.md",
+        heading="## 9. PR 5b cutover — brief full maintenance window",
+        sha256="8352d41a394d2135956db347c6370d9589e6941774bf31233a12f3df4ee70b7f",
+        commands=(
+            Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
+        ),
+    ),
 )
 
 BUNDLE_PINNING = Procedure(
@@ -159,8 +175,19 @@ BUNDLE_PINNING = Procedure(
         RollbackFact(ENDING, ENDING_RESUMED,
                      "start workers with KYC_ENFORCE_BUNDLE_PINNING=false"),
     )),
-    playbook="docs/DEPLOYMENT.md, PR 6 cutover",
-    playbook_digest="7d6ad3c1df2e92ce251244227448ea8fbc64160bc3442369773dd71a3b307f7c",
+    playbook_ref=PlaybookRef(
+        path="docs/DEPLOYMENT.md",
+        heading="## 10. PR 6 cutover — bundle-pinning activation",
+        sha256="4f39a02d37f16867ac277bfda9783afa915e27692328781ebf97b8b0de2ba981",
+        commands=(
+            Command(("python", "-m", "kyc_tool.ops.seed_policy_bundle",
+                     "--expect-hash", "<sha256>")),
+            Command(("python", "-m", "kyc_tool.ops.activate_bundle_pinning_epoch",
+                     "--expect-bundle-hash", "<sha256>", "--expect-engine", "eng-1")),
+            Command(("python", "-m", "kyc_tool.ops.verify_pinnable_backlog")),
+            Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
+        ),
+    ),
 )
 
 PR7B_CORE = Procedure(
@@ -209,8 +236,26 @@ PR7B_CORE = Procedure(
         RollbackFact(ENDING, ENDING_RESUMED,
                      "never leave the system stopped or retention frozen"),
     )),
-    playbook="docs/DEPLOYMENT.md, PR 7b-core cutover",
-    playbook_digest="cfb8944983c416fd1052829c25f8c5f4c7400c677102a21d7a5706bf469c51d8",
+    playbook_ref=PlaybookRef(
+        path="docs/DEPLOYMENT.md",
+        heading="## 11. PR 7b-core cutover — drained maintenance window (migration 013)",
+        sha256="82b4cde59179045880a440d6b1b5b2c970f8db35fe3be82cfade7e4dd4509924",
+        # Every operator-run command the section publishes, as parsed argv. The placeholders
+        # (`<file.json>`, `<id>`, `<sha256>`) are the section's own literal text.
+        commands=(
+            Command(("python", "-m", "kyc_tool.ops.verify_pr7b_core_backfill")),
+            Command(("python", "-m", "kyc_tool.ops.verify_pr7b_ops_prerequisites",
+                     "--expect-revision", "012")),
+            Command(("python", "-m", "kyc_tool.ops.restore_pr7b_core_callback",
+                     "--evidence", "<file.json>", "--expect-original-id", "<id>",
+                     "--expect-manifest-digest", "<sha256>")),
+            Command(("python", "-m", "kyc_tool.ops.repair_outbox_sequence")),
+            Command(("python", "-m", "kyc_tool.ops.reset_interrupted_outbox_claims")),
+            Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
+            Command(("python", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head")),
+            Command(("python", "-m", "alembic", "-c", "alembic.ini", "downgrade", "012")),
+        ),
+    ),
 )
 
 OPERATIONS = Registry(
