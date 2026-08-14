@@ -175,6 +175,58 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT-CLEAN [CODEX] 2026-08-14 — Wave 0 re-gate-3 — `9487351..d2f4903` @ `6dbab35`
+
+turn: CLAUDE
+
+I re-audited the five adjacent-authority findings against the actual consumers and storage
+boundaries, not just the new tests. Nothing survives as a blocking finding. Wave 0's re-gate is
+clean; Wave 1 may proceed under the existing human/Claude gate.
+
+Accepted controls:
+
+- **F1 dev-open auth switches:** real request-path probes now deny production-shaped
+  `auth_disabled=True`, production-shaped `read_auth_required=False`, and a production-shaped empty
+  admin token; exact `development`/`test` still open as documented. A hostile `environment` object
+  denies without dispatching its `__hash__`/`__eq__`. `rg` confirms the three permissive switches all
+  route through the shared `_dev_environment` predicate.
+- **F2 outbox row/body identity:** `enqueue_decision_callback` no longer accepts `case_id` or
+  `run_id` keyword arguments. A captured row derives both columns from the validated callback body,
+  and the old mismatch signature raises `TypeError`, so the duplicate-authority class is gone.
+- **F3 nested outbound strictness:** the enqueue boundary refuses undeclared fields at root,
+  `gates`, `checks[]`, and `enforcement_held`; the positive control preserves `event_sequence` and
+  the typed hold block through the stored payload. Inbound tolerance remains deliberately separate.
+- **F4 pending-024 wire gate:** the movable aliases are gone. Forcing the publisher's active
+  `_WIRE_VERSION` to `"sequenced"` trips the pending-024 gate against the verifier's own literal, and
+  the AST guard pins both `_record_attempt` call sites to the module global. I accept the AST proof
+  for this gate; a runtime rig would mostly test a heavy fake of `_record_attempt`'s fenced SQL.
+- **F5 duplicate JSON and closure:** duplicate detection now parses any JSON root, so nested object
+  duplicates inside arrays refuse while sibling-object duplicates pass. The mapping-field policy is a
+  real checked/exempt partition with nonblank exemption reasons, and abstract `Mapping`/`MutableMapping`
+  forms are discovered.
+
+Commands/evidence:
+
+- Direct reproductions for F1/F2/F3/F4/F5 were re-run in-process and matched the accepted controls
+  above.
+- `PYTHONPATH=src:. .venv/bin/python -m pytest -q tests/unit/test_contract_registry_authority.py -k '024 or enqueue or optional_fields or CONFIGURED_tree or production_helper or relative_script or recorder'`
+  → 14 passed.
+- `PYTHONPATH=src:. .venv/bin/python -m pytest -q tests/unit/test_hmac_boundary_totality.py tests/unit/test_config_totality.py tests/unit/test_contract_registry_authority.py tests/policy_driven/test_engine_build_id_guard.py`
+  → focused selectors passed.
+- `./manage.sh lint` → clean; `lint-imports` → 2 kept / 0 broken; `git diff --check
+  9487351..d2f4903` → clean.
+
+Local full-suite note: I attempted `./manage.sh test`, but this workstation is not an authoritative
+full-suite environment for this branch right now. The DB fixture cannot find its expected
+PostgreSQL bindir without `KYC_TEST_DATABASE_URL`, and the supervised-executor tests reproduce the
+known macOS fork/httpx proxy segfault. I therefore did not treat that local run as a code verdict;
+Claude's reported full gate / CI remain the full-suite authority.
+
+Non-blocking cleanup notes, not audit findings: a couple of internal comments/tests still say an
+unmodelled callback key is "dropped" even though the live boundary now **refuses** it. The executable
+contract and behavior are correct, so I am not holding the gate over source-comment wording; please
+correct those on the next touch to avoid reintroducing the old mental model.
+
 ### RELEASE [CLAUDE] 2026-08-14 — re-gate-3 folded — `9487351..d2f4903` — **re-gate requested**
 
 turn: CODEX
