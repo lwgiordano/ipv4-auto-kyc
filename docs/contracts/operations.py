@@ -10,6 +10,7 @@ The blocker at the top is the reason this document is titled a staging guide.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from docs.contracts import Claim, ClaimState, Registry
 from docs.contracts.playbook import (
@@ -34,6 +35,7 @@ from docs.contracts.playbook import (
     WINDOW,
     WINDOW_SAME,
     Command,
+    MigrationSpan,
     PlaybookRef,
     RollbackContract,
     RollbackFact,
@@ -56,6 +58,33 @@ from docs.contracts.playbook import (
 # The outbox-ceiling cutover below is the exception, and deliberately so: it is rendered from the
 # shipped canonical record in kyc_tool.ops.cutover and validated against it, so it is generated
 # from the authority rather than summarized from prose.
+
+
+def _resolved_migration_range(span: MigrationSpan) -> tuple[str, ...]:
+    """The ordered revisions a span installs, read off Alembic's own graph.
+
+    Ascending, EXCLUSIVE of the base (the base is where you already are), inclusive of the
+    target. Alembic raises for an unbuilt endpoint or a pair that is not ancestor/descendant, so
+    a span cannot name a walk the graph does not contain.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    repo = Path(__file__).resolve().parents[2]
+    cfg = Config(str(repo / "alembic.ini"))
+    declared = cfg.get_main_option("script_location")
+    if declared and not Path(declared).is_absolute():
+        cfg.set_main_option("script_location", str((repo / declared).resolve()))
+    script = ScriptDirectory.from_config(cfg)
+    walk = list(script.walk_revisions(base=span.base_revision, head=span.target_revision))
+    ordered = tuple(r.revision for r in reversed(walk) if r.revision != span.base_revision)
+    if not ordered or ordered[-1] != span.target_revision:
+        raise ValueError(f"span {span.base_revision}->{span.target_revision} resolved to nothing")
+    return ordered
+
+
+def _span_display_name(resolved: tuple[str, ...]) -> str:
+    return f"Migrations {resolved[0]}-{resolved[-1]}"
 
 
 @dataclass(frozen=True)
@@ -82,10 +111,14 @@ class Procedure:
     sentence it was read from. Passing either field explicitly is refused below: there is no
     free-text rollback field left to mutate.
 
-    `migration_range` is what THIS cutover installs, and it is the executable authority for the
-    schema answer — the tests classify each revision's downgrade AST and recompute the answer
-    rather than trusting it. PR 6's flag flip installs nothing (its migration deployed earlier,
-    rolling), which is why its range is empty.
+    `migration_range` is what THIS cutover installs, DERIVED (Wave 1 / F8) by walking Alembic's
+    revision graph from `migration_span.base_revision` to its target — the authored tuple it
+    replaces was bound only by a subset check, so dropping 013-017 under the unchanged name
+    "Migrations 013-023" passed every guard. The visible name must equal the resolved span or
+    construction refuses, the release verifier recomputes the walk independently and requires
+    exact ordered equality, and the range remains the executable authority for the schema answer
+    (each revision's downgrade AST is classified, never trusted). PR 6's flag flip installs
+    nothing (its migration deployed earlier, rolling), which is why it carries no span.
     """
 
     name: str
@@ -93,7 +126,8 @@ class Procedure:
     blocks_start: tuple[str, ...]
     playbook_ref: PlaybookRef
     rollback_contract: RollbackContract
-    migration_range: tuple[str, ...] = ()
+    migration_span: MigrationSpan | None = None
+    migration_range: tuple[str, ...] = field(default=(), init=False)
     playbook: str = field(default="", init=False)
     rollback: tuple[str, ...] = field(default=(), init=False)
     irreversible: str = field(default="", init=False)
@@ -108,6 +142,17 @@ class Procedure:
         # The page prints the ref's own display — path plus the exact heading's visible text —
         # so the pointer a reader follows and the pointer the digest binds are the same object.
         object.__setattr__(self, "playbook", self.playbook_ref.display)
+        if self.migration_span is not None:
+            resolved = _resolved_migration_range(self.migration_span)
+            object.__setattr__(self, "migration_range", resolved)
+            # The visible name must BE the resolved span. F8's mutation kept "Migrations 013-023"
+            # while the authored range silently dropped 013-017; with the range derived and the
+            # name checked against it, the pair cannot disagree and still construct.
+            if self.name != _span_display_name(resolved):
+                raise ValueError(
+                    f"procedure name {self.name!r} disagrees with its resolved span "
+                    f"{_span_display_name(resolved)!r}"
+                )
 
 
 FULL_WINDOW = Procedure(
@@ -219,7 +264,7 @@ PR7B_CORE = Procedure(
     # the tests from every downgrade body in `migration_range`, so a per-revision account cannot
     # drift because there is no per-revision account here to drift. Section 6 still carries it, and
     # is still checked against the migrations.
-    migration_range=("013", "014", "015", "016", "017", "018", "019", "020", "021", "022", "023"),
+    migration_span=MigrationSpan(base_revision="012", target_revision="023"),
     rollback_contract=RollbackContract((
         RollbackFact(REVERSIBILITY, IRREVERSIBLE_PAST_BOUNDARY,
                      "018 through 022 refuse unconditionally"),

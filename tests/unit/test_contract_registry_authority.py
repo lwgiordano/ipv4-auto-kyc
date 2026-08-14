@@ -1338,7 +1338,28 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
         # 4. The RANGE is bound to the playbook, so it cannot be understated to make an
         #    understated schema answer agree with itself.
         _assert_range_covers_forward_only(procedure, body, ref.heading)
-        # 5. INDEPENDENT: the schema answer is recomputed from the downgrade bodies.
+        # 5. The RANGE itself is recomputed through the verifier's own script-directory helper
+        #    (separately hardened against the configured-tree substitution) and must match the
+        #    procedure's derived range EXACTLY and IN ORDER — so even object.__setattr__ tampering
+        #    on a constructed procedure cannot survive, and the visible name must be the resolved
+        #    span's own display (Wave 1 / F8).
+        if procedure.migration_span is not None:
+            span = procedure.migration_span
+            walk = list(_alembic_script().walk_revisions(
+                base=span.base_revision, head=span.target_revision))
+            recomputed = tuple(r.revision for r in reversed(walk)
+                               if r.revision != span.base_revision)
+            assert procedure.migration_range == recomputed, (
+                f"{procedure.name}: derived range {procedure.migration_range} != the graph walk "
+                f"{recomputed}"
+            )
+            assert procedure.name == f"Migrations {recomputed[0]}-{recomputed[-1]}"
+        else:
+            assert procedure.migration_range == (), (
+                f"{procedure.name} carries a range with no span to derive it from"
+            )
+
+        # 6. INDEPENDENT: the schema answer is recomputed from the downgrade bodies.
         derived = _schema_answer_from_migrations(procedure.migration_range)
         assert contract.answer(playbook.SCHEMA) == derived, (
             f"{procedure.name} publishes schema={contract.answer(playbook.SCHEMA)!r} but its "
@@ -1710,42 +1731,66 @@ def test_schema_answer_is_recomputed_from_migrations_not_trusted():
 
 
 def test_understating_the_migration_range_cannot_erase_the_boundary():
-    """The hole a first pass at this left open, and the reason `migration_range` is not enough on
-    its own.
+    """The F8 mutation — keep the name "Migrations 013-023", drop 013-017 from the range — is now
+    UNCONSTRUCTABLE rather than detected: the range is derived from the span by walking Alembic's
+    graph, `replace()` refuses to author it, and a name that disagrees with its resolved span
+    refuses at construction. Tampering after construction is caught by the verifier's independent
+    recompute (asserted in the OPS.CUTOVER.PROCEDURES verifier above)."""
 
-    Deriving the schema answer from a range the AUTHOR supplies only moves the trust one level
-    down. Declare `migration_range=()` and the derivation dutifully returns `stays`, which then
-    agrees with an understated `schema=stays`, which in turn permits `reversibility=with_conditions`
-    — and PR 7b-core's 018 boundary vanishes from the document with every invariant satisfied.
+    from docs.contracts.playbook import MigrationSpan
 
-    The fix is that the playbook body has to agree too. It names 018 and 022 as forward-only, and a
-    cutover cannot warn about a revision it claims not to install.
-    """
     pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
                 if p.name == "Migrations 013-023")
+
+    # (a) the range cannot be authored at all
+    with pytest.raises(ValueError, match="init=False"):
+        dataclasses.replace(pr7b, migration_range=("018", "019", "020", "021", "022", "023"))
+
+    # (b) a name that understates its span refuses at construction
+    with pytest.raises(ValueError, match="disagrees with its resolved span"):
+        dataclasses.replace(pr7b, migration_span=MigrationSpan("017", "023"))
+
+    # (c) even direct __setattr__ tampering cannot survive the independent recompute
+    tampered = dataclasses.replace(pr7b)
+    object.__setattr__(tampered, "migration_range",
+                       ("018", "019", "020", "021", "022", "023"))
+    span = tampered.migration_span
+    walk = list(_alembic_script().walk_revisions(base=span.base_revision,
+                                                 head=span.target_revision))
+    recomputed = tuple(r.revision for r in reversed(walk) if r.revision != span.base_revision)
+    assert tampered.migration_range != recomputed
+
+    # (d) and the playbook-body bind still holds as belt over the derived range
     body = " ".join(_section_bytes(pr7b.playbook_ref).split())
-
     assert {"018", "022"} <= _forward_only_revisions_named_in(body)
+    _assert_range_covers_forward_only(pr7b, body, pr7b.playbook_ref.heading)
 
-    # the erased-boundary contract is internally consistent — every invariant in playbook.py
-    # passes, and the derivation agrees with it once the range is empty
-    erased = playbook.RollbackContract(_valid_facts())
-    assert erased.answer(playbook.SCHEMA) == playbook.SCHEMA_STAYS
-    assert erased.answer(playbook.REVERSIBILITY) == playbook.REVERSIBLE_WITH_CONDITIONS
-    assert _schema_answer_from_migrations(()) == erased.answer(playbook.SCHEMA)
 
-    # the shipped procedure passes the bind; the understated one does not. Both run the SAME
-    # check the release runs, not a restatement of it.
-    _assert_range_covers_forward_only(pr7b, body, "PR 7b-core cutover")
-    understated = dataclasses.replace(pr7b, migration_range=(), rollback_contract=erased)
-    with pytest.raises(AssertionError, match="cannot warn about a revision it claims not to"):
-        _assert_range_covers_forward_only(understated, body, "PR 7b-core cutover")
+def test_a_span_cannot_name_a_walk_the_graph_does_not_contain():
+    """Codex's endpoint REDs: unbuilt, reversed, self, and unknown endpoints all refuse."""
+    from alembic.util import CommandError
+    from docs.contracts.operations import _resolved_migration_range
+    from docs.contracts.playbook import MigrationSpan
 
-    # and dropping just one revision is caught — the check is per-revision, not a count
-    trimmed = dataclasses.replace(
-        pr7b, migration_range=tuple(r for r in pr7b.migration_range if r != "022"))
-    with pytest.raises(AssertionError, match=r"\['022'\]"):
-        _assert_range_covers_forward_only(trimmed, body, "PR 7b-core cutover")
+    with pytest.raises(CommandError):
+        _resolved_migration_range(MigrationSpan("012", "024"))  # unbuilt target
+    with pytest.raises(CommandError):
+        _resolved_migration_range(MigrationSpan("023", "013"))  # reversed
+    with pytest.raises(CommandError):
+        _resolved_migration_range(MigrationSpan("000", "023"))  # unknown base
+    with pytest.raises(ValueError, match="installs nothing"):
+        MigrationSpan("012", "012")  # self-span refused at the record
+
+
+def test_the_derived_range_is_exactly_the_graph_walk():
+    """Positive control: ascending, base-exclusive, target-inclusive, no gaps or duplicates."""
+    from docs.contracts.operations import _resolved_migration_range
+    from docs.contracts.playbook import MigrationSpan
+
+    resolved = _resolved_migration_range(MigrationSpan("012", "023"))
+    assert resolved == ("013", "014", "015", "016", "017", "018", "019", "020", "021",
+                        "022", "023")
+    assert len(set(resolved)) == len(resolved)
 
 
 def test_older_revisions_a_playbook_merely_references_are_not_forced_into_the_range():

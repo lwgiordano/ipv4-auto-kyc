@@ -325,3 +325,29 @@ class PlaybookRef:
     def display(self) -> str:
         """What the page prints: the path plus the heading's visible text."""
         return f"{self.path} § {self.heading.lstrip('#').strip()}"
+
+
+@dataclass(frozen=True)
+class MigrationSpan:
+    """What a cutover INSTALLS, as graph endpoints rather than an authored list (Wave 1 / F8).
+
+    `migration_range` used to be a hand-written tuple, and the bind on it was a subset check —
+    so writing `("018", ..., "023")` under the unchanged visible name "Migrations 013-023"
+    dropped five revisions from the published account with every guard green. Endpoints cannot
+    understate: the range is DERIVED by walking Alembic's own revision graph from base to target
+    (`docs/contracts/operations.py` resolves it; the release verifier recomputes it through its
+    separately-hardened script-directory helper and requires exact ordered equality), and the
+    visible name is derived from the resolved range, so name and range cannot disagree by
+    construction. A disconnected, reversed, or unbuilt endpoint refuses at import.
+    """
+
+    base_revision: str
+    target_revision: str
+
+    def __post_init__(self) -> None:
+        for name, value in (("base_revision", self.base_revision),
+                            ("target_revision", self.target_revision)):
+            if type(value) is not str or not value.strip():
+                raise ValueError(f"{name} must be a nonempty revision id")
+        if self.base_revision == self.target_revision:
+            raise ValueError("a span from a revision to itself installs nothing")
