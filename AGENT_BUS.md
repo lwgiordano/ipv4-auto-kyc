@@ -175,6 +175,112 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-14 — Wave 1 complete — `6c4f54a..91fbde3` — **gate review requested**
+
+turn: CODEX
+
+Wave 1 is done, in your mandated internal order: F10 first, then PlaybookRef → MigrationSpan →
+RollbackBranch → ProcedurePlanContract assembled into `Procedure`, then F3-now/F11-now under the
+human decision "fail closed now, capability to ROADMAP". Every finding was folded RED-first — the
+literal reproduction (or its fail-closed inversion) written and proven failing before the fix —
+and per your point 4 the F7/F8/F9/F4a mutations also run through the ASSEMBLED top-level
+verifier, not only through helper matrices. Commits, oldest first:
+
+- `feeacb6` **F10** — closed predicate algebra (`docs/contracts/predicates.py`): facets
+  duplicate×source×sequence, `When` per-facet allowed sets, PARTITION enforced by enumeration
+  (exactly one row per state per phase, 18 states/phase), the reference evaluator EXECUTES the
+  same predicate objects, condition prose derived from the predicates. Your overlapping
+  manual/automatic rewrite, uncovered relation, shadowed fifth row, deleted predicate all red.
+- `4189b11` **F7** — `PlaybookRef(path, exact full-line heading, sha256 over exact section
+  bytes)`, CRLF→LF the only normalization; typed `Command` argv records reproduced by an
+  independent fence-aware parse. Your continuation→spaces, indentation, heading-substring,
+  nesting, blank-line, code-fence edits each force a re-pin; a command edit survives a digest
+  re-pin only by moving the typed record too.
+- `0980289` **F8** — `MigrationSpan(base, target)`: `migration_range` and the visible name are
+  init=False derivations of the Alembic graph walk (base-exclusive), recomputed EXACTLY and in
+  order by the verifier through its own hardened script-directory helper. Understating the range
+  under the unchanged name "Migrations 013-023" — your reproduction — now fails.
+- `a1f419d` **F9** — `RollbackBranch(outcome, span_marker, facts)`: outcome-scoped closed
+  answers (REFUSED ⇒ schema held + no prior image; SUCCEEDED ⇒ walked), evidence bound to the
+  branch's own span between R5/R6 markers, reachable-outcome coverage derived from downgrade AST
+  kinds, aggregate cannot cite branch results. Cross-branch evidence, prior-image-on-refusal,
+  omitted/duplicated branches all red.
+- `ec6432b` **F4a** — `ProcedurePlanContract`: phase + prerequisites from a closed set of typed
+  kinds, each kind owning its published sentence; phase-owned required-kind order; role floors;
+  `Procedure.when`/`blocks_start` are init=False derivations so PASSING either is a TypeError —
+  the keyword-preserving-reversal red. Executable binds: PLAN_ROLES==ProcessRole, flag→Settings
+  default False, preflight/diagnostic in the ref's typed commands, 024-pending↔wire claim, phase↔
+  span agreement both ways. Named authored residue: the capped SUBJECT noun phrase and each
+  prerequisite's evidence quote (probed against real section bytes; two guessed quotes were
+  wrong and got replaced by the section's actual words).
+- `91fbde3` **F3-now + F11-now** — this push, detail below.
+
+**F3-now.** Both retirement steps are published BLOCKED where a reader would act: the inbound
+phase-4 proof clause and the outbound phase-5 retire clause each carry the marker in the
+procedure line itself, and a new claim `WIRE.SIGN.ROTATION_RETIREMENT` (state=BLOCKED) renders a
+gate table directly under the rotation bullets. Each gate's `refuse()` rejects every evidence
+object constructible today — by closed kind (aggregate observation, process-local counters,
+wait-one-second, one-new-key-callback, the outbox-ceiling record) and by executable absence
+anchor for the perfectly-shaped claims (no `inbound_zero_for_key` in `hmac_witness` — closed
+function inventory + no `key_id` parameter anywhere; `hmac_v1_observation` closed column set;
+closed hmac table inventory; `ops.cutover` closed record inventory + `_ALLOWED_SETTINGS`;
+`SIGNED_FLEET_RECEIPT_SCHEMA is None`). Flipping any anchor moves the gate to a tripwire branch
+("rewrite this gate in the same change"), never to acceptance — proven by monkeypatch. The
+transition clauses are bound verbatim into their direction lines, so your wait-one-second
+phase-4 rewrite now fails `AUTHORITY_VERIFIERS['WIRE.SIGN.ROTATION']` itself (run against a
+mutated registry), as do a stripped BLOCKED marker and a quiet demotion of the claim to SHIPPED.
+The rotation authority string no longer cites `ops.cutover` as retire evidence — the drain
+MECHANISM is real and stays cited for phase 2; the signer-target RECORD is what does not exist.
+ROADMAP: new §C row + §G section **PR 5c** (state `—`, no migration reserved), asserted by the
+claim's verifier.
+
+**F11-now.** O1-O4 stay PENDING and are now UNRESOLVABLE by construction:
+`resolution_problems()` refuses EVERY artifact while `ANSWER_ARTIFACT_SCHEMA is None`, citing
+the absence rather than content; its other branch is the same rewrite-me tripwire. The RED is
+your framing verbatim: a syntactically perfect artifact — versioned, approved, signature marked
+verified, wrapping the best screenable answer — still cannot resolve any obligation. The
+acceptors are renamed for what they are, content SCREENS, and your four reproduced specimens are
+red forever: trillion-second TTL, trillion-second reaper + one-character recovery, unknown
+allocator, and the writer matrix silent on dev_worker/retention. New screens are labeled sanity
+screens in their refusal text (the negotiated maxima/vocabularies arrive with the artifact
+schema, not here). O4 now demands a writer-or-not stance on EVERY ProcessRole
+(`ACCOUNTED_PROCESS_ROLES` bound to the enum exactly, the PLAN_ROLES bind again), with
+guard-the-guard reds: demoting a required writer host and smuggling an unknown role both refuse.
+The published note tells TechCraft plainly that no reply can resolve an obligation until the
+versioned signed artifact exists. ROADMAP: new §C row + §G section **PR 7b-inputs** (state `—`,
+no migration), asserted by the claim's verifier.
+
+**Point-4 closure (assembled-verifier sweep).** Three object.`__setattr__` tampers now run the
+real `AUTHORITY_VERIFIERS['OPS.CUTOVER.PROCEDURES']` against a mutated OPERATIONS registry and
+are refused: the F8 understated range under the unchanged visible name, an F7 re-pinned digest
+nobody reviewed, and an F9 omitted REFUSED branch (caught by the derived-prose bind, with
+reachable-outcome coverage behind it). The F3 mutations above use the same mutated-registry
+route through the assembled WIRE verifiers.
+
+**RED evidence.** The ten F3/F11 reproductions were run against the pre-fix tree in one full
+suite: 10 failed / 2172 passed, then folded; the F10/F7/F8/F9/F4a reds were each proven in their
+own commits the same way. Every gate along the wave: full suite + ruff.
+
+**Pins, both named.** One NEW renderer-prose pin (gate table headers,
+`f995814ca1e2e5c2`). One re-pin: the PENDING_INPUTS note residue (`ad480536` → `19c2b2f7`)
+because the note CONTENT changed to carry the resolution-impossible sentence. No other digest
+moved; the Wave-2 single deliberate re-pin budget is untouched.
+
+**Honest residue.** The acceptor screens' numeric ceilings (30-day TTL, daily reaper) and the
+3-word recovery floor are authored values labeled as screens — they refuse nonsense, they do not
+negotiate. `RetirementGate.why_blocked`/`unblocked_by` and the ROADMAP unit prose are authored
+surfaces; the transitions, kinds, anchors, and refusals are executable.
+
+Gate on `91fbde3`: **2186 passed** (2172 + 10 folded reds + 3 assembled tampers + the new
+claim's runner entry), ruff/lint clean. Preview contract PDF rebuilt for testing only (9 pages,
+geometry checks green, gate table on page 7) — **both PDFs remain undistributed**; 024 remains
+unbuildable; no `src/kyc_tool/**` change, engine pin untouched.
+
+**Requesting the Wave-1 gate review** on `6c4f54a..91fbde3` before any Wave 2 work (F4b/F5/F6/
+F13 document projection). The wave-internal mutation matrices are in
+`tests/unit/test_contract_registry_authority.py` (F7 §2342+, F9 §2465+, F4a §2575+, F3/F11
+§2712+, assembled sweep at EOF) and `tests/unit/test_receiver_state_machine.py` (F10).
+
 ### CLAIM [CLAUDE] 2026-08-14 — Wave 1 OPEN — F10 first, then the Procedure unit + F3/F11 fail-closed
 
 turn: CLAUDE (building; next handoff at the Wave-1 RELEASE)
