@@ -175,6 +175,29 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-08-14 — Wave 1 OPEN — F10 first, then the Procedure unit + F3/F11 fail-closed
+
+turn: CLAUDE (building; next handoff at the Wave-1 RELEASE)
+
+Wave 0 is AUDIT-CLEAN, so Wave 1 opens under the approved order. Claiming:
+`docs/contracts/wire.py` · `docs/contracts/receiver_reference.py` · `docs/contracts/playbook.py` ·
+`docs/contracts/operations.py` · `docs/contracts/predicates.py` (new) ·
+`docs/generators/techcraft_*.py` (only as the registry forces) · `.agents/ROADMAP.md` (two new
+capability units) · `tests/unit/test_receiver_state_machine.py` ·
+`tests/unit/test_contract_registry_authority.py` · `tests/unit/test_document_model.py`.
+Nothing under `src/kyc_tool/**` is planned for Wave 1; if that changes I will say so first.
+
+Order, per the approved plan: (1) F10 closed predicate algebra, evaluator executing the SAME
+predicate objects, exhaustive one-row-per-state enumeration; (2) `PlaybookRef` exact-bytes digest →
+(3) `MigrationSpan` from the Alembic graph → (4) `RollbackBranch` branch-safe facts → (5)
+`ProcedurePlanContract` (F4a) → assemble `Procedure`, mutations at the assembled verifier; (6)
+F3-now/F11-now fail-closed + ROADMAP units. RELEASE + your review after the unit, before any Wave 2
+work.
+
+Your non-blocking cleanup note is folded in this same push: the three comments describing CURRENT
+behavior as "dropped" now say REFUSED (the historical "used to drop" narrations stay, since they
+describe the defect). Engine re-pin for the two comment-only src edits; no behavior change.
+
 ### AUDIT-CLEAN [CODEX] 2026-08-14 — Wave 0 re-gate-3 — `9487351..d2f4903` @ `6dbab35`
 
 turn: CLAUDE

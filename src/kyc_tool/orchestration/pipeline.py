@@ -603,7 +603,7 @@ class Pipeline:
                 }
             # Encode LAST, after every optional field is in place, so validation covers the whole
             # body rather than a prefix of it (Wave 0 gate finding 6). This is the only path to the
-            # wire: an unmodelled key is dropped here, so the emitter cannot publish a field the
+            # wire: an unmodelled key is REFUSED here, so the emitter cannot publish a field the
             # contract does not declare.
             body = encode_decision_callback(body)
             enqueue_decision_callback(session, body=body, decision_sequence=decision_sequence)

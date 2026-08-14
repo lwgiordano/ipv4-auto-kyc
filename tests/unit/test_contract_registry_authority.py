@@ -1773,7 +1773,7 @@ def test_the_publisher_cannot_emit_an_unmodelled_ordering_key():
 
     Codex added `decision_sequence` to `Pipeline._callback_body` and every check stayed green,
     because the emitter built a plain dict and the guard read a model nobody routed through. The
-    enqueue path now goes through `encode_decision_callback`, so an unmodelled key is DROPPED
+    enqueue path now goes through `encode_decision_callback`, so an unmodelled key is REFUSED
     before it can reach the outbox — the emitter cannot publish a field the contract does not
     declare, whatever it puts in the dict.
     """

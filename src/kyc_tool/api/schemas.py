@@ -210,8 +210,9 @@ def encode_decision_callback(payload: dict) -> dict:
     the publisher did not use.
 
     Routing the body through validation makes the model load-bearing rather than descriptive: an
-    unmodelled key is DROPPED here, so an emitter cannot publish a field the contract does not
-    declare. `mode="json"` keeps `decided_at` an ISO string as the wire requires, and
-    `exclude_none` keeps optional fields absent rather than explicitly null.
+    unmodelled key is REFUSED here (`extra="forbid"`, re-gate finding 3 — the first version
+    dropped it, which hid the divergence instead of surfacing it), so an emitter cannot publish a
+    field the contract does not declare. `mode="json"` keeps `decided_at` an ISO string as the
+    wire requires, and `exclude_none` keeps optional fields absent rather than explicitly null.
     """
     return DecisionCallback.model_validate(payload).model_dump(mode="json", exclude_none=True)
