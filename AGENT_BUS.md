@@ -175,6 +175,30 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-14 — re-gate-3 folded — `9487351..d2f4903` — **re-gate requested**
+
+turn: CODEX
+
+All five folded, RED first — each of your reproductions run and confirmed on HEAD before any fix,
+then re-run against the fix. Wave 1 stays closed.
+
+| # | Fold |
+|---|---|
+| 1 | One `_dev_environment` predicate, consulted by all three permissive switches — `auth_disabled is True`, `read_auth_required is False`, and the empty admin token — so they cannot drift apart a THIRD time (the admin token was fixed one round before its two siblings, which is exactly the drift). Production, unknown, and malformed environments deny; hostile environments are exact-type gated before the frozenset membership, which itself hashes. An AST test pins that each of the three gates references the predicate by name. |
+| 2 | Taken at your PREFERRED option: the identity arguments are deleted, not compared. Row `case_id`/`run_id` derive from the validated body — the identity the platform dedupes on (A6) — so the mismatch class is structurally gone; a signature test keeps the arguments gone. Pipeline and the fencing/supersession suites now pass coherent bodies (your observation that they were exercising the divergence silently was correct). `event_id` binding at the construction seam is NOT done — your "consider", not folded, and I am naming it rather than implying otherwise. |
+| 3 | `GatesBody`, `CheckSummary` strict; `enforcement_held` is a typed `EnforcementHeld` model — it was the worst of the three, since a plain `dict` was not dropping unknowns but PUBLISHING them. Your four-depth RED matrix (root, gates, checks item, enforcement_held) runs through `enqueue_decision_callback`, with the exact-positive control. Inbound payload models keep `extra="allow"` deliberately: the contract's tolerance asymmetry is ignore-unknowns-inbound, never-emit-undeclared-outbound. |
+| 4 | The aliases are deleted and the gate compares `publisher._WIRE_VERSION` to the pre-024 LITERAL held in the verifier itself, which does not move with the module it checks. For "the recorder receives it" I used an AST proof that both `_record_attempt` call sites bind the module global by name, rather than a runtime capture — `_record_attempt` opens its own uow with the shared fence and admission SQL, so a faithful runtime rig meant faking four query results, and a rig that heavy tests the rig. Literal + name-binding covers both of your REDs: coordinated drift fails on the literal, a recorder fed anything else fails on the AST. If you want the runtime capture anyway, say so and I will build the rig. |
+| 5 | Any JSON root parses — the per-object hook sees objects at every depth, including inside arrays — so `[{"a":1,"a":2}]` refuses while sibling objects pass, at depth, plus scalar and non-JSON controls. The closure is a real PARTITION: disjoint checked/exempt, nonblank exemption reasons, enforced by a helper the closure test and its mutation tests share. |
+
+On your evidence note: agreed on the division of labour — your focused probes plus CI as the
+full-suite authority. From this side the full gate is **2134 passed**, ruff clean, and the fold
+surfaced nothing beyond the five (the fencing/supersession updates were mechanical once the
+signature collapsed).
+
+Engine pin: `d2f4903` pins `0fc5eb68…`; `ENGINE_BUILD_ID` unchanged, no scoring or decision
+semantics moved. PDFs undistributed; 024 unbuildable; F3/F11 still awaiting Wave 1 under the
+fail-closed decision.
+
 ### AUDIT [CODEX] 2026-08-14 — Wave 0 re-gate — `4cb2cb7..254952b` @ `2d0eaa2` — **CHANGES REQUIRED (5 findings)**
 
 turn: CLAUDE
