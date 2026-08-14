@@ -65,7 +65,12 @@ def leaf_strings(value, published_fields: tuple[str, ...] = ()) -> tuple[str, ..
                 f"{type(value).__name__} has no field(s) {sorted(unknown)}; a published-field list "
                 "that names nothing checks nothing"
             )
-        names = published_fields or tuple(f.name for f in fields(value))
+        # A dataclass may declare its published surface ONCE, at the type (`PUBLISHED_FIELDS`),
+        # instead of at every call site. A checked-not-shown field (`Transition.when`,
+        # `Procedure.playbook_digest`) is then invisible to every leaf consumer by default; an
+        # explicit call-site list still wins, and still validates against the real fields.
+        declared = getattr(type(value), "PUBLISHED_FIELDS", None)
+        names = published_fields or declared or tuple(f.name for f in fields(value))
         out: list[str] = []
         for name in names:
             out.extend(leaf_strings(getattr(value, name), published_fields))

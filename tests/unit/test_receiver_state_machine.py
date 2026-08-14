@@ -12,13 +12,18 @@ implements it, the scenarios below are the findings' own repros, and a structura
 branch to the published row it claims to implement.
 """
 
+import dataclasses as _dataclasses
+
 import pytest
+from docs.contracts import predicates as _predicates
 from docs.contracts.receiver_reference import (
     Callback,
     LedgerState,
     Outcome,
+    TableIntegrityError,
     UnknownSourceError,
     decide,
+    observe,
 )
 from docs.contracts.wire import (
     INTERIM,
@@ -26,6 +31,7 @@ from docs.contracts.wire import (
     POST_024,
     RECEIVER_TRANSITIONS,
     WIRE,
+    Transition,
 )
 
 CASE = "case-42"
@@ -57,7 +63,11 @@ def test_no_row_falls_through_to_an_otherwise():
     for transition in RECEIVER_TRANSITIONS:
         assert "otherwise" not in transition.condition.lower(), transition
     note = WIRE["WIRE.CALLBACK.EFFECTIVENESS"].note.lower()
-    assert "first match wins" in note and "exhaustive" in note
+    # The note used to promise "first match wins" over an "exhaustive" list — order-dependent
+    # selection over rows nothing verified. It now states the property the enumeration actually
+    # proves: the rows PARTITION the state space, so no state has zero answers or two.
+    assert "partition" in note and "exactly one row" in note
+    assert "otherwise" in note  # the note still names the banned branch explicitly
 
 
 def test_the_reference_implementation_uses_every_published_row():
@@ -279,3 +289,123 @@ def test_mutating_any_published_outcome_field_fails_the_binding():
                 assert outcome.effective != mutated.becomes_effective, (
                     f"row {index} could be flipped without the binding noticing")
                 break
+
+
+# ── F10: the mutations that got through "four rows plus token presence", each RED ─────────────
+#
+# Codex widened the post-024 manual row to "MANUAL or AUTOMATIC" and every suite stayed green: the
+# evaluator had its own hardcoded branches, and totality was checked as a row count. Rows now carry
+# executable predicates, the evaluator executes them, and each phase must PARTITION the closed
+# state space. Every mutation below is run through `partition_problems` — the same check the
+# release verifier runs — and through `decide()`, which must HOLD (raise), never pick, on an
+# ambiguous table.
+
+def _phase_rows(phase):
+    return [t for t in RECEIVER_TRANSITIONS if t.phase == phase]
+
+
+def test_the_shipped_tables_partition_the_state_space():
+    """Baseline: without this, every rejection below could be the checker failing on anything."""
+    for phase in (INTERIM, POST_024):
+        assert _predicates.partition_problems(_phase_rows(phase)) == []
+
+
+def test_codex_overlap_widening_the_manual_row_is_caught():
+    """The literal F10 mutation: post-024 row 2 claims MANUAL *or* AUTOMATIC, so the ABOVE x
+    AUTOMATIC state has two competing answers — one says effective, one says not."""
+    rows = _phase_rows(POST_024)
+    widened = _dataclasses.replace(
+        rows[2],
+        when=_predicates.When(
+            duplicate=frozenset({_predicates.FRESH}),
+            source=frozenset({_predicates.SRC_MANUAL, _predicates.SRC_AUTOMATIC}),
+            sequence=frozenset({_predicates.SEQ_ABOVE})))
+    mutated = [rows[0], rows[1], widened, rows[3]]
+    problems = _predicates.partition_problems(mutated)
+    assert problems and all("competing answers" in x for x in problems), problems
+
+
+def test_an_uncovered_sequence_relation_is_caught():
+    """Drop SEQ_ABSENT from post-024 row 1: a callback with no decision_sequence matches nothing,
+    and the receiver has no published answer for a state that arrives on day one."""
+    rows = _phase_rows(POST_024)
+    narrowed = _dataclasses.replace(
+        rows[1],
+        when=_predicates.When(
+            duplicate=frozenset({_predicates.FRESH}),
+            source=_predicates.ANY_SOURCE,
+            sequence=frozenset({_predicates.SEQ_NOT_ABOVE})))
+    mutated = [rows[0], narrowed, rows[2], rows[3]]
+    problems = _predicates.partition_problems(mutated)
+    assert problems and any("uncovered" in x for x in problems), problems
+
+
+def test_a_deleted_row_is_caught():
+    for phase in (INTERIM, POST_024):
+        rows = _phase_rows(phase)
+        for drop in range(len(rows)):
+            mutated = rows[:drop] + rows[drop + 1:]
+            assert _predicates.partition_problems(mutated), (phase, drop)
+
+
+def test_a_shadowed_extra_row_is_caught():
+    """A fifth row whose states are already claimed: with first-match semantics it is silently
+    dead weight a reader still trusts; under the partition property it is competing answers."""
+    rows = _phase_rows(INTERIM)
+    shadow = _dataclasses.replace(rows[1], why="a shadowed restatement")
+    assert _predicates.partition_problems([*rows, shadow])
+
+
+def test_the_duplicate_row_leads_each_phase():
+    """Evaluation order is part of the published contract even though a partition makes selection
+    order-independent — the PDF prints the rows in order and names the duplicate check first."""
+    for phase in (INTERIM, POST_024):
+        first = _phase_rows(phase)[0]
+        assert first.when.duplicate == frozenset({_predicates.DUP})
+        assert first.when.source == _predicates.ANY_SOURCE
+
+
+def test_decide_holds_rather_than_picking_on_an_ambiguous_table(monkeypatch):
+    """If the table ever stops being a partition at runtime, the receiver must HOLD. Which of two
+    matching rows wins would otherwise be an implementation accident — the F10 defect itself."""
+    from docs.contracts import receiver_reference, wire
+
+    rows = _phase_rows(POST_024)
+    widened = _dataclasses.replace(
+        rows[2],
+        when=_predicates.When(
+            duplicate=frozenset({_predicates.FRESH}),
+            source=frozenset({_predicates.SRC_MANUAL, _predicates.SRC_AUTOMATIC}),
+            sequence=frozenset({_predicates.SEQ_ABOVE})))
+    mutated = tuple(_phase_rows(INTERIM)) + (rows[0], rows[1], widened, rows[3])
+    monkeypatch.setattr(wire, "RECEIVER_TRANSITIONS", mutated)
+    monkeypatch.setattr(receiver_reference, "RECEIVER_TRANSITIONS", mutated)
+    state = LedgerState(seen_run_ids=frozenset(), current_source="automatic", high_water=1)
+    with pytest.raises(TableIntegrityError):
+        decide(state, Callback(case_id="c", run_id="r2", decision_sequence=9), phase=POST_024)
+
+
+def test_an_unknown_source_is_refused_before_any_row_is_consulted():
+    """The fail-closed gate lives in `observe`, ahead of matching, so no predicate widening can
+    make an unclassifiable source eligible for any row."""
+    state = LedgerState(seen_run_ids=frozenset(), current_source="manual_release_pending")
+    with pytest.raises(UnknownSourceError):
+        observe(state, Callback(case_id="c", run_id="r1"))
+
+
+def test_a_condition_cannot_be_authored():
+    """The text is the predicate's derivation; there is no field left to write prose into."""
+    with pytest.raises(TypeError):
+        Transition(phase=INTERIM, condition="otherwise apply", record="x", effective="x", why="x",
+                   when=_predicates.When(duplicate=frozenset({_predicates.DUP}),
+                                         source=_predicates.ANY_SOURCE,
+                                         sequence=_predicates.ANY_SEQUENCE))
+
+
+def test_a_full_space_predicate_cannot_derive_a_condition():
+    """`When(everything)` derives the condition 'always' — the 'otherwise apply' defect wearing
+    predicate syntax. Refused at derivation."""
+    with pytest.raises(ValueError, match="otherwise apply"):
+        _predicates.When(duplicate=_predicates.ANY_DUPLICATE,
+                         source=_predicates.ANY_SOURCE,
+                         sequence=_predicates.ANY_SEQUENCE).condition()

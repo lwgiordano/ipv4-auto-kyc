@@ -8,9 +8,15 @@ requirement). `tests/unit/test_contract_registry_authority.py` holds each litera
 authority; `tests/unit/test_contract_rendering.py` proves the rendered PDF displays it.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import ClassVar
 
-from docs.contracts import Claim, ClaimState, Registry
+from docs.contracts import (
+    Claim,
+    ClaimState,
+    Registry,
+    predicates,  # noqa: I001 — sibling module, not the package root
+)
 
 # ── the receiver's effectiveness decision, as a TOTAL transition table ─────────────────────────────
 #
@@ -36,7 +42,16 @@ KNOWN_SOURCES = frozenset({SOURCE_MANUAL, SOURCE_AUTOMATIC})
 
 @dataclass(frozen=True)
 class Transition:
-    """One row. `condition` is evaluated in order within its phase; the first match wins.
+    """One row of the receiver table.
+
+    `when` is the row's PREDICATE — a subset of the closed receiver state space
+    (`docs/contracts/predicates.py`) — and `condition`, the text the PDF prints, is DERIVED from
+    it (re-audit `4cb2cb7` F10). Conditions used to be authored prose evaluated nowhere: the
+    reference implementation carried its own hardcoded branches, so widening the manual row to
+    "MANUAL or AUTOMATIC" — two rows claiming the same state — left every test green. The
+    evaluator now executes these same `when` objects, and each phase's rows must PARTITION the
+    state space: every state matches exactly one row, checked by enumeration, so an overlap, an
+    uncovered state, a deleted row, and a shadowed extra row all fail the same property.
 
     The prose fields are what the PDF prints. The three booleans are what the reference
     implementation is held against: previously the implementation reported which ROW it took and
@@ -45,8 +60,15 @@ class Transition:
     kept doing the right thing and the document told TechCraft the wrong thing.
     """
 
+    # What a document may PRINT from this row. `when` is deliberately absent: it is the checked
+    # form, and its facet tokens ("fresh", "above") leaking into leaf traversal would both demand
+    # internal vocabulary on the page and mangle residue subtraction (they substring ordinary
+    # prose). Same principle as `Procedure.playbook_digest`: checked, not shown.
+    PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = (
+        "phase", "condition", "record", "effective", "why")
+
     phase: str  # "interim" (today) or "post-024" (after ordered delivery is activated)
-    condition: str
+    when: predicates.When
     record: str  # what goes into the accepted-run ledger
     effective: str  # whether it becomes the case's current decision
     why: str
@@ -54,6 +76,10 @@ class Transition:
     records: bool = True
     becomes_effective: bool = False
     advances_high_water: bool = False
+    condition: str = field(default="", init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "condition", self.when.condition())
 
 
 INTERIM = "interim"
@@ -62,7 +88,8 @@ POST_024 = "post-024"
 RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     Transition(
         phase=INTERIM,
-        condition="the (case_id, run_id) is already in your accepted ledger",
+        when=predicates.When(duplicate=frozenset({predicates.DUP}),
+                             source=predicates.ANY_SOURCE, sequence=predicates.ANY_SEQUENCE),
         record="nothing new; the row is already there",
         effective="NO CHANGE — acknowledge with 2xx and stop",
         records=False,
@@ -71,7 +98,9 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
     Transition(
         phase=INTERIM,
-        condition="the case has no currently effective decision",
+        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                             source=frozenset({predicates.SRC_NONE}),
+                             sequence=predicates.ANY_SEQUENCE),
         record="the callback",
         effective="YES — it becomes the current automatic decision",
         becomes_effective=True,
@@ -79,7 +108,9 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
     Transition(
         phase=INTERIM,
-        condition="the currently effective source for the case is a MANUAL approval",
+        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                             source=frozenset({predicates.SRC_MANUAL}),
+                             sequence=predicates.ANY_SEQUENCE),
         record="the callback",
         effective="NO",
         why="A reviewer decided this case. An automatic callback queued before that approval can "
@@ -89,8 +120,9 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
     Transition(
         phase=INTERIM,
-        condition="the currently effective source is AUTOMATIC and this callback is a different "
-                  "run for the same case",
+        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                             source=frozenset({predicates.SRC_AUTOMATIC}),
+                             sequence=predicates.ANY_SEQUENCE),
         record="the callback",
         effective="NO — hold the case for review instead",
         why="This is the row that must not read 'otherwise apply'. Interim has no wire ordering "
@@ -100,7 +132,8 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
     Transition(
         phase=POST_024,
-        condition="the (case_id, run_id) is already in your accepted ledger",
+        when=predicates.When(duplicate=frozenset({predicates.DUP}),
+                             source=predicates.ANY_SOURCE, sequence=predicates.ANY_SEQUENCE),
         record="nothing new",
         effective="NO CHANGE — acknowledge with 2xx and stop",
         records=False,
@@ -108,8 +141,10 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
     Transition(
         phase=POST_024,
-        condition="the callback carries no decision_sequence, or its decision_sequence is <= your "
-                  "recorded high-water mark for the case",
+        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                             source=predicates.ANY_SOURCE,
+                             sequence=frozenset({predicates.SEQ_ABSENT,
+                                                 predicates.SEQ_NOT_ABOVE})),
         record="the callback",
         effective="NO, and the high-water mark does NOT move",
         why="It is superseded or unordered. Recording it keeps your audit trail complete without "
@@ -117,8 +152,9 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
     Transition(
         phase=POST_024,
-        condition="the decision_sequence exceeds the high-water mark AND the current source is "
-                  "MANUAL",
+        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                             source=frozenset({predicates.SRC_MANUAL}),
+                             sequence=frozenset({predicates.SEQ_ABOVE})),
         record="the callback, AND advance the high-water mark to its decision_sequence",
         effective="NO",
         advances_high_water=True,
@@ -128,8 +164,9 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
     ),
     Transition(
         phase=POST_024,
-        condition="the decision_sequence exceeds the high-water mark AND the current source is "
-                  "AUTOMATIC or absent",
+        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                             source=frozenset({predicates.SRC_NONE, predicates.SRC_AUTOMATIC}),
+                             sequence=frozenset({predicates.SEQ_ABOVE})),
         record="the callback, AND advance the high-water mark to its decision_sequence",
         effective="YES",
         becomes_effective=True,
@@ -622,9 +659,10 @@ WIRE = Registry(
                       "docs/contracts/receiver_reference.py (executable, scenario-tested)",
             note="ACKNOWLEDGING a callback and APPLYING it are different decisions: always "
                  "acknowledge and record, then consult this table for whether it takes effect. "
-                 "Rows are evaluated in order within a phase and the first match wins; the rows "
-                 "are exhaustive, so there is no 'otherwise' branch to fall through to. Automatic "
-                 "authority over a manual-current case returns ONLY through the authenticated "
+                 "Within a phase the rows PARTITION the receiver's state space — every state "
+                 "matches exactly one row, checked by enumeration — so there is no 'otherwise' "
+                 "branch to fall through to and no state with two answers. Automatic authority "
+                 "over a manual-current case returns ONLY through the authenticated "
                  "platform-owned release protocol, never by a callback arriving.",
         ),
         Claim(

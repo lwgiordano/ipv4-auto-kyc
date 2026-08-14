@@ -15,10 +15,12 @@ believe correct, in a form they can run.
 
 from dataclasses import dataclass
 
+from docs.contracts import predicates
 from docs.contracts.wire import (
     INTERIM,
     KNOWN_SOURCES,
     POST_024,
+    RECEIVER_TRANSITIONS,
     SOURCE_MANUAL,
 )
 
@@ -62,43 +64,66 @@ class Outcome:
     advance_high_water: bool
 
 
-def decide(state: LedgerState, callback: Callback, *, phase: str) -> Outcome:
-    """Apply the published table. Rows are tried in order; the first match wins.
+class TableIntegrityError(RuntimeError):
+    """The table stopped being a partition: a state matched zero rows or several. The receiver
+    must HOLD on ambiguity, never pick — which answer wins would otherwise be an implementation
+    accident, and that accident is the F10 defect itself."""
 
-    Returns which row decided it, so a test can prove the implementation and the table agree row
-    for row rather than merely agreeing on the final answer.
+
+def observe(state: LedgerState, callback: Callback) -> dict:
+    """Reduce (state, callback) to the closed facet observation the predicates match against.
+
+    FAIL CLOSED on an unrecognised source (re-audit `4f23f23..122cc67` finding 2), BEFORE any row
+    is consulted: `manual_release_pending`, `MANUAL`, a typo — a source you cannot classify is
+    precisely the case where you do not know whether a human decided this, so it holds.
     """
     if state.current_source is not None and state.current_source not in KNOWN_SOURCES:
-        # FAIL CLOSED (re-audit `4f23f23..122cc67` finding 2). Every unrecognised source —
-        # `manual_release_pending`, `MANUAL`, a typo — used to fall through to the automatic
-        # branch and take effect. A source you cannot classify is precisely the case where you do
-        # not know whether a human decided this, so it holds.
         raise UnknownSourceError(
             f"current_source {state.current_source!r} is not one of {sorted(KNOWN_SOURCES)}; "
             "record the callback and hold the case rather than applying it"
         )
+    if state.current_source is None:
+        source = predicates.SRC_NONE
+    elif state.current_source == SOURCE_MANUAL:
+        source = predicates.SRC_MANUAL
+    else:
+        source = predicates.SRC_AUTOMATIC
+    if callback.decision_sequence is None:
+        sequence = predicates.SEQ_ABSENT
+    elif state.high_water is not None and callback.decision_sequence <= state.high_water:
+        sequence = predicates.SEQ_NOT_ABOVE
+    else:
+        sequence = predicates.SEQ_ABOVE
+    return {
+        "duplicate": predicates.DUP if callback.run_id in state.seen_run_ids else predicates.FRESH,
+        "source": source,
+        "sequence": sequence,
+    }
 
-    if phase == INTERIM:
-        if callback.run_id in state.seen_run_ids:
-            return Outcome(row=0, record=False, effective=False, advance_high_water=False)
-        if state.current_source is None:
-            return Outcome(row=1, record=True, effective=True, advance_high_water=False)
-        if state.current_source == SOURCE_MANUAL:
-            return Outcome(row=2, record=True, effective=False, advance_high_water=False)
-        # AUTOMATIC current, different run. NOT "otherwise apply": interim has no ordering
-        # authority, so an older decision delayed in flight is indistinguishable from a newer one.
-        return Outcome(row=3, record=True, effective=False, advance_high_water=False)
 
-    if phase == POST_024:
-        if callback.run_id in state.seen_run_ids:
-            return Outcome(row=0, record=False, effective=False, advance_high_water=False)
-        sequence = callback.decision_sequence
-        if sequence is None or (state.high_water is not None and sequence <= state.high_water):
-            return Outcome(row=1, record=True, effective=False, advance_high_water=False)
-        if state.current_source == SOURCE_MANUAL:
-            # The mark advances even though the decision does not take effect: leaving it stale
-            # would judge the first post-release automatic decision against the wrong baseline.
-            return Outcome(row=2, record=True, effective=False, advance_high_water=True)
-        return Outcome(row=3, record=True, effective=True, advance_high_water=True)
+def decide(state: LedgerState, callback: Callback, *, phase: str) -> Outcome:
+    """Apply the published table BY EXECUTING ITS PREDICATES (re-audit `4cb2cb7` F10).
 
-    raise ValueError(f"unknown phase {phase!r}")
+    The previous version carried its own hardcoded branches beside the table, so the two could
+    disagree and nothing noticed — widening a published row's condition changed what TechCraft was
+    told and changed nothing here. Now the rows are the only logic: the observation is matched
+    against each row's `when`, exactly one row may claim it, and the outcome is read off THAT
+    ROW'S booleans — so editing a published row edits this function's behaviour, and the scenario
+    tests hold both at once.
+    """
+    if phase not in (INTERIM, POST_024):
+        raise ValueError(f"unknown phase {phase!r}")
+    observed = observe(state, callback)
+    rows = [t for t in RECEIVER_TRANSITIONS if t.phase == phase]
+    matched = [index for index, row in enumerate(rows) if row.when.matches(observed)]
+    if len(matched) != 1:
+        raise TableIntegrityError(
+            f"state {observed} matches row(s) {matched or 'NONE'} in phase {phase!r}"
+        )
+    row = rows[matched[0]]
+    return Outcome(
+        row=matched[0],
+        record=row.records,
+        effective=row.becomes_effective,
+        advance_high_water=row.advances_high_water,
+    )

@@ -536,15 +536,64 @@ def _effectiveness_table_is_executable_and_total():
     own scenarios by `tests/unit/test_receiver_state_machine.py`; here we prove the published rows
     and that implementation are the same object of study.
     """
+    from docs.contracts import predicates
     from docs.contracts.receiver_reference import Callback, LedgerState, decide
     from docs.contracts.wire import INTERIM, POST_024, RECEIVER_TRANSITIONS
 
     rows = WIRE.value("WIRE.CALLBACK.EFFECTIVENESS")
     assert rows is RECEIVER_TRANSITIONS
     assert {t.phase for t in rows} == {INTERIM, POST_024}
-    for phase in (INTERIM, POST_024):
-        assert len([t for t in rows if t.phase == phase]) == 4
     assert not any("otherwise" in t.condition.lower() for t in rows)
+
+    # ── the partition property (re-audit `4cb2cb7` F10) ──────────────────────────────────────
+    # "Four rows plus token presence" was the totality check Codex got through: an overlapping
+    # manual/automatic predicate, an uncovered sequence relation, a deleted row, and a shadowed
+    # extra row all kept four rows and every token. Enumeration over the closed state space is
+    # the property all four mutations break: every state matches EXACTLY ONE row.
+    for phase in (INTERIM, POST_024):
+        phase_rows = [t for t in rows if t.phase == phase]
+        problems = predicates.partition_problems(phase_rows)
+        assert not problems, f"{phase}: {problems}"
+        # the duplicate row is the published entry point of each phase — evaluation order is
+        # part of the contract the PDF prints, even though a partition makes selection
+        # order-independent
+        assert phase_rows[0].when.duplicate == frozenset({predicates.DUP})
+
+    # ── the evaluator executes THESE predicates, not a private restatement ──────────────────
+    # Every state is realized as a concrete (LedgerState, Callback) and driven through decide();
+    # the returned row index must be the enumeration's unique match, and the outcome must be that
+    # row's own booleans. A hardcoded branch that drifts from the table now fails here.
+    def realize(observed):
+        run_id = "r-seen" if observed["duplicate"] == predicates.DUP else "r-new"
+        source = {predicates.SRC_NONE: None, predicates.SRC_MANUAL: "manual",
+                  predicates.SRC_AUTOMATIC: "automatic"}[observed["source"]]
+        sequence = {predicates.SEQ_ABSENT: None, predicates.SEQ_NOT_ABOVE: 3,
+                    predicates.SEQ_ABOVE: 9}[observed["sequence"]]
+        state = LedgerState(seen_run_ids=frozenset({"r-seen"}), current_source=source,
+                            high_water=5)
+        return state, Callback(case_id="c", run_id=run_id, decision_sequence=sequence)
+
+    for phase in (INTERIM, POST_024):
+        phase_rows = [t for t in rows if t.phase == phase]
+        for observed in predicates.state_space():
+            (expected_row,) = [i for i, r in enumerate(phase_rows) if r.when.matches(observed)]
+            state, callback = realize(observed)
+            outcome = decide(state, callback, phase=phase)
+            assert outcome.row == expected_row, (phase, observed)
+            row = phase_rows[expected_row]
+            assert (outcome.record, outcome.effective, outcome.advance_high_water) == (
+                row.records, row.becomes_effective, row.advances_high_water), (phase, observed)
+
+    # ── the published text is the predicate's own derivation ────────────────────────────────
+    for transition in rows:
+        assert transition.condition == transition.when.condition()
+
+    # the one semantic the facet space cannot carry: ABOVE with NO recorded mark yet — the first
+    # sequenced callback for a case — must still be ABOVE, not a fourth relation
+    state = LedgerState(seen_run_ids=frozenset(), current_source=None, high_water=None)
+    outcome = decide(state, Callback(case_id="c", run_id="r1", decision_sequence=1),
+                     phase=POST_024)
+    assert outcome.effective and outcome.advance_high_water
 
     # the two outcomes the finding turns on, executed
     late_older = decide(

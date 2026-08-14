@@ -854,8 +854,9 @@ RENDERER_PROSE = {
     ("contract", "WIRE.CALLBACK.OPTIONAL_FIELDS", 0): ("febe3f9a74da208d",
                                                        "tolerate and preserve; which decision "
                                                        "stays authoritative under the hold"),
-    ("contract", "WIRE.CALLBACK.EFFECTIVENESS", 0): ("ba7c70bdb4a16c5c",
-                                                     "acknowledging vs applying a callback"),
+    ("contract", "WIRE.CALLBACK.EFFECTIVENESS", 0): ("c64fed84bfb92e34",
+                                                     "acknowledging vs applying; rows partition "
+                                                     "the state space"),
     ("contract", "WIRE.CALLBACK.EFFECTIVENESS", 1): ("116c95cbf7ad7f0d",
                                                      "transition table headers"),
     ("contract", "WIRE.CALLBACK.RETRY", 0): ("e07949a7ee8f8121",
