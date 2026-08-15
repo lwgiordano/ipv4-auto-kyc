@@ -16,6 +16,7 @@ the guards follow; the lineage guard is what keeps §C itself honest against Ale
 Everything is read off disk — no database.
 """
 
+import hashlib
 import re
 
 from kyc_tool.config import REPO_ROOT
@@ -131,3 +132,63 @@ def head(recs: list[Record]) -> int:
     revs = shipped(recs)
     assert revs, "ROADMAP §C reserves no shipped migration"
     return revs[-1]
+
+
+# ── future units: lifecycle bound by type, not inferred from a dash ───────────────────────────
+#
+# Gate audit `6c4f54a..91fbde3` finding 12. A `—` State means only "no migration" — shipped
+# code-only rows carry it too — so nothing distinguished a reserved unbuilt unit from a shipped
+# one, and deleting the §G scope sections or relabelling the §C rows as shipped left every
+# verifier green. Future units now carry the explicit `future` State (legal ONLY without a
+# migration; the lineage guard enforces that side), and this registry binds each one's §C row
+# AND its §G scope section by digest: deletion, promotion, and a rewritten scope all become
+# located failures, and a scope re-pin is the reviewed act.
+
+# unit -> (exact §G heading prefix, sha256[:16] of the exact section text from that heading to
+# the next `### ` heading). Pinned like the playbook sections: read the new text, then re-pin
+# in the same commit.
+FUTURE_UNITS = {
+    "PR 5c": ("### PR 5c — Per-key HMAC retirement evidence — FUTURE, reserved unbuilt "
+              "(audit fold `4c3015a..cccd5f7` F3)", "8be3bc83a5f1fb2f"),
+    "PR 7b-inputs": ("### PR 7b-inputs — Platform answer artifacts — FUTURE, reserved unbuilt "
+                     "(audit fold `4c3015a..cccd5f7` F11)", "93c2f4ccd7c72151"),
+}
+
+
+def _scope_section(text: str, heading: str) -> str | None:
+    lines = text.splitlines()
+    starts = [i for i, line in enumerate(lines) if line == heading]
+    if len(starts) != 1:
+        return None
+    end = next((i for i in range(starts[0] + 1, len(lines))
+                if lines[i].startswith("### ")), len(lines))
+    return "\n".join(lines[starts[0]:end])
+
+
+def future_unit_problems(text: str) -> list[str]:
+    """Why the document no longer honors its future-unit reservations; empty when it does."""
+    problems = []
+    try:
+        recs = parse_records(section_c(text))
+    except (StopIteration, ValueError) as exc:
+        return [f"§C is unreadable: {exc}"]
+    for unit, (heading, pinned) in FUTURE_UNITS.items():
+        row = next((r for r in recs if r[0] == unit), None)
+        if row is None:
+            problems.append(f"{unit}: the §C reservation row is gone")
+        elif row[1] != "future" or row[2]:
+            problems.append(
+                f"{unit}: §C says state={row[1]!r} migrations={row[2]} — a future unit is "
+                "`future` with no migration until it is actually designed and built"
+            )
+        section = _scope_section(text, heading)
+        if section is None:
+            problems.append(f"{unit}: the §G scope section is missing (or duplicated)")
+            continue
+        digest = hashlib.sha256(section.encode()).hexdigest()[:16]
+        if digest != pinned:
+            problems.append(
+                f"{unit}: the §G scope changed since it was reviewed (was {pinned}, "
+                f"now {digest}) — read the new scope, then re-pin in the same commit"
+            )
+    return problems

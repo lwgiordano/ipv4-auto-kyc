@@ -475,8 +475,19 @@ REQUIRED_WRITER_ROLES = frozenset({
 # writer hides. Mirrors kyc_tool.config.ProcessRole so this module stays import-pure; the
 # authority test binds the two exactly, the same bind that holds plan.PLAN_ROLES.
 ACCOUNTED_PROCESS_ROLES = ("api", "pipeline_worker", "outbox_worker", "retention", "dev_worker")
-# The processes hosting the three required writer identities; their stance cannot be non-writer.
-_WRITER_HOST_PROCESSES = ("api", "pipeline_worker", "outbox_worker")
+# The stance for OUR roles is not negotiated — it is DERIVED from the canonical capability map
+# (kyc_tool.config.ROLE_CAPABILITIES; gate audit `6c4f54a..91fbde3` finding 9): a role is a
+# writer exactly when it can write a decision or publish a callback. The previously accepted
+# matrix called dev_worker a non-writer while its entry point constructs BOTH the pipeline
+# worker and the outbox publisher; a stop-and-attest inventory built on that omits a live
+# writer. This mirror is bound to the derived map by the authority test.
+LOCAL_WRITER_STANCES = {
+    "api": "writer",
+    "pipeline_worker": "writer",
+    "outbox_worker": "writer",
+    "retention": "non-writer",
+    "dev_worker": "writer",
+}
 _ROLE_STANCES = frozenset({"writer", "non-writer"})
 
 
@@ -505,10 +516,15 @@ def _accept_writer_matrix(answer: dict) -> list[str]:
             problems.append(
                 f"{vague} carry a stance other than 'writer'/'non-writer'; a hedged stance "
                 "accounts for nothing")
-        demoted = sorted(r for r in _WRITER_HOST_PROCESSES if accounting.get(r) == "non-writer")
-        if demoted:
+        wrong = sorted(
+            role for role, stance in LOCAL_WRITER_STANCES.items()
+            if role in accounting and accounting[role] in _ROLE_STANCES
+            and accounting[role] != stance)
+        if wrong:
             problems.append(
-                f"{demoted} host the required writer identities and cannot be non-writers")
+                f"{wrong} carry a stance that contradicts our canonical capability map — our "
+                "side's roles are classified by what their entry points construct, not by "
+                "agreement; dev_worker runs the pipeline AND the publisher and IS a writer")
     if answer.get("old_image_full_stop") is not True:
         problems.append(
             "the full maintenance stop during an old-image transition is not agreed; an old-image "
@@ -614,16 +630,21 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
               "old_image_full_stop": True,
               "process_roles": {"api": "writer", "pipeline_worker": "writer",
                                 "outbox_worker": "writer", "retention": "non-writer",
-                                "dev_worker": "non-writer"}}),
+                                "dev_worker": "writer"}}),
             ("no old-image stop",
              {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": False,
               "process_roles": {"api": "writer", "pipeline_worker": "writer",
                                 "outbox_worker": "writer", "retention": "non-writer",
-                                "dev_worker": "non-writer"}}),
+                                "dev_worker": "writer"}}),
             ("dev_worker and retention unaccounted",
              {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": True,
               "process_roles": {"api": "writer", "pipeline_worker": "writer",
                                 "outbox_worker": "writer"}}),
+            ("dev_worker demoted to non-writer",
+             {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": True,
+              "process_roles": {"api": "writer", "pipeline_worker": "writer",
+                                "outbox_worker": "writer", "retention": "non-writer",
+                                "dev_worker": "non-writer"}}),
         ),
     ),
 )
@@ -638,24 +659,57 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
 # (.agents/ROADMAP.md §C, PR 7b-inputs); shipping it must replace the anchor AND rewrite the gate
 # in the same change — the gate's other branch is a tripwire that says exactly that.
 
-# Absence anchor. While None, resolution is impossible by construction.
+# ── the typed capability slots (gate audit `6c4f54a..91fbde3` finding 13) ─────────────────────────
+#
+# "Shipping any part forces the gate forward" used to rest on a search of favored names, which a
+# consumable helper in a NEW module walks straight past. The absence is now a TYPED value: each
+# absent authority is one slot holding a MissingCapability, every gate dispatches on that type,
+# and the claim verifiers fail the moment a slot holds anything else — so registering ANY
+# provider forces the claims, the gates, and the ROADMAP unit forward in the same change. The
+# guarantee is scoped honestly: it holds at these named extension points and at the structural
+# anchors the verifiers execute, not tree-wide; the consumability boundary (no runtime module
+# may reference the slots or the unshipped APIs) is a separate swept assertion.
+
+
+@dataclass(frozen=True)
+class MissingCapability:
+    """The typed absence of a runtime authority. Consumers dispatch on this TYPE: while a slot
+    holds one, every dependent transition refuses with this reason; when a slot holds anything
+    else, every consumer trips its rewrite-me branch and the claim verifiers fail."""
+
+    reason: str
+    roadmap_unit: str
+
+
+RETIREMENT_AUTHORITY: object = MissingCapability(
+    reason="no durable per-key fleet witness, signed fleet receipt, or HMAC signer-target "
+           "cutover record exists",
+    roadmap_unit="PR 5c",
+)
+ANSWER_ARTIFACT_AUTHORITY: object = MissingCapability(
+    reason="no versioned, approved/signed answer-artifact schema or verifying authority exists",
+    roadmap_unit="PR 7b-inputs",
+)
+
+# Absence anchor for the schema payload itself; the slot above is what the gates consume.
 ANSWER_ARTIFACT_SCHEMA: object = None
 
 
 def resolution_problems(item: PendingInput, artifact: object) -> list[str]:
     """Why `artifact` cannot RESOLVE `item`. Non-empty for every input in the repository's
-    current state — both branches refuse; only the change that ships the schema may open one."""
-    if ANSWER_ARTIFACT_SCHEMA is None:
+    current state — both branches refuse; only the change that ships the authority may open
+    one, and it must rewrite this gate to consume it."""
+    if isinstance(ANSWER_ARTIFACT_AUTHORITY, MissingCapability):
         return [
-            f"{item.obligation}: unresolvable — no versioned, approved/signed answer-artifact "
-            "schema or verifying authority exists. Screening an answer's content is not "
-            "resolution; the obligation stays PENDING until the platform-artifact unit ships "
-            "(.agents/ROADMAP.md §C, PR 7b-inputs)."
+            f"{item.obligation}: unresolvable — {ANSWER_ARTIFACT_AUTHORITY.reason}. Screening "
+            "an answer's content is not resolution; the obligation stays PENDING until the "
+            f"platform-artifact unit ships (.agents/ROADMAP.md §C, "
+            f"{ANSWER_ARTIFACT_AUTHORITY.roadmap_unit})."
         ]
     return [
-        f"{item.obligation}: an answer-artifact schema has landed but this gate still refuses by "
-        "default — rewrite resolution_problems to validate against it in the same change that "
-        "ships the schema."
+        f"{item.obligation}: an answer-artifact authority has landed but this gate still "
+        "refuses by default — rewrite resolution_problems to validate against it in the same "
+        "change that ships it."
     ]
 
 
@@ -692,27 +746,23 @@ def _refuse_inbound_retirement(evidence: object) -> list[str]:
             "observation row is version-aggregate and never keyed by key id, and waiting any "
             "interval proves nothing about the traffic during it."
         ]
-    if kind == "durable_per_key_fleet_witness":
-        from kyc_tool.api import hmac_witness
-
-        if getattr(hmac_witness, "inbound_zero_for_key", None) is None:
-            return [
-                "no durable per-key witness is shipped: kyc_tool.api.hmac_witness has no "
-                "inbound_zero_for_key, and hmac_v1_observation records acceptance per HMAC "
-                "version, not per key id (.agents/ROADMAP.md §C, PR 5c — reserved, unbuilt)"
-            ]
+    if not isinstance(RETIREMENT_AUTHORITY, MissingCapability):
         return [
-            "a per-key witness has landed but this gate still refuses by default — rewrite "
-            "_refuse_inbound_retirement to consume it in the same change that ships the witness"
+            "a retirement authority has landed in the capability slot but this gate still "
+            "refuses by default — rewrite _refuse_inbound_retirement to consume it in the same "
+            "change that ships it"
         ]
-    if SIGNED_FLEET_RECEIPT_SCHEMA is None:
+    if kind == "durable_per_key_fleet_witness":
         return [
-            "no signed fleet-receipt schema or verifying authority exists "
-            "(.agents/ROADMAP.md §C, PR 5c — reserved, unbuilt)"
+            f"{RETIREMENT_AUTHORITY.reason}: kyc_tool.api.hmac_witness has no "
+            "inbound_zero_for_key, and hmac_v1_observation records acceptance per HMAC "
+            f"version, not per key id (.agents/ROADMAP.md §C, "
+            f"{RETIREMENT_AUTHORITY.roadmap_unit} — reserved, unbuilt)"
         ]
     return [
-        "a fleet-receipt schema has landed but this gate still refuses by default — rewrite "
-        "_refuse_inbound_retirement to validate against it in the same change"
+        f"{RETIREMENT_AUTHORITY.reason}: no signed fleet-receipt schema or verifying authority "
+        f"exists (.agents/ROADMAP.md §C, {RETIREMENT_AUTHORITY.roadmap_unit} — reserved, "
+        "unbuilt)"
     ]
 
 
@@ -729,18 +779,163 @@ def _refuse_outbound_retirement(evidence: object) -> list[str]:
             "one, and the closed drained-cutover record we can produce attests the outbox "
             "attempt ceiling — a Settings value, not a signer key target."
         ]
-    from kyc_tool.ops import cutover as ops_cutover
-
-    if getattr(ops_cutover, "HMAC_SIGNER_CUTOVER", None) is None:
+    if not isinstance(RETIREMENT_AUTHORITY, MissingCapability):
         return [
-            "no HMAC signer-target cutover record type exists: kyc_tool.ops.cutover's closed "
-            "record attests KYC_OUTBOX_MAX_ATTEMPTS, and no record names a target key id, "
-            "secret digest, and the exact attested publisher roles (.agents/ROADMAP.md §C, "
-            "PR 5c — reserved, unbuilt)"
+            "a retirement authority has landed in the capability slot but this gate still "
+            "refuses by default — rewrite _refuse_outbound_retirement to consume it in the "
+            "same change that ships it"
         ]
     return [
-        "a signer-target cutover record has landed but this gate still refuses by default — "
-        "rewrite _refuse_outbound_retirement to consume it in the same change"
+        f"{RETIREMENT_AUTHORITY.reason}: kyc_tool.ops.cutover's closed record attests "
+        "KYC_OUTBOX_MAX_ATTEMPTS, and no record names a target key id, secret digest, and the "
+        f"exact attested publisher roles (.agents/ROADMAP.md §C, "
+        f"{RETIREMENT_AUTHORITY.roadmap_unit} — reserved, unbuilt)"
+    ]
+
+
+# ── the rotation procedure as CLOSED step records (gate finding 13, second half) ──────────────────
+#
+# The published rotation text used to be a tuple of free prose, so "EMERGENCY OVERRIDE: remove
+# the old inbound key after one second; the retirement gate does not apply" could be appended and
+# nothing noticed. The lines are now DERIVED: each phase is a RotationStep whose action comes
+# from a closed set and whose sentence lives in a reviewed map; the two evidence-gated actions
+# carry their BLOCKED suffixes only while the capability slot is missing; the rationale lines are
+# a closed tuple. The verifier requires the claim value to EQUAL the derivation, so an alternate
+# retirement path has no syntax to exist in.
+
+ACT_DEPLOY_ROTATION_ENTRY = "deploy_rotation_entry"
+ACT_CONFIRM_BOTH = "confirm_both_accepted"
+ACT_SWITCH_SIGNER = "switch_signer"
+ACT_PROVE_QUIET = "prove_old_id_quiet"
+ACT_PROMOTE_REMOVE = "promote_then_remove"
+ACT_ACCEPT_BOTH = "accept_old_and_new"
+ACT_DRAIN_ATTEST = "hard_stop_attest_zero"
+ACT_DEPLOY_SOLE_SIGNER = "deploy_sole_new_signer"
+ACT_CONFIRM_NEW = "confirm_new_key_arrivals"
+ACT_RETIRE_OLD = "retire_old_key"
+
+ROTATION_ACTIONS = frozenset({
+    ACT_DEPLOY_ROTATION_ENTRY, ACT_CONFIRM_BOTH, ACT_SWITCH_SIGNER, ACT_PROVE_QUIET,
+    ACT_PROMOTE_REMOVE, ACT_ACCEPT_BOTH, ACT_DRAIN_ATTEST, ACT_DEPLOY_SOLE_SIGNER,
+    ACT_CONFIRM_NEW, ACT_RETIRE_OLD,
+})
+GATED_ACTIONS = frozenset({ACT_PROVE_QUIET, ACT_RETIRE_OLD})
+
+_ACTION_SENTENCES = {
+    ACT_DEPLOY_ROTATION_ENTRY: "We deploy your NEW key id as a rotation entry alongside the old "
+                               "ACTIVE one, fleet-wide.",
+    ACT_CONFIRM_BOTH: "We confirm both are accepted.",
+    ACT_SWITCH_SIGNER: "You switch your signer to the new id.",
+    ACT_PROVE_QUIET: "We prove no request has arrived under the old id",
+    ACT_PROMOTE_REMOVE: "We PROMOTE the new id to active with the old one demoted to a rotation "
+                        "entry, then remove the old entry.",
+    ACT_ACCEPT_BOTH: "You start accepting old and new.",
+    ACT_DRAIN_ATTEST: "We hard-stop and attest ZERO publishers, so no replica is still signing "
+                      "with the old key.",
+    ACT_DEPLOY_SOLE_SIGNER: "We deploy the sole new signer.",
+    ACT_CONFIRM_NEW: "We resume and you confirm callbacks are arriving under the new key id.",
+    ACT_RETIRE_OLD: "You retire the old key",
+}
+_GATED_SUFFIXES = {
+    ACT_PROVE_QUIET: " — the step that is BLOCKED today; see the gate table directly below.",
+    ACT_RETIRE_OLD: " — BLOCKED today until we can hand you a signer-target attestation record, "
+                    "which does not exist yet; see the gate table directly below.",
+}
+
+
+@dataclass(frozen=True)
+class RotationStep:
+    """One phase of one rotation direction. `action` must come from the closed set — an
+    emergency-override step has no syntax — and only the two evidence-gated actions may carry a
+    BLOCKED suffix, which they do exactly while the retirement capability slot is missing."""
+
+    direction: str
+    number: int
+    action: str
+
+    def __post_init__(self) -> None:
+        if self.direction not in ("INBOUND", "OUTBOUND"):
+            raise ValueError(f"unknown direction {self.direction!r}")
+        if self.action not in ROTATION_ACTIONS:
+            raise ValueError(f"{self.action!r} is not in the closed action set")
+
+    def sentence(self) -> str:
+        text = _ACTION_SENTENCES[self.action]
+        if self.action in GATED_ACTIONS:
+            if not isinstance(RETIREMENT_AUTHORITY, MissingCapability):
+                raise RuntimeError(
+                    "a retirement authority landed: rewrite the rotation derivation to say what "
+                    "is now true, in the same change"
+                )
+            return text + _GATED_SUFFIXES[self.action]
+        return text
+
+
+ROTATION_STEPS: tuple[RotationStep, ...] = (
+    RotationStep("INBOUND", 1, ACT_DEPLOY_ROTATION_ENTRY),
+    RotationStep("INBOUND", 2, ACT_CONFIRM_BOTH),
+    RotationStep("INBOUND", 3, ACT_SWITCH_SIGNER),
+    RotationStep("INBOUND", 4, ACT_PROVE_QUIET),
+    RotationStep("INBOUND", 5, ACT_PROMOTE_REMOVE),
+    RotationStep("OUTBOUND", 1, ACT_ACCEPT_BOTH),
+    RotationStep("OUTBOUND", 2, ACT_DRAIN_ATTEST),
+    RotationStep("OUTBOUND", 3, ACT_DEPLOY_SOLE_SIGNER),
+    RotationStep("OUTBOUND", 4, ACT_CONFIRM_NEW),
+    RotationStep("OUTBOUND", 5, ACT_RETIRE_OLD),
+)
+
+_DIRECTION_PREFIXES = {
+    "INBOUND": "INBOUND (your key, verifying your calls to us) — five phases, in this order. ",
+    "OUTBOUND": "OUTBOUND (our key, signing our callbacks to you) — THE OVERLAP IS YOURS TO "
+                "HOLD. We sign with exactly one outbound key. ",
+}
+
+# Closed, reviewed rationale lines — the WHY beside the steps. Adding one is a reviewed edit
+# here, never an append to the claim value, and the prose scan below refuses retirement
+# semantics anywhere outside the derived lines.
+ROTATION_RATIONALES = (
+    "Phase 5 is not optional bookkeeping. Deleting the old entry while it is still the ACTIVE "
+    "key leaves us with no active key and the new id resolvable only as a rotation entry — a "
+    "state that verifies nothing once the entry is dropped. The promotion is what makes the new "
+    "key primary.",
+    "Phase 2 is why this is a drain and not a rolling deploy. In a mixed fleet, seeing one "
+    "callback under the new key does not prove no replica is still signing with the old one; "
+    "retiring early makes the next old-signed callback fail verification and dead-letter.",
+    "Rotation secrets are full verification credentials and carry the same floor as the active "
+    "key: at least 32 characters, a non-blank key id, and no collision with the active id.",
+)
+
+
+def _direction_line(direction: str) -> str:
+    steps = [s for s in ROTATION_STEPS if s.direction == direction]
+    assert [s.number for s in steps] == [1, 2, 3, 4, 5]
+    return _DIRECTION_PREFIXES[direction] + " ".join(
+        f"({s.number}) {s.sentence()}" for s in steps)
+
+
+def rotation_lines() -> tuple[str, ...]:
+    """The published rotation lines, derived — the ONLY way they come to exist."""
+    return (
+        _direction_line("INBOUND"),
+        ROTATION_RATIONALES[0],
+        _direction_line("OUTBOUND"),
+        ROTATION_RATIONALES[1],
+        ROTATION_RATIONALES[2],
+    )
+
+
+_RETIREMENT_TOKENS = ("retir", "remove the old", "delete the old", "deleting the old")
+
+
+def rotation_prose_problems(lines) -> list[str]:
+    """Any line outside the derivation that carries retirement semantics — the override
+    specimen's shape. The equality check catches every foreign line; this names the dangerous
+    ones specifically so the refusal reads as what it is."""
+    derived = set(rotation_lines())
+    return [
+        f"foreign line carries retirement semantics: {line[:80]!r}"
+        for line in lines
+        if line not in derived and any(token in line.lower() for token in _RETIREMENT_TOKENS)
     ]
 
 
@@ -1007,32 +1202,9 @@ WIRE = Registry(
         ),
         Claim(
             id="WIRE.SIGN.ROTATION",
-            value=(
-                "INBOUND (your key, verifying your calls to us) — five phases, in this order. "
-                "(1) We deploy your NEW key id as a rotation entry alongside the old ACTIVE one, "
-                "fleet-wide. (2) We confirm both are accepted. (3) You switch your signer to the "
-                "new id. (4) We prove no request has arrived under the old id — the step that is "
-                "BLOCKED today; see the gate table directly below. (5) We PROMOTE the new id to "
-                "active with the old one demoted to a rotation entry, then remove the old entry.",
-                "Phase 5 is not optional bookkeeping. Deleting the old entry while it is still "
-                "the ACTIVE key leaves us with no active key and the new id resolvable only as a "
-                "rotation entry — a state that verifies nothing once the entry is dropped. The "
-                "promotion is what makes the new key primary.",
-                "OUTBOUND (our key, signing our callbacks to you) — THE OVERLAP IS YOURS TO HOLD. "
-                "We sign with exactly one outbound key. (1) You start accepting old and new. "
-                "(2) We hard-stop and attest ZERO publishers, so no replica is still signing with "
-                "the old key. (3) We deploy the sole new signer. (4) We resume and you confirm "
-                "callbacks are arriving under the new key id. (5) You retire the old key — "
-                "BLOCKED today until we can hand you a signer-target attestation record, which "
-                "does not exist yet; see the gate table directly below.",
-                "Phase 2 is why this is a drain and not a rolling deploy. In a mixed fleet, seeing "
-                "one callback under the new key does not prove no replica is still signing with "
-                "the old one; retiring early makes the next old-signed callback fail verification "
-                "and dead-letter.",
-                "Rotation secrets are full verification credentials and carry the same floor as "
-                "the active key: at least 32 characters, a non-blank key id, and no collision "
-                "with the active id.",
-            ),
+            # DERIVED from the closed step records (gate finding 13): free prose cannot add an
+            # alternate retirement path, because the verifier requires value == rotation_lines().
+            value=rotation_lines(),
             authority="kyc_tool.config.hmac_extra_key_violations + kyc_tool.api.auth._inbound_secret "
                       "+ kyc_tool.outbox.publisher (one outbound signer) + "
                       "WIRE.SIGN.ROTATION_RETIREMENT (both retirement steps gated BLOCKED)",

@@ -57,12 +57,14 @@ is linear. Rebase each to the live head at merge. **CI gate on every migration P
 rebased `down_revision` + `upgrade head && downgrade -1 && upgrade head` on a fresh
 DB. `/readyz` resolves the head **dynamically** (shipped in PR 1 — do not regress).
 
-The **State** column (`shipped`/`pending`/`—`) is machine-checked by
+The **State** column (`shipped`/`pending`/`future`/`—`) is machine-checked by
 `tests/unit/test_migration_lineage.py`: every authored Alembic revision at or above
 the first reservation must be owned by a `shipped` row, every `pending` revision must
 be absent from the Alembic chain, the first `pending` revision must be `head+1`, and
 no revision may be double-booked. Update a row's State to `shipped` in the same PR
-that lands its migration.
+that lands its migration. `future` marks a reserved UNBUILT unit (no migration allowed);
+`tests/roadmap.py` binds each future row to its §G scope section by digest, so promoting,
+deleting, or rewriting one is a located failure, not an edit.
 
 | Unit | Item(s) | State | Migration | Content |
 |------|---------|-------|-----------|---------|
@@ -72,7 +74,7 @@ that lands its migration.
 | PR 4 | 5 | shipped | 009 | `poc_tokens.{rir,org_handle,resource,consumed_at}` |
 | PR 5a | 6 | shipped | 010 | drop global idem unique, add per-case unique, `request_nonces` |
 | PR 5b | 11 | — | — | review-record binding |
-| PR 5c | — | — | — | per-key HMAC retirement evidence (reserved by audit fold `4c3015a..cccd5f7` F3, NOT built): durable fleet-wide per-key acceptance witness with a defined zero window, or signed signer-fleet cutover receipt with bounded observation, plus an HMAC signer-target drained-cutover record (target key id, secret digest, exact attested publisher roles). Unblocks the two retirement steps WIRE.SIGN.ROTATION publishes as BLOCKED; shipping it must flip the absence anchors and rewrite the gates in docs/contracts/wire.py in the same change |
+| PR 5c | — | future | — | per-key HMAC retirement evidence (reserved by audit fold `4c3015a..cccd5f7` F3, NOT built): durable fleet-wide per-key acceptance witness with a defined zero window, or signed signer-fleet cutover receipt with bounded observation, plus an HMAC signer-target drained-cutover record (target key id, secret digest, exact attested publisher roles). Unblocks the two retirement steps WIRE.SIGN.ROTATION publishes as BLOCKED; shipping it must flip the absence anchors and rewrite the gates in docs/contracts/wire.py in the same change |
 | PR 6 | 7A | shipped | 011, 012 | `policy_bundles`, `checks.policy_bundle_hash`, `runs/decisions.engine_build_id` (011); `VALIDATE` those provenance CHECKs (012, audit round 1) |
 | PR 7b-core | 8 | shipped | 013 | `outbox.ordering_stream` (NOT NULL) + `case_id` NOT NULL + per-(case,stream) claim; `decisions.decision_sequence` + `cases.last_decision_sequence` + a **best-effort** local `superseded` guard (higher *locally-stamped* delivery only; send-before-stamp/cross-replica reverts remain for 7b-activation); identity + ordering (`UNIQUE decisions(case_id, decision_sequence)` [per-case namespace] + `UNIQUE(run_id)` + triple FK + partial callback index); fenced claim (`claim_token`); exhaustive per-status lifecycle CHECKs; `ordering_stream`/`case_id` real `SET NOT NULL` (drained cutover; 013's OWN downgrade is reversible-before-first-supersession, but the shipped 013–023 chain is forward-only after any witness — see the SHIPPED ROLLBACK CONTRACT note below, as 018+ are forward-only) |
 | PR 7b-core repair | 8 | shipped | 014 | `outbox_delivery_attempts` (pre-HTTP attempt authority; created-or-validated because the amended-013 history exists) + insert-only trigger; `outbox.witness_generation` (legacy|attempt_v1, conservative backfill); digest⇒delivered CHECK; `cases.latest_decision_row_id` (trigger-maintained latest-decision authority + composite same-case FK; read API never sorts by `decided_at`); `ix_outbox_live_status` partial index for the exact (pending,dead) alerting predicate; **forward-only-after-any-witness** downgrade |
@@ -86,7 +88,7 @@ that lands its migration.
 | PR 7b-core authority invariant repair | 8 | shipped | 022 | validates the exact 021 authority surface by trigger definition and origin-enable mode (not name-only or replica-only); repairs and enforces terminal POC-token redaction in the terminal transition; makes `outbox.created_at` immutable in every status; adds DB guards that `cases.latest_manual_decision_row_id` references a same-case manual decision and `decisions.manual` is immutable; **forward-only** |
 | PR 7b-core cross-table authority repair | 8 | shipped | 023 | validates the exact cross-table authority constraints and data that 022 did not cover: `fk_outbox_decision_triple`, `fk_cases_latest_decision`, `fk_cases_latest_manual_decision`, their unique targets, and same-case pointer/outbox rows; read surfaces fetch pointer rows by `id+case_id`; validation-only downgrade |
 | PR 7b-activation | 8 | pending | 024 | wire `decision_sequence` emission + `integrity_mismatch`; platform high-water bootstrap (candidate manifest + signed response envelope); `outbox_ordering_activation` phase machine + immutable `BYTEA` artifacts; four CAS CLIs + activation cutover (`down_revision='023'`, forward-only-after-use) |
-| PR 7b-inputs | — | — | — | platform answer artifacts (reserved by audit fold `4c3015a..cccd5f7` F11, NOT built): versioned, approved/signed answer-artifact schema and its verifying authority for the O1-O4 obligations behind WIRE.ORDERING.PENDING_INPUTS. Until it ships, `resolution_problems` in docs/contracts/wire.py refuses every artifact — the acceptors are content screens, and screening is not resolution. Shipping it must replace ANSWER_ARTIFACT_SCHEMA and rewrite the gate in the same change |
+| PR 7b-inputs | — | future | — | platform answer artifacts (reserved by audit fold `4c3015a..cccd5f7` F11, NOT built): versioned, approved/signed answer-artifact schema and its verifying authority for the O1-O4 obligations behind WIRE.ORDERING.PENDING_INPUTS. Until it ships, `resolution_problems` in docs/contracts/wire.py refuses every artifact — the acceptors are content screens, and screening is not resolution. Shipping it must replace ANSWER_ARTIFACT_SCHEMA and rewrite the gate in the same change |
 | PR 6b | 7B | pending | 025 | revalidation / rollout staging |
 | PR 7a | 9 | pending | 026 | `jobs.lease_token` |
 | PR 8 | 10 | pending | 027 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |

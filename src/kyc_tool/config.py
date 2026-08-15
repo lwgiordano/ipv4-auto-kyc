@@ -1031,6 +1031,26 @@ class ProcessRole(StrEnum):
     DEV_WORKER = "dev_worker"
 
 
+# ── what each executable role can WRITE (gate audit `6c4f54a..91fbde3` finding 9) ─────────────
+# The canonical capability map. The O4 writer-matrix screen in docs/contracts/wire.py derives our
+# side's writer/non-writer stances from THIS, and an entry-point closure test holds it against
+# the code: a module that declares its role and constructs Pipeline or OutboxPublisher must carry
+# the matching capability here. dev_worker is the load-bearing row — its entry point constructs
+# BOTH the pipeline worker and the outbox publisher and runs them, so classifying it a non-writer
+# would omit a live decision/callback writer from every stop-and-attest inventory.
+CAP_DECISION_WRITE = "decision_write"
+CAP_CALLBACK_PUBLISH = "callback_publish"
+CAP_RETENTION = "retention"
+
+ROLE_CAPABILITIES: dict[ProcessRole, frozenset[str]] = {
+    ProcessRole.API: frozenset({CAP_DECISION_WRITE}),  # inline reviewer.manual_approve decides
+    ProcessRole.PIPELINE_WORKER: frozenset({CAP_DECISION_WRITE}),
+    ProcessRole.OUTBOX_WORKER: frozenset({CAP_CALLBACK_PUBLISH}),
+    ProcessRole.RETENTION: frozenset({CAP_RETENTION}),
+    ProcessRole.DEV_WORKER: frozenset({CAP_DECISION_WRITE, CAP_CALLBACK_PUBLISH}),
+}
+
+
 _KEY_ID_MAX_LEN = 128
 
 

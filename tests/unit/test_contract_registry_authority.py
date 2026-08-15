@@ -250,6 +250,13 @@ def _rotation_publishes_an_executable_procedure_for_each_direction():
     new key, which in a mixed fleet does not prove an old-key signer is gone.
     """
     lines = WIRE.value("WIRE.SIGN.ROTATION")
+    # gate finding 13: the lines are the DERIVATION of the closed step records — an appended
+    # override instruction has no syntax, and retirement semantics outside the derived lines
+    # are refused by name
+    assert tuple(lines) == wire_module.rotation_lines(), (
+        "the published rotation lines diverge from the closed-step derivation"
+    )
+    assert wire_module.rotation_prose_problems(lines) == []
     inbound = next(line for line in lines if line.startswith("INBOUND"))
     outbound = next(line for line in lines if line.startswith("OUTBOUND"))
 
@@ -370,14 +377,22 @@ def _rotation_retirement_is_unreachable_by_construction():
     assert drained_records == {"OUTBOX_MAX_ATTEMPTS_CUTOVER"}
     assert getattr(cutover, "HMAC_SIGNER_CUTOVER", None) is None
     assert wire_module.SIGNED_FLEET_RECEIPT_SCHEMA is None
+    # gate finding 13: the typed slot is the named extension point — anything but a
+    # MissingCapability here means a provider registered, and this claim must move with it
+    assert isinstance(wire_module.RETIREMENT_AUTHORITY, wire_module.MissingCapability), (
+        "a retirement authority is registered; the claim, gates, and ROADMAP unit must move "
+        "in the same change"
+    )
+    assert wire_module.RETIREMENT_AUTHORITY.roadmap_unit == "PR 5c"
 
     # the reserved, unbuilt ROADMAP unit — reserved WITHOUT a migration or a shipped/pending state
     row = next((r for r in roadmap.records() if r[0] == "PR 5c"), None)
     assert row is not None, "ROADMAP §C reserves no PR 5c unit for the retirement evidence"
     _unit, state, revisions = row
-    assert state == "—" and revisions == [], (
-        "PR 5c must stay a reservation without a migration until it is actually designed"
+    assert state == "future" and revisions == [], (
+        "PR 5c must stay an explicit `future` reservation without a migration (gate F12)"
     )
+    assert not roadmap.future_unit_problems(roadmap.ROADMAP.read_text())
 
 
 @verifies("WIRE.SIGN.V1_SUNSET")
@@ -1118,7 +1133,7 @@ def _pending_024_inputs_cover_every_live_obligation():
         ("O4", ""): {"writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": True,
                      "process_roles": {"api": "writer", "pipeline_worker": "writer",
                                        "outbox_worker": "writer", "retention": "non-writer",
-                                       "dev_worker": "non-writer"}},
+                                       "dev_worker": "writer"}},
     }
     for item in inputs:
         answers = [a for (obligation, _hint), a in good.items() if obligation == item.obligation]
@@ -1149,6 +1164,11 @@ def _pending_024_inputs_cover_every_live_obligation():
         "the answer-artifact schema anchor moved; resolution_problems, the claim note, and "
         "ROADMAP PR 7b-inputs must all move in the same change"
     )
+    assert isinstance(wire_module.ANSWER_ARTIFACT_AUTHORITY, wire_module.MissingCapability), (
+        "an answer-artifact authority is registered; the claim, the gate, and ROADMAP "
+        "PR 7b-inputs must move in the same change"
+    )
+    assert wire_module.ANSWER_ARTIFACT_AUTHORITY.roadmap_unit == "PR 7b-inputs"
     note = WIRE["WIRE.ORDERING.PENDING_INPUTS"].note
     assert "RESOLVE" in note and "has not shipped" in note, (
         "the published note no longer tells the reader that no reply can resolve an obligation"
@@ -1163,9 +1183,10 @@ def _pending_024_inputs_cover_every_live_obligation():
     row = next((r for r in roadmap.records() if r[0] == "PR 7b-inputs"), None)
     assert row is not None, "ROADMAP §C reserves no PR 7b-inputs unit for the answer artifacts"
     _unit, state, revisions = row
-    assert state == "—" and revisions == [], (
-        "PR 7b-inputs must stay a reservation without a migration until it is actually designed"
+    assert state == "future" and revisions == [], (
+        "PR 7b-inputs must stay an explicit `future` reservation without a migration (gate F12)"
     )
+    assert not roadmap.future_unit_problems(roadmap.ROADMAP.read_text())
 
 
 @verifies("WIRE.ORDERING.INTEGRITY_MISMATCH")
@@ -3075,14 +3096,15 @@ def test_f11_the_previously_acceptable_o4_answer_is_now_refused():
     demoted = dict(old_complete_looking)
     demoted["process_roles"] = {
         "api": "non-writer", "pipeline_worker": "writer", "outbox_worker": "writer",
-        "retention": "non-writer", "dev_worker": "non-writer"}
-    assert any("required writer" in p for p in wire_module._accept_writer_matrix(demoted)), (
-        "a required writer host demoted to non-writer was not refused"
+        "retention": "non-writer", "dev_worker": "writer"}
+    assert any("canonical capability map" in p
+               for p in wire_module._accept_writer_matrix(demoted)), (
+        "a writer host demoted to non-writer was not refused against the canonical map"
     )
     unknown = dict(old_complete_looking)
     unknown["process_roles"] = {
         "api": "writer", "pipeline_worker": "writer", "outbox_worker": "writer",
-        "retention": "non-writer", "dev_worker": "non-writer", "shadow_worker": "non-writer"}
+        "retention": "non-writer", "dev_worker": "writer", "shadow_worker": "non-writer"}
     assert any("do not run" in p for p in wire_module._accept_writer_matrix(unknown)), (
         "a process role we do not run was accepted into the accounting"
     )
@@ -3111,12 +3133,13 @@ def test_f11_the_resolution_gate_reads_its_anchor_not_a_constant_refusal():
     tripwire demanding the gate be rewritten with the schema — proving the gate consults the
     anchor rather than returning a hardcoded no."""
     item = WIRE.value("WIRE.ORDERING.PENDING_INPUTS")[0]
-    with mock.patch.object(wire_module, "ANSWER_ARTIFACT_SCHEMA", object()):
+    with mock.patch.object(wire_module, "ANSWER_ARTIFACT_AUTHORITY", object()):
         problems = wire_module.resolution_problems(item, {"schema_version": "1.0.0"})
-        assert problems, "flipping the anchor must not silently resolve anything"
+        assert problems, "flipping the slot must not silently resolve anything"
         assert any("rewrite resolution_problems" in p for p in problems), problems
         assert not any("unresolvable" in p for p in problems), (
-            "the absence branch fired with a non-None anchor; the gate is not reading it"
+            "the absence branch fired with a registered authority; the gate is not reading "
+            "the slot"
         )
 
 
@@ -3125,6 +3148,13 @@ def test_f3_the_rotation_claim_no_longer_presents_retirement_as_available():
     cutover record whose subject is the outbox attempt ceiling. Both retirement steps must now be
     marked BLOCKED in the procedure text itself, where a reader would otherwise act."""
     lines = WIRE.value("WIRE.SIGN.ROTATION")
+    # gate finding 13: the lines are the DERIVATION of the closed step records — an appended
+    # override instruction has no syntax, and retirement semantics outside the derived lines
+    # are refused by name
+    assert tuple(lines) == wire_module.rotation_lines(), (
+        "the published rotation lines diverge from the closed-step derivation"
+    )
+    assert wire_module.rotation_prose_problems(lines) == []
     inbound = next(line for line in lines if line.startswith("INBOUND"))
     outbound = next(line for line in lines if line.startswith("OUTBOUND"))
     assert "BLOCKED" in inbound, "the inbound proof step reads as available"
@@ -3146,40 +3176,41 @@ def test_f3_no_constructible_evidence_authorizes_retirement():
         "authority": "kyc_tool.api.hmac_witness.inbound_zero_for_key",
         "window_days": 30, "zero_confirmed": True}
     reasons = gates["INBOUND"].refuse(shaped_witness)
-    assert any("no durable per-key witness is shipped" in r for r in reasons), reasons
+    assert any("has no inbound_zero_for_key" in r for r in reasons), reasons
     shaped_receipt = {
         "kind": "signed_fleet_receipt", "signed_by": "signer-fleet operator",
         "signature_verified": True, "observation_days": 7}
     reasons = gates["INBOUND"].refuse(shaped_receipt)
-    assert any("no signed fleet-receipt schema" in r for r in reasons), reasons
+    assert any("no signed fleet-receipt schema or verifying authority exists" in r
+               for r in reasons), reasons
     shaped_record = {
         "kind": "hmac_signer_cutover_record", "target_key_id": "new",
         "secret_digest": "0" * 64, "roles": ("outbox_worker", "dev_worker"),
         "attested_zero": True}
     reasons = gates["OUTBOUND"].refuse(shaped_record)
-    assert any("no HMAC signer-target cutover record" in r for r in reasons), reasons
+    assert any("no record names a target key id" in r for r in reasons), reasons
 
 
 def test_f3_the_gates_read_their_absence_anchors():
-    """Guard the guard, three anchors: give each absent capability a fake presence and the
-    refusal must change branch to the rewrite-me tripwire — never silently authorize."""
+    """Guard the guard, restated on the typed slot (gate finding 13 moved the gates from
+    name-probing to slot dispatch): a fake presence in the SLOT moves every refusal to the
+    rewrite-me tripwire — never to acceptance — and the module-name anchors keep their own
+    bite inside the assembled claim verifier (a fake per-key witness fails it outright)."""
     from kyc_tool.api import hmac_witness
 
     gates = {g.direction: g for g in WIRE.value("WIRE.SIGN.ROTATION_RETIREMENT")}
-    witness_evidence = {"kind": "durable_per_key_fleet_witness"}
+    with mock.patch.object(wire_module, "RETIREMENT_AUTHORITY", object()):
+        for direction, evidence in (
+            ("INBOUND", {"kind": "durable_per_key_fleet_witness"}),
+            ("INBOUND", {"kind": "signed_fleet_receipt"}),
+            ("OUTBOUND", {"kind": "hmac_signer_cutover_record"}),
+        ):
+            reasons = gates[direction].refuse(evidence)
+            assert reasons and any("rewrite _refuse" in r for r in reasons), reasons
     with mock.patch.object(
         hmac_witness, "inbound_zero_for_key", lambda *a, **k: True, create=True
-    ):
-        reasons = gates["INBOUND"].refuse(witness_evidence)
-        assert reasons and any("rewrite _refuse_inbound_retirement" in r for r in reasons), reasons
-    receipt_evidence = {"kind": "signed_fleet_receipt"}
-    with mock.patch.object(wire_module, "SIGNED_FLEET_RECEIPT_SCHEMA", object()):
-        reasons = gates["INBOUND"].refuse(receipt_evidence)
-        assert reasons and any("rewrite _refuse_inbound_retirement" in r for r in reasons), reasons
-    record_evidence = {"kind": "hmac_signer_cutover_record"}
-    with mock.patch.object(cutover, "HMAC_SIGNER_CUTOVER", object(), create=True):
-        reasons = gates["OUTBOUND"].refuse(record_evidence)
-        assert reasons and any("rewrite _refuse_outbound_retirement" in r for r in reasons), reasons
+    ), pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION_RETIREMENT"]()
 
 
 def test_f3_wait_only_phase_mutation_fails_the_assembled_verifier(monkeypatch):
@@ -3704,3 +3735,251 @@ def test_f11_gate_the_old_parser_would_have_misread_the_specimens():
     old = set(re.findall(r"\*\*(O\d)\b", "**O1** a **O10** c **O4** x **O4** y"))
     assert "O10" not in old
     assert old == {"O1", "O4"}
+
+
+# ── Wave-1 gate F9: the capability map, not the counterparty, classifies our roles ────────────────
+#
+# Gate audit `6c4f54a..91fbde3` finding 9. The accepted "good" O4 matrix said dev_worker is a
+# non-writer, and the screen agreed — while the executable entry point constructs BOTH the
+# pipeline Worker and the OutboxPublisher and runs them. A stop-and-attest inventory built on
+# that matrix omits a live decision/callback writer. TechCraft does not classify IPv4.Global's
+# executable roles: one canonical ProcessRole -> capability map does, the O4 screen derives the
+# local stances from it, and an entry-point closure sweep keeps the map honest against the code.
+
+
+def test_f9_gate_dev_worker_demoted_to_non_writer_is_refused():
+    """The audit's reproduction verbatim: the previously accepted matrix, dev_worker declared
+    non-writer, must now be refused — dev_worker runs the pipeline AND the publisher."""
+    from docs.contracts.wire import REQUIRED_WRITER_ROLES
+
+    previously_accepted = {
+        "writer_roles": tuple(REQUIRED_WRITER_ROLES), "old_image_full_stop": True,
+        "process_roles": {"api": "writer", "pipeline_worker": "writer",
+                          "outbox_worker": "writer", "retention": "non-writer",
+                          "dev_worker": "non-writer"}}
+    problems = wire_module._accept_writer_matrix(previously_accepted)
+    assert any("dev_worker" in p for p in problems), (
+        f"dev_worker demoted to non-writer was accepted: {problems}"
+    )
+
+
+def test_f9_gate_local_stances_derive_from_the_canonical_capability_map():
+    """The wire mirror must EQUAL the stance derived from kyc_tool's own capability map — writer
+    exactly when the role carries a decision-write or callback-publish capability — the same
+    bind discipline as PLAN_ROLES/ACCOUNTED_PROCESS_ROLES."""
+    from kyc_tool.config import (
+        CAP_CALLBACK_PUBLISH,
+        CAP_DECISION_WRITE,
+        ROLE_CAPABILITIES,
+    )
+
+    derived = {
+        role.value: ("writer" if ROLE_CAPABILITIES[role]
+                     & {CAP_DECISION_WRITE, CAP_CALLBACK_PUBLISH} else "non-writer")
+        for role in ProcessRole
+    }
+    assert derived == wire_module.LOCAL_WRITER_STANCES
+    assert derived["dev_worker"] == "writer", (
+        "the map itself denies what dev_worker's entry point constructs"
+    )
+
+
+def test_f9_gate_every_entry_point_construction_is_covered_by_the_map():
+    """Closure against the code: every src module that declares its role (validate_process_role)
+    and constructs a writer class must hold the matching capability in the map. Adding a
+    construction without updating the map fails here; a library module with no declared role is
+    out of scope — the boundary is the executable entry point."""
+    from kyc_tool.config import (
+        CAP_CALLBACK_PUBLISH,
+        CAP_DECISION_WRITE,
+        ROLE_CAPABILITIES,
+    )
+
+    implications = {"Pipeline": CAP_DECISION_WRITE, "OutboxPublisher": CAP_CALLBACK_PUBLISH}
+    covered_any = 0
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        declared_roles = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name) and node.value.id == "ProcessRole"
+        }
+        if not declared_roles:
+            continue
+        constructed = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id in implications
+        }
+        for class_name in constructed:
+            covered_any += 1
+            needed = implications[class_name]
+            for role_name in declared_roles:
+                role = ProcessRole[role_name]
+                assert needed in ROLE_CAPABILITIES[role], (
+                    f"{path.relative_to(REPO)}: role {role.value} constructs {class_name} but "
+                    f"the capability map does not grant {needed}"
+                )
+    assert covered_any >= 3, (
+        "the closure sweep found almost nothing; the construction patterns changed and this "
+        "guard is no longer reading the entry points"
+    )
+    # the inline manual approve is a decision write with no Pipeline construction to see: the
+    # API role's capability is asserted directly, bound to the writer identity it hosts
+    assert CAP_DECISION_WRITE in ROLE_CAPABILITIES[ProcessRole.API]
+
+
+# ── Wave-1 gate F12: future-unit lifecycle is typed, not inferred from a dash ─────────────────────
+#
+# Gate audit `6c4f54a..91fbde3` finding 12. `state == "—"` means only "no migration" — shipped
+# code-only PR 5b carries the same value — so deleting both §G detail sections and re-labelling
+# the reserved units as shipped left every verifier green. Unit lifecycle (shipped|pending|future)
+# is now separate from migration lifecycle: the reserved units carry the explicit `future` state,
+# and a typed registry binds each future unit's §C row AND its §G scope section (by digest) so
+# neither can be deleted, promoted, or rewritten to say the capability is permitted without a
+# reviewed re-pin.
+
+
+def test_f12_gate_the_future_units_are_bound_by_the_registry():
+    problems = roadmap.future_unit_problems(roadmap.ROADMAP.read_text())
+    assert problems == [], problems
+
+
+def test_f12_gate_marking_a_future_unit_shipped_is_refused():
+    """The audit's mutation: §C says PR 5c is SHIPPED. The future-unit registry refuses it, and
+    the lineage state contract refuses `future` on any row that carries a migration."""
+    text = roadmap.ROADMAP.read_text().replace(
+        "| PR 5c | — | future | — |", "| PR 5c | — | shipped | — |")
+    assert text != roadmap.ROADMAP.read_text(), "the mutation failed to change the table"
+    assert any("PR 5c" in p for p in roadmap.future_unit_problems(text))
+
+
+def test_f12_gate_deleting_a_scope_section_is_refused():
+    """The other mutation: both §G detail sections deleted while the §C rows remain."""
+    text = roadmap.ROADMAP.read_text()
+    heading = "### PR 7b-inputs — Platform answer artifacts"
+    start = text.index(heading)
+    end = text.index("\n### ", start + 1)
+    gutted = text[:start] + text[end + 1:]
+    assert any("PR 7b-inputs" in p for p in roadmap.future_unit_problems(gutted))
+
+
+def test_f12_gate_rewriting_a_scope_to_permit_the_capability_is_refused():
+    """Replacing the reserved scope with 'retirement/resolution permitted' must fail the scope
+    digest — a re-pin being the reviewed act, exactly like the playbook sections."""
+    text = roadmap.ROADMAP.read_text()
+    heading = "### PR 5c — Per-key HMAC retirement evidence"
+    start = text.index(heading)
+    end = text.index("\n### ", start + 1)
+    rewritten = (text[:start]
+                 + heading + " — FUTURE\nRetirement is permitted on aggregate telemetry.\n"
+                 + text[end + 1:])
+    assert any("PR 5c" in p for p in roadmap.future_unit_problems(rewritten))
+
+
+def test_f12_gate_shipped_no_migration_rows_stay_legal():
+    """PR 5b (shipped, code-only, no migration) keeps its `—` and stays outside the future
+    registry — the separation is the point, not a new constraint on old rows."""
+    records = roadmap.records()
+    pr5b = next(r for r in records if r[0] == "PR 5b")
+    assert pr5b[1] == "—" and pr5b[2] == []
+    for unit in roadmap.FUTURE_UNITS:
+        row = next(r for r in records if r[0] == unit)
+        assert row[1] == "future" and row[2] == []
+
+
+# ── Wave-1 gate F13: capability slots and a closed rotation surface ───────────────────────────────
+#
+# Gate audit `6c4f54a..91fbde3` finding 13. Two survivals: the "shipping any part forces the gate
+# forward" claim was only a search of favored names — a consumable helper in a NEW module left
+# every verifier green — and free prose could add an alternate retirement instruction (EMERGENCY
+# OVERRIDE) to WIRE.SIGN.ROTATION without any gate noticing. The absence is now TYPED: one
+# MissingCapability slot per absent authority, consumed by every gate, forced forward by the
+# claim verifiers; and the rotation lines are DERIVED from closed step records, so an alternate
+# retirement path has no syntax.
+
+
+def test_f13_gate_the_gates_consume_the_typed_slots():
+    """Every refusal must cite the slot's own reason, and flipping a slot to a fake authority
+    must move every consumer to the rewrite-me tripwire — never to acceptance."""
+    gates = {g.direction: g for g in WIRE.value("WIRE.SIGN.ROTATION_RETIREMENT")}
+    assert isinstance(wire_module.RETIREMENT_AUTHORITY, wire_module.MissingCapability)
+    assert isinstance(wire_module.ANSWER_ARTIFACT_AUTHORITY, wire_module.MissingCapability)
+    assert wire_module.RETIREMENT_AUTHORITY.roadmap_unit == "PR 5c"
+    assert wire_module.ANSWER_ARTIFACT_AUTHORITY.roadmap_unit == "PR 7b-inputs"
+
+    fake = object()
+    with mock.patch.object(wire_module, "RETIREMENT_AUTHORITY", fake):
+        for evidence in ({"kind": "durable_per_key_fleet_witness"},
+                         {"kind": "signed_fleet_receipt"}):
+            reasons = gates["INBOUND"].refuse(evidence)
+            assert reasons and any("rewrite" in r for r in reasons), reasons
+        reasons = gates["OUTBOUND"].refuse({"kind": "hmac_signer_cutover_record"})
+        assert reasons and any("rewrite" in r for r in reasons), reasons
+    with mock.patch.object(wire_module, "ANSWER_ARTIFACT_AUTHORITY", fake):
+        item = WIRE.value("WIRE.ORDERING.PENDING_INPUTS")[0]
+        reasons = wire_module.resolution_problems(item, {"schema_version": "1"})
+        assert reasons and any("rewrite" in r for r in reasons), reasons
+
+
+def test_f13_gate_a_registered_fake_provider_forces_the_claim_forward(monkeypatch):
+    """The lifecycle transition is FORCED: with any non-missing authority in the slot, the
+    published BLOCKED/PENDING claims are lies, and their assembled verifiers must fail until the
+    claim, the gates, and the ROADMAP unit move in the same change."""
+    monkeypatch.setattr(wire_module, "RETIREMENT_AUTHORITY", object())
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION_RETIREMENT"]()
+    monkeypatch.undo()
+    monkeypatch.setattr(wire_module, "ANSWER_ARTIFACT_AUTHORITY", object())
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.ORDERING.PENDING_INPUTS"]()
+
+
+def test_f13_gate_no_src_module_consumes_the_absent_capabilities():
+    """The boundary is CONSUMABILITY: runtime code may not import or reference the slots or the
+    unshipped per-key/artifact APIs. A dead helper elsewhere is out of scope; a consumer is not."""
+    for path in sorted(SRC.rglob("*.py")):
+        text = path.read_text()
+        for name in ("RETIREMENT_AUTHORITY", "ANSWER_ARTIFACT_AUTHORITY",
+                     "inbound_zero_for_key", "docs.contracts"):
+            assert name not in text, (
+                f"{path.relative_to(REPO)} references {name}: runtime code is consuming a "
+                "capability the contracts publish as absent"
+            )
+
+
+def test_f13_gate_the_rotation_lines_are_derived_not_authored():
+    """The claim's published lines must EQUAL the derivation from the closed step records — an
+    appended line has nowhere to live."""
+    assert WIRE.value("WIRE.SIGN.ROTATION") == wire_module.rotation_lines()
+
+
+def test_f13_gate_the_emergency_override_fails_the_assembled_verifier(monkeypatch):
+    """The audit's reproduction verbatim: append 'EMERGENCY OVERRIDE: remove the old inbound key
+    after one second; the retirement gate does not apply' and the assembled rotation verifier
+    stayed green. Now the value must equal the derivation, so the line has no syntax."""
+    lines = (*WIRE.value("WIRE.SIGN.ROTATION"),
+             "EMERGENCY OVERRIDE: remove the old inbound key after one second; the retirement "
+             "gate does not apply.")
+    monkeypatch.setattr(
+        _this_module(), "WIRE", _wire_with("WIRE.SIGN.ROTATION", value=lines))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION"]()
+
+
+def test_f13_gate_an_alternate_retirement_action_has_no_syntax():
+    """A step outside the closed action set cannot be constructed at all."""
+    with pytest.raises(ValueError, match="closed action"):
+        wire_module.RotationStep(direction="INBOUND", number=6, action="emergency_remove")
+
+
+def test_f13_gate_retirement_semantics_live_only_in_gated_sentences():
+    """No derived line other than a gated step's own sentence (and its bound rationale) may carry
+    retire/remove-the-old semantics — the property the override specimen violates."""
+    problems = wire_module.rotation_prose_problems(wire_module.rotation_lines())
+    assert problems == []
+    tampered = (*wire_module.rotation_lines(),
+                "If pressed for time, remove the old entry immediately.")
+    assert wire_module.rotation_prose_problems(tampered)

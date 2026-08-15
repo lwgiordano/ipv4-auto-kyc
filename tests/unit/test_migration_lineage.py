@@ -51,7 +51,11 @@ def _validate_lineage(
                 f"{unit}: migration row has unrecognised State {state!r} (want shipped|pending)"
             )
         else:
-            assert state == "—", f"{unit}: non-migration row has State {state!r} (want '—')"
+            # `future` is the reserved-unbuilt lifecycle (gate audit `6c4f54a..91fbde3` F12) —
+            # legal ONLY without a migration; `—` stays the no-migration row of any other unit.
+            assert state in ("—", "future"), (
+                f"{unit}: non-migration row has State {state!r} (want '—' or 'future')"
+            )
 
     flat = [rev for _unit, _state, revs in records for rev in revs]
     dupes = sorted({rev for rev in flat if flat.count(rev) > 1})
