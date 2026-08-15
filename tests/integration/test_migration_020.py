@@ -12,6 +12,7 @@ from alembic import command
 from sqlalchemy import create_engine, text
 
 from kyc_tool.config import ProcessRole
+from tests.conftest import process_context
 from tests.integration.test_migration_014 import _seed_callback
 from tests.integration.test_migrations import _config, _fresh_db
 
@@ -240,6 +241,6 @@ def test_the_poisoned_row_scenario_is_unreachable_end_to_end(session_factory, se
     pub = OutboxPublisher(
         session_factory, settings,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-        email_sender=_Sender(), process_role=ProcessRole.OUTBOX_WORKER)
+        email_sender=_Sender(), process_role=process_context(ProcessRole.OUTBOX_WORKER))
     pub.process_pending()
     assert sent == ["c@d"], f"the healthy email did not get through: {sent}"

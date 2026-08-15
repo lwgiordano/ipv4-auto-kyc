@@ -1062,12 +1062,41 @@ class ProcessRoleCapabilityError(RuntimeError):
     """A construction demanded a capability the declared process role does not carry."""
 
 
-def require_role_capability(role: ProcessRole, capability: str, construction: str) -> None:
+_PROCESS_CONTEXT_TOKEN = object()
+
+
+class ProcessContext:
+    """The BOUND identity of a validated executable process (R-audit-3 finding 10).
+
+    A constructor argument is self-attestation: a process that validated itself as RETENTION
+    could still construct a Worker while PASSING the pipeline role. The context is issued by
+    `validate_process_role` — the same call every entry point already makes before touching
+    anything — and the writer constructors consume the CONTEXT, so the role they enforce is
+    the one the executable actually validated as, not a freely selected enum."""
+
+    __slots__ = ("role",)
+
+    def __init__(self, role: ProcessRole, *, _token: object = None) -> None:
+        if _token is not _PROCESS_CONTEXT_TOKEN:
+            raise ProcessRoleCapabilityError(
+                "a ProcessContext is issued by validate_process_role, never constructed "
+                "directly — a freely selected role is the self-attestation this exists to end"
+            )
+        self.role = ProcessRole(role)
+
+
+def require_role_capability(context: "ProcessContext", capability: str,
+                            construction: str) -> None:
     """The construction-time side of the capability map (re-audit `1826661..b5c7a83` finding
-    5). Called INSIDE the writer constructors, so every path to a live writer — direct call,
-    alias, factory, functools.partial, a disposable module — proves its declared role carries
-    the capability, against the same map the O4 stance derivation reads."""
-    role = ProcessRole(role)
+    5; R-audit-3 finding 10). Called INSIDE the writer constructors with the BOUND
+    ProcessContext — so every path to a live writer proves the identity the executable
+    actually validated as carries the capability; a bare enum is refused outright."""
+    if not isinstance(context, ProcessContext):
+        raise ProcessRoleCapabilityError(
+            f"{construction} requires the ProcessContext issued by validate_process_role; a "
+            f"caller-selected {type(context).__name__} is self-attestation and is refused"
+        )
+    role = context.role
     granted = ROLE_CAPABILITIES.get(role)
     if granted is None:
         raise ProcessRoleCapabilityError(
@@ -1227,7 +1256,7 @@ _DEV_ONLY_ROLES = frozenset({ProcessRole.DEV_WORKER})
 _PUBLISHER_ROLES = frozenset({ProcessRole.OUTBOX_WORKER, ProcessRole.DEV_WORKER})
 
 
-def validate_process_role(settings: Settings, role: ProcessRole) -> None:
+def validate_process_role(settings: Settings, role: ProcessRole) -> "ProcessContext":
     """The single process-role authority (re-audit `03dbfab..bc325e7` R5-F1). Called by EVERY
     executable entry point BEFORE it creates a database engine, network client, or object store.
 
@@ -1262,13 +1291,14 @@ def validate_process_role(settings: Settings, role: ProcessRole) -> None:
                 "stale task definition; refusing to start (DEPLOYMENT §8 drained cutover)"
             )
     if settings.environment != "production":
-        return
+        return ProcessContext(role, _token=_PROCESS_CONTEXT_TOKEN)
     if role in _DEV_ONLY_ROLES:
         raise ProductionConfigError(
             f"process role {role.value!r} is DEV-ONLY (fixture adapters) and must never run in a "
             "production environment — refusing before any database/network/store access"
         )
     validate_for_production(settings)
+    return ProcessContext(role, _token=_PROCESS_CONTEXT_TOKEN)
 
 
 class ConfigLoadError(RuntimeError):

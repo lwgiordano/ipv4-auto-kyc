@@ -15,12 +15,12 @@ SATURATION_EXIT_CODE = 3
 
 def build_publisher() -> OutboxPublisher:
     settings = get_settings()
-    validate_process_role(settings, ProcessRole.OUTBOX_WORKER)  # fail-closed before any DB access
+    context = validate_process_role(settings, ProcessRole.OUTBOX_WORKER)  # fail-closed before any DB access
     session_factory = make_session_factory(make_engine(settings.database_url))
     return OutboxPublisher(
         session_factory,
         settings,
-        process_role=ProcessRole.OUTBOX_WORKER,
+        process_role=context,
         email_sender=make_email_sender(
             settings.email_provider, file_path=settings.email_file_path
         ),

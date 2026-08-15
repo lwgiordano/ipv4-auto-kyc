@@ -38,7 +38,7 @@ from kyc_tool.api.schemas import encode_decision_callback
 from kyc_tool.config import (
     CAP_CALLBACK_PUBLISH,
     OUTBOX_ATTEMPT_DEADLINE_PHASES,
-    ProcessRole,
+    ProcessContext,
     Settings,
     parse_sunset,
     require_role_capability,
@@ -239,7 +239,7 @@ class OutboxPublisher:
         session_factory: sessionmaker[Session],
         settings: Settings,
         *,
-        process_role: ProcessRole,
+        process_role: "ProcessContext",
         http_client: httpx.Client | None = None,
         email_sender: EmailSender | None = None,
     ) -> None:
@@ -247,7 +247,7 @@ class OutboxPublisher:
         # `1826661..b5c7a83` finding 5): the declared role must carry it in the canonical map,
         # checked here so no alias, factory, or disposable entry point publishes unaccounted.
         require_role_capability(process_role, CAP_CALLBACK_PUBLISH, "OutboxPublisher")
-        self.process_role = ProcessRole(process_role)
+        self.process_role = process_role.role
         self.session_factory = session_factory
         self.settings = settings
         self.http = http_client or httpx.Client(timeout=settings.outbox_http_timeout_seconds)

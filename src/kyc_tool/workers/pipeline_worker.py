@@ -79,7 +79,7 @@ def build_adapters(settings: Settings, store: ObjectStore) -> dict:
 
 def build_worker() -> Worker:
     settings = get_settings()
-    validate_process_role(settings, ProcessRole.PIPELINE_WORKER)  # fail-closed before any DB access
+    context = validate_process_role(settings, ProcessRole.PIPELINE_WORKER)  # fail-closed before any DB access
     session_factory = make_session_factory(make_engine(settings.database_url))
     policy = load_policy(settings.policy_dir)
     h = seed_and_verify(session_factory, settings.policy_dir)
@@ -98,7 +98,7 @@ def build_worker() -> Worker:
     return Worker(
         session_factory,
         {"run_transition": pipeline.handle_job},
-        process_role=ProcessRole.PIPELINE_WORKER,
+        process_role=context,
         lease_seconds=settings.job_lease_seconds,
         backoff_base_seconds=settings.job_backoff_base_seconds,
         poll_seconds=settings.worker_poll_seconds,

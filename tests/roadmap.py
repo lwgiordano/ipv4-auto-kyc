@@ -109,12 +109,13 @@ def reservation_rows_outside_section_c(text: str) -> list[str]:
     end = next(
         (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines)
     )
+    # R-audit-3 finding 13: EVERY PR-shaped row outside §C is refused — including a
+    # no-migration `future` reservation, which reads as a reservation but is invisible to the
+    # typed authority. The old filter required a revision number, so exactly those rows hid.
     return [
         line.strip()
         for i, line in enumerate(lines)
-        if not (start < i < end)
-        and line.lstrip().startswith("| PR ")
-        and re.search(r"\b0\d\d\b", line)
+        if not (start < i < end) and line.lstrip().startswith("| PR ")
     ]
 
 
@@ -230,6 +231,11 @@ def future_unit_problems(text: str) -> list[str]:
         recs = parse_records(section_c(text))
     except (StopIteration, ValueError) as exc:
         return [f"§C is unreadable: {exc}"]
+    for stray in reservation_rows_outside_section_c(text):
+        problems.append(f"a PR-shaped row outside §C reads as a reservation but is invisible "
+                        f"to this authority: {stray[:70]!r}")
+    if problems:
+        return problems
     names = [r.unit for r in recs]
     for name in sorted({n for n in names if names.count(n) > 1}):
         problems.append(f"{name}: duplicate §C unit rows — two apparent reservations, at "

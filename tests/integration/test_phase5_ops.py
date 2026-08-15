@@ -16,6 +16,7 @@ from kyc_tool.queue import jobs
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
 from kyc_tool.workers.retention import prune
+from tests.conftest import process_context
 from tests.integration.shared import ACME_KYB
 
 pytestmark = pytest.mark.postgres
@@ -28,7 +29,7 @@ def _worker_for(session_factory, pipeline, **kwargs) -> Worker:
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
         **kwargs,
-    process_role=ProcessRole.PIPELINE_WORKER)
+    process_role=process_context(ProcessRole.PIPELINE_WORKER))
 
 
 def test_crash_mid_decide_resumes_without_partial_writes(

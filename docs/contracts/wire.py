@@ -1343,6 +1343,11 @@ def rotation_surface_projection() -> str:
         }
         for action, semantics in sorted(ROTATION_SEMANTICS.items())
     }
+    # R-audit-3 finding 9: the direction PREFIXES and terminal facts are normative rendered
+    # text too — inside this pinned projection, so "RETIRE THE OLD KEY FIRST" cannot enter
+    # through an unpinned prefix with a regenerated claim.
+    surface["__direction_prefixes__"] = dict(sorted(_DIRECTION_PREFIXES.items()))
+    surface["__terminal_facts__"] = dict(sorted(_DIRECTION_TERMINAL_FACTS.items()))
     return json.dumps(surface, sort_keys=True)
 
 

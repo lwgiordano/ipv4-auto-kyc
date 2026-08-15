@@ -65,6 +65,7 @@ from kyc_tool.security import (
     sign_v2,
 )
 from tests import roadmap
+from tests.conftest import process_context
 
 from .test_production_config import hardened
 
@@ -3924,8 +3925,12 @@ def _live_obligation_ids(live: str) -> list[str]:
             raise ValueError(f"blocker-shaped heading inside the live section: {line!r}")
         if line.strip() and line.startswith((" ", "\t")):
             raise ValueError(f"indented text outside any blocker item: {line!r}")
-        if re.search(r"\*\*\s*O[0-9]", line):
-            raise ValueError(f"obligation-shaped bold token outside an item: {line!r}")
+        # R-audit-3 finding 12: obligation-shaped text hides in the trusted preamble in ANY
+        # syntax — plain, numbered, blockquoted, bolded. A bare O<n> token in the preamble is
+        # an error outright; obligations exist only as top-level bold-id items.
+        if re.search(r"\bO[1-9][0-9]*\b", line):
+            raise ValueError(
+                f"obligation-shaped text outside the blocker items: {line.strip()[:70]!r}")
     ids = []
     for n, start in enumerate(item_starts):
         end = item_starts[n + 1] if n + 1 < len(item_starts) else len(body)
@@ -4072,15 +4077,12 @@ def test_f9_gate_every_entry_point_construction_is_covered_by_the_map():
                     f"but the capability map does not grant {needed}"
                 )
             if call.func.id in ("Worker", "OutboxPublisher"):
-                stated = [
-                    k.value.attr for k in call.keywords
-                    if k.arg == "process_role" and isinstance(k.value, ast.Attribute)
-                    and isinstance(k.value.value, ast.Name)
-                    and k.value.value.id == "ProcessRole"
-                ]
-                assert stated and stated[0] in declared_roles, (
-                    f"{path.relative_to(REPO)}: a {call.func.id} construction does not state "
-                    "the module's own declared ProcessRole"
+                # R-audit-3 finding 10: entry constructions pass the BOUND context returned by
+                # validate_process_role — a bare Name, never a freely selected enum attribute
+                stated = [k.value for k in call.keywords if k.arg == "process_role"]
+                assert stated and isinstance(stated[0], ast.Name), (
+                    f"{path.relative_to(REPO)}: a {call.func.id} construction does not pass "
+                    "the bound ProcessContext variable"
                 )
     assert covered_any >= 3, (
         "the closure sweep found almost nothing; the construction patterns changed and this "
@@ -4782,7 +4784,7 @@ ROTATION_PROFILE_PINS = {
     "OUTBOUND": ("accept_old_and_new", "hard_stop_attest_zero", "deploy_sole_new_signer",
                  "confirm_new_key_arrivals", "retire_old_key"),
 }
-ROTATION_SURFACE_PIN = "5bfbd34e478e5a06"
+ROTATION_SURFACE_PIN = "f44603ba2bff6b4d"
 ROTATION_RATIONALES_PIN = "fbe2e74488509e50"
 
 
@@ -4938,9 +4940,13 @@ def test_ru6_registering_a_provider_through_the_real_path_forces_the_claims(monk
     change."""
     from kyc_tool import capabilities
 
-    class DisposablePerKeyWitness:  # deliberately arbitrary identifiers (the audit's shape)
-        def zero_window(self, key_id: str) -> int:
-            return 0
+    class DisposablePerKeyWitness:  # conforming (R-audit-3 finding 11: only a
+        # RetirementEvidenceAuthority can register at all)
+        def inbound_zero_window_receipt(self, key_id: str) -> object:
+            return {"key_id": key_id, "requests": 0}
+
+        def signer_cutover_record(self, target_key_id: str) -> object:
+            return {"target": target_key_id}
 
     monkeypatch.setattr(capabilities, "_SLOTS", dict(capabilities._SLOTS))
     capabilities.register(capabilities.SLOT_RETIREMENT_EVIDENCE, DisposablePerKeyWitness())
@@ -4952,8 +4958,12 @@ def test_ru6_registering_a_provider_through_the_real_path_forces_the_claims(monk
     with pytest.raises(AssertionError):
         AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION_RETIREMENT"]()
 
+    class DisposableVerifier:
+        def verify_artifact(self, artifact: object) -> list:
+            return []
+
     monkeypatch.setattr(capabilities, "_SLOTS", dict(capabilities._SLOTS))
-    capabilities.register(capabilities.SLOT_ANSWER_ARTIFACT, object())
+    capabilities.register(capabilities.SLOT_ANSWER_ARTIFACT, DisposableVerifier())
     item = WIRE.value("WIRE.ORDERING.PENDING_INPUTS")[0]
     reasons = wire_module.resolution_problems(item, {"schema_version": "1"})
     assert reasons and any("rewrite" in r for r in reasons), reasons
@@ -4977,6 +4987,10 @@ def test_ru6_an_unregistered_provider_and_route_have_no_effect():
         return {"key_id": key_id, "requests_in_window": svc.window(key_id)}
 
     assert api_route_prove_quiet("old-id")["requests_in_window"] == 0  # the route is live
+    # R-audit-3 finding 11: the arbitrary-identifier provider FAILS the consumer closure — it
+    # cannot even register (non-conforming), so no official consumer can ever reach it
+    with pytest.raises(ValueError, match="conform"):
+        capabilities.register(capabilities.SLOT_RETIREMENT_EVIDENCE, PerKeyEvidenceService())
     assert wire_module._refuse_outbound_retirement({"kind": "hmac_signer_cutover_record"})
     assert wire_module._refuse_inbound_retirement({"kind": "durable_per_key_fleet_witness"})
     AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION_RETIREMENT"]()  # still green: still BLOCKED
@@ -4992,11 +5006,22 @@ def test_ru6_the_registry_validates_registration_itself():
     original = capabilities._SLOTS
     try:
         capabilities._SLOTS = dict(original)  # work on a copy; the real slots never mutate
-        provider = object()
+        class ConformingWitness:
+            def inbound_zero_window_receipt(self, key_id: str) -> object:
+                return {"key_id": key_id}
+
+            def signer_cutover_record(self, target_key_id: str) -> object:
+                return {"target": target_key_id}
+
+        # R-audit-3 finding 11: an arbitrary object is NOT a provider — the typed protocol is
+        # the slot's domain (MissingCapability | AuthorityProtocol)
+        with pytest.raises(ValueError, match="conform"):
+            capabilities.register(capabilities.SLOT_RETIREMENT_EVIDENCE, object())
+        provider = ConformingWitness()
         capabilities.register(capabilities.SLOT_RETIREMENT_EVIDENCE, provider)
         assert capabilities.resolve(capabilities.SLOT_RETIREMENT_EVIDENCE) is provider
         with pytest.raises(ValueError, match="already"):
-            capabilities.register(capabilities.SLOT_RETIREMENT_EVIDENCE, object())
+            capabilities.register(capabilities.SLOT_RETIREMENT_EVIDENCE, ConformingWitness())
         with pytest.raises(ValueError, match="unknown"):
             capabilities.register("a_slot_nobody_declared", object())
         with pytest.raises(ValueError, match="unknown"):
@@ -5063,7 +5088,7 @@ def test_ru5_a_retention_process_cannot_register_a_decision_writer():
 
     with pytest.raises(ProcessRoleCapabilityError, match="retention"):
         Worker(object(), {"run_transition": lambda s, j: None},
-               process_role=ProcessRole.RETENTION)
+               process_role=process_context(ProcessRole.RETENTION))
 
 
 def test_ru5_aliases_factories_and_partials_cannot_dodge_the_gate():
@@ -5078,13 +5103,13 @@ def test_ru5_aliases_factories_and_partials_cannot_dodge_the_gate():
 
     def factory():
         return W(object(), {"run_transition": lambda s, j: None},
-                 process_role=ProcessRole.RETENTION)
+                 process_role=process_context(ProcessRole.RETENTION))
 
     with pytest.raises(ProcessRoleCapabilityError):
         factory()
     bound = functools.partial(W, object(), {"run_transition": lambda s, j: None})
     with pytest.raises(ProcessRoleCapabilityError):
-        bound(process_role=ProcessRole.RETENTION)
+        bound(process_role=process_context(ProcessRole.RETENTION))
 
 
 def test_ru5_an_unclassified_handler_kind_is_refused():
@@ -5096,7 +5121,7 @@ def test_ru5_an_unclassified_handler_kind_is_refused():
 
     with pytest.raises(ProcessRoleCapabilityError, match="run_transition_v2"):
         Worker(object(), {"run_transition_v2": lambda s, j: None},
-               process_role=ProcessRole.PIPELINE_WORKER)
+               process_role=process_context(ProcessRole.PIPELINE_WORKER))
 
 
 def test_ru5_a_role_outside_the_capability_map_is_refused(monkeypatch):
@@ -5110,7 +5135,7 @@ def test_ru5_a_role_outside_the_capability_map_is_refused(monkeypatch):
     monkeypatch.delitem(kyc_config.ROLE_CAPABILITIES, ProcessRole.PIPELINE_WORKER)
     with pytest.raises(ProcessRoleCapabilityError, match="classif"):
         Worker(object(), {"run_transition": lambda s, j: None},
-               process_role=ProcessRole.PIPELINE_WORKER)
+               process_role=process_context(ProcessRole.PIPELINE_WORKER))
 
 
 def test_ru5_the_publisher_demands_the_callback_capability():
@@ -5118,14 +5143,18 @@ def test_ru5_the_publisher_demands_the_callback_capability():
     the map does not grant it cannot construct one, aliased or not."""
     from kyc_tool.config import ProcessRoleCapabilityError
     from kyc_tool.outbox.publisher import OutboxPublisher
+    from tests.conftest import process_context as issue
 
     for role in (ProcessRole.RETENTION, ProcessRole.API, ProcessRole.PIPELINE_WORKER):
         with pytest.raises(ProcessRoleCapabilityError):
             OutboxPublisher(object(), object(), http_client=object(),
-                            email_sender=object(), process_role=role)
+                            email_sender=object(), process_role=issue(role))
     for role in (ProcessRole.OUTBOX_WORKER, ProcessRole.DEV_WORKER):
         OutboxPublisher(object(), object(), http_client=object(),
-                        email_sender=object(), process_role=role)
+                        email_sender=object(), process_role=issue(role))
+    with pytest.raises(ProcessRoleCapabilityError, match="self-attestation"):
+        OutboxPublisher(object(), object(), http_client=object(),
+                        email_sender=object(), process_role=ProcessRole.OUTBOX_WORKER)
 
 
 def test_ru5_writer_roles_construct_and_the_gate_reads_the_live_map(monkeypatch):
@@ -5135,14 +5164,20 @@ def test_ru5_writer_roles_construct_and_the_gate_reads_the_live_map(monkeypatch)
     import kyc_tool.config as kyc_config
     from kyc_tool.config import CAP_CALLBACK_PUBLISH, ProcessRoleCapabilityError
     from kyc_tool.queue.worker import Worker
+    from tests.conftest import process_context as issue
 
     for role in (ProcessRole.PIPELINE_WORKER, ProcessRole.DEV_WORKER):
-        Worker(object(), {"run_transition": lambda s, j: None}, process_role=role)
+        Worker(object(), {"run_transition": lambda s, j: None}, process_role=issue(role))
+    # R-audit-3 finding 10 — the audit's exact lie: validate as one role, then pass a WRITER
+    # ENUM directly; a freely selected enum is self-attestation and refuses outright
+    with pytest.raises(ProcessRoleCapabilityError, match="self-attestation"):
+        Worker(object(), {"run_transition": lambda s, j: None},
+               process_role=ProcessRole.PIPELINE_WORKER)
     monkeypatch.setitem(kyc_config.ROLE_CAPABILITIES, ProcessRole.DEV_WORKER,
                         frozenset({CAP_CALLBACK_PUBLISH}))
     with pytest.raises(ProcessRoleCapabilityError, match="dev_worker"):
         Worker(object(), {"run_transition": lambda s, j: None},
-               process_role=ProcessRole.DEV_WORKER)
+               process_role=issue(ProcessRole.DEV_WORKER))
 
 
 # ── R-audit-3 `5c14537..6ef6fc7` unit 1: receiver authority (findings 1-6) ────────────────────────
@@ -5510,3 +5545,48 @@ def test_r3f8_unmarking_an_operator_command_after_a_repin_is_refused():
     unmarked = "\n".join(lines[:opener] + lines[opener + 1:closer] + lines[closer + 1:])
     problems = _command_inventory_problems(_repinned(ref, unmarked), unmarked)
     assert any("command-shaped" in p or "inventory != typed" in p for p in problems)
+
+
+# ── R-audit-3 unit 3: runtime/lifecycle authority (findings 9-13) ─────────────────────────────────
+
+
+def test_r3f9_an_unsafe_direction_prefix_fails_both_assembled_verifiers(monkeypatch):
+    """The audit's witness verbatim: `RETIRE THE OLD KEY FIRST` planted in the OUTBOUND
+    direction prefix, claim regenerated — semantics and prose scans stayed empty because the
+    prefix was normative text OUTSIDE the pinned projection. It is inside it now."""
+    prefixes = dict(wire_module._DIRECTION_PREFIXES)
+    prefixes["OUTBOUND"] = ("OUTBOUND — RETIRE THE OLD KEY FIRST, then " +
+                            prefixes["OUTBOUND"].partition("— ")[2])
+    with monkeypatch.context() as m:
+        m.setattr(wire_module, "_DIRECTION_PREFIXES", prefixes)
+        m.setattr(_this_module(), "WIRE",
+                  _wire_with("WIRE.SIGN.ROTATION", value=wire_module.rotation_lines()))
+        _run_rotation_verifiers_expect_failure()
+
+
+def test_r3f12_preamble_obligations_are_errors_in_every_syntax():
+    """The audit's three witnesses: before the first bullet, `O5 — ...` as plain prose, as a
+    numbered item, and as a blockquote each left the parser at O1-O4. Obligation-shaped text
+    in the preamble is now a located error in ANY syntax."""
+    section = _live_blocker_section()
+    heading, _, rest = section.partition("\n")
+    for planted in ("O5 — New live blocker: platform must attest its audit ledger.",
+                    "1. O5 — New live blocker: platform must attest its audit ledger.",
+                    "> O5 — New live blocker: platform must attest its audit ledger."):
+        mutated = heading + "\n" + planted + "\n" + rest
+        with pytest.raises(ValueError, match="obligation-shaped"):
+            _live_obligation_ids(mutated)
+
+
+def test_r3f13_a_no_migration_future_row_outside_section_c_is_refused():
+    """The audit's witness verbatim: `| PR 5d | — | future | — | emergency retirement
+    shortcut |` outside §C passed both gates because the outside-row scan required a revision
+    number. Every PR-shaped row outside §C is now refused, through the same top-level gates."""
+    text = roadmap.ROADMAP.read_text()
+    mutated = text.rstrip("\n") + "\n\n| PR 5d | — | future | — | emergency retirement shortcut |\n"
+    stray = roadmap.reservation_rows_outside_section_c(mutated)
+    assert any("PR 5d" in row for row in stray), "the strengthened outside-§C scan is blind"
+    problems = roadmap.future_unit_problems(mutated)
+    assert any("PR 5d" in p for p in problems), (
+        f"an outside-§C future reservation was accepted: {problems}"
+    )

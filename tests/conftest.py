@@ -259,7 +259,7 @@ def worker(session_factory, settings, pipeline) -> Worker:
         lease_seconds=settings.job_lease_seconds,
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
-    process_role=ProcessRole.PIPELINE_WORKER)
+    process_role=process_context(ProcessRole.PIPELINE_WORKER))
 
 
 class CallbackCapture:
@@ -301,9 +301,19 @@ def publisher(session_factory, settings, callback_capture, email_sender) -> Outb
         settings,
         http_client=httpx.Client(transport=transport),
         email_sender=email_sender,
-    process_role=ProcessRole.OUTBOX_WORKER)
+    process_role=process_context(ProcessRole.OUTBOX_WORKER))
 
 
 @pytest.fixture()
 def evidence_store(settings) -> FsStore:
     return FsStore(settings.object_store_root)
+
+
+def process_context(role):
+    """The BOUND ProcessContext for tests — issued through the REAL validate_process_role path
+    (R-audit-3 finding 10), with default development settings, exactly as an entry point would
+    obtain it. Tests never construct a context directly; the role they exercise is the role
+    they validated as."""
+    from kyc_tool.config import Settings, validate_process_role
+
+    return validate_process_role(Settings(), role)

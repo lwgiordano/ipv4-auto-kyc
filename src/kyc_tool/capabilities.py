@@ -17,6 +17,26 @@ claims, the gates, and the ROADMAP unit move in the same change.
 """
 
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class RetirementEvidenceAuthority(Protocol):
+    """What a shipped retirement-evidence provider must BE (R-audit-3 finding 11): the typed
+    boundary registration validates, so `register(slot, object())` — an arbitrary object with
+    no evidence surface — is refused, and 'MissingCapability | AuthorityProtocol' is the slot's
+    real domain."""
+
+    def inbound_zero_window_receipt(self, key_id: str) -> object: ...
+
+    def signer_cutover_record(self, target_key_id: str) -> object: ...
+
+
+@runtime_checkable
+class AnswerArtifactAuthority(Protocol):
+    """What a shipped answer-artifact verifying authority must BE."""
+
+    def verify_artifact(self, artifact: object) -> list: ...
 
 
 @dataclass(frozen=True)
@@ -54,14 +74,27 @@ def resolve(slot: str) -> object:
     return _SLOTS[slot]
 
 
+_SLOT_PROTOCOLS: dict[str, type] = {
+    SLOT_RETIREMENT_EVIDENCE: RetirementEvidenceAuthority,
+    SLOT_ANSWER_ARTIFACT: AnswerArtifactAuthority,
+}
+
+
 def register(slot: str, provider: object) -> None:
     """Ship a provider into a slot — the call the owning unit makes when it lands. One
-    authority per slot: registering over a live provider refuses, and a `MissingCapability`
-    or empty provider is not a registration."""
+    authority per slot: registering over a live provider refuses; a `MissingCapability`,
+    empty, or NON-CONFORMING provider is not a registration (R-audit-3 finding 11 — the slot's
+    domain is MissingCapability | the slot's AuthorityProtocol, so an arbitrary object cannot
+    become an authority)."""
     if slot not in _SLOTS:
         raise ValueError(f"unknown capability slot {slot!r}")
     if provider is None or isinstance(provider, MissingCapability):
         raise ValueError("a registration must ship a real provider, not another absence")
+    if not isinstance(provider, _SLOT_PROTOCOLS[slot]):
+        raise ValueError(
+            f"the provider does not conform to {_SLOT_PROTOCOLS[slot].__name__}; a slot holds "
+            "MissingCapability or a conforming authority, nothing else"
+        )
     if not isinstance(_SLOTS[slot], MissingCapability):
         raise ValueError(f"slot {slot!r} already holds a registered authority")
     _SLOTS[slot] = provider

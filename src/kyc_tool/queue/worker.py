@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from kyc_tool.config import (
     CAP_DECISION_WRITE,
-    ProcessRole,
+    ProcessContext,
+    ProcessRole,  # noqa: F401 — re-exported for handler-role tooling
     ProcessRoleCapabilityError,
     require_numeric_domain,
     require_role_capability,
@@ -47,7 +48,7 @@ class Worker:
         session_factory: sessionmaker[Session],
         handlers: dict[str, object],
         *,
-        process_role: ProcessRole,
+        process_role: "ProcessContext",
         lease_seconds: int = 120,
         backoff_base_seconds: int = 5,
         poll_seconds: float = 0.5,
@@ -66,7 +67,7 @@ class Worker:
                     f"classify its write capability before any role may register it"
                 )
             require_role_capability(process_role, capability, f"a {kind!r} handler")
-        self.process_role = ProcessRole(process_role)
+        self.process_role = process_role.role
         # Process boundary (re-audit `5b0f0b8..b75a320` R4-F3): validate the timing knobs at
         # construction so a nonpositive/non-finite poll cannot kill the idle loop at the first
         # `time.sleep`, and a bad lease/backoff refuses BEFORE the worker starts claiming — not mid-run.

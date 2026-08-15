@@ -106,7 +106,7 @@ def main() -> None:
     # DEV-ONLY: fixture adapters synthesize checks/decisions/callbacks and this loop would consume
     # real run_transition jobs. Refuse categorically in production BEFORE touching the database
     # (re-audit `03dbfab..bc325e7` R5-F1) — a hardened production config does not make it safe.
-    validate_process_role(settings, ProcessRole.DEV_WORKER)
+    context = validate_process_role(settings, ProcessRole.DEV_WORKER)
     session_factory = make_session_factory(make_engine(settings.database_url))
     policy = load_policy(settings.policy_dir)
     h = seed_and_verify(session_factory, settings.policy_dir)
@@ -132,13 +132,13 @@ def main() -> None:
     worker = Worker(
         session_factory,
         {"run_transition": pipeline.handle_job},
-        process_role=ProcessRole.DEV_WORKER,
+        process_role=context,
         lease_seconds=settings.job_lease_seconds,
         backoff_base_seconds=settings.job_backoff_base_seconds,
         poll_seconds=settings.worker_poll_seconds,
         on_dead_letter=pipeline.on_dead_letter,
     )
-    publisher = OutboxPublisher(session_factory, settings, process_role=ProcessRole.DEV_WORKER)
+    publisher = OutboxPublisher(session_factory, settings, process_role=context)
     threading.Thread(target=worker.run_forever, daemon=True).start()
     print("dev worker: pipeline (fixture adapters) + outbox running", flush=True)
     publisher.run_forever(poll_seconds=settings.worker_poll_seconds)

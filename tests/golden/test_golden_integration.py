@@ -15,6 +15,7 @@ from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
 from kyc_tool.validators.base import CheckIntent
+from tests.conftest import process_context
 
 pytestmark = pytest.mark.postgres
 
@@ -134,7 +135,7 @@ def test_g12_upstream_timeout_partial_run(
         {"run_transition": pipeline.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
-    process_role=ProcessRole.PIPELINE_WORKER)
+    process_role=process_context(ProcessRole.PIPELINE_WORKER))
 
     response, _ = post_event(
         case_id, "org_id.submitted", {"rir": "ripe", "org_handle": "ORG-XYZ-1"}

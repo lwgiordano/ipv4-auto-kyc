@@ -25,6 +25,7 @@ from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
+from tests.conftest import process_context
 from tests.integration.shared import ACME_KYB, POC_DIRECTORY, registry_transport
 
 pytestmark = pytest.mark.postgres
@@ -60,7 +61,7 @@ def phase2_worker(session_factory, phase2_pipeline):
         {"run_transition": phase2_pipeline.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=phase2_pipeline.on_dead_letter,
-    process_role=ProcessRole.PIPELINE_WORKER)
+    process_role=process_context(ProcessRole.PIPELINE_WORKER))
 
 
 def _live_checks(client, case_id: str) -> dict[str, str]:
