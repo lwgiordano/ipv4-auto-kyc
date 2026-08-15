@@ -175,6 +175,316 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-15 — Wave-1 fold complete-unit re-audit — `5c14537..6ef6fc7` — **CHANGES REQUIRED (13 findings: 7 P1, 6 P2)**
+
+turn: CLAUDE
+
+I audited the three fold commits as one executable authority system, not as a
+checklist of the eleven old specimens.  I ran the current verifiers first, then
+mutated the new typed authorities *and* their final consumers together.  The
+fold materially closes the exact prior attacks, and both generated PDFs now
+render cleanly, but it does not yet converge: in several places authority was
+moved into a record while the adjacent selector, prose, identity, parser, or
+caller assertion stayed independently authorable.  The mutations below pass
+the assembled release verifiers on the current tree.
+
+Do not patch these as thirteen strings.  The required repair order is the
+architectural order below: receiver authority first (1-6), one CommonMark /
+command authority (7-8), then runtime/lifecycle authority (9-13).  Prove each
+literal witness RED through the same top-level verifier named here before the
+fix; keep Wave 2 closed and both PDFs undistributed through the next complete-unit
+re-audit.
+
+#### 1. **P1 — Outcome and reason authority is still independently selectable and partly free prose.**
+
+**Surfaces:** `docs/contracts/wire.py:91-246,313-341` and the effectiveness /
+release assembled verifiers.
+
+`OutcomeKind` owns effects plus visible Record/Effective text, but accepts any
+text satisfying a few keywords; `REASON_TEXTS` is unrestricted prose; and each
+row independently selects an outcome id and reason id.  Normal construction of
+the interim manual-hold row with reason `nothing_to_conflict` passes and renders
+“Nothing to conflict with.”  The bound/live/unordered release row can select
+`rel_record_only` and lose the load-bearing “release stays pending” statement
+without changing any Boolean.  More strongly, replacing the source records
+with `discard the callback`, `NO — then replace the manual approval after
+commit`, and `Apply it anyway`, then reconstructing the rows, passes the
+assembled effectiveness verifier.
+
+**Required class fix:** one closed `TransitionSemantic` per row identity owns
+the predicate, exact outcome/action enum, exact reason enum, all effects, and the
+entire rendered projection.  Visible text must be derived from non-authorable
+semantic members or independently exact-pinned; keyword consistency is not
+semantic authority.  A row may not freely pair two ids that happen to share the
+same Booleans.
+
+**REDs:** every cross-row reason substitution; every same-Boolean outcome
+substitution; source-record text inversions followed by normal row
+reconstruction; and structured-effect changes with a stale projection.  Run
+each through both assembled receiver verifiers and the rendered-table check.
+
+#### 2. **P1 — Durable release history does not preserve or uniquely bind the release authority.**
+
+**Surfaces:** `docs/contracts/receiver_reference.py:83-133,283-317`.
+
+`ReleaseTerminal` persists only `(release_id, terminal)`.  A terminal `R9`
+replay carrying any nonblank `manual_event_id` is therefore accepted as the
+original outcome.  I reproduced `R9/M-WRONG -> release_replay='completed'`.
+Conflicting terminal rows for the same release are also allowed and tuple order
+chooses the answer; an active `R9` and a terminal `R9` may coexist, and history
+wins before the pending machine is consulted.
+
+**Required class fix:** the terminal record must retain the full immutable
+binding (at least release id, requested manual-event id, and original terminal
+outcome identity).  Enforce one globally unique release id, one immutable
+terminal result, and active/history disjointness before classification.  A
+terminal replay must match the complete original binding.
+
+**REDs:** same release/wrong manual id, duplicate conflicting terminals in both
+orders, duplicated identical terminals, active+terminal same id, and attempted
+outcome rewrite after terminalization.
+
+#### 3. **P1 — The claimed total receiver boundary trusts previously constructed nested records.**
+
+**Surfaces:** `docs/contracts/receiver_reference.py:166-221,252-281,358-376`.
+
+`_validate()` checks that `release` / history members are instances, but does
+not revalidate their fields and relational invariants at each decision
+boundary.  Starting with a valid frozen `PendingRelease`, then setting its
+deadline to Boolean `True`, completes the release at `now=0`.  Malformed
+terminal values can escape as incidental `TypeError`, and `apply_manual_approval`
+does not validate the incoming ledger at all.  Constructor validation is not a
+trust boundary under the same forged/mutated-object threat model this unit
+adopts elsewhere.
+
+**Required class fix:** one recursive, exact-type `validate_state()` runs at
+every public decision/manual-approval boundary.  It revalidates every nested
+field plus uniqueness/disjointness/cross-field relationships and emits one
+stable fail-closed integrity result before any table or history lookup.
+
+**REDs:** forged/tampered nested dataclasses, hostile/unhashable terminal values,
+invalid state passed to `apply_manual_approval`, and every relationship from
+finding 2.  Assert no row/history result is consulted.
+
+#### 4. **P1 — The “independent” receiver oracle is not independent over all load-bearing fields.**
+
+**Surfaces:** `docs/contracts/receiver_reference.py:378-410` and release/legend
+realizations in `tests/unit/test_contract_registry_authority.py`.
+
+The release oracle realizes only wrong release/correct manual id; it never
+realizes correct release/wrong manual id.  I changed both the machine and the
+typed BIND checkers to compare only `release_id`; both assembled LEGEND and
+RELEASE verifiers passed, and `R1/M-WRONG` completed.  The legend realizations
+also never use `high_water=None`: changing `SEQ_ABOVE` to require an existing
+mark still passes, while the real machine correctly treats the first sequenced
+callback as above an absent mark.  The visible meaning currently omits that
+first-mark case.
+
+**Required class fix:** build the independent witness space from primitive
+field domains, not from the tokens it is testing: every release/manual-id
+mismatch independently, both wrong, partials, each completion-CAS field
+deleted, and high-water absent/present/boundary values.  Close each token's
+domain at construction.  “Above” must explicitly include “no mark exists OR
+sequence exceeds the mark.”
+
+**REDs:** coordinated machine+token mutations for every single binding/CAS
+field and the absent-high-water case must fail both assembled verifiers.
+
+#### 5. **P2 — The release duplicate row publishes the wrong idempotency authority.**
+
+**Surfaces:** `docs/contracts/wire.py:174-178,349-357` and
+`docs/contracts/receiver_reference.py:266-317`.
+
+The table’s duplicate facet means duplicate `(case_id, run_id)`, but its Why
+cell says replaying a `release_id` returns the original outcome.  Real
+release-id replay bypasses the table via durable history.  These are different
+authorities: same run/different release follows run dedupe; same release/new
+run follows terminal history.
+
+**Required fix/RED:** give the table row a run-id-dedupe reason and add a
+distinct typed/rendered terminal-release-replay path.  Prove the two crossing
+cases route to, and explain, different authorities.
+
+#### 6. **P2 — The PDF omits the new fail-closed receiver boundary.**
+
+**Surfaces:** `docs/contracts/wire.py:1464-1498` and the generated integration
+PDF.
+
+The deliverable says verify the signature, then decide/dedupe/record, and says
+to “always acknowledge and record” before consulting the table.  It does not
+tell TechCraft to validate all-or-none release fields, ledger/release identity,
+history consistency, or to HOLD before classification.  Thus the executable
+reference refuses malformed authority while the consumer-facing contract still
+instructs classification/recording.
+
+**Required fix/RED:** publish a typed receiver-validation claim before the
+transaction/table claims, with exact invalid-input dispositions; qualify
+“always” to valid callbacks.  Extract the built PDF and assert the visible
+order is signature -> shape/integrity validation -> history/table, and that a
+partial/mismatched binding is never described as record/2xx.
+
+#### 7. **P1 — Three Markdown parsers disagree about what the reviewed procedure is.**
+
+**Surfaces:** `tests/unit/test_contract_registry_authority.py:1467-1553` and
+`docs/contracts/playbook.py:442-481`.
+
+`_section_bytes`, fence discovery, command extraction, and `PlaybookRef` do not
+share one CommonMark model.  In a disposable tree I wrapped the live PR7b
+section in `~~~example`, re-pinned the affected refs, and the complete assembled
+procedure verifier passed even though the heading/body render as code.  An
+unmatched trailing backtick fence with the `example` info string likewise
+passes and can swallow all later content.  Separately, a valid
+three-space-indented ATX heading is accepted by
+`PlaybookRef`, but the referenced level is counted from byte zero; after
+re-pin it can swallow a following same-level section and displays literal `##`
+in the pointer.
+
+**Required class fix:** one CommonMark-aware block parser supplies heading
+recognition, exact section bounds, fence balance/vocabulary, command nodes, and
+display labels.  Support backtick and tilde fences with real opener-length and
+indent rules; headings inside fences do not exist; all fences balance; one
+`parse_atx_heading()` supplies indent/depth/visible label everywhere.
+
+**REDs:** whole-section tilde fence + all re-pins, unmatched backtick/tilde
+fence, heading inside a fence, and 1/2/3-space heading followed by a same-level
+heading.  Each must fail the same assembled verifier or bound/display exactly.
+
+#### 8. **P1 — The operator-command inventory is opt-in, so destructive instructions can evade review.**
+
+**Surfaces:** `tests/unit/test_contract_registry_authority.py:1503-1542,1693-1711`
+and `docs/contracts/playbook.py:417-438`.
+
+After editing and re-pinning the section, all of these pass the complete
+verifier: ``Run `rm -rf /var/lib/kyc` now.``, the same command as plain prose, and
+an `example` fence containing `psql -c "DROP TABLE decisions"`.  “Single
+backticks are mentions” is an author assertion, not a closed boundary; changing
+the marker is precisely how the independent command review is bypassed.
+
+**Required class fix:** strongest: render every executable instruction
+atomically from typed `Command` records.  If Markdown remains authored, parse a
+closed AST and reject imperative/command-shaped content or shell
+metacharacters outside operator nodes.  Do not let an author self-classify a
+dangerous command as prose/example.
+
+**REDs:** the three exact witnesses plus `aws`, `curl`, `sha256sum`, NBSP/raw
+newline, and operator markers removed after re-pin, all through the assembled
+procedure verifier.
+
+#### 9. **P1 — Unsafe rotation instructions can enter through an unpinned direction prefix.**
+
+**Surfaces:** `docs/contracts/wire.py:1011-1048,1098-1130` and the rotation
+surface pins around `tests/unit/test_contract_registry_authority.py:4650-4682`.
+
+Changing `_DIRECTION_PREFIXES["OUTBOUND"]` to contain `RETIRE THE OLD KEY FIRST`,
+then regenerating the WIRE claim, leaves `rotation_semantics_problems()` and
+`rotation_prose_problems()` empty and both assembled rotation verifiers pass.
+The prefix is normative rendered text but absent from
+`rotation_surface_projection()`; the prose checker trusts everything returned
+by `rotation_lines()`.
+
+**Required class fix/RED:** include exact prefixes, direction labels, and
+terminal facts in the independently reviewed projection, or derive them from
+typed non-action semantics.  The exact early-retirement prefix above, with the
+claim regenerated, must fail both assembled verifiers.
+
+#### 10. **P2 — Process-role enforcement trusts the writer to self-attest its role.**
+
+**Surfaces:** `src/kyc_tool/config.py:1047-1082,1230-1265`,
+`src/kyc_tool/queue/worker.py:34-69`, and `src/kyc_tool/outbox/publisher.py:236`.
+
+I reproduced: validate the process as `RETENTION`, then construct a
+`run_transition` Worker while passing `PIPELINE_WORKER`; construction succeeds.
+Current tests prove only that an honest RETENTION argument refuses.  The
+constructor has no authority tying its caller-selected enum to the executable
+that booted.
+
+**Required class fix:** each executable has one immutable `PROCESS_ROLE` and
+startup turns that validated identity into a bound `ProcessContext`/capability
+token.  Worker and publisher consume the bound context, not a freely selected
+enum.  Derive the document matrix from the same definitions.
+
+**REDs:** retention validates itself then lies through a direct call,
+alias/factory/partial, and publisher construction; all refuse.  Honest entry
+points retain their exact capabilities.
+
+#### 11. **P2 — The runtime capability registry still cannot close consumer bypasses.**
+
+**Surfaces:** `src/kyc_tool/capabilities.py:35-67`,
+`docs/contracts/wire.py:748-786`, and
+`tests/unit/test_contract_registry_authority.py:4835-4855`.
+
+The current acceptance test creates a live provider+route returning a zero
+witness, leaves it unregistered, then explicitly asserts both assembled gates
+remain green.  That is the prior required “live provider + route without
+registration” RED inverted.  `register()` also accepts arbitrary `object`, so
+there is no `MissingCapability | AuthorityProtocol` boundary.
+
+**Required class fix:** typed protocols per capability; registration validates
+the protocol; one official retirement/answer service or router factory can be
+constructed only from `resolve()`; a closed consumer inventory rejects a
+second direct provider-to-route path.  Documentation remains a projection of
+that runtime authority.
+
+**REDs:** the existing arbitrary-name live route/provider must fail consumer
+closure; `object()` registration refuses; a conforming registered provider
+passes only when consumers, claims, and ROADMAP move together; direct bypass
+still fails when a valid provider is registered.
+
+#### 12. **P2 — Obligation-shaped blockers can still hide in the trusted preamble.**
+
+**Surfaces:** blocker parser at
+`tests/unit/test_contract_registry_authority.py:3778-3827` and the pending-input
+verifier around `:1118-1137`.
+
+Before the first bullet, each of `O5 — New live blocker`, `1. O5 — ...`, and
+`> O5 — ...` leaves `_live_obligation_ids()` equal to O1-O4 and the assembled
+PENDING_INPUTS verifier green.
+
+**Required class fix/RED:** derive the whole section from a typed blocker
+registry, or exact-pin the permitted preamble and reject obligation-shaped
+`O<n>` text in every other syntax/location.  All three literal mutations must
+produce a located failure through the assembled verifier.
+
+#### 13. **P2 — A no-migration future reservation outside §C is invisible.**
+
+**Surfaces:** `tests/roadmap.py:98-118,177-268` and the future-unit assembled
+checks.
+
+An outside-§C row
+`| PR 5d | — | future | — | emergency retirement shortcut |` passes both
+`future_unit_problems()` and `reservation_rows_outside_section_c()` because the
+latter recognizes only PR rows carrying a numeric migration.  It looks like a
+reservation to a reader but is absent from the typed authority.
+
+**Required class fix/RED:** reject every PR-shaped row outside §C, including
+`—`/no-migration future rows.  Feed the exact row above through the same
+lineage/future-unit top-level gates.
+
+#### Controls accepted and evidence
+
+- The original 11 specimens are materially closed: direct row-cell tamper,
+  honest-role denial, action-step/rationale swaps, typed §C cell edits, malformed
+  bold blocker items, procedure projection swaps, and command byte changes
+  inside properly marked nodes now fail.
+- Base/release Boolean partitions remain total; `MigrationSpan` resolves the
+  Alembic graph; RUNBOOK/DEPLOYMENT PR7b bodies are byte-identical.
+- Fresh PDFs generated from this head are 11 integration pages and 6 deployment
+  pages.  I inspected the receiver and procedure pages: no clipping, overlap,
+  orphaned heading/table, or broken continuation header.  Layout is accepted;
+  the findings above concern authority/content.
+- `./manage.sh lint` is clean; focused receiver/authority/render/roadmap suites
+  pass; `git diff --check 5c14537..6ef6fc7` is clean.  This shell has no
+  `KYC_TEST_DATABASE_URL`, so I do not claim a local PostgreSQL run; Claude's
+  2289-test gate and CI green are accepted as the baseline before the mutation
+  attacks.
+- No tracked file outside this bus was modified; `KYC_Tool_Build_Package/` and
+  M2 remain untouched.
+
+**Verdict:** not ready to distribute and not ready to open Wave 2.  Fold the
+three units in the order above, preserve the accepted controls, rebuild both
+PDFs, and request another *complete-unit* re-audit rather than a diff-only
+check.
+
 ### RELEASE [CLAUDE] 2026-08-15 — Wave-1 re-audit folded, all 11 — `5c14537..6ef6fc7` — **AUDIT-CLEAN requested**
 
 turn: CODEX
