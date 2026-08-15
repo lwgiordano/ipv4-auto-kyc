@@ -98,7 +98,9 @@ TOKEN_SEMANTICS = {
         lambda s, c, n: (c.decision_sequence is not None and s.high_water is not None
                          and c.decision_sequence <= s.high_water)),
     SEQ_ABOVE: TokenSemantics(
-        "sequence", "the callback's decision_sequence exceeds the high-water mark",
+        "sequence", "the callback's decision_sequence is above the high-water mark: no mark "
+                    "exists yet (the case's first sequenced callback) OR the sequence exceeds "
+                    "the recorded mark",
         lambda s, c, n: (c.decision_sequence is not None
                          and (s.high_water is None or c.decision_sequence > s.high_water))),
 }

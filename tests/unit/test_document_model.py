@@ -862,7 +862,7 @@ RENDERER_PROSE = {
     ("contract", "WIRE.CALLBACK.OPTIONAL_FIELDS", 0): ("febe3f9a74da208d",
                                                        "tolerate and preserve; which decision "
                                                        "stays authoritative under the hold"),
-    ("contract", "WIRE.CALLBACK.EFFECTIVENESS", 0): ("053d74684f7af784",
+    ("contract", "WIRE.CALLBACK.EFFECTIVENESS", 0): ("0f89c296195add53",
                                                      "acknowledging vs applying; grammar over "
                                                      "legend tokens; rows partition the state "
                                                      "space; release-pending points at its own "
@@ -870,6 +870,9 @@ RENDERER_PROSE = {
     ("contract", "WIRE.CALLBACK.EFFECTIVENESS", 1): ("116c95cbf7ad7f0d",
                                                      "transition table headers"),
     ("contract", "WIRE.CALLBACK.LEGEND", 0): ("7234b0308090d929", "condition-token legend headers"),
+    ("contract", "WIRE.CALLBACK.VALIDATION", 0): ("f813152c02a3a312",
+                                                   "validation table headers (R-audit-3 "
+                                                   "finding 6: validate before classify)"),
     ("contract", "WIRE.CALLBACK.RELEASE", 0): ("c27832f0debc8aa4",
                                                "release-pending table headers"),
     ("contract", "WIRE.CALLBACK.RETRY", 0): ("e07949a7ee8f8121",

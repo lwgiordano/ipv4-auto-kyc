@@ -171,9 +171,11 @@ REASON_TEXTS = {
     "applies_on_proven_order":
         "This is the only row that applies an automatic decision, and it does so on proven "
         "DECISION order rather than on arrival order.",
-    "rel_replay_idempotent":
-        "Same as both base tables: duplicates are expected, and replaying a release_id "
-        "returns the original outcome and changes nothing.",
+    "rel_run_dedupe":
+        "Run-id dedupe, same as both base tables: a duplicate (case_id, run_id) is the "
+        "expected at-least-once delivery, acknowledged without change. Replaying a TERMINATED "
+        "release_id is a different authority — durable terminal history, resolved before this "
+        "table (see the replay rule).",
     "rel_complete_cas":
         "The ONLY completing row. Every check the platform's completion CAS re-asserts holds: "
         "the bound release matches the pending one, the case's current manual event is still "
@@ -253,50 +255,94 @@ class Transition:
 INTERIM = "interim"
 POST_024 = "post-024"
 
-RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
-    Transition(phase=INTERIM,
-               when=predicates.When(duplicate=frozenset({predicates.DUP}),
-                                    source=predicates.ANY_SOURCE,
-                                    sequence=predicates.ANY_SEQUENCE),
-               outcome="ack_duplicate_interim", reason="at_least_once_duplicates"),
-    Transition(phase=INTERIM,
-               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                                    source=frozenset({predicates.SRC_NONE}),
-                                    sequence=predicates.ANY_SEQUENCE),
-               outcome="apply_first", reason="nothing_to_conflict"),
-    Transition(phase=INTERIM,
-               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                                    source=frozenset({predicates.SRC_MANUAL}),
-                                    sequence=predicates.ANY_SEQUENCE),
-               outcome="record_manual_holds", reason="manual_decided"),
-    Transition(phase=INTERIM,
-               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                                    source=frozenset({predicates.SRC_AUTOMATIC}),
-                                    sequence=predicates.ANY_SEQUENCE),
-               outcome="record_hold_review", reason="no_ordering_authority"),
-    Transition(phase=POST_024,
-               when=predicates.When(duplicate=frozenset({predicates.DUP}),
-                                    source=predicates.ANY_SOURCE,
-                                    sequence=predicates.ANY_SEQUENCE),
-               outcome="ack_duplicate", reason="post_duplicates"),
-    Transition(phase=POST_024,
-               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                                    source=predicates.ANY_SOURCE,
-                                    sequence=frozenset({predicates.SEQ_ABSENT,
-                                                        predicates.SEQ_NOT_ABOVE})),
-               outcome="record_unordered", reason="superseded_or_unordered"),
-    Transition(phase=POST_024,
-               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                                    source=frozenset({predicates.SRC_MANUAL}),
-                                    sequence=frozenset({predicates.SEQ_ABOVE})),
-               outcome="record_advance", reason="mark_moves_manual"),
-    Transition(phase=POST_024,
-               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                                    source=frozenset({predicates.SRC_NONE,
-                                                      predicates.SRC_AUTOMATIC}),
-                                    sequence=frozenset({predicates.SEQ_ABOVE})),
-               outcome="apply_ordered", reason="applies_on_proven_order"),
-)
+@dataclass(frozen=True)
+class TransitionSemantic:
+    """One row identity's COMPLETE closed pairing (R-audit-3 `5c14537..6ef6fc7` finding 1).
+
+    The rows used to pair an outcome id and a reason id freely at the row site, and the visible
+    texts were keyword-screened prose — so two ids sharing the same Booleans could be swapped,
+    and the source records could be inverted wholesale, without any verifier noticing. The
+    pairing now lives HERE, one record per row identity; both published tables are DERIVED from
+    this registry in their reviewed order; and the authority verifier pins the projection of
+    the complete surface (every OutcomeKind field, every reason text, every pairing), so any
+    edit anywhere on the surface is a re-pin — the act of review — never a quiet row edit."""
+
+    table: str  # "base" | "release"
+    phase: str | None  # base rows carry interim/post-024; release rows are post-024 by construction
+    when: object
+    outcome: str
+    reason: str
+
+
+TRANSITION_SEMANTICS: dict[str, TransitionSemantic] = {
+    "interim.duplicate": TransitionSemantic(
+        "base", INTERIM,
+        predicates.When(duplicate=frozenset({predicates.DUP}),
+                        source=predicates.ANY_SOURCE,
+                        sequence=predicates.ANY_SEQUENCE),
+        "ack_duplicate_interim", "at_least_once_duplicates"),
+    "interim.fresh_none": TransitionSemantic(
+        "base", INTERIM,
+        predicates.When(duplicate=frozenset({predicates.FRESH}),
+                        source=frozenset({predicates.SRC_NONE}),
+                        sequence=predicates.ANY_SEQUENCE),
+        "apply_first", "nothing_to_conflict"),
+    "interim.fresh_manual": TransitionSemantic(
+        "base", INTERIM,
+        predicates.When(duplicate=frozenset({predicates.FRESH}),
+                        source=frozenset({predicates.SRC_MANUAL}),
+                        sequence=predicates.ANY_SEQUENCE),
+        "record_manual_holds", "manual_decided"),
+    "interim.fresh_automatic": TransitionSemantic(
+        "base", INTERIM,
+        predicates.When(duplicate=frozenset({predicates.FRESH}),
+                        source=frozenset({predicates.SRC_AUTOMATIC}),
+                        sequence=predicates.ANY_SEQUENCE),
+        "record_hold_review", "no_ordering_authority"),
+    "post.duplicate": TransitionSemantic(
+        "base", POST_024,
+        predicates.When(duplicate=frozenset({predicates.DUP}),
+                        source=predicates.ANY_SOURCE,
+                        sequence=predicates.ANY_SEQUENCE),
+        "ack_duplicate", "post_duplicates"),
+    "post.fresh_unordered": TransitionSemantic(
+        "base", POST_024,
+        predicates.When(duplicate=frozenset({predicates.FRESH}),
+                        source=predicates.ANY_SOURCE,
+                        sequence=frozenset({predicates.SEQ_ABSENT,
+                                            predicates.SEQ_NOT_ABOVE})),
+        "record_unordered", "superseded_or_unordered"),
+    "post.fresh_manual_above": TransitionSemantic(
+        "base", POST_024,
+        predicates.When(duplicate=frozenset({predicates.FRESH}),
+                        source=frozenset({predicates.SRC_MANUAL}),
+                        sequence=frozenset({predicates.SEQ_ABOVE})),
+        "record_advance", "mark_moves_manual"),
+    "post.apply_ordered": TransitionSemantic(
+        "base", POST_024,
+        predicates.When(duplicate=frozenset({predicates.FRESH}),
+                        source=frozenset({predicates.SRC_NONE,
+                                          predicates.SRC_AUTOMATIC}),
+                        sequence=frozenset({predicates.SEQ_ABOVE})),
+        "apply_ordered", "applies_on_proven_order"),
+}
+
+_BASE_ROW_ORDER = (
+    "interim.duplicate", "interim.fresh_none", "interim.fresh_manual",
+    "interim.fresh_automatic", "post.duplicate", "post.fresh_unordered",
+    "post.fresh_manual_above", "post.apply_ordered")
+
+
+def base_transitions() -> tuple[Transition, ...]:
+    """The published base table, DERIVED from the registry — the only way rows come to exist."""
+    return tuple(
+        Transition(phase=TRANSITION_SEMANTICS[key].phase, when=TRANSITION_SEMANTICS[key].when,
+                   outcome=TRANSITION_SEMANTICS[key].outcome,
+                   reason=TRANSITION_SEMANTICS[key].reason)
+        for key in _BASE_ROW_ORDER)
+
+
+RECEIVER_TRANSITIONS: tuple[Transition, ...] = base_transitions()
 
 # ── the manual-release machine: what happens while a release is PENDING ───────────────────────────
 #
@@ -346,78 +392,263 @@ class ReleaseTransition:
         object.__setattr__(self, "condition", self.when.condition())
 
 
-RELEASE_TRANSITIONS: tuple[ReleaseTransition, ...] = (
-    ReleaseTransition(
-        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.DUP}),
-                                    binding=predicates.ANY_BINDING,
-                                    manual_event=predicates.ANY_EVENT,
-                                    deadline=predicates.ANY_DEADLINE,
-                                    sequence=predicates.ANY_SEQUENCE),
-        outcome="ack_duplicate", reason="rel_replay_idempotent"),
-    ReleaseTransition(
-        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
-                                    binding=frozenset({predicates.BIND_MATCH}),
-                                    manual_event=frozenset({predicates.EVENT_UNCHANGED}),
-                                    deadline=frozenset({predicates.DEADLINE_LIVE}),
-                                    sequence=frozenset({predicates.SEQ_ABOVE})),
-        outcome="rel_complete", reason="rel_complete_cas"),
-    ReleaseTransition(
-        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
-                                    binding=frozenset({predicates.BIND_NONE,
-                                                       predicates.BIND_MISMATCH}),
-                                    manual_event=predicates.ANY_EVENT,
-                                    deadline=predicates.ANY_DEADLINE,
-                                    sequence=frozenset({predicates.SEQ_ABOVE})),
-        outcome="rel_record_advance", reason="rel_foreign_advances"),
-    ReleaseTransition(
-        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
-                                    binding=frozenset({predicates.BIND_MATCH}),
-                                    manual_event=frozenset({predicates.EVENT_CHANGED}),
-                                    deadline=predicates.ANY_DEADLINE,
-                                    sequence=frozenset({predicates.SEQ_ABOVE})),
-        outcome="rel_record_advance", reason="rel_reapproved_above"),
-    ReleaseTransition(
-        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
-                                    binding=frozenset({predicates.BIND_MATCH}),
-                                    manual_event=frozenset({predicates.EVENT_UNCHANGED}),
-                                    deadline=frozenset({predicates.DEADLINE_EXPIRED}),
-                                    sequence=frozenset({predicates.SEQ_ABOVE})),
-        outcome="rel_record_advance", reason="rel_expired_above"),
-    ReleaseTransition(
-        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
-                                    binding=frozenset({predicates.BIND_NONE,
-                                                       predicates.BIND_MISMATCH}),
-                                    manual_event=predicates.ANY_EVENT,
-                                    deadline=predicates.ANY_DEADLINE,
-                                    sequence=frozenset({predicates.SEQ_ABSENT,
-                                                        predicates.SEQ_NOT_ABOVE})),
-        outcome="rel_record_only", reason="rel_no_order"),
-    ReleaseTransition(
-        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
-                                    binding=frozenset({predicates.BIND_MATCH}),
-                                    manual_event=frozenset({predicates.EVENT_CHANGED}),
-                                    deadline=predicates.ANY_DEADLINE,
-                                    sequence=frozenset({predicates.SEQ_ABSENT,
-                                                        predicates.SEQ_NOT_ABOVE})),
-        outcome="rel_record_only", reason="rel_reapproved_no_order"),
-    ReleaseTransition(
-        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
-                                    binding=frozenset({predicates.BIND_MATCH}),
-                                    manual_event=frozenset({predicates.EVENT_UNCHANGED}),
-                                    deadline=frozenset({predicates.DEADLINE_EXPIRED}),
-                                    sequence=frozenset({predicates.SEQ_ABSENT,
-                                                        predicates.SEQ_NOT_ABOVE})),
-        outcome="rel_record_only", reason="rel_expired_no_order"),
-    ReleaseTransition(
-        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
-                                    binding=frozenset({predicates.BIND_MATCH}),
-                                    manual_event=frozenset({predicates.EVENT_UNCHANGED}),
-                                    deadline=frozenset({predicates.DEADLINE_LIVE}),
-                                    sequence=frozenset({predicates.SEQ_ABSENT,
-                                                        predicates.SEQ_NOT_ABOVE})),
-        outcome="rel_record_only_pending", reason="rel_bound_no_order"),
+TRANSITION_SEMANTICS.update({
+    "release.duplicate": TransitionSemantic(
+        "release", None,
+        predicates.ReleaseWhen(duplicate=frozenset({predicates.DUP}),
+                               binding=predicates.ANY_BINDING,
+                               manual_event=predicates.ANY_EVENT,
+                               deadline=predicates.ANY_DEADLINE,
+                               sequence=predicates.ANY_SEQUENCE),
+        "ack_duplicate", "rel_run_dedupe"),
+    "release.complete": TransitionSemantic(
+        "release", None,
+        predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                               binding=frozenset({predicates.BIND_MATCH}),
+                               manual_event=frozenset({predicates.EVENT_UNCHANGED}),
+                               deadline=frozenset({predicates.DEADLINE_LIVE}),
+                               sequence=frozenset({predicates.SEQ_ABOVE})),
+        "rel_complete", "rel_complete_cas"),
+    "release.foreign_above": TransitionSemantic(
+        "release", None,
+        predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                               binding=frozenset({predicates.BIND_NONE,
+                                                  predicates.BIND_MISMATCH}),
+                               manual_event=predicates.ANY_EVENT,
+                               deadline=predicates.ANY_DEADLINE,
+                               sequence=frozenset({predicates.SEQ_ABOVE})),
+        "rel_record_advance", "rel_foreign_advances"),
+    "release.reapproved_above": TransitionSemantic(
+        "release", None,
+        predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                               binding=frozenset({predicates.BIND_MATCH}),
+                               manual_event=frozenset({predicates.EVENT_CHANGED}),
+                               deadline=predicates.ANY_DEADLINE,
+                               sequence=frozenset({predicates.SEQ_ABOVE})),
+        "rel_record_advance", "rel_reapproved_above"),
+    "release.expired_above": TransitionSemantic(
+        "release", None,
+        predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                               binding=frozenset({predicates.BIND_MATCH}),
+                               manual_event=frozenset({predicates.EVENT_UNCHANGED}),
+                               deadline=frozenset({predicates.DEADLINE_EXPIRED}),
+                               sequence=frozenset({predicates.SEQ_ABOVE})),
+        "rel_record_advance", "rel_expired_above"),
+    "release.foreign_no_order": TransitionSemantic(
+        "release", None,
+        predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                               binding=frozenset({predicates.BIND_NONE,
+                                                  predicates.BIND_MISMATCH}),
+                               manual_event=predicates.ANY_EVENT,
+                               deadline=predicates.ANY_DEADLINE,
+                               sequence=frozenset({predicates.SEQ_ABSENT,
+                                                   predicates.SEQ_NOT_ABOVE})),
+        "rel_record_only", "rel_no_order"),
+    "release.reapproved_no_order": TransitionSemantic(
+        "release", None,
+        predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                               binding=frozenset({predicates.BIND_MATCH}),
+                               manual_event=frozenset({predicates.EVENT_CHANGED}),
+                               deadline=predicates.ANY_DEADLINE,
+                               sequence=frozenset({predicates.SEQ_ABSENT,
+                                                   predicates.SEQ_NOT_ABOVE})),
+        "rel_record_only", "rel_reapproved_no_order"),
+    "release.expired_no_order": TransitionSemantic(
+        "release", None,
+        predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                               binding=frozenset({predicates.BIND_MATCH}),
+                               manual_event=frozenset({predicates.EVENT_UNCHANGED}),
+                               deadline=frozenset({predicates.DEADLINE_EXPIRED}),
+                               sequence=frozenset({predicates.SEQ_ABSENT,
+                                                   predicates.SEQ_NOT_ABOVE})),
+        "rel_record_only", "rel_expired_no_order"),
+    "release.bound_no_order": TransitionSemantic(
+        "release", None,
+        predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                               binding=frozenset({predicates.BIND_MATCH}),
+                               manual_event=frozenset({predicates.EVENT_UNCHANGED}),
+                               deadline=frozenset({predicates.DEADLINE_LIVE}),
+                               sequence=frozenset({predicates.SEQ_ABSENT,
+                                                   predicates.SEQ_NOT_ABOVE})),
+        "rel_record_only_pending", "rel_bound_no_order"),
+})
+
+_RELEASE_ROW_ORDER = (
+    "release.duplicate", "release.complete", "release.foreign_above",
+    "release.reapproved_above", "release.expired_above", "release.foreign_no_order",
+    "release.reapproved_no_order", "release.expired_no_order", "release.bound_no_order")
+
+
+def release_transitions() -> tuple[ReleaseTransition, ...]:
+    """The published release table, DERIVED from the registry."""
+    return tuple(
+        ReleaseTransition(when=TRANSITION_SEMANTICS[key].when,
+                          outcome=TRANSITION_SEMANTICS[key].outcome,
+                          reason=TRANSITION_SEMANTICS[key].reason)
+        for key in _RELEASE_ROW_ORDER)
+
+
+RELEASE_TRANSITIONS: tuple[ReleaseTransition, ...] = release_transitions()
+
+
+@dataclass(frozen=True)
+class ReleaseReplayRule:
+    """The DISTINCT terminal-release-replay authority (R-audit-3 finding 5): replaying a
+    TERMINATED release id is resolved from durable history BEFORE the table, on the release
+    identity — a different authority from the table's run-id dedupe row, published as its own
+    rule so the two cannot be conflated again."""
+
+    text: str
+
+
+RELEASE_REPLAY_RULE = ReleaseReplayRule(
+    text="REPLAY RULE (distinct from run-id dedupe): a bound callback naming a release that "
+         "has already TERMINATED — completed, expired, or cancelled — is answered from the "
+         "durable terminal history record BEFORE this table is consulted, and returns the "
+         "original terminal outcome unchanged. The replay must present the complete original "
+         "binding (the release id AND its requested manual event); a partial match is an "
+         "integrity hold, never the original outcome.")
+
+
+@dataclass(frozen=True)
+class ValidationRule:
+    """One invalid-input class the receiver must refuse BEFORE consulting history or a table
+    (R-audit-3 finding 6), with its exact disposition and an EXECUTABLE specimen: the authority
+    verifier constructs the specimen and proves the reference receiver refuses it, so the
+    published contract and the executable boundary cannot drift."""
+
+    PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = ("invalid_input", "disposition")
+
+    invalid_input: str
+    disposition: str
+    specimen: object = None  # zero-arg callable -> (state, callback, kwargs); checked, not shown
+
+
+def _specimen_partial_binding():
+    from docs.contracts import receiver_reference as receiver
+    return (receiver.LedgerState(current_source="automatic"),
+            receiver.Callback(case_id="c", run_id="r", release_id="R1"),
+            {"phase": POST_024})
+
+
+def _specimen_unknown_source():
+    from docs.contracts import receiver_reference as receiver
+    return (receiver.LedgerState(current_source="a-source-nobody-defined"),
+            receiver.Callback(case_id="c", run_id="r"), {"phase": POST_024})
+
+
+def _specimen_release_disagreement():
+    from docs.contracts import receiver_reference as receiver
+    return (receiver.LedgerState(
+                current_source="manual",
+                release=receiver.PendingRelease(release_id="R1",
+                                                requested_manual_event_id="M1",
+                                                deadline=1000)),
+            receiver.Callback(case_id="c", run_id="r"), {"phase": POST_024})
+
+
+def _specimen_forged_deadline():
+    from docs.contracts import receiver_reference as receiver
+    release = receiver.PendingRelease(release_id="R1", requested_manual_event_id="M1",
+                                      deadline=1000)
+    object.__setattr__(release, "deadline", True)
+    return (receiver.LedgerState(current_source="manual_release_pending",
+                                 current_manual_event_id="M1", release=release),
+            receiver.Callback(case_id="c", run_id="r", release_id="R1",
+                              manual_event_id="M1"),
+            {"phase": POST_024, "now": 0})
+
+
+def _specimen_conflicting_history():
+    from docs.contracts import receiver_reference as receiver
+    return (receiver.LedgerState(
+                current_source="manual", current_manual_event_id="M2",
+                release_history=(
+                    receiver.ReleaseTerminal(release_id="R9",
+                                             requested_manual_event_id="M9",
+                                             terminal="completed"),
+                    receiver.ReleaseTerminal(release_id="R9",
+                                             requested_manual_event_id="M9",
+                                             terminal="expired"))),
+            receiver.Callback(case_id="c", run_id="r"), {"phase": POST_024})
+
+
+def _specimen_replay_wrong_manual():
+    from docs.contracts import receiver_reference as receiver
+    return (receiver.LedgerState(
+                current_source="manual", current_manual_event_id="M2",
+                release_history=(
+                    receiver.ReleaseTerminal(release_id="R9",
+                                             requested_manual_event_id="M9",
+                                             terminal="completed"),)),
+            receiver.Callback(case_id="c", run_id="r", release_id="R9",
+                              manual_event_id="M-WRONG"),
+            {"phase": POST_024, "now": 500})
+
+
+RECEIVER_VALIDATION_RULES: tuple[ValidationRule, ...] = (
+    ValidationRule(
+        invalid_input="a PARTIAL release binding (release_id without manual_event_id, or the "
+                      "reverse)",
+        disposition="integrity_mismatch — HOLD; do not record, classify, or 2xx-and-forget it",
+        specimen=_specimen_partial_binding),
+    ValidationRule(
+        invalid_input="a current_source outside the closed set",
+        disposition="HOLD the case; never guess a table",
+        specimen=_specimen_unknown_source),
+    ValidationRule(
+        invalid_input="source and pending-release records that disagree (a pending release "
+                      "outside manual_release_pending, or that state without one)",
+        disposition="HOLD — an impossible state, not a classifiable callback",
+        specimen=_specimen_release_disagreement),
+    ValidationRule(
+        invalid_input="a nested field outside its exact domain (a Boolean deadline, a "
+                      "non-string id), however the record was produced",
+        disposition="HOLD — every nested record is revalidated at every decision boundary",
+        specimen=_specimen_forged_deadline),
+    ValidationRule(
+        invalid_input="duplicate or conflicting terminal-history records for one release id, "
+                      "or a release both active and terminal",
+        disposition="HOLD before any history lookup — history must be uniquely binding",
+        specimen=_specimen_conflicting_history),
+    ValidationRule(
+        invalid_input="a terminal-release replay whose manual binding does not match the "
+                      "original",
+        disposition="HOLD — a replay must present the complete original binding to be "
+                    "answered from history",
+        specimen=_specimen_replay_wrong_manual),
 )
 
+
+def receiver_surface_projection() -> str:
+    """The COMPLETE receiver surface as one canonical string — every OutcomeKind field, every
+    reason text, every row pairing in table order, and the replay rule. The authority verifier
+    pins this projection's digest, so re-pairing ids, rewriting a source record, or flipping a
+    structured effect without review has nowhere to hide (R-audit-3 finding 1)."""
+    surface = {
+        "outcome_kinds": {
+            name: {"records": kind.records, "becomes_effective": kind.becomes_effective,
+                   "advances_high_water": kind.advances_high_water,
+                   "completes_release": kind.completes_release,
+                   "record_text": kind.record_text, "effective_text": kind.effective_text}
+            for name, kind in sorted(OUTCOME_KINDS.items())
+        },
+        "reason_texts": dict(sorted(REASON_TEXTS.items())),
+        "rows": {
+            key: {"table": semantic.table, "phase": semantic.phase,
+                  "condition": semantic.when.condition(),
+                  "outcome": semantic.outcome, "reason": semantic.reason}
+            for key, semantic in sorted(TRANSITION_SEMANTICS.items())
+        },
+        "base_order": _BASE_ROW_ORDER,
+        "release_order": _RELEASE_ROW_ORDER,
+        "replay_rule": RELEASE_REPLAY_RULE.text,
+        "validation_rules": [
+            {"invalid_input": rule.invalid_input, "disposition": rule.disposition}
+            for rule in RECEIVER_VALIDATION_RULES
+        ],
+    }
+    return json.dumps(surface, sort_keys=True)
 
 # ── what 024 still needs from the platform, keyed to the live obligations ─────────────────────────
 #
@@ -1461,12 +1692,25 @@ WIRE = Registry(
             authority="AUDIT_FINDINGS.md A6 + kyc_tool.outbox.publisher module docstring",
         ),
         Claim(
+            id="WIRE.CALLBACK.VALIDATION",
+            value=RECEIVER_VALIDATION_RULES,
+            authority="docs/contracts/receiver_reference.py _validate/validate_state — every "
+                      "rule's specimen is executed by the authority verifier and must refuse",
+            note="VALIDATE BEFORE YOU CLASSIFY: after the signature verifies, check the "
+                 "callback's shape and your own ledger's integrity BEFORE consulting the "
+                 "replay history or either table. Each row below is an input that must be "
+                 "HELD, not recorded or acknowledged as processed — a malformed callback "
+                 "acknowledged with 2xx is unrecoverable under at-least-once delivery.",
+        ),
+        Claim(
             id="WIRE.CALLBACK.RECEIVER_TXN",
             value=(
                 "Verify the signature.",
-                "In ONE transaction: dedupe on (case_id, run_id); decide whether this callback "
-                "becomes EFFECTIVE using the algorithm below; record it in your accepted ledger "
-                "either way.",
+                "Validate the callback and your ledger state (the validation table above); "
+                "HOLD anything invalid.",
+                "In ONE transaction: dedupe on (case_id, run_id); decide whether this VALID "
+                "callback becomes EFFECTIVE using the algorithm below; record it in your "
+                "accepted ledger either way.",
                 "COMMIT.",
                 "Only then return 2xx.",
                 "If the commit fails or its outcome is uncertain, return non-2xx or drop the "
@@ -1486,8 +1730,10 @@ WIRE = Registry(
                       "docs/contracts/receiver_reference.py (executable, scenario-tested) + the "
                       "invariant oracle in the authority test (every row and the executed "
                       "decision held against it)",
-            note="ACKNOWLEDGING a callback and APPLYING it are different decisions: always "
-                 "acknowledge and record, then consult this table for whether it takes effect. "
+            note="ACKNOWLEDGING a callback and APPLYING it are different decisions: "
+                 "acknowledge and record every VALID callback (validation table above; invalid "
+                 "input is HELD, never recorded), then consult this table for whether it takes "
+                 "effect. "
                  "Conditions are written in a fixed grammar over the legend's tokens — each "
                  "clause names a facet, and every clause must hold. Within a phase the rows "
                  "PARTITION the receiver's state space — every state matches exactly one row, "
@@ -1518,7 +1764,8 @@ WIRE = Registry(
                  "table is the accepted design, not a wire you can exercise today. While a "
                  "release is pending, MANUAL REMAINS EFFECTIVE. Exactly one row completes the "
                  "release; a new manual approval cancels the pending release outright; expiry is "
-                 "driven by the platform's stored deadline, never by waiting for traffic.",
+                 "driven by the platform's stored deadline, never by waiting for traffic. "
+                 + RELEASE_REPLAY_RULE.text,
         ),
         Claim(
             id="WIRE.CALLBACK.RETRY",

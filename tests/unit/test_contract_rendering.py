@@ -844,3 +844,27 @@ def test_f15_gate_the_effectiveness_heading_shares_a_page_with_its_table(tmp_pat
     assert "When this row applies" in page, (
         "the effectiveness heading is orphaned: its table does not start on the same page"
     )
+
+
+def test_r3f6_the_built_pdf_orders_validation_before_history_and_table(tmp_path):
+    """R-audit-3 finding 6, proven on the BUILT artifact: the visible order is signature
+    verification -> shape/integrity validation -> transaction/history/table, and a partial or
+    mismatched release binding is described as a HOLD — never as record-and-2xx."""
+    path = str(tmp_path / "order.pdf")
+    _build(contract_gen).build(path, "order")
+    with pdfplumber.open(path) as pdf:
+        text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    validate_at = text.find("Validate before you classify")
+    commit_at = text.find("Your endpoint must commit before it answers")
+    table_at = text.find("Recording a callback is not the same as acting on it")
+    assert validate_at != -1 and commit_at != -1 and table_at != -1
+    assert validate_at < commit_at < table_at, (
+        "the published order is no longer signature -> validation -> transaction/table"
+    )
+    # the partial-binding row is a HOLD, and nowhere does the document instruct recording it
+    partial_at = text.find("PARTIAL release binding")
+    assert partial_at != -1, "the partial-binding disposition vanished from the document"
+    disposition = text[partial_at:partial_at + 220]
+    assert "HOLD" in disposition and "do not record" in disposition, (
+        "the partial-binding disposition no longer reads as a hold"
+    )

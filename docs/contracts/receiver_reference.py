@@ -97,15 +97,19 @@ class PendingRelease:
 
 @dataclass(frozen=True)
 class ReleaseTerminal:
-    """One durable terminal release record: how a past release ended. Replaying its bound
-    callback answers from this, never from a table."""
+    """One durable terminal release record: how a past release ended, retaining the COMPLETE
+    immutable binding (R-audit-3 finding 2 — a record keyed on release id alone answered a
+    wrong-manual replay as the original outcome). Replaying its bound callback answers from
+    this, never from a table, and only on a full-binding match."""
 
     release_id: str
+    requested_manual_event_id: str
     terminal: str  # completed | expired | cancelled
 
     def __post_init__(self) -> None:
         _exact_str(self.release_id, label="release_id")
-        if self.terminal not in RELEASE_TERMINALS:
+        _exact_str(self.requested_manual_event_id, label="requested_manual_event_id")
+        if type(self.terminal) is not str or self.terminal not in RELEASE_TERMINALS:
             raise ReleaseIntegrityError(
                 f"terminal {self.terminal!r} is not one of {sorted(RELEASE_TERMINALS)}"
             )
@@ -163,14 +167,13 @@ class TableIntegrityError(RuntimeError):
     accident, and that accident is the F10 defect itself."""
 
 
-def _validate(state: LedgerState, callback: Callback) -> None:
-    """Every domain and consistency check, before any classification. Exact types only: `True`
-    is not 1 here, 1.5 is not almost-2, NaN is not a mark, and an unhashable source never
-    reaches a membership test."""
-    for label, value in (("case_id", callback.case_id), ("run_id", callback.run_id)):
-        _exact_str(value, label=label)
-    if callback.decision_sequence is not None:
-        _domain_int(callback.decision_sequence, floor=1, label="decision_sequence")
+def validate_state(state: LedgerState) -> None:
+    """RECURSIVE, exact-type revalidation of the ledger state — the trust boundary at EVERY
+    public decision/manual-approval entry (R-audit-3 finding 3: constructor validation is not a
+    boundary against forged or mutated nested records; a frozen PendingRelease whose deadline
+    was later forged to Boolean True completed a release at now=0). Every nested field, every
+    uniqueness/disjointness relationship, one stable fail-closed integrity result — BEFORE any
+    history or table lookup."""
     if state.high_water is not None:
         _domain_int(state.high_water, floor=0, label="high_water")
     if type(state.seen_run_ids) not in (set, frozenset):
@@ -198,6 +201,33 @@ def _validate(state: LedgerState, callback: Callback) -> None:
         not isinstance(record, ReleaseTerminal) for record in state.release_history
     ):
         raise ReleaseIntegrityError("release_history must be a tuple of ReleaseTerminal records")
+    if state.release is not None:
+        # revalidate the nested record's OWN fields — frozen is not forgery-proof
+        _exact_str(state.release.release_id, label="release.release_id")
+        _exact_str(state.release.requested_manual_event_id,
+                   label="release.requested_manual_event_id")
+        _domain_int(state.release.deadline, floor=1, label="release.deadline")
+    seen_terminal_ids = []
+    for record in state.release_history:
+        _exact_str(record.release_id, label="release_history release_id")
+        _exact_str(record.requested_manual_event_id,
+                   label="release_history requested_manual_event_id")
+        if type(record.terminal) is not str or record.terminal not in RELEASE_TERMINALS:
+            raise ReleaseIntegrityError(
+                f"history terminal {record.terminal!r} is not one of "
+                f"{sorted(RELEASE_TERMINALS)}"
+            )
+        seen_terminal_ids.append(record.release_id)
+    if len(seen_terminal_ids) != len(set(seen_terminal_ids)):
+        raise ReleaseIntegrityError(
+            "release_history carries more than one terminal record for one release id — "
+            "which answer wins would be an accident; hold the case"
+        )
+    if state.release is not None and state.release.release_id in seen_terminal_ids:
+        raise ReleaseIntegrityError(
+            "a release is both PENDING and TERMINAL on this ledger — an impossible state; "
+            "hold the case"
+        )
     # cross-field source/release invariants: a pending release exists exactly in the
     # release-pending state
     if (source == SOURCE_RELEASE_PENDING) != (state.release is not None):
@@ -205,6 +235,17 @@ def _validate(state: LedgerState, callback: Callback) -> None:
             "current_source and the pending release record disagree: manual_release_pending "
             "iff a PendingRelease is held — an impossible state; hold the case"
         )
+
+
+def _validate(state: LedgerState, callback: Callback) -> None:
+    """State (recursive) plus callback domains plus the cross-record binding rule, before any
+    classification. Exact types only: `True` is not 1 here, 1.5 is not almost-2, NaN is not a
+    mark, and an unhashable source never reaches a membership test."""
+    validate_state(state)
+    for label, value in (("case_id", callback.case_id), ("run_id", callback.run_id)):
+        _exact_str(value, label=label)
+    if callback.decision_sequence is not None:
+        _domain_int(callback.decision_sequence, floor=1, label="decision_sequence")
     # release fields on the callback: globally both-absent or both-valid (finding 2 — this used
     # to be checked only inside the pending branch, so a partial binding reached the ordinary
     # table)
@@ -307,7 +348,15 @@ def decide(state: LedgerState, callback: Callback, *, phase: str, now: int | Non
             (r for r in state.release_history if r.release_id == callback.release_id), None)
         if replayed is not None:
             # 'Replaying it returns the original outcome and changes nothing, including after
-            # completed or expired.' The durable record answers; no table is consulted.
+            # completed or expired.' The durable record answers; no table is consulted — and
+            # only on the COMPLETE original binding (R-audit-3 finding 2): a matching release
+            # id with the wrong manual event is not the original callback, it is an integrity
+            # hold.
+            if callback.manual_event_id != replayed.requested_manual_event_id:
+                raise ReleaseIntegrityError(
+                    f"a bound callback replays terminal release {callback.release_id!r} but "
+                    "its manual binding does not match the original — hold"
+                )
             return Outcome(row=-1, record=False, effective=False, advance_high_water=False,
                            completes_release=False, release_replay=replayed.terminal)
         if state.current_source != SOURCE_RELEASE_PENDING:
@@ -361,10 +410,13 @@ def apply_manual_approval(state: LedgerState, *, manual_event_id: str) -> Ledger
     approval effective, and the formerly bound callback can never complete the cancelled release
     afterwards — its replay answers from the durable record."""
     _exact_str(manual_event_id, label="manual_event_id")
+    validate_state(state)  # the same trust boundary as decide(); a forged ledger never writes
     history = state.release_history
     if state.release is not None:
-        history = (*history, ReleaseTerminal(release_id=state.release.release_id,
-                                             terminal="cancelled"))
+        history = (*history, ReleaseTerminal(
+            release_id=state.release.release_id,
+            requested_manual_event_id=state.release.requested_manual_event_id,
+            terminal="cancelled"))
     return LedgerState(
         seen_run_ids=state.seen_run_ids,
         current_source=SOURCE_MANUAL,
@@ -384,15 +436,21 @@ def token_semantics_problems() -> list[str]:
     for source in (None, "manual", "automatic"):
         for run_id in ("r-seen", "r-new"):
             for sequence in (None, 3, 9):
-                state = LedgerState(
-                    seen_run_ids=frozenset({"r-seen"}), current_source=source, high_water=5,
-                    current_manual_event_id="M1" if source == "manual" else None)
-                base_realizations.append(
-                    (state, Callback(case_id="c", run_id=run_id, decision_sequence=sequence),
-                     500))
+                for mark in (None, 5):  # R-audit-3 finding 4: the ABSENT mark is realized too
+                    state = LedgerState(
+                        seen_run_ids=frozenset({"r-seen"}), current_source=source,
+                        high_water=mark,
+                        current_manual_event_id="M1" if source == "manual" else None)
+                    base_realizations.append(
+                        (state,
+                         Callback(case_id="c", run_id=run_id, decision_sequence=sequence),
+                         500))
     release_realizations = []
     for run_id in ("r-seen", "r-new"):
-        for binding in ((None, None), ("R1", "M1"), ("R-other", "M1")):
+        # every binding-field mismatch independently (R-audit-3 finding 4): correct/correct,
+        # wrong id/correct manual, CORRECT ID/WRONG MANUAL, both wrong, and unbound
+        for binding in ((None, None), ("R1", "M1"), ("R-other", "M1"),
+                        ("R1", "M-wrong"), ("R-other", "M-wrong")):
             for current_event in ("M1", "M2"):
                 for now in (500, 1000):
                     for sequence in (None, 3, 9):

@@ -651,6 +651,7 @@ def _effectiveness_table_is_executable_and_total():
     own scenarios by `tests/unit/test_receiver_state_machine.py`; here we prove the published rows
     and that implementation are the same object of study.
     """
+    _receiver_surface_ok()
     from docs.contracts import predicates
     from docs.contracts.receiver_reference import Callback, LedgerState, decide
     from docs.contracts.wire import INTERIM, POST_024, RECEIVER_TRANSITIONS
@@ -773,6 +774,42 @@ def _effectiveness_table_is_executable_and_total():
     assert not manual_current.effective and manual_current.advance_high_water
 
 
+@verifies("WIRE.CALLBACK.VALIDATION")
+def _receiver_validation_rules_are_executable_and_precede_classification():
+    """R-audit-3 finding 6: the published contract must order validation BEFORE history/table
+    consultation, and each published invalid-input row must be a real refusal — the verifier
+    constructs every rule's specimen and the reference receiver must HOLD it, so the contract
+    and the executable boundary cannot drift."""
+    from docs.contracts import receiver_reference as receiver
+
+    claim_ids = [c.id for c in WIRE.claims]
+    validation_index = claim_ids.index("WIRE.CALLBACK.VALIDATION")
+    assert validation_index < claim_ids.index("WIRE.CALLBACK.RECEIVER_TXN")
+    assert validation_index < claim_ids.index("WIRE.CALLBACK.EFFECTIVENESS")
+    assert validation_index < claim_ids.index("WIRE.CALLBACK.RELEASE")
+    rules = WIRE.value("WIRE.CALLBACK.VALIDATION")
+    assert len(rules) >= 6, "the validation table lost rows"
+    for rule in rules:
+        assert rule.invalid_input.strip() and rule.disposition.strip()
+        assert "HOLD" in rule.disposition.upper(), (
+            f"{rule.invalid_input[:40]}: the disposition no longer says HOLD"
+        )
+        state, callback, kwargs = rule.specimen()
+        with pytest.raises(receiver.ReceiverIntegrityError):
+            receiver.decide(state, callback, **kwargs)
+    # the transaction steps consult validation before the table, and acknowledgement is
+    # qualified to VALID callbacks
+    steps = " ".join(WIRE.value("WIRE.CALLBACK.RECEIVER_TXN"))
+    validate_at = steps.find("Validate the callback")
+    record_at = steps.find("record it in your accepted")
+    assert validate_at != -1 and record_at != -1 and validate_at < record_at, (
+        "the transaction steps no longer validate before recording"
+    )
+    assert "VALID" in steps
+    note = WIRE["WIRE.CALLBACK.EFFECTIVENESS"].note
+    assert "VALID callback" in note and "always acknowledge" not in note
+
+
 @verifies("WIRE.CALLBACK.LEGEND")
 def _the_condition_legend_is_closed_and_cross_bound():
     """Gate audit `6c4f54a..91fbde3` finding 3: the per-value phrases used to be an authority
@@ -796,7 +833,7 @@ def _the_condition_legend_is_closed_and_cross_bound():
     legend_digest = hashlib.sha256(
         "\0".join(f"{t}={m}" for t, m in sorted(legend.items())).encode()
     ).hexdigest()[:16]
-    assert legend_digest == "44590df7364f002d", (
+    assert legend_digest == "44365d0e7c62b6f5", (
         f"the legend meanings changed since review: now {legend_digest}. Read every meaning, "
         "then re-pin in the SAME commit."
     )
@@ -837,6 +874,7 @@ def _the_release_table_is_total_and_held_to_its_own_oracle():
     machine from day one: the rows partition all 72 release-pending states, exactly ONE row
     completes, every row and every executed decision matches an oracle restating the accepted
     completion CAS, and the rendered conditions parse back."""
+    _receiver_surface_ok()
     from docs.contracts import predicates
     from docs.contracts import receiver_reference as rr
     from docs.contracts.wire import POST_024, RELEASE_TRANSITIONS
@@ -4295,7 +4333,8 @@ def test_ra2_terminal_release_replays_answer_from_durable_history():
     for terminal in ("completed", "expired", "cancelled"):
         state = rr.LedgerState(
             seen_run_ids=frozenset(), current_source="automatic", high_water=9,
-            release_history=(rr.ReleaseTerminal(release_id="R9", terminal=terminal),))
+            release_history=(rr.ReleaseTerminal(
+                release_id="R9", requested_manual_event_id="M1", terminal=terminal),))
         outcome = rr.decide(
             state, rr.Callback(case_id="c", run_id="r-new", decision_sequence=10,
                                release_id="R9", manual_event_id="M1"),
@@ -5014,3 +5053,278 @@ def test_ru5_writer_roles_construct_and_the_gate_reads_the_live_map(monkeypatch)
     with pytest.raises(ProcessRoleCapabilityError, match="dev_worker"):
         Worker(object(), {"run_transition": lambda s, j: None},
                process_role=ProcessRole.DEV_WORKER)
+
+
+# ── R-audit-3 `5c14537..6ef6fc7` unit 1: receiver authority (findings 1-6) ────────────────────────
+#
+# Finding 1: outcome/reason pairing was row-local and the visible texts were keyword-screened
+# prose, so a row could pair any two ids sharing Booleans and the source records could be
+# inverted wholesale. The pairing now lives in ONE closed TRANSITION_SEMANTICS registry, both
+# tables derive from it, and the verifiers pin the COMPLETE receiver surface (every outcome
+# record, every reason text, every row pairing) — an edit anywhere is a re-pin, the act of
+# review. Finding 2: durable history binds the complete original release identity. Finding 3:
+# every public boundary revalidates nested records recursively. Finding 4: the verifier-side
+# expectations are literal and cover every binding field and the absent mark. Finding 5: run
+# dedupe and terminal-release replay are distinct, separately rendered authorities. Finding 6:
+# the published contract orders validation before history/table consultation.
+
+RECEIVER_SURFACE_PIN = "f9568942885e5f5a"
+
+
+def _receiver_surface_ok() -> None:
+    """Asserted by the effectiveness AND release verifiers: both published tables EQUAL their
+    registry derivation, and the complete surface digest equals the reviewed pin."""
+    assert tuple(WIRE.value("WIRE.CALLBACK.EFFECTIVENESS")) == wire_module.base_transitions()
+    assert tuple(WIRE.value("WIRE.CALLBACK.RELEASE")) == wire_module.release_transitions()
+    digest = hashlib.sha256(
+        wire_module.receiver_surface_projection().encode()).hexdigest()[:16]
+    assert digest == RECEIVER_SURFACE_PIN, (
+        f"the receiver surface changed since review (was {RECEIVER_SURFACE_PIN}, now "
+        f"{digest}) — read the new surface, then re-pin in the same commit"
+    )
+
+
+def _run_receiver_verifiers_expect_failure() -> None:
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.CALLBACK.EFFECTIVENESS"]()
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.CALLBACK.RELEASE"]()
+
+
+def test_r3f1_a_cross_row_reason_substitution_fails_both_verifiers(monkeypatch):
+    """The audit's witness: the interim manual-hold row re-paired with `nothing_to_conflict`
+    renders 'Nothing to conflict with.' beside a manual hold. The pairing is registry-owned and
+    pinned; normal reconstruction with the foreign reason fails both assembled verifiers."""
+    semantics = dict(wire_module.TRANSITION_SEMANTICS)
+    key = "interim.fresh_manual"
+    semantics[key] = dataclasses.replace(semantics[key], reason="nothing_to_conflict")
+    with monkeypatch.context() as m:
+        m.setattr(wire_module, "TRANSITION_SEMANTICS", semantics)
+        m.setattr(_this_module(), "WIRE",
+                  _wire_with("WIRE.CALLBACK.EFFECTIVENESS",
+                             value=wire_module.base_transitions()))
+        _run_receiver_verifiers_expect_failure()
+
+
+def test_r3f1_a_same_boolean_outcome_substitution_fails_both_verifiers(monkeypatch):
+    """The audit's witness: the bound/live/unordered release row moved from
+    `rel_record_only_pending` to `rel_record_only` — identical Booleans, and the load-bearing
+    'the release stays pending' statement silently gone."""
+    semantics = dict(wire_module.TRANSITION_SEMANTICS)
+    key = "release.bound_no_order"
+    assert semantics[key].outcome == "rel_record_only_pending"
+    semantics[key] = dataclasses.replace(semantics[key], outcome="rel_record_only")
+    with monkeypatch.context() as m:
+        m.setattr(wire_module, "TRANSITION_SEMANTICS", semantics)
+        m.setattr(_this_module(), "WIRE",
+                  _wire_with("WIRE.CALLBACK.RELEASE",
+                             value=wire_module.release_transitions()))
+        _run_receiver_verifiers_expect_failure()
+
+
+def test_r3f1_source_record_inversions_fail_both_verifiers(monkeypatch):
+    """The audit's strongest witness: replace the source records with 'discard the callback',
+    'NO — then replace the manual approval after commit', and 'Apply it anyway', reconstruct
+    every row normally, and the assembled effectiveness verifier passed. The complete surface
+    is now pinned; the inversion is a re-pin, and until re-pinned both verifiers fail."""
+    inverted = dict(wire_module.OUTCOME_KINDS)
+    forged = object.__new__(wire_module.OutcomeKind)
+    for name, value in (("records", True), ("becomes_effective", False),
+                        ("advances_high_water", False), ("completes_release", False),
+                        ("record_text", "discard the callback"),
+                        ("effective_text",
+                         "NO — then replace the manual approval after commit")):
+        object.__setattr__(forged, name, value)
+    inverted["record_manual_holds"] = forged
+    with monkeypatch.context() as m:
+        m.setattr(wire_module, "OUTCOME_KINDS", inverted)
+        m.setattr(_this_module(), "WIRE",
+                  _wire_with("WIRE.CALLBACK.EFFECTIVENESS",
+                             value=wire_module.base_transitions()))
+        _run_receiver_verifiers_expect_failure()
+
+
+def test_r3f1_a_structured_effect_change_with_a_stale_projection_fails(monkeypatch):
+    """Flipping one effect Boolean without re-pinning the projection fails: the digest covers
+    the structured effects, not only the prose."""
+    flipped = dict(wire_module.OUTCOME_KINDS)
+    forged = object.__new__(wire_module.OutcomeKind)
+    base = wire_module.OUTCOME_KINDS["record_unordered"]
+    for name in ("records", "becomes_effective", "advances_high_water", "completes_release",
+                 "record_text", "effective_text"):
+        object.__setattr__(forged, name, getattr(base, name))
+    object.__setattr__(forged, "advances_high_water", True)
+    flipped["record_unordered"] = forged
+    with monkeypatch.context() as m:
+        m.setattr(wire_module, "OUTCOME_KINDS", flipped)
+        m.setattr(_this_module(), "WIRE",
+                  _wire_with("WIRE.CALLBACK.EFFECTIVENESS",
+                             value=wire_module.base_transitions()))
+        _run_receiver_verifiers_expect_failure()
+
+
+def test_r3f2_a_terminal_replay_must_match_the_complete_original_binding():
+    """The audit's reproduction verbatim: R9 terminated as completed; a bound callback naming
+    R9 with manual event M-WRONG was answered 'completed'. The durable record now retains the
+    full binding, and a partial match is an integrity HOLD, never the original outcome."""
+    from docs.contracts import receiver_reference as receiver
+
+    state = receiver.LedgerState(
+        current_source="manual", current_manual_event_id="M2",
+        release_history=(receiver.ReleaseTerminal(
+            release_id="R9", requested_manual_event_id="M9", terminal="completed"),))
+    replay = receiver.decide(
+        state, receiver.Callback(case_id="c", run_id="r-new", release_id="R9",
+                                 manual_event_id="M9"),
+        phase="post-024", now=500)
+    assert replay.release_replay == "completed" and not replay.effective
+    with pytest.raises(receiver.ReceiverIntegrityError):
+        receiver.decide(
+            state, receiver.Callback(case_id="c", run_id="r-new", release_id="R9",
+                                     manual_event_id="M-WRONG"),
+            phase="post-024", now=500)
+
+
+def test_r3f2_history_uniqueness_and_active_disjointness_are_enforced():
+    """Conflicting terminals in both orders, an identical duplicate, an active release that is
+    also terminal, and a post-terminal rewrite are each refused BEFORE any classification."""
+    from docs.contracts import receiver_reference as receiver
+
+    def terminal(terminal_value):
+        return receiver.ReleaseTerminal(
+            release_id="R9", requested_manual_event_id="M9", terminal=terminal_value)
+
+    for history in ((terminal("completed"), terminal("expired")),
+                    (terminal("expired"), terminal("completed")),
+                    (terminal("completed"), terminal("completed"))):
+        state = receiver.LedgerState(current_source="manual",
+                                     current_manual_event_id="M2",
+                                     release_history=history)
+        with pytest.raises(receiver.ReceiverIntegrityError):
+            receiver.decide(state, receiver.Callback(case_id="c", run_id="r"),
+                            phase="post-024")
+    active_and_terminal = receiver.LedgerState(
+        current_source="manual_release_pending", current_manual_event_id="M9",
+        release=receiver.PendingRelease(release_id="R9", requested_manual_event_id="M9",
+                                        deadline=1000),
+        release_history=(terminal("cancelled"),))
+    with pytest.raises(receiver.ReceiverIntegrityError):
+        receiver.decide(active_and_terminal,
+                        receiver.Callback(case_id="c", run_id="r", release_id="R9",
+                                          manual_event_id="M9"),
+                        phase="post-024", now=500)
+
+
+def test_r3f3_forged_nested_records_are_refused_at_every_public_boundary():
+    """The audit's reproduction: a valid frozen PendingRelease whose deadline was then forged
+    to Boolean True completed the release at now=0. Every public boundary now revalidates
+    nested records recursively — the forge is an integrity refusal before any history or table
+    lookup, and apply_manual_approval validates the incoming ledger too."""
+    from docs.contracts import receiver_reference as receiver
+
+    release = receiver.PendingRelease(release_id="R1", requested_manual_event_id="M1",
+                                      deadline=1000)
+    object.__setattr__(release, "deadline", True)
+    state = receiver.LedgerState(
+        current_source="manual_release_pending", current_manual_event_id="M1",
+        release=release)
+    callback = receiver.Callback(case_id="c", run_id="r-new", decision_sequence=9,
+                                 release_id="R1", manual_event_id="M1")
+    with pytest.raises(receiver.ReceiverIntegrityError):
+        receiver.decide(state, callback, phase="post-024", now=0)
+
+    forged_terminal = receiver.ReleaseTerminal(
+        release_id="R2", requested_manual_event_id="M2", terminal="expired")
+    object.__setattr__(forged_terminal, "terminal", {"not": "hashable"})
+    history_state = receiver.LedgerState(current_source="manual",
+                                         current_manual_event_id="M1",
+                                         release_history=(forged_terminal,))
+    with pytest.raises(receiver.ReceiverIntegrityError):
+        receiver.decide(history_state, receiver.Callback(case_id="c", run_id="r"),
+                        phase="post-024")
+    with pytest.raises(receiver.ReceiverIntegrityError):
+        receiver.apply_manual_approval(history_state, manual_event_id="M3")
+
+
+def test_r3f4_wrong_manual_id_and_absent_mark_are_literal_expectations():
+    """Independent-oracle witnesses stated as literals: correct release id with the WRONG
+    manual id never completes (it is a binding mismatch), and the first sequenced callback with
+    NO high-water mark is above the (absent) mark."""
+    from docs.contracts import predicates as predicates_module
+    from docs.contracts import receiver_reference as receiver
+
+    state = receiver.LedgerState(
+        current_source="manual_release_pending", current_manual_event_id="M1",
+        release=receiver.PendingRelease(release_id="R1", requested_manual_event_id="M1",
+                                        deadline=1000))
+    wrong_manual = receiver.Callback(case_id="c", run_id="r-new", decision_sequence=9,
+                                     release_id="R1", manual_event_id="M-WRONG")
+    observed = receiver.observe_release(state, wrong_manual, now=500)
+    assert observed["binding"] == predicates_module.BIND_MISMATCH
+    outcome = receiver.decide(state, wrong_manual, phase="post-024", now=500)
+    assert not outcome.completes_release and not outcome.effective
+
+    no_mark = receiver.LedgerState(current_source="automatic", high_water=None)
+    sequenced = receiver.Callback(case_id="c", run_id="r-new", decision_sequence=1)
+    assert receiver.observe(no_mark, sequenced)["sequence"] == predicates_module.SEQ_ABOVE
+    first = receiver.decide(no_mark, sequenced, phase="post-024")
+    assert first.effective and first.advance_high_water
+
+
+def test_r3f5_run_dedupe_and_release_replay_are_distinct_authorities():
+    """The audit's crossing cases: a duplicate run id on a pending case follows the TABLE's
+    run-dedupe row; a fresh run replaying a TERMINATED release id follows durable history —
+    and the published texts name their own authorities, not each other's."""
+    from docs.contracts import receiver_reference as receiver
+
+    pending = receiver.LedgerState(
+        seen_run_ids=frozenset({"r-seen"}),
+        current_source="manual_release_pending", current_manual_event_id="M1",
+        release=receiver.PendingRelease(release_id="R1", requested_manual_event_id="M1",
+                                        deadline=1000))
+    dup_run = receiver.decide(
+        pending, receiver.Callback(case_id="c", run_id="r-seen", release_id="R1",
+                                   manual_event_id="M1"),
+        phase="post-024", now=500)
+    assert dup_run.row == 0 and dup_run.release_replay is None
+
+    terminated = receiver.LedgerState(
+        current_source="manual", current_manual_event_id="M2",
+        release_history=(receiver.ReleaseTerminal(
+            release_id="R1", requested_manual_event_id="M1", terminal="expired"),))
+    replay = receiver.decide(
+        terminated, receiver.Callback(case_id="c", run_id="r-new", release_id="R1",
+                                      manual_event_id="M1"),
+        phase="post-024", now=500)
+    assert replay.row == -1 and replay.release_replay == "expired"
+
+    dup_row = wire_module.release_transitions()[0]
+    assert "Run-id dedupe" in dup_row.why, "the duplicate row lost its run-dedupe authority"
+    assert "returns the original outcome and changes nothing" not in dup_row.why, (
+        "the duplicate row still claims the release-replay authority as its own"
+    )
+    assert "different authority" in dup_row.why
+    assert "durable" in wire_module.RELEASE_REPLAY_RULE.text.lower()
+
+
+def test_r3f6_the_published_contract_validates_before_history_and_table():
+    """The receiver-validation claim exists, precedes the transaction/table claims, carries
+    executable invalid-input dispositions (each specimen actually refuses), and the
+    acknowledge-and-record instruction is qualified to VALID callbacks."""
+    from docs.contracts import receiver_reference as receiver
+
+    claim_ids = [c.id for c in WIRE.claims]
+    validation_index = claim_ids.index("WIRE.CALLBACK.VALIDATION")
+    assert validation_index < claim_ids.index("WIRE.CALLBACK.RECEIVER_TXN")
+    assert validation_index < claim_ids.index("WIRE.CALLBACK.EFFECTIVENESS")
+    rules = WIRE.value("WIRE.CALLBACK.VALIDATION")
+    assert rules, "the validation claim publishes no rules"
+    for rule in rules:
+        state, callback, kwargs = rule.specimen()
+        with pytest.raises(receiver.ReceiverIntegrityError):
+            receiver.decide(state, callback, **kwargs)
+    transaction = " ".join(WIRE.value("WIRE.CALLBACK.RECEIVER_TXN"))
+    assert "VALID" in transaction, (
+        "the transaction claim still says always-acknowledge without the validity "
+        "qualification"
+    )

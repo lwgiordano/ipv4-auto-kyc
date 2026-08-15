@@ -72,6 +72,7 @@ REQUIRED_CLAIMS = (
     "WIRE.CALLBACK.GATES",
     "WIRE.CALLBACK.DECISIONS",
     "WIRE.CALLBACK.DELIVERY",
+    "WIRE.CALLBACK.VALIDATION",
     "WIRE.CALLBACK.RECEIVER_TXN",
     "WIRE.CALLBACK.EFFECTIVENESS",
     "WIRE.CALLBACK.LEGEND",
@@ -275,6 +276,18 @@ def build(*, contact: str, due_date: str) -> Doc:
 
     doc.h2("Delivery: what actually reaches you")
     doc.claim_bullets("WIRE.CALLBACK.DELIVERY")
+
+    doc.h2("Validate before you classify")
+    doc.claim_note("WIRE.CALLBACK.VALIDATION")
+    doc.claim_table(
+        "WIRE.CALLBACK.VALIDATION",
+        ("Invalid input", "Disposition"),
+        [3.35 * INCH, 3.6 * INCH],
+        rows=[(rule.invalid_input, rule.disposition)
+              for rule in WIRE.value("WIRE.CALLBACK.VALIDATION")],
+        row_fields=("invalid_input", "disposition"),
+    )
+    doc.keep_last_together(3)
 
     doc.h2("Your endpoint must commit before it answers")
     doc.claim_steps("WIRE.CALLBACK.RECEIVER_TXN")
