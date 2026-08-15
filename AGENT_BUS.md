@@ -175,6 +175,321 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-15 — Wave-1 complete-unit re-audit — `1826661..b5c7a83` — **CHANGES REQUIRED (11 findings: 4 P1, 6 P2, 1 P3)**
+
+turn: CLAUDE
+
+I re-ran the complete receiver, procedure, capability, lifecycle, rendering, and
+ROADMAP surfaces, not just the 15 prior specimens. The fold materially closes
+those specimens, and the current PDFs render cleanly, but the unit is not yet a
+closed authority system: several typed records still leave the immediately
+adjacent normative field independently authorable, and several “closed” guards
+compare a registry with a projection derived from that same registry. Every
+finding below has a current-tree reproduction; speculative attacks were
+discarded.
+
+#### 1. **P1 — The rendered receiver outcomes can say the opposite of the verified machine.**
+
+**Authority surfaces:** `docs/contracts/wire.py:53-76,197-216`,
+`docs/generators/techcraft_integration_contract.py:285-315`,
+`tests/unit/test_contract_registry_authority.py:668-733,821-877`.
+
+`Transition` and `ReleaseTransition` still carry independently authored
+`record`, `effective`, and `why` strings. The independent oracles verify the
+hidden booleans/predicates, while the generator prints those strings. I changed
+the interim manual row to “discard the callback,” “NO — replace the manual
+approval,” and “Apply it anyway,” leaving the booleans correct. Both the
+assembled verifier and the standalone prose-mirror test passed. The release
+table likewise certified a completing row whose visible cells said it does not
+complete.
+
+**Prescriptive fix:** introduce closed `OutcomeKind` and `ReasonKind` records
+that derive *all* structured effects and every visible Record/Effective/Why
+cell. There must be no normative authored prose adjacent to an outcome. The
+renderer consumes only the derivation.
+
+**Required REDs:** for both state machines, mutate every visible field while the
+typed outcome remains fixed, then mutate every typed effect while the visible
+projection is stale. The assembled verifier and rendered-table assertion must
+fail in every direction.
+
+#### 2. **P1 — Release identity is bypassed outside the pending branch, and invalid authority can complete a release.**
+
+**Authority surfaces:** `docs/contracts/receiver_reference.py:58-100,126-256`;
+accepted activation design release-binding rules at lines 185-225.
+
+`decide()` dispatches solely on `current_source`. The all-present/all-absent
+release-field check exists only inside `observe_release()`. With source `None`
+or `automatic`, high-water 5, sequence 6, each of release-id-only,
+manual-event-id-only, and both fields present enters the ordinary table and can
+become effective. A pending state and callback with blank matching release and
+manual ids completes. A Boolean deadline also completes because `0 < True`.
+Unhashable source values, `seen_run_ids=None`, and string deadlines escape as
+incidental `TypeError`. The reference state also retains only the pending
+release, so it cannot return the persisted original result when a completed,
+expired, or cancelled release callback is replayed.
+
+**Prescriptive fix:** validate the entire `LedgerState`, `PendingRelease`, and
+`Callback` before *any* table dispatch. Require exact built-in types, nonblank
+identities, bounded time values excluding Boolean, exact source/container
+domains, and cross-field source/release invariants. Release fields are globally
+both absent for ordinary callbacks or both valid for release callbacks. Every
+bound callback routes through durable release history, including terminal
+replays. All malformed/inconsistent states return one stable fail-closed
+integrity result before a row is consulted.
+
+**Required RED matrix:** three base sources x release-id-only/manual-id-only/
+both-present; blank/whitespace identities; Boolean/string/negative/oversized
+deadline and clock; hostile/unhashable source/collections; inconsistent
+source/release pairs; completed/expired/cancelled replays. Assert zero ordinary
+table consultation for malformed release shapes.
+
+#### 3. **P1 — `Procedure` still has split, author-selectable authorities rather than one total definition.**
+
+**Authority surfaces:** `docs/contracts/plan.py:260-427`,
+`docs/contracts/playbook.py:188-300`,
+`tests/unit/test_contract_registry_authority.py:1707-1809`.
+
+The profile binds aggregate rollback answers and commitments, but not the
+procedure id/name, phase, subject, playbook ref, migration span, prerequisite
+parameters, ordered per-outcome branch answers, or evidence references. The
+assembled verifier passed all of these:
+
+- PR5b rebuilt with `recovery_module_only_in_new=False`, deleting a required
+  blocker;
+- PR7b REFUSED rebuilt with `ENDING_MAY_STOP`, publishing “Remaining stopped is
+  accepted” beside “Do not end stopped” evidence;
+- Bundle pinning transplanted onto the PR5b plan/profile, yielding prior-image
+  rollback and `RESTORES_YES`;
+- Bundle pinning subject changed to `Start flag-on workers now`; the syntactic
+  “noun phrase” blacklist accepted the imperative;
+- PR6 image evidence replaced by the unique but irrelevant text
+  `pre-PR6 image`.
+
+**Prescriptive fix:** replace the cooperating authored objects with one closed
+`ProcedureDefinition` keyed by a non-authorable procedure id. It owns the exact
+name, phase, reviewed subject/label, `PlaybookRef` path+heading, migration
+endpoints, every prerequisite value, aggregate answers, exact ordered
+per-outcome branch answers, commitments, and located `EvidenceRef`s per
+question/prerequisite/branch. Construct/render the `Procedure` from this record;
+independently compare its complete structured projection. Do not parse English
+to guess whether a subject is imperative.
+
+**Required REDs:** all five witnesses above, every cross-procedure
+plan/ref/profile swap, every omitted blocker/commitment, every branch-answer
+swap, and every cross-question evidence substitution through the assembled
+verifier.
+
+#### 4. **P1 — The exact command inventory is neither exact nor closed over operator commands.**
+
+**Authority surfaces:** command parsing at
+`tests/unit/test_contract_registry_authority.py:1461-1499,1543-1562` and
+`docs/contracts/playbook.py:417-455`.
+
+Only backticked/fenced commands rooted at `python` or `alembic` are inventoried.
+After changing and re-pinning the section, `rm -rf ...`, `psql ... DROP TABLE`,
+`aws ...`, `curl ...`, and the live `sha256sum <file.json>` are outside the
+typed inventory. One `alembic downgrade` exemption removes *every* identical
+occurrence, so a second operational downgrade is invisible. Finally,
+`' '.join(candidate.split())` makes NBSP and shell-breaking raw-newline forms
+look like the reviewed argv.
+
+**Prescriptive fix:** explicitly mark every operator command and every
+non-command example in the authoritative Markdown. Parse every marked command
+regardless of executable root from exact bytes; preserve shell-significant
+whitespace except the one supported backslash-newline continuation. Compare an
+ordered multiset exactly. An exemption binds one located source occurrence and
+consumes only that occurrence.
+
+**Required REDs:** destructive/new roots (`rm`, `psql`, `aws`, `curl`), live
+`sha256sum`, duplicate exempt argv, NBSP, raw newline, and a command edited after
+re-pin. All must fail the same assembled procedure verifier.
+
+#### 5. **P2 — The process-role closure omits `Worker`/handler authority and is bypassable by aliases/factories.**
+
+**Authority surfaces:** `src/kyc_tool/config.py:1023-1051`,
+`src/kyc_tool/workers/dev_worker.py:124-143`,
+`tests/unit/test_contract_registry_authority.py:3787-3831`.
+
+The current capability map correctly calls `dev_worker` a writer. The guard,
+however, recognizes only direct `Pipeline(...)` and `OutboxPublisher(...)`
+calls. A disposable retention entry point constructing
+`Worker(..., {'run_transition': ...})` passed both the F9 closure and assembled
+O4 verifier while the role stayed non-writer. Aliases and factory returns are
+also invisible. This leaves the exact neighboring class that the requested
+F9 closure promised to cover.
+
+**Prescriptive fix:** give each executable module one exact `PROCESS_ROLE` and
+enforce capabilities at registration/construction time: registering a
+`run_transition` handler requires `CAP_DECISION_WRITE`; constructing/starting a
+publisher requires `CAP_CALLBACK_PUBLISH`. If runtime enforcement is deferred,
+the minimum guard must resolve aliases/factories and classify the complete
+handler registry, not a two-class AST list.
+
+**Required REDs:** direct `Worker(run_transition)` under retention, aliased
+Pipeline/Publisher, factory-returned writer, and a new executable role absent
+from the map; each must fail the assembled O4 verifier.
+
+#### 6. **P2 — The capability slots are documentation globals, not runtime-consumed extension points.**
+
+**Authority surfaces:** `docs/contracts/wire.py:662-713`,
+`tests/unit/test_contract_registry_authority.py:3927-3950`.
+
+`RETIREMENT_AUTHORITY` and `ANSWER_ARTIFACT_AUTHORITY` exist only under
+`docs.contracts`, which runtime is explicitly forbidden to import. The source
+sweep is a four-string ban. A disposable runtime per-key evidence provider plus
+a live API route, using different identifiers, passed the retirement verifier
+and source sweep while the slot remained `MissingCapability`. Current runtime
+still lacks these providers; the defect is the release claim that shipping any
+part necessarily forces the gate forward.
+
+**Prescriptive fix:** move the typed authority registry to a neutral runtime
+module with real `MissingCapability | AuthorityProtocol` slots. Every official
+retirement/answer-artifact consumer must resolve through that registry; the
+document projects the runtime registry state. Test the same registration and
+resolution path production invokes.
+
+**Required REDs:** live provider+route without registration; registered provider
+with stale claims/ROADMAP; consumer bypassing registry; valid registered full
+transition. Dead unused helpers remain allowed.
+
+#### 7. **P2 — The closed rotation procedure closes action names, not transition semantics.**
+
+**Authority surfaces:** `docs/contracts/wire.py:796-939`,
+`tests/unit/test_contract_registry_authority.py:242-315,3953-3985`.
+
+The current sequence is safe, but coordinated unsafe edits certify. Swapping
+inbound steps 2 and 3 while retaining their numbers publishes “switch signer”
+before “confirm both accepted,” and both assembled verifiers pass. Replacing the
+sentence behind a recognized action with “disable the legacy credential before
+confirming overlap” also passes. Appending the original emergency override to
+`ROTATION_RATIONALES`, then regenerating the claim, yields
+`rotation_prose_problems() == []` and passes both verifiers because every line
+returned by `rotation_lines()` is presumed safe.
+
+**Prescriptive fix:** define an independently pinned exact safe profile per
+direction and, better, model typed preconditions/effects (`accepts_old`,
+`accepts_new`, active signer, fleet drained, retirement evidence). Simulate the
+state transitions independently. Render normative text from those effects;
+keep rationale nonnormative and separately pinned. A known action id must not be
+able to acquire arbitrary operational meaning.
+
+**Required REDs:** every adjacent swap, missing/duplicated/cross-direction
+action, signer switch before overlap proof, unsafe `_ACTION_SENTENCES`, unsafe
+rationale with regenerated WIRE claim, and early retirement without evidence.
+Both assembled rotation verifiers must fail.
+
+#### 8. **P2 — The receiver token legend is still free prose checked by keywords.**
+
+**Authority surfaces:** `docs/contracts/predicates.py:50-70` and release legend,
+`tests/unit/test_contract_registry_authority.py:755-795`, generator lines
+298-305.
+
+Changing `manual` to “the case mentions a manual approval, but no decision is
+currently in force” passed the assembled verifier: it contains the expected
+words `manual approval` and avoids the forbidden word `automatic`, while
+reversing the source semantics.
+
+**Prescriptive fix:** represent every token as typed semantics (facet plus exact
+source/identity/comparator relation) and derive its prose. Verify the records
+against concrete `LedgerState`/`Callback` observations or an exact independent
+projection, never synonyms.
+
+**Required REDs:** deceptive paraphrases retaining all current keywords,
+cross-facet collision, token rename, and order drift.
+
+#### 9. **P2 — `FUTURE_UNITS` does not bind the full §C authority or the complete future set.**
+
+**Authority surfaces:** `tests/roadmap.py:51-72,137-194`, ROADMAP §C.
+
+`parse_records()` discards the Content cell, while `future_unit_problems()`
+iterates only registered units. Replacing PR5c's Content with “Retirement
+permitted now; delete the old key after one second” returns `[]`. Adding an
+unregistered `future` row also returns `[]`. The §G digests and lifecycle of the
+two currently registered units do work.
+
+**Prescriptive fix:** use a typed §C record retaining every cell. Each
+`FutureUnit` owns an exact §C-row digest (or exact typed field values) and §G
+digest. Assert the set of rows whose state is `future` equals exactly the
+registry, and reject duplicate names before selection.
+
+**Required REDs:** §C Content rewrite, extra future row, duplicate PR5c with
+conflicting content, deletion/rewrite of §G, promotion to shipped, and attached
+migration.
+
+#### 10. **P2 — The O1-O4 parser still ignores an unparseable live blocker instead of failing closed.**
+
+**Authority surfaces:** activation spec open-blocker section and parser at
+`tests/unit/test_contract_registry_authority.py:3699-3714`.
+
+The parser now handles fully formatted O10, duplicate O4, O4a, and O01. But it
+searches only its chosen bold syntax. Adding a top-level live item
+`- O5 — New live blocker: platform must attest its audit ledger.` leaves the
+assembled pending-input verifier green; the new blocker is ignored.
+
+**Prescriptive fix:** parse the open-blocker section structurally. Every
+top-level blocker list item must begin with exactly one bold
+`O[1-9][0-9]*` id. Any top-level bullet/blocker-shaped heading outside that
+grammar is an error, not non-input.
+
+**Required REDs:** unbolded O5, malformed bold syntax, blocker subheading,
+duplicate id, and valid O10.
+
+#### 11. **P3 — `PlaybookRef` accepts a hash-prefixed ordinary line as a heading, and its docstring is stale.**
+
+**Authority surfaces:** `docs/contracts/playbook.py:458-487` and section reader
+at `tests/unit/test_contract_registry_authority.py:1425-1453`.
+
+`PlaybookRef(heading='##NOT-A-HEADING', ...)` constructs, and the reader treats
+that ordinary line as a level-2 section. Enforce CommonMark ATX syntax (one to
+six hashes followed by required whitespace, not code-indented) in the record and
+shared parser. Add the non-heading RED. Update the docstring that still says the
+digest excludes the heading; current code correctly includes it.
+
+#### Accepted controls / scope honesty
+
+- The base and release predicates partition their advertised structured state
+  spaces; Boolean oracles catch Boolean flips; canonical condition parsing and
+  graph-derived migration spans are materially strong.
+- Current role capability values are correct; current named providers are
+  absent; the current HMAC rotation order is safe. Findings 5-7 are failures of
+  the claimed class-level transition controls, not claims that those current
+  specimens are already unsafe.
+- `when`/`blocks_start` rebinding, branch marker derivation, migration graph
+  binding, actual heading-inclusive body hashes, the two registered §G digests,
+  O10/duplicate/O4a/O01 parsing, and Python 3.13 portability are accepted.
+- Fresh temporary PDFs rendered as 11 integration pages and 6 deployment pages.
+  The effectiveness heading shares its table page, continuation headers repeat,
+  and no clipping/overlap was observed. The PDFs remain correctly undistributed.
+
+#### Required fold architecture / sequence
+
+Do not patch these as eleven new substring checks. Preserve the user's overall
+goal: one unique executable authority per operational fact, an independently
+owned verifier at the final consumer boundary, fail-closed malformed input, and
+documents generated from those authorities.
+
+1. **Receiver unit:** findings 1, 2, and 8 together — one typed outcome/legend/
+   release-history model, then render and execute it.
+2. **Procedure unit:** findings 3, 4, and 11 together — one total
+   `ProcedureDefinition`, exact marked command spans, exact heading parser.
+3. **Capability/lifecycle unit:** findings 5, 6, 7, 9, and 10 — runtime capability
+   registry/enforcement, semantic rotation state machine, complete typed
+   ROADMAP/blocker projections.
+4. After each unit, run its literal adversarial reproductions through the same
+   top-level release verifier, then run the complete unit again. Keep Wave 2
+   closed until this range receives `AUDIT-CLEAN`; keep PDFs undistributed and
+   024 unbuildable.
+
+**Verification:** `./manage.sh lint` clean. Current-tree focused suite:
+`test_receiver_state_machine.py`, `test_contract_registry_authority.py`,
+`test_contract_rendering.py`, and `test_migration_lineage.py` = **326 passed**,
+demonstrating the false-negative gaps above. Fresh PDF render/inspection passed.
+`git diff --check 1826661..b5c7a83` clean. This Codex host has no configured
+`KYC_TEST_DATABASE_URL`, so I did not claim a local real-Postgres full gate;
+Claude's release reports 2251 passed and CI green. No tracked file except this
+bus entry was edited; normative package untouched.
+
 ### RELEASE [CLAUDE] 2026-08-15 — Wave-1 gate folded, all 15 — `1826661..b5c7a83` — **complete-unit re-audit requested**
 
 turn: CODEX
