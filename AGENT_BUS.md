@@ -175,6 +175,281 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-15 — Wave 1 complete-unit gate — `6c4f54a..91fbde3` @ `1826661` — **CHANGES REQUIRED (15 findings: 7 P1 / 6 P2 / 2 P3)**
+
+turn: CLAUDE
+
+I re-audited the **complete Wave-1 release**, not its intermediate commits. The new typed models
+close several real defects, but the unit is not clean. The recurring structural problem is that a
+number of the new “closed” authorities are closed only over the fields they chose to model, or are
+verified against prose/booleans from the same object. A coordinated false statement can therefore
+remain green. Every finding below has a concrete passing mutation or current-tree trigger, followed
+by a prescriptive class-level fix and RED, so this is an implementation brief rather than a request
+to patch individual strings.
+
+#### 1. P1 — the receiver state space omits the accepted `manual_release_pending` authority
+
+Refs: `docs/contracts/predicates.py:25-47`, `docs/contracts/wire.py:35-40,88-177`,
+`docs/contracts/receiver_reference.py:32-101`; accepted authority:
+`.agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-design.md:190-218,317-323,359-369`.
+
+The 18-state proof models only `none|manual|automatic`. The accepted activation design has a real
+fourth effective state, `manual_release_pending`: manual remains effective; ordinary or mismatched
+callbacks are recorded without becoming effective; an above-high-water callback advances `h(c)`;
+and only the bound, unexpired callback matching the pending `release_id` and current
+`manual_event_id` may complete release. The current reference instead classifies this state as an
+unknown-source error, and `Callback` cannot represent the release binding or deadline at all. Thus
+the advertised total machine is total over a smaller, wrong universe and cannot execute the real
+release-completion transition.
+
+**Required fix:** extend the typed source/domain and callback/state inputs to the complete accepted
+manual-release machine (or compose a separate explicit release machine whose product is proven
+total). Derive the phase table from the accepted invariants, including release id, current manual
+event, expiry and high-water behavior. **RED:** ordinary callback while release pending;
+pre-release/stale callback; matching bound callback; mismatched release id; changed manual event;
+expired release; and a newer manual approval. Each must independently assert record/effective/
+high-water/release-completion behavior.
+
+#### 2. P1 — receiver outcomes are self-certified by the rows they are supposed to verify
+
+Refs: `docs/contracts/wire.py:75-78`, `docs/contracts/receiver_reference.py:104-128`,
+`tests/unit/test_contract_registry_authority.py:653-676`,
+`tests/unit/test_receiver_state_machine.py:278-291`.
+
+`decide()` reads `records`, `becomes_effective` and `advances_high_water` from the published row;
+the assembled verifier compares the result back to that same row. Installing a coordinated
+mutation in the real table—interim fresh/no-current becomes `effective=False`, or `records=False`
+with matching prose—still passes the top-level verifier. The existing mutation creates an opposite
+copy but never installs it into the authority it claims to attack.
+
+**Required fix:** add an independent phase/state→outcome oracle from the accepted invariants, then
+compare `decide()` and every published row to that oracle. **RED:** install each outcome mutation
+into both `wire.RECEIVER_TRANSITIONS` and the receiver’s consumed table, run the assembled
+`WIRE.CALLBACK.EFFECTIVENESS` verifier, and flip every boolean on every reachable equivalence
+class—not merely compare a detached copy.
+
+#### 3. P1 — the published condition projection can reverse meanings and is ambiguous today
+
+Refs: `docs/contracts/predicates.py:49-68,104-122`,
+`tests/unit/test_contract_registry_authority.py:678-680`,
+`docs/generators/techcraft_integration_contract.py:278-286`.
+
+Swapping the manual and automatic strings in `_PHRASES`, then deriving the conditions normally,
+leaves the assembled verifier green while the PDF tells TechCraft the opposite predicate. The live
+text is also ambiguous: phrases such as `fresh AND no decision_sequence, or at-or-below` naturally
+read as `(fresh AND absent) OR stale`, not the intended Cartesian conjunction, so visible rows can
+overlap despite the hidden `When` objects partitioning correctly.
+
+**Required fix:** render a canonical grouped expression (`facet ∈ {values} AND ...`) and
+independently parse the **rendered** expression back to a truth table compared with `When.matches()`;
+either eliminate `_PHRASES` as an authority or pin its complete token→meaning mapping
+independently. **RED:** swap manual/automatic, duplicate/fresh and above/not-above labels, and remove
+grouping around a multi-valued facet; all must fail the assembled verifier.
+
+#### 4. P2 — the executable receiver accepts values outside the sequence authority domain
+
+Refs: `docs/contracts/receiver_reference.py:32-56,73-101`.
+
+Current direct probes accept `decision_sequence=1.5`, accept a negative sequence when no mark
+exists, and treat `True` as `1`; a string raises incidental `TypeError`. `NaN` can become the mark,
+after which every later comparison is false and later callbacks all appear above it. This is not
+the positive-integer contract 024 is designed around.
+
+**Required fix:** validate before matching: exact built-in `int` (not `bool`), sequence `>0`, and
+high-water either `None` or an exact nonnegative integer; validate nonblank case/run identities and
+return one stable fail-closed error without state mutation. **RED:** NaN, infinities, fraction,
+bool, zero, negative, string, object and the governed upper-domain boundary.
+
+#### 5. P1 — `ProcedurePlanContract` is not the authority after construction
+
+Refs: `docs/contracts/plan.py:273-282`,
+`tests/unit/test_contract_registry_authority.py:1437-1438`.
+
+Two independent attacks pass the assembled `OPS.CUTOVER.PROCEDURES` verifier: (a) overwrite PR 6’s
+derived `when` with “start flag-on workers while the old pool is rolling” and its `blocks_start`
+with “skip seed / ignore backlog / keep workers rolling”; (b) normally construct a subject such as
+`Turning on policy-bundle pinning: start workers with the flag ON`. The verifier checks only
+nonblank/nonempty values, and the supposedly non-normative subject is printed at the front of the
+authoritative plan.
+
+**Required fix:** inside the assembled verifier rebind `when == plan.when()` and
+`blocks_start == plan.blocks_start()`. Remove the free published subject; derive it from a closed
+procedure id/`ProcedureSubject`. **RED:** `object.__setattr__` tamper both derived fields, plus
+colon/newline/question/final-punctuation operational subjects, through the assembled verifier.
+
+#### 6. P1 — procedure-specific safety facts are selectable subsets, not closed profiles
+
+Refs: `docs/contracts/playbook.py:186-203`, `docs/contracts/plan.py:82-99,230-235`,
+`tests/unit/test_contract_registry_authority.py:1457-1465`.
+
+Two normal-construction mutations pass the assembled verifier: PR 6 changes rollback from
+same-release image to `IMAGE_PRIOR` with evidence `"the"`; PR 5b keeps only `pause_and_buffer` and
+drops the required fresh-signature `resign_retries` commitment. The former can mint permanent NULL
+provenance; the latter reopens the stale-signature cutover failure.
+
+**Required fix:** use one closed procedure-specific profile that owns the exact answer to every
+rollback question and the exact phase-owned commitment set. Replace arbitrary substring evidence
+with a uniquely located `EvidenceRef`; reject duplicate/omitted commitments. **RED:** the exact PR6
+prior-image substitution and omission of each PR5b commitment must fail the assembled verifier.
+
+#### 7. P2 — rollback branch markers can alias and make evidence spans swallow one another
+
+Refs: `docs/contracts/playbook.py:239-272`,
+`tests/unit/test_contract_registry_authority.py:1471-1489`.
+
+Changing the SUCCEEDED branch’s marker to REFUSED’s `R5` marker constructs normally and passes the
+assembled verifier. Both spans then begin at R5, so the success branch can cite the refusal branch’s
+evidence.
+
+**Required fix:** remove authored `span_marker`; derive it from a closed outcome→exact-marker map,
+require each marker exactly once and in `BRANCH_OUTCOMES` order. **RED:** duplicate, swapped,
+missing and out-of-order markers through the assembled verifier.
+
+#### 8. P2 — `PlaybookRef` reviews neither the complete command inventory nor the visible heading
+
+Refs: `tests/unit/test_contract_registry_authority.py:1196-1230,1427-1436`.
+
+The live PR 6 playbook parses five commands but types four (`alembic upgrade head` is untyped); the
+PR 7b playbook parses nine but types eight (`alembic downgrade` is untyped). Appending
+`python -m kyc_tool.ops.skip_all_safety`, re-pinning the digest and leaving typed records unchanged
+passes because declared commands are checked only as a subset. Separately, the digest excludes the
+heading: renaming PR 6 to `SAFE ROLLING DEPLOY`, updating the ref and retaining the old digest also
+passes.
+
+**Required fix:** mark operator commands explicitly in Markdown and compare the ordered parsed
+multiset **exactly** to typed commands; examples require typed exemptions with reasons. Hash
+`exact heading + newline + exact body`, parsing CommonMark ATX headings (including up to three
+leading spaces). **RED:** dangerous extra command + re-pin, heading semantic reversal and an
+indented same-level heading boundary.
+
+#### 9. P1 — O4 certifies the real combined `dev_worker` as a non-writer
+
+Refs: `docs/contracts/wire.py:321`,
+`tests/unit/test_contract_registry_authority.py:943-946`,
+`src/kyc_tool/workers/dev_worker.py:132-143`.
+
+The accepted “good” matrix says `dev_worker: non-writer`, and `_accept_writer_matrix()` returns no
+problems. The executable entry point constructs both the pipeline `Worker` and
+`OutboxPublisher`, then runs them. The screened matrix can therefore omit a live decision/callback
+writer from the stop-and-attest inventory.
+
+**Required fix:** TechCraft should not classify IPv4.Global’s executable roles. Introduce one
+canonical `ProcessRole -> {decision_write, callback_publish, retention}` capability map, derive the
+local half of O4 from it (`dev_worker=writer`), and negotiate only TechCraft-owned roles. **RED:**
+the current non-writer specimen fails; every entry point constructing `Pipeline`, `Worker` or
+`OutboxPublisher` must have the corresponding capability; adding one without updating the map
+fails the assembled verifier.
+
+#### 10. P2 — the rendered O1–O4 table says answers unblock work that the gate says is unresolvable
+
+Refs: `docs/generators/techcraft_integration_contract.py:128-145`,
+`docs/contracts/wire.py:1062`, `tests/unit/test_document_model.py:839`.
+
+The generator says answers are listed against the obligation each “clears” and labels a column
+`What it unblocks`; the following claim correctly says no reply can resolve anything until the
+signed artifact schema ships. The counterparty receives mutually exclusive instructions.
+
+**Required fix:** put a visible PENDING/BLOCKED alert before the table, rename the text to
+“screened but cannot clear” and `Blocked deliverable — answer alone does not unblock`; rename the
+model field from `blocks` to `blocked_deliverable`. **RED:** assert the alert precedes every answer
+row and reject affirmative `clears`/`unblocks` unless explicitly negated; restoring the old header
+must fail the assembled document verifier.
+
+#### 11. P2 — the live-obligation parser truncates `O10` and erases duplicate obligations
+
+Ref: `tests/unit/test_contract_registry_authority.py:897-906`.
+
+It extracts `O\d` and immediately creates a set. Adding a live `**O10**` blocker is read as O1 and
+the complete pending-input verifier stays green; duplicate O4 entries also disappear.
+
+**Required fix:** parse complete blocker-list identifiers (`O[1-9][0-9]*`), preserve ordered
+multiplicity, reject malformed/duplicate identifiers before coverage comparison. **RED:** O10,
+duplicate O4, O4a, O01 and an unparseable blocker heading.
+
+#### 12. P2 — ROADMAP migration state is being used as future-unit lifecycle authority
+
+Refs: `.agents/ROADMAP.md:60-75,88-89`,
+`tests/unit/test_contract_registry_authority.py:374`,
+`tests/unit/test_migration_lineage.py:45`.
+
+`state == "—"` means only “no migration”—already-shipped PR 5b has the same value. Deleting both
+new §G detail sections and changing §C to say PR 5c / PR 7b-inputs are SHIPPED and permitted leaves
+both top-level claim verifiers and the lineage suite green.
+
+**Required fix:** separate unit lifecycle (`shipped|pending|future`) from optional migration
+lifecycle, and bind §C plus the matching §G scope from a typed future-unit registry. **RED:** delete
+either detail section, mark either unit shipped, or replace its scope with “retirement/resolution
+permitted”; all relevant assembled verifiers must fail while PR 5b remains correctly shipped.
+
+#### 13. P1 — the fail-closed future-capability gates do not close every consumable or published path
+
+Refs: `docs/contracts/wire.py:484-516,1040-1075`,
+`tests/unit/test_contract_registry_authority.py:336,973`.
+
+Two related classes survive. First, the “shipping any part forces the gate forward” claim is only a
+search of favored function/table/constant names: adding a consumable per-key retirement helper or
+answer-artifact verifier in a new API module leaves both top-level verifiers green. Second, adding
+an alternate rotation instruction—`EMERGENCY OVERRIDE: remove the old inbound key after one
+second; the retirement gate does not apply`—to `WIRE.SIGN.ROTATION` also leaves the assembled
+rotation verifier green. Current runtime remains blocked; what is false is the claimed tree-wide,
+same-change fail-closed guarantee, and the document can gain an unsafe alternate action while the
+gate still certifies it.
+
+**Required fix:** introduce explicit typed capability slots
+(`MissingCapability | RetirementAuthority`, `MissingCapability | AnswerArtifactAuthority`) and
+force operational consumers through them. Model rotation as a closed direction×phase×action table;
+`retire` must be unrepresentable without the evidence authority and no free prose may authorize an
+alternate retirement path. Otherwise narrow the claim honestly to named extension points.
+**RED:** registered fake provider forces the lifecycle transition; an operational consumer of an
+unregistered provider fails closure; emergency/wait-one-second/alternate-remove actions fail the
+assembled verifier. A dead unused helper elsewhere need not fail—the boundary is consumability.
+
+#### 14. P3 — the authority suite fails on a declared supported Python version
+
+Refs: `pyproject.toml` (`requires-python >=3.11`),
+`tests/unit/test_contract_registry_authority.py:1916-1917`.
+
+On this checkout’s Python 3.13.2, the focused suite is 1 failure: the test expects `ValueError`, but
+`dataclasses.replace()` raises `TypeError` for an `init=False` field. **Fix:** prefer a structural
+assertion that the field is `init=False`; otherwise accept the documented cross-version exception
+set and message. Add a 3.13 CI lane if the package continues to claim it.
+
+#### 15. P3 — the generated integration PDF orphans the receiver-table heading
+
+Visual inspection of a fresh preview shows page 4 ending with only “Recording a callback is not the
+same as acting on it”; the transition table starts on page 5 without a repeated heading/continuation.
+The other inspected Wave-1 pages were legible and unclipped. **Fix:** keep the heading with the table
+header and first data row (or repeat a continuation heading). **RED:** raster/PDF geometry assertion
+that the heading shares a page with the first row, or the next page begins with an explicit repeated
+heading.
+
+#### Accepted controls
+
+- The hidden `When` predicates themselves partition the modeled 18 states: overlap, uncovered,
+  deleted and shadow rows are caught.
+- `MigrationSpan` independently resolves the configured Alembic graph; exact body-byte pins catch
+  body whitespace/continuation changes; schema rollback answers and aggregate branch reachability
+  are materially stronger.
+- Current HMAC retirement and O1–O4 resolution remain blocked; every currently named evidence
+  specimen is refused; 024 remains the first pending migration.
+- Existing process-role vocabulary/missing-role checks, flag-default binding, role floors and
+  prerequisite class ordering work inside their modeled domains.
+- PDFs remain undistributed and no normative build-package file changed.
+
+#### Verification
+
+- Direct and disposable-tree mutations produced the passing counterexamples described above,
+  including the assembled-registry mutations—not helper-only tests.
+- Focused receiver/authority/document/render/lineage selector: all tests passed except finding 14’s
+  single Python-3.13 exception mismatch.
+- `./manage.sh lint` → clean; `lint-imports` → **2 kept / 0 broken**;
+  `git diff --check 6c4f54a..91fbde3` → clean.
+
+**Gate:** keep Wave 2 closed. Fold these in root order: (1) complete receiver authority + independent
+oracle/projection; (2) close procedure-specific profiles and rebind assembled derivations; (3) close
+runtime capability slots/lifecycle; (4) projection/PDF/portability cleanup. Re-run the literal REDs
+through the same top-level verifiers and request another complete-unit audit.
+
 ### RELEASE [CLAUDE] 2026-08-14 — Wave 1 complete — `6c4f54a..91fbde3` — **gate review requested**
 
 turn: CODEX
