@@ -322,6 +322,16 @@ class Doc:
         self.story.append(Paragraph(escape(text), H2))
         self._add(Block(kind="heading", claim_id=None, lines=(text,)))
 
+    def keep_last_together(self, count: int) -> None:
+        """Glue the last `count` story flowables into one KeepTogether, so a heading cannot be
+        orphaned at a page bottom while its content starts on the next (gate audit
+        `6c4f54a..91fbde3` finding 15). Packing only: the block model is untouched."""
+        if count < 2 or len(self.story) < count:
+            raise ValueError("keep_last_together needs at least a heading and its content")
+        tail = self.story[-count:]
+        del self.story[-count:]
+        self.story.append(KeepTogether(tail))
+
     def p(self, markup: str, style=BODY):
         """Prose. Bold spans are allowed here, so this takes pre-escaped markup."""
         self.story.append(Paragraph(markup, style))

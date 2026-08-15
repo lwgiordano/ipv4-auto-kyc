@@ -1070,14 +1070,16 @@ def _pending_024_inputs_cover_every_live_obligation():
             / "2026-07-22-pr7b-activation-platform-ordering-design.md").read_text()
     live = spec[spec.index("## Open blockers"):]
     live = live[: live.index("\n## ", 1)] if "\n## " in live[1:] else live
-    obligations = set(re.findall(r"\*\*(O\d)\b", live))
-    assert obligations == {"O1", "O2", "O3", "O4"}, f"the live obligation set changed: {obligations}"
+    obligations = _live_obligation_ids(live)
+    assert obligations == ["O1", "O2", "O3", "O4"], (
+        f"the live obligation list changed: {obligations}"
+    )
 
     inputs = WIRE.value("WIRE.ORDERING.PENDING_INPUTS")
     covered = {i.obligation for i in inputs}
-    assert covered == obligations, (
-        f"uncovered obligations {sorted(obligations - covered)}; "
-        f"inputs naming nothing live {sorted(covered - obligations)}"
+    assert covered == set(obligations), (
+        f"uncovered obligations {sorted(set(obligations) - covered)}; "
+        f"inputs naming nothing live {sorted(covered - set(obligations))}"
     )
     for item in inputs:
         assert item.owner in {"TechCraft", "IPv4.Global", "both"}, item.owner
@@ -1094,7 +1096,8 @@ def _pending_024_inputs_cover_every_live_obligation():
         # every input must ASK something: a question mark, or an explicit request to confirm
         assert "?" in item.question or item.question.startswith(("Confirm", "Agree")), (
             f"{item.obligation}: this input asks nothing")
-        assert item.answer_type.strip() and item.authority.strip() and item.blocks.strip()
+        assert item.answer_type.strip() and item.authority.strip()
+        assert item.blocked_deliverable.strip()
         assert item.obligation in item.authority, (
             f"{item.obligation}: the authority reference does not name its own obligation"
         )
@@ -2197,8 +2200,13 @@ def test_understating_the_migration_range_cannot_erase_the_boundary():
     pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
                 if p.name == "Migrations 013-023")
 
-    # (a) the range cannot be authored at all
-    with pytest.raises(ValueError, match="init=False"):
+    # (a) the range cannot be authored at all. Structural first (gate finding 14): the field IS
+    #     init=False, which is the property the refusal rests on; then the refusal itself, whose
+    #     exception type is version-dependent (ValueError through 3.12, TypeError on 3.13+) —
+    #     pinning one type made the suite fail on a declared-supported Python.
+    range_field = next(f for f in dataclasses.fields(Procedure) if f.name == "migration_range")
+    assert range_field.init is False
+    with pytest.raises((ValueError, TypeError)):
         dataclasses.replace(pr7b, migration_range=("018", "019", "020", "021", "022", "023"))
 
     # (b) a name that understates its span refuses at construction
@@ -3652,3 +3660,47 @@ def test_f8_exemptions_must_be_honest():
         ref, exempt=(*ref.exempt, playbook.CommandExemption(
             argv=("alembic", "never-parsed-anywhere"), reason="a dead exemption")))
     assert _command_inventory_problems(dead, section), "a dead exemption was accepted"
+
+
+# ── Wave-1 gate F11 (parser half) + F14: portability of the live authorities ──────────────────────
+
+
+def _live_obligation_ids(live: str) -> list[str]:
+    """The blocker list's obligation identifiers, ORDERED, with multiplicity checked — refusing
+    malformed and duplicate identifiers BEFORE any coverage comparison (gate audit
+    `6c4f54a..91fbde3` finding 11). The old `O\\d` + immediate set() silently mis-read a live
+    **O10** and erased a duplicated obligation, so the coverage assert stayed green while the
+    spec named work the document never asked about."""
+    ids = []
+    for raw in re.findall(r"\*\*(O[0-9][^*]*)\*\*", live):
+        token = re.fullmatch(r"(O[0-9]+)(?:[^0-9A-Za-z].*)?", raw, re.DOTALL)
+        if not token or not re.fullmatch(r"O[1-9][0-9]*", token.group(1)):
+            raise ValueError(f"malformed obligation identifier {raw!r} in the live blocker list")
+        ids.append(token.group(1))
+    duplicates = {i for i in ids if ids.count(i) > 1}
+    if duplicates:
+        raise ValueError(f"duplicate obligation identifiers {sorted(duplicates)}")
+    return ids
+
+
+def test_f11_gate_the_obligation_parser_reads_complete_identifiers():
+    """The audit's specimens: O10 read as O1, duplicate O4 erased, O4a and O01 accepted-shaped.
+    Each is now an explicit outcome: complete ids in order, duplicates and malformed refused."""
+    assert _live_obligation_ids("**O1** a\n**O2** b\n**O10** c") == ["O1", "O2", "O10"]
+    with pytest.raises(ValueError, match="duplicate"):
+        _live_obligation_ids("**O4** x\n**O4** y")
+    with pytest.raises(ValueError, match="malformed"):
+        _live_obligation_ids("**O4a** x")
+    with pytest.raises(ValueError, match="malformed"):
+        _live_obligation_ids("**O01** x")
+    # a titled entry — the live spec's own format — reads as its id, not as malformed
+    assert _live_obligation_ids("**O4 (was F3) — both decision writers fenced.**") == ["O4"]
+
+
+def test_f11_gate_the_old_parser_would_have_misread_the_specimens():
+    """Fossil: the defeated `O\\d` + immediate-set() reading, kept executable so the audit's
+    reproduction stays red against it forever — a live O10 was invisible and a duplicated O4
+    collapsed silently, leaving the coverage assert green."""
+    old = set(re.findall(r"\*\*(O\d)\b", "**O1** a **O10** c **O4** x **O4** y"))
+    assert "O10" not in old
+    assert old == {"O1", "O4"}

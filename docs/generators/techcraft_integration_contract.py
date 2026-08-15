@@ -129,20 +129,25 @@ def build(*, contact: str, due_date: str) -> Doc:
     )
     doc.p(
         "Those three answers are necessary and not sufficient. The activation unit is blocked on "
-        "decisions only your side can make, listed below against the obligation each one clears. "
-        "We cannot build 024 without all of them."
+        "decisions only your side can make, listed below with the deliverable each one blocks. "
+        "An answer is screened but cannot clear its obligation yet — the note above the table "
+        "says why — and we cannot build 024 without all of them."
     )
+    # The PENDING alert renders BEFORE any answer row (gate finding 10): the note carries the
+    # no-reply-can-RESOLVE statement, and putting it after the table handed the reader the rows
+    # first and the truth second.
+    doc.claim_note("WIRE.ORDERING.PENDING_INPUTS")
     doc.claim_table(
         "WIRE.ORDERING.PENDING_INPUTS",
-        ("#", "Owner", "What we need to know", "Answer shape", "What it unblocks"),
-        # the "unblocks" column has to fit `manual.release_requested` whole
-        [0.35 * INCH, 0.8 * INCH, 2.4 * INCH, 1.3 * INCH, 1.85 * INCH],
-        rows=[(i.obligation, i.owner, i.question, i.answer_type, i.blocks)
+        ("#", "Owner", "What we need to know", "Answer shape",
+         "Blocked deliverable — answer alone does not unblock"),
+        # the deliverable column has to fit `manual.release_requested` whole
+        [0.35 * INCH, 0.8 * INCH, 2.35 * INCH, 1.25 * INCH, 1.95 * INCH],
+        rows=[(i.obligation, i.owner, i.question, i.answer_type, i.blocked_deliverable)
               for i in WIRE.value("WIRE.ORDERING.PENDING_INPUTS")],
         # `authority` is the internal spec reference; it is checked, not printed.
-        row_fields=("obligation", "owner", "question", "answer_type", "blocks"),
+        row_fields=("obligation", "owner", "question", "answer_type", "blocked_deliverable"),
     )
-    doc.claim_note("WIRE.ORDERING.PENDING_INPUTS")
     doc.p(
         "<b>1.2 Dedupe commitment.</b> Confirm you dedupe callbacks on (case_id, run_id) and "
         "drop a late duplicate that arrives after a newer decision."
@@ -287,6 +292,9 @@ def build(*, contact: str, due_date: str) -> Doc:
         # the reader gets, and a test asserts the two halves agree
         row_fields=("phase", "condition", "record", "effective", "why"),
     )
+    # heading + note + table travel as one unit: the heading must never sit alone at a page
+    # bottom with the table starting overleaf (gate finding 15)
+    doc.keep_last_together(3)
     doc.claim_table(
         "WIRE.CALLBACK.LEGEND",
         ("Token", "Meaning"),

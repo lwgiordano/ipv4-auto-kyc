@@ -826,3 +826,21 @@ def test_the_section_footer_tracks_section_changes(tmp_path):
     doc = _build(deploy_gen)
     doc.build(str(tmp_path / "track.pdf"), "track")
     assert len(set(doc.page_sections.values())) > 1, doc.page_sections
+
+
+def test_f15_gate_the_effectiveness_heading_shares_a_page_with_its_table(tmp_path):
+    """Gate audit `6c4f54a..91fbde3` finding 15: a fresh preview showed page 4 ending with only
+    'Recording a callback is not the same as acting on it', the transition table starting
+    overleaf with no repeated heading. The heading, its note, and the table now travel as one
+    KeepTogether unit, proven by geometry: the heading's page must also carry the table header."""
+    path = str(tmp_path / "keep.pdf")
+    _build(contract_gen).build(path, "keep")
+    heading = "Recording a callback is not the same as acting on it"
+    with pdfplumber.open(path) as pdf:
+        pages = [(p.extract_text() or "") for p in pdf.pages]
+    heading_pages = [i for i, text in enumerate(pages) if heading in text]
+    assert len(heading_pages) == 1
+    page = pages[heading_pages[0]]
+    assert "When this row applies" in page, (
+        "the effectiveness heading is orphaned: its table does not start on the same page"
+    )

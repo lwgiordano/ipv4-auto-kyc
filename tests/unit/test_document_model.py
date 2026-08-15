@@ -562,7 +562,9 @@ NARRATION_LABELS = {
                                         "checks separately"),
     ("contract", "asks", 0): ("c77063c9a829011c", "1.1 heading + why ordering is asked for"),
     ("contract", "asks", 1): ("f7662c6b9304e6b7", "1.1 what we need now is not code"),
-    ("contract", "asks", 2): ("d5c7111569ed9c66", "1.1 necessary and not sufficient"),
+    ("contract", "asks", 2): ("2c5f41e9c09d3884",
+                              "1.1 necessary and not sufficient; screened but "
+                              "cannot clear (gate finding 10)"),
     ("contract", "asks", 3): ("3f901c37e3839bdc", "1.2 dedupe commitment"),
     ("contract", "asks", 4): ("87c2e7c956b36fc0", "1.3 callback URL and key exchange"),
     ("contract", "asks", 5): ("a6143e1512e363d3", "1.4 document upload path"),
@@ -836,11 +838,15 @@ def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatc
 
 RENDERER_PROSE = {
     # ── contract ──────────────────────────────────────────────────────────────────────────────
-    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 0): ("3b14b4a6307e5905", "024 asks table headers"),
-    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 1): ("19c2b2f7d5f9a473",
+    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 0): ("19c2b2f7d5f9a473",
                                                       "what 024 cannot be built without + no "
                                                       "reply can RESOLVE an obligation until the "
-                                                      "answer-artifact schema ships"),
+                                                      "answer-artifact schema ships (the alert "
+                                                      "now PRECEDES the table, gate finding 10)"),
+    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 1): ("3bd98b07b64356ec",
+                                                      "024 asks table headers; the deliverable "
+                                                      "column is negated: answer alone does not "
+                                                      "unblock"),
     ("contract", "WIRE.INGEST.HEADERS", 0): ("9e9d62e11f51e35c", "header table headers + why column"),
     ("contract", "WIRE.INGEST.EXTRA_FIELDS", 0): ("3dbd54f03ecebb08",
                                                   "the forward-compatibility commitment: we add "
@@ -1004,3 +1010,36 @@ def test_the_connective_residue_is_stable_under_overlapping_leaf_values(rendered
                 f"{block.claim_id}: the claim value {leaf[:40]!r} survived into the residue, so "
                 "the pin would cover registry-owned content and fail on a legitimate claim edit"
             )
+
+
+# ── Wave-1 gate F10: the answer table may not contradict the resolution gate ──────────────────────
+#
+# Gate audit `6c4f54a..91fbde3` finding 10. The generator said answers are "listed below against
+# the obligation each one clears" and headed a column "What it unblocks", while the claim beside
+# it correctly said no reply can resolve anything until the signed artifact schema ships — the
+# counterparty received mutually exclusive instructions.
+
+
+def test_f10_gate_the_unresolvable_alert_precedes_the_answer_table():
+    """The PENDING note (which carries the no-reply-can-resolve statement) must be VISIBLE before
+    any answer row, and the deliverable column must be negated, not affirmative."""
+    doc = _build(contract_gen)
+    blocks = [b for b in doc.blocks if b.claim_id == "WIRE.ORDERING.PENDING_INPUTS"]
+    note_at = next(i for i, b in enumerate(blocks) if b.projection == projection.NOTE)
+    table_at = next(i for i, b in enumerate(blocks) if b.kind == "table")
+    assert note_at < table_at, "the resolution-impossible note renders after the answer rows"
+    header_row = blocks[table_at].rows[0]
+    assert any("does not unblock" in cell for cell in header_row), header_row
+    assert not any(cell == "What it unblocks" for cell in header_row), (
+        "the affirmative header is back"
+    )
+
+
+def test_f10_gate_no_affirmative_clearing_language_in_the_asks_section():
+    """The framing prose may not promise that an answer CLEARS an obligation while the gate says
+    resolution is impossible; the screened-but-cannot-clear wording is the honest form."""
+    doc = _build(contract_gen)
+    asks = next(s for s in doc.sections if s.section_id == "asks")
+    prose = " ".join(" ".join(b.lines) for b in asks.blocks)
+    assert "each one clears" not in prose
+    assert "screened" in prose and "cannot clear" in prose

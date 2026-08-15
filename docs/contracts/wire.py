@@ -368,7 +368,7 @@ class PendingInput:
     question: str
     answer_type: str
     authority: str
-    blocks: str  # the deliverable that cannot be built until this is answered
+    blocked_deliverable: str  # cannot be built until this is answered AND the artifact schema ships
     accept: object = None  # Callable[[dict], list[str]] -> reasons it is NOT acceptable
     must_reject: tuple[tuple[str, dict], ...] = ()  # named unusable answers, for the RED tests
 
@@ -525,7 +525,7 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
                  "auth result must carry the verified HMAC VERSION, not just verified/not.",
         answer_type="principal identifier + key id + which HMAC version it signs with",
         authority="activation spec O1 (manual-release authority, executable and relationally bound)",
-        blocks="the manual.release_requested request model and its admission gate",
+        blocked_deliverable="the manual.release_requested request model and its admission gate",
         accept=_accept_principal,
         must_reject=(
             ("a v1 signature", {"principal": "platform-svc", "hmac_version": "v1", "key_id": "k1"}),
@@ -541,7 +541,7 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
         answer_type="duration + the clock that owns it (platform DB time, per O2)",
         authority="activation spec O1 (request model: release id, requested manual event, "
                   "authoritative deadline/TTL)",
-        blocks="the release request model and the expiry reaper",
+        blocked_deliverable="the release request model and the expiry reaper",
         accept=_accept_deadline,
         must_reject=(
             ("a local process clock", {"clock": "local process", "ttl_seconds": 900}),
@@ -559,7 +559,7 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
                  "What is the reaper's cadence, and how is a lost outcome recovered?",
         answer_type="written confirmation + reaper cadence + outcome redelivery/recovery contract",
         authority="activation spec O2 (two-system convergence; no-traffic expiry)",
-        blocks="the outcome mirror, the expiry path, and every convergence test",
+        blocked_deliverable="the outcome mirror, the expiry path, and every convergence test",
         accept=_accept_terminal_authority,
         must_reject=(
             ("shared terminal authority", {"terminal_authority": "both",
@@ -585,7 +585,7 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
                  "id is rejected outright rather than admitted on a second case.",
         answer_type="written confirmation of global uniqueness + who allocates the id",
         authority="activation spec O3 (release-id scope and governance)",
-        blocks="the UNIQUE(release_id) constraint and its 409 path",
+        blocked_deliverable="the UNIQUE(release_id) constraint and its 409 path",
         accept=_accept_release_id,
         must_reject=(
             ("a per-case scope", {"scope": "per case", "allocated_by": "platform"}),
@@ -606,7 +606,7 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
         answer_type="role list per side + a stance on every process role + written agreement on "
                     "the old-image stop",
         authority="activation spec O4 (both decision writers fenced) + .agents/ROADMAP.md",
-        blocks="the activation migration's admission fence and its preflight",
+        blocked_deliverable="the activation migration's admission fence and its preflight",
         accept=_accept_writer_matrix,
         must_reject=(
             ("the inline manual approve omitted",
