@@ -38,7 +38,7 @@ def test_callback_retries_on_5xx_then_delivers(client, engine, post_event, worke
         session_factory,
         retry_settings,
         http_client=httpx.Client(transport=httpx.MockTransport(platform.handler)),
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))
+    process_role=process_context(ProcessRole.OUTBOX_WORKER, retry_settings))
     response, _ = post_event("case-retry", "recalculate.requested", {})
     run_id = response.json()["run_id"]
     worker.run_until_idle()
@@ -69,7 +69,7 @@ def test_callback_dead_letters_after_max_attempts(
         session_factory,
         dead_settings,
         http_client=httpx.Client(transport=httpx.MockTransport(platform.handler)),
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))
+    process_role=process_context(ProcessRole.OUTBOX_WORKER, dead_settings))
     response, _ = post_event("case-dead", "recalculate.requested", {})
     run_id = response.json()["run_id"]
     worker.run_until_idle()

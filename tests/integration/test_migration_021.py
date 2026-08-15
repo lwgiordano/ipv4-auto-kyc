@@ -241,7 +241,7 @@ def test_a_poisoned_row_no_longer_stops_the_whole_outbox(session_factory, settin
     pub = OutboxPublisher(
         session_factory, one_shot,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-        email_sender=_Sender(), process_role=process_context(ProcessRole.OUTBOX_WORKER))
+        email_sender=_Sender(), process_role=process_context(ProcessRole.OUTBOX_WORKER, one_shot))
 
     # scrub the head row's body the legal way (dead -> redact), then let it be reopened is
     # impossible — so instead prove the SURVIVING danger: a row already pending+redacted.

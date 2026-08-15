@@ -783,6 +783,7 @@ def _receiver_validation_rules_are_executable_and_precede_classification():
     and the executable boundary cannot drift."""
     from docs.contracts import receiver_reference as receiver
 
+    _receiver_surface_ok()  # the rules AND their specimen identities are pinned surface
     claim_ids = [c.id for c in WIRE.claims]
     validation_index = claim_ids.index("WIRE.CALLBACK.VALIDATION")
     assert validation_index < claim_ids.index("WIRE.CALLBACK.RECEIVER_TXN")
@@ -1632,10 +1633,12 @@ _STRICT_METACHAR = re.compile(r"\$\(|&&|\|\||<\(|;\s|\s>\s")
 
 
 def _command_shaped(text: str, strict: bool = False) -> bool:
-    """Would a reader read `text` as something to RUN? A known executable root leading an
-    argv, a root followed by a dash-flag or absolute path anywhere (the 'Run rm -rf ... now.'
-    prose shape), or shell metacharacters. Unicode whitespace lookalikes split like whitespace,
-    so an NBSP variant is still command-shaped."""
+    """Would a reader read `text` as something to RUN? Shape is STRUCTURAL (R-audit-4 finding
+    2 — a finite root list missed `/bin/rm` and `find ... -delete`): any multi-token text
+    carrying a dash-flag token or an absolute-path token is runnable whatever its first word,
+    a known executable root leading an argv is runnable, and shell metacharacters are
+    runnable. A LONE flag or path token is a mention — you cannot run a flag. Unicode
+    whitespace lookalikes split like whitespace, so an NBSP variant is still command-shaped."""
     tokens = text.split()
     if not tokens:
         return False
@@ -1643,10 +1646,23 @@ def _command_shaped(text: str, strict: bool = False) -> bool:
         return True
     if tokens[0].lower() in _COMMANDLIKE_ROOTS and len(tokens) >= 2:
         return True
-    for i, token in enumerate(tokens[:-1]):
-        if token.lower().strip(".,;:()`'\"") in _COMMANDLIKE_ROOTS and (
-                tokens[i + 1].startswith("-") or tokens[i + 1].startswith("/")):
-            return True
+    if len(tokens) >= 2:
+        for token in tokens:
+            bare = token.strip(".,;:()`'\"")
+            # a dash-flag token is executable fingerprint whatever the first word is
+            # (`/bin/rm -rf`, `find -delete`, `mytool --wipe-everything`); an absolute path
+            # ALONE is not — these documents legitimately mention API routes like
+            # /v1/cases/{id}/events in prose. A path only counts beside a flag or root.
+            if re.fullmatch(r"-{1,2}[A-Za-z][A-Za-z0-9-]*(=\S*)?", bare):
+                return True
+        for i, token in enumerate(tokens[:-1]):
+            bare = token.strip(".,;:()`'\"")
+            # a known root — bare or by absolute path — followed by a path/flag argument is an
+            # instruction wherever it sits in the sentence ("confirm with sha256sum /etc/...")
+            if (bare.lower() in _COMMANDLIKE_ROOTS
+                    or bare.rpartition("/")[2].lower() in _COMMANDLIKE_ROOTS) and (
+                    tokens[i + 1].startswith("-") or tokens[i + 1].startswith("/")):
+                return True
     return False
 
 
@@ -1665,13 +1681,13 @@ def _unmarked_instruction_problems(section_text: str) -> list:
                         f"a {node[2] or 'bare'} fence carries a command-shaped line outside "
                         f"the operator lane: {line.strip()[:70]!r}")
             continue
-        line = re.sub(r"(?<!`)``[^`]+?``(?!`)", " ", node[1])  # marked spans are reviewed
+        line = re.sub(r"(?<!`)``[^`]+?``(?!`)", "\u2039span\u203a", node[1])  # reviewed
         for span in re.findall(r"(?<!`)`([^`]+?)`(?!`)", line):
             if _command_shaped(span):
                 problems.append(
                     f"a single-backtick span is command-shaped — a mention cannot be "
                     f"runnable: {span[:70]!r}")
-        prose = re.sub(r"(?<!`)`[^`]+?`(?!`)", " ", line)
+        prose = re.sub(r"(?<!`)`[^`]+?`(?!`)", "\u2039span\u203a", line)
         if _command_shaped(prose):
             problems.append(
                 f"prose carries a command-shaped instruction outside any marked node: "
@@ -3914,6 +3930,14 @@ def _live_obligation_ids(live: str) -> list[str]:
     token outside an item head, and a duplicate or malformed identifier are each ERRORS —
     never non-input. Multiplicity and completeness stay checked (gate finding 11: O10 read
     complete, duplicates refused)."""
+    # R-audit-4 finding 6: `O&#53;` renders as O5 to a reader; an HTML comment can split a
+    # token. The obligation-bearing section is PLAIN by contract — entity references and HTML
+    # comments are refused outright, before any scan that could be blinded by them.
+    if re.search(r"&#\d+;|&#x[0-9A-Fa-f]+;|&[A-Za-z][A-Za-z0-9]*;|<!--", live):
+        raise ValueError(
+            "entity or comment obfuscation in the live blocker section — the section is "
+            "plain text by contract; write the obligation as a top-level bold-id item"
+        )
     lines = live.split("\n")
     if not lines or _atx_level(lines[0]) == 0:
         raise ValueError("the live blocker text does not start at its section heading")
@@ -4784,7 +4808,7 @@ ROTATION_PROFILE_PINS = {
     "OUTBOUND": ("accept_old_and_new", "hard_stop_attest_zero", "deploy_sole_new_signer",
                  "confirm_new_key_arrivals", "retire_old_key"),
 }
-ROTATION_SURFACE_PIN = "f44603ba2bff6b4d"
+ROTATION_SURFACE_PIN = "67139a6b27e53774"
 ROTATION_RATIONALES_PIN = "fbe2e74488509e50"
 
 
@@ -5141,19 +5165,21 @@ def test_ru5_a_role_outside_the_capability_map_is_refused(monkeypatch):
 def test_ru5_the_publisher_demands_the_callback_capability():
     """Constructing the outbox publisher is acquiring the callback-publish capability; a role
     the map does not grant it cannot construct one, aliased or not."""
-    from kyc_tool.config import ProcessRoleCapabilityError
+    from kyc_tool.config import ProcessRoleCapabilityError, Settings, validate_process_role
     from kyc_tool.outbox.publisher import OutboxPublisher
-    from tests.conftest import process_context as issue
 
+    settings = Settings()
     for role in (ProcessRole.RETENTION, ProcessRole.API, ProcessRole.PIPELINE_WORKER):
         with pytest.raises(ProcessRoleCapabilityError):
-            OutboxPublisher(object(), object(), http_client=object(),
-                            email_sender=object(), process_role=issue(role))
+            OutboxPublisher(object(), settings, http_client=object(),
+                            email_sender=object(),
+                            process_role=validate_process_role(settings, role))
     for role in (ProcessRole.OUTBOX_WORKER, ProcessRole.DEV_WORKER):
-        OutboxPublisher(object(), object(), http_client=object(),
-                        email_sender=object(), process_role=issue(role))
+        OutboxPublisher(object(), settings, http_client=object(),
+                        email_sender=object(),
+                        process_role=validate_process_role(settings, role))
     with pytest.raises(ProcessRoleCapabilityError, match="self-attestation"):
-        OutboxPublisher(object(), object(), http_client=object(),
+        OutboxPublisher(object(), settings, http_client=object(),
                         email_sender=object(), process_role=ProcessRole.OUTBOX_WORKER)
 
 
@@ -5193,7 +5219,7 @@ def test_ru5_writer_roles_construct_and_the_gate_reads_the_live_map(monkeypatch)
 # dedupe and terminal-release replay are distinct, separately rendered authorities. Finding 6:
 # the published contract orders validation before history/table consultation.
 
-RECEIVER_SURFACE_PIN = "f9568942885e5f5a"
+RECEIVER_SURFACE_PIN = "24ed7efcfa93edfc"
 
 
 def _receiver_surface_ok() -> None:
@@ -5590,3 +5616,184 @@ def test_r3f13_a_no_migration_future_row_outside_section_c_is_refused():
     assert any("PR 5d" in p for p in problems), (
         f"an outside-§C future reservation was accepted: {problems}"
     )
+
+
+# ── R-audit-4 `58276cb..4cb928a` (findings 1-7) ───────────────────────────────────────────────────
+
+
+def test_r4f1_contexts_are_registry_bound_not_object_trusted():
+    """The audit's three attacks: mutate an issued context's role, forge one without
+    validation, and reuse a dev-issued context against production settings. The constructors
+    now consult the ISSUANCE REGISTRY — what was validated, for which settings — never the
+    object's own say-so."""
+    from kyc_tool.config import (
+        ProcessContext,
+        ProcessRoleCapabilityError,
+        Settings,
+        validate_process_role,
+    )
+    from kyc_tool.queue.worker import Worker
+
+    dev = Settings()
+    issued = validate_process_role(dev, ProcessRole.RETENTION)
+    with pytest.raises(ProcessRoleCapabilityError):
+        issued.role = ProcessRole.PIPELINE_WORKER  # plain mutation refuses
+    object.__setattr__(issued, "role", ProcessRole.PIPELINE_WORKER)  # the back door
+    with pytest.raises(ProcessRoleCapabilityError):
+        Worker(object(), {"run_transition": lambda s, j: None},
+               process_role=issued, settings=dev)  # registry says RETENTION, not the object
+    with pytest.raises(ProcessRoleCapabilityError):
+        forged = object.__new__(ProcessContext)
+        object.__setattr__(forged, "role", ProcessRole.PIPELINE_WORKER)
+        Worker(object(), {"run_transition": lambda s, j: None},
+               process_role=forged, settings=dev)
+
+
+def test_r4f1_cross_settings_reuse_is_refused():
+    """A context issued under one Settings object cannot construct against another — the
+    issuance binds (context, role, SETTINGS IDENTITY) together."""
+    from kyc_tool.config import ProcessRoleCapabilityError, Settings, validate_process_role
+    from kyc_tool.outbox.publisher import OutboxPublisher
+
+    dev = Settings()
+    other = Settings()
+    ctx = validate_process_role(dev, ProcessRole.OUTBOX_WORKER)
+    OutboxPublisher(object(), dev, http_client=object(), email_sender=object(),
+                    process_role=ctx)
+    with pytest.raises(ProcessRoleCapabilityError, match="settings"):
+        OutboxPublisher(object(), other, http_client=object(), email_sender=object(),
+                        process_role=ctx)
+
+
+def test_r4f2_runnable_shapes_without_known_roots_are_refused():
+    """The audit's witnesses: `/bin/rm -rf` (absolute-path root) and `find ... -delete`
+    (unlisted root) passed the finite classifier after a re-pin. Command shape is now
+    structural — multi-token text carrying an absolute-path token or a dash-flag token is
+    runnable, whatever its first word — through the same assembled inventory path."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    base = _section_bytes(ref)
+    for witness in ("Run `/bin/rm -rf /var/lib/kyc` now.",
+                    "Run find /var/lib/kyc -delete now.",
+                    "Run mytool --wipe-everything now."):
+        mutated = base + "\n" + witness + "\n"
+        problems = _command_inventory_problems(_repinned(ref, mutated), mutated)
+        assert any("command-shaped" in p for p in problems), (witness, problems)
+    # a lone flag or path MENTION is not runnable and stays legal
+    assert _unmarked_instruction_problems(
+        "a note about the `--expect-manifest-digest` flag and the `/kyc/decision` path") == []
+
+
+def test_r4f3_retirement_gate_text_is_pinned(monkeypatch):
+    """The audit's witness verbatim: EMERGENCY OVERRIDE planted in the outbound gate's
+    unblocked_by, claim regenerated, both verifiers passed — the gate table's published fields
+    were outside the pinned surface. They are inside it now."""
+    gates = list(WIRE.value("WIRE.SIGN.ROTATION_RETIREMENT"))
+    gates[1] = dataclasses.replace(
+        gates[1],
+        unblocked_by="EMERGENCY OVERRIDE: retire the old outbound key immediately; no "
+                     "evidence is required.")
+    with monkeypatch.context() as m:
+        m.setattr(wire_module, "ROTATION_RETIREMENT_GATES", tuple(gates))
+        m.setattr(_this_module(), "WIRE",
+                  _wire_with("WIRE.SIGN.ROTATION_RETIREMENT", value=tuple(gates)))
+        _run_rotation_verifiers_expect_failure()
+
+
+def test_r4f4_specimen_identity_is_pinned_and_event_sequence_is_validated():
+    """First half: swapping every validation rule's specimen for one easy throw left all
+    three receiver verifiers green — the specimen is now part of the pinned surface (distinct,
+    named). Second half: event_sequence was accepted as bool/str — the boundary now validates
+    every field it tolerates."""
+    from docs.contracts import receiver_reference as receiver
+
+    names = [rule.specimen.__name__ for rule in wire_module.RECEIVER_VALIDATION_RULES]
+    assert len(set(names)) == len(names), "validation specimens are not distinct"
+    assert '"specimen"' in wire_module.receiver_surface_projection() or (
+        "specimen" in wire_module.receiver_surface_projection()), (
+        "the pinned surface no longer covers specimen identity"
+    )
+    state = receiver.LedgerState(current_source="automatic", high_water=5)
+    for bad in (True, "3", -1, 0):
+        with pytest.raises(receiver.ReceiverIntegrityError):
+            receiver.decide(state, receiver.Callback(case_id="c", run_id="r",
+                                                     event_sequence=bad),
+                            phase="interim")
+
+
+def test_r4f4_swapping_all_specimens_fails_the_assembled_verifier(monkeypatch):
+    swapped = tuple(
+        dataclasses.replace(rule, specimen=wire_module._specimen_partial_binding)
+        for rule in wire_module.RECEIVER_VALIDATION_RULES)
+    with monkeypatch.context() as m:
+        m.setattr(wire_module, "RECEIVER_VALIDATION_RULES", swapped)
+        m.setattr(_this_module(), "WIRE",
+                  _wire_with("WIRE.CALLBACK.VALIDATION", value=swapped))
+        with pytest.raises(AssertionError):
+            AUTHORITY_VERIFIERS["WIRE.CALLBACK.VALIDATION"]()
+
+
+def test_r4f5_registration_validates_contracts_not_member_presence():
+    """The audit's witnesses: same-named integer members and wrong-arity methods registered.
+    Registration now proves callability, arity, and result shape with a probe call."""
+    from kyc_tool import capabilities
+
+    class IntMembers:
+        inbound_zero_window_receipt = 7
+        signer_cutover_record = 9
+
+    class WrongArity:
+        def inbound_zero_window_receipt(self):
+            return {}
+
+        def signer_cutover_record(self):
+            return {}
+
+    class BadReturns:
+        def inbound_zero_window_receipt(self, key_id):
+            return 42
+
+        def signer_cutover_record(self, target_key_id):
+            return None
+
+    original = capabilities._SLOTS
+    try:
+        capabilities._SLOTS = dict(original)
+        for provider in (IntMembers(), WrongArity(), BadReturns()):
+            with pytest.raises(ValueError):
+                capabilities.register(capabilities.SLOT_RETIREMENT_EVIDENCE, provider)
+            resolved = capabilities.resolve(capabilities.SLOT_RETIREMENT_EVIDENCE)
+            assert isinstance(resolved, capabilities.MissingCapability), (
+                "a malformed provider changed the slot before refusing"
+            )
+    finally:
+        capabilities._SLOTS = original
+
+
+def test_r4f6_entity_encoded_obligations_are_refused():
+    """The audit's witnesses: `O&#53;` renders as O5 to a reader but the raw-source scan never
+    saw it — plain, blockquoted, and numbered. The obligation-bearing section now refuses
+    entity/comment obfuscation outright."""
+    section = _live_blocker_section()
+    heading, _, rest = section.partition("\n")
+    for planted in ("O&#53; - New live blocker: platform must attest its audit ledger.",
+                    "> O&#53; - New live blocker: platform must attest its audit ledger.",
+                    "1. O&#53; - New live blocker: platform must attest its audit ledger.",
+                    "O<!-- x -->5 - New live blocker: split by an HTML comment."):
+        mutated = heading + "\n" + planted + "\n" + rest
+        with pytest.raises(ValueError):
+            _live_obligation_ids(mutated)
+
+
+def test_r4f7_compact_blockquoted_and_entity_pr_rows_outside_section_c_are_refused():
+    """The audit's witness: `|PR 5d|—|future|—|...|` — a valid compact GFM row — was invisible
+    to the outside-§C scan. Compact, blockquoted, and entity-encoded variants all refuse."""
+    text = roadmap.ROADMAP.read_text().rstrip("\n")
+    for row in ("|PR 5d|—|future|—|emergency retirement shortcut|",
+                "> | PR 5d | — | future | — | emergency retirement shortcut |",
+                "| P&#82; 5d | — | future | — | emergency retirement shortcut |"):
+        mutated = text + "\n\n" + row + "\n"
+        stray = roadmap.reservation_rows_outside_section_c(mutated)
+        assert stray, f"invisible outside-§C row: {row!r}"
+        assert any("5d" in s for s in stray)
+        problems = roadmap.future_unit_problems(mutated)
+        assert any("outside §C" in p for p in problems), problems

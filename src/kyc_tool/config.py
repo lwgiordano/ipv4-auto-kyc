@@ -7,6 +7,7 @@ any unsafe or stub configuration (see api/app.py, workers/*).
 
 import json
 import math
+import weakref
 from collections import abc
 from dataclasses import dataclass
 from datetime import datetime
@@ -1062,41 +1063,68 @@ class ProcessRoleCapabilityError(RuntimeError):
     """A construction demanded a capability the declared process role does not carry."""
 
 
-_PROCESS_CONTEXT_TOKEN = object()
-
-
 class ProcessContext:
-    """The BOUND identity of a validated executable process (R-audit-3 finding 10).
+    """The BOUND identity of a validated executable process (R-audit-3 finding 10; R-audit-4
+    finding 1).
 
-    A constructor argument is self-attestation: a process that validated itself as RETENTION
-    could still construct a Worker while PASSING the pipeline role. The context is issued by
-    `validate_process_role` — the same call every entry point already makes before touching
-    anything — and the writer constructors consume the CONTEXT, so the role they enforce is
-    the one the executable actually validated as, not a freely selected enum."""
+    A constructor argument is self-attestation, and the OBJECT is not the authority either —
+    a mutable attribute, a forged instance, or a context issued under different settings all
+    lied to the round-3 constructors. Issuance now records (context identity -> issued role,
+    validated settings) in a module-private registry, and consumption reads THE REGISTRY:
+    mutating the object changes nothing the constructors trust, an unissued instance is
+    refused outright, and a context only constructs against the exact Settings object it was
+    validated with."""
 
-    __slots__ = ("role",)
+    __slots__ = ("role", "__weakref__")
 
-    def __init__(self, role: ProcessRole, *, _token: object = None) -> None:
-        if _token is not _PROCESS_CONTEXT_TOKEN:
-            raise ProcessRoleCapabilityError(
-                "a ProcessContext is issued by validate_process_role, never constructed "
-                "directly — a freely selected role is the self-attestation this exists to end"
-            )
-        self.role = ProcessRole(role)
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise ProcessRoleCapabilityError(
+            "a ProcessContext is issued by validate_process_role, never constructed "
+            "directly — a freely selected role is the self-attestation this exists to end"
+        )
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise ProcessRoleCapabilityError("an issued ProcessContext is immutable")
 
 
-def require_role_capability(context: "ProcessContext", capability: str,
-                            construction: str) -> None:
+# context identity -> (issued role, weakref to the validated Settings). Weak keys: a context
+# that dies releases its issuance; nothing accumulates.
+_ISSUED_CONTEXTS: "weakref.WeakKeyDictionary[ProcessContext, tuple]" = (
+    weakref.WeakKeyDictionary())
+
+
+def _issue_context(role: ProcessRole, settings: "Settings") -> ProcessContext:
+    context = object.__new__(ProcessContext)
+    object.__setattr__(context, "role", ProcessRole(role))
+    _ISSUED_CONTEXTS[context] = (ProcessRole(role), weakref.ref(settings))
+    return context
+
+
+def require_role_capability(context: "ProcessContext", capability: str, construction: str,
+                            *, settings: "Settings | None" = None) -> None:
     """The construction-time side of the capability map (re-audit `1826661..b5c7a83` finding
-    5; R-audit-3 finding 10). Called INSIDE the writer constructors with the BOUND
-    ProcessContext — so every path to a live writer proves the identity the executable
-    actually validated as carries the capability; a bare enum is refused outright."""
-    if not isinstance(context, ProcessContext):
+    5; R-audit-3 finding 10; R-audit-4 finding 1). Called INSIDE the writer constructors with
+    the BOUND ProcessContext. The decision reads the ISSUANCE REGISTRY, never the object: the
+    role consumed is the role validate_process_role recorded, a forged or subclassed instance
+    was never recorded and refuses, and when the construction carries a Settings object it
+    must be the EXACT object the context was validated with."""
+    if type(context) is not ProcessContext:
         raise ProcessRoleCapabilityError(
             f"{construction} requires the ProcessContext issued by validate_process_role; a "
             f"caller-selected {type(context).__name__} is self-attestation and is refused"
         )
-    role = context.role
+    issued = _ISSUED_CONTEXTS.get(context)
+    if issued is None:
+        raise ProcessRoleCapabilityError(
+            f"{construction}: this context was never issued by validate_process_role — a "
+            "forged or unvalidated identity"
+        )
+    role, settings_ref = issued
+    if settings is not None and settings_ref() is not settings:
+        raise ProcessRoleCapabilityError(
+            f"{construction}: the context was validated under different settings; validate "
+            "this process's own settings to construct against them"
+        )
     granted = ROLE_CAPABILITIES.get(role)
     if granted is None:
         raise ProcessRoleCapabilityError(
@@ -1291,14 +1319,14 @@ def validate_process_role(settings: Settings, role: ProcessRole) -> "ProcessCont
                 "stale task definition; refusing to start (DEPLOYMENT §8 drained cutover)"
             )
     if settings.environment != "production":
-        return ProcessContext(role, _token=_PROCESS_CONTEXT_TOKEN)
+        return _issue_context(role, settings)
     if role in _DEV_ONLY_ROLES:
         raise ProductionConfigError(
             f"process role {role.value!r} is DEV-ONLY (fixture adapters) and must never run in a "
             "production environment — refusing before any database/network/store access"
         )
     validate_for_production(settings)
-    return ProcessContext(role, _token=_PROCESS_CONTEXT_TOKEN)
+    return _issue_context(role, settings)
 
 
 class ConfigLoadError(RuntimeError):

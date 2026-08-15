@@ -79,6 +79,46 @@ _SLOT_PROTOCOLS: dict[str, type] = {
     SLOT_ANSWER_ARTIFACT: AnswerArtifactAuthority,
 }
 
+# Per-slot CONTRACT probes (R-audit-4 finding 5): a runtime_checkable Protocol proves member
+# NAMES exist, not that they are callable, take the promised arguments, or return the promised
+# shape — same-named integers and zero-arg methods both "conformed". Registration now proves
+# each member callable, binds the probe arguments against its real signature, CALLS it with
+# inert probe inputs, and validates the result shape — all BEFORE the slot changes.
+_SLOT_PROBES: dict[str, tuple] = {
+    SLOT_RETIREMENT_EVIDENCE: (
+        ("inbound_zero_window_receipt", ("__capability-probe__",), dict),
+        ("signer_cutover_record", ("__capability-probe__",), dict),
+    ),
+    SLOT_ANSWER_ARTIFACT: (
+        ("verify_artifact", ({"__capability-probe__": True},), list),
+    ),
+}
+
+
+def _provider_contract_problems(slot: str, provider: object) -> list:
+    import inspect
+
+    problems = []
+    for name, probe_args, result_type in _SLOT_PROBES[slot]:
+        member = getattr(provider, name, None)
+        if not callable(member):
+            problems.append(f"{name} is not callable")
+            continue
+        try:
+            inspect.signature(member).bind(*probe_args)
+        except TypeError as exc:
+            problems.append(f"{name} cannot take the contract arguments: {exc}")
+            continue
+        try:
+            result = member(*probe_args)
+        except Exception as exc:  # a probe call may not fail — the contract demands totality
+            problems.append(f"{name} raised on the probe call: {exc}")
+            continue
+        if not isinstance(result, result_type):
+            problems.append(
+                f"{name} returned {type(result).__name__}, not {result_type.__name__}")
+    return problems
+
 
 def register(slot: str, provider: object) -> None:
     """Ship a provider into a slot — the call the owning unit makes when it lands. One
@@ -94,6 +134,12 @@ def register(slot: str, provider: object) -> None:
         raise ValueError(
             f"the provider does not conform to {_SLOT_PROTOCOLS[slot].__name__}; a slot holds "
             "MissingCapability or a conforming authority, nothing else"
+        )
+    contract_problems = _provider_contract_problems(slot, provider)
+    if contract_problems:
+        raise ValueError(
+            f"the provider does not honor the {_SLOT_PROTOCOLS[slot].__name__} contract: "
+            + "; ".join(contract_problems)
         )
     if not isinstance(_SLOTS[slot], MissingCapability):
         raise ValueError(f"slot {slot!r} already holds a registered authority")

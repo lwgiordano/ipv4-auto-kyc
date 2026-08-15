@@ -301,7 +301,7 @@ def publisher(session_factory, settings, callback_capture, email_sender) -> Outb
         settings,
         http_client=httpx.Client(transport=transport),
         email_sender=email_sender,
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))
+    process_role=process_context(ProcessRole.OUTBOX_WORKER, settings))
 
 
 @pytest.fixture()
@@ -309,11 +309,11 @@ def evidence_store(settings) -> FsStore:
     return FsStore(settings.object_store_root)
 
 
-def process_context(role):
+def process_context(role, settings=None):
     """The BOUND ProcessContext for tests — issued through the REAL validate_process_role path
-    (R-audit-3 finding 10), with default development settings, exactly as an entry point would
-    obtain it. Tests never construct a context directly; the role they exercise is the role
-    they validated as."""
+    (R-audit-3 finding 10; R-audit-4 finding 1 bound it to the validated Settings), exactly as
+    an entry point would obtain it. Pass the SAME settings object the construction will use;
+    default development settings serve constructions that carry no settings binding."""
     from kyc_tool.config import Settings, validate_process_role
 
-    return validate_process_role(Settings(), role)
+    return validate_process_role(settings if settings is not None else Settings(), role)

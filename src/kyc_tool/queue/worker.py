@@ -49,6 +49,7 @@ class Worker:
         handlers: dict[str, object],
         *,
         process_role: "ProcessContext",
+        settings: object | None = None,
         lease_seconds: int = 120,
         backoff_base_seconds: int = 5,
         poll_seconds: float = 0.5,
@@ -66,7 +67,8 @@ class Worker:
                     f"handler kind {kind!r} is not classified in HANDLER_KIND_CAPABILITIES; "
                     f"classify its write capability before any role may register it"
                 )
-            require_role_capability(process_role, capability, f"a {kind!r} handler")
+            require_role_capability(process_role, capability, f"a {kind!r} handler",
+                                    settings=settings)
         self.process_role = process_role.role
         # Process boundary (re-audit `5b0f0b8..b75a320` R4-F3): validate the timing knobs at
         # construction so a nonpositive/non-finite poll cannot kill the idle loop at the first

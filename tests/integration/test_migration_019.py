@@ -47,7 +47,7 @@ def test_dead_poc_email_scrubs_its_raw_token(session_factory, settings, clean_db
         session_factory, one_shot,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
         email_sender=_DeadProvider(),
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))
+    process_role=process_context(ProcessRole.OUTBOX_WORKER, one_shot))
     pub.process_once()  # must not raise: the raise used to escape the worker loop entirely
 
     with session_factory() as s:

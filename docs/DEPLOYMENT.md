@@ -533,7 +533,7 @@ python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
         callback as newer), and substituting `now()` for `delivered_at` is prohibited (it falsifies
         the audit record). If the original id is unavailable, do NOT restore: remain
         `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012. The evidence tuple is captured into the JSON
-        file `restore_pr7b_core_callback --evidence` consumes; `--expect-original-id` must repeat
+        file the restore CLI's `--evidence` input consumes; `--expect-original-id` must repeat
         the id (double entry). The id, body digest and decision linkage are machine-refused on
         mismatch; the lifecycle fields are ATTESTED inputs from the backup — but the MANDATORY
         `--expect-manifest-digest` (sha256 of the whole evidence file, from the signed manifest)
@@ -570,7 +570,7 @@ python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
     (e) ``python -m kyc_tool.ops.repair_outbox_sequence`` is the SEPARATE DRAINED action for the
         ONLY case the restore does not cover: a divergent sequence high-water with NO row to
         restore (nothing missing, the counter itself is wrong). Same maintenance-stop
-        preconditions and owner privilege; `--floor <id>` when an id above max must stay cleared.
+        preconditions and owner privilege; pass `--floor` with the id when an id above max must stay cleared.
         It is never a prerequisite the restore waits on.
     (f) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
 

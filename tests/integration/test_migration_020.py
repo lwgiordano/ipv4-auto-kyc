@@ -241,6 +241,6 @@ def test_the_poisoned_row_scenario_is_unreachable_end_to_end(session_factory, se
     pub = OutboxPublisher(
         session_factory, settings,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-        email_sender=_Sender(), process_role=process_context(ProcessRole.OUTBOX_WORKER))
+        email_sender=_Sender(), process_role=process_context(ProcessRole.OUTBOX_WORKER, settings))
     pub.process_pending()
     assert sent == ["c@d"], f"the healthy email did not get through: {sent}"

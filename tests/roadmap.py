@@ -17,6 +17,7 @@ Everything is read off disk — no database.
 """
 
 import hashlib
+import html
 import re
 from dataclasses import dataclass
 from typing import NamedTuple
@@ -110,12 +111,15 @@ def reservation_rows_outside_section_c(text: str) -> list[str]:
         (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines)
     )
     # R-audit-3 finding 13: EVERY PR-shaped row outside §C is refused — including a
-    # no-migration `future` reservation, which reads as a reservation but is invisible to the
-    # typed authority. The old filter required a revision number, so exactly those rows hid.
+    # no-migration `future` reservation. R-audit-4 finding 7: "PR-shaped" is what a READER
+    # sees, so the match is structural — compact GFM rows (`|PR 5d|...`), blockquoted rows,
+    # and entity-encoded cells (`P&#82;`) are all rows; the scan runs on entity-decoded text
+    # and tolerates missing cell padding and quote markers.
+    pr_row = re.compile(r"^\s*(?:>\s*)*\|\s*PR\b")
     return [
         line.strip()
         for i, line in enumerate(lines)
-        if not (start < i < end) and line.lstrip().startswith("| PR ")
+        if not (start < i < end) and pr_row.match(html.unescape(line))
     ]
 
 

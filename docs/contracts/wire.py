@@ -644,7 +644,10 @@ def receiver_surface_projection() -> str:
         "release_order": _RELEASE_ROW_ORDER,
         "replay_rule": RELEASE_REPLAY_RULE.text,
         "validation_rules": [
-            {"invalid_input": rule.invalid_input, "disposition": rule.disposition}
+            # R-audit-4 finding 4: the specimen IDENTITY is pinned too — swapping every rule's
+            # executable specimen for one easy throw is a re-pin, not a silent pass
+            {"invalid_input": rule.invalid_input, "disposition": rule.disposition,
+             "specimen": rule.specimen.__name__}
             for rule in RECEIVER_VALIDATION_RULES
         ],
     }
@@ -1348,6 +1351,14 @@ def rotation_surface_projection() -> str:
     # through an unpinned prefix with a regenerated claim.
     surface["__direction_prefixes__"] = dict(sorted(_DIRECTION_PREFIXES.items()))
     surface["__terminal_facts__"] = dict(sorted(_DIRECTION_TERMINAL_FACTS.items()))
+    # R-audit-4 finding 3: the gate table's PUBLISHED text — why_blocked, unblocked_by, the
+    # gated transition clause — is binding retirement instruction; it lives in this pinned
+    # surface too, in order, so an EMERGENCY OVERRIDE planted in unblocked_by with a
+    # regenerated claim is a re-pin, never a silent certification.
+    surface["__retirement_gates__"] = [
+        {field_name: getattr(gate, field_name) for field_name in gate.PUBLISHED_FIELDS}
+        for gate in ROTATION_RETIREMENT_GATES
+    ]
     return json.dumps(surface, sort_keys=True)
 
 

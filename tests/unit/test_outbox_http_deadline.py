@@ -15,9 +15,8 @@ import time
 import httpx
 import pytest
 
-from kyc_tool.config import ProcessRole, Settings
+from kyc_tool.config import ProcessRole, Settings, validate_process_role
 from kyc_tool.outbox.publisher import OutboxPublisher
-from tests.conftest import process_context
 
 
 class _SlowBody(httpx.SyncByteStream):
@@ -28,11 +27,12 @@ class _SlowBody(httpx.SyncByteStream):
 
 
 def _publisher(client: httpx.Client, **settings) -> OutboxPublisher:
+    bound = Settings(platform_callback_url="http://platform.test", **settings)
     return OutboxPublisher(
         lambda: None,
-        Settings(platform_callback_url="http://platform.test", **settings),
+        bound,
         http_client=client,
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))
+        process_role=validate_process_role(bound, ProcessRole.OUTBOX_WORKER))
 
 
 def test_slow_response_body_cannot_outlive_the_configured_budget():
@@ -214,8 +214,9 @@ def test_header_drip_returns_within_the_bound_and_the_publisher_keeps_working():
     drip = _HeaderDripReceiver()
     publisher = OutboxPublisher(
         lambda: None,
-        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.1),
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))  # bound: 4 x 0.1 = 0.4s
+        bound := Settings(platform_callback_url="http://platform.test",
+                          outbox_http_timeout_seconds=0.1),
+        process_role=validate_process_role(bound, ProcessRole.OUTBOX_WORKER))  # 4 x 0.1 = 0.4s
     try:
         request = publisher.http.build_request("POST", drip.url, content=b"{}")
         started = time.monotonic()
@@ -264,9 +265,9 @@ def test_return_bound_holds_even_when_close_would_block():
 
     publisher = OutboxPublisher(
         lambda: None,
-        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
+        bound := Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
         http_client=_UncloseableClient(transport=_WedgedTransport(gate)),
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))
+        process_role=validate_process_role(bound, ProcessRole.OUTBOX_WORKER))
     try:
         request = publisher.http.build_request("POST", "http://platform.test/x", content=b"{}")
         started = time.monotonic()
@@ -286,9 +287,9 @@ def test_capacity_is_a_hard_cap_that_stops_new_claims_not_a_log_line():
     gate = threading.Event()
     publisher = OutboxPublisher(
         lambda: None,
-        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
+        bound := Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
         http_client=httpx.Client(transport=_WedgedTransport(gate)),
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))
+        process_role=validate_process_role(bound, ProcessRole.OUTBOX_WORKER))
     try:
         # drive well PAST the cap; orphan count must saturate AT the cap, never exceed it
         for _ in range(_MAX_ORPHAN_SENDS + 5):
@@ -316,9 +317,9 @@ def test_close_is_bounded_not_linear_in_orphan_count():
     gate = threading.Event()
     publisher = OutboxPublisher(
         lambda: None,
-        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
+        bound := Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
         http_client=httpx.Client(transport=_WedgedTransport(gate)),
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))
+        process_role=validate_process_role(bound, ProcessRole.OUTBOX_WORKER))
     try:
         while not publisher.at_capacity():
             request = publisher.http.build_request("POST", "http://platform.test/x", content=b"{}")
@@ -345,9 +346,9 @@ def test_close_is_bounded_even_when_http_close_blocks_forever():
 
     publisher = OutboxPublisher(
         lambda: None,
-        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
+        bound := Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
         http_client=_UncloseableClient(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))
+        process_role=validate_process_role(bound, ProcessRole.OUTBOX_WORKER))
     try:
         assert publisher._orphans == []  # ZERO orphans — Codex's exact case
         started = time.monotonic()
@@ -371,9 +372,9 @@ def test_run_forever_exits_on_saturation_for_supervised_restart():
     gate = threading.Event()
     publisher = OutboxPublisher(
         lambda: None,
-        Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
+        bound := Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
         http_client=httpx.Client(transport=_WedgedTransport(gate)),
-    process_role=process_context(ProcessRole.OUTBOX_WORKER))
+        process_role=validate_process_role(bound, ProcessRole.OUTBOX_WORKER))
     try:
         while not publisher.at_capacity():  # wedge sends until the cap is reached
             request = publisher.http.build_request("POST", "http://platform.test/x", content=b"{}")
@@ -403,10 +404,11 @@ class Wedged(httpx.BaseTransport):
     def handle_request(self, request):
         threading.Event().wait()  # forever
 
+bound = Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05)
 pub = OutboxPublisher(lambda: None,
-    Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
+    bound,
     http_client=httpx.Client(transport=Wedged()),
-    process_role=validate_process_role(Settings(), ProcessRole.OUTBOX_WORKER))
+    process_role=validate_process_role(bound, ProcessRole.OUTBOX_WORKER))
 try:
     pub._send_for_status(pub.http.build_request("POST", "http://platform.test/x", content=b"{}"))
 except _AttemptDeadlineExceeded:

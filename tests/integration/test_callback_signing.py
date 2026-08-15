@@ -28,7 +28,7 @@ def _deliver(session_factory, settings):
 
     pub = OutboxPublisher(
         session_factory, settings, http_client=httpx.Client(transport=httpx.MockTransport(handler))
-    , process_role=process_context(ProcessRole.OUTBOX_WORKER))
+    , process_role=process_context(ProcessRole.OUTBOX_WORKER, settings))
     # Build-and-send only: this suite is about what goes on the wire, so it deliberately does NOT
     # go through `_deliver_decision_callback`, which additionally commits an attempt row and
     # therefore needs a real claimed outbox row. The attempt authority is proven in

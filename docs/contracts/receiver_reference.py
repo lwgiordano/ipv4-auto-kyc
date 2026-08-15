@@ -246,6 +246,11 @@ def _validate(state: LedgerState, callback: Callback) -> None:
         _exact_str(value, label=label)
     if callback.decision_sequence is not None:
         _domain_int(callback.decision_sequence, floor=1, label="decision_sequence")
+    # R-audit-4 finding 4: EVERY tolerated field is validated — event_sequence is ingest
+    # provenance, never ordering authority, but a bool/str/negative value is still not a
+    # callback this boundary may classify.
+    if callback.event_sequence is not None:
+        _domain_int(callback.event_sequence, floor=1, label="event_sequence")
     # release fields on the callback: globally both-absent or both-valid (finding 2 — this used
     # to be checked only inside the pending branch, so a partial binding reached the ordinary
     # table)

@@ -677,7 +677,7 @@ def test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersessio
 
     pub = OutboxPublisher(_mk_sf(_mk_engine(url)), settings,
                           http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-                                 process_role=process_context(ProcessRole.OUTBOX_WORKER))
+                                 process_role=process_context(ProcessRole.OUTBOX_WORKER, settings))
     assert pub.process_pending() == 2
     assert order == ["rA", "rB"]  # A (seq 1) delivered before B (seq 2)
     with eng.connect() as conn:
