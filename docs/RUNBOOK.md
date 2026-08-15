@@ -295,7 +295,7 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
     zero-task output MUST be recorded here once the production substrate is chosen. A pytest does NOT
     prove this — it is a deployment acceptance. Do not invent a substrate.
 0.4 With the schedule still suspended, run the digest-pinned
-    `python -m kyc_tool.ops.verify_pr7b_core_backfill`. The result is valid ONLY while retention stays
+    ``python -m kyc_tool.ops.verify_pr7b_core_backfill``. The result is valid ONLY while retention stays
     suspended AND the 0.3 attestation holds.
 0.5 On failure, ABORT here — before stopping service (no outage begun). Recovery is restore-or-block:
     restore from authoritative backup the EXACT callback row, OR remain on 012 in
@@ -303,16 +303,27 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
     THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE — a pre-window maintenance stop, not the
-    cutover (which 0.4 still gates): FIRST run `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites
-    --expect-revision 012` (read-only, takes NO lock) and confirm it is GREEN — exact schema phase,
-    correct role, `outbox_id_seq` ownership, and timeout budgets — so a wrong maintenance credential
-    OR wrong phase is caught HERE, not at `ALTER SEQUENCE` inside the stop; then pause submissions,
+    cutover (which 0.4 still gates): FIRST run the prerequisites check (read-only, takes NO
+    lock) and confirm it is GREEN — exact schema phase, correct role, `outbox_id_seq`
+    ownership, and timeout budgets:
+
+```operator
+python -m kyc_tool.ops.verify_pr7b_ops_prerequisites --expect-revision 012
+```
+
+    A wrong maintenance credential OR wrong phase is caught HERE, not at `ALTER SEQUENCE`
+    inside the stop; then pause submissions,
     hard-stop and attest EVERY writer (API,
     pipeline, outbox, `dev_worker`, retention), then run
-    `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json>
-    --expect-original-id <id> --expect-manifest-digest <sha256>` (dry-run first; add `--apply` to
-    perform). `--expect-manifest-digest` is MANDATORY and is an INTEGRITY check: the tool recomputes
-    the sha256 of the evidence file (`sha256sum <file.json>`) and refuses unless it matches, so a
+    the restore CLI (dry-run first; add `--apply` to perform):
+
+```operator
+python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
+    --expect-original-id <id> --expect-manifest-digest <sha256>
+```
+
+    `--expect-manifest-digest` is MANDATORY and is an INTEGRITY check: the tool recomputes
+    the sha256 of the evidence file (``sha256sum <file.json>``) and refuses unless it matches, so a
     tampered or wrong file is rejected before any DB work — the file cannot self-certify by carrying
     its own digest. The tool does NOT verify a cryptographic signature; the digest's authenticity is
     yours to establish out of band, from a trusted/signed backup manifest (machine-verified signing
@@ -379,7 +390,7 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
         RESTART WITH` takes a literal and excludes `nextval` for the transaction. Run it (dry-run,
         then `--apply`) as step 0.5 above — the restore and the sequence floor are ONE action, not
         a check-then-repair sequence.
-    (e) `python -m kyc_tool.ops.repair_outbox_sequence` is the SEPARATE DRAINED action for the
+    (e) ``python -m kyc_tool.ops.repair_outbox_sequence`` is the SEPARATE DRAINED action for the
         ONLY case the restore does not cover: a divergent sequence high-water with NO row to
         restore (nothing missing, the counter itself is wrong). Same maintenance-stop
         preconditions and owner privilege; `--floor <id>` when an id above max must stay cleared.
@@ -390,10 +401,10 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
 1. Pause submission, edge-block the composer, disable autoscaling/restarts.
 2. Hard-stop API, pipeline, outbox, `dev_worker` (queue AND outbox), retention, and every writer;
    attest zero at the orchestrator.
-3. Run the shipped `python -m kyc_tool.ops.requeue_interrupted_jobs`. NO outbox reset here — the
+3. Run the shipped ``python -m kyc_tool.ops.requeue_interrupted_jobs``. NO outbox reset here — the
    pre-013 schema has no claim columns; an interrupted old claim simply waits until its already-
    recorded `next_attempt_at`. Preserve every pending row's `next_attempt_at`.
-4. Run `python -m alembic -c alembic.ini upgrade head` (the chain `013`→`014`→…→`022`→`023`) — the deployment image runs its exact
+4. Run ``python -m alembic -c alembic.ini upgrade head`` (the chain `013`→`014`→…→`022`→`023`) — the deployment image runs its exact
    equivalent. This repeats the §0 parity preflights under the zero-writer boundary and is the
    authoritative fail-closed check (the pre-window diagnostic is an early detector, not a substitute).
    `017` additionally machine-checks the drain: it refuses with `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`
@@ -407,7 +418,7 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
 end in a full resume — never leave the system stopped or retention frozen:**
 R1. Pause submissions, edge-block the composer, disable autoscaling/restarts.
 R2. Hard-stop and orchestrator-attest zero API, pipeline, outbox, `dev_worker`, retention, every writer.
-R3. While 013 still exists, run `python -m kyc_tool.ops.reset_interrupted_outbox_claims` (post-013-only;
+R3. While 013 still exists, run ``python -m kyc_tool.ops.reset_interrupted_outbox_claims`` (post-013-only;
     clears complete claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero) and
     verify zero claim tuples.
 R4. **With `018` or anything above it installed there is no schema-downgrade path**: `018` through
@@ -417,7 +428,7 @@ R4. **With `018` or anything above it installed there is no schema-downgrade pat
     even that step rolls back and the schema does not move) — because walking below them would restore
     search-path-vulnerable authority functions, so rollback goes straight to R5 (image-only on
     the schema already installed). The walk below is the HISTORICAL path, reachable only on a
-    schema that never reached `018`: run `python -m alembic -c alembic.ini downgrade 012` (the revision is a
+    schema that never reached `018`: run ``python -m alembic -c alembic.ini downgrade 012`` (the revision is a
     REQUIRED positional argument — a bare `alembic downgrade` exits with a usage error
     mid-outage). That walk is `017 → 016 → 015 → 014 → 013 → 012`, and EACH revision preflights
     under

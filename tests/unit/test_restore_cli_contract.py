@@ -50,8 +50,31 @@ def _argv(command: str) -> list[str]:
 
 
 def _documented():
+    """Both marked forms (re-audit `1826661..b5c7a83` finding 4 moved DEPLOYMENT.md to explicit
+    marking), extracted by a line-wise fence walk so ``` runs can never mis-pair: an operator
+    fence containing the launcher IS the command (block-wise, exact bytes); any other fence's
+    CONTENT is scanned for backtick-delimited spans (the plan quotes a runbook section inside a
+    markdown fence); text outside fences is scanned the same way."""
     for rel in _SURFACES:
-        yield rel, _CMD_RE.findall((REPO_ROOT / rel).read_text())
+        matches: list[str] = []
+        outside: list[str] = []
+        block: list[str] = []
+        info, in_fence = "", False
+        for line in (REPO_ROOT / rel).read_text().split("\n"):
+            if line.lstrip().startswith("```"):
+                if in_fence:
+                    content = "\n".join(block)
+                    if info == "operator" and _LAUNCHER in content:
+                        matches.append(content.strip())
+                    elif info != "operator":
+                        matches.extend(_CMD_RE.findall(content))
+                    in_fence = False
+                else:
+                    info, block, in_fence = line.strip().removeprefix("```").strip(), [], True
+                continue
+            (block if in_fence else outside).append(line)
+        matches.extend(_CMD_RE.findall("\n".join(outside)))
+        yield rel, matches
 
 
 def test_every_required_surface_documents_the_command():

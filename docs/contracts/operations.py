@@ -59,7 +59,6 @@ from docs.contracts.playbook import (
     WINDOW,
     WINDOW_SAME,
     Command,
-    CommandExemption,
     MigrationSpan,
     PlaybookRef,
     RollbackBranch,
@@ -227,7 +226,7 @@ FULL_WINDOW = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 9. PR 5b cutover — brief full maintenance window",
-        sha256="817872dfd1552d988db36962595155ae9fa5fecd108e1256adf0f0bf526ce9ab",
+        sha256="8f3c7769f696ecb647b00fa550dda3a1d8e10d355f0fb3e7305ed5414e3c8dc8",
         commands=(
             Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
         ),
@@ -265,15 +264,14 @@ BUNDLE_PINNING = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 10. PR 6 cutover — bundle-pinning activation",
-        sha256="974ad11b8b638397785d2cff0faa1ae2242eb678a84b762c3e5f5546fde821c4",
+        sha256="502f7e5c8cf3256ead69e1fe7ad9b7543f17393888b4ece25699739580bfe21c",
         commands=(
             Command(("python", "-m", "kyc_tool.ops.seed_policy_bundle",
                      "--expect-hash", "<sha256>")),
-            Command(("python", "-m", "kyc_tool.ops.activate_bundle_pinning_epoch",
-                     "--expect-bundle-hash", "<sha256>", "--expect-engine", "eng-1")),
-            Command(("alembic", "upgrade", "head")),
             Command(("python", "-m", "kyc_tool.ops.verify_pinnable_backlog")),
             Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
+            Command(("python", "-m", "kyc_tool.ops.activate_bundle_pinning_epoch",
+                     "--expect-bundle-hash", "<sha256>", "--expect-engine", "eng-1")),
         ),
     ),
 )
@@ -353,7 +351,7 @@ PR7B_CORE = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 11. PR 7b-core cutover — drained maintenance window (migration 013)",
-        sha256="57377dec0386c371c2ec1ee4dbfd21ea7c0a2fa36245d9626a11a1426ce30250",
+        sha256="354f64022701b6294a7b5dc37cdb05a70a27664945c2b38a12e50a56ce11dee0",
         # Every operator-run command the section publishes, as parsed argv. The placeholders
         # (`<file.json>`, `<id>`, `<sha256>`) are the section's own literal text.
         commands=(
@@ -363,19 +361,12 @@ PR7B_CORE = Procedure(
             Command(("python", "-m", "kyc_tool.ops.restore_pr7b_core_callback",
                      "--evidence", "<file.json>", "--expect-original-id", "<id>",
                      "--expect-manifest-digest", "<sha256>")),
+            Command(("sha256sum", "<file.json>")),
             Command(("python", "-m", "kyc_tool.ops.repair_outbox_sequence")),
             Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
             Command(("python", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head")),
             Command(("python", "-m", "kyc_tool.ops.reset_interrupted_outbox_claims")),
             Command(("python", "-m", "alembic", "-c", "alembic.ini", "downgrade", "012")),
-        ),
-        exempt=(
-            CommandExemption(
-                argv=("alembic", "downgrade"),
-                reason="named as the usage-error counterexample — the section explains that a "
-                       "bare `alembic downgrade` exits with a usage error; it is not an "
-                       "instruction to run",
-            ),
         ),
     ),
 )
@@ -622,3 +613,49 @@ OPERATIONS = Registry(
         ),
     ),
 )
+
+
+def procedure_projection(procedure: Procedure) -> tuple:
+    """The COMPLETE structured projection of one procedure — every operational fact it publishes,
+    in one canonical tuple (re-audit `1826661..b5c7a83` finding 3).
+
+    The cooperating typed parts (plan, ref, contract, profile) could previously be swapped or
+    weakened ONE AT A TIME: a transplanted plan, a deleted prerequisite parameter, a swapped
+    branch ending, an imperative slipped into the subject map, an irrelevant-but-unique evidence
+    quote — each left every focused bind green. The release verifier hashes THIS projection and
+    holds it to a reviewed per-procedure pin, so any divergence anywhere in the definition is one
+    located failure, and changing a definition is a re-pin — the act of review. No English is
+    parsed anywhere in it.
+    """
+    plan_contract = procedure.plan
+    prerequisites = tuple(
+        (type(p).__name__,
+         tuple((f.name, getattr(p, f.name)) for f in _dataclass_fields(p)))
+        for p in plan_contract.prerequisites
+    )
+    contract = procedure.rollback_contract
+    aggregate = tuple((f.question, f.answer, f.evidence) for f in contract.facts)
+    branches = tuple(
+        (b.outcome, b.span_marker, tuple((f.question, f.answer, f.evidence) for f in b.facts))
+        for b in contract.branches
+    )
+    span = procedure.migration_span
+    return (
+        procedure.name,
+        plan_contract.phase,
+        plan_contract.subject_id,
+        plan_contract.subject,
+        procedure.playbook_ref.path,
+        procedure.playbook_ref.heading,
+        tuple(c.line for c in procedure.playbook_ref.commands),
+        (span.base_revision, span.target_revision) if span is not None else None,
+        prerequisites,
+        aggregate,
+        branches,
+    )
+
+
+def _dataclass_fields(value):
+    from dataclasses import fields
+
+    return fields(value)

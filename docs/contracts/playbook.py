@@ -415,44 +415,27 @@ class RollbackContract:
 
 
 @dataclass(frozen=True)
-class CommandExemption:
-    """One parsed command that is deliberately NOT an operator instruction, with the reason.
-
-    Gate audit `6c4f54a..91fbde3` finding 8: typed commands were checked as a SUBSET of the
-    parsed inventory, so an appended `skip_all_safety` survived a digest re-pin unnoticed. The
-    parsed inventory must now equal the typed records exactly — and a command the section merely
-    MENTIONS (a usage-error counterexample, an illustration) is excluded only by naming it here,
-    with the reason a reviewer can weigh. The verifier refuses a dead exemption (nothing parsed
-    matches), so this list cannot pre-authorize future additions."""
-
-    argv: tuple[str, ...]
-    reason: str
-
-    def __post_init__(self) -> None:
-        if not self.argv or any(type(a) is not str or not a for a in self.argv):
-            raise ValueError("an exemption names the exact argv it exempts")
-        if type(self.reason) is not str or not self.reason.strip():
-            raise ValueError("an exemption without a reason is an unreviewed hole")
-
-
-@dataclass(frozen=True)
 class Command:
-    """One executable command the referenced playbook section MUST contain, as parsed argv.
+    """One operator command, as the playbook's own marked span publishes it.
 
-    Wave 1 / F7's second half. The exact-bytes digest proves the section was re-reviewed after ANY
-    edit; it cannot prove the command inside it still parses to what the operator needs. These
-    records are compared against an INDEPENDENT parse of the section's backtick spans — argv by
-    argv — so a command edit that someone re-pins the digest over is still caught unless the typed
-    record moves with it, which is a second, visible act.
+    `argv` is the parsed vector; `line` is the EXACT source text of the marked span (after the
+    one supported backslash-newline continuation join). The inventory comparison runs on `line`
+    bytes (re-audit `1826661..b5c7a83` finding 4): a lookalike with an NBSP or a raw newline is
+    not the reviewed command, and there is no root restriction — `rm`, `psql`, `aws`, whatever
+    appears in a marked span must be typed here or the section fails, because a destructive
+    command is exactly the one the old python/alembic filter waved past.
     """
 
     argv: tuple[str, ...]
+    line: str = ""
 
     def __post_init__(self) -> None:
-        if len(self.argv) < 2:
-            raise ValueError("a command record needs at least an interpreter and a target")
-        if self.argv[0] not in ("python", "alembic"):
-            raise ValueError(f"unrecognised command root {self.argv[0]!r}")
+        if not self.argv or any(type(a) is not str or not a for a in self.argv):
+            raise ValueError("argv must be non-empty exact strings")
+        if self.line == "":
+            object.__setattr__(self, "line", " ".join(self.argv))
+        if self.line.split() != list(self.argv):
+            raise ValueError("line and argv must agree token-for-token")
 
 
 @dataclass(frozen=True)
@@ -462,8 +445,10 @@ class PlaybookRef:
     `heading` is the FULL heading line, matched by exact string equality against exactly one line
     of the document — a substring match accepted any same-named section, which is how a wrong
     section could satisfy the old pointer. `sha256` is over the EXACT UTF-8 bytes of the section
-    body (heading line excluded, up to the next same-or-higher-level heading), with CRLF→LF the
-    only permitted normalization. The old digest collapsed ALL whitespace first, so a shell
+    — HEADING LINE INCLUDED (re-audit finding 11 corrected the stale text here; the gate fold
+    brought the heading inside the digest), up to the next same-or-higher-level CommonMark ATX
+    heading — with CRLF→LF the only permitted normalization. The old digest collapsed ALL
+    whitespace first, so a shell
     continuation rewritten from a backslash-newline to a backslash-space — which hands the shell a
     literal backslash argument and breaks the command — hashed identically and passed review.
     Exact bytes make every byte a reviewed byte.
@@ -473,11 +458,20 @@ class PlaybookRef:
     heading: str
     sha256: str
     commands: tuple[Command, ...] = ()
-    exempt: tuple["CommandExemption", ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.heading.startswith("#") or "\n" in self.heading:
-            raise ValueError("heading must be the exact single heading line, hashes included")
+        # CommonMark ATX only (re-audit `1826661..b5c7a83` finding 11): one to six hashes
+        # followed by required whitespace, not code-indented — `##NOT-A-HEADING` is an ordinary
+        # line, and treating it as a section anchor let a non-heading bound a reviewed span.
+        stripped = self.heading.lstrip(" ")
+        indent = len(self.heading) - len(stripped)
+        depth = len(stripped) - len(stripped.lstrip("#"))
+        if ("\n" in self.heading or indent > 3 or not 1 <= depth <= 6
+                or not stripped[depth:depth + 1].isspace()):
+            raise ValueError(
+                "heading must be one exact CommonMark ATX heading line: 1-6 hashes, a space, "
+                "not code-indented"
+            )
         if len(self.sha256) != 64 or set(self.sha256) - set("0123456789abcdef"):
             raise ValueError("sha256 must be 64 lowercase hex characters")
 
