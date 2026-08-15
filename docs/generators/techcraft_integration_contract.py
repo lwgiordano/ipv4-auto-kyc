@@ -74,6 +74,8 @@ REQUIRED_CLAIMS = (
     "WIRE.CALLBACK.DELIVERY",
     "WIRE.CALLBACK.RECEIVER_TXN",
     "WIRE.CALLBACK.EFFECTIVENESS",
+    "WIRE.CALLBACK.LEGEND",
+    "WIRE.CALLBACK.RELEASE",
     "WIRE.CALLBACK.RETRY",
     "WIRE.CALLBACK.WAIT_BOUND",
     "WIRE.CALLBACK.COMPLETION",
@@ -284,6 +286,25 @@ def build(*, contact: str, due_date: str) -> Doc:
         # the booleans are the machine-checkable mirror of `record`/`effective`; the prose is what
         # the reader gets, and a test asserts the two halves agree
         row_fields=("phase", "condition", "record", "effective", "why"),
+    )
+    doc.claim_table(
+        "WIRE.CALLBACK.LEGEND",
+        ("Token", "Meaning"),
+        [1.55 * INCH, 5.15 * INCH],
+        rows=[(token, meaning) for token, meaning in WIRE.value("WIRE.CALLBACK.LEGEND")],
+        code_columns=(0,),
+    )
+    doc.claim_note("WIRE.CALLBACK.LEGEND")
+
+    doc.h2("While a release is pending (post-024 only)")
+    doc.claim_note("WIRE.CALLBACK.RELEASE")
+    doc.claim_table(
+        "WIRE.CALLBACK.RELEASE",
+        ("When this row applies", "Record", "Effective?", "Why"),
+        [2.1 * INCH, 1.25 * INCH, 1.5 * INCH, 1.85 * INCH],
+        rows=[(t.condition, t.record, t.effective, t.why)
+              for t in WIRE.value("WIRE.CALLBACK.RELEASE")],
+        row_fields=("condition", "record", "effective", "why"),
     )
 
     doc.h2("Timing")

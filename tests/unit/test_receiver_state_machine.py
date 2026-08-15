@@ -48,12 +48,14 @@ def test_the_effectiveness_claim_is_the_transition_table():
 
 def test_every_phase_covers_its_whole_space():
     """Totality is the property the prose lacked. Each phase must handle: a duplicate, no current
-    decision, a manual-current case, and an automatic-current case — with no row left implicit."""
+    decision, a manual-current case, and an automatic-current case — with no row left implicit.
+    (Conditions are token expressions now, so the tokens are what the text must carry; the legend
+    claim defines them.)"""
     for phase in (INTERIM, POST_024):
         rows = _rows(phase)
         assert len(rows) == 4, f"{phase} has {len(rows)} rows; the space needs exactly four"
         joined = " ".join(r.condition.lower() for r in rows)
-        assert "already in your accepted ledger" in joined
+        assert "duplicate = duplicate" in joined
         assert "manual" in joined
         assert all(r.record and r.effective and r.why for r in rows)
 
@@ -257,19 +259,20 @@ def test_the_prose_and_the_structured_outcome_agree():
             assert "advance the high-water mark" not in row.record.lower(), row
 
 
-@pytest.mark.parametrize("source", ["manual_release_pending", "MANUAL", "Automatic", "typo", ""])
+@pytest.mark.parametrize("source", ["MANUAL", "Automatic", "typo", "", "release_pending"])
 def test_an_unrecognised_current_source_holds_instead_of_applying(source):
     """Every unknown source used to fall through to the automatic branch and TAKE EFFECT — the one
     case where you cannot tell whether a human decided this is exactly the case where applying is
-    unsafe."""
+    unsafe. (`manual_release_pending` left this list with the gate fold: it is a KNOWN state with
+    its own machine now, so the specimens are casings, typos, and near-misses.)"""
     for phase in (INTERIM, POST_024):
         with pytest.raises(UnknownSourceError):
             decide(LedgerState(current_source=source, high_water=1),
                    Callback(CASE, "r", decision_sequence=9), phase=phase)
 
 
-def test_the_two_known_sources_are_the_only_ones():
-    assert {"manual", "automatic"} == KNOWN_SOURCES
+def test_the_three_known_sources_are_the_only_ones():
+    assert {"manual", "automatic", "manual_release_pending"} == KNOWN_SOURCES
     for source in (None, "manual", "automatic"):
         decide(LedgerState(current_source=source), Callback(CASE, "r", decision_sequence=1),
                phase=POST_024)
@@ -387,10 +390,14 @@ def test_decide_holds_rather_than_picking_on_an_ambiguous_table(monkeypatch):
 
 def test_an_unknown_source_is_refused_before_any_row_is_consulted():
     """The fail-closed gate lives in `observe`, ahead of matching, so no predicate widening can
-    make an unclassifiable source eligible for any row."""
-    state = LedgerState(seen_run_ids=frozenset(), current_source="manual_release_pending")
+    make an unclassifiable source eligible for any base-table row. Release-pending is KNOWN but
+    belongs to the other machine, so `observe` refuses it too — only `decide` may dispatch it."""
     with pytest.raises(UnknownSourceError):
-        observe(state, Callback(case_id="c", run_id="r1"))
+        observe(LedgerState(seen_run_ids=frozenset(), current_source="typo"),
+                Callback(case_id="c", run_id="r1"))
+    with pytest.raises(UnknownSourceError):
+        observe(LedgerState(seen_run_ids=frozenset(), current_source="manual_release_pending"),
+                Callback(case_id="c", run_id="r1"))
 
 
 def test_a_condition_cannot_be_authored():
@@ -409,3 +416,209 @@ def test_a_full_space_predicate_cannot_derive_a_condition():
         _predicates.When(duplicate=_predicates.ANY_DUPLICATE,
                          source=_predicates.ANY_SOURCE,
                          sequence=_predicates.ANY_SEQUENCE).condition()
+
+
+# ── Wave-1 gate F1 + F4: the manual-release machine and the sequence domain, red first ────────────
+#
+# Gate audit `6c4f54a..91fbde3` findings 1 and 4. The 18-state proof was total over a smaller,
+# wrong universe: the accepted activation design has a third effective-source state,
+# `manual_release_pending`, with its own closed transition rules (record ordinary callbacks
+# without effect, advance the mark on above, complete ONLY the bound unexpired callback that
+# re-passes every CAS check), and the reference classified it as an unknown source. And `observe`
+# accepted values outside the sequence authority's domain: fractions, bools, negatives with no
+# mark, NaN as a mark.
+
+
+def _pending_state(**overrides):
+    from docs.contracts import receiver_reference as rr
+
+    fields = {
+        "seen_run_ids": frozenset({"r-seen"}),
+        "current_source": "manual_release_pending",
+        "high_water": 4,
+        "current_manual_event_id": "M1",
+        "release": rr.PendingRelease(
+            release_id="R1", requested_manual_event_id="M1", deadline=1000),
+    }
+    fields.update(overrides)
+    return rr.LedgerState(**fields)
+
+
+def test_f1_release_pending_is_a_known_state_with_release_rows():
+    """The audit's trigger: the accepted state was an UnknownSourceError. An ordinary callback
+    while a release is pending must be recorded, must NOT take effect, and must advance the mark
+    when above it — manual stays effective."""
+    outcome = decide(
+        _pending_state(),
+        Callback(case_id=CASE, run_id="r-new", decision_sequence=9),
+        phase=POST_024, now=500,
+    )
+    assert outcome.record and not outcome.effective
+    assert outcome.advance_high_water
+    assert not outcome.completes_release
+
+
+def test_f1_a_stale_callback_while_pending_records_only():
+    outcome = decide(
+        _pending_state(),
+        Callback(case_id=CASE, run_id="r-new", decision_sequence=3),
+        phase=POST_024, now=500,
+    )
+    assert outcome.record and not outcome.effective
+    assert not outcome.advance_high_water and not outcome.completes_release
+
+
+def test_f1_only_the_fully_bound_unexpired_above_callback_completes_release():
+    outcome = decide(
+        _pending_state(),
+        Callback(case_id=CASE, run_id="r-new", decision_sequence=9,
+                 release_id="R1", manual_event_id="M1"),
+        phase=POST_024, now=500,
+    )
+    assert outcome.record and outcome.effective
+    assert outcome.advance_high_water and outcome.completes_release
+
+
+def test_f1_a_mismatched_release_id_does_not_complete():
+    outcome = decide(
+        _pending_state(),
+        Callback(case_id=CASE, run_id="r-new", decision_sequence=9,
+                 release_id="R-other", manual_event_id="M1"),
+        phase=POST_024, now=500,
+    )
+    assert outcome.record and not outcome.effective and not outcome.completes_release
+    assert outcome.advance_high_water  # above the mark still advances it
+
+
+def test_f1_a_changed_manual_event_leaves_manual_effective():
+    """The rev-4 race verbatim: M1 effective, release R1 opened against M1, a reviewer records
+    M2, R1's bound callback arrives. Completion must re-CAS the CURRENT manual event."""
+    outcome = decide(
+        _pending_state(current_manual_event_id="M2"),
+        Callback(case_id=CASE, run_id="r-new", decision_sequence=9,
+                 release_id="R1", manual_event_id="M1"),
+        phase=POST_024, now=500,
+    )
+    assert outcome.record and not outcome.effective and not outcome.completes_release
+
+
+def test_f1_an_expired_release_cannot_complete_by_database_time():
+    outcome = decide(
+        _pending_state(),
+        Callback(case_id=CASE, run_id="r-new", decision_sequence=9,
+                 release_id="R1", manual_event_id="M1"),
+        phase=POST_024, now=1000,  # deadline is 1000: not strictly before it -> expired
+    )
+    assert outcome.record and not outcome.effective and not outcome.completes_release
+
+
+def test_f1_a_newer_manual_approval_cancels_the_pending_release():
+    """Spec transition 4: the new approval takes the case lock, cancels the release, and the
+    formerly bound callback can never complete it afterwards."""
+    from docs.contracts import receiver_reference as rr
+
+    cancelled = rr.apply_manual_approval(_pending_state(), manual_event_id="M2")
+    assert cancelled.release is None
+    assert cancelled.current_source == "manual"
+    assert cancelled.current_manual_event_id == "M2"
+    late_bound = Callback(case_id=CASE, run_id="r-new", decision_sequence=9,
+                          release_id="R1", manual_event_id="M1")
+    outcome = decide(cancelled, late_bound, phase=POST_024, now=500)
+    assert not outcome.effective and not outcome.completes_release
+
+
+def test_f1_a_duplicate_release_callback_changes_nothing():
+    """Replaying the bound callback after its run id is already in the ledger acknowledges and
+    changes nothing — release_id idempotency, spec transition 6. `record` is False for the same
+    reason as both base tables' duplicate rows: there is nothing NEW to append."""
+    outcome = decide(
+        _pending_state(seen_run_ids=frozenset({"r-bound"})),
+        Callback(case_id=CASE, run_id="r-bound", decision_sequence=9,
+                 release_id="R1", manual_event_id="M1"),
+        phase=POST_024, now=500,
+    )
+    assert not outcome.record and not outcome.effective
+    assert not outcome.advance_high_water and not outcome.completes_release
+
+
+def test_f1_mixed_release_fields_hold_as_integrity_mismatch():
+    """'Ordinary callbacks carry every release field NULL; release callbacks carry them all
+    non-NULL and equal. A mismatch anywhere is an integrity_mismatch terminal' — a partial
+    binding is neither, so it must HOLD, never classify."""
+    from docs.contracts import receiver_reference as rr
+
+    with pytest.raises(rr.ReleaseIntegrityError):
+        decide(
+            _pending_state(),
+            Callback(case_id=CASE, run_id="r-new", decision_sequence=9, release_id="R1"),
+            phase=POST_024, now=500,
+        )
+
+
+def test_f1_release_pending_in_the_interim_phase_holds():
+    """The release protocol arrives with 024; a ledger claiming a pending release before the
+    activation unit exists is in an impossible state and must hold."""
+    with pytest.raises(UnknownSourceError):
+        decide(_pending_state(), Callback(case_id=CASE, run_id="r-new"), phase=INTERIM)
+
+
+def test_f1_the_release_rows_partition_their_own_space():
+    from docs.contracts import predicates
+
+    problems = predicates.release_partition_problems(
+        [t for t in WIRE.value("WIRE.CALLBACK.RELEASE") ])
+    assert problems == []
+
+
+@pytest.mark.parametrize(
+    ("label", "sequence"),
+    [
+        ("a fraction", 1.5),
+        ("a bool", True),
+        ("zero", 0),
+        ("a negative", -1),
+        ("a string", "5"),
+        ("NaN", float("nan")),
+        ("infinity", float("inf")),
+        ("past the storage ceiling", 2**63),
+    ],
+)
+def test_f4_sequence_values_outside_the_authority_domain_are_refused(label, sequence):
+    """024's ordering authority is a positive BIGINT. Anything else must be one stable
+    fail-closed error before any row is consulted — not an accidental TypeError, not a coerced
+    bool, not a NaN that poisons every later comparison."""
+    from docs.contracts import receiver_reference as rr
+
+    state = LedgerState(seen_run_ids=frozenset(), current_source="automatic", high_water=1)
+    with pytest.raises(rr.SequenceDomainError):
+        decide(state, Callback(case_id=CASE, run_id="r1", decision_sequence=sequence),
+               phase=POST_024)
+
+
+@pytest.mark.parametrize(
+    ("label", "mark"),
+    [
+        ("a fraction", 2.5),
+        ("a bool", True),
+        ("a negative", -3),
+        ("NaN", float("nan")),
+        ("a string", "4"),
+    ],
+)
+def test_f4_a_high_water_mark_outside_the_domain_is_refused(label, mark):
+    from docs.contracts import receiver_reference as rr
+
+    state = LedgerState(seen_run_ids=frozenset(), current_source="automatic", high_water=mark)
+    with pytest.raises(rr.SequenceDomainError):
+        decide(state, Callback(case_id=CASE, run_id="r1", decision_sequence=5), phase=POST_024)
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_f4_blank_identities_are_refused(blank):
+    from docs.contracts import receiver_reference as rr
+
+    state = LedgerState(seen_run_ids=frozenset(), current_source="automatic", high_water=1)
+    with pytest.raises(rr.SequenceDomainError):
+        decide(state, Callback(case_id=blank, run_id="r1", decision_sequence=5), phase=POST_024)
+    with pytest.raises(rr.SequenceDomainError):
+        decide(state, Callback(case_id=CASE, run_id=blank, decision_sequence=5), phase=POST_024)

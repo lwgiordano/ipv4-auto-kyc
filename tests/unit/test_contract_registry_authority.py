@@ -650,10 +650,39 @@ def _effectiveness_table_is_executable_and_total():
         # order-independent
         assert phase_rows[0].when.duplicate == frozenset({predicates.DUP})
 
+    # ── the INDEPENDENT ORACLE (gate audit `6c4f54a..91fbde3` finding 2) ────────────────────
+    # `decide()` reads its outcome off the published row, so comparing the two was the row
+    # agreeing with itself: a coordinated boolean flip INSTALLED in the real table stayed green.
+    # This oracle restates the accepted invariants directly — a second, independent statement of
+    # the answer for every state — and BOTH the published rows and the executed decisions are
+    # held to it.
+    def oracle(phase, observed):
+        """(records, effective, advances) from the accepted invariants, not from any row."""
+        if observed["duplicate"] == predicates.DUP:
+            return (False, False, False)  # at-least-once delivery: acknowledge, append nothing
+        if phase == INTERIM:
+            # no wire ordering authority: only a case with nothing in force may apply
+            return (True, observed["source"] == predicates.SRC_NONE, False)
+        if observed["sequence"] != predicates.SEQ_ABOVE:
+            return (True, False, False)  # no proven order: record only
+        if observed["source"] == predicates.SRC_MANUAL:
+            return (True, False, True)  # manual holds; the mark still moves on proven order
+        return (True, True, True)  # proven order, nothing manual in force: apply
+
+    for phase in (INTERIM, POST_024):
+        phase_rows = [t for t in rows if t.phase == phase]
+        for observed in predicates.state_space():
+            (expected_row,) = [i for i, r in enumerate(phase_rows) if r.when.matches(observed)]
+            row = phase_rows[expected_row]
+            assert (row.records, row.becomes_effective, row.advances_high_water) == oracle(
+                phase, observed), (
+                f"{phase} {observed}: the published row disagrees with the invariant oracle"
+            )
+
     # ── the evaluator executes THESE predicates, not a private restatement ──────────────────
     # Every state is realized as a concrete (LedgerState, Callback) and driven through decide();
-    # the returned row index must be the enumeration's unique match, and the outcome must be that
-    # row's own booleans. A hardcoded branch that drifts from the table now fails here.
+    # the returned row index must be the enumeration's unique match, and the outcome must equal
+    # the ORACLE's answer — so a drifted branch and a flipped row both fail, independently.
     def realize(observed):
         run_id = "r-seen" if observed["duplicate"] == predicates.DUP else "r-new"
         source = {predicates.SRC_NONE: None, predicates.SRC_MANUAL: "manual",
@@ -661,7 +690,9 @@ def _effectiveness_table_is_executable_and_total():
         sequence = {predicates.SEQ_ABSENT: None, predicates.SEQ_NOT_ABOVE: 3,
                     predicates.SEQ_ABOVE: 9}[observed["sequence"]]
         state = LedgerState(seen_run_ids=frozenset({"r-seen"}), current_source=source,
-                            high_water=5)
+                            high_water=5,
+                            current_manual_event_id=(
+                                "M1" if source == "manual" else None))
         return state, Callback(case_id="c", run_id=run_id, decision_sequence=sequence)
 
     for phase in (INTERIM, POST_024):
@@ -671,13 +702,21 @@ def _effectiveness_table_is_executable_and_total():
             state, callback = realize(observed)
             outcome = decide(state, callback, phase=phase)
             assert outcome.row == expected_row, (phase, observed)
-            row = phase_rows[expected_row]
-            assert (outcome.record, outcome.effective, outcome.advance_high_water) == (
-                row.records, row.becomes_effective, row.advances_high_water), (phase, observed)
+            assert (outcome.record, outcome.effective, outcome.advance_high_water) == oracle(
+                phase, observed), (
+                f"{phase} {observed}: the executed decision disagrees with the invariant oracle"
+            )
+            assert not outcome.completes_release, "the base tables can never complete a release"
 
-    # ── the published text is the predicate's own derivation ────────────────────────────────
+    # ── the published text is the predicate's own derivation AND parses back to it ──────────
+    # Derivation alone compares the claim to itself; the parse is the independent direction
+    # (gate finding 3): the RENDERED text, read under the published grammar, must denote exactly
+    # the row's predicate.
     for transition in rows:
         assert transition.condition == transition.when.condition()
+        assert predicates.parse_condition(transition.condition) == transition.when, (
+            f"{transition.phase}: {transition.condition!r} does not parse back to its predicate"
+        )
 
     # the one semantic the facet space cannot carry: ABOVE with NO recorded mark yet — the first
     # sequenced callback for a case — must still be ABOVE, not a fourth relation
@@ -696,6 +735,139 @@ def _effectiveness_table_is_executable_and_total():
         LedgerState(current_source="manual", high_water=5),
         Callback("c", "r", decision_sequence=6), phase=POST_024)
     assert not manual_current.effective and manual_current.advance_high_water
+
+
+@verifies("WIRE.CALLBACK.LEGEND")
+def _the_condition_legend_is_closed_and_cross_bound():
+    """Gate audit `6c4f54a..91fbde3` finding 3: the per-value phrases used to be an authority
+    nothing pinned, so swapping the manual and automatic meanings derived conditions normally and
+    reversed what the page said. The legend is now one claim: its token set must equal the
+    machines' closed domains exactly, and each paired meaning must carry its own token's
+    distinguishing term and never its sibling's — the swap is a failing mutation."""
+    from docs.contracts import predicates
+
+    legend = dict(WIRE.value("WIRE.CALLBACK.LEGEND"))
+    module_legend = {**predicates.FACET_LEGEND, **predicates.RELEASE_LEGEND}
+    assert legend == module_legend, "the claim and the module legend drifted apart"
+    expected_tokens = (
+        predicates.DUPLICATE_DOMAIN | predicates.SOURCE_DOMAIN | predicates.SEQUENCE_DOMAIN
+        | predicates.BINDING_DOMAIN | predicates.EVENT_DOMAIN | predicates.DEADLINE_DOMAIN
+    )
+    assert set(legend) == expected_tokens, (
+        f"legend tokens {sorted(set(legend) ^ expected_tokens)} out of step with the domains"
+    )
+    for token, meaning in legend.items():
+        assert meaning.strip(), f"{token}: empty meaning"
+    # paired exclusivity: (token, its distinguishing term, sibling, sibling's term)
+    pairs = (
+        (predicates.SRC_MANUAL, "manual approval", predicates.SRC_AUTOMATIC, "automatic"),
+        (predicates.DUP, "already", predicates.FRESH, "new"),
+        (predicates.SEQ_ABOVE, "exceeds", predicates.SEQ_NOT_ABOVE, "at or below"),
+        (predicates.EVENT_UNCHANGED, "still the one", predicates.EVENT_CHANGED, "no longer"),
+        (predicates.DEADLINE_LIVE, "before", predicates.DEADLINE_EXPIRED, "reached"),
+        (predicates.BIND_MATCH, "pending release", predicates.BIND_MISMATCH, "different release"),
+    )
+    for token, term, sibling, sibling_term in pairs:
+        assert term in legend[token], f"{token}: meaning lost its distinguishing term {term!r}"
+        assert term not in legend[sibling], (
+            f"{sibling}: meaning carries {token}'s distinguishing term {term!r} — the swap"
+        )
+        assert sibling_term in legend[sibling], (
+            f"{sibling}: meaning lost its distinguishing term {sibling_term!r}"
+        )
+        assert sibling_term not in legend[token], (
+            f"{token}: meaning carries {sibling}'s distinguishing term {sibling_term!r} — the swap"
+        )
+
+
+@verifies("WIRE.CALLBACK.RELEASE")
+def _the_release_table_is_total_and_held_to_its_own_oracle():
+    """Gate audit `6c4f54a..91fbde3` finding 1, plus the finding-2 oracle discipline for the new
+    machine from day one: the rows partition all 72 release-pending states, exactly ONE row
+    completes, every row and every executed decision matches an oracle restating the accepted
+    completion CAS, and the rendered conditions parse back."""
+    from docs.contracts import predicates
+    from docs.contracts import receiver_reference as rr
+    from docs.contracts.wire import POST_024, RELEASE_TRANSITIONS
+
+    claim = WIRE["WIRE.CALLBACK.RELEASE"]
+    assert claim.state is ClaimState.PENDING, (
+        "the release protocol arrives with 024; publishing it as exercisable is finding 13's "
+        "free-prose defect in table form"
+    )
+    rows = claim.value
+    assert rows is RELEASE_TRANSITIONS
+    problems = predicates.release_partition_problems(rows)
+    assert not problems, problems
+    assert sum(1 for r in rows if r.completes_release) == 1, (
+        "exactly one row may complete the release"
+    )
+
+    def oracle(observed):
+        """(records, effective, advances, completes) from the accepted invariants: manual stays
+        effective; the mark moves on proven order; completion requires EVERY CAS check."""
+        if observed["duplicate"] == predicates.DUP:
+            return (False, False, False, False)
+        completes = (
+            observed["binding"] == predicates.BIND_MATCH
+            and observed["manual_event"] == predicates.EVENT_UNCHANGED
+            and observed["deadline"] == predicates.DEADLINE_LIVE
+            and observed["sequence"] == predicates.SEQ_ABOVE
+        )
+        advances = observed["sequence"] == predicates.SEQ_ABOVE
+        return (True, completes, advances, completes)
+
+    for observed in predicates.release_state_space():
+        (index,) = [i for i, r in enumerate(rows) if r.when.matches(observed)]
+        row = rows[index]
+        assert (row.records, row.becomes_effective, row.advances_high_water,
+                row.completes_release) == oracle(observed), (
+            f"{observed}: the published release row disagrees with the invariant oracle"
+        )
+
+    def realize(observed):
+        run_id = "r-seen" if observed["duplicate"] == predicates.DUP else "r-new"
+        current_event = ("M1" if observed["manual_event"] == predicates.EVENT_UNCHANGED
+                         else "M2")
+        binding = {
+            predicates.BIND_NONE: (None, None),
+            predicates.BIND_MATCH: ("R1", "M1"),
+            predicates.BIND_MISMATCH: ("R-other", "M1"),
+        }[observed["binding"]]
+        sequence = {predicates.SEQ_ABSENT: None, predicates.SEQ_NOT_ABOVE: 3,
+                    predicates.SEQ_ABOVE: 9}[observed["sequence"]]
+        now = 500 if observed["deadline"] == predicates.DEADLINE_LIVE else 1000
+        state = rr.LedgerState(
+            seen_run_ids=frozenset({"r-seen"}),
+            current_source="manual_release_pending",
+            high_water=5,
+            current_manual_event_id=current_event,
+            release=rr.PendingRelease(release_id="R1", requested_manual_event_id="M1",
+                                      deadline=1000),
+        )
+        callback = rr.Callback(case_id="c", run_id=run_id, decision_sequence=sequence,
+                               release_id=binding[0], manual_event_id=binding[1])
+        return state, callback, now
+
+    for observed in predicates.release_state_space():
+        state, callback, now = realize(observed)
+        outcome = rr.decide(state, callback, phase=POST_024, now=now)
+        assert (outcome.record, outcome.effective, outcome.advance_high_water,
+                outcome.completes_release) == oracle(observed), (
+            f"{observed}: the executed release decision disagrees with the invariant oracle"
+        )
+
+    for row in rows:
+        assert row.condition == row.when.condition()
+        assert predicates.parse_release_condition(row.condition) == row.when
+
+    # the machine's non-callback transitions, executed: cancellation and the interim hold
+    cancelled = rr.apply_manual_approval(
+        realize(next(iter(predicates.release_state_space())))[0], manual_event_id="M9")
+    assert cancelled.release is None and cancelled.current_source == "manual"
+    with pytest.raises(rr.UnknownSourceError):
+        rr.decide(realize(next(iter(predicates.release_state_space())))[0],
+                  rr.Callback(case_id="c", run_id="r-x"), phase="interim")
 
     # consistent with the interim ordering rule, which is the same rule stated for sorting
     assert "manual approval" in WIRE.value("WIRE.ORDERING.INTERIM").lower()
@@ -3004,3 +3176,118 @@ def test_f9_an_omitted_branch_fails_the_assembled_verifier(monkeypatch):
     monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
     with pytest.raises(AssertionError):
         AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+
+
+# ── Wave-1 gate F2 + F3: outcomes against an independent oracle; conditions parse back ────────────
+#
+# Gate audit `6c4f54a..91fbde3` findings 2 and 3. `decide()` read its outcome off the same row the
+# verifier compared it to, so a coordinated boolean flip INSTALLED in the real table stayed green;
+# and the derived condition prose could have its facet phrases swapped (or read ambiguously) while
+# the hidden predicates stayed correct. The verifier now holds every row and the executed decision
+# against an oracle derived from the accepted invariants, and parses the RENDERED condition text
+# back into a predicate.
+
+
+def _installed_effectiveness_mutation(monkeypatch, row_index: int, **flips):
+    """Install a boolean-flipped copy of one post-024 row into BOTH consumers: the published
+    registry object and the reference implementation's imported table."""
+    from docs.contracts import receiver_reference as rr
+    from docs.contracts import wire as w
+
+    rows = list(wire_module.RECEIVER_TRANSITIONS)
+    target = [i for i, t in enumerate(rows) if t.phase == w.POST_024][row_index]
+    changes = dict(flips)
+    mutated_row = dataclasses.replace(rows[target], **changes)
+    rows[target] = mutated_row
+    mutated = tuple(rows)
+    monkeypatch.setattr(w, "RECEIVER_TRANSITIONS", mutated)
+    monkeypatch.setattr(rr, "RECEIVER_TRANSITIONS", mutated)
+    monkeypatch.setattr(
+        _this_module(), "WIRE",
+        _wire_with("WIRE.CALLBACK.EFFECTIVENESS", value=mutated))
+
+
+def test_f2_every_installed_outcome_flip_fails_the_assembled_verifier(monkeypatch):
+    """The audit's reproduction: flip `becomes_effective` on the interim fresh/no-current row (and
+    every other boolean on every post-024 row), install it in the real table, and the top-level
+    verifier stayed green. Now every flip must fail against the invariant oracle."""
+    from docs.contracts import wire as w
+
+    post_rows = [t for t in wire_module.RECEIVER_TRANSITIONS if t.phase == w.POST_024]
+    for index in range(len(post_rows)):
+        for field, current in (
+            ("records", post_rows[index].records),
+            ("becomes_effective", post_rows[index].becomes_effective),
+            ("advances_high_water", post_rows[index].advances_high_water),
+        ):
+            _installed_effectiveness_mutation(monkeypatch, index, **{field: not current})
+            with pytest.raises(AssertionError):
+                AUTHORITY_VERIFIERS["WIRE.CALLBACK.EFFECTIVENESS"]()
+            monkeypatch.undo()
+
+
+def test_f2_the_interim_fresh_no_current_flip_specifically(monkeypatch):
+    """The named specimen, kept explicit: interim fresh/no-current becomes effective=False."""
+    from docs.contracts import receiver_reference as rr
+    from docs.contracts import wire as w
+
+    rows = list(wire_module.RECEIVER_TRANSITIONS)
+    target = next(
+        i for i, t in enumerate(rows)
+        if t.phase == w.INTERIM and t.becomes_effective
+    )
+    rows[target] = dataclasses.replace(rows[target], becomes_effective=False)
+    mutated = tuple(rows)
+    monkeypatch.setattr(w, "RECEIVER_TRANSITIONS", mutated)
+    monkeypatch.setattr(rr, "RECEIVER_TRANSITIONS", mutated)
+    monkeypatch.setattr(
+        _this_module(), "WIRE", _wire_with("WIRE.CALLBACK.EFFECTIVENESS", value=mutated))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.CALLBACK.EFFECTIVENESS"]()
+
+
+def test_f3_swapping_facet_phrases_fails_the_assembled_verifier(monkeypatch):
+    """The audit's reproduction: swap the manual and automatic meanings in the token legend and
+    derive conditions normally — the PDF then tells TechCraft the opposite predicate. The rendered
+    text must parse back to the row's own predicate, and the legend's meanings are cross-bound to
+    their tokens."""
+    from docs.contracts import predicates
+
+    legend = dict(predicates.FACET_LEGEND)
+    legend[predicates.SRC_MANUAL], legend[predicates.SRC_AUTOMATIC] = (
+        legend[predicates.SRC_AUTOMATIC], legend[predicates.SRC_MANUAL])
+    monkeypatch.setattr(predicates, "FACET_LEGEND", legend)
+    monkeypatch.setattr(
+        _this_module(), "WIRE",
+        _wire_with("WIRE.CALLBACK.LEGEND", value=tuple(sorted(legend.items()))))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.CALLBACK.LEGEND"]()
+
+
+def test_f3_rendered_conditions_parse_back_to_their_own_predicates():
+    """Ambiguity is the other half: `fresh AND no sequence, or at-or-below` reads as a
+    disjunction of conjunctions. The canonical grouped form must round-trip: parse(render(when))
+    == when, for every published row, in both machines."""
+    from docs.contracts import predicates
+
+    for row in wire_module.RECEIVER_TRANSITIONS:
+        parsed = predicates.parse_condition(row.condition)
+        assert parsed == row.when, (
+            f"{row.phase}: {row.condition!r} does not parse back to its own predicate"
+        )
+
+
+def test_f3_a_multivalue_facet_renders_as_one_braced_group():
+    """Grouping is load-bearing: the old flat 'a, or b, AND c' shape reads as a disjunction of
+    conjunctions, so a multi-valued facet must render inside ONE braced group with the facet
+    named, leaving no precedence for a reader to guess."""
+    from docs.contracts import predicates
+
+    when = predicates.When(
+        duplicate=frozenset({predicates.FRESH}),
+        source=frozenset({predicates.SRC_NONE, predicates.SRC_AUTOMATIC}),
+        sequence=frozenset({predicates.SEQ_ABOVE}),
+    )
+    assert when.condition() == (
+        "duplicate = fresh AND source in {none, automatic} AND sequence = above"
+    )

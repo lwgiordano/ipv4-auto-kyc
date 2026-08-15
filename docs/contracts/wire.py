@@ -33,11 +33,15 @@ from docs.contracts import (
 
 
 # The only values a receiver may report as the currently effective source. Anything else — a
-# release-pending marker, a case variant, a typo — is UNKNOWN, and unknown must hold, not apply
-# (re-audit `4f23f23..122cc67` finding 2).
+# case variant, a typo — is UNKNOWN, and unknown must hold, not apply (re-audit
+# `4f23f23..122cc67` finding 2). `manual_release_pending` is the accepted activation design's
+# third state (gate audit `6c4f54a..91fbde3` finding 1): manual REMAINS EFFECTIVE while a release
+# is open, and callbacks arriving in it are governed by the release table below — it is a known
+# state with its own machine, not an error and not a variant of "manual".
 SOURCE_MANUAL = "manual"
 SOURCE_AUTOMATIC = "automatic"
-KNOWN_SOURCES = frozenset({SOURCE_MANUAL, SOURCE_AUTOMATIC})
+SOURCE_RELEASE_PENDING = "manual_release_pending"
+KNOWN_SOURCES = frozenset({SOURCE_MANUAL, SOURCE_AUTOMATIC, SOURCE_RELEASE_PENDING})
 
 
 @dataclass(frozen=True)
@@ -175,6 +179,159 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
             "DECISION order rather than on arrival order.",
     ),
 )
+
+# ── the manual-release machine: what happens while a release is PENDING ───────────────────────────
+#
+# Gate audit `6c4f54a..91fbde3` finding 1. The accepted activation design's release protocol has a
+# state the base table cannot express: `manual_release_pending`, in which manual remains effective
+# and completion happens ONLY through the bound callback that re-passes every CAS check — pending
+# release id, the release's requested manual event, the case's CURRENT manual event still being
+# that same event, an unexpired deadline by database time, and a sequence above the mark. These
+# rows are that machine, over five closed facets; they partition all 72 states (proven by
+# enumeration), and exactly ONE row completes the release.
+
+
+@dataclass(frozen=True)
+class ReleaseTransition:
+    """One row of the release-pending table. Same discipline as `Transition`: the predicate is
+    checked, the condition text is derived and parses back, and the booleans are what the
+    reference implementation is held against — plus `completes_release`, this machine's one
+    transition the base table cannot have."""
+
+    PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = ("condition", "record", "effective", "why")
+
+    when: predicates.ReleaseWhen
+    record: str
+    effective: str
+    why: str
+    records: bool = True
+    becomes_effective: bool = False
+    advances_high_water: bool = False
+    completes_release: bool = False
+    condition: str = field(default="", init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "condition", self.when.condition())
+
+
+RELEASE_TRANSITIONS: tuple[ReleaseTransition, ...] = (
+    ReleaseTransition(
+        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.DUP}),
+                                    binding=predicates.ANY_BINDING,
+                                    manual_event=predicates.ANY_EVENT,
+                                    deadline=predicates.ANY_DEADLINE,
+                                    sequence=predicates.ANY_SEQUENCE),
+        record="nothing new",
+        effective="NO CHANGE — acknowledge with 2xx and stop",
+        records=False,
+        why="Same as both base tables: duplicates are expected, and replaying a release_id "
+            "returns the original outcome and changes nothing.",
+    ),
+    ReleaseTransition(
+        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                                    binding=frozenset({predicates.BIND_MATCH}),
+                                    manual_event=frozenset({predicates.EVENT_UNCHANGED}),
+                                    deadline=frozenset({predicates.DEADLINE_LIVE}),
+                                    sequence=frozenset({predicates.SEQ_ABOVE})),
+        record="the callback, AND advance the high-water mark",
+        effective="YES — the release COMPLETES; automatic authority returns with this decision",
+        becomes_effective=True,
+        advances_high_water=True,
+        completes_release=True,
+        why="The ONLY completing row. Every check the platform's completion CAS re-asserts holds: "
+            "the bound release matches the pending one, the case's current manual event is still "
+            "the one the release was opened against, the deadline is unexpired by database time, "
+            "and the sequence proves order.",
+    ),
+    ReleaseTransition(
+        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                                    binding=frozenset({predicates.BIND_NONE,
+                                                       predicates.BIND_MISMATCH}),
+                                    manual_event=predicates.ANY_EVENT,
+                                    deadline=predicates.ANY_DEADLINE,
+                                    sequence=frozenset({predicates.SEQ_ABOVE})),
+        record="the callback, AND advance the high-water mark",
+        effective="NO — manual remains in force",
+        advances_high_water=True,
+        why="An ordinary or foreign-release callback cannot complete this case's release, but the "
+            "mark still moves on proven order — otherwise the first callback after completion "
+            "would be judged against a stale baseline.",
+    ),
+    ReleaseTransition(
+        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                                    binding=frozenset({predicates.BIND_MATCH}),
+                                    manual_event=frozenset({predicates.EVENT_CHANGED}),
+                                    deadline=predicates.ANY_DEADLINE,
+                                    sequence=frozenset({predicates.SEQ_ABOVE})),
+        record="the callback, AND advance the high-water mark",
+        effective="NO — manual remains in force",
+        advances_high_water=True,
+        why="The case was re-approved after this release was opened. Completing now would "
+            "replace an approval nobody released — the exact race the completion CAS exists to "
+            "lose safely.",
+    ),
+    ReleaseTransition(
+        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                                    binding=frozenset({predicates.BIND_MATCH}),
+                                    manual_event=frozenset({predicates.EVENT_UNCHANGED}),
+                                    deadline=frozenset({predicates.DEADLINE_EXPIRED}),
+                                    sequence=frozenset({predicates.SEQ_ABOVE})),
+        record="the callback, AND advance the high-water mark",
+        effective="NO — manual remains in force",
+        advances_high_water=True,
+        why="Past the stored deadline the release can only be EXPIRED by the platform's reaper "
+            "or lazy transition — never completed by a late callback, however well bound.",
+    ),
+    ReleaseTransition(
+        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                                    binding=frozenset({predicates.BIND_NONE,
+                                                       predicates.BIND_MISMATCH}),
+                                    manual_event=predicates.ANY_EVENT,
+                                    deadline=predicates.ANY_DEADLINE,
+                                    sequence=frozenset({predicates.SEQ_ABSENT,
+                                                        predicates.SEQ_NOT_ABOVE})),
+        record="the callback",
+        effective="NO — manual remains in force",
+        why="Recorded for the audit trail; without proven order the mark does not move either.",
+    ),
+    ReleaseTransition(
+        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                                    binding=frozenset({predicates.BIND_MATCH}),
+                                    manual_event=frozenset({predicates.EVENT_CHANGED}),
+                                    deadline=predicates.ANY_DEADLINE,
+                                    sequence=frozenset({predicates.SEQ_ABSENT,
+                                                        predicates.SEQ_NOT_ABOVE})),
+        record="the callback",
+        effective="NO — manual remains in force",
+        why="Re-approved since the release opened, and no proven order either: nothing about "
+            "this arrival may change the case.",
+    ),
+    ReleaseTransition(
+        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                                    binding=frozenset({predicates.BIND_MATCH}),
+                                    manual_event=frozenset({predicates.EVENT_UNCHANGED}),
+                                    deadline=frozenset({predicates.DEADLINE_EXPIRED}),
+                                    sequence=frozenset({predicates.SEQ_ABSENT,
+                                                        predicates.SEQ_NOT_ABOVE})),
+        record="the callback",
+        effective="NO — manual remains in force",
+        why="Expired AND without proven order: recorded, nothing else.",
+    ),
+    ReleaseTransition(
+        when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
+                                    binding=frozenset({predicates.BIND_MATCH}),
+                                    manual_event=frozenset({predicates.EVENT_UNCHANGED}),
+                                    deadline=frozenset({predicates.DEADLINE_LIVE}),
+                                    sequence=frozenset({predicates.SEQ_ABSENT,
+                                                        predicates.SEQ_NOT_ABOVE})),
+        record="the callback",
+        effective="NO — manual remains in force; the release stays pending",
+        why="Bound, current, and unexpired — but completion also requires a sequence above the "
+            "mark. 'The discarded pre-release callbacks never satisfy it': only the FRESH bound "
+            "sequence completes.",
+    ),
+)
+
 
 # ── what 024 still needs from the platform, keyed to the live obligations ─────────────────────────
 #
@@ -963,14 +1120,42 @@ WIRE = Registry(
             id="WIRE.CALLBACK.EFFECTIVENESS",
             value=RECEIVER_TRANSITIONS,
             authority="AUDIT_FINDINGS.md A6 residual reverts + the accepted receiver design + "
-                      "docs/contracts/receiver_reference.py (executable, scenario-tested)",
+                      "docs/contracts/receiver_reference.py (executable, scenario-tested) + the "
+                      "invariant oracle in the authority test (every row and the executed "
+                      "decision held against it)",
             note="ACKNOWLEDGING a callback and APPLYING it are different decisions: always "
                  "acknowledge and record, then consult this table for whether it takes effect. "
-                 "Within a phase the rows PARTITION the receiver's state space — every state "
-                 "matches exactly one row, checked by enumeration — so there is no 'otherwise' "
-                 "branch to fall through to and no state with two answers. Automatic authority "
-                 "over a manual-current case returns ONLY through the authenticated "
-                 "platform-owned release protocol, never by a callback arriving.",
+                 "Conditions are written in a fixed grammar over the legend's tokens — each "
+                 "clause names a facet, and every clause must hold. Within a phase the rows "
+                 "PARTITION the receiver's state space — every state matches exactly one row, "
+                 "checked by enumeration — so there is no 'otherwise' branch to fall through to "
+                 "and no state with two answers. Automatic authority over a manual-current case "
+                 "returns ONLY through the authenticated platform-owned release protocol, and "
+                 "while a release is OPEN the case is in manual_release_pending and the release "
+                 "table below governs instead.",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.LEGEND",
+            value=tuple(sorted({**predicates.FACET_LEGEND, **predicates.RELEASE_LEGEND}.items())),
+            authority="docs.contracts.predicates FACET_LEGEND/RELEASE_LEGEND, cross-bound: each "
+                      "meaning must carry its own token's distinguishing term and never its "
+                      "paired sibling's",
+            note="Every condition in the two tables is built from exactly these tokens; a token "
+                 "means this and nothing else.",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.RELEASE",
+            value=RELEASE_TRANSITIONS,
+            authority="the accepted activation design's manual-release machine (states, "
+                      "completion CAS, expiry, cancellation) + docs/contracts/"
+                      "receiver_reference.py (executable, scenario-tested) + the release oracle "
+                      "in the authority test; partition proven over all 72 states",
+            state=ClaimState.PENDING,
+            note="POST-024 ONLY: the release protocol arrives with the activation unit, so this "
+                 "table is the accepted design, not a wire you can exercise today. While a "
+                 "release is pending, MANUAL REMAINS EFFECTIVE. Exactly one row completes the "
+                 "release; a new manual approval cancels the pending release outright; expiry is "
+                 "driven by the platform's stored deadline, never by waiting for traffic.",
         ),
         Claim(
             id="WIRE.CALLBACK.RETRY",
