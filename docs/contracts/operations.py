@@ -264,7 +264,7 @@ BUNDLE_PINNING = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 10. PR 6 cutover — bundle-pinning activation",
-        sha256="502f7e5c8cf3256ead69e1fe7ad9b7543f17393888b4ece25699739580bfe21c",
+        sha256="487cfedfdf2cd670b633ff09cdb774e3802406d0b56f425ba9f49a7324f106f4",
         commands=(
             Command(("python", "-m", "kyc_tool.ops.seed_policy_bundle",
                      "--expect-hash", "<sha256>")),
@@ -351,7 +351,7 @@ PR7B_CORE = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 11. PR 7b-core cutover — drained maintenance window (migration 013)",
-        sha256="354f64022701b6294a7b5dc37cdb05a70a27664945c2b38a12e50a56ce11dee0",
+        sha256="1a56e982c41690ad42fa0170f21a24a5124e377a0df6e24492bf1d71be38b6a6",
         # Every operator-run command the section publishes, as parsed argv. The placeholders
         # (`<file.json>`, `<id>`, `<sha256>`) are the section's own literal text.
         commands=(

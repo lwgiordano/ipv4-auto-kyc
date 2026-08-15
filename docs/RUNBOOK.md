@@ -290,10 +290,11 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
 **Step 0 — pre-window diagnostic (BEFORE any outage):**
 0.1 Suspend the retention schedule.
 0.2 Terminate and wait for every active retention task.
-0.3 Capture target-orchestrator zero-running evidence. `TODO(integration)`: the exact ECS/Fargate
-    `aws ecs list-tasks --cluster <c> --family retention` (or EC2 equivalent) command + its expected
-    zero-task output MUST be recorded here once the production substrate is chosen. A pytest does NOT
-    prove this — it is a deployment acceptance. Do not invent a substrate.
+0.3 Capture target-orchestrator zero-running evidence. `TODO(integration)`: the exact
+    zero-running listing — the `aws` CLI's `ecs list-tasks` scoped to the cluster and the
+    retention family (or the EC2 equivalent) — and its expected zero-task output MUST be
+    recorded here as a typed operator command once the production substrate is chosen. A
+    pytest does NOT prove this — it is a deployment acceptance. Do not invent a substrate.
 0.4 With the schedule still suspended, run the digest-pinned
     ``python -m kyc_tool.ops.verify_pr7b_core_backfill``. The result is valid ONLY while retention stays
     suspended AND the 0.3 attestation holds.
@@ -429,7 +430,7 @@ R4. **With `018` or anything above it installed there is no schema-downgrade pat
     search-path-vulnerable authority functions, so rollback goes straight to R5 (image-only on
     the schema already installed). The walk below is the HISTORICAL path, reachable only on a
     schema that never reached `018`: run ``python -m alembic -c alembic.ini downgrade 012`` (the revision is a
-    REQUIRED positional argument — a bare `alembic downgrade` exits with a usage error
+    REQUIRED positional argument — a bare `alembic` downgrade invocation without it exits with a usage error
     mid-outage). That walk is `017 → 016 → 015 → 014 → 013 → 012`, and EACH revision preflights
     under
     `LOCK TABLE ... ACCESS EXCLUSIVE` (child-first from `015` on; `017` first takes the shared

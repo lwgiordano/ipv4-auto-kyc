@@ -1486,46 +1486,96 @@ def _deployment_section_body(section: str) -> str:
     return " ".join("\n".join(lines[start + 1:end]).split())
 
 
-def _atx_level(line: str) -> int:
-    """The ATX heading level of `line` under CommonMark, or 0. Up to THREE leading spaces are
-    part of the heading syntax (gate audit `6c4f54a..91fbde3` finding 8): the old scan required
-    column-zero hashes, so an indented same-level heading did not bound a section, letting
-    content sit inside a reviewed span that a Markdown reader files under a different one.
-    Four spaces is an indented code block, never a heading."""
+def _parse_atx_heading(line: str):
+    """CommonMark ATX recognition, ONE rule for every consumer (R-audit-3 finding 7): up to
+    three leading spaces, 1-6 hashes, required space/EOL — returning (level, visible label).
+    Returns None for non-headings. Four spaces is an indented code block, never a heading."""
     indent = len(line) - len(line.lstrip(" "))
     candidate = line.lstrip(" ") if indent <= 3 else ""
     if not candidate.startswith("#"):
-        return 0
+        return None
     depth = len(candidate) - len(candidate.lstrip("#"))
     if 0 < depth <= 6 and candidate[depth:depth + 1] in (" ", ""):
-        return depth
-    return 0
+        return depth, candidate[depth:].strip()
+    return None
+
+
+def _atx_level(line: str) -> int:
+    """The ATX heading level of `line`, or 0 — a thin view over _parse_atx_heading."""
+    parsed = _parse_atx_heading(line)
+    return parsed[0] if parsed else 0
+
+
+_FENCE_OPEN = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)$")
+
+
+def _markdown_blocks(text: str) -> list:
+    """ONE CommonMark block model for every section reader (R-audit-3 finding 7): backtick AND
+    tilde fences with real opener-length/indent/closer rules, headings nonexistent inside
+    fences, and EVERY fence balanced — an unmatched fence is a ValueError, never silently
+    swallowed content. Nodes: ("fence", char, info, [lines]) and ("line", text)."""
+    nodes, open_fence = [], None  # open_fence = (char, length, info, lines)
+    for line in text.split("\n"):
+        if open_fence is not None:
+            char, length, info, lines = open_fence
+            stripped = line.strip()
+            if (len(line) - len(line.lstrip(" ")) <= 3 and stripped
+                    and set(stripped) == {char} and len(stripped) >= length):
+                nodes.append(("fence", char, info, lines))
+                open_fence = None
+            else:
+                lines.append(line)
+            continue
+        opened = _FENCE_OPEN.match(line)
+        if opened:
+            char, info = opened.group(2)[0], opened.group(3).strip()
+            if char == "`" and "`" in info:
+                raise ValueError(f"a backtick fence info string may not contain backticks: "
+                                 f"{line!r}")
+            open_fence = (char, len(opened.group(2)), info, [])
+            continue
+        nodes.append(("line", line))
+    if open_fence is not None:
+        raise ValueError(
+            f"an unbalanced {open_fence[0]!r} fence (info {open_fence[2]!r}) runs to the end "
+            "of the section — it can swallow everything after it; refuse the document"
+        )
+    return nodes
 
 
 def _section_bytes(ref, root=None) -> str:
-    """The EXACT text of the referenced section, HEADING INCLUDED (Wave 1 / F7; heading brought
-    inside the digest by the gate fold, finding 8 — a heading renamed to a semantic reversal
-    used to keep the reviewed pin, because only the body was hashed).
-
-    The heading is matched by full-line equality against exactly one line — a substring match
-    accepted any same-named section. The section runs from the heading line to the start of the
-    next CommonMark ATX heading of the same or higher level (up to three leading spaces
-    included, per finding 8), byte-exact; CRLF→LF is the ONLY normalization. The old digest
-    collapsed all whitespace first, so a shell continuation rewritten from backslash-newline to
-    backslash-space — which hands the shell a literal backslash argument and breaks the command —
-    hashed identically and passed review.
-    """
+    """The EXACT text of the referenced section, HEADING INCLUDED, bounded by the ONE shared
+    CommonMark block model (R-audit-3 finding 7): the heading must exist OUTSIDE any fence (a
+    section wrapped in a ```/~~~ fence renders as code — it has no heading to reference), its
+    level comes from _parse_atx_heading (never from byte zero, so a 1-3 space indented heading
+    bounds and displays exactly), fences balance, and the section runs to the next real heading
+    of the same or higher level. Byte-exact; CRLF→LF is the ONLY normalization."""
     text = ((root or REPO) / ref.path).read_bytes().decode("utf-8").replace("\r\n", "\n")
+    _markdown_blocks(text)  # whole-document fence balance, before any bounding
     lines = text.split("\n")
-    matches = [i for i, line in enumerate(lines) if line == ref.heading]
+    fence_lines = set()
+    index = 0
+    for node in _markdown_blocks(text):
+        if node[0] == "line":
+            while lines[index] != node[1]:
+                fence_lines.add(index)
+                index += 1
+            index += 1
+    fence_lines.update(range(index, len(lines)))
+    matches = [i for i, line in enumerate(lines)
+               if line == ref.heading and i not in fence_lines]
     assert len(matches) == 1, (
-        f"heading {ref.heading!r} matches {len(matches)} lines; the reference must name exactly "
-        "one section by its exact heading line"
+        f"heading {ref.heading!r} matches {len(matches)} real (non-fence) lines; the "
+        "reference must name exactly one section by its exact heading line"
     )
-    level = len(ref.heading) - len(ref.heading.lstrip("#"))
+    parsed = _parse_atx_heading(ref.heading)
+    assert parsed is not None, f"{ref.heading!r} is not a CommonMark ATX heading"
+    level = parsed[0]
     start = matches[0] + 1
     end = len(lines)
     for i in range(start, len(lines)):
+        if i in fence_lines:
+            continue
         depth = _atx_level(lines[i])
         if 0 < depth <= level:
             end = i
@@ -1538,57 +1588,94 @@ def _section_body(section_text: str) -> str:
     return section_text.partition("\n")[2]
 
 
-def _section_commands(section_text: str) -> list[str]:
-    """Every MARKED operator command in the section, in source order, as exact line strings
-    (re-audit `1826661..b5c7a83` finding 4).
+def _join_operator_lines(block: list) -> list:
+    joined = []
+    for raw in block:
+        if joined and joined[-1].endswith("\\"):
+            joined[-1] = joined[-1][:-1].rstrip() + " " + raw.strip()
+        elif raw.strip():
+            joined.append(raw.strip())
+    return joined
 
-    The marking convention is the document's, not the parser's guess: operator commands live in
-    ```operator fences (one command per line; a trailing backslash joins the next line with one
-    space) and in ``double-backtick`` inline spans. Single-backtick spans are non-commands by
-    construction — mentions, module names, flags — so nothing needs an exemption and nothing can
-    consume 'every identical occurrence'. Bytes are compared exactly: no whitespace collapse, so
-    an NBSP or raw-newline lookalike is not the reviewed command. Any root is inventoried —
-    `rm`, `psql`, `aws` in a marked span must be typed or the section fails."""
-    commands: list[str] = []
-    lines = section_text.split("\n")
-    i = 0
-    while i < len(lines):
-        stripped = lines[i].strip()
-        if stripped.startswith("```"):
-            info = stripped[3:].strip()
-            block: list[str] = []
-            i += 1
-            while i < len(lines) and not lines[i].strip().startswith("```"):
-                block.append(lines[i])
-                i += 1
-            if info == "operator":
-                joined: list[str] = []
-                for raw in block:
-                    if joined and joined[-1].endswith("\\"):
-                        joined[-1] = joined[-1][:-1].rstrip() + " " + raw.strip()
-                    elif raw.strip():
-                        joined.append(raw.strip())
-                commands.append(("\x00FENCE", tuple(joined)))  # placeholder, flattened below
-            i += 1
+
+def _section_commands(section_text: str) -> list:
+    """Every MARKED operator command in the section, in source order, as exact line strings.
+
+    The marking convention is the document's: operator commands live in operator fences
+    (backtick or tilde; one command per line; a trailing backslash joins the next line with one
+    space) and in ``double-backtick`` inline spans. Bytes are compared exactly — an NBSP or
+    raw-newline lookalike is not the reviewed command — and any root is inventoried. What is
+    NOT marked is not thereby trusted: _unmarked_instruction_problems refuses command-shaped
+    content everywhere else (R-audit-3 finding 8)."""
+    commands = []
+    for node in _markdown_blocks(section_text):
+        if node[0] == "fence":
+            if node[2] == "operator":
+                commands.extend(_join_operator_lines(node[3]))
+        else:
+            commands.extend(
+                re.findall(r"(?<!`)``([^`]+?)``(?!`)", node[1]))
+    return commands
+
+
+def _section_fence_infos(section_text: str) -> list:
+    """The info string of every fence (backtick AND tilde) in the section, in order."""
+    return [node[2] for node in _markdown_blocks(section_text) if node[0] == "fence"]
+
+
+_COMMANDLIKE_ROOTS = frozenset({
+    "python", "python3", "alembic", "rm", "psql", "aws", "curl", "sha256sum", "bash", "sh",
+    "docker", "git", "pip", "kubectl", "systemctl", "dropdb", "pg_dump", "pg_restore"})
+_SHELL_METACHAR = re.compile(r"\$\(|&&|\|\||<\(")
+_STRICT_METACHAR = re.compile(r"\$\(|&&|\|\||<\(|;\s|\s>\s")
+
+
+def _command_shaped(text: str, strict: bool = False) -> bool:
+    """Would a reader read `text` as something to RUN? A known executable root leading an
+    argv, a root followed by a dash-flag or absolute path anywhere (the 'Run rm -rf ... now.'
+    prose shape), or shell metacharacters. Unicode whitespace lookalikes split like whitespace,
+    so an NBSP variant is still command-shaped."""
+    tokens = text.split()
+    if not tokens:
+        return False
+    if (_STRICT_METACHAR if strict else _SHELL_METACHAR).search(text):
+        return True
+    if tokens[0].lower() in _COMMANDLIKE_ROOTS and len(tokens) >= 2:
+        return True
+    for i, token in enumerate(tokens[:-1]):
+        if token.lower().strip(".,;:()`'\"") in _COMMANDLIKE_ROOTS and (
+                tokens[i + 1].startswith("-") or tokens[i + 1].startswith("/")):
+            return True
+    return False
+
+
+def _unmarked_instruction_problems(section_text: str) -> list:
+    """Command-shaped content OUTSIDE operator nodes (R-audit-3 finding 8): a single-backtick
+    span, an example fence, or plain prose carrying something runnable is a located refusal —
+    an author cannot self-classify a dangerous command as a mention or an example."""
+    problems = []
+    for node in _markdown_blocks(section_text):
+        if node[0] == "fence":
+            if node[2] == "operator":
+                continue
+            for line in node[3]:
+                if _command_shaped(line, strict=True):
+                    problems.append(
+                        f"a {node[2] or 'bare'} fence carries a command-shaped line outside "
+                        f"the operator lane: {line.strip()[:70]!r}")
             continue
-        for span in re.findall(r"(?<!`)``([^`]+?)``(?!`)", lines[i]):
-            commands.append(("\x00SPAN", (span,)))
-        i += 1
-    flat: list[str] = []
-    for _kind, entries in commands:
-        flat.extend(entries)
-    return flat
-
-
-def _section_fence_infos(section_text: str) -> list[str]:
-    """The info string of every fence in the section, in order — the closed vocabulary check."""
-    infos, in_fence = [], False
-    for line in section_text.split("\n"):
-        if line.strip().startswith("```"):
-            if not in_fence:
-                infos.append(line.strip()[3:].strip())
-            in_fence = not in_fence
-    return infos
+        line = re.sub(r"(?<!`)``[^`]+?``(?!`)", " ", node[1])  # marked spans are reviewed
+        for span in re.findall(r"(?<!`)`([^`]+?)`(?!`)", line):
+            if _command_shaped(span):
+                problems.append(
+                    f"a single-backtick span is command-shaped — a mention cannot be "
+                    f"runnable: {span[:70]!r}")
+        prose = re.sub(r"(?<!`)`[^`]+?`(?!`)", " ", line)
+        if _command_shaped(prose):
+            problems.append(
+                f"prose carries a command-shaped instruction outside any marked node: "
+                f"{prose.strip()[:70]!r}")
+    return problems
 
 
 def _playbook_prose(ref) -> str:
@@ -1746,6 +1833,9 @@ def _command_inventory_problems(ref, section: str) -> list[str]:
             f"marked operator inventory != typed records.\n  marked: {parsed}\n"
             f"  typed:  {typed}"
         )
+    # R-audit-3 finding 8: review is not opt-in — command-shaped content outside the operator
+    # lane (mentions, example fences, plain prose) is refused, not skipped.
+    problems.extend(_unmarked_instruction_problems(_section_body(section)))
     return problems
 
 
@@ -2831,7 +2921,7 @@ def test_a_substring_heading_is_refused(tmp_path):
 
     vague = PlaybookRef(path="docs/DEPLOYMENT.md", heading="## 9. PR 5b cutover",
                         sha256="0" * 64)
-    with pytest.raises(AssertionError, match="matches 0 lines"):
+    with pytest.raises(AssertionError, match="matches 0 real"):
         _section_bytes(vague)
 
 
@@ -2841,7 +2931,7 @@ def test_a_duplicated_heading_is_refused(tmp_path):
     heading = "## 9. PR 5b cutover — brief full maintenance window"
     root = _copy_deployment(tmp_path, lambda t: t + "\n" + heading + "\n\nimpostor body\n")
     ref = PlaybookRef(path="docs/DEPLOYMENT.md", heading=heading, sha256="0" * 64)
-    with pytest.raises(AssertionError, match="matches 2 lines"):
+    with pytest.raises(AssertionError, match="matches 2 real"):
         _section_bytes(ref, root=root)
 
 
@@ -5328,3 +5418,95 @@ def test_r3f6_the_published_contract_validates_before_history_and_table():
         "the transaction claim still says always-acknowledge without the validity "
         "qualification"
     )
+
+
+# ── R-audit-3 unit 2: one CommonMark model, non-opt-in command review (findings 7-8) ──────────────
+
+
+def _repinned(ref, section: str):
+    return dataclasses.replace(ref, sha256=hashlib.sha256(section.encode()).hexdigest())
+
+
+def test_r3f7_a_tilde_wrapped_section_has_no_heading_to_reference(tmp_path):
+    """The audit's witness: the live section wrapped in `~~~example` renders as CODE, yet the
+    old readers (backtick-only) still 'found' its heading and the assembled verifier passed
+    after a re-pin. Headings inside fences do not exist."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    live = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ref.path).write_text("~~~example\n" + live + "\n~~~\n")
+    with pytest.raises(AssertionError, match="0 real"):
+        _section_bytes(_repinned(ref, live), root=tmp_path)
+
+
+def test_r3f7_an_unmatched_fence_is_refused_never_swallowed(tmp_path):
+    """An unmatched trailing fence (backtick or tilde, `example` info included) can swallow
+    every later section; both are now a located refusal at parse time."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    live = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    for opener in ("```example", "~~~example"):
+        (tmp_path / ref.path).write_text(live + "\n" + opener + "\nswallowed\n")
+        with pytest.raises(ValueError, match="unbalanced"):
+            _section_bytes(_repinned(ref, live), root=tmp_path)
+
+
+def test_r3f7_a_heading_inside_a_fence_does_not_bound_the_section(tmp_path):
+    """A `## lookalike` INSIDE an example fence is fence content, not a boundary — the section
+    extends past it, exactly as a CommonMark reader files it."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    doc = (f"{ref.heading}\nbody before\n```example\n## not a heading\n```\nbody after\n"
+           f"## a real same-level heading\nnext section\n")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ref.path).write_text(doc)
+    section = _section_bytes(_repinned(ref, ""), root=tmp_path)
+    assert "body after" in section and "not a heading" in section
+    assert "next section" not in section
+
+
+def test_r3f7_an_indented_heading_bounds_by_its_parsed_level(tmp_path):
+    """The byte-zero level bug: a 2-space-indented `## A` ref computed level 0 and swallowed
+    the following same-level section. Levels come from the ONE parse_atx_heading now, and the
+    visible label is hash-free."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    doc = "  ## Indented section\nits body\n## Neighbor\nother body\n"
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ref.path).write_text(doc)
+    probe = dataclasses.replace(ref, heading="  ## Indented section", sha256="0" * 64)
+    section = _section_bytes(probe, root=tmp_path)
+    assert "its body" in section and "Neighbor" not in section
+    assert _parse_atx_heading("  ## Indented section") == (2, "Indented section")
+
+
+def test_r3f8_selfclassified_dangerous_content_is_refused():
+    """The audit's three witnesses plus the named roots: a single-backtick 'mention' of
+    `rm -rf`, the same instruction as plain prose, an example fence carrying psql, and
+    aws/curl/sha256sum variants — each a located refusal, marker games included."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    base = _section_bytes(ref)
+    witnesses = (
+        "Run `rm -rf /var/lib/kyc` now.",
+        "Run rm -rf /var/lib/kyc now.",
+        '```example\npsql -c "DROP TABLE decisions"\n```',
+        "then `aws s3 rm --recursive s3://kyc-evidence` before the window.",
+        "fetch it with `curl -X POST https://x/y` first.",
+        "confirm with sha256sum /etc/kyc/bundle.json before starting.",
+        "Run rm -rf /var/lib/kyc now.",
+    )
+    for witness in witnesses:
+        mutated = base + "\n" + witness + "\n"
+        problems = _command_inventory_problems(_repinned(ref, mutated), mutated)
+        assert any("command-shaped" in p for p in problems), (witness, problems)
+
+
+def test_r3f8_unmarking_an_operator_command_after_a_repin_is_refused():
+    """Removing the operator markers (the fence lines) turns the reviewed command into plain
+    command-shaped prose — refused even though the section digest was re-pinned."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    base = _section_bytes(ref)
+    lines = base.split("\n")
+    opener = next(i for i, ln in enumerate(lines) if ln.strip() == "```operator")
+    closer = next(i for i in range(opener + 1, len(lines)) if lines[i].strip() == "```")
+    unmarked = "\n".join(lines[:opener] + lines[opener + 1:closer] + lines[closer + 1:])
+    problems = _command_inventory_problems(_repinned(ref, unmarked), unmarked)
+    assert any("command-shaped" in p or "inventory != typed" in p for p in problems)
