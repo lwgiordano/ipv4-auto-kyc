@@ -732,6 +732,18 @@ def _effectiveness_table_is_executable_and_total():
         assert predicates.parse_condition(transition.condition) == transition.when, (
             f"{transition.phase}: {transition.condition!r} does not parse back to its predicate"
         )
+        # re-audit finding 1: every visible cell REBINDS to the closed records each run, so a
+        # tampered cell cannot outlive one verification and a contradictory kind cannot construct
+        kind = wire_module.OUTCOME_KINDS[transition.outcome]
+        assert transition.record == kind.record_text
+        assert transition.effective == kind.effective_text
+        assert transition.why == wire_module.REASON_TEXTS[transition.reason]
+        assert (transition.records, transition.becomes_effective,
+                transition.advances_high_water) == (
+            kind.records, kind.becomes_effective, kind.advances_high_water)
+        assert not wire_module.outcome_record_problems(
+            kind.records, kind.becomes_effective, kind.advances_high_water,
+            kind.completes_release, kind.record_text, kind.effective_text)
 
     # the one semantic the facet space cannot carry: ABOVE with NO recorded mark yet — the first
     # sequenced callback for a case — must still be ABOVE, not a fourth relation
@@ -762,8 +774,23 @@ def _the_condition_legend_is_closed_and_cross_bound():
     from docs.contracts import predicates
 
     legend = dict(WIRE.value("WIRE.CALLBACK.LEGEND"))
-    module_legend = {**predicates.FACET_LEGEND, **predicates.RELEASE_LEGEND}
-    assert legend == module_legend, "the claim and the module legend drifted apart"
+    assert legend == predicates.legend(), (
+        "the claim and the typed-semantics derivation drifted apart"
+    )
+    # re-audit finding 8: every token's executable checker, held to the machines themselves
+    from docs.contracts.receiver_reference import token_semantics_problems
+
+    assert token_semantics_problems() == []
+    # ...and the derived meanings carry a reviewed pin: a paraphrase is a re-pin, the act of
+    # review — keyword presence proved nothing (the deceptive-paraphrase specimen kept every
+    # expected word while reversing the semantics)
+    legend_digest = hashlib.sha256(
+        "\0".join(f"{t}={m}" for t, m in sorted(legend.items())).encode()
+    ).hexdigest()[:16]
+    assert legend_digest == "44590df7364f002d", (
+        f"the legend meanings changed since review: now {legend_digest}. Read every meaning, "
+        "then re-pin in the SAME commit."
+    )
     expected_tokens = (
         predicates.DUPLICATE_DOMAIN | predicates.SOURCE_DOMAIN | predicates.SEQUENCE_DOMAIN
         | predicates.BINDING_DOMAIN | predicates.EVENT_DOMAIN | predicates.DEADLINE_DOMAIN
@@ -875,6 +902,13 @@ def _the_release_table_is_total_and_held_to_its_own_oracle():
     for row in rows:
         assert row.condition == row.when.condition()
         assert predicates.parse_release_condition(row.condition) == row.when
+        kind = wire_module.OUTCOME_KINDS[row.outcome]
+        assert row.record == kind.record_text and row.effective == kind.effective_text
+        assert row.why == wire_module.REASON_TEXTS[row.reason]
+        assert (row.records, row.becomes_effective, row.advances_high_water,
+                row.completes_release) == (
+            kind.records, kind.becomes_effective, kind.advances_high_water,
+            kind.completes_release)
 
     # the machine's non-callback transitions, executed: cancellation and the interim hold
     cancelled = rr.apply_manual_approval(
@@ -3347,13 +3381,16 @@ def test_f9_an_omitted_branch_fails_the_assembled_verifier(monkeypatch):
 def _installed_effectiveness_mutation(monkeypatch, row_index: int, **flips):
     """Install a boolean-flipped copy of one post-024 row into BOTH consumers: the published
     registry object and the reference implementation's imported table."""
+    import copy
+
     from docs.contracts import receiver_reference as rr
     from docs.contracts import wire as w
 
     rows = list(wire_module.RECEIVER_TRANSITIONS)
     target = [i for i, t in enumerate(rows) if t.phase == w.POST_024][row_index]
-    changes = dict(flips)
-    mutated_row = dataclasses.replace(rows[target], **changes)
+    mutated_row = copy.copy(rows[target])
+    for field_name, flipped in flips.items():
+        object.__setattr__(mutated_row, field_name, flipped)
     rows[target] = mutated_row
     mutated = tuple(rows)
     monkeypatch.setattr(w, "RECEIVER_TRANSITIONS", mutated)
@@ -3392,7 +3429,11 @@ def test_f2_the_interim_fresh_no_current_flip_specifically(monkeypatch):
         i for i, t in enumerate(rows)
         if t.phase == w.INTERIM and t.becomes_effective
     )
-    rows[target] = dataclasses.replace(rows[target], becomes_effective=False)
+    import copy
+
+    tampered_row = copy.copy(rows[target])
+    object.__setattr__(tampered_row, "becomes_effective", False)
+    rows[target] = tampered_row
     mutated = tuple(rows)
     monkeypatch.setattr(w, "RECEIVER_TRANSITIONS", mutated)
     monkeypatch.setattr(rr, "RECEIVER_TRANSITIONS", mutated)
@@ -3983,3 +4024,210 @@ def test_f13_gate_retirement_semantics_live_only_in_gated_sentences():
     tampered = (*wire_module.rotation_lines(),
                 "If pressed for time, remove the old entry immediately.")
     assert wire_module.rotation_prose_problems(tampered)
+
+
+# ── Re-audit unit 1: F1 typed outcomes, F2 total receiver validation, F8 legend semantics ─────────
+#
+# Re-audit `1826661..b5c7a83` findings 1, 2, 8. The visible Record/Effective/Why cells were
+# authored beside verified booleans and could say the opposite; release identity was checked only
+# inside the pending branch (partial bindings reached the ordinary table, blank ids and a Boolean
+# deadline completed, terminal replays had no durable history to answer from); and the token
+# legend was free prose held by keyword checks.
+
+
+def test_ra1_visible_outcome_cells_cannot_contradict_the_typed_effects(monkeypatch):
+    """The audit's reproduction: interim manual row rewritten to 'discard the callback' /
+    'NO — replace the manual approval' / 'Apply it anyway.' with booleans intact — both the
+    assembled verifier and the prose-mirror test passed. The cells are now DERIVED from closed
+    OutcomeKind/ReasonKind records; a tampered cell fails the derivation rebind."""
+    import copy
+
+    from docs.contracts import receiver_reference as rr
+    from docs.contracts import wire as w
+
+    rows = list(wire_module.RECEIVER_TRANSITIONS)
+    target = next(
+        i for i, t in enumerate(rows)
+        if t.phase == w.INTERIM and "reviewer decided this case" in t.why
+    )
+    tampered = copy.copy(rows[target])
+    object.__setattr__(tampered, "record", "discard the callback")
+    object.__setattr__(tampered, "effective", "NO — replace the manual approval")
+    object.__setattr__(tampered, "why", "Apply it anyway.")
+    rows[target] = tampered
+    mutated = tuple(rows)
+    monkeypatch.setattr(w, "RECEIVER_TRANSITIONS", mutated)
+    monkeypatch.setattr(rr, "RECEIVER_TRANSITIONS", mutated)
+    monkeypatch.setattr(
+        _this_module(), "WIRE", _wire_with("WIRE.CALLBACK.EFFECTIVENESS", value=mutated))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.CALLBACK.EFFECTIVENESS"]()
+
+
+def test_ra1_the_release_table_cells_derive_too(monkeypatch):
+    """The completing row's visible cells said it does not complete while completes_release
+    stayed True — certified. Same derivation discipline for the release machine."""
+    import copy
+
+    from docs.contracts import receiver_reference as rr
+    from docs.contracts import wire as w
+
+    rows = list(wire_module.RELEASE_TRANSITIONS)
+    target = next(i for i, t in enumerate(rows) if t.completes_release)
+    tampered = copy.copy(rows[target])
+    object.__setattr__(tampered, "effective", "NO — the release does not complete")
+    rows[target] = tampered
+    mutated = tuple(rows)
+    monkeypatch.setattr(w, "RELEASE_TRANSITIONS", mutated)
+    monkeypatch.setattr(rr, "RELEASE_TRANSITIONS", mutated)
+    monkeypatch.setattr(
+        _this_module(), "WIRE", _wire_with("WIRE.CALLBACK.RELEASE", value=mutated))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.CALLBACK.RELEASE"]()
+
+
+def test_ra1_an_outcome_kind_cannot_say_the_opposite_of_its_booleans():
+    """The closed record binds text to effect: an effective=True kind whose visible cell reads NO
+    is unconstructable, in both directions."""
+    with pytest.raises(ValueError):
+        wire_module.OutcomeKind(
+            records=True, becomes_effective=True, advances_high_water=False,
+            completes_release=False, record_text="the callback",
+            effective_text="NO — replace the manual approval")
+    with pytest.raises(ValueError):
+        wire_module.OutcomeKind(
+            records=False, becomes_effective=False, advances_high_water=False,
+            completes_release=False, record_text="the callback",
+            effective_text="NO CHANGE — acknowledge with 2xx and stop")
+
+
+def test_ra2_partial_release_bindings_never_reach_the_ordinary_table():
+    """The audit's matrix: with source None/automatic/manual, release-id-only, manual-id-only,
+    and both-present callbacks entered the ordinary table (and could become effective). All are
+    now one stable integrity refusal before any row is consulted."""
+    from docs.contracts import receiver_reference as rr
+    from docs.contracts.wire import POST_024
+
+    for source in (None, "automatic", "manual"):
+        state = rr.LedgerState(
+            seen_run_ids=frozenset(), current_source=source, high_water=5,
+            current_manual_event_id="M1" if source == "manual" else None)
+        for fields in ({"release_id": "R1"}, {"manual_event_id": "M1"},
+                       {"release_id": "R1", "manual_event_id": "M1"}):
+            callback = rr.Callback(case_id="c", run_id="r", decision_sequence=6, **fields)
+            with pytest.raises(rr.ReceiverIntegrityError):
+                rr.decide(state, callback, phase=POST_024, now=500)
+
+
+def test_ra2_blank_release_identities_cannot_complete():
+    """Blank matching release and manual ids completed. PendingRelease refuses blanks at
+    construction, and a bound callback with blank fields is an integrity refusal."""
+    from docs.contracts import receiver_reference as rr
+    from docs.contracts.wire import POST_024
+
+    with pytest.raises((rr.ReceiverIntegrityError, ValueError)):
+        rr.PendingRelease(release_id="", requested_manual_event_id="", deadline=1000)
+    state = rr.LedgerState(
+        seen_run_ids=frozenset(), current_source="manual_release_pending", high_water=5,
+        current_manual_event_id="M1",
+        release=rr.PendingRelease(release_id="R1", requested_manual_event_id="M1",
+                                  deadline=1000))
+    with pytest.raises(rr.ReceiverIntegrityError):
+        rr.decide(state, rr.Callback(case_id="c", run_id="r", decision_sequence=6,
+                                     release_id=" ", manual_event_id="M1"),
+                  phase=POST_024, now=500)
+
+
+def test_ra2_a_boolean_deadline_cannot_complete():
+    """`0 < True` made a Boolean deadline live. Exact int only, Boolean excluded, bounded."""
+    from docs.contracts import receiver_reference as rr
+    from docs.contracts.wire import POST_024
+
+    with pytest.raises((rr.ReceiverIntegrityError, ValueError)):
+        rr.PendingRelease(release_id="R1", requested_manual_event_id="M1", deadline=True)
+    for bad_now in (True, "500", -1, 2**63):
+        state = rr.LedgerState(
+            seen_run_ids=frozenset(), current_source="manual_release_pending", high_water=5,
+            current_manual_event_id="M1",
+            release=rr.PendingRelease(release_id="R1", requested_manual_event_id="M1",
+                                      deadline=1000))
+        with pytest.raises(rr.ReceiverIntegrityError):
+            rr.decide(state, rr.Callback(case_id="c", run_id="r", decision_sequence=6,
+                                         release_id="R1", manual_event_id="M1"),
+                      phase=POST_024, now=bad_now)
+
+
+def test_ra2_hostile_state_shapes_are_one_stable_refusal():
+    """Unhashable sources, a None run-id set, and inconsistent source/release pairs escaped as
+    incidental TypeErrors or dispatched anyway. Every one is the same typed refusal."""
+    from docs.contracts import receiver_reference as rr
+    from docs.contracts.wire import POST_024
+
+    hostile = [
+        rr.LedgerState(seen_run_ids=frozenset(), current_source=["manual"]),
+        rr.LedgerState(seen_run_ids=None, current_source="automatic"),
+        rr.LedgerState(seen_run_ids=frozenset(), current_source="manual",
+                       current_manual_event_id="M1",
+                       release=rr.PendingRelease(release_id="R1",
+                                                 requested_manual_event_id="M1",
+                                                 deadline=1000)),
+    ]
+    for state in hostile:
+        with pytest.raises(rr.ReceiverIntegrityError):
+            rr.decide(state, rr.Callback(case_id="c", run_id="r", decision_sequence=6),
+                      phase=POST_024, now=500)
+
+
+def test_ra2_terminal_release_replays_answer_from_durable_history():
+    """'Replaying it returns the original outcome and changes nothing, including after completed
+    or expired.' The ledger now carries durable terminal release records; a bound replay answers
+    from them — never from the ordinary table, and a bound callback naming a release the ledger
+    never knew holds."""
+    from docs.contracts import receiver_reference as rr
+    from docs.contracts.wire import POST_024
+
+    for terminal in ("completed", "expired", "cancelled"):
+        state = rr.LedgerState(
+            seen_run_ids=frozenset(), current_source="automatic", high_water=9,
+            release_history=(rr.ReleaseTerminal(release_id="R9", terminal=terminal),))
+        outcome = rr.decide(
+            state, rr.Callback(case_id="c", run_id="r-new", decision_sequence=10,
+                               release_id="R9", manual_event_id="M1"),
+            phase=POST_024, now=500)
+        assert not outcome.record and not outcome.effective
+        assert not outcome.advance_high_water and not outcome.completes_release
+        assert outcome.release_replay == terminal
+    unknown = rr.LedgerState(seen_run_ids=frozenset(), current_source="automatic", high_water=9)
+    with pytest.raises(rr.ReceiverIntegrityError):
+        rr.decide(unknown, rr.Callback(case_id="c", run_id="r", decision_sequence=10,
+                                       release_id="R-never", manual_event_id="M1"),
+                  phase=POST_024, now=500)
+
+
+def test_ra8_a_deceptive_paraphrase_cannot_ride_the_legend(monkeypatch):
+    """The audit's reproduction: 'manual' redefined as 'the case mentions a manual approval, but
+    no decision is currently in force' — keeps the expected words, avoids the forbidden one,
+    reverses the semantics. The legend is now derived from typed token semantics whose checkers
+    are verified against concrete observations, and the derived meanings carry a reviewed pin —
+    the paraphrase fails the assembled verifier without a re-pin."""
+    from docs.contracts import predicates
+
+    semantics = dict(predicates.TOKEN_SEMANTICS)
+    original = semantics[predicates.SRC_MANUAL]
+    semantics[predicates.SRC_MANUAL] = dataclasses.replace(
+        original,
+        meaning="the case mentions a manual approval, but no decision is currently in force")
+    monkeypatch.setattr(predicates, "TOKEN_SEMANTICS", semantics)
+    monkeypatch.setattr(
+        _this_module(), "WIRE",
+        _wire_with("WIRE.CALLBACK.LEGEND", value=tuple(sorted(predicates.legend().items()))))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.CALLBACK.LEGEND"]()
+
+
+def test_ra8_every_token_checker_matches_the_observed_facet():
+    """Each token's executable semantics, held to the machines themselves: over every realized
+    observation, the facet observes the token exactly when the checker holds."""
+    from docs.contracts.receiver_reference import token_semantics_problems
+
+    assert token_semantics_problems() == []

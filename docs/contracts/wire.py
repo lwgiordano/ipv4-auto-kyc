@@ -44,45 +44,194 @@ SOURCE_RELEASE_PENDING = "manual_release_pending"
 KNOWN_SOURCES = frozenset({SOURCE_MANUAL, SOURCE_AUTOMATIC, SOURCE_RELEASE_PENDING})
 
 
+# ── closed outcome and reason records (re-audit `1826661..b5c7a83` finding 1) ─────────────────────
+#
+# The rows used to carry independently authored `record`/`effective`/`why` strings beside the
+# verified booleans, so the page could say "NO — replace the manual approval" while the machine
+# said the opposite and every check passed. An OutcomeKind is ONE closed record pairing the
+# structured effects with the exact visible cells — text that contradicts its own booleans is
+# unconstructable — and a row carries only the ids; every visible cell is derived. There is no
+# normative authored prose adjacent to an outcome.
+
+
+def outcome_record_problems(records, becomes_effective, advances_high_water, completes_release,
+                            record_text, effective_text) -> list[str]:
+    problems = []
+    if becomes_effective and not effective_text.startswith("YES"):
+        problems.append("an effective outcome's visible cell must start YES")
+    if not becomes_effective and not effective_text.startswith("NO"):
+        problems.append("a non-effective outcome's visible cell must start NO")
+    if records and "nothing" in record_text.lower():
+        problems.append("a recording outcome's cell may not say nothing is recorded")
+    if not records and "nothing" not in record_text.lower():
+        problems.append("a non-recording outcome's cell must say nothing new is recorded")
+    if advances_high_water != ("advance the high-water mark" in record_text):
+        problems.append("the advance phrase must appear exactly when the mark moves")
+    if completes_release != ("COMPLETES" in effective_text):
+        problems.append("COMPLETES must appear exactly when the release completes")
+    return problems
+
+
+@dataclass(frozen=True)
+class OutcomeKind:
+    """The structured effects AND the exact visible cells, one closed record."""
+
+    records: bool
+    becomes_effective: bool
+    advances_high_water: bool
+    completes_release: bool
+    record_text: str
+    effective_text: str
+
+    def __post_init__(self) -> None:
+        problems = outcome_record_problems(
+            self.records, self.becomes_effective, self.advances_high_water,
+            self.completes_release, self.record_text, self.effective_text)
+        if problems:
+            raise ValueError(f"OutcomeKind text contradicts its effects: {problems}")
+
+
+OUTCOME_KINDS = {
+    "ack_duplicate_interim": OutcomeKind(
+        False, False, False, False,
+        "nothing new; the row is already there",
+        "NO CHANGE — acknowledge with 2xx and stop"),
+    "apply_first": OutcomeKind(
+        True, True, False, False,
+        "the callback", "YES — it becomes the current automatic decision"),
+    "record_manual_holds": OutcomeKind(
+        True, False, False, False, "the callback", "NO"),
+    "record_hold_review": OutcomeKind(
+        True, False, False, False,
+        "the callback", "NO — hold the case for review instead"),
+    "ack_duplicate": OutcomeKind(
+        False, False, False, False,
+        "nothing new", "NO CHANGE — acknowledge with 2xx and stop"),
+    "record_unordered": OutcomeKind(
+        True, False, False, False,
+        "the callback", "NO, and the high-water mark does NOT move"),
+    "record_advance": OutcomeKind(
+        True, False, True, False,
+        "the callback, AND advance the high-water mark to its decision_sequence", "NO"),
+    "apply_ordered": OutcomeKind(
+        True, True, True, False,
+        "the callback, AND advance the high-water mark to its decision_sequence", "YES"),
+    "rel_complete": OutcomeKind(
+        True, True, True, True,
+        "the callback, AND advance the high-water mark",
+        "YES — the release COMPLETES; automatic authority returns with this decision"),
+    "rel_record_advance": OutcomeKind(
+        True, False, True, False,
+        "the callback, AND advance the high-water mark", "NO — manual remains in force"),
+    "rel_record_only": OutcomeKind(
+        True, False, False, False, "the callback", "NO — manual remains in force"),
+    "rel_record_only_pending": OutcomeKind(
+        True, False, False, False,
+        "the callback", "NO — manual remains in force; the release stays pending"),
+}
+
+REASON_TEXTS = {
+    "at_least_once_duplicates":
+        "Delivery is at-least-once, so a duplicate is the expected case, not an error. "
+        "Returning non-2xx to a duplicate makes us retry it forever.",
+    "nothing_to_conflict": "Nothing to conflict with.",
+    "manual_decided":
+        "A reviewer decided this case. An automatic callback queued before that approval can "
+        "arrive after it under a run id you have never seen; applying it silently overturns a "
+        "human decision. Automatic authority returns only through the authenticated "
+        "platform-owned release protocol.",
+    "no_ordering_authority":
+        "This is the row that must not read 'otherwise apply'. Interim has no wire ordering "
+        "authority, so you cannot tell a newer decision from an older one that was delayed. "
+        "decided_at will not tell you either (section 5). Applying the arrival that happens "
+        "to land second silently replaces a newer decision with an older one.",
+    "post_duplicates": "Same as interim: duplicates are expected.",
+    "superseded_or_unordered":
+        "It is superseded or unordered. Recording it keeps your audit trail complete without "
+        "letting it take effect.",
+    "mark_moves_manual":
+        "The manual approval stays in force, but the mark still moves: otherwise every later "
+        "automatic decision for the case is compared against a stale mark and the first one "
+        "after a manual release would be judged by the wrong baseline.",
+    "applies_on_proven_order":
+        "This is the only row that applies an automatic decision, and it does so on proven "
+        "DECISION order rather than on arrival order.",
+    "rel_replay_idempotent":
+        "Same as both base tables: duplicates are expected, and replaying a release_id "
+        "returns the original outcome and changes nothing.",
+    "rel_complete_cas":
+        "The ONLY completing row. Every check the platform's completion CAS re-asserts holds: "
+        "the bound release matches the pending one, the case's current manual event is still "
+        "the one the release was opened against, the deadline is unexpired by database time, "
+        "and the sequence proves order.",
+    "rel_foreign_advances":
+        "An ordinary or foreign-release callback cannot complete this case's release, but the "
+        "mark still moves on proven order — otherwise the first callback after completion "
+        "would be judged against a stale baseline.",
+    "rel_reapproved_above":
+        "The case was re-approved after this release was opened. Completing now would "
+        "replace an approval nobody released — the exact race the completion CAS exists to "
+        "lose safely.",
+    "rel_expired_above":
+        "Past the stored deadline the release can only be EXPIRED by the platform's reaper "
+        "or lazy transition — never completed by a late callback, however well bound.",
+    "rel_no_order":
+        "Recorded for the audit trail; without proven order the mark does not move either.",
+    "rel_reapproved_no_order":
+        "Re-approved since the release opened, and no proven order either: nothing about "
+        "this arrival may change the case.",
+    "rel_expired_no_order": "Expired AND without proven order: recorded, nothing else.",
+    "rel_bound_no_order":
+        "Bound, current, and unexpired — but completion also requires a sequence above the "
+        "mark. 'The discarded pre-release callbacks never satisfy it': only the FRESH bound "
+        "sequence completes.",
+}
+
+
 @dataclass(frozen=True)
 class Transition:
     """One row of the receiver table.
 
     `when` is the row's PREDICATE — a subset of the closed receiver state space
     (`docs/contracts/predicates.py`) — and `condition`, the text the PDF prints, is DERIVED from
-    it (re-audit `4cb2cb7` F10). Conditions used to be authored prose evaluated nowhere: the
-    reference implementation carried its own hardcoded branches, so widening the manual row to
-    "MANUAL or AUTOMATIC" — two rows claiming the same state — left every test green. The
-    evaluator now executes these same `when` objects, and each phase's rows must PARTITION the
-    state space: every state matches exactly one row, checked by enumeration, so an overlap, an
-    uncovered state, a deleted row, and a shadowed extra row all fail the same property.
-
-    The prose fields are what the PDF prints. The three booleans are what the reference
-    implementation is held against: previously the implementation reported which ROW it took and
-    nothing compared its behaviour to that row's words, so rewriting a published row to
-    "effective=YES — replace the manual approval" left 159 tests green while the implementation
-    kept doing the right thing and the document told TechCraft the wrong thing.
+    it (re-audit `4cb2cb7` F10). `outcome` and `reason` are ids into the closed OUTCOME_KINDS and
+    REASON_TEXTS records (re-audit `1826661..b5c7a83` finding 1): every visible cell — Record,
+    Effective, Why — and every structured effect derives from those records, so there is no
+    authored prose left beside an outcome to contradict it, and an OutcomeKind whose text fights
+    its own booleans cannot even construct. The evaluator executes the same `when` objects, each
+    phase's rows PARTITION the state space, and independent oracles hold the derived effects to
+    the accepted invariants.
     """
 
-    # What a document may PRINT from this row. `when` is deliberately absent: it is the checked
-    # form, and its facet tokens ("fresh", "above") leaking into leaf traversal would both demand
-    # internal vocabulary on the page and mangle residue subtraction (they substring ordinary
-    # prose). Same principle as `Procedure.playbook_digest`: checked, not shown.
     PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = (
         "phase", "condition", "record", "effective", "why")
 
     phase: str  # "interim" (today) or "post-024" (after ordered delivery is activated)
     when: predicates.When
-    record: str  # what goes into the accepted-run ledger
-    effective: str  # whether it becomes the case's current decision
-    why: str
-    # structured outcome — the machine-checkable form of `record` and `effective`
-    records: bool = True
-    becomes_effective: bool = False
-    advances_high_water: bool = False
+    outcome: str  # id into OUTCOME_KINDS — effects and visible cells, one closed record
+    reason: str  # id into REASON_TEXTS — the Why cell
+    record: str = field(default="", init=False)
+    effective: str = field(default="", init=False)
+    why: str = field(default="", init=False)
+    records: bool = field(default=False, init=False)
+    becomes_effective: bool = field(default=False, init=False)
+    advances_high_water: bool = field(default=False, init=False)
     condition: str = field(default="", init=False)
 
     def __post_init__(self) -> None:
+        if self.outcome not in OUTCOME_KINDS:
+            raise ValueError(f"unknown outcome kind {self.outcome!r}")
+        if self.reason not in REASON_TEXTS:
+            raise ValueError(f"unknown reason {self.reason!r}")
+        kind = OUTCOME_KINDS[self.outcome]
+        if kind.completes_release:
+            raise ValueError("the base tables can never complete a release")
+        object.__setattr__(self, "record", kind.record_text)
+        object.__setattr__(self, "effective", kind.effective_text)
+        object.__setattr__(self, "why", REASON_TEXTS[self.reason])
+        object.__setattr__(self, "records", kind.records)
+        object.__setattr__(self, "becomes_effective", kind.becomes_effective)
+        object.__setattr__(self, "advances_high_water", kind.advances_high_water)
         object.__setattr__(self, "condition", self.when.condition())
 
 
@@ -90,94 +239,48 @@ INTERIM = "interim"
 POST_024 = "post-024"
 
 RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
-    Transition(
-        phase=INTERIM,
-        when=predicates.When(duplicate=frozenset({predicates.DUP}),
-                             source=predicates.ANY_SOURCE, sequence=predicates.ANY_SEQUENCE),
-        record="nothing new; the row is already there",
-        effective="NO CHANGE — acknowledge with 2xx and stop",
-        records=False,
-        why="Delivery is at-least-once, so a duplicate is the expected case, not an error. "
-            "Returning non-2xx to a duplicate makes us retry it forever.",
-    ),
-    Transition(
-        phase=INTERIM,
-        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                             source=frozenset({predicates.SRC_NONE}),
-                             sequence=predicates.ANY_SEQUENCE),
-        record="the callback",
-        effective="YES — it becomes the current automatic decision",
-        becomes_effective=True,
-        why="Nothing to conflict with.",
-    ),
-    Transition(
-        phase=INTERIM,
-        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                             source=frozenset({predicates.SRC_MANUAL}),
-                             sequence=predicates.ANY_SEQUENCE),
-        record="the callback",
-        effective="NO",
-        why="A reviewer decided this case. An automatic callback queued before that approval can "
-            "arrive after it under a run id you have never seen; applying it silently overturns a "
-            "human decision. Automatic authority returns only through the authenticated "
-            "platform-owned release protocol.",
-    ),
-    Transition(
-        phase=INTERIM,
-        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                             source=frozenset({predicates.SRC_AUTOMATIC}),
-                             sequence=predicates.ANY_SEQUENCE),
-        record="the callback",
-        effective="NO — hold the case for review instead",
-        why="This is the row that must not read 'otherwise apply'. Interim has no wire ordering "
-            "authority, so you cannot tell a newer decision from an older one that was delayed. "
-            "decided_at will not tell you either (section 5). Applying the arrival that happens "
-            "to land second silently replaces a newer decision with an older one.",
-    ),
-    Transition(
-        phase=POST_024,
-        when=predicates.When(duplicate=frozenset({predicates.DUP}),
-                             source=predicates.ANY_SOURCE, sequence=predicates.ANY_SEQUENCE),
-        record="nothing new",
-        effective="NO CHANGE — acknowledge with 2xx and stop",
-        records=False,
-        why="Same as interim: duplicates are expected.",
-    ),
-    Transition(
-        phase=POST_024,
-        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                             source=predicates.ANY_SOURCE,
-                             sequence=frozenset({predicates.SEQ_ABSENT,
-                                                 predicates.SEQ_NOT_ABOVE})),
-        record="the callback",
-        effective="NO, and the high-water mark does NOT move",
-        why="It is superseded or unordered. Recording it keeps your audit trail complete without "
-            "letting it take effect.",
-    ),
-    Transition(
-        phase=POST_024,
-        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                             source=frozenset({predicates.SRC_MANUAL}),
-                             sequence=frozenset({predicates.SEQ_ABOVE})),
-        record="the callback, AND advance the high-water mark to its decision_sequence",
-        effective="NO",
-        advances_high_water=True,
-        why="The manual approval stays in force, but the mark still moves: otherwise every later "
-            "automatic decision for the case is compared against a stale mark and the first one "
-            "after a manual release would be judged by the wrong baseline.",
-    ),
-    Transition(
-        phase=POST_024,
-        when=predicates.When(duplicate=frozenset({predicates.FRESH}),
-                             source=frozenset({predicates.SRC_NONE, predicates.SRC_AUTOMATIC}),
-                             sequence=frozenset({predicates.SEQ_ABOVE})),
-        record="the callback, AND advance the high-water mark to its decision_sequence",
-        effective="YES",
-        becomes_effective=True,
-        advances_high_water=True,
-        why="This is the only row that applies an automatic decision, and it does so on proven "
-            "DECISION order rather than on arrival order.",
-    ),
+    Transition(phase=INTERIM,
+               when=predicates.When(duplicate=frozenset({predicates.DUP}),
+                                    source=predicates.ANY_SOURCE,
+                                    sequence=predicates.ANY_SEQUENCE),
+               outcome="ack_duplicate_interim", reason="at_least_once_duplicates"),
+    Transition(phase=INTERIM,
+               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                                    source=frozenset({predicates.SRC_NONE}),
+                                    sequence=predicates.ANY_SEQUENCE),
+               outcome="apply_first", reason="nothing_to_conflict"),
+    Transition(phase=INTERIM,
+               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                                    source=frozenset({predicates.SRC_MANUAL}),
+                                    sequence=predicates.ANY_SEQUENCE),
+               outcome="record_manual_holds", reason="manual_decided"),
+    Transition(phase=INTERIM,
+               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                                    source=frozenset({predicates.SRC_AUTOMATIC}),
+                                    sequence=predicates.ANY_SEQUENCE),
+               outcome="record_hold_review", reason="no_ordering_authority"),
+    Transition(phase=POST_024,
+               when=predicates.When(duplicate=frozenset({predicates.DUP}),
+                                    source=predicates.ANY_SOURCE,
+                                    sequence=predicates.ANY_SEQUENCE),
+               outcome="ack_duplicate", reason="post_duplicates"),
+    Transition(phase=POST_024,
+               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                                    source=predicates.ANY_SOURCE,
+                                    sequence=frozenset({predicates.SEQ_ABSENT,
+                                                        predicates.SEQ_NOT_ABOVE})),
+               outcome="record_unordered", reason="superseded_or_unordered"),
+    Transition(phase=POST_024,
+               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                                    source=frozenset({predicates.SRC_MANUAL}),
+                                    sequence=frozenset({predicates.SEQ_ABOVE})),
+               outcome="record_advance", reason="mark_moves_manual"),
+    Transition(phase=POST_024,
+               when=predicates.When(duplicate=frozenset({predicates.FRESH}),
+                                    source=frozenset({predicates.SRC_NONE,
+                                                      predicates.SRC_AUTOMATIC}),
+                                    sequence=frozenset({predicates.SEQ_ABOVE})),
+               outcome="apply_ordered", reason="applies_on_proven_order"),
 )
 
 # ── the manual-release machine: what happens while a release is PENDING ───────────────────────────
@@ -194,23 +297,37 @@ RECEIVER_TRANSITIONS: tuple[Transition, ...] = (
 @dataclass(frozen=True)
 class ReleaseTransition:
     """One row of the release-pending table. Same discipline as `Transition`: the predicate is
-    checked, the condition text is derived and parses back, and the booleans are what the
-    reference implementation is held against — plus `completes_release`, this machine's one
-    transition the base table cannot have."""
+    checked, the condition parses back, and EVERY visible cell and structured effect derives from
+    the closed OutcomeKind/ReasonKind records — including `completes_release`, this machine's one
+    transition the base table cannot have (re-audit `1826661..b5c7a83` finding 1)."""
 
     PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = ("condition", "record", "effective", "why")
 
     when: predicates.ReleaseWhen
-    record: str
-    effective: str
-    why: str
-    records: bool = True
-    becomes_effective: bool = False
-    advances_high_water: bool = False
-    completes_release: bool = False
+    outcome: str
+    reason: str
+    record: str = field(default="", init=False)
+    effective: str = field(default="", init=False)
+    why: str = field(default="", init=False)
+    records: bool = field(default=False, init=False)
+    becomes_effective: bool = field(default=False, init=False)
+    advances_high_water: bool = field(default=False, init=False)
+    completes_release: bool = field(default=False, init=False)
     condition: str = field(default="", init=False)
 
     def __post_init__(self) -> None:
+        if self.outcome not in OUTCOME_KINDS:
+            raise ValueError(f"unknown outcome kind {self.outcome!r}")
+        if self.reason not in REASON_TEXTS:
+            raise ValueError(f"unknown reason {self.reason!r}")
+        kind = OUTCOME_KINDS[self.outcome]
+        object.__setattr__(self, "record", kind.record_text)
+        object.__setattr__(self, "effective", kind.effective_text)
+        object.__setattr__(self, "why", REASON_TEXTS[self.reason])
+        object.__setattr__(self, "records", kind.records)
+        object.__setattr__(self, "becomes_effective", kind.becomes_effective)
+        object.__setattr__(self, "advances_high_water", kind.advances_high_water)
+        object.__setattr__(self, "completes_release", kind.completes_release)
         object.__setattr__(self, "condition", self.when.condition())
 
 
@@ -221,28 +338,14 @@ RELEASE_TRANSITIONS: tuple[ReleaseTransition, ...] = (
                                     manual_event=predicates.ANY_EVENT,
                                     deadline=predicates.ANY_DEADLINE,
                                     sequence=predicates.ANY_SEQUENCE),
-        record="nothing new",
-        effective="NO CHANGE — acknowledge with 2xx and stop",
-        records=False,
-        why="Same as both base tables: duplicates are expected, and replaying a release_id "
-            "returns the original outcome and changes nothing.",
-    ),
+        outcome="ack_duplicate", reason="rel_replay_idempotent"),
     ReleaseTransition(
         when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
                                     binding=frozenset({predicates.BIND_MATCH}),
                                     manual_event=frozenset({predicates.EVENT_UNCHANGED}),
                                     deadline=frozenset({predicates.DEADLINE_LIVE}),
                                     sequence=frozenset({predicates.SEQ_ABOVE})),
-        record="the callback, AND advance the high-water mark",
-        effective="YES — the release COMPLETES; automatic authority returns with this decision",
-        becomes_effective=True,
-        advances_high_water=True,
-        completes_release=True,
-        why="The ONLY completing row. Every check the platform's completion CAS re-asserts holds: "
-            "the bound release matches the pending one, the case's current manual event is still "
-            "the one the release was opened against, the deadline is unexpired by database time, "
-            "and the sequence proves order.",
-    ),
+        outcome="rel_complete", reason="rel_complete_cas"),
     ReleaseTransition(
         when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
                                     binding=frozenset({predicates.BIND_NONE,
@@ -250,38 +353,21 @@ RELEASE_TRANSITIONS: tuple[ReleaseTransition, ...] = (
                                     manual_event=predicates.ANY_EVENT,
                                     deadline=predicates.ANY_DEADLINE,
                                     sequence=frozenset({predicates.SEQ_ABOVE})),
-        record="the callback, AND advance the high-water mark",
-        effective="NO — manual remains in force",
-        advances_high_water=True,
-        why="An ordinary or foreign-release callback cannot complete this case's release, but the "
-            "mark still moves on proven order — otherwise the first callback after completion "
-            "would be judged against a stale baseline.",
-    ),
+        outcome="rel_record_advance", reason="rel_foreign_advances"),
     ReleaseTransition(
         when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
                                     binding=frozenset({predicates.BIND_MATCH}),
                                     manual_event=frozenset({predicates.EVENT_CHANGED}),
                                     deadline=predicates.ANY_DEADLINE,
                                     sequence=frozenset({predicates.SEQ_ABOVE})),
-        record="the callback, AND advance the high-water mark",
-        effective="NO — manual remains in force",
-        advances_high_water=True,
-        why="The case was re-approved after this release was opened. Completing now would "
-            "replace an approval nobody released — the exact race the completion CAS exists to "
-            "lose safely.",
-    ),
+        outcome="rel_record_advance", reason="rel_reapproved_above"),
     ReleaseTransition(
         when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
                                     binding=frozenset({predicates.BIND_MATCH}),
                                     manual_event=frozenset({predicates.EVENT_UNCHANGED}),
                                     deadline=frozenset({predicates.DEADLINE_EXPIRED}),
                                     sequence=frozenset({predicates.SEQ_ABOVE})),
-        record="the callback, AND advance the high-water mark",
-        effective="NO — manual remains in force",
-        advances_high_water=True,
-        why="Past the stored deadline the release can only be EXPIRED by the platform's reaper "
-            "or lazy transition — never completed by a late callback, however well bound.",
-    ),
+        outcome="rel_record_advance", reason="rel_expired_above"),
     ReleaseTransition(
         when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
                                     binding=frozenset({predicates.BIND_NONE,
@@ -290,10 +376,7 @@ RELEASE_TRANSITIONS: tuple[ReleaseTransition, ...] = (
                                     deadline=predicates.ANY_DEADLINE,
                                     sequence=frozenset({predicates.SEQ_ABSENT,
                                                         predicates.SEQ_NOT_ABOVE})),
-        record="the callback",
-        effective="NO — manual remains in force",
-        why="Recorded for the audit trail; without proven order the mark does not move either.",
-    ),
+        outcome="rel_record_only", reason="rel_no_order"),
     ReleaseTransition(
         when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
                                     binding=frozenset({predicates.BIND_MATCH}),
@@ -301,11 +384,7 @@ RELEASE_TRANSITIONS: tuple[ReleaseTransition, ...] = (
                                     deadline=predicates.ANY_DEADLINE,
                                     sequence=frozenset({predicates.SEQ_ABSENT,
                                                         predicates.SEQ_NOT_ABOVE})),
-        record="the callback",
-        effective="NO — manual remains in force",
-        why="Re-approved since the release opened, and no proven order either: nothing about "
-            "this arrival may change the case.",
-    ),
+        outcome="rel_record_only", reason="rel_reapproved_no_order"),
     ReleaseTransition(
         when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
                                     binding=frozenset({predicates.BIND_MATCH}),
@@ -313,10 +392,7 @@ RELEASE_TRANSITIONS: tuple[ReleaseTransition, ...] = (
                                     deadline=frozenset({predicates.DEADLINE_EXPIRED}),
                                     sequence=frozenset({predicates.SEQ_ABSENT,
                                                         predicates.SEQ_NOT_ABOVE})),
-        record="the callback",
-        effective="NO — manual remains in force",
-        why="Expired AND without proven order: recorded, nothing else.",
-    ),
+        outcome="rel_record_only", reason="rel_expired_no_order"),
     ReleaseTransition(
         when=predicates.ReleaseWhen(duplicate=frozenset({predicates.FRESH}),
                                     binding=frozenset({predicates.BIND_MATCH}),
@@ -324,12 +400,7 @@ RELEASE_TRANSITIONS: tuple[ReleaseTransition, ...] = (
                                     deadline=frozenset({predicates.DEADLINE_LIVE}),
                                     sequence=frozenset({predicates.SEQ_ABSENT,
                                                         predicates.SEQ_NOT_ABOVE})),
-        record="the callback",
-        effective="NO — manual remains in force; the release stays pending",
-        why="Bound, current, and unexpired — but completion also requires a sequence above the "
-            "mark. 'The discarded pre-release callbacks never satisfy it': only the FRESH bound "
-            "sequence completes.",
-    ),
+        outcome="rel_record_only_pending", reason="rel_bound_no_order"),
 )
 
 
@@ -1308,7 +1379,7 @@ WIRE = Registry(
         ),
         Claim(
             id="WIRE.CALLBACK.LEGEND",
-            value=tuple(sorted({**predicates.FACET_LEGEND, **predicates.RELEASE_LEGEND}.items())),
+            value=tuple(sorted(predicates.legend().items())),
             authority="docs.contracts.predicates FACET_LEGEND/RELEASE_LEGEND, cross-bound: each "
                       "meaning must carry its own token's distinguishing term and never its "
                       "paired sibling's",

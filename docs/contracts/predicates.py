@@ -57,17 +57,52 @@ ANY_SEQUENCE = SEQUENCE_DOMAIN
 # legend defines each token exactly once. The legend's verifier cross-binds each meaning to its
 # own token and excludes sibling tokens' terms, so the swap is a failing mutation rather than a
 # quiet reversal.
-FACET_LEGEND = {
-    DUP: "the callback's (case_id, run_id) is already in your accepted ledger",
-    FRESH: "the callback's (case_id, run_id) is new to your ledger",
-    SRC_NONE: "no decision is currently in force for the case",
-    SRC_MANUAL: "the decision currently in force is a manual approval",
-    SRC_AUTOMATIC: "the decision currently in force is an automatic one",
-    SEQ_ABSENT: "the callback carries no decision_sequence",
-    SEQ_NOT_ABOVE: "the callback's decision_sequence is at or below your recorded high-water "
-                   "mark for the case",
-    SEQ_ABOVE: "the callback's decision_sequence exceeds the high-water mark",
+
+@dataclass(frozen=True)
+class TokenSemantics:
+    """One legend token's TYPED meaning: its facet, its executable checker over concrete
+    (LedgerState, Callback, now) inputs, and the meaning sentence the legend derives (re-audit
+    `1826661..b5c7a83` finding 8 — the legend was free prose held by keyword checks, so a
+    paraphrase keeping the expected words could reverse the semantics). The checker is verified
+    against the machines themselves by enumeration (`receiver_reference.token_semantics_problems`),
+    the legend claim must EQUAL the derivation, and the derived meanings carry a reviewed digest
+    pin in the authority test — so a reworded meaning is a re-pin, the act of review."""
+
+    facet: str
+    meaning: str
+    check: object  # Callable[(state, callback, now)] -> bool, duck-typed to avoid an import cycle
+
+
+TOKEN_SEMANTICS = {
+    DUP: TokenSemantics(
+        "duplicate", "the callback's (case_id, run_id) is already in your accepted ledger",
+        lambda s, c, n: c.run_id in s.seen_run_ids),
+    FRESH: TokenSemantics(
+        "duplicate", "the callback's (case_id, run_id) is new to your ledger",
+        lambda s, c, n: c.run_id not in s.seen_run_ids),
+    SRC_NONE: TokenSemantics(
+        "source", "no decision is currently in force for the case",
+        lambda s, c, n: s.current_source is None),
+    SRC_MANUAL: TokenSemantics(
+        "source", "the decision currently in force is a manual approval",
+        lambda s, c, n: s.current_source == "manual"),
+    SRC_AUTOMATIC: TokenSemantics(
+        "source", "the decision currently in force is an automatic one",
+        lambda s, c, n: s.current_source == "automatic"),
+    SEQ_ABSENT: TokenSemantics(
+        "sequence", "the callback carries no decision_sequence",
+        lambda s, c, n: c.decision_sequence is None),
+    SEQ_NOT_ABOVE: TokenSemantics(
+        "sequence", "the callback's decision_sequence is at or below your recorded high-water "
+                    "mark for the case",
+        lambda s, c, n: (c.decision_sequence is not None and s.high_water is not None
+                         and c.decision_sequence <= s.high_water)),
+    SEQ_ABOVE: TokenSemantics(
+        "sequence", "the callback's decision_sequence exceeds the high-water mark",
+        lambda s, c, n: (c.decision_sequence is not None
+                         and (s.high_water is None or c.decision_sequence > s.high_water))),
 }
+
 
 # Multi-value rendering joins in a FIXED order so the derived text is deterministic.
 _FACET_ORDER = {
@@ -236,17 +271,50 @@ ANY_BINDING = BINDING_DOMAIN
 ANY_EVENT = EVENT_DOMAIN
 ANY_DEADLINE = DEADLINE_DOMAIN
 
-RELEASE_LEGEND = {
-    BIND_NONE: "the callback carries no release fields at all (an ordinary decision callback)",
-    BIND_MATCH: "the callback carries every release field, naming the case's pending release",
-    BIND_MISMATCH: "the callback carries every release field, but names a different release",
-    EVENT_UNCHANGED: "the case's current manual event is still the one the release was opened "
-                     "against",
-    EVENT_CHANGED: "the case has been re-approved: its current manual event is no longer the one "
-                   "the release was opened against",
-    DEADLINE_LIVE: "database time is still before the release's stored deadline",
-    DEADLINE_EXPIRED: "database time has reached the release's stored deadline",
+RELEASE_TOKEN_SEMANTICS = {
+    BIND_NONE: TokenSemantics(
+        "binding", "the callback carries no release fields at all (an ordinary decision "
+                   "callback)",
+        lambda s, c, n: c.release_id is None),
+    BIND_MATCH: TokenSemantics(
+        "binding", "the callback carries every release field, naming the case's pending release",
+        lambda s, c, n: (c.release_id is not None
+                         and c.release_id == s.release.release_id
+                         and c.manual_event_id == s.release.requested_manual_event_id)),
+    BIND_MISMATCH: TokenSemantics(
+        "binding", "the callback carries every release field, but names a different release",
+        lambda s, c, n: (c.release_id is not None
+                         and not (c.release_id == s.release.release_id
+                                  and c.manual_event_id
+                                  == s.release.requested_manual_event_id))),
+    EVENT_UNCHANGED: TokenSemantics(
+        "manual_event", "the case's current manual event is still the one the release was "
+                        "opened against",
+        lambda s, c, n: s.current_manual_event_id == s.release.requested_manual_event_id),
+    EVENT_CHANGED: TokenSemantics(
+        "manual_event", "the case has been re-approved: its current manual event is no longer "
+                        "the one the release was opened against",
+        lambda s, c, n: s.current_manual_event_id != s.release.requested_manual_event_id),
+    DEADLINE_LIVE: TokenSemantics(
+        "deadline", "database time is still before the release's stored deadline",
+        lambda s, c, n: n < s.release.deadline),
+    DEADLINE_EXPIRED: TokenSemantics(
+        "deadline", "database time has reached the release's stored deadline",
+        lambda s, c, n: n >= s.release.deadline),
 }
+TOKEN_SEMANTICS.update(RELEASE_TOKEN_SEMANTICS)
+
+
+def legend() -> dict:
+    """The published token legend, DERIVED from the typed semantics — the only way a meaning
+    comes to exist."""
+    return {token: semantics.meaning for token, semantics in TOKEN_SEMANTICS.items()}
+
+
+# Derived views kept under the established names; consumers and the claim build from these.
+FACET_LEGEND = {t: s_.meaning for t, s_ in TOKEN_SEMANTICS.items()
+                if t not in RELEASE_TOKEN_SEMANTICS}
+RELEASE_LEGEND = {t: s_.meaning for t, s_ in RELEASE_TOKEN_SEMANTICS.items()}
 
 _RELEASE_DOMAINS = {
     "duplicate": DUPLICATE_DOMAIN,

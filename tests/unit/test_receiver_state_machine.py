@@ -279,11 +279,14 @@ def test_the_three_known_sources_are_the_only_ones():
 
 
 def test_mutating_any_published_outcome_field_fails_the_binding():
-    """The guard's own failure mode: flip a row's outcome and the binding test must reject it."""
-    import dataclasses
+    """The guard's own failure mode: flip a row's effect and the binding test must reject it.
+    The effect fields are init=False now (re-audit finding 1), so the flip itself needs the
+    object.__setattr__ back door — construction can no longer express it at all."""
+    import copy
 
     for index, row in enumerate(RECEIVER_TRANSITIONS):
-        mutated = dataclasses.replace(row, becomes_effective=not row.becomes_effective)
+        mutated = copy.copy(row)
+        object.__setattr__(mutated, "becomes_effective", not row.becomes_effective)
         rows = [t for t in RECEIVER_TRANSITIONS if t.phase == row.phase]
         position = rows.index(row)
         for state, callback in _scenarios_for(row.phase):
@@ -355,7 +358,7 @@ def test_a_shadowed_extra_row_is_caught():
     """A fifth row whose states are already claimed: with first-match semantics it is silently
     dead weight a reader still trusts; under the partition property it is competing answers."""
     rows = _phase_rows(INTERIM)
-    shadow = _dataclasses.replace(rows[1], why="a shadowed restatement")
+    shadow = _dataclasses.replace(rows[1], reason="post_duplicates")  # same when, other reason
     assert _predicates.partition_problems([*rows, shadow])
 
 
@@ -395,8 +398,14 @@ def test_an_unknown_source_is_refused_before_any_row_is_consulted():
     with pytest.raises(UnknownSourceError):
         observe(LedgerState(seen_run_ids=frozenset(), current_source="typo"),
                 Callback(case_id="c", run_id="r1"))
+    from docs.contracts.receiver_reference import PendingRelease
+
     with pytest.raises(UnknownSourceError):
-        observe(LedgerState(seen_run_ids=frozenset(), current_source="manual_release_pending"),
+        observe(LedgerState(seen_run_ids=frozenset(), current_source="manual_release_pending",
+                            current_manual_event_id="M1",
+                            release=PendingRelease(release_id="R1",
+                                                   requested_manual_event_id="M1",
+                                                   deadline=1000)),
                 Callback(case_id="c", run_id="r1"))
 
 
