@@ -257,28 +257,72 @@ _WHEN_TEMPLATES = {
 }
 
 
+# ── the closed subjects (gate audit `6c4f54a..91fbde3` finding 5) ─────────────────────────────
+#
+# The subject used to be the one free authored slot, and a normally constructed one could read
+# "Turning on policy-bundle pinning: start workers with the flag ON" — an operational instruction
+# printed at the front of the authoritative plan. Subjects are now CLOSED: the constructor takes
+# an id, the text lives in this reviewed map, and `subject_problems` refuses every operational
+# shape (sentence punctuation anywhere it can end or chain a clause, colons, newlines,
+# questions). The map is validated at import, so a smuggled entry cannot even load.
+
+SUBJECT_PR5B = "pr5b_full_window"
+SUBJECT_BUNDLE_PINNING = "bundle_pinning_activation"
+SUBJECT_PR7B_CORE = "pr7b_core_schema_maintenance"
+
+PROCEDURE_SUBJECTS = {
+    SUBJECT_PR5B: "The PR 5b reviewer-actor security release",
+    SUBJECT_BUNDLE_PINNING: "Turning on policy-bundle pinning",
+    SUBJECT_PR7B_CORE: "Moving onto the local receipt/transition-authority schema",
+}
+
+
+def subject_problems(text: object) -> list[str]:
+    """Why `text` cannot be a subject. A subject is a NAME: no clause separators, no line
+    breaks, no questions, no terminal punctuation — nothing an instruction needs."""
+    if type(text) is not str or not text.strip():
+        return ["subject must be a nonempty noun phrase"]
+    problems = []
+    if len(text) > 90:
+        problems.append("longer than a name has any business being")
+    for mark in (". ", "! ", "; ", ":", "\n", "?"):
+        if mark in text:
+            problems.append(f"carries {mark!r} — a name has no use for it")
+    if text.rstrip().endswith((".", "!", ";")):
+        problems.append("ends like a sentence; a name does not")
+    return problems
+
+
+for _sid, _text in PROCEDURE_SUBJECTS.items():
+    _problems = subject_problems(_text)
+    if _problems:
+        raise ValueError(f"PROCEDURE_SUBJECTS[{_sid!r}]: {_problems}")
+
+
 @dataclass(frozen=True)
 class ProcedurePlanContract:
-    """A phase, a subject, and the phase's required prerequisites — nothing else.
+    """A phase, a closed subject id, and the phase's required prerequisites — nothing else.
 
-    `subject` is the one authored slot: a short noun phrase naming what this cutover is. It is
-    length-capped and refused if it tries to be prose (no sentence punctuation), so it cannot
-    carry an obligation. Everything normative is a typed kind whose sentence it owns.
+    There is no authored text slot left (gate finding 5): the subject resolves through the
+    validated closed map above, so the constructor cannot be handed prose at all. Everything
+    normative is a typed kind whose sentence it owns.
     """
 
     phase: str
-    subject: str
+    subject_id: str
     prerequisites: tuple
+
+    @property
+    def subject(self) -> str:
+        return PROCEDURE_SUBJECTS[self.subject_id]
 
     def __post_init__(self) -> None:
         if self.phase not in PHASES:
             raise ValueError(f"unknown phase {self.phase!r}")
-        if type(self.subject) is not str or not self.subject.strip():
-            raise ValueError("subject must be a nonempty noun phrase")
-        if len(self.subject) > 90 or any(mark in self.subject for mark in (". ", "! ", "; ")):
+        if self.subject_id not in PROCEDURE_SUBJECTS:
             raise ValueError(
-                "subject is a NAME, not prose — an obligation smuggled into it would be the F4a "
-                "defect returning through the one authored slot"
+                f"unknown subject id {self.subject_id!r}; subjects are the closed reviewed map, "
+                "not a text slot"
             )
         required = PHASE_REQUIRED_KINDS[self.phase]
         actual = tuple(type(p) for p in self.prerequisites)
@@ -311,3 +355,73 @@ class ProcedurePlanContract:
             else:
                 out.append(prerequisite.sentence)
         return tuple(out)
+
+
+# ── the closed per-procedure safety profiles (gate audit `6c4f54a..91fbde3` finding 6) ────────
+#
+# Rollback answers and platform commitments were selectable at construction: a normally built
+# PR 6 contract could flip its image answer to PRIOR (minting permanent NULL provenance) and a
+# PR 5b plan could quietly drop the fresh-signature retry commitment. Each procedure's profile
+# now OWNS the exact answer to every rollback question and the exact commitment set; the
+# assembled verifier holds the constructed procedure to its subject's profile, so a divergent
+# answer is a located failure rather than a choice.
+
+from docs.contracts import playbook as _playbook  # noqa: E402  (docs-side; no cycle)
+
+
+@dataclass(frozen=True)
+class ProcedureProfile:
+    """The exact safety answers one procedure is allowed to publish."""
+
+    rollback_answers: tuple[tuple[str, str], ...]  # (question, answer), all seven, in order
+    commitments: tuple[str, ...]  # exact ordered platform-commitment set; () when none
+
+    def __post_init__(self) -> None:
+        questions = tuple(q for q, _a in self.rollback_answers)
+        if questions != tuple(_playbook.ROLLBACK_QUESTIONS):
+            raise ValueError(
+                "a profile must answer every rollback question exactly once, in order"
+            )
+        unknown = [c for c in self.commitments if c not in _COMMITMENT_SENTENCES]
+        if unknown:
+            raise ValueError(f"unknown commitments in profile: {unknown}")
+
+
+PROCEDURE_PROFILES = {
+    SUBJECT_PR5B: ProcedureProfile(
+        rollback_answers=(
+            (_playbook.REVERSIBILITY, _playbook.REVERSIBLE_WITH_CONDITIONS),
+            (_playbook.SCHEMA, _playbook.SCHEMA_STAYS),
+            (_playbook.IMAGE, _playbook.IMAGE_PRIOR),
+            (_playbook.RESTORES, _playbook.RESTORES_YES),
+            (_playbook.VERIFICATION, _playbook.VERIFY_NON_MUTATING),
+            (_playbook.WINDOW, _playbook.WINDOW_SAME),
+            (_playbook.ENDING, _playbook.ENDING_RESUMED),
+        ),
+        commitments=(COMMIT_PAUSE_BUFFER, COMMIT_RESIGN_RETRIES),
+    ),
+    SUBJECT_BUNDLE_PINNING: ProcedureProfile(
+        rollback_answers=(
+            (_playbook.REVERSIBILITY, _playbook.REVERSIBLE_WITH_CONDITIONS),
+            (_playbook.SCHEMA, _playbook.SCHEMA_STAYS),
+            (_playbook.IMAGE, _playbook.IMAGE_SAME_RELEASE),
+            (_playbook.RESTORES, _playbook.RESTORES_NO),
+            (_playbook.VERIFICATION, _playbook.VERIFY_NOT_STATED),
+            (_playbook.WINDOW, _playbook.WINDOW_SAME),
+            (_playbook.ENDING, _playbook.ENDING_RESUMED),
+        ),
+        commitments=(),
+    ),
+    SUBJECT_PR7B_CORE: ProcedureProfile(
+        rollback_answers=(
+            (_playbook.REVERSIBILITY, _playbook.IRREVERSIBLE_PAST_BOUNDARY),
+            (_playbook.SCHEMA, _playbook.SCHEMA_CONDITIONAL),
+            (_playbook.IMAGE, _playbook.IMAGE_CONDITIONAL),
+            (_playbook.RESTORES, _playbook.RESTORES_NO),
+            (_playbook.VERIFICATION, _playbook.VERIFY_NOT_STATED),
+            (_playbook.WINDOW, _playbook.WINDOW_SAME),
+            (_playbook.ENDING, _playbook.ENDING_RESUMED),
+        ),
+        commitments=(),
+    ),
+}

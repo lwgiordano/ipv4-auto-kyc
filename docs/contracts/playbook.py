@@ -31,7 +31,7 @@ digest — plus the evidence quote making a wrong answer visible to a human read
 side by side with the playbook's own words on the page.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # ── the closed question set ───────────────────────────────────────────────────────────────────
 # Each is a question an operator must be able to answer BEFORE starting, because getting it wrong
@@ -96,6 +96,16 @@ BRANCH_SCHEMA_ANSWERS = frozenset({BR_SCHEMA_HELD, BR_SCHEMA_WALKED})
 OUTCOME_REFUSED = "downgrade_refused"
 OUTCOME_SUCCEEDED = "downgrade_succeeded"
 BRANCH_OUTCOMES = (OUTCOME_REFUSED, OUTCOME_SUCCEEDED)
+
+# The verbatim playbook marker that opens each outcome's span — a CLOSED map (gate audit
+# `6c4f54a..91fbde3` finding 7). When branches authored their own markers, pointing the SUCCEEDED
+# branch at R5 made both spans begin at the refusal marker, so the success branch could cite the
+# refusal branch's evidence. Deriving the marker from the outcome removes the slot; the verifier
+# additionally requires each marker exactly once in the section, in BRANCH_OUTCOMES order.
+OUTCOME_MARKERS = {
+    OUTCOME_REFUSED: "R5. ROLLBACK OUTCOME A",
+    OUTCOME_SUCCEEDED: "R6. ROLLBACK OUTCOME B",
+}
 OUTCOME_TITLES = {
     OUTCOME_REFUSED: "If the downgrade is REFUSED (outcome A)",
     OUTCOME_SUCCEEDED: "If the downgrade SUCCEEDS all the way to the base (outcome B)",
@@ -224,7 +234,9 @@ class RollbackBranch:
     and R6, downgrade SUCCEEDED (walked to base, prior image legal) — and a flat fact bag could
     select the prior image on outcome-B evidence while outcome-A's prohibition sat beside it.
     A branch binds its answers to ONE outcome, its evidence to that outcome's exact span of the
-    playbook (`span_marker`), and the outcome-specific laws are construction refusals:
+    playbook (`span_marker` — DERIVED from the closed OUTCOME_MARKERS map, never authored, so
+    two branches cannot alias one span; gate finding 7), and the outcome-specific laws are
+    construction refusals:
 
       * REFUSED means the schema HELD and the prior image is FORBIDDEN — evidence survived, and
         an older publisher must not run against it.
@@ -233,14 +245,13 @@ class RollbackBranch:
     """
 
     outcome: str
-    span_marker: str
     facts: tuple[RollbackFact, ...]
+    span_marker: str = field(default="", init=False)
 
     def __post_init__(self) -> None:
         if self.outcome not in BRANCH_OUTCOMES:
             raise ValueError(f"unknown branch outcome {self.outcome!r}")
-        if not self.span_marker.strip():
-            raise ValueError("a branch must name the verbatim marker that opens its span")
+        object.__setattr__(self, "span_marker", OUTCOME_MARKERS[self.outcome])
         asked = [f.question for f in self.facts]
         missing = [q for q in BRANCH_QUESTIONS if q not in asked]
         extra = [q for q in asked if q not in BRANCH_QUESTIONS]
@@ -404,6 +415,27 @@ class RollbackContract:
 
 
 @dataclass(frozen=True)
+class CommandExemption:
+    """One parsed command that is deliberately NOT an operator instruction, with the reason.
+
+    Gate audit `6c4f54a..91fbde3` finding 8: typed commands were checked as a SUBSET of the
+    parsed inventory, so an appended `skip_all_safety` survived a digest re-pin unnoticed. The
+    parsed inventory must now equal the typed records exactly — and a command the section merely
+    MENTIONS (a usage-error counterexample, an illustration) is excluded only by naming it here,
+    with the reason a reviewer can weigh. The verifier refuses a dead exemption (nothing parsed
+    matches), so this list cannot pre-authorize future additions."""
+
+    argv: tuple[str, ...]
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.argv or any(type(a) is not str or not a for a in self.argv):
+            raise ValueError("an exemption names the exact argv it exempts")
+        if type(self.reason) is not str or not self.reason.strip():
+            raise ValueError("an exemption without a reason is an unreviewed hole")
+
+
+@dataclass(frozen=True)
 class Command:
     """One executable command the referenced playbook section MUST contain, as parsed argv.
 
@@ -441,6 +473,7 @@ class PlaybookRef:
     heading: str
     sha256: str
     commands: tuple[Command, ...] = ()
+    exempt: tuple["CommandExemption", ...] = ()
 
     def __post_init__(self) -> None:
         if not self.heading.startswith("#") or "\n" in self.heading:

@@ -12,7 +12,7 @@ The blocker at the top is the reason this document is titled a staging guide.
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from docs.contracts import Claim, ClaimState, Registry
+from docs.contracts import Claim, ClaimState, Registry, plan
 from docs.contracts.plan import (
     COMMIT_PAUSE_BUFFER,
     COMMIT_RESIGN_RETRIES,
@@ -59,6 +59,7 @@ from docs.contracts.playbook import (
     WINDOW,
     WINDOW_SAME,
     Command,
+    CommandExemption,
     MigrationSpan,
     PlaybookRef,
     RollbackBranch,
@@ -201,7 +202,7 @@ FULL_WINDOW = Procedure(
     name="PR 5b full maintenance window",
     plan=ProcedurePlanContract(
         phase=PHASE_SECURITY_FULL_WINDOW,
-        subject="The PR 5b reviewer-actor security release",
+        subject_id=plan.SUBJECT_PR5B,
         prerequisites=(
             PinnedImage(evidence="is pinned to that one digest",
                         recovery_module_only_in_new=True),
@@ -226,7 +227,7 @@ FULL_WINDOW = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 9. PR 5b cutover — brief full maintenance window",
-        sha256="8352d41a394d2135956db347c6370d9589e6941774bf31233a12f3df4ee70b7f",
+        sha256="817872dfd1552d988db36962595155ae9fa5fecd108e1256adf0f0bf526ce9ab",
         commands=(
             Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
         ),
@@ -237,7 +238,7 @@ BUNDLE_PINNING = Procedure(
     name="Bundle-pinning activation",
     plan=ProcedurePlanContract(
         phase=PHASE_FLAG_ACTIVATION,
-        subject="Turning on policy-bundle pinning",
+        subject_id=plan.SUBJECT_BUNDLE_PINNING,
         prerequisites=(
             FlagStillOff(flag_env="KYC_ENFORCE_BUNDLE_PINNING",
                          evidence="KYC_ENFORCE_BUNDLE_PINNING=false"),
@@ -264,12 +265,13 @@ BUNDLE_PINNING = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 10. PR 6 cutover — bundle-pinning activation",
-        sha256="4f39a02d37f16867ac277bfda9783afa915e27692328781ebf97b8b0de2ba981",
+        sha256="974ad11b8b638397785d2cff0faa1ae2242eb678a84b762c3e5f5546fde821c4",
         commands=(
             Command(("python", "-m", "kyc_tool.ops.seed_policy_bundle",
                      "--expect-hash", "<sha256>")),
             Command(("python", "-m", "kyc_tool.ops.activate_bundle_pinning_epoch",
                      "--expect-bundle-hash", "<sha256>", "--expect-engine", "eng-1")),
+            Command(("alembic", "upgrade", "head")),
             Command(("python", "-m", "kyc_tool.ops.verify_pinnable_backlog")),
             Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
         ),
@@ -285,11 +287,11 @@ PR7B_CORE = Procedure(
     # activation of ordered delivery and start trusting an order nothing provides.
     plan=ProcedurePlanContract(
         phase=PHASE_SCHEMA_MAINTENANCE,
-        subject="Moving onto the local receipt/transition-authority schema",
+        subject_id=plan.SUBJECT_PR7B_CORE,
         prerequisites=(
             RetentionSuspendedAttested(evidence="retention stays suspended"),
-            PreWindowDiagnostic(evidence="pre-window diagnostic"),
-            AuthoritativeBackup(evidence="BLOCKED_NO_AUTHORITATIVE_MAPPING"),
+            PreWindowDiagnostic(evidence="the pre-window diagnostic is an early detector"),
+            AuthoritativeBackup(evidence="Backup availability is an operator prerequisite"),
             StoppedAttestedZero(
                 roles=PLAN_ROLES,
                 evidence="Hard-stop and orchestrator-attest zero API, pipeline, outbox"),
@@ -323,7 +325,6 @@ PR7B_CORE = Procedure(
         # success — so outcome-B evidence can no longer justify outcome-A's image policy.
         RollbackBranch(
             outcome=OUTCOME_REFUSED,
-            span_marker="R5. ROLLBACK OUTCOME A",
             facts=(
                 RollbackFact(SCHEMA, BR_SCHEMA_HELD,
                              "the DB stays on the witness-authority schema"),
@@ -337,7 +338,6 @@ PR7B_CORE = Procedure(
         ),
         RollbackBranch(
             outcome=OUTCOME_SUCCEEDED,
-            span_marker="R6. ROLLBACK OUTCOME B",
             facts=(
                 RollbackFact(SCHEMA, BR_SCHEMA_WALKED, "downgrade SUCCEEDED"),
                 RollbackFact(IMAGE, IMAGE_PRIOR, "deploy the recorded prior-image digest"),
@@ -353,7 +353,7 @@ PR7B_CORE = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 11. PR 7b-core cutover — drained maintenance window (migration 013)",
-        sha256="82b4cde59179045880a440d6b1b5b2c970f8db35fe3be82cfade7e4dd4509924",
+        sha256="57377dec0386c371c2ec1ee4dbfd21ea7c0a2fa36245d9626a11a1426ce30250",
         # Every operator-run command the section publishes, as parsed argv. The placeholders
         # (`<file.json>`, `<id>`, `<sha256>`) are the section's own literal text.
         commands=(
@@ -364,10 +364,18 @@ PR7B_CORE = Procedure(
                      "--evidence", "<file.json>", "--expect-original-id", "<id>",
                      "--expect-manifest-digest", "<sha256>")),
             Command(("python", "-m", "kyc_tool.ops.repair_outbox_sequence")),
-            Command(("python", "-m", "kyc_tool.ops.reset_interrupted_outbox_claims")),
             Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
             Command(("python", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head")),
+            Command(("python", "-m", "kyc_tool.ops.reset_interrupted_outbox_claims")),
             Command(("python", "-m", "alembic", "-c", "alembic.ini", "downgrade", "012")),
+        ),
+        exempt=(
+            CommandExemption(
+                argv=("alembic", "downgrade"),
+                reason="named as the usage-error counterexample — the section explains that a "
+                       "bare `alembic downgrade` exits with a usage error; it is not an "
+                       "instruction to run",
+            ),
         ),
     ),
 )

@@ -1382,15 +1382,34 @@ def _deployment_section_body(section: str) -> str:
     return " ".join("\n".join(lines[start + 1:end]).split())
 
 
+def _atx_level(line: str) -> int:
+    """The ATX heading level of `line` under CommonMark, or 0. Up to THREE leading spaces are
+    part of the heading syntax (gate audit `6c4f54a..91fbde3` finding 8): the old scan required
+    column-zero hashes, so an indented same-level heading did not bound a section, letting
+    content sit inside a reviewed span that a Markdown reader files under a different one.
+    Four spaces is an indented code block, never a heading."""
+    indent = len(line) - len(line.lstrip(" "))
+    candidate = line.lstrip(" ") if indent <= 3 else ""
+    if not candidate.startswith("#"):
+        return 0
+    depth = len(candidate) - len(candidate.lstrip("#"))
+    if 0 < depth <= 6 and candidate[depth:depth + 1] in (" ", ""):
+        return depth
+    return 0
+
+
 def _section_bytes(ref, root=None) -> str:
-    """The EXACT text of the referenced section (Wave 1 / F7).
+    """The EXACT text of the referenced section, HEADING INCLUDED (Wave 1 / F7; heading brought
+    inside the digest by the gate fold, finding 8 — a heading renamed to a semantic reversal
+    used to keep the reviewed pin, because only the body was hashed).
 
     The heading is matched by full-line equality against exactly one line — a substring match
-    accepted any same-named section. The body runs from the character after the heading's newline
-    to the start of the next heading of the same or higher level, byte-exact; CRLF→LF is the ONLY
-    normalization. The old digest collapsed all whitespace first, so a shell continuation
-    rewritten from backslash-newline to backslash-space — which hands the shell a literal
-    backslash argument and breaks the command — hashed identically and passed review.
+    accepted any same-named section. The section runs from the heading line to the start of the
+    next CommonMark ATX heading of the same or higher level (up to three leading spaces
+    included, per finding 8), byte-exact; CRLF→LF is the ONLY normalization. The old digest
+    collapsed all whitespace first, so a shell continuation rewritten from backslash-newline to
+    backslash-space — which hands the shell a literal backslash argument and breaks the command —
+    hashed identically and passed review.
     """
     text = ((root or REPO) / ref.path).read_bytes().decode("utf-8").replace("\r\n", "\n")
     lines = text.split("\n")
@@ -1403,13 +1422,16 @@ def _section_bytes(ref, root=None) -> str:
     start = matches[0] + 1
     end = len(lines)
     for i in range(start, len(lines)):
-        stripped = lines[i]
-        if stripped.startswith("#"):
-            depth = len(stripped) - len(stripped.lstrip("#"))
-            if 0 < depth <= level and stripped[depth:depth + 1] == " ":
-                end = i
-                break
-    return "\n".join(lines[start:end])
+        depth = _atx_level(lines[i])
+        if 0 < depth <= level:
+            end = i
+            break
+    return "\n".join([ref.heading, *lines[start:end]])
+
+
+def _section_body(section_text: str) -> str:
+    """The section WITHOUT its heading line — what command parsing and prose quoting run over."""
+    return section_text.partition("\n")[2]
 
 
 def _section_commands(section_text: str) -> list[tuple[str, ...]]:
@@ -1460,7 +1482,60 @@ def _playbook_prose(ref) -> str:
     sequence a reviewer read. Evidence quotes are matched against this softer form so a contract
     can quote a sentence without reproducing its asterisks and backticks.
     """
-    return re.sub(r"[*`]", "", " ".join(_section_bytes(ref).split())).lower()
+    return re.sub(r"[*`]", "", " ".join(_section_body(_section_bytes(ref)).split())).lower()
+
+
+def _unique_quote_problems(prose: str, quote: str) -> list[str]:
+    """Evidence must have ONE location (gate audit `6c4f54a..91fbde3` finding 6): 'the' is
+    somewhere in every section, which is exactly why it proved nothing. Zero occurrences is the
+    old failure; two or more is a quote that does not LOCATE its sentence."""
+    count = prose.count(quote.lower())
+    if count == 1:
+        return []
+    return [f"quote {quote!r} occurs {count} times in the span; evidence must occur exactly once"]
+
+
+def _branch_marker_problems(prose: str, branches) -> list[str]:
+    """Each branch's derived marker must appear EXACTLY ONCE, and in BRANCH_OUTCOMES order
+    (finding 7): a duplicated or reordered marker makes one span swallow another, which is the
+    cross-branch evidence defect at the playbook layer."""
+    problems = []
+    positions = []
+    for outcome in playbook.BRANCH_OUTCOMES:
+        marker = playbook.OUTCOME_MARKERS[outcome].lower()
+        count = prose.count(marker)
+        if count != 1:
+            problems.append(f"marker {marker!r} occurs {count} times; want exactly 1")
+        elif positions and prose.find(marker) < positions[-1]:
+            problems.append(f"marker {marker!r} appears before its predecessor")
+        if count == 1:
+            positions.append(prose.find(marker))
+    claimed = [b.outcome for b in branches]
+    if claimed != [o for o in playbook.BRANCH_OUTCOMES if o in claimed]:
+        problems.append(f"branches out of outcome order: {claimed}")
+    return problems
+
+
+def _command_inventory_problems(ref, section: str) -> list[str]:
+    """The parsed operator inventory must equal the typed records EXACTLY — order, multiplicity,
+    argv — after removing only the ref's NAMED exemptions (finding 8). A subset check let an
+    appended `skip_all_safety` survive a digest re-pin; exactness makes any new command a typed,
+    reviewed act. A dead exemption (nothing parsed matches) is refused so the exempt list cannot
+    pre-authorize future additions."""
+    parsed = _section_commands(_section_body(section))
+    problems = []
+    exempt_argvs = [e.argv for e in ref.exempt]
+    for argv in exempt_argvs:
+        if argv not in parsed:
+            problems.append(f"dead exemption: {argv} is not in the parsed inventory")
+    remaining = [c for c in parsed if c not in exempt_argvs]
+    typed = [c.argv for c in ref.commands]
+    if remaining != typed:
+        problems.append(
+            f"parsed operator inventory != typed records.\n  parsed (non-exempt): {remaining}\n"
+            f"  typed: {typed}"
+        )
+    return problems
 
 
 def _downgrade_kind(path: Path) -> str:
@@ -1584,28 +1659,52 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
         ref = procedure.playbook_ref
         assert (REPO / ref.path).exists(), f"{procedure.name} points at a missing document"
         assert procedure.playbook == ref.display, "the printed pointer drifted from the ref"
-        body = _section_bytes(ref)
+        section = _section_bytes(ref)
+        body = _section_body(section)
         assert len(body) > 500, (
             f"{procedure.name}: the section under {ref.heading!r} is {len(body)} chars — a "
             "pointer to an empty body is worse than the summary it replaced"
         )
-        digest = hashlib.sha256(body.encode()).hexdigest()
+        # The digest covers HEADING + body (gate finding 8): renaming the heading to a semantic
+        # reversal used to keep the reviewed pin, because only the body was hashed.
+        digest = hashlib.sha256(section.encode()).hexdigest()
         assert digest == ref.sha256, (
             f"{procedure.name}: {ref.heading!r} changed since it was reviewed.\n"
             f"  reviewed: {ref.sha256}\n  now:      {digest}\n"
-            "Re-read the section EXACTLY — every byte is a reviewed byte — then re-pin sha256 "
-            "in the SAME commit."
+            "Re-read the section EXACTLY — every byte is a reviewed byte, heading included — "
+            "then re-pin sha256 in the SAME commit."
         )
-        # The section's own commands, parsed independently, must reproduce every typed record
-        # argv-for-argv (Wave 1 / F7): a command edit someone re-pins the digest over is still
-        # caught unless the record moves too, which is a second, visible act.
-        parsed = _section_commands(body)
-        for command in ref.commands:
-            assert command.argv in parsed, (
-                f"{procedure.name}: the section no longer publishes "
-                f"`{' '.join(command.argv)}` — its command record does not match any parsed "
-                f"backtick span"
-            )
+        # The section's own commands, parsed independently, must reproduce the typed records
+        # EXACTLY — order, multiplicity, argv — less only the named exemptions (Wave 1 / F7,
+        # exactness by gate finding 8): a subset check let an appended command survive a digest
+        # re-pin, and a command edit is still caught even when the record moves too.
+        inventory_problems = _command_inventory_problems(ref, section)
+        assert not inventory_problems, f"{procedure.name}: {inventory_problems}"
+        # gate finding 5: the derived fields are REBOUND to the plan's own derivations every
+        # run, so object.__setattr__ on the frozen procedure cannot outlive one verification
+        assert procedure.when == procedure.plan.when(), (
+            f"{procedure.name}: `when` no longer equals the plan's derivation"
+        )
+        assert procedure.blocks_start == procedure.plan.blocks_start(), (
+            f"{procedure.name}: `blocks_start` no longer equals the plan's derivation"
+        )
+        # gate finding 6: the closed per-procedure profile owns the exact rollback answers and
+        # the exact platform-commitment set — a divergent answer is a located failure
+        from docs.contracts import plan as plan_module
+
+        profile = plan_module.PROCEDURE_PROFILES[procedure.plan.subject_id]
+        published_answers = tuple(
+            (f.question, f.answer) for f in procedure.rollback_contract.facts)
+        assert published_answers == profile.rollback_answers, (
+            f"{procedure.name}: rollback answers diverge from the closed profile.\n"
+            f"  published: {published_answers}\n  profile:   {profile.rollback_answers}"
+        )
+        committed = tuple(
+            c for p in procedure.plan.prerequisites
+            if isinstance(p, plan_module.PlatformWrittenCommitment) for c in p.commitments)
+        assert committed == profile.commitments, (
+            f"{procedure.name}: commitments {committed} != profile {profile.commitments}"
+        )
         assert procedure.blocks_start, f"{procedure.name} lists nothing that blocks starting"
         assert procedure.when.strip()
         # no step numbering: a numbered list here IS the summary this claim exists to avoid
@@ -1625,16 +1724,24 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
         statements = contract.statements()
         assert procedure.irreversible == statements[0]
         assert procedure.rollback == statements[1:]
-        # 3. QUOTED: every non-silent answer points at a sentence in the digest-bound body.
+        # 3. QUOTED, UNIQUELY: every non-silent answer points at ONE sentence in the digest-bound
+        #    body (uniqueness by gate finding 6 — 'the' is somewhere in every section, which is
+        #    exactly why a bare substring check proved nothing).
         prose = _playbook_prose(ref)
         for fact in contract.facts:
             if fact.answer in playbook.SILENT_ANSWERS:
                 assert not fact.evidence
                 continue
-            assert fact.evidence.lower() in prose, (
-                f"{procedure.name}/{fact.question}: the quote\n  {fact.evidence!r}\n"
-                f"is not in the reviewed body of {ref.heading!r}. An answer must come from the "
-                "playbook it claims to summarize."
+            quote_problems = _unique_quote_problems(prose, fact.evidence)
+            assert not quote_problems, (
+                f"{procedure.name}/{fact.question}: {quote_problems} in the reviewed body of "
+                f"{ref.heading!r}. An answer must come from ONE place in the playbook it claims "
+                "to summarize."
+            )
+        for prerequisite in procedure.plan.prerequisites:
+            quote_problems = _unique_quote_problems(prose, prerequisite.evidence)
+            assert not quote_problems, (
+                f"{procedure.name}/{type(prerequisite).__name__}: {quote_problems}"
             )
         # 4. BRANCH answers bind to their own span of the playbook (Wave 1 / F9): outcome-B
         #    evidence cannot justify outcome-A's image policy, because each branch's quotes must
@@ -1643,6 +1750,10 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
         contract_branches = procedure.rollback_contract.branches
         if contract_branches:
             prose = _playbook_prose(ref)
+            # gate finding 7: the derived markers must each appear exactly once, in outcome
+            # order — a duplicated or swapped marker makes one span swallow another
+            marker_problems = _branch_marker_problems(prose, contract_branches)
+            assert not marker_problems, f"{procedure.name}: {marker_problems}"
             spans = {}
             markers = [b.span_marker for b in contract_branches]
             for branch in contract_branches:
@@ -1654,10 +1765,12 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
             for branch in contract_branches:
                 for fact in branch.facts:
                     if fact.evidence:
-                        assert fact.evidence.lower() in spans[branch.outcome], (
-                            f"{procedure.name}/{branch.outcome}/{fact.question}: the quote\n"
-                            f"  {fact.evidence!r}\nis not inside this branch's own span — "
-                            "cross-branch evidence is the F9 defect itself"
+                        quote_problems = _unique_quote_problems(
+                            spans[branch.outcome], fact.evidence)
+                        assert not quote_problems, (
+                            f"{procedure.name}/{branch.outcome}/{fact.question}: "
+                            f"{quote_problems} — evidence must sit at ONE place inside this "
+                            "branch's own span; cross-branch evidence is the F9 defect itself"
                         )
             kinds = {r: _downgrade_kind(_revision_file(r)) for r in procedure.migration_range}
             reachable = set()
@@ -2645,7 +2758,6 @@ def test_the_prior_image_on_the_refused_branch_is_unconstructable():
     with pytest.raises(ValueError, match="prior image on the REFUSED branch"):
         playbook.RollbackBranch(
             outcome=playbook.OUTCOME_REFUSED,
-            span_marker="R5. ROLLBACK OUTCOME A",
             facts=(
                 playbook.RollbackFact(playbook.SCHEMA, playbook.BR_SCHEMA_HELD, "a"),
                 playbook.RollbackFact(playbook.IMAGE, playbook.IMAGE_PRIOR, "b"),
@@ -2713,7 +2825,7 @@ def test_branch_schema_answers_are_results_and_stay_out_of_the_aggregate():
     the aggregate cannot claim a branch's 'held'/'walked' (the aggregate names the fork)."""
     with pytest.raises(ValueError, match="schema must be a RESULT"):
         playbook.RollbackBranch(
-            outcome=playbook.OUTCOME_REFUSED, span_marker="R5. ROLLBACK OUTCOME A",
+            outcome=playbook.OUTCOME_REFUSED,
             facts=(
                 playbook.RollbackFact(playbook.SCHEMA, playbook.SCHEMA_CONDITIONAL, "a"),
                 playbook.RollbackFact(playbook.IMAGE, playbook.IMAGE_SAME_RELEASE, "b"),
@@ -2733,7 +2845,7 @@ def test_branch_schema_answers_are_results_and_stay_out_of_the_aggregate():
 def test_a_swapped_outcome_cannot_claim_the_other_result():
     with pytest.raises(ValueError, match="SUCCEEDED downgrade cannot claim the schema held"):
         playbook.RollbackBranch(
-            outcome=playbook.OUTCOME_SUCCEEDED, span_marker="R6. ROLLBACK OUTCOME B",
+            outcome=playbook.OUTCOME_SUCCEEDED,
             facts=(
                 playbook.RollbackFact(playbook.SCHEMA, playbook.BR_SCHEMA_HELD, "a"),
                 playbook.RollbackFact(playbook.IMAGE, playbook.IMAGE_PRIOR, "b"),
@@ -2810,26 +2922,26 @@ def test_the_four_bundle_inversions_are_unconstructable():
     # 2. skip the seed/read-back
     with pytest.raises(ValueError, match="requires exactly"):
         plan_module.ProcedurePlanContract(
-            phase=plan_module.PHASE_FLAG_ACTIVATION, subject="Turning on policy-bundle pinning",
+            phase=plan_module.PHASE_FLAG_ACTIVATION, subject_id=plan_module.SUBJECT_BUNDLE_PINNING,
             prerequisites=tuple(p for p in good
                                 if not isinstance(p, plan_module.SeedAndReadBack)))
 
     # 3. ignore the backlog preflight
     with pytest.raises(ValueError, match="requires exactly"):
         plan_module.ProcedurePlanContract(
-            phase=plan_module.PHASE_FLAG_ACTIVATION, subject="Turning on policy-bundle pinning",
+            phase=plan_module.PHASE_FLAG_ACTIVATION, subject_id=plan_module.SUBJECT_BUNDLE_PINNING,
             prerequisites=tuple(p for p in good
                                 if not isinstance(p, plan_module.BacklogPreflight)))
 
     # 4. keep the old workers rolling — either drop the stop entirely, or shrink it below floor
     with pytest.raises(ValueError, match="requires exactly"):
         plan_module.ProcedurePlanContract(
-            phase=plan_module.PHASE_FLAG_ACTIVATION, subject="Turning on policy-bundle pinning",
+            phase=plan_module.PHASE_FLAG_ACTIVATION, subject_id=plan_module.SUBJECT_BUNDLE_PINNING,
             prerequisites=tuple(p for p in good
                                 if not isinstance(p, plan_module.StoppedAttestedZero)))
     with pytest.raises(ValueError, match="stop-set to include"):
         plan_module.ProcedurePlanContract(
-            phase=plan_module.PHASE_FLAG_ACTIVATION, subject="Turning on policy-bundle pinning",
+            phase=plan_module.PHASE_FLAG_ACTIVATION, subject_id=plan_module.SUBJECT_BUNDLE_PINNING,
             prerequisites=tuple(
                 plan_module.StoppedAttestedZero(roles=("retention",), evidence="x")
                 if isinstance(p, plan_module.StoppedAttestedZero) else p for p in good))
@@ -2846,20 +2958,25 @@ def test_reordering_retention_after_the_diagnostic_is_unconstructable():
                  *pr7b.plan.prerequisites[2:])
     with pytest.raises(ValueError, match="requires exactly"):
         plan_module.ProcedurePlanContract(
-            phase=plan_module.PHASE_SCHEMA_MAINTENANCE, subject=pr7b.plan.subject,
+            phase=plan_module.PHASE_SCHEMA_MAINTENANCE, subject_id=pr7b.plan.subject_id,
             prerequisites=reordered)
 
 
 def test_a_subject_cannot_smuggle_an_obligation():
+    """Strengthened by the gate fold (finding 5): the constructor no longer takes text at all —
+    the smuggle is a TypeError — and the closed map's validator refuses the sentence shape the
+    original F4a specimen used."""
     from docs.contracts import plan as plan_module
 
     pr5b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
                 if p.name == "PR 5b full maintenance window")
-    with pytest.raises(ValueError, match="NAME, not prose"):
+    with pytest.raises(TypeError):
         plan_module.ProcedurePlanContract(
             phase=plan_module.PHASE_SECURITY_FULL_WINDOW,
             subject="The PR 5b release. You may skip the window if pressed for time",
             prerequisites=pr5b.plan.prerequisites)
+    assert plan_module.subject_problems(
+        "The PR 5b release. You may skip the window if pressed for time")
 
 
 def test_phase_and_migration_span_cannot_disagree():
@@ -3291,3 +3408,247 @@ def test_f3_a_multivalue_facet_renders_as_one_braced_group():
     assert when.condition() == (
         "duplicate = fresh AND source in {none, automatic} AND sequence = above"
     )
+
+
+# ── Wave-1 gate F5-F8: closed procedure profiles and exact inventories, red first ─────────────────
+#
+# Gate audit `6c4f54a..91fbde3` findings 5-8. The typed procedure unit was closed only over the
+# fields it chose to model: derived prose could be overwritten after construction, the one
+# authored subject slot could carry an operational instruction, rollback answers and platform
+# commitments were selectable subsets, branch markers could alias, and the playbook's command
+# inventory was checked as a subset with the heading outside the digest.
+
+
+def _pr(name: str):
+    return next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES") if p.name == name)
+
+
+def test_f5_tampered_derivations_fail_the_assembled_verifier(monkeypatch):
+    """The audit's reproduction: overwrite PR 6's derived `when` and `blocks_start` with the
+    inverted instructions and the assembled verifier passed, because it checked only
+    nonblank/nonempty. The verifier now REBINDS both to the plan's own derivations every run."""
+    import copy
+
+    pr6 = _pr("Bundle-pinning activation")
+    tampered = copy.copy(pr6)
+    object.__setattr__(
+        tampered, "when", "start flag-on workers while the old pool is rolling")
+    object.__setattr__(
+        tampered, "blocks_start",
+        ("skip the seed and read-back", "ignore the unpinnable backlog",
+         "keep the old workers rolling"))
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+
+
+def test_f5_the_subject_is_a_closed_id_not_free_text():
+    """The audit's second route: a normally constructed subject reading 'Turning on
+    policy-bundle pinning: start workers with the flag ON' was printed at the front of the
+    authoritative plan. The constructor no longer takes text at all — subjects are closed ids
+    resolved through a validated map — and the validator refuses every operational shape."""
+    from docs.contracts import plan as plan_module
+
+    pr6 = _pr("Bundle-pinning activation")
+    with pytest.raises(TypeError):
+        plan_module.ProcedurePlanContract(
+            phase=plan_module.PHASE_FLAG_ACTIVATION,
+            subject="Turning on policy-bundle pinning: start workers with the flag ON",
+            prerequisites=pr6.plan.prerequisites)
+    for operational in (
+        "Turning on policy-bundle pinning: start workers with the flag ON",
+        "Turning on policy-bundle pinning\nstart workers with the flag ON",
+        "Should we start the flag-on workers now?",
+        "Start the flag-on workers now.",
+        "Start the flag-on workers now!",
+    ):
+        assert plan_module.subject_problems(operational), (
+            f"an operational subject was accepted: {operational!r}"
+        )
+    for sid, text in plan_module.PROCEDURE_SUBJECTS.items():
+        assert plan_module.subject_problems(text) == [], f"{sid}: shipped subject refused"
+
+
+def test_f6_the_prior_image_substitution_fails_the_assembled_verifier(monkeypatch):
+    """The audit's reproduction verbatim: PR 6's image answer flipped from same-release to
+    IMAGE_PRIOR with evidence 'the' — a coordinated tamper regenerating the derived prose — and
+    the assembled verifier passed. The closed per-procedure profile now owns the exact answer to
+    every rollback question."""
+    import copy
+
+    pr6 = _pr("Bundle-pinning activation")
+    facts = tuple(
+        dataclasses.replace(f, answer=playbook.IMAGE_PRIOR, evidence="the")
+        if f.question == playbook.IMAGE else f
+        for f in pr6.rollback_contract.facts
+    )
+    tampered_contract = playbook.RollbackContract(facts)
+    statements = tampered_contract.statements()
+    tampered = copy.copy(pr6)
+    object.__setattr__(tampered, "rollback_contract", tampered_contract)
+    object.__setattr__(tampered, "irreversible", statements[0])
+    object.__setattr__(tampered, "rollback", tuple(statements[1:]))
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+
+
+def test_f6_omitting_a_platform_commitment_fails_the_assembled_verifier(monkeypatch):
+    """The other reproduction: PR 5b's written-commitment set shrunk to pause-and-buffer alone,
+    dropping the fresh-signature retry commitment that the stale-signature cutover failure
+    exists to prevent. The profile owns the exact commitment set."""
+    import copy
+
+    from docs.contracts import plan as plan_module
+
+    pr5b = _pr("PR 5b full maintenance window")
+    prerequisites = tuple(
+        dataclasses.replace(p, commitments=(plan_module.COMMIT_PAUSE_BUFFER,))
+        if isinstance(p, plan_module.PlatformWrittenCommitment) else p
+        for p in pr5b.plan.prerequisites
+    )
+    weakened_plan = dataclasses.replace(pr5b.plan, prerequisites=prerequisites)
+    tampered = copy.copy(pr5b)
+    object.__setattr__(tampered, "plan", weakened_plan)
+    object.__setattr__(tampered, "when", weakened_plan.when())
+    object.__setattr__(tampered, "blocks_start", weakened_plan.blocks_start())
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+
+
+def test_f6_evidence_must_be_uniquely_located():
+    """'the' is somewhere in every section, which is exactly why it proved nothing. A quote is
+    evidence only when it has ONE location in the digest-bound span."""
+    prose = "the window opens. the window closes. nothing else."
+    assert _unique_quote_problems(prose, "the window") != []
+    assert _unique_quote_problems(prose, "nothing else") == []
+    assert _unique_quote_problems(prose, "absent entirely") != []
+
+
+def test_f7_the_span_marker_is_derived_not_authored():
+    """The audit's reproduction: pointing the SUCCEEDED branch at REFUSED's R5 marker made both
+    spans start at R5, so the success branch could cite the refusal branch's evidence. The
+    marker is now derived from a closed outcome->marker map; authoring one is a TypeError."""
+    pr7b = _pr("Migrations 013-023")
+    refused = next(b for b in pr7b.rollback_contract.branches
+                   if b.outcome == playbook.OUTCOME_REFUSED)
+    with pytest.raises(TypeError):
+        playbook.RollbackBranch(outcome=playbook.OUTCOME_REFUSED,
+                                span_marker="R6. ROLLBACK OUTCOME B",
+                                facts=refused.facts)
+    for branch in pr7b.rollback_contract.branches:
+        assert branch.span_marker == playbook.OUTCOME_MARKERS[branch.outcome]
+
+
+def test_f7_swapped_or_duplicated_markers_fail_the_marker_check():
+    """The playbook side of the same aliasing: markers must each appear exactly once, in
+    BRANCH_OUTCOMES order — a duplicate, a swap, and an absence are all located failures."""
+    branches = _pr("Migrations 013-023").rollback_contract.branches
+    r5 = playbook.OUTCOME_MARKERS[playbook.OUTCOME_REFUSED].lower()
+    r6 = playbook.OUTCOME_MARKERS[playbook.OUTCOME_SUCCEEDED].lower()
+    assert _branch_marker_problems(f"... {r5} ... {r6} ...", branches) == []
+    assert _branch_marker_problems(f"... {r6} ... {r5} ...", branches), "swap accepted"
+    assert _branch_marker_problems(f"... {r5} ... {r5} ... {r6} ...", branches), (
+        "duplicate accepted"
+    )
+    assert _branch_marker_problems(f"... {r5} ...", branches), "missing marker accepted"
+
+
+def test_f8_an_appended_command_fails_even_after_a_digest_repin(tmp_path):
+    """The audit's reproduction: append `python -m kyc_tool.ops.skip_all_safety`, re-pin the
+    digest, leave the typed records unchanged — the subset check passed. The parsed operator
+    inventory must now equal the typed records EXACTLY, in order, with named exemptions."""
+    import shutil
+
+    ref = _pr("Bundle-pinning activation").playbook_ref
+    root = tmp_path
+    target = root / ref.path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(REPO / ref.path, target)
+    text = target.read_text()
+    heading_at = text.index(ref.heading)
+    insert_at = text.index("\n## ", heading_at)
+    target.write_text(
+        text[:insert_at]
+        + "\n```bash\npython -m kyc_tool.ops.skip_all_safety\n```\n"
+        + text[insert_at:])
+    section = _section_bytes(ref, root=root)
+    repinned = dataclasses.replace(
+        ref, sha256=hashlib.sha256(section.encode()).hexdigest())
+    assert _command_inventory_problems(repinned, section), (
+        "a dangerous appended command survived a digest re-pin"
+    )
+
+
+def test_f8_dropping_a_typed_command_fails_the_assembled_verifier(monkeypatch):
+    """Same exactness from the other side, through the assembled verifier on the REAL file:
+    deleting a typed record while the section still publishes the command must fail."""
+    import copy
+
+    pr6 = _pr("Bundle-pinning activation")
+    weakened_ref = dataclasses.replace(pr6.playbook_ref,
+                                       commands=pr6.playbook_ref.commands[:-1])
+    tampered = copy.copy(pr6)
+    object.__setattr__(tampered, "playbook_ref", weakened_ref)
+    monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+
+
+def test_f8_the_heading_is_inside_the_digest(tmp_path):
+    """The audit's reproduction: rename the heading to a semantic reversal, update the ref's
+    heading, keep the old digest — it passed because only the body was hashed."""
+    import shutil
+
+    ref = _pr("Bundle-pinning activation").playbook_ref
+    target = tmp_path / ref.path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(REPO / ref.path, target)
+    text = target.read_text()
+    renamed_heading = "## 10. SAFE ROLLING DEPLOY — no window needed"
+    target.write_text(text.replace(ref.heading, renamed_heading))
+    renamed_ref = dataclasses.replace(ref, heading=renamed_heading)
+    section = _section_bytes(renamed_ref, root=tmp_path)
+    assert hashlib.sha256(section.encode()).hexdigest() != ref.sha256, (
+        "the digest ignored the heading: a semantic reversal kept the reviewed pin"
+    )
+
+
+def test_f8_an_indented_same_level_heading_bounds_the_section(tmp_path):
+    """CommonMark treats up to three leading spaces before `##` as the same heading level; the
+    old boundary scan did not, so an indented heading could smuggle content into the reviewed
+    span or silently extend it."""
+    import shutil
+
+    ref = _pr("Bundle-pinning activation").playbook_ref
+    target = tmp_path / ref.path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(REPO / ref.path, target)
+    text = target.read_text()
+    heading_at = text.index(ref.heading)
+    next_at = text.index("\n## ", heading_at)
+    mid = heading_at + (next_at - heading_at) // 2
+    mid = text.index("\n", mid) + 1
+    target.write_text(
+        text[:mid] + "   ## 10b. Injected same-level heading\nInjected content.\n" + text[mid:])
+    section = _section_bytes(ref, root=tmp_path)
+    assert "Injected content" not in section, (
+        "an indented same-level heading did not bound the section"
+    )
+
+
+def test_f8_exemptions_must_be_honest():
+    """An exemption names a parsed command that is deliberately NOT an operator instruction, with
+    the reason. A dead exemption (nothing parsed matches) and a reasonless one are refused."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    assert any(e.argv == ("alembic", "downgrade") for e in ref.exempt), (
+        "the usage-error mention is no longer exempted by name"
+    )
+    for exemption in ref.exempt:
+        assert exemption.reason.strip()
+    section = _section_bytes(ref)
+    dead = dataclasses.replace(
+        ref, exempt=(*ref.exempt, playbook.CommandExemption(
+            argv=("alembic", "never-parsed-anywhere"), reason="a dead exemption")))
+    assert _command_inventory_problems(dead, section), "a dead exemption was accepted"
