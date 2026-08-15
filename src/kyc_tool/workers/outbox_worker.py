@@ -20,6 +20,7 @@ def build_publisher() -> OutboxPublisher:
     return OutboxPublisher(
         session_factory,
         settings,
+        process_role=ProcessRole.OUTBOX_WORKER,
         email_sender=make_email_sender(
             settings.email_provider, file_path=settings.email_file_path
         ),

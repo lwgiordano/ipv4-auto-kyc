@@ -11,6 +11,7 @@ import time
 import pytest
 from sqlalchemy import text
 
+from kyc_tool.config import ProcessRole
 from kyc_tool.db.session import uow
 from kyc_tool.ops.requeue_service import requeue_dead_job
 from kyc_tool.queue import jobs
@@ -169,7 +170,7 @@ def test_stale_fail_after_recovery_emits_no_dead_letter_and_leaves_the_job_queue
         session_factory, {"run_transition": handler},
         lease_seconds=120, backoff_base_seconds=0, poll_seconds=0.05,
         on_dead_letter=lambda job, err, session=None: dead_letters.append(job.id),
-    )
+    process_role=ProcessRole.PIPELINE_WORKER)
     assert worker.run_once() is True
     assert dead_letters == []  # the fence miss must NOT report as a successful dead-letter
     with session_factory() as s:
@@ -203,7 +204,7 @@ def test_heartbeat_error_sets_lost_and_revokes_the_handler(session_factory, clea
     worker = Worker(
         session_factory, {"run_transition": handler},
         lease_seconds=2, backoff_base_seconds=0, poll_seconds=0.05,
-    )
+    process_role=ProcessRole.PIPELINE_WORKER)
     worker.session_factory = factory  # claims/fails on the main thread still work
     assert worker.run_once() is True
     with session_factory() as s:
@@ -538,7 +539,7 @@ def test_heartbeat_keeps_a_slow_handler_alive_past_its_lease(session_factory, cl
     worker = Worker(
         session_factory, {"run_transition": slow_handler},
         lease_seconds=2, backoff_base_seconds=0, poll_seconds=0.05,
-    )
+    process_role=ProcessRole.PIPELINE_WORKER)
     assert worker.run_once() is True
     assert reap_results == ["running", "running"]  # never reaped mid-run — heartbeat held the lease
     with session_factory() as s:

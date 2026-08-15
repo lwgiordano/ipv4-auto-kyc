@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from kyc_tool.adapters.base import AdapterOutput, hash_inputs
 from kyc_tool.checkstore import repo as checkstore
+from kyc_tool.config import ProcessRole
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Case
 from kyc_tool.domain.models import CheckStatus
@@ -133,7 +134,7 @@ def test_g12_upstream_timeout_partial_run(
         {"run_transition": pipeline.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
-    )
+    process_role=ProcessRole.PIPELINE_WORKER)
 
     response, _ = post_event(
         case_id, "org_id.submitted", {"rir": "ripe", "org_handle": "ORG-XYZ-1"}

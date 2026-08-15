@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import text
 
 from kyc_tool.adapters.base import AdapterOutput, hash_inputs
+from kyc_tool.config import ProcessRole
 from kyc_tool.domain.models import AdapterStatus
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue import jobs
@@ -27,7 +28,7 @@ def _worker_for(session_factory, pipeline, **kwargs) -> Worker:
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
         **kwargs,
-    )
+    process_role=ProcessRole.PIPELINE_WORKER)
 
 
 def test_crash_mid_decide_resumes_without_partial_writes(

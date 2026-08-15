@@ -6,6 +6,7 @@ invalid case now fails closed and leaves durable state unchanged; the real DB si
 import pytest
 from sqlalchemy import text
 
+from kyc_tool.config import ProcessRole
 from kyc_tool.db.session import uow
 from kyc_tool.queue import jobs
 from kyc_tool.queue.worker import Worker
@@ -72,7 +73,8 @@ def test_fail_at_a_high_attempt_count_requeues_without_overflow(session_factory,
 @pytest.mark.parametrize("bad_poll", [-1, 0, float("nan"), float("inf")])
 def test_worker_refuses_a_bad_poll_at_construction(session_factory, bad_poll):
     with pytest.raises(ValueError):
-        Worker(session_factory, {"run_transition": lambda j: None}, poll_seconds=bad_poll)
+        Worker(session_factory, {"run_transition": lambda j: None}, poll_seconds=bad_poll,
+               process_role=ProcessRole.PIPELINE_WORKER)
 
 
 def _seed_case_and_run(session_factory, case_id):

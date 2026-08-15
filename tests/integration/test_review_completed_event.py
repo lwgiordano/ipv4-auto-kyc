@@ -19,7 +19,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from kyc_tool.checkstore import repo as checkstore
-from kyc_tool.config import get_settings
+from kyc_tool.config import ProcessRole, get_settings
 from kyc_tool.db.tables import AuditLog, DecisionRow, ReviewTask
 from kyc_tool.orchestration import pipeline as pipeline_module
 from kyc_tool.orchestration.pipeline import Pipeline
@@ -206,7 +206,7 @@ def _worker_for(session_factory, policy, settings, tmp_path) -> Worker:
         {"run_transition": pipeline.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
-    )
+    process_role=ProcessRole.PIPELINE_WORKER)
 
 
 def _drive_run(session_factory, policy, settings, tmp_path, run_id: str) -> None:

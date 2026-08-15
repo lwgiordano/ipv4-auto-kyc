@@ -12,6 +12,7 @@ import pytest
 from alembic import command
 from sqlalchemy import create_engine, text
 
+from kyc_tool.config import ProcessRole
 from tests.integration.test_migration_014 import _seed_callback
 from tests.integration.test_migrations import _config, _fresh_db
 
@@ -45,7 +46,7 @@ def test_dead_poc_email_scrubs_its_raw_token(session_factory, settings, clean_db
         session_factory, one_shot,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
         email_sender=_DeadProvider(),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     pub.process_once()  # must not raise: the raise used to escape the worker loop entirely
 
     with session_factory() as s:

@@ -11,6 +11,7 @@ import pytest
 from alembic import command
 from sqlalchemy import create_engine, text
 
+from kyc_tool.config import ProcessRole
 from tests.integration.test_migration_014 import _seed_callback
 from tests.integration.test_migrations import _config, _fresh_db
 
@@ -239,7 +240,7 @@ def test_a_poisoned_row_no_longer_stops_the_whole_outbox(session_factory, settin
     pub = OutboxPublisher(
         session_factory, one_shot,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-        email_sender=_Sender())
+        email_sender=_Sender(), process_role=ProcessRole.OUTBOX_WORKER)
 
     # scrub the head row's body the legal way (dead -> redact), then let it be reopened is
     # impossible — so instead prove the SURVIVING danger: a row already pending+redacted.

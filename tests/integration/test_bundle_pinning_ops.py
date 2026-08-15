@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from kyc_tool.config import ProcessRole
 from kyc_tool.ops import activate_bundle_pinning_epoch as epoch_cli
 from kyc_tool.ops.requeue_interrupted_jobs import requeue_interrupted
 from kyc_tool.ops.seed_policy_bundle import seed_policy_bundle
@@ -130,7 +131,7 @@ def test_activation_recovery_requeues_then_scores_under_pinning(
         {"run_transition": pl.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=pl.on_dead_letter,
-    ).run_until_idle()
+    process_role=ProcessRole.PIPELINE_WORKER).run_until_idle()
     with session_factory() as s:
         assert (
             s.execute(text("SELECT engine_build_id FROM decisions WHERE case_id='c-rec'")).scalar_one()
@@ -175,7 +176,7 @@ def test_rollback_inflight_job_requeued_then_flag_off_decides_once(
         {"run_transition": pl.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=pl.on_dead_letter,
-    ).run_until_idle()
+    process_role=ProcessRole.PIPELINE_WORKER).run_until_idle()
     with session_factory() as s:
         assert (
             s.execute(text("SELECT count(*) FROM decisions WHERE case_id='c-rb'")).scalar_one() == 1

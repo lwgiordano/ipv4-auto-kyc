@@ -10,7 +10,7 @@ from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 from sqlalchemy import create_engine, inspect, text
 
-from kyc_tool.config import REPO_ROOT
+from kyc_tool.config import REPO_ROOT, ProcessRole
 from kyc_tool.db.session import make_engine as _mk_engine
 from kyc_tool.db.session import make_session_factory as _mk_sf
 from kyc_tool.outbox.publisher import OutboxPublisher
@@ -675,7 +675,8 @@ def test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersessio
         return httpx.Response(200)
 
     pub = OutboxPublisher(_mk_sf(_mk_engine(url)), settings,
-                          http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+                          http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+                                 process_role=ProcessRole.OUTBOX_WORKER)
     assert pub.process_pending() == 2
     assert order == ["rA", "rB"]  # A (seq 1) delivered before B (seq 2)
     with eng.connect() as conn:

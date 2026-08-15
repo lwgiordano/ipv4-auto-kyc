@@ -18,13 +18,30 @@ Everything is read off disk — no database.
 
 import hashlib
 import re
+from dataclasses import dataclass
+from typing import NamedTuple
 
 from kyc_tool.config import REPO_ROOT
 
 ROADMAP = REPO_ROOT / ".agents" / "ROADMAP.md"
 
-# `(unit, state, revisions)` — one per §C data row, in table order.
-Record = tuple[str, str, list[int]]
+
+class CRow(NamedTuple):
+    """One §C data row with EVERY cell retained (re-audit `1826661..b5c7a83` finding 9 — the
+    old tuple discarded the Content cell, so a rewritten reservation meaning parsed as
+    unchanged). The first three fields keep the historical tuple order, so positional
+    consumers of (unit, state, revisions) still read the same values."""
+
+    unit: str
+    state: str
+    revisions: tuple[int, ...]
+    items: str
+    migration: str
+    content: str
+
+
+# Backwards-compatible alias: one per §C data row, in table order.
+Record = CRow
 
 _SECTION_C = "## C."
 
@@ -49,7 +66,7 @@ def section_c(text: str) -> str:
 
 
 def parse_records(text: str) -> list[Record]:
-    """Ordered `(unit, state, [revisions])` from a §C-shaped table, NO deduplication —
+    """Ordered typed rows (EVERY cell retained) from a §C-shaped table, NO deduplication —
     a revision double-booked across two rows must survive as two records so the duplicate
     is visible. Columns: `| Unit | Item(s) | State | Migration | Content |` — EXACTLY five;
     a `| PR …` row with any other shape raises rather than being silently skipped, because
@@ -66,9 +83,10 @@ def parse_records(text: str) -> list[Record]:
                 f"§C row has {len(cells)} cells, want exactly 5 "
                 f"(Unit | Item(s) | State | Migration | Content): {line.strip()!r}"
             )
-        unit, state, migration = cells[0], cells[2], cells[3]
-        revisions = [int(tok) for tok in re.findall(r"\b0\d\d\b", migration)]
-        records.append((unit, state, revisions))
+        unit, items, state, migration, content = cells
+        revisions = tuple(int(tok) for tok in re.findall(r"\b0\d\d\b", migration))
+        records.append(CRow(unit=unit, state=state, revisions=revisions,
+                            items=items, migration=migration, content=content))
     return records
 
 
@@ -102,12 +120,12 @@ def reservation_rows_outside_section_c(text: str) -> list[str]:
 
 def shipped(recs: list[Record]) -> list[int]:
     """Every revision owned by a `shipped` row, sorted."""
-    return sorted(rev for _unit, state, revs in recs if state == "shipped" for rev in revs)
+    return sorted(rev for r in recs if r.state == "shipped" for rev in r.revisions)
 
 
 def pending(recs: list[Record]) -> list[int]:
     """Every revision owned by a `pending` row, sorted."""
-    return sorted(rev for _unit, state, revs in recs if state == "pending" for rev in revs)
+    return sorted(rev for r in recs if r.state == "pending" for rev in r.revisions)
 
 
 def unit_revisions(recs: list[Record], unit: str) -> list[int]:
@@ -120,9 +138,9 @@ def unit_revisions(recs: list[Record], unit: str) -> list[int]:
     """
     return sorted(
         rev
-        for name, _state, revs in recs
-        if name == unit or name.startswith(unit + " ")
-        for rev in revs
+        for r in recs
+        if r.unit == unit or r.unit.startswith(unit + " ")
+        for rev in r.revisions
     )
 
 
@@ -144,14 +162,49 @@ def head(recs: list[Record]) -> int:
 # AND its §G scope section by digest: deletion, promotion, and a rewritten scope all become
 # located failures, and a scope re-pin is the reviewed act.
 
-# unit -> (exact §G heading prefix, sha256[:16] of the exact section text from that heading to
-# the next `### ` heading). Pinned like the playbook sections: read the new text, then re-pin
-# in the same commit.
+@dataclass(frozen=True)
+class FutureUnit:
+    """One reserved unbuilt unit: the EXACT reviewed §C row (every cell typed — re-audit
+    `1826661..b5c7a83` finding 9 replaced a state-only bind that let the Content cell say
+    anything) plus its §G scope section pinned by digest. Editing either is a re-pin here, the
+    act of review."""
+
+    row: CRow
+    scope_heading: str
+    scope_digest: str  # sha256[:16] of the exact section text, heading line included
+
+
 FUTURE_UNITS = {
-    "PR 5c": ("### PR 5c — Per-key HMAC retirement evidence — FUTURE, reserved unbuilt "
-              "(audit fold `4c3015a..cccd5f7` F3)", "8be3bc83a5f1fb2f"),
-    "PR 7b-inputs": ("### PR 7b-inputs — Platform answer artifacts — FUTURE, reserved unbuilt "
-                     "(audit fold `4c3015a..cccd5f7` F11)", "93c2f4ccd7c72151"),
+    "PR 5c": FutureUnit(
+        row=CRow(
+            unit="PR 5c", state="future", revisions=(), items="—", migration="—",
+            content="per-key HMAC retirement evidence (reserved by audit fold "
+                    "`4c3015a..cccd5f7` F3, NOT built): durable fleet-wide per-key acceptance "
+                    "witness with a defined zero window, or signed signer-fleet cutover "
+                    "receipt with bounded observation, plus an HMAC signer-target "
+                    "drained-cutover record (target key id, secret digest, exact attested "
+                    "publisher roles). Unblocks the two retirement steps WIRE.SIGN.ROTATION "
+                    "publishes as BLOCKED; shipping it must register the authority in "
+                    "kyc_tool.capabilities (the runtime registry every retirement consumer "
+                    "resolves), flip the absence anchors, and rewrite the gates in "
+                    "docs/contracts/wire.py in the same change"),
+        scope_heading="### PR 5c — Per-key HMAC retirement evidence — FUTURE, reserved "
+                      "unbuilt (audit fold `4c3015a..cccd5f7` F3)",
+        scope_digest="e8e6dd3102162c39"),
+    "PR 7b-inputs": FutureUnit(
+        row=CRow(
+            unit="PR 7b-inputs", state="future", revisions=(), items="—", migration="—",
+            content="platform answer artifacts (reserved by audit fold `4c3015a..cccd5f7` "
+                    "F11, NOT built): versioned, approved/signed answer-artifact schema and "
+                    "its verifying authority for the O1-O4 obligations behind "
+                    "WIRE.ORDERING.PENDING_INPUTS. Until it ships, `resolution_problems` in "
+                    "docs/contracts/wire.py refuses every artifact — the acceptors are "
+                    "content screens, and screening is not resolution. Shipping it must "
+                    "register the verifying authority in kyc_tool.capabilities, replace "
+                    "ANSWER_ARTIFACT_SCHEMA, and rewrite the gate in the same change"),
+        scope_heading="### PR 7b-inputs — Platform answer artifacts — FUTURE, reserved "
+                      "unbuilt (audit fold `4c3015a..cccd5f7` F11)",
+        scope_digest="cfebec33c6e40758"),
 }
 
 
@@ -166,29 +219,46 @@ def _scope_section(text: str, heading: str) -> str | None:
 
 
 def future_unit_problems(text: str) -> list[str]:
-    """Why the document no longer honors its future-unit reservations; empty when it does."""
+    """Why the document no longer honors its future-unit reservations; empty when it does.
+
+    Three binds (re-audit `1826661..b5c7a83` finding 9): duplicate unit names are refused
+    BEFORE any row is selected; every registered unit's live row must EQUAL the reviewed row —
+    every cell, Content included; and the set of `future` rows must equal the registry
+    exactly, so an unregistered reservation is an error, not non-input."""
     problems = []
     try:
         recs = parse_records(section_c(text))
     except (StopIteration, ValueError) as exc:
         return [f"§C is unreadable: {exc}"]
-    for unit, (heading, pinned) in FUTURE_UNITS.items():
-        row = next((r for r in recs if r[0] == unit), None)
+    names = [r.unit for r in recs]
+    for name in sorted({n for n in names if names.count(n) > 1}):
+        problems.append(f"{name}: duplicate §C unit rows — two apparent reservations, at "
+                        "most one checked")
+    if problems:
+        return problems
+    future_rows = {r.unit for r in recs if r.state == "future"}
+    for extra in sorted(future_rows - set(FUTURE_UNITS)):
+        problems.append(
+            f"{extra}: a `future` reservation row the registry never reviewed — register it "
+            "with its exact cells and scope digest, or it does not exist")
+    for unit, spec in FUTURE_UNITS.items():
+        row = next((r for r in recs if r.unit == unit), None)
         if row is None:
             problems.append(f"{unit}: the §C reservation row is gone")
-        elif row[1] != "future" or row[2]:
+        elif row != spec.row:
+            diverged = [f for f in CRow._fields if getattr(row, f) != getattr(spec.row, f)]
             problems.append(
-                f"{unit}: §C says state={row[1]!r} migrations={row[2]} — a future unit is "
-                "`future` with no migration until it is actually designed and built"
-            )
-        section = _scope_section(text, heading)
+                f"{unit}: the §C row diverges from the reviewed cells ({', '.join(diverged)})"
+                " — read the new row, then re-pin the registry in the same commit")
+        section = _scope_section(text, spec.scope_heading)
         if section is None:
             problems.append(f"{unit}: the §G scope section is missing (or duplicated)")
             continue
         digest = hashlib.sha256(section.encode()).hexdigest()[:16]
-        if digest != pinned:
+        if digest != spec.scope_digest:
             problems.append(
-                f"{unit}: the §G scope changed since it was reviewed (was {pinned}, "
-                f"now {digest}) — read the new scope, then re-pin in the same commit"
+                f"{unit}: the §G scope changed since it was reviewed (was "
+                f"{spec.scope_digest}, now {digest}) — read the new scope, then re-pin in "
+                "the same commit"
             )
     return problems

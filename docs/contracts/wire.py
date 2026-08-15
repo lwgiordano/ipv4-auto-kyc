@@ -8,6 +8,7 @@ requirement). `tests/unit/test_contract_registry_authority.py` holds each litera
 authority; `tests/unit/test_contract_rendering.py` proves the rendered PDF displays it.
 """
 
+import json
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -16,6 +17,20 @@ from docs.contracts import (
     ClaimState,
     Registry,
     predicates,  # noqa: I001 — sibling module, not the package root
+)
+
+# The one deliberate runtime dependency (re-audit `1826661..b5c7a83` finding 6): the capability
+# registry is RUNTIME state, owned by the dependency-neutral, stdlib-only
+# `kyc_tool.capabilities`, and this document PROJECTS it — consumers below resolve through the
+# registry at call time, so there is no docs-side copy to drift and no name sweep to fool.
+# (The heavyweight `kyc_tool.config` is still mirrored, never imported.)
+from kyc_tool.capabilities import (
+    SLOT_ANSWER_ARTIFACT,
+    SLOT_RETIREMENT_EVIDENCE,
+    MissingCapability,
+)
+from kyc_tool.capabilities import (
+    resolve as resolve_capability,
 )
 
 # ── the receiver's effectiveness decision, as a TOTAL transition table ─────────────────────────────
@@ -730,39 +745,20 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
 # (.agents/ROADMAP.md §C, PR 7b-inputs); shipping it must replace the anchor AND rewrite the gate
 # in the same change — the gate's other branch is a tripwire that says exactly that.
 
-# ── the typed capability slots (gate audit `6c4f54a..91fbde3` finding 13) ─────────────────────────
+# ── the typed capability slots are RUNTIME state (re-audit `1826661..b5c7a83` finding 6) ──────────
 #
-# "Shipping any part forces the gate forward" used to rest on a search of favored names, which a
-# consumable helper in a NEW module walks straight past. The absence is now a TYPED value: each
-# absent authority is one slot holding a MissingCapability, every gate dispatches on that type,
-# and the claim verifiers fail the moment a slot holds anything else — so registering ANY
-# provider forces the claims, the gates, and the ROADMAP unit forward in the same change. The
-# guarantee is scoped honestly: it holds at these named extension points and at the structural
-# anchors the verifiers execute, not tree-wide; the consumability boundary (no runtime module
-# may reference the slots or the unshipped APIs) is a separate swept assertion.
+# Gate audit finding 13 made the absences TYPED; this re-audit showed the slots were still
+# documentation globals under `docs.contracts` — a package runtime is forbidden to import — so
+# "shipping any part forces the gate forward" rested on a four-string ban that a provider with
+# different identifiers walked straight past. The registry now lives in
+# `kyc_tool.capabilities`: every consumer below resolves through it at CALL time, the published
+# text derives from what it resolves, and only `register()` — the call production makes to ship
+# a provider — can flip a slot, which trips every consumer's rewrite-me branch and fails the
+# claim verifiers until the claims, the gates, and the ROADMAP unit move in the same change.
+# The forcing guarantee is scoped where it is executable: an UNREGISTERED provider moves
+# nothing, because nothing official consults anything but the registry.
 
-
-@dataclass(frozen=True)
-class MissingCapability:
-    """The typed absence of a runtime authority. Consumers dispatch on this TYPE: while a slot
-    holds one, every dependent transition refuses with this reason; when a slot holds anything
-    else, every consumer trips its rewrite-me branch and the claim verifiers fail."""
-
-    reason: str
-    roadmap_unit: str
-
-
-RETIREMENT_AUTHORITY: object = MissingCapability(
-    reason="no durable per-key fleet witness, signed fleet receipt, or HMAC signer-target "
-           "cutover record exists",
-    roadmap_unit="PR 5c",
-)
-ANSWER_ARTIFACT_AUTHORITY: object = MissingCapability(
-    reason="no versioned, approved/signed answer-artifact schema or verifying authority exists",
-    roadmap_unit="PR 7b-inputs",
-)
-
-# Absence anchor for the schema payload itself; the slot above is what the gates consume.
+# Absence anchor for the schema payload itself; the registry slot is what the gates consume.
 ANSWER_ARTIFACT_SCHEMA: object = None
 
 
@@ -770,17 +766,18 @@ def resolution_problems(item: PendingInput, artifact: object) -> list[str]:
     """Why `artifact` cannot RESOLVE `item`. Non-empty for every input in the repository's
     current state — both branches refuse; only the change that ships the authority may open
     one, and it must rewrite this gate to consume it."""
-    if isinstance(ANSWER_ARTIFACT_AUTHORITY, MissingCapability):
+    authority = resolve_capability(SLOT_ANSWER_ARTIFACT)
+    if isinstance(authority, MissingCapability):
         return [
-            f"{item.obligation}: unresolvable — {ANSWER_ARTIFACT_AUTHORITY.reason}. Screening "
+            f"{item.obligation}: unresolvable — {authority.reason}. Screening "
             "an answer's content is not resolution; the obligation stays PENDING until the "
             f"platform-artifact unit ships (.agents/ROADMAP.md §C, "
-            f"{ANSWER_ARTIFACT_AUTHORITY.roadmap_unit})."
+            f"{authority.roadmap_unit})."
         ]
     return [
-        f"{item.obligation}: an answer-artifact authority has landed but this gate still "
-        "refuses by default — rewrite resolution_problems to validate against it in the same "
-        "change that ships it."
+        f"{item.obligation}: an answer-artifact authority is REGISTERED in "
+        "kyc_tool.capabilities but this gate still refuses by default — rewrite "
+        "resolution_problems to validate against it in the same change that ships it."
     ]
 
 
@@ -817,22 +814,23 @@ def _refuse_inbound_retirement(evidence: object) -> list[str]:
             "observation row is version-aggregate and never keyed by key id, and waiting any "
             "interval proves nothing about the traffic during it."
         ]
-    if not isinstance(RETIREMENT_AUTHORITY, MissingCapability):
+    authority = resolve_capability(SLOT_RETIREMENT_EVIDENCE)
+    if not isinstance(authority, MissingCapability):
         return [
-            "a retirement authority has landed in the capability slot but this gate still "
-            "refuses by default — rewrite _refuse_inbound_retirement to consume it in the same "
-            "change that ships it"
+            "a retirement authority is REGISTERED in kyc_tool.capabilities but this gate "
+            "still refuses by default — rewrite _refuse_inbound_retirement to consume it in "
+            "the same change that ships it"
         ]
     if kind == "durable_per_key_fleet_witness":
         return [
-            f"{RETIREMENT_AUTHORITY.reason}: kyc_tool.api.hmac_witness has no "
+            f"{authority.reason}: kyc_tool.api.hmac_witness has no "
             "inbound_zero_for_key, and hmac_v1_observation records acceptance per HMAC "
             f"version, not per key id (.agents/ROADMAP.md §C, "
-            f"{RETIREMENT_AUTHORITY.roadmap_unit} — reserved, unbuilt)"
+            f"{authority.roadmap_unit} — reserved, unbuilt)"
         ]
     return [
-        f"{RETIREMENT_AUTHORITY.reason}: no signed fleet-receipt schema or verifying authority "
-        f"exists (.agents/ROADMAP.md §C, {RETIREMENT_AUTHORITY.roadmap_unit} — reserved, "
+        f"{authority.reason}: no signed fleet-receipt schema or verifying authority "
+        f"exists (.agents/ROADMAP.md §C, {authority.roadmap_unit} — reserved, "
         "unbuilt)"
     ]
 
@@ -850,17 +848,18 @@ def _refuse_outbound_retirement(evidence: object) -> list[str]:
             "one, and the closed drained-cutover record we can produce attests the outbox "
             "attempt ceiling — a Settings value, not a signer key target."
         ]
-    if not isinstance(RETIREMENT_AUTHORITY, MissingCapability):
+    authority = resolve_capability(SLOT_RETIREMENT_EVIDENCE)
+    if not isinstance(authority, MissingCapability):
         return [
-            "a retirement authority has landed in the capability slot but this gate still "
-            "refuses by default — rewrite _refuse_outbound_retirement to consume it in the "
-            "same change that ships it"
+            "a retirement authority is REGISTERED in kyc_tool.capabilities but this gate "
+            "still refuses by default — rewrite _refuse_outbound_retirement to consume it in "
+            "the same change that ships it"
         ]
     return [
-        f"{RETIREMENT_AUTHORITY.reason}: kyc_tool.ops.cutover's closed record attests "
+        f"{authority.reason}: kyc_tool.ops.cutover's closed record attests "
         "KYC_OUTBOX_MAX_ATTEMPTS, and no record names a target key id, secret digest, and the "
         f"exact attested publisher roles (.agents/ROADMAP.md §C, "
-        f"{RETIREMENT_AUTHORITY.roadmap_unit} — reserved, unbuilt)"
+        f"{authority.roadmap_unit} — reserved, unbuilt)"
     ]
 
 
@@ -915,6 +914,59 @@ _GATED_SUFFIXES = {
 
 
 @dataclass(frozen=True)
+class ActionSemantics:
+    """What one rotation action NEEDS and what it MAKES TRUE (re-audit `1826661..b5c7a83`
+    finding 7). The closed action set stopped a foreign step from existing, but a known action
+    id could still be reordered or resemanticized and certify. The simulation below walks each
+    direction's phases against these typed preconditions/effects, so safety comes from
+    transition semantics, not from action names or the luck of a keyword index."""
+
+    requires: frozenset
+    effects: frozenset
+    gated: bool = False  # consumes the retirement-evidence capability; BLOCKED while missing
+    destructive: bool = False  # removes or retires a live credential
+
+
+ROTATION_SEMANTICS: dict[str, ActionSemantics] = {
+    ACT_DEPLOY_ROTATION_ENTRY: ActionSemantics(
+        requires=frozenset(),
+        effects=frozenset({"in.new_entry_deployed"})),
+    ACT_CONFIRM_BOTH: ActionSemantics(
+        requires=frozenset({"in.new_entry_deployed"}),
+        effects=frozenset({"in.both_accepted_confirmed"})),
+    ACT_SWITCH_SIGNER: ActionSemantics(
+        requires=frozenset({"in.both_accepted_confirmed"}),
+        effects=frozenset({"in.their_signer_new"})),
+    ACT_PROVE_QUIET: ActionSemantics(
+        requires=frozenset({"in.their_signer_new"}),
+        effects=frozenset({"in.old_id_quiet_proven"}), gated=True),
+    ACT_PROMOTE_REMOVE: ActionSemantics(
+        requires=frozenset({"in.old_id_quiet_proven"}),
+        effects=frozenset({"in.new_active_old_removed"}), destructive=True),
+    ACT_ACCEPT_BOTH: ActionSemantics(
+        requires=frozenset(),
+        effects=frozenset({"out.both_accepted"})),
+    ACT_DRAIN_ATTEST: ActionSemantics(
+        requires=frozenset({"out.both_accepted"}),
+        effects=frozenset({"out.fleet_drained_zero"})),
+    ACT_DEPLOY_SOLE_SIGNER: ActionSemantics(
+        requires=frozenset({"out.fleet_drained_zero"}),
+        effects=frozenset({"out.our_signer_new"})),
+    ACT_CONFIRM_NEW: ActionSemantics(
+        requires=frozenset({"out.our_signer_new"}),
+        effects=frozenset({"out.new_arrivals_confirmed"})),
+    ACT_RETIRE_OLD: ActionSemantics(
+        requires=frozenset({"out.new_arrivals_confirmed"}),
+        effects=frozenset({"out.old_key_retired"}), gated=True, destructive=True),
+}
+
+_DIRECTION_TERMINAL_FACTS = {
+    "INBOUND": "in.new_active_old_removed",
+    "OUTBOUND": "out.old_key_retired",
+}
+
+
+@dataclass(frozen=True)
 class RotationStep:
     """One phase of one rotation direction. `action` must come from the closed set — an
     emergency-override step has no syntax — and only the two evidence-gated actions may carry a
@@ -933,10 +985,11 @@ class RotationStep:
     def sentence(self) -> str:
         text = _ACTION_SENTENCES[self.action]
         if self.action in GATED_ACTIONS:
-            if not isinstance(RETIREMENT_AUTHORITY, MissingCapability):
+            if not isinstance(resolve_capability(SLOT_RETIREMENT_EVIDENCE),
+                              MissingCapability):
                 raise RuntimeError(
-                    "a retirement authority landed: rewrite the rotation derivation to say what "
-                    "is now true, in the same change"
+                    "a retirement authority is registered in kyc_tool.capabilities: rewrite "
+                    "the rotation derivation to say what is now true, in the same change"
                 )
             return text + _GATED_SUFFIXES[self.action]
         return text
@@ -993,6 +1046,73 @@ def rotation_lines() -> tuple[str, ...]:
         ROTATION_RATIONALES[1],
         ROTATION_RATIONALES[2],
     )
+
+
+def rotation_semantics_problems() -> list[str]:
+    """Simulate the published procedure against the typed action semantics; empty when every
+    phase's preconditions are established by the effects before it and each direction reaches
+    its terminal state. Reads module state at CALL time, so a mutated step tuple, sentence
+    map, or semantics map is judged exactly as it would publish."""
+    problems: list[str] = []
+    if set(ROTATION_SEMANTICS) != ROTATION_ACTIONS:
+        problems.append("the semantics map and the closed action set diverge")
+    if {a for a, s in ROTATION_SEMANTICS.items() if s.gated} != GATED_ACTIONS:
+        problems.append("the gated actions and the semantics map's gated flags diverge")
+    actions = [s.action for s in ROTATION_STEPS]
+    duplicated = sorted({a for a in actions if actions.count(a) > 1})
+    if duplicated:
+        problems.append(f"actions appear behind more than one phase number: {duplicated}")
+    for direction in ("INBOUND", "OUTBOUND"):
+        steps = sorted((s for s in ROTATION_STEPS if s.direction == direction),
+                       key=lambda s: s.number)
+        if [s.number for s in steps] != [1, 2, 3, 4, 5]:
+            problems.append(
+                f"{direction}: phases are not exactly 1-5: {[s.number for s in steps]}")
+            continue
+        established: set[str] = set()
+        for step in steps:
+            semantics = ROTATION_SEMANTICS.get(step.action)
+            if semantics is None:
+                problems.append(
+                    f"{direction} phase {step.number}: {step.action!r} has no typed semantics")
+                continue
+            missing = semantics.requires - established
+            if missing:
+                problems.append(
+                    f"{direction} phase {step.number} ({step.action}) publishes an instruction "
+                    f"whose preconditions are not established: missing {sorted(missing)}")
+            established |= semantics.effects
+        terminal = _DIRECTION_TERMINAL_FACTS[direction]
+        if terminal not in established:
+            problems.append(f"{direction}: the procedure never establishes {terminal}")
+    gated_effects = frozenset().union(
+        *(s.effects for s in ROTATION_SEMANTICS.values() if s.gated))
+    for action, semantics in ROTATION_SEMANTICS.items():
+        if (semantics.destructive and not semantics.gated
+                and not semantics.requires & gated_effects):
+            problems.append(
+                f"{action}: a destructive step does not sit behind an evidence-gated proof")
+    return problems
+
+
+def rotation_surface_projection() -> str:
+    """The complete closed NORMATIVE rotation surface as one canonical string — every action's
+    typed semantics, its published sentence, and its gated suffix. The authority verifier pins
+    this projection's digest, so resemanticizing a known action id, rewriting a sentence, or
+    widening a gate is a re-pin at the verifier boundary: the act of review. Rationales are
+    nonnormative and pinned separately."""
+    surface = {
+        action: {
+            "requires": sorted(semantics.requires),
+            "effects": sorted(semantics.effects),
+            "gated": semantics.gated,
+            "destructive": semantics.destructive,
+            "sentence": _ACTION_SENTENCES[action],
+            "gated_suffix": _GATED_SUFFIXES.get(action),
+        }
+        for action, semantics in sorted(ROTATION_SEMANTICS.items())
+    }
+    return json.dumps(surface, sort_keys=True)
 
 
 _RETIREMENT_TOKENS = ("retir", "remove the old", "delete the old", "deleting the old")

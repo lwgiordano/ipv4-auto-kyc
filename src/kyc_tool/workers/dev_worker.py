@@ -132,12 +132,13 @@ def main() -> None:
     worker = Worker(
         session_factory,
         {"run_transition": pipeline.handle_job},
+        process_role=ProcessRole.DEV_WORKER,
         lease_seconds=settings.job_lease_seconds,
         backoff_base_seconds=settings.job_backoff_base_seconds,
         poll_seconds=settings.worker_poll_seconds,
         on_dead_letter=pipeline.on_dead_letter,
     )
-    publisher = OutboxPublisher(session_factory, settings)
+    publisher = OutboxPublisher(session_factory, settings, process_role=ProcessRole.DEV_WORKER)
     threading.Thread(target=worker.run_forever, daemon=True).start()
     print("dev worker: pipeline (fixture adapters) + outbox running", flush=True)
     publisher.run_forever(poll_seconds=settings.worker_poll_seconds)

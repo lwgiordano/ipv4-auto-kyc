@@ -35,7 +35,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from kyc_tool import security
 from kyc_tool.api.schemas import encode_decision_callback
-from kyc_tool.config import OUTBOX_ATTEMPT_DEADLINE_PHASES, Settings, parse_sunset
+from kyc_tool.config import (
+    CAP_CALLBACK_PUBLISH,
+    OUTBOX_ATTEMPT_DEADLINE_PHASES,
+    ProcessRole,
+    Settings,
+    parse_sunset,
+    require_role_capability,
+)
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Outbox
@@ -232,9 +239,15 @@ class OutboxPublisher:
         session_factory: sessionmaker[Session],
         settings: Settings,
         *,
+        process_role: ProcessRole,
         http_client: httpx.Client | None = None,
         email_sender: EmailSender | None = None,
     ) -> None:
+        # Constructing a publisher is acquiring the callback-publish capability (re-audit
+        # `1826661..b5c7a83` finding 5): the declared role must carry it in the canonical map,
+        # checked here so no alias, factory, or disposable entry point publishes unaccounted.
+        require_role_capability(process_role, CAP_CALLBACK_PUBLISH, "OutboxPublisher")
+        self.process_role = ProcessRole(process_role)
         self.session_factory = session_factory
         self.settings = settings
         self.http = http_client or httpx.Client(timeout=settings.outbox_http_timeout_seconds)

@@ -98,6 +98,7 @@ def build_worker() -> Worker:
     return Worker(
         session_factory,
         {"run_transition": pipeline.handle_job},
+        process_role=ProcessRole.PIPELINE_WORKER,
         lease_seconds=settings.job_lease_seconds,
         backoff_base_seconds=settings.job_backoff_base_seconds,
         poll_seconds=settings.worker_poll_seconds,

@@ -45,7 +45,7 @@ def _validate_lineage(
     # State contract, fail-closed: a row with a migration is shipped|pending; a row
     # without one is '—'. An unrecognised State (e.g. the typo 'pendng') must NOT be
     # silently dropped — that would orphan its revision from both ownership sets.
-    for unit, state, revs in records:
+    for unit, state, revs, *_rest in records:
         if revs:
             assert state in ("shipped", "pending"), (
                 f"{unit}: migration row has unrecognised State {state!r} (want shipped|pending)"
@@ -57,7 +57,7 @@ def _validate_lineage(
                 f"{unit}: non-migration row has State {state!r} (want '—' or 'future')"
             )
 
-    flat = [rev for _unit, _state, revs in records for rev in revs]
+    flat = [rev for r in records for rev in r.revisions]
     dupes = sorted({rev for rev in flat if flat.count(rev) > 1})
     assert not dupes, f"duplicate migration reservations in ROADMAP §C: {dupes}"
 
@@ -67,8 +67,8 @@ def _validate_lineage(
         f"ROADMAP migration reservations are not contiguous: {reserved}"
     )
 
-    shipped = {rev for _u, s, revs in records if s == "shipped" for rev in revs}
-    pending = sorted(rev for _u, s, revs in records if s == "pending" for rev in revs)
+    shipped = {rev for r in records if r.state == "shipped" for rev in r.revisions}
+    pending = sorted(rev for r in records if r.state == "pending" for rev in r.revisions)
     pending_set = set(pending)
     # shipped/pending must partition every reserved revision (disjoint + exhaustive) —
     # a second, explicit statement of the fail-closed State contract above.
@@ -147,7 +147,7 @@ _SHIPPED_OWNERS = {
 
 def test_shipped_reservations_keep_their_frozen_owners():
     owners = {
-        rev: unit for unit, state, revs in roadmap.records() if state == "shipped" for rev in revs
+        rev: r.unit for r in roadmap.records() if r.state == "shipped" for rev in r.revisions
     }
     assert owners == _SHIPPED_OWNERS, (
         "shipped revision→owner rows changed. Shipping a NEW migration appends exactly one "

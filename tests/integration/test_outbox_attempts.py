@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 
+from kyc_tool.config import ProcessRole
 from kyc_tool.outbox import witness
 from kyc_tool.outbox.publisher import _CLAIM_SQL, OutboxPublisher, _StaleClaim
 from kyc_tool.workers.retention import prune
@@ -512,7 +513,7 @@ def test_attempt_is_counted_at_admission_before_the_send(session_factory, clean_
     pub = OutboxPublisher(
         session_factory, settings.model_copy(update=_F1_SETTINGS),
         http_client=httpx.Client(transport=httpx.MockTransport(_probe_then_fail)),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     assert pub.process_once() is True
     assert sends == [1]                       # exactly one transport call
     assert at_send["attempts"] == 1           # already counted when those bytes went out
@@ -542,7 +543,7 @@ def test_admission_reanchors_a_nearly_expired_claim_to_cover_send_and_accounting
     pub = OutboxPublisher(
         session_factory, prod,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     pub._record_attempt(outbox_id=rowA.id, token=rowA.claim_token,
                         wire_version="legacy", request_sha256="a" * 64)
 
@@ -588,7 +589,7 @@ def test_max1_crash_reclaim_dead_letters_without_a_second_send(session_factory, 
         session_factory, prod,
         http_client=httpx.Client(transport=httpx.MockTransport(
             lambda r: (sends.append(1), httpx.Response(500))[1])),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     oid = _admit_then_crash(pub, session_factory, prod, "gm")
 
     assert pub.process_once() is True          # B reclaims → reconciles → dead, no send
@@ -622,7 +623,7 @@ def test_malformed_int4_max_attempts_row_dead_letters_with_no_send_no_overflow(
         session_factory, prod,
         http_client=httpx.Client(transport=httpx.MockTransport(
             lambda r: (sends.append(1), httpx.Response(500))[1])),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
 
     assert pub.process_once() is True            # ceiling check dead-letters before admission
     assert sends == []                           # zero external sends
@@ -654,7 +655,7 @@ def test_negative_attempts_row_fails_closed_with_no_send(
         session_factory, prod,
         http_client=httpx.Client(transport=httpx.MockTransport(
             lambda r: (sends.append(1), httpx.Response(500))[1])),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
 
     assert pub.process_once() is True
     assert sends == []                            # zero external sends, whatever the negative value
@@ -679,7 +680,8 @@ def test_negative_attempts_poc_email_fails_closed_and_redacts(session_factory, c
     sender = _RaisingEmail()
     lo = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 1})
 
-    OutboxPublisher(session_factory, lo, email_sender=sender).process_once()
+    OutboxPublisher(session_factory, lo, email_sender=sender,
+           process_role=ProcessRole.OUTBOX_WORKER).process_once()
     assert sender.calls == 0                       # zero provider calls
     with session_factory() as s:
         st = s.execute(text("SELECT status, payload_json FROM outbox WHERE case_id='nq'")).one()
@@ -704,7 +706,7 @@ def test_max2_crash_reclaim_backs_off_then_a_later_cycle_sends_attempt_2(
         session_factory, prod,
         http_client=httpx.Client(transport=httpx.MockTransport(
             lambda r: (sends.append(1), httpx.Response(500))[1])),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     oid = _admit_then_crash(pub, session_factory, prod, "gn")
 
     assert pub.process_once() is True          # reclaim → reconcile + backoff, NO send
@@ -737,7 +739,7 @@ def test_admission_never_shortens_a_healthy_claim(session_factory, clean_db, set
     pub = OutboxPublisher(
         session_factory, prod,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     with session_factory() as s:
         rowA = s.execute(_CLAIM_SQL, {"lease_seconds": 300, "claimed_by": "A"}).one()
         before = s.execute(text("SELECT claim_lease_expires_at FROM outbox WHERE id=:i"),
@@ -768,7 +770,8 @@ def test_lowering_max_attempts_dead_letters_at_ceiling_without_a_send(
 
     # max=3 world: one real send fails → clean release at attempts=1 (pending, claim cleared).
     hi = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 3})
-    OutboxPublisher(session_factory, hi, http_client=httpx.Client(transport=transport)).process_once()
+    OutboxPublisher(session_factory, hi, http_client=httpx.Client(transport=transport),
+           process_role=ProcessRole.OUTBOX_WORKER).process_once()
     assert sends == [1]
     with session_factory() as s:
         st = s.execute(text(
@@ -780,8 +783,9 @@ def test_lowering_max_attempts_dead_letters_at_ceiling_without_a_send(
         s.commit()
     lo = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 1})
     assert OutboxPublisher(
-        session_factory, lo, http_client=httpx.Client(transport=transport)
-    ).process_once() is True                      # claim → ceiling guard → dead, no send
+        session_factory, lo, http_client=httpx.Client(transport=transport),
+        process_role=ProcessRole.OUTBOX_WORKER,
+    ).process_once() is True                       # claim → ceiling guard → dead, no send
 
     assert sends == [1]                            # still exactly ONE send total — none past the max
     with session_factory() as s:
@@ -799,7 +803,7 @@ def test_backoff_saturates_below_timestamptz_overflow(session_factory, clean_db,
 
     prod = settings.model_copy(update={"outbox_backoff_base_seconds": 10, "outbox_max_attempts": 64})
     pub = OutboxPublisher(session_factory, prod, http_client=httpx.Client(
-        transport=httpx.MockTransport(lambda r: httpx.Response(200))))
+        transport=httpx.MockTransport(lambda r: httpx.Response(200))), process_role=ProcessRole.OUTBOX_WORKER)
     assert pub._backoff_seconds(1) == 10          # base
     assert pub._backoff_seconds(5) == 160         # 10 × 2**4
     assert pub._backoff_seconds(63) == _MAX_BACKOFF_SECONDS   # saturated, NOT 10×2**62
@@ -807,7 +811,7 @@ def test_backoff_saturates_below_timestamptz_overflow(session_factory, clean_db,
 
     zero = settings.model_copy(update={"outbox_backoff_base_seconds": 0})
     pub0 = OutboxPublisher(session_factory, zero, http_client=httpx.Client(
-        transport=httpx.MockTransport(lambda r: httpx.Response(200))))
+        transport=httpx.MockTransport(lambda r: httpx.Response(200))), process_role=ProcessRole.OUTBOX_WORKER)
     assert pub0._backoff_seconds(50) == 0         # zero base (dev/test) → retry when due
 
     with session_factory() as s:  # the capped delay is actually accepted by PostgreSQL, no overflow
@@ -840,7 +844,8 @@ def test_ceiling_dead_letter_redacts_a_poc_body_and_does_not_resend(
 
     # max=2 world: one send fails → clean release at attempts=1 (body NOT yet redacted — not dead).
     hi = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 2})
-    OutboxPublisher(session_factory, hi, email_sender=sender).process_once()
+    OutboxPublisher(session_factory, hi, email_sender=sender,
+           process_role=ProcessRole.OUTBOX_WORKER).process_once()
     assert sender.calls == 1
     with session_factory() as s:
         st = s.execute(text("SELECT status, attempts, payload_json FROM outbox "
@@ -852,7 +857,8 @@ def test_ceiling_dead_letter_redacts_a_poc_body_and_does_not_resend(
         s.execute(text("UPDATE outbox SET next_attempt_at=now() WHERE case_id='gq'"))
         s.commit()
     lo = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 1})
-    OutboxPublisher(session_factory, lo, email_sender=sender).process_once()
+    OutboxPublisher(session_factory, lo, email_sender=sender,
+           process_role=ProcessRole.OUTBOX_WORKER).process_once()
 
     assert sender.calls == 1                              # ZERO additional provider calls
     with session_factory() as s:

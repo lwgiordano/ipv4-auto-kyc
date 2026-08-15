@@ -17,6 +17,7 @@ from kyc_tool.adapters.email_verification import EmailVerificationAdapter
 from kyc_tool.adapters.gleif import GleifAdapter
 from kyc_tool.adapters.rir_poc import FixturePocDirectory, RirPocAdapter
 from kyc_tool.adapters.website_manual_review import WebsiteManualReviewAdapter
+from kyc_tool.config import ProcessRole
 from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue.worker import Worker
@@ -55,7 +56,7 @@ def worker_no_rdap(session_factory, pipeline_no_rdap):
         {"run_transition": pipeline_no_rdap.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=pipeline_no_rdap.on_dead_letter,
-    )
+    process_role=ProcessRole.PIPELINE_WORKER)
 
 
 def _live(client, case_id):

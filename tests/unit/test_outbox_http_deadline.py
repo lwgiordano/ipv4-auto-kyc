@@ -15,7 +15,7 @@ import time
 import httpx
 import pytest
 
-from kyc_tool.config import Settings
+from kyc_tool.config import ProcessRole, Settings
 from kyc_tool.outbox.publisher import OutboxPublisher
 
 
@@ -31,7 +31,7 @@ def _publisher(client: httpx.Client, **settings) -> OutboxPublisher:
         lambda: None,
         Settings(platform_callback_url="http://platform.test", **settings),
         http_client=client,
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
 
 
 def test_slow_response_body_cannot_outlive_the_configured_budget():
@@ -214,7 +214,7 @@ def test_header_drip_returns_within_the_bound_and_the_publisher_keeps_working():
     publisher = OutboxPublisher(
         lambda: None,
         Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.1),
-    )  # bound: 4 x 0.1 = 0.4s
+    process_role=ProcessRole.OUTBOX_WORKER)  # bound: 4 x 0.1 = 0.4s
     try:
         request = publisher.http.build_request("POST", drip.url, content=b"{}")
         started = time.monotonic()
@@ -265,7 +265,7 @@ def test_return_bound_holds_even_when_close_would_block():
         lambda: None,
         Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
         http_client=_UncloseableClient(transport=_WedgedTransport(gate)),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     try:
         request = publisher.http.build_request("POST", "http://platform.test/x", content=b"{}")
         started = time.monotonic()
@@ -287,7 +287,7 @@ def test_capacity_is_a_hard_cap_that_stops_new_claims_not_a_log_line():
         lambda: None,
         Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
         http_client=httpx.Client(transport=_WedgedTransport(gate)),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     try:
         # drive well PAST the cap; orphan count must saturate AT the cap, never exceed it
         for _ in range(_MAX_ORPHAN_SENDS + 5):
@@ -317,7 +317,7 @@ def test_close_is_bounded_not_linear_in_orphan_count():
         lambda: None,
         Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
         http_client=httpx.Client(transport=_WedgedTransport(gate)),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     try:
         while not publisher.at_capacity():
             request = publisher.http.build_request("POST", "http://platform.test/x", content=b"{}")
@@ -346,7 +346,7 @@ def test_close_is_bounded_even_when_http_close_blocks_forever():
         lambda: None,
         Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
         http_client=_UncloseableClient(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     try:
         assert publisher._orphans == []  # ZERO orphans — Codex's exact case
         started = time.monotonic()
@@ -372,7 +372,7 @@ def test_run_forever_exits_on_saturation_for_supervised_restart():
         lambda: None,
         Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.02),
         http_client=httpx.Client(transport=_WedgedTransport(gate)),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     try:
         while not publisher.at_capacity():  # wedge sends until the cap is reached
             request = publisher.http.build_request("POST", "http://platform.test/x", content=b"{}")
@@ -396,6 +396,7 @@ def test_daemon_send_threads_never_block_process_exit():
 import threading, httpx, sys
 from kyc_tool.config import Settings
 from kyc_tool.outbox.publisher import OutboxPublisher, _AttemptDeadlineExceeded
+from kyc_tool.config import ProcessRole
 
 class Wedged(httpx.BaseTransport):
     def handle_request(self, request):
@@ -403,7 +404,8 @@ class Wedged(httpx.BaseTransport):
 
 pub = OutboxPublisher(lambda: None,
     Settings(platform_callback_url="http://platform.test", outbox_http_timeout_seconds=0.05),
-    http_client=httpx.Client(transport=Wedged()))
+    http_client=httpx.Client(transport=Wedged()),
+    process_role=ProcessRole.OUTBOX_WORKER)
 try:
     pub._send_for_status(pub.http.build_request("POST", "http://platform.test/x", content=b"{}"))
 except _AttemptDeadlineExceeded:

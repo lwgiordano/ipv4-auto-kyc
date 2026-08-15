@@ -13,6 +13,7 @@ from kyc_tool.adapters.ocr import JsonScanOcrEngine
 from kyc_tool.adapters.rir_poc import FixturePocDirectory, RirPocAdapter
 from kyc_tool.adapters.rir_rdap.adapter import FixtureRirStrategy, RirRdapAdapter
 from kyc_tool.adapters.website_manual_review import WebsiteManualReviewAdapter
+from kyc_tool.config import ProcessRole
 from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue.worker import Worker
@@ -58,4 +59,4 @@ def phase3_worker(session_factory, phase3_pipeline):
         {"run_transition": phase3_pipeline.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=phase3_pipeline.on_dead_letter,
-    )
+    process_role=ProcessRole.PIPELINE_WORKER)

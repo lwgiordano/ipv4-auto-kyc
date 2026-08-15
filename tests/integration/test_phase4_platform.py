@@ -8,6 +8,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 
+from kyc_tool.config import ProcessRole
 from kyc_tool.outbox.publisher import OutboxPublisher
 from tests.conftest import envelope
 from tests.integration.shared import ACME_KYB_WITH_CONTACT
@@ -37,7 +38,7 @@ def test_callback_retries_on_5xx_then_delivers(client, engine, post_event, worke
         session_factory,
         retry_settings,
         http_client=httpx.Client(transport=httpx.MockTransport(platform.handler)),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     response, _ = post_event("case-retry", "recalculate.requested", {})
     run_id = response.json()["run_id"]
     worker.run_until_idle()
@@ -68,7 +69,7 @@ def test_callback_dead_letters_after_max_attempts(
         session_factory,
         dead_settings,
         http_client=httpx.Client(transport=httpx.MockTransport(platform.handler)),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     response, _ = post_event("case-dead", "recalculate.requested", {})
     run_id = response.json()["run_id"]
     worker.run_until_idle()

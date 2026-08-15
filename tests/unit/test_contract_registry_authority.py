@@ -257,6 +257,9 @@ def _rotation_publishes_an_executable_procedure_for_each_direction():
         "the published rotation lines diverge from the closed-step derivation"
     )
     assert wire_module.rotation_prose_problems(lines) == []
+    # re-audit `1826661..b5c7a83` finding 7: names are not semantics — the typed
+    # preconditions/effects are simulated and the whole normative surface is pinned here
+    _rotation_closed_surface_ok()
     inbound = next(line for line in lines if line.startswith("INBOUND"))
     outbound = next(line for line in lines if line.startswith("OUTBOUND"))
 
@@ -377,19 +380,25 @@ def _rotation_retirement_is_unreachable_by_construction():
     assert drained_records == {"OUTBOX_MAX_ATTEMPTS_CUTOVER"}
     assert getattr(cutover, "HMAC_SIGNER_CUTOVER", None) is None
     assert wire_module.SIGNED_FLEET_RECEIPT_SCHEMA is None
-    # gate finding 13: the typed slot is the named extension point — anything but a
-    # MissingCapability here means a provider registered, and this claim must move with it
-    assert isinstance(wire_module.RETIREMENT_AUTHORITY, wire_module.MissingCapability), (
+    # re-audit `1826661..b5c7a83` finding 6: the extension point is the RUNTIME registry — the
+    # verifier resolves the same slot every consumer does; anything but a MissingCapability
+    # means a provider REGISTERED, and this claim must move with it
+    from kyc_tool import capabilities
+
+    resolved = capabilities.resolve(capabilities.SLOT_RETIREMENT_EVIDENCE)
+    assert isinstance(resolved, capabilities.MissingCapability), (
         "a retirement authority is registered; the claim, gates, and ROADMAP unit must move "
         "in the same change"
     )
-    assert wire_module.RETIREMENT_AUTHORITY.roadmap_unit == "PR 5c"
+    assert resolved.roadmap_unit == "PR 5c"
+    # finding 7: the procedure the gates hang off is itself simulated and pinned
+    _rotation_closed_surface_ok()
 
     # the reserved, unbuilt ROADMAP unit — reserved WITHOUT a migration or a shipped/pending state
     row = next((r for r in roadmap.records() if r[0] == "PR 5c"), None)
     assert row is not None, "ROADMAP §C reserves no PR 5c unit for the retirement evidence"
-    _unit, state, revisions = row
-    assert state == "future" and revisions == [], (
+    _unit, state, revisions = row.unit, row.state, row.revisions
+    assert state == "future" and revisions == (), (
         "PR 5c must stay an explicit `future` reservation without a migration (gate F12)"
     )
     assert not roadmap.future_unit_problems(roadmap.ROADMAP.read_text())
@@ -1115,11 +1124,7 @@ def _pending_024_inputs_cover_every_live_obligation():
     platform can make. Parsing the spec rather than hardcoding the ids means a fifth obligation
     appearing there fails this test until the document asks for it too.
     """
-    spec = (REPO / ".agents" / "superpowers" / "specs"
-            / "2026-07-22-pr7b-activation-platform-ordering-design.md").read_text()
-    live = spec[spec.index("## Open blockers"):]
-    live = live[: live.index("\n## ", 1)] if "\n## " in live[1:] else live
-    obligations = _live_obligation_ids(live)
+    obligations = _live_obligation_ids(_live_blocker_section())
     assert obligations == ["O1", "O2", "O3", "O4"], (
         f"the live obligation list changed: {obligations}"
     )
@@ -1198,11 +1203,14 @@ def _pending_024_inputs_cover_every_live_obligation():
         "the answer-artifact schema anchor moved; resolution_problems, the claim note, and "
         "ROADMAP PR 7b-inputs must all move in the same change"
     )
-    assert isinstance(wire_module.ANSWER_ARTIFACT_AUTHORITY, wire_module.MissingCapability), (
+    from kyc_tool import capabilities
+
+    resolved = capabilities.resolve(capabilities.SLOT_ANSWER_ARTIFACT)
+    assert isinstance(resolved, capabilities.MissingCapability), (
         "an answer-artifact authority is registered; the claim, the gate, and ROADMAP "
         "PR 7b-inputs must move in the same change"
     )
-    assert wire_module.ANSWER_ARTIFACT_AUTHORITY.roadmap_unit == "PR 7b-inputs"
+    assert resolved.roadmap_unit == "PR 7b-inputs"
     note = WIRE["WIRE.ORDERING.PENDING_INPUTS"].note
     assert "RESOLVE" in note and "has not shipped" in note, (
         "the published note no longer tells the reader that no reply can resolve an obligation"
@@ -1216,8 +1224,8 @@ def _pending_024_inputs_cover_every_live_obligation():
     # the reserved, unbuilt ROADMAP unit for the artifact schema
     row = next((r for r in roadmap.records() if r[0] == "PR 7b-inputs"), None)
     assert row is not None, "ROADMAP §C reserves no PR 7b-inputs unit for the answer artifacts"
-    _unit, state, revisions = row
-    assert state == "future" and revisions == [], (
+    _unit, state, revisions = row.unit, row.state, row.revisions
+    assert state == "future" and revisions == (), (
         "PR 7b-inputs must stay an explicit `future` reservation without a migration (gate F12)"
     )
     assert not roadmap.future_unit_problems(roadmap.ROADMAP.read_text())
@@ -3209,8 +3217,11 @@ def test_f11_the_resolution_gate_reads_its_anchor_not_a_constant_refusal():
     """Guard the guard: flip the absence anchor and the refusal must CHANGE BRANCH — to the
     tripwire demanding the gate be rewritten with the schema — proving the gate consults the
     anchor rather than returning a hardcoded no."""
+    from kyc_tool import capabilities
+
     item = WIRE.value("WIRE.ORDERING.PENDING_INPUTS")[0]
-    with mock.patch.object(wire_module, "ANSWER_ARTIFACT_AUTHORITY", object()):
+    with mock.patch.dict(capabilities._SLOTS,
+                         {capabilities.SLOT_ANSWER_ARTIFACT: object()}):
         problems = wire_module.resolution_problems(item, {"schema_version": "1.0.0"})
         assert problems, "flipping the slot must not silently resolve anything"
         assert any("rewrite resolution_problems" in p for p in problems), problems
@@ -3273,10 +3284,12 @@ def test_f3_the_gates_read_their_absence_anchors():
     name-probing to slot dispatch): a fake presence in the SLOT moves every refusal to the
     rewrite-me tripwire — never to acceptance — and the module-name anchors keep their own
     bite inside the assembled claim verifier (a fake per-key witness fails it outright)."""
+    from kyc_tool import capabilities
     from kyc_tool.api import hmac_witness
 
     gates = {g.direction: g for g in WIRE.value("WIRE.SIGN.ROTATION_RETIREMENT")}
-    with mock.patch.object(wire_module, "RETIREMENT_AUTHORITY", object()):
+    with mock.patch.dict(capabilities._SLOTS,
+                         {capabilities.SLOT_RETIREMENT_EVIDENCE: object()}):
         for direction, evidence in (
             ("INBOUND", {"kind": "durable_per_key_fleet_witness"}),
             ("INBOUND", {"kind": "signed_fleet_receipt"}),
@@ -3759,17 +3772,54 @@ def test_f8_an_indented_same_level_heading_bounds_the_section(tmp_path):
     assert "Injected content" not in section, (
         "an indented same-level heading did not bound the section"
     )
+_BLOCKER_ITEM_HEAD = re.compile(r"- \*\*([^*]+)\*\*")
+
+
 def _live_obligation_ids(live: str) -> list[str]:
-    """The blocker list's obligation identifiers, ORDERED, with multiplicity checked — refusing
-    malformed and duplicate identifiers BEFORE any coverage comparison (gate audit
-    `6c4f54a..91fbde3` finding 11). The old `O\\d` + immediate set() silently mis-read a live
-    **O10** and erased a duplicated obligation, so the coverage assert stayed green while the
-    spec named work the document never asked about."""
+    """The blocker list's obligation identifiers, ORDERED, read STRUCTURALLY (re-audit
+    `1826661..b5c7a83` finding 10 — the previous reader searched for its chosen bold syntax,
+    so a top-level `- O5 — ...` item was invisible rather than an input). The section is its
+    heading, an unindented prose preamble, then top-level list items; EVERY item must begin
+    with exactly one bold `O<n>` identifier, and a bullet outside that grammar, a heading
+    inside the section, an unindented line after the list starts, an obligation-shaped bold
+    token outside an item head, and a duplicate or malformed identifier are each ERRORS —
+    never non-input. Multiplicity and completeness stay checked (gate finding 11: O10 read
+    complete, duplicates refused)."""
+    lines = live.split("\n")
+    if not lines or _atx_level(lines[0]) == 0:
+        raise ValueError("the live blocker text does not start at its section heading")
+    body = lines[1:]
+    item_starts = [i for i, line in enumerate(body) if line.startswith("- ")]
+    preamble_end = item_starts[0] if item_starts else len(body)
+    for line in body[:preamble_end]:
+        if _atx_level(line):
+            raise ValueError(f"blocker-shaped heading inside the live section: {line!r}")
+        if line.strip() and line.startswith((" ", "\t")):
+            raise ValueError(f"indented text outside any blocker item: {line!r}")
+        if re.search(r"\*\*\s*O[0-9]", line):
+            raise ValueError(f"obligation-shaped bold token outside an item: {line!r}")
     ids = []
-    for raw in re.findall(r"\*\*(O[0-9][^*]*)\*\*", live):
-        token = re.fullmatch(r"(O[0-9]+)(?:[^0-9A-Za-z].*)?", raw, re.DOTALL)
+    for n, start in enumerate(item_starts):
+        end = item_starts[n + 1] if n + 1 < len(item_starts) else len(body)
+        for continuation in body[start + 1:end]:
+            if _atx_level(continuation):
+                raise ValueError(
+                    f"blocker-shaped heading inside the live section: {continuation!r}")
+            if continuation.strip() and not continuation.startswith((" ", "\t")):
+                raise ValueError(
+                    f"unstructured top-level line inside the blocker list: {continuation!r}")
+        item = "\n".join(body[start:end])
+        head = _BLOCKER_ITEM_HEAD.match(item)
+        if head is None:
+            raise ValueError(
+                f"top-level blocker item outside the bold-id grammar: {item[:70]!r}")
+        token = re.fullmatch(r"(O[0-9]+)(?:[^0-9A-Za-z].*)?", head.group(1), re.DOTALL)
         if not token or not re.fullmatch(r"O[1-9][0-9]*", token.group(1)):
-            raise ValueError(f"malformed obligation identifier {raw!r} in the live blocker list")
+            raise ValueError(
+                f"malformed obligation identifier {head.group(1)!r} in the live blocker list")
+        if re.search(r"\*\*\s*O[0-9]", item[head.end():]):
+            raise ValueError(
+                f"obligation-shaped bold token beyond its item head: {item[:70]!r}")
         ids.append(token.group(1))
     duplicates = {i for i in ids if ids.count(i) > 1}
     if duplicates:
@@ -3779,16 +3829,20 @@ def _live_obligation_ids(live: str) -> list[str]:
 
 def test_f11_gate_the_obligation_parser_reads_complete_identifiers():
     """The audit's specimens: O10 read as O1, duplicate O4 erased, O4a and O01 accepted-shaped.
-    Each is now an explicit outcome: complete ids in order, duplicates and malformed refused."""
-    assert _live_obligation_ids("**O1** a\n**O2** b\n**O10** c") == ["O1", "O2", "O10"]
+    Each is now an explicit outcome: complete ids in order, duplicates and malformed refused —
+    stated in the structural item grammar re-audit finding 10 introduced."""
+    heading = "## Open blockers\n\n"
+    assert _live_obligation_ids(
+        heading + "- **O1** a\n- **O2** b\n- **O10** c") == ["O1", "O2", "O10"]
     with pytest.raises(ValueError, match="duplicate"):
-        _live_obligation_ids("**O4** x\n**O4** y")
+        _live_obligation_ids(heading + "- **O4** x\n- **O4** y")
     with pytest.raises(ValueError, match="malformed"):
-        _live_obligation_ids("**O4a** x")
+        _live_obligation_ids(heading + "- **O4a** x")
     with pytest.raises(ValueError, match="malformed"):
-        _live_obligation_ids("**O01** x")
+        _live_obligation_ids(heading + "- **O01** x")
     # a titled entry — the live spec's own format — reads as its id, not as malformed
-    assert _live_obligation_ids("**O4 (was F3) — both decision writers fenced.**") == ["O4"]
+    assert _live_obligation_ids(
+        heading + "- **O4 (was F3) — both decision writers fenced.**") == ["O4"]
 
 
 def test_f11_gate_the_old_parser_would_have_misread_the_specimens():
@@ -3849,16 +3903,20 @@ def test_f9_gate_local_stances_derive_from_the_canonical_capability_map():
 
 def test_f9_gate_every_entry_point_construction_is_covered_by_the_map():
     """Closure against the code: every src module that declares its role (validate_process_role)
-    and constructs a writer class must hold the matching capability in the map. Adding a
-    construction without updating the map fails here; a library module with no declared role is
-    out of scope — the boundary is the executable entry point."""
+    and constructs a writer class must hold the matching capability in the map, and — re-audit
+    `1826661..b5c7a83` finding 5 — every Worker/OutboxPublisher construction in an entry module
+    must state a `process_role=` drawn from that module's own declared roles, because the
+    constructors now ENFORCE the map at runtime and a mismatched declaration would refuse at
+    boot. A library module with no declared role is out of scope — and no longer a bypass,
+    since the runtime gate rides inside the constructors themselves."""
     from kyc_tool.config import (
         CAP_CALLBACK_PUBLISH,
         CAP_DECISION_WRITE,
         ROLE_CAPABILITIES,
     )
 
-    implications = {"Pipeline": CAP_DECISION_WRITE, "OutboxPublisher": CAP_CALLBACK_PUBLISH}
+    implications = {"Pipeline": CAP_DECISION_WRITE, "OutboxPublisher": CAP_CALLBACK_PUBLISH,
+                    "Worker": CAP_DECISION_WRITE}
     covered_any = 0
     for path in sorted(SRC.rglob("*.py")):
         tree = ast.parse(path.read_text())
@@ -3870,20 +3928,31 @@ def test_f9_gate_every_entry_point_construction_is_covered_by_the_map():
         }
         if not declared_roles:
             continue
-        constructed = {
-            node.func.id
+        constructions = [
+            node
             for node in ast.walk(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id in implications
-        }
-        for class_name in constructed:
+        ]
+        for call in constructions:
             covered_any += 1
-            needed = implications[class_name]
+            needed = implications[call.func.id]
             for role_name in declared_roles:
                 role = ProcessRole[role_name]
                 assert needed in ROLE_CAPABILITIES[role], (
-                    f"{path.relative_to(REPO)}: role {role.value} constructs {class_name} but "
-                    f"the capability map does not grant {needed}"
+                    f"{path.relative_to(REPO)}: role {role.value} constructs {call.func.id} "
+                    f"but the capability map does not grant {needed}"
+                )
+            if call.func.id in ("Worker", "OutboxPublisher"):
+                stated = [
+                    k.value.attr for k in call.keywords
+                    if k.arg == "process_role" and isinstance(k.value, ast.Attribute)
+                    and isinstance(k.value.value, ast.Name)
+                    and k.value.value.id == "ProcessRole"
+                ]
+                assert stated and stated[0] in declared_roles, (
+                    f"{path.relative_to(REPO)}: a {call.func.id} construction does not state "
+                    "the module's own declared ProcessRole"
                 )
     assert covered_any >= 3, (
         "the closure sweep found almost nothing; the construction patterns changed and this "
@@ -3946,11 +4015,11 @@ def test_f12_gate_shipped_no_migration_rows_stay_legal():
     """PR 5b (shipped, code-only, no migration) keeps its `—` and stays outside the future
     registry — the separation is the point, not a new constraint on old rows."""
     records = roadmap.records()
-    pr5b = next(r for r in records if r[0] == "PR 5b")
-    assert pr5b[1] == "—" and pr5b[2] == []
+    pr5b = next(r for r in records if r.unit == "PR 5b")
+    assert pr5b.state == "—" and pr5b.revisions == ()
     for unit in roadmap.FUTURE_UNITS:
-        row = next(r for r in records if r[0] == unit)
-        assert row[1] == "future" and row[2] == []
+        row = next(r for r in records if r.unit == unit)
+        assert row.state == "future" and row.revisions == ()
 
 
 # ── Wave-1 gate F13: capability slots and a closed rotation surface ───────────────────────────────
@@ -3965,51 +4034,66 @@ def test_f12_gate_shipped_no_migration_rows_stay_legal():
 
 
 def test_f13_gate_the_gates_consume_the_typed_slots():
-    """Every refusal must cite the slot's own reason, and flipping a slot to a fake authority
-    must move every consumer to the rewrite-me tripwire — never to acceptance."""
+    """Every refusal must cite the registry slot's own reason, and flipping a slot to a fake
+    authority must move every consumer to the rewrite-me tripwire — never to acceptance.
+    (Re-audit finding 6 moved the slots from docs globals to kyc_tool.capabilities; the
+    consumers are the same gates, now resolving runtime state.)"""
+    from kyc_tool import capabilities
+
     gates = {g.direction: g for g in WIRE.value("WIRE.SIGN.ROTATION_RETIREMENT")}
-    assert isinstance(wire_module.RETIREMENT_AUTHORITY, wire_module.MissingCapability)
-    assert isinstance(wire_module.ANSWER_ARTIFACT_AUTHORITY, wire_module.MissingCapability)
-    assert wire_module.RETIREMENT_AUTHORITY.roadmap_unit == "PR 5c"
-    assert wire_module.ANSWER_ARTIFACT_AUTHORITY.roadmap_unit == "PR 7b-inputs"
+    retirement = capabilities.resolve(capabilities.SLOT_RETIREMENT_EVIDENCE)
+    artifact = capabilities.resolve(capabilities.SLOT_ANSWER_ARTIFACT)
+    assert isinstance(retirement, capabilities.MissingCapability)
+    assert isinstance(artifact, capabilities.MissingCapability)
+    assert retirement.roadmap_unit == "PR 5c"
+    assert artifact.roadmap_unit == "PR 7b-inputs"
+    reasons = gates["INBOUND"].refuse({"kind": "signed_fleet_receipt"})
+    assert any(retirement.reason in r for r in reasons), (
+        "the refusal no longer cites the registry slot's own reason"
+    )
 
     fake = object()
-    with mock.patch.object(wire_module, "RETIREMENT_AUTHORITY", fake):
+    with mock.patch.dict(capabilities._SLOTS,
+                         {capabilities.SLOT_RETIREMENT_EVIDENCE: fake}):
         for evidence in ({"kind": "durable_per_key_fleet_witness"},
                          {"kind": "signed_fleet_receipt"}):
             reasons = gates["INBOUND"].refuse(evidence)
             assert reasons and any("rewrite" in r for r in reasons), reasons
         reasons = gates["OUTBOUND"].refuse({"kind": "hmac_signer_cutover_record"})
         assert reasons and any("rewrite" in r for r in reasons), reasons
-    with mock.patch.object(wire_module, "ANSWER_ARTIFACT_AUTHORITY", fake):
+    with mock.patch.dict(capabilities._SLOTS,
+                         {capabilities.SLOT_ANSWER_ARTIFACT: fake}):
         item = WIRE.value("WIRE.ORDERING.PENDING_INPUTS")[0]
         reasons = wire_module.resolution_problems(item, {"schema_version": "1"})
         assert reasons and any("rewrite" in r for r in reasons), reasons
 
 
-def test_f13_gate_a_registered_fake_provider_forces_the_claim_forward(monkeypatch):
+def test_f13_gate_a_registered_fake_provider_forces_the_claim_forward():
     """The lifecycle transition is FORCED: with any non-missing authority in the slot, the
     published BLOCKED/PENDING claims are lies, and their assembled verifiers must fail until the
     claim, the gates, and the ROADMAP unit move in the same change."""
-    monkeypatch.setattr(wire_module, "RETIREMENT_AUTHORITY", object())
-    with pytest.raises(AssertionError):
+    from kyc_tool import capabilities
+
+    with mock.patch.dict(capabilities._SLOTS,
+                         {capabilities.SLOT_RETIREMENT_EVIDENCE: object()}), pytest.raises(AssertionError):
         AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION_RETIREMENT"]()
-    monkeypatch.undo()
-    monkeypatch.setattr(wire_module, "ANSWER_ARTIFACT_AUTHORITY", object())
-    with pytest.raises(AssertionError):
+    with mock.patch.dict(capabilities._SLOTS,
+                         {capabilities.SLOT_ANSWER_ARTIFACT: object()}), pytest.raises(AssertionError):
         AUTHORITY_VERIFIERS["WIRE.ORDERING.PENDING_INPUTS"]()
 
 
-def test_f13_gate_no_src_module_consumes_the_absent_capabilities():
-    """The boundary is CONSUMABILITY: runtime code may not import or reference the slots or the
-    unshipped per-key/artifact APIs. A dead helper elsewhere is out of scope; a consumer is not."""
+def test_f13_gate_runtime_never_imports_the_document_layer():
+    """The layering rule that SURVIVES finding 6: runtime code may never import
+    `docs.contracts` (the document projects runtime, never the reverse), and the unshipped
+    per-key witness API name stays absent from src. The old four-string consumability ban is
+    fossilized in test_ru6_the_old_name_sweep_is_a_defeated_fossil — the capability guarantee
+    itself now lives at the registry, where it is executable, not in this sweep."""
     for path in sorted(SRC.rglob("*.py")):
         text = path.read_text()
-        for name in ("RETIREMENT_AUTHORITY", "ANSWER_ARTIFACT_AUTHORITY",
-                     "inbound_zero_for_key", "docs.contracts"):
+        for name in ("inbound_zero_for_key", "docs.contracts"):
             assert name not in text, (
-                f"{path.relative_to(REPO)} references {name}: runtime code is consuming a "
-                "capability the contracts publish as absent"
+                f"{path.relative_to(REPO)} references {name}: runtime code is crossing the "
+                "document boundary"
             )
 
 
@@ -4413,3 +4497,520 @@ def test_ru11_a_hash_prefixed_ordinary_line_is_not_a_heading():
     assert _atx_level("##NOT-A-HEADING") == 0
     assert _atx_level("## A real heading") == 2
     assert _atx_level("####### seven hashes") == 0
+
+
+# ── re-audit `1826661..b5c7a83` unit 3: capability/lifecycle (findings 5, 6, 7, 9, 10) ────────────
+#
+# Finding 5: the process-role closure recognized two constructor names by AST, so a disposable
+# retention entry point constructing `Worker(..., {'run_transition': ...})` — or any alias or
+# factory — became a decision writer the O4 matrix never accounted. Enforcement moves to
+# CONSTRUCTION: every Worker/OutboxPublisher states the ProcessRole it runs under and the one
+# canonical capability map decides, so the specimen has no path that dodges the check.
+# Finding 6: the capability slots were docs-module globals guarded by a four-string ban a
+# different-identifier provider walked past. The registry is now RUNTIME
+# (kyc_tool.capabilities); official consumers resolve through it, the document derives from it,
+# and only registration — the path production would invoke — can make a provider effective.
+# Finding 7: the rotation procedure closed action NAMES, not semantics. Typed
+# preconditions/effects are now simulated per direction, and the whole normative surface
+# (per-direction action profile, sentences, suffixes, semantics, rationales) is pinned here at
+# the verifier boundary, so a swapped pair, a rewritten sentence, or an appended rationale is a
+# re-pin — the act of review — never a silent certification.
+# Finding 9: FUTURE_UNITS bound §C state but discarded the Content cell and iterated only
+# registered units. Every §C cell is now typed, registered rows are held to their exact
+# reviewed cells, and the set of `future` rows must equal the registry exactly.
+# Finding 10: the blocker parser searched for its chosen bold syntax; an unbolded top-level
+# `- O5 — ...` was invisible. The section is now parsed structurally and anything outside the
+# grammar is an ERROR, never non-input.
+
+
+def _live_blocker_section() -> str:
+    """EXACTLY the live `## Open blockers` section, the slice the pending-inputs verifier
+    reads — REDs mutate this text and run the same reader."""
+    spec = (REPO / ".agents" / "superpowers" / "specs"
+            / "2026-07-22-pr7b-activation-platform-ordering-design.md").read_text()
+    live = spec[spec.index("## Open blockers"):]
+    return live[: live.index("\n## ", 1)] if "\n## " in live[1:] else live
+
+
+def test_ru10_an_unbolded_live_blocker_is_an_error_not_noninput():
+    """The audit's reproduction verbatim: a top-level `- O5 — New live blocker: ...` item left
+    the assembled pending-input verifier green because the parser only saw its own bold syntax.
+    A top-level bullet outside the bold-id grammar now refuses the whole section."""
+    mutated = (_live_blocker_section().rstrip("\n")
+               + "\n- O5 — New live blocker: platform must attest its audit ledger.\n")
+    with pytest.raises(ValueError, match="grammar"):
+        _live_obligation_ids(mutated)
+
+
+def test_ru10_malformed_bold_headings_and_stray_declarations_are_errors():
+    """Every structure the old reader silently skipped is now a located refusal: an unclosed
+    bold head, a blocker-shaped subheading, an obligation declared inside another item's body,
+    and an unindented stray line after the list has started."""
+    section = _live_blocker_section().rstrip("\n")
+    with pytest.raises(ValueError, match="grammar"):
+        _live_obligation_ids(section + "\n- **O5 — an unclosed bold head\n")
+    with pytest.raises(ValueError, match="malformed"):
+        _live_obligation_ids(section + "\n- **O5a** — a suffixed identifier.\n")
+    with pytest.raises(ValueError, match="heading"):
+        _live_obligation_ids(section + "\n#### O5 — a blocker subheading\n")
+    with pytest.raises(ValueError, match="beyond its item head"):
+        _live_obligation_ids(section + "\n  and **O6** must also hold, says a nested aside.\n")
+    with pytest.raises(ValueError, match="unstructured"):
+        _live_obligation_ids(section + "\nOne more thing outside any item.\n")
+    with pytest.raises(ValueError, match="duplicate"):
+        _live_obligation_ids(section + "\n- **O4 — again.** a second O4 body.\n")
+
+
+def test_ru10_a_valid_tenth_obligation_parses_and_the_live_section_is_clean():
+    """The grammar is not a refusal machine: a well-formed `- **O10 — ...**` item parses to its
+    complete id, and the live section reads as exactly O1-O4."""
+    assert _live_obligation_ids(_live_blocker_section()) == ["O1", "O2", "O3", "O4"]
+    grown = (_live_blocker_section().rstrip("\n")
+             + "\n- **O10 — a tenth obligation.** with a conforming body.\n")
+    assert _live_obligation_ids(grown) == ["O1", "O2", "O3", "O4", "O10"]
+
+
+def _mutated_roadmap(replace: str | None = None, with_line: str | None = None,
+                     insert_after: str | None = None, line: str | None = None) -> str:
+    text = roadmap.ROADMAP.read_text()
+    lines = text.split("\n")
+    if replace is not None:
+        i = next(n for n, ln in enumerate(lines) if ln.startswith(replace))
+        lines[i] = with_line
+    if insert_after is not None:
+        i = next(n for n, ln in enumerate(lines) if ln.startswith(insert_after))
+        lines.insert(i + 1, line)
+    return "\n".join(lines)
+
+
+def test_ru9_a_content_rewrite_of_a_future_row_is_refused():
+    """The audit's reproduction verbatim: PR 5c's Content cell rewritten to 'Retirement
+    permitted now; delete the old key after one second' returned [] — the parser discarded the
+    one cell that says what the reservation MEANS. The registry now holds every reviewed cell
+    and the row must equal it exactly."""
+    mutated = _mutated_roadmap(
+        replace="| PR 5c |",
+        with_line="| PR 5c | — | future | — | Retirement permitted now; delete the old key "
+                  "after one second |")
+    problems = roadmap.future_unit_problems(mutated)
+    assert any("PR 5c" in p for p in problems), (
+        f"a rewritten future-row Content cell was accepted: {problems}"
+    )
+
+
+def test_ru9_an_unregistered_future_row_is_refused():
+    """The other reproduction: a NEW `future` row the registry never reviewed parsed as
+    non-input. The set of future rows must equal the registry exactly."""
+    mutated = _mutated_roadmap(
+        insert_after="| PR 5c |",
+        line="| PR 9z | — | future | — | a reserved capability nobody reviewed |")
+    problems = roadmap.future_unit_problems(mutated)
+    assert any("PR 9z" in p for p in problems), (
+        f"an unregistered future row was accepted: {problems}"
+    )
+
+
+def test_ru9_duplicate_unit_rows_are_refused_before_selection():
+    """A second `PR 5c` row with conflicting content must be a duplicate-name refusal BEFORE
+    any row is selected — `next()` silently took the first and the conflict vanished."""
+    mutated = _mutated_roadmap(
+        insert_after="| PR 5c |",
+        line="| PR 5c | — | future | — | a conflicting shadow reservation |")
+    problems = roadmap.future_unit_problems(mutated)
+    assert any("duplicate" in p.lower() for p in problems), (
+        f"a duplicated §C unit row was accepted: {problems}"
+    )
+
+
+def test_ru9_the_registry_binds_every_cell_of_the_reviewed_rows():
+    """Acceptance: the live rows equal the registry's typed cells exactly — items, state,
+    migration, revisions, and the full Content text — and the future set is exactly the
+    registry."""
+    assert roadmap.future_unit_problems(roadmap.ROADMAP.read_text()) == []
+    recs = roadmap.records()
+    future_names = {r[0] for r in recs if r[1] == "future"}
+    assert future_names == set(roadmap.FUTURE_UNITS)
+    for unit, spec in roadmap.FUTURE_UNITS.items():
+        row = next(r for r in recs if r[0] == unit)
+        assert row == spec.row, f"{unit}: the live §C row diverges from the reviewed cells"
+        assert "kyc_tool.capabilities" in row.content, (
+            f"{unit}: the reservation no longer names the runtime registry that forces it"
+        )
+
+
+# ── finding 7: the rotation surface, pinned and SIMULATED at this boundary ────────────────────────
+#
+# The verifier-side pins: the exact safe action profile per direction, and one digest over the
+# complete closed normative surface (semantics + sentences + suffixes) plus one over the
+# nonnormative rationales. Changing any of it — reordering, resemanticizing a known action id,
+# appending an override rationale — is a re-pin here, the act of review; and independently of
+# review, the typed preconditions/effects are SIMULATED, so an unsafe order fails even with a
+# fresh pin.
+
+ROTATION_PROFILE_PINS = {
+    "INBOUND": ("deploy_rotation_entry", "confirm_both_accepted", "switch_signer",
+                "prove_old_id_quiet", "promote_then_remove"),
+    "OUTBOUND": ("accept_old_and_new", "hard_stop_attest_zero", "deploy_sole_new_signer",
+                 "confirm_new_key_arrivals", "retire_old_key"),
+}
+ROTATION_SURFACE_PIN = "5bfbd34e478e5a06"
+ROTATION_RATIONALES_PIN = "fbe2e74488509e50"
+
+
+def _rotation_closed_surface_ok() -> None:
+    """Asserted by BOTH assembled rotation verifiers: simulation clean, profile exact,
+    normative surface and rationales exactly as reviewed."""
+    problems = wire_module.rotation_semantics_problems()
+    assert problems == [], problems
+    for direction, pinned in ROTATION_PROFILE_PINS.items():
+        derived = tuple(s.action for s in wire_module.ROTATION_STEPS
+                        if s.direction == direction)
+        assert derived == pinned, (
+            f"{direction}: the step actions diverge from the reviewed profile: {derived}"
+        )
+    surface = hashlib.sha256(wire_module.rotation_surface_projection().encode()).hexdigest()[:16]
+    assert surface == ROTATION_SURFACE_PIN, (
+        f"the closed rotation surface changed since review (was {ROTATION_SURFACE_PIN}, "
+        f"now {surface}) — read it, then re-pin in the same commit"
+    )
+    rationales = hashlib.sha256(
+        "\n\n".join(wire_module.ROTATION_RATIONALES).encode()).hexdigest()[:16]
+    assert rationales == ROTATION_RATIONALES_PIN, (
+        f"the rotation rationales changed since review (was {ROTATION_RATIONALES_PIN}, "
+        f"now {rationales}) — read them, then re-pin in the same commit"
+    )
+
+
+def _swapped_rotation_steps(direction: str, phase_a: int, phase_b: int):
+    """The audit's mutation shape: the two phases KEEP their numbers and swap their actions."""
+    by_phase = {(s.direction, s.number): s for s in wire_module.ROTATION_STEPS}
+    out = []
+    for s in wire_module.ROTATION_STEPS:
+        if s.direction == direction and s.number in (phase_a, phase_b):
+            other = by_phase[(direction, phase_b if s.number == phase_a else phase_a)]
+            out.append(wire_module.RotationStep(direction, s.number, other.action))
+        else:
+            out.append(s)
+    return tuple(out)
+
+
+def _run_rotation_verifiers_expect_failure() -> None:
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION"]()
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION_RETIREMENT"]()
+
+
+def test_ru7_every_adjacent_swap_fails_both_assembled_verifiers(monkeypatch):
+    """The audit's core reproduction: swapping inbound phases 2 and 3 (numbers retained)
+    publishes 'switch signer' before 'confirm both accepted' and BOTH assembled verifiers
+    passed. Every adjacent swap in both directions must now fail both — by simulation, not by
+    the luck of a keyword index."""
+    for direction in ("INBOUND", "OUTBOUND"):
+        for phase in (1, 2, 3, 4):
+            with monkeypatch.context() as m:
+                m.setattr(wire_module, "ROTATION_STEPS",
+                          _swapped_rotation_steps(direction, phase, phase + 1))
+                m.setattr(_this_module(), "WIRE",
+                          _wire_with("WIRE.SIGN.ROTATION",
+                                     value=wire_module.rotation_lines()))
+                _run_rotation_verifiers_expect_failure()
+
+
+def test_ru7_the_signer_switch_before_overlap_proof_is_named(monkeypatch):
+    """The named specimen: with phases 2/3 swapped the simulation must SAY the instruction's
+    preconditions are not established — the refusal reads as what it is."""
+    with monkeypatch.context() as m:
+        m.setattr(wire_module, "ROTATION_STEPS", _swapped_rotation_steps("INBOUND", 2, 3))
+        problems = wire_module.rotation_semantics_problems()
+        assert any("precondition" in p for p in problems), problems
+
+
+def test_ru7_missing_duplicated_and_cross_direction_actions_fail(monkeypatch):
+    """A dropped phase, a duplicated action behind two numbers, and an action imported from the
+    other direction each fail both assembled verifiers."""
+    steps = wire_module.ROTATION_STEPS
+    missing = tuple(s for s in steps if not (s.direction == "INBOUND" and s.number == 4))
+    duplicated = tuple(
+        wire_module.RotationStep("INBOUND", 4, "switch_signer")
+        if (s.direction, s.number) == ("INBOUND", 4) else s for s in steps)
+    cross = tuple(
+        wire_module.RotationStep("INBOUND", 2, "hard_stop_attest_zero")
+        if (s.direction, s.number) == ("INBOUND", 2) else s for s in steps)
+    for mutated in (missing, duplicated, cross):
+        with monkeypatch.context() as m:
+            m.setattr(wire_module, "ROTATION_STEPS", mutated)
+            try:
+                regenerated = wire_module.rotation_lines()
+            except Exception:
+                continue  # the derivation itself refuses: nothing certifiable exists
+            m.setattr(_this_module(), "WIRE",
+                      _wire_with("WIRE.SIGN.ROTATION", value=regenerated))
+            _run_rotation_verifiers_expect_failure()
+
+
+def test_ru7_early_retirement_without_evidence_fails(monkeypatch):
+    """Retire-the-old-key moved before the new-key arrival confirmation (outbound 4/5 swap):
+    the destructive step's typed preconditions are unestablished and both verifiers fail."""
+    with monkeypatch.context() as m:
+        m.setattr(wire_module, "ROTATION_STEPS", _swapped_rotation_steps("OUTBOUND", 4, 5))
+        m.setattr(_this_module(), "WIRE",
+                  _wire_with("WIRE.SIGN.ROTATION", value=wire_module.rotation_lines()))
+        _run_rotation_verifiers_expect_failure()
+
+
+def test_ru7_an_unsafe_sentence_behind_a_known_action_fails(monkeypatch):
+    """The audit's second reproduction: the sentence behind the recognized
+    `confirm_both_accepted` id replaced with 'Disable the legacy credential before confirming
+    overlap.' — a known action id must not be able to acquire arbitrary operational meaning.
+    The closed-surface pin makes the edit a re-pin, and until re-pinned both verifiers fail."""
+    with monkeypatch.context() as m:
+        m.setitem(wire_module._ACTION_SENTENCES, "confirm_both_accepted",
+                  "Disable the legacy credential before confirming overlap.")
+        m.setattr(_this_module(), "WIRE",
+                  _wire_with("WIRE.SIGN.ROTATION", value=wire_module.rotation_lines()))
+        _run_rotation_verifiers_expect_failure()
+
+
+def test_ru7_an_unsafe_rationale_with_a_regenerated_claim_fails(monkeypatch):
+    """The audit's third reproduction: the emergency override appended to ROTATION_RATIONALES
+    and the claim regenerated — every line the derivation returns was presumed safe. The
+    rationales are now separately pinned as the nonnormative surface they are; the append is a
+    re-pin, and until re-pinned both verifiers fail."""
+    override = ("EMERGENCY OVERRIDE: remove the old inbound key after one second; the "
+                "retirement gate does not apply.")
+    with monkeypatch.context() as m:
+        m.setattr(wire_module, "ROTATION_RATIONALES",
+                  (*wire_module.ROTATION_RATIONALES, override))
+        m.setattr(_this_module(), "WIRE",
+                  _wire_with("WIRE.SIGN.ROTATION", value=wire_module.rotation_lines()))
+        _run_rotation_verifiers_expect_failure()
+
+
+def test_ru7_the_live_procedure_simulates_clean():
+    """Acceptance: the real steps simulate clean end-to-end — every precondition established
+    when its phase runs, both directions reaching their terminal state — and the destructive
+    steps sit behind the evidence-gated proof by type."""
+    assert wire_module.rotation_semantics_problems() == []
+    for action in ("promote_then_remove", "retire_old_key"):
+        sem = wire_module.ROTATION_SEMANTICS[action]
+        assert sem.destructive
+    assert wire_module.ROTATION_SEMANTICS["prove_old_id_quiet"].gated
+    assert wire_module.ROTATION_SEMANTICS["retire_old_key"].gated
+
+
+# ── finding 6: the capability registry is RUNTIME, and registration is the only effective path ────
+
+
+def test_ru6_registering_a_provider_through_the_real_path_forces_the_claims(monkeypatch):
+    """Registration — the exact call production would make — flips a slot away from
+    MissingCapability; every consumer moves to its rewrite-me tripwire and both dependent
+    assembled verifiers fail until the claim, the gates, and the ROADMAP unit move in the same
+    change."""
+    from kyc_tool import capabilities
+
+    class DisposablePerKeyWitness:  # deliberately arbitrary identifiers (the audit's shape)
+        def zero_window(self, key_id: str) -> int:
+            return 0
+
+    monkeypatch.setattr(capabilities, "_SLOTS", dict(capabilities._SLOTS))
+    capabilities.register(capabilities.SLOT_RETIREMENT_EVIDENCE, DisposablePerKeyWitness())
+    reasons = wire_module._refuse_outbound_retirement({"kind": "hmac_signer_cutover_record"})
+    assert reasons and any("rewrite" in r for r in reasons), reasons
+    reasons = wire_module._refuse_inbound_retirement(
+        {"kind": "durable_per_key_fleet_witness"})
+    assert reasons and any("rewrite" in r for r in reasons), reasons
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION_RETIREMENT"]()
+
+    monkeypatch.setattr(capabilities, "_SLOTS", dict(capabilities._SLOTS))
+    capabilities.register(capabilities.SLOT_ANSWER_ARTIFACT, object())
+    item = WIRE.value("WIRE.ORDERING.PENDING_INPUTS")[0]
+    reasons = wire_module.resolution_problems(item, {"schema_version": "1"})
+    assert reasons and any("rewrite" in r for r in reasons), reasons
+    with pytest.raises(AssertionError):
+        AUTHORITY_VERIFIERS["WIRE.ORDERING.PENDING_INPUTS"]()
+
+
+def test_ru6_an_unregistered_provider_and_route_have_no_effect():
+    """The audit's specimen inverted into the honest boundary: a live provider object and a
+    route-shaped consumer with arbitrary identifiers, NEVER registered, move nothing — official
+    consumers resolve only through the registry, so the gates refuse exactly as before and the
+    claims stay BLOCKED. The forcing claim is scoped to the registration boundary, where it is
+    executable — not to a name sweep."""
+    from kyc_tool import capabilities
+
+    class PerKeyEvidenceService:  # identifiers chosen to defeat any string ban
+        def window(self, key_id: str) -> int:
+            return 0
+
+    def api_route_prove_quiet(key_id: str, svc: object = PerKeyEvidenceService()) -> dict:
+        return {"key_id": key_id, "requests_in_window": svc.window(key_id)}
+
+    assert api_route_prove_quiet("old-id")["requests_in_window"] == 0  # the route is live
+    assert wire_module._refuse_outbound_retirement({"kind": "hmac_signer_cutover_record"})
+    assert wire_module._refuse_inbound_retirement({"kind": "durable_per_key_fleet_witness"})
+    AUTHORITY_VERIFIERS["WIRE.SIGN.ROTATION_RETIREMENT"]()  # still green: still BLOCKED
+    resolved = capabilities.resolve(capabilities.SLOT_RETIREMENT_EVIDENCE)
+    assert isinstance(resolved, capabilities.MissingCapability)
+
+
+def test_ru6_the_registry_validates_registration_itself():
+    """The registry is not a refusal machine: a valid registration lands and resolves; an
+    unknown slot, an empty provider, and a second registration over a live one refuse."""
+    from kyc_tool import capabilities
+
+    original = capabilities._SLOTS
+    try:
+        capabilities._SLOTS = dict(original)  # work on a copy; the real slots never mutate
+        provider = object()
+        capabilities.register(capabilities.SLOT_RETIREMENT_EVIDENCE, provider)
+        assert capabilities.resolve(capabilities.SLOT_RETIREMENT_EVIDENCE) is provider
+        with pytest.raises(ValueError, match="already"):
+            capabilities.register(capabilities.SLOT_RETIREMENT_EVIDENCE, object())
+        with pytest.raises(ValueError, match="unknown"):
+            capabilities.register("a_slot_nobody_declared", object())
+        with pytest.raises(ValueError, match="unknown"):
+            capabilities.resolve("a_slot_nobody_declared")
+        with pytest.raises(ValueError, match="provider"):
+            capabilities.register(capabilities.SLOT_ANSWER_ARTIFACT, None)
+        with pytest.raises(ValueError, match="provider"):
+            capabilities.register(
+                capabilities.SLOT_ANSWER_ARTIFACT,
+                capabilities.MissingCapability(reason="an absence", roadmap_unit="x"))
+    finally:
+        capabilities._SLOTS = original
+
+
+def test_ru6_no_shipped_module_registers_at_import_and_the_document_projects_the_registry():
+    """Executable absence anchor: with every executable entry-point module imported, both slots
+    still hold MissingCapability naming their reserved units — no shipped code registers a
+    provider — and the published document text derives from these same objects, so the
+    document IS a projection of runtime registry state."""
+    import kyc_tool.api.app  # noqa: F401  (the API entry point)
+    import kyc_tool.workers.dev_worker  # noqa: F401
+    import kyc_tool.workers.outbox_worker  # noqa: F401
+    import kyc_tool.workers.pipeline_worker  # noqa: F401
+    import kyc_tool.workers.retention  # noqa: F401
+    from kyc_tool import capabilities
+
+    retirement = capabilities.resolve(capabilities.SLOT_RETIREMENT_EVIDENCE)
+    artifact = capabilities.resolve(capabilities.SLOT_ANSWER_ARTIFACT)
+    assert isinstance(retirement, capabilities.MissingCapability)
+    assert isinstance(artifact, capabilities.MissingCapability)
+    assert retirement.roadmap_unit == "PR 5c"
+    assert artifact.roadmap_unit == "PR 7b-inputs"
+    inbound = next(line for line in WIRE.value("WIRE.SIGN.ROTATION")
+                   if line.startswith("INBOUND"))
+    assert "BLOCKED" in inbound, "the projection no longer reflects the missing capability"
+
+
+def test_ru6_the_old_name_sweep_is_a_defeated_fossil():
+    """Fossil: the four-string consumability ban, shown blind to the audit's
+    different-identifier provider — the reason the boundary moved to the registry."""
+    specimen = (
+        "class PerKeyEvidenceService:\n"
+        "    def window(self, key_id):\n"
+        "        return 0\n"
+        "def api_route_prove_quiet(key_id):\n"
+        "    return PerKeyEvidenceService().window(key_id)\n"
+    )
+    banned = ("RETIREMENT_AUTHORITY", "ANSWER_ARTIFACT_AUTHORITY",
+              "inbound_zero_for_key", "docs.contracts")
+    assert all(name not in specimen for name in banned), (
+        "the fossil specimen accidentally names a banned string"
+    )
+
+
+# ── finding 5: the capability map is enforced at CONSTRUCTION, not by an AST name list ────────────
+
+
+def test_ru5_a_retention_process_cannot_register_a_decision_writer():
+    """The audit's reproduction verbatim: `Worker(..., {'run_transition': ...})` under the
+    retention role passed the closure and the assembled O4 verifier while the role stayed
+    non-writer. Construction now demands the capability from the one canonical map."""
+    from kyc_tool.config import ProcessRoleCapabilityError
+    from kyc_tool.queue.worker import Worker
+
+    with pytest.raises(ProcessRoleCapabilityError, match="retention"):
+        Worker(object(), {"run_transition": lambda s, j: None},
+               process_role=ProcessRole.RETENTION)
+
+
+def test_ru5_aliases_factories_and_partials_cannot_dodge_the_gate():
+    """The check runs INSIDE construction, so the alias/factory shapes the AST sweep could
+    never see hit the same refusal."""
+    import functools
+
+    from kyc_tool.config import ProcessRoleCapabilityError
+    from kyc_tool.queue.worker import Worker
+
+    W = Worker
+
+    def factory():
+        return W(object(), {"run_transition": lambda s, j: None},
+                 process_role=ProcessRole.RETENTION)
+
+    with pytest.raises(ProcessRoleCapabilityError):
+        factory()
+    bound = functools.partial(W, object(), {"run_transition": lambda s, j: None})
+    with pytest.raises(ProcessRoleCapabilityError):
+        bound(process_role=ProcessRole.RETENTION)
+
+
+def test_ru5_an_unclassified_handler_kind_is_refused():
+    """Fail-closed at the kind registry: a handler kind the capability classification does not
+    know cannot be registered under ANY role — adding a kind is adding a reviewed
+    classification, never a silent new write path."""
+    from kyc_tool.config import ProcessRoleCapabilityError
+    from kyc_tool.queue.worker import Worker
+
+    with pytest.raises(ProcessRoleCapabilityError, match="run_transition_v2"):
+        Worker(object(), {"run_transition_v2": lambda s, j: None},
+               process_role=ProcessRole.PIPELINE_WORKER)
+
+
+def test_ru5_a_role_outside_the_capability_map_is_refused(monkeypatch):
+    """A new executable role absent from the map is a refusal at construction, not an
+    unaccounted writer: the map is total over ProcessRole and consulted live."""
+    import kyc_tool.config as kyc_config
+    from kyc_tool.config import ProcessRoleCapabilityError
+    from kyc_tool.queue.worker import Worker
+
+    assert set(kyc_config.ROLE_CAPABILITIES) == set(ProcessRole)
+    monkeypatch.delitem(kyc_config.ROLE_CAPABILITIES, ProcessRole.PIPELINE_WORKER)
+    with pytest.raises(ProcessRoleCapabilityError, match="classif"):
+        Worker(object(), {"run_transition": lambda s, j: None},
+               process_role=ProcessRole.PIPELINE_WORKER)
+
+
+def test_ru5_the_publisher_demands_the_callback_capability():
+    """Constructing the outbox publisher is acquiring the callback-publish capability; a role
+    the map does not grant it cannot construct one, aliased or not."""
+    from kyc_tool.config import ProcessRoleCapabilityError
+    from kyc_tool.outbox.publisher import OutboxPublisher
+
+    for role in (ProcessRole.RETENTION, ProcessRole.API, ProcessRole.PIPELINE_WORKER):
+        with pytest.raises(ProcessRoleCapabilityError):
+            OutboxPublisher(object(), object(), http_client=object(),
+                            email_sender=object(), process_role=role)
+    for role in (ProcessRole.OUTBOX_WORKER, ProcessRole.DEV_WORKER):
+        OutboxPublisher(object(), object(), http_client=object(),
+                        email_sender=object(), process_role=role)
+
+
+def test_ru5_writer_roles_construct_and_the_gate_reads_the_live_map(monkeypatch):
+    """The same map the O4 stance derivation reads is the one construction consults: writer
+    roles construct today, and demoting dev_worker in the map refuses its constructions — the
+    class-level control and the runtime gate cannot drift apart."""
+    import kyc_tool.config as kyc_config
+    from kyc_tool.config import CAP_CALLBACK_PUBLISH, ProcessRoleCapabilityError
+    from kyc_tool.queue.worker import Worker
+
+    for role in (ProcessRole.PIPELINE_WORKER, ProcessRole.DEV_WORKER):
+        Worker(object(), {"run_transition": lambda s, j: None}, process_role=role)
+    monkeypatch.setitem(kyc_config.ROLE_CAPABILITIES, ProcessRole.DEV_WORKER,
+                        frozenset({CAP_CALLBACK_PUBLISH}))
+    with pytest.raises(ProcessRoleCapabilityError, match="dev_worker"):
+        Worker(object(), {"run_transition": lambda s, j: None},
+               process_role=ProcessRole.DEV_WORKER)

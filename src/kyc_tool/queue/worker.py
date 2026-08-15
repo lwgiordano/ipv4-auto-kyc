@@ -12,13 +12,26 @@ import uuid
 import structlog
 from sqlalchemy.orm import Session, sessionmaker
 
-from kyc_tool.config import require_numeric_domain
+from kyc_tool.config import (
+    CAP_DECISION_WRITE,
+    ProcessRole,
+    ProcessRoleCapabilityError,
+    require_numeric_domain,
+    require_role_capability,
+)
 from kyc_tool.db.session import uow
 from kyc_tool.queue import jobs
 
 log = structlog.get_logger(__name__)
 
 Handler = "callable[[Session | None, jobs.ClaimedJob], None]"
+
+# Registering a handler for a kind is acquiring that kind's write capability (re-audit
+# `1826661..b5c7a83` finding 5): `run_transition` jobs decide cases, so the role must carry
+# CAP_DECISION_WRITE. The map is CLOSED — a kind it does not classify cannot be registered
+# under any role, so a new job kind is a reviewed classification here, never a silent write
+# path beside the accounted one.
+HANDLER_KIND_CAPABILITIES: dict[str, str] = {"run_transition": CAP_DECISION_WRITE}
 
 
 def heartbeat_cadence_seconds(lease_seconds: float) -> float:
@@ -34,12 +47,26 @@ class Worker:
         session_factory: sessionmaker[Session],
         handlers: dict[str, object],
         *,
+        process_role: ProcessRole,
         lease_seconds: int = 120,
         backoff_base_seconds: int = 5,
         poll_seconds: float = 0.5,
         worker_id: str | None = None,
         on_dead_letter: object | None = None,
     ) -> None:
+        # Capability boundary FIRST (re-audit `1826661..b5c7a83` finding 5): every construction
+        # states the ProcessRole it runs under, and registering each handler kind demands that
+        # kind's capability from the canonical map — inside the constructor, so aliases,
+        # factories, and disposable entry points cannot become unaccounted writers.
+        for kind in handlers:
+            capability = HANDLER_KIND_CAPABILITIES.get(kind)
+            if capability is None:
+                raise ProcessRoleCapabilityError(
+                    f"handler kind {kind!r} is not classified in HANDLER_KIND_CAPABILITIES; "
+                    f"classify its write capability before any role may register it"
+                )
+            require_role_capability(process_role, capability, f"a {kind!r} handler")
+        self.process_role = ProcessRole(process_role)
         # Process boundary (re-audit `5b0f0b8..b75a320` R4-F3): validate the timing knobs at
         # construction so a nonpositive/non-finite poll cannot kill the idle loop at the first
         # `time.sleep`, and a bad lease/backoff refuses BEFORE the worker starts claiming — not mid-run.

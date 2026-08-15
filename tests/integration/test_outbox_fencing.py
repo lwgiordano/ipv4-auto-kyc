@@ -7,6 +7,7 @@ import pytest
 import structlog
 from sqlalchemy import text
 
+from kyc_tool.config import ProcessRole
 from tests.callback_bodies import valid_callback_body
 
 pytestmark = pytest.mark.postgres
@@ -41,7 +42,7 @@ def _pub_for(session_factory, settings):
     return OutboxPublisher(
         session_factory, settings,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
 
 
 def test_stuck_email_does_not_block_decision_callback(
@@ -179,7 +180,7 @@ def test_final_poc_failure_dead_letters_and_redacts_atomically(
         session_factory,
         settings.model_copy(update={"outbox_max_attempts": 1}),
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
     publisher._record_failure(row, "provider failed", row.claim_token)
 
     with session_factory() as s:
@@ -672,7 +673,7 @@ def test_failure_after_lease_expiry_is_accounted_exactly_once(session_factory, s
     pub = OutboxPublisher(
         session_factory, settings,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
 
     pub._record_failure(row, "delivery outlived its lease", token)
 
@@ -702,7 +703,7 @@ def test_final_failure_after_lease_expiry_still_dead_letters_and_redacts(
     pub = OutboxPublisher(
         session_factory, settings,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
 
     pub._record_failure(row, "last straw", token)
 
@@ -733,7 +734,7 @@ def test_failure_from_a_rotated_out_claim_still_writes_nothing(
     pub = OutboxPublisher(
         session_factory, settings,
         http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
 
     pub._record_failure(row, "stale claimant reporting late", old_token)
 

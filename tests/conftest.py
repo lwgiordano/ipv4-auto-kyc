@@ -19,7 +19,7 @@ from sqlalchemy import text
 
 from kyc_tool import security
 from kyc_tool.api.app import create_app
-from kyc_tool.config import REPO_ROOT, Settings
+from kyc_tool.config import REPO_ROOT, ProcessRole, Settings
 from kyc_tool.db.session import make_engine, make_session_factory
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.outbox.publisher import OutboxPublisher
@@ -259,7 +259,7 @@ def worker(session_factory, settings, pipeline) -> Worker:
         lease_seconds=settings.job_lease_seconds,
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
-    )
+    process_role=ProcessRole.PIPELINE_WORKER)
 
 
 class CallbackCapture:
@@ -301,7 +301,7 @@ def publisher(session_factory, settings, callback_capture, email_sender) -> Outb
         settings,
         http_client=httpx.Client(transport=transport),
         email_sender=email_sender,
-    )
+    process_role=ProcessRole.OUTBOX_WORKER)
 
 
 @pytest.fixture()
