@@ -12,8 +12,8 @@ from collections import abc
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from pathlib import Path
-from typing import Literal, get_args, get_origin
+from pathlib import Path, PurePath
+from typing import Literal, NamedTuple, get_args, get_origin
 from urllib.parse import urlparse
 
 from pydantic import Field, ValidationError, field_validator, model_validator
@@ -1114,12 +1114,28 @@ def _make_issuance_authority():
         return _hmac.new(key, message, "sha256").digest()
 
     def issue(role: ProcessRole, settings: "Settings") -> "ProcessContext":
-        role = _admission_checks(settings, role)
+        # Canonical values FIRST, and admission judges THEM (R-audit-8 finding 1): the
+        # screen and the eventual consumer see the same canonical values, so a conversion
+        # hook that lies can only choose the value that is both admitted and executed —
+        # never split them. Admission runs on an UNVALIDATED carrier of those values,
+        # BEFORE full revalidation, so a production boundary violation keeps its
+        # established ProductionConfigError contract (with its named violations) instead
+        # of surfacing as a generic revalidation refusal; whatever invalidity remains
+        # after the screen is then a governed refusal at snapshot revalidation.
+        canonical = _canonical_settings_dump(settings)
+        role = _admission_checks(Settings.model_construct(**canonical), role)
+        snapshot = _canonical_execution_snapshot(canonical)
+        fingerprint = _settings_fingerprint(settings)
+        if _settings_fingerprint(snapshot) != fingerprint:
+            raise ProcessRoleCapabilityError(
+                "the settings and their canonical snapshot fingerprint differently — a "
+                "value misrepresents itself under serialization; re-validate this "
+                "process's settings"
+            )
         context = object.__new__(ProcessContext)
         object.__setattr__(context, "role", role)
-        fingerprint = _settings_fingerprint(settings)
         _ISSUED_CONTEXTS[context] = (
-            role, weakref.ref(settings), fingerprint,
+            role, weakref.ref(settings), fingerprint, snapshot,
             _mac(context, role, fingerprint))
         return context
 
@@ -1127,7 +1143,7 @@ def _make_issuance_authority():
         issued = _ISSUED_CONTEXTS.get(context)
         if issued is None:
             return None
-        role, settings_ref, fingerprint, mac = issued
+        role, settings_ref, fingerprint, snapshot, mac = issued
         if not _hmac.compare_digest(mac, _mac(context, role, fingerprint)):
             return None
         return issued
@@ -1154,7 +1170,10 @@ def exact_environment(settings: "Settings") -> str:
 def _settings_fingerprint(settings: "Settings") -> str:
     """Total over the mutated-Settings threat model (R-audit-7 finding 3): a hostile value
     whose repr or serialization raises is a GOVERNED capability refusal, never a raw
-    exception escaping mid-construction."""
+    exception escaping mid-construction. Scope stated honestly (R-audit-8 finding 1): this
+    digest pins VALUES, not runtime types — a same-value subclass with hostile methods
+    fingerprints equal. That is why consumers execute the canonical SNAPSHOT issuance
+    built, never the live object this digest re-checks."""
     import hashlib as _hashlib
 
     try:
@@ -1168,17 +1187,100 @@ def _settings_fingerprint(settings: "Settings") -> str:
         ) from exc
 
 
+def _canonical_execution_value(value: object) -> object:
+    """One value of the canonical execution snapshot (R-audit-8 finding 1): exact built-ins
+    pass through, subclasses are rebuilt as exact built-ins from their RAW data (raw string
+    buffer, raw dict items — never a method the value could override), containers recurse,
+    and anything outside the closed set refuses. A subclass whose conversion hook lies can
+    only choose which value gets ADMITTED — the admitted value is also the consumed value,
+    so no check/use split survives."""
+    kind = type(value)
+    if value is None or kind in (bool, int, float, str, bytes, datetime):
+        return value
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value)
+    if isinstance(value, str):
+        return "".join((value,))  # the raw character data; no subclass method runs
+    if isinstance(value, bytes):
+        return bytes(value)
+    if isinstance(value, dict):
+        return {
+            _canonical_execution_value(key): _canonical_execution_value(item)
+            for key, item in dict.items(value)  # the raw mapping, not an overridden .items
+        }
+    if isinstance(value, (list, tuple)):
+        return [_canonical_execution_value(item) for item in value]
+    if kind in (Path, type(Path())):
+        return value
+    if isinstance(value, PurePath):
+        return Path(*("".join((part,)) for part in value.parts))
+    raise ProcessRoleCapabilityError(
+        f"a {type(value).__name__} value is outside the canonical execution set and cannot "
+        "be admitted; re-validate this process's settings"
+    )
+
+
+def _canonical_settings_dump(settings: "Settings") -> dict:
+    """Every Settings value rebuilt as an exact built-in from its raw data (R-audit-8
+    finding 1). Total: any value that cannot be canonicalized is a governed refusal."""
+    try:
+        return {
+            _canonical_execution_value(key): _canonical_execution_value(item)
+            for key, item in settings.model_dump().items()
+        }
+    except ProcessRoleCapabilityError:
+        raise
+    except Exception as exc:
+        raise ProcessRoleCapabilityError(
+            f"the settings cannot be canonicalized ({type(exc).__name__}) — a malformed or "
+            "hostile value; re-validate this process's settings"
+        ) from exc
+
+
+def _canonical_execution_snapshot(canonical: dict) -> "Settings":
+    """The canonical, REVALIDATED execution snapshot issuance owns (R-audit-8 finding 1: the
+    fingerprint erases runtime types, so a same-value hostile subclass passed the digest and
+    the publisher dispatched its methods on the live object). The canonical values are
+    re-run through full Settings validation; consumers execute THIS object, which nothing
+    outside the issuance registry holds a reference to. Total: a set of values that cannot
+    revalidate is a governed refusal (the admission screen has already had its say — see
+    issue() for the ordering)."""
+    try:
+        return Settings(**canonical)
+    except Exception as exc:
+        raise ProcessRoleCapabilityError(
+            f"the canonical settings snapshot fails revalidation ({type(exc).__name__}); "
+            "re-validate this process's settings"
+        ) from exc
+
+
 _issue_context, _verify_issuance = _make_issuance_authority()
 
 
+class AdmittedProcess(NamedTuple):
+    """What a construction CONSUMES (R-audit-8 finding 1): the VERIFIED registry role and
+    the canonical execution snapshot admission validated. The caller's live mutable object
+    proves continuity (identity + fingerprint) and is then set aside — wire targets,
+    signing inputs, and knobs all read the snapshot, so a post-check mutation of the live
+    object has nothing left to reach."""
+
+    role: ProcessRole
+    settings: "Settings"
+
+
 def require_role_capability(context: "ProcessContext", capability: str, construction: str,
-                            *, settings: "Settings") -> ProcessRole:
+                            *, settings: "Settings") -> AdmittedProcess:
     """The construction-time side of the capability map (re-audit `1826661..b5c7a83` finding
     5; R-audit-3 finding 10; R-audit-4 finding 1). Called INSIDE the writer constructors with
     the BOUND ProcessContext. The decision reads the ISSUANCE REGISTRY, never the object: the
     role consumed is the role validate_process_role recorded, a forged or subclassed instance
     was never recorded and refuses, and when the construction carries a Settings object it
-    must be the EXACT object the context was validated with."""
+    must be the EXACT object the context was validated with. Returns the verified role WITH
+    the admitted snapshot — the values the constructor must execute (R-audit-8 finding 1)."""
     if type(context) is not ProcessContext:
         raise ProcessRoleCapabilityError(
             f"{construction} requires the ProcessContext issued by validate_process_role; a "
@@ -1196,7 +1298,7 @@ def require_role_capability(context: "ProcessContext", capability: str, construc
             f"{construction}: this context was never issued by validate_process_role, or its "
             "registry record does not verify — a forged, tampered, or replayed identity"
         )
-    role, settings_ref, fingerprint, _mac_unused = issued
+    role, settings_ref, fingerprint, snapshot, _mac_unused = issued
     if context.role is not role:
         raise ProcessRoleCapabilityError(
             f"{construction}: the context object and its issuance record disagree about the "
@@ -1213,6 +1315,11 @@ def require_role_capability(context: "ProcessContext", capability: str, construc
             f"{construction}: the settings changed since validation — boot-time "
             "validation is not a boundary once the object mutates; re-validate"
         )
+    if _settings_fingerprint(snapshot) != fingerprint:
+        raise ProcessRoleCapabilityError(
+            f"{construction}: the issuance snapshot no longer matches the MAC-bound "
+            "fingerprint — a tampered registry record; refuse"
+        )
     granted = ROLE_CAPABILITIES.get(role)
     if granted is None:
         raise ProcessRoleCapabilityError(
@@ -1225,7 +1332,9 @@ def require_role_capability(context: "ProcessContext", capability: str, construc
             f"not grant {capability!r} — an unaccounted writer, exactly what the O4 matrix "
             f"exists to prevent"
         )
-    return role  # the VERIFIED registry role — the consumer stores this, never context.role
+    # the VERIFIED registry role and the ADMITTED snapshot — the consumer stores and
+    # executes these, never context.role and never the live object it was handed
+    return AdmittedProcess(role=role, settings=snapshot)
 
 
 _KEY_ID_MAX_LEN = 128

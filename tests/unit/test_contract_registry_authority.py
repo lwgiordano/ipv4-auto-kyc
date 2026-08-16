@@ -19,6 +19,7 @@ tests, which meant an unverified claim was invisible — it simply had no test, 
 import ast
 import dataclasses
 import hashlib
+import html
 import math
 import re
 import time
@@ -1733,10 +1734,33 @@ def _command_shaped(text: str, strict: bool = False) -> bool:
     return False
 
 
+def _rendered_inline(text: str) -> str:
+    """What a CommonMark reader SEES for inline prose (R-audit-8 finding 2: `pk**ill**`
+    renders as `pkill`, `&#47;` as `/` — review over source tokens certified commands the
+    reader would run). Order mirrors the spec: emphasis and links are SYNTAX, resolved
+    first; entities decode LAST, on the parsed text, so a decoded `&#42;` is a literal `*`
+    and can never become a new delimiter. Star emphasis binds intraword; underscore
+    emphasis does not (CommonMark flanking), so `kyc_worker` keeps its underscores. Code
+    spans are the caller's lane and never reach here."""
+    previous = None
+    while previous != text:
+        previous = text
+        text = re.sub(r"!?\[([^\]]*)\]\([^()\s]*(?:\s+\"[^\"]*\")?\)", r"\1", text)
+        text = re.sub(r"\*\*(?=\S)([^*]+?)(?<=\S)\*\*", r"\1", text)
+        text = re.sub(r"\*(?=[^\s*])([^*]+?)(?<=[^\s*])\*", r"\1", text)
+        text = re.sub(r"(?<![A-Za-z0-9_])__(?=\S)([^_]+?)(?<=\S)__(?![A-Za-z0-9_])",
+                      r"\1", text)
+        text = re.sub(r"(?<![A-Za-z0-9_])_(?=[^\s_])([^_]+?)(?<=[^\s_])_(?![A-Za-z0-9_])",
+                      r"\1", text)
+    return html.unescape(text)
+
+
 def _unmarked_instruction_problems(section_text: str) -> list:
     """Command-shaped content OUTSIDE operator nodes (R-audit-3 finding 8): a single-backtick
     span, an example fence, or plain prose carrying something runnable is a located refusal —
-    an author cannot self-classify a dangerous command as a mention or an example."""
+    an author cannot self-classify a dangerous command as a mention or an example. Prose is
+    judged as RENDERED (R-audit-8 finding 2); fence and span content is literal for a
+    reader, so it is scanned exactly as written."""
     problems = []
     for node in _markdown_blocks(section_text):
         if node[0] == "fence":
@@ -1754,7 +1778,9 @@ def _unmarked_instruction_problems(section_text: str) -> list:
                 problems.append(
                     f"a single-backtick span is command-shaped — a mention cannot be "
                     f"runnable: {span[:70]!r}")
-        prose = re.sub(r"(?<!`)`[^`]+?`(?!`)", "\u2039span\u203a", line)
+        # prose is judged as RENDERED (R-audit-8 finding 2): code spans are the reader's
+        # literal lane and were lifted out above; everything else renders before review.
+        prose = _rendered_inline(re.sub(r"(?<!`)`[^`]+?`(?!`)", "\u2039span\u203a", line))
         if _command_shaped(prose):
             problems.append(
                 f"prose carries a command-shaped instruction outside any marked node: "
@@ -6193,3 +6219,138 @@ def test_r7f4_inline_html_on_a_table_shaped_row_is_refused_outright():
         assert stray, f"quoted-attribute row invisible: {row!r}"
         problems = roadmap.future_unit_problems(mutated)
         assert any("outside §C" in p or "inline HTML" in p for p in problems), problems
+
+
+# ── R-audit-8 `23880db..62877f3` (findings 1-3) ───────────────────────────────────────────────────
+
+
+def test_r8f1_the_publisher_executes_the_admitted_snapshot_not_the_live_object():
+    """The audit's witness: `_settings_fingerprint` hashes `model_dump()`, which erases a str
+    subclass's runtime behavior — so replacing `platform_callback_url` with a same-value
+    hostile subclass AFTER issuance passed the fingerprint, and `_build_callback_request`
+    dispatched the hostile `rstrip`, producing a signed callback for an attacker URL. The
+    consumed value must be the value that was admitted: issuance owns a canonical,
+    revalidated snapshot of built-ins, and the publisher's wire target, signing inputs, and
+    knobs all come from it."""
+    from kyc_tool.config import ProcessRole, validate_process_role
+    from kyc_tool.outbox.publisher import OutboxPublisher
+    from tests.unit.test_production_config import hardened
+
+    class EvilUrl(str):
+        __hash__ = str.__hash__
+
+        def rstrip(self, chars=None):
+            return "https://attacker.invalid" if chars == "/" else super().rstrip(chars)
+
+    class EvilSecret(str):
+        __hash__ = str.__hash__
+
+        def encode(self, *a, **k):
+            return b"attacker-chosen-key"
+
+    s = hardened()
+    original_url = s.platform_callback_url
+    original_outbound_secret = s.hmac_outbound_secret
+    ctx = validate_process_role(s, ProcessRole.OUTBOX_WORKER)
+    object.__setattr__(s, "platform_callback_url", EvilUrl(original_url))
+    object.__setattr__(s, "hmac_outbound_secret", EvilSecret(original_outbound_secret))
+    publisher = OutboxPublisher(object(), s, process_role=ctx)
+    # every consumed execution value is a canonical built-in, never the live subclass
+    assert type(publisher.settings.platform_callback_url) is str
+    assert type(publisher.settings.hmac_outbound_secret) is str
+    assert type(publisher.settings.outbox_http_timeout_seconds) in (int, float)
+    request, _ = publisher._build_callback_request({"probe": 1})
+    assert request.url.host != "attacker.invalid", (
+        "the wire target came from the live mutable object, not the admitted snapshot"
+    )
+    assert str(request.url).startswith(original_url.rstrip("/"))
+    # the v2 signature was computed from the ADMITTED secret: recompute and compare
+    expected = sign_v2(
+        original_outbound_secret,
+        key_id=s.hmac_outbound_key_id,
+        direction=DIRECTION_OUTBOUND,
+        method="POST",
+        path_qs=request.url.raw_path.decode("ascii"),
+        timestamp=request.headers["X-KYC-Timestamp"],
+        slot="",
+        body=request.content,
+    )
+    assert request.headers["X-KYC-Signature-V2"] == expected
+
+
+def test_r8f1_a_value_the_snapshot_cannot_admit_is_a_governed_refusal():
+    """Totality of the canonical snapshot: a smuggled value outside the closed canonical set
+    refuses with the governed error at issuance — never a raw exception, never a context."""
+    from kyc_tool.config import (
+        ProcessRole,
+        ProcessRoleCapabilityError,
+        Settings,
+        validate_process_role,
+    )
+
+    s = Settings()
+    object.__setattr__(s, "hmac_inbound_extra_keys", {"key-id": object()})
+    with pytest.raises(ProcessRoleCapabilityError):
+        validate_process_role(s, ProcessRole.PIPELINE_WORKER)
+
+
+def test_r8f2_rendered_markdown_cannot_hide_a_command_from_the_assembled_verifier(
+        tmp_path, monkeypatch):
+    """The audit's witnesses, through the real AUTHORITY_VERIFIERS['OPS.CUTOVER.PROCEDURES']
+    with every pin coherently updated: emphasis and entities split or alter source tokens
+    while the reader sees `pkill kyc_worker` / `chmod 777 /var/lib/kyc` — so after a section
+    re-pin the assembled verifier certified a destructive instruction that never entered the
+    typed command inventory. Review runs over the RENDERED text a reader sees."""
+    import copy
+    import shutil
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    live_doc = (REPO / ref.path).read_text()
+    section = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    # the verifier also walks the real migration graph — same files, other root
+    (tmp_path / "alembic").symlink_to(REPO / "alembic")
+    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+    for witness in ("pk**ill** kyc_worker",
+                    "chmod 777 /var/lib/**kyc**",
+                    "Run the pk**ill** kyc_worker before the window.",
+                    "chmod 777 /var&#47;lib/kyc"):
+        mutated_section = section + "\n" + witness + "\n"
+        assert live_doc.count(section) == 1, "the section must be a unique byte span"
+        (tmp_path / ref.path).write_text(
+            live_doc.replace(section, mutated_section, 1))
+        for other in ("docs/RUNBOOK.md",):
+            if (REPO / other).exists() and not (tmp_path / other).exists():
+                shutil.copy(REPO / other, tmp_path / other)
+        tampered = copy.copy(pr7b)
+        object.__setattr__(
+            tampered, "playbook_ref",
+            dataclasses.replace(
+                ref, sha256=hashlib.sha256(mutated_section.encode()).hexdigest()))
+        monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+        monkeypatch.setattr(_this_module(), "OPERATIONS",
+                            _operations_with_procedure(tampered))
+        with pytest.raises(AssertionError, match="command-shaped"):
+            AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        monkeypatch.undo()
+
+
+def test_r8f3_markdown_formatting_cannot_hide_a_table_shaped_row_outside_section_c():
+    """The audit's witnesses plus the demanded variants: emphasis, links, code spans,
+    entities, and mixed markup each hide `PR 5d` from the row regex while a reader sees a
+    reservation. The closed boundary: EVERY table-shaped row outside §C refuses outright,
+    before its contents are interpreted at all."""
+    text = roadmap.ROADMAP.read_text().rstrip("\n")
+    for row in ("| P**R** 5d | — | future | — | emergency shortcut |",
+                "| **PR** 5d | — | future | — | emergency shortcut |",
+                "| P[R](#) 5d | — | future | — | emergency shortcut |",
+                "| `PR` 5d | — | future | — | emergency shortcut |",
+                "| P&#82;&#32;5d | — | future | — | emergency shortcut |",
+                "> | *P**R** 5d* | — | future | — | emergency shortcut |"):
+        mutated = text + "\n\n" + row + "\n"
+        stray = roadmap.reservation_rows_outside_section_c(mutated)
+        assert stray, f"markdown-hidden row invisible: {row!r}"
+        problems = roadmap.future_unit_problems(mutated)
+        assert any("outside §C" in p for p in problems), problems

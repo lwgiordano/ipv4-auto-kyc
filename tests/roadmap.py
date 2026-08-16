@@ -128,16 +128,19 @@ def reservation_rows_outside_section_c(text: str) -> list[str]:
         line = re.sub(r"</?[A-Za-z!](?:\"[^\"]*\"|'[^']*'|[^>])*>", "", line)
         return html.unescape(line)
 
-    # R-audit-7 finding 4, the belt over the strip: the reservation authority is PLAIN, so a
-    # table-row-shaped line outside §C carrying ANY inline HTML is refused outright — no HTML
-    # parsing race decides.
+    # R-audit-8 finding 3 (widening R-audit-7 finding 4): Markdown emphasis, links, code
+    # spans, and entities hide `PR` from any row regex while a reader still sees a
+    # reservation — the same source-vs-rendered split, one syntax over. §C is the ONLY
+    # table this authority publishes, so the closed boundary is shape, not content: EVERY
+    # table-shaped row outside §C's line span refuses OUTRIGHT, before its cells are
+    # interpreted at all. The rendered() strip still catches rows whose leading `|` is
+    # itself manufactured by markup (an HTML wrapper ahead of the pipe).
     table_shaped = re.compile(r"^\s*(?:>\s*)*\|")
     return [
         line.strip()
         for i, line in enumerate(lines)
         if not (start < i < end) and (
-            pr_row.match(rendered(line))
-            or (table_shaped.match(line) and re.search(r"<[A-Za-z!/]", line))
+            table_shaped.match(line) or pr_row.match(rendered(line))
         )
     ]
 
@@ -261,8 +264,8 @@ def future_unit_problems(text: str) -> list[str]:
         problems.append("an unclosed HTML comment hides the rest of the rendered document "
                         "from every reader and scanner; refuse the document")
     for stray in reservation_rows_outside_section_c(text):
-        problems.append(f"a PR-shaped row outside §C reads as a reservation but is invisible "
-                        f"to this authority: {stray[:70]!r}")
+        problems.append(f"a table-shaped row outside §C can read as a reservation while "
+                        f"invisible to this authority; refused outright: {stray[:70]!r}")
     if problems:
         return problems
     names = [r.unit for r in recs]

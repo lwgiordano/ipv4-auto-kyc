@@ -246,11 +246,17 @@ class OutboxPublisher:
         # Constructing a publisher is acquiring the callback-publish capability (re-audit
         # `1826661..b5c7a83` finding 5): the declared role must carry it in the canonical map,
         # checked here so no alias, factory, or disposable entry point publishes unaccounted.
-        self.process_role = require_role_capability(
+        admitted = require_role_capability(
             process_role, CAP_CALLBACK_PUBLISH, "OutboxPublisher", settings=settings)
+        self.process_role = admitted.role
         self.session_factory = session_factory
-        self.settings = settings
-        self.http = http_client or httpx.Client(timeout=settings.outbox_http_timeout_seconds)
+        # Execute the ADMITTED snapshot, never the caller's live object (R-audit-8 finding
+        # 1): a same-value hostile subclass swapped in after validation fingerprints equal,
+        # so the wire target, signing inputs, sunsets, and knobs below all read
+        # self.settings — canonical built-ins the admission screen actually judged.
+        self.settings = admitted.settings
+        self.http = http_client or httpx.Client(
+            timeout=self.settings.outbox_http_timeout_seconds)
         self.email_sender = email_sender or LoggingEmailSender()
         self._claimant = f"{socket.gethostname()}:{os.getpid()}"
         self._orphans: list[threading.Thread] = []
