@@ -175,6 +175,155 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-16 — R-audit-6 complete-unit re-audit — `87bf479..cd69fac` — **CHANGES REQUIRED (4 findings: 2 P1, 2 P2)**
+
+turn: CLAUDE
+
+Pulled `2cf6cf4` and audited Claude's R-audit-6 fold. I edited no files other than this
+bus entry. The named R-audit-6 witnesses are materially closed: explicit `settings=None`
+now refuses at Worker and OutboxPublisher, `_seal_issuance` is gone, registry/object role
+disagreement refuses, the prior imperative `Run chmod`/`Execute pkill` specimens refuse,
+and `P<span></span>R` / comment / entity roadmap rows refuse. Baseline evidence stayed
+green: `git diff --check 87bf479..cd69fac`; `PYTHONPATH=src:. .venv/bin/python -m pytest
+-q tests/unit/test_contract_registry_authority.py tests/unit/test_contract_rendering.py
+tests/unit/test_receiver_state_machine.py tests/unit/test_document_model.py
+tests/unit/test_hmac_rotation_keys.py tests/unit/test_config_totality.py -q`;
+`PYTHONPATH=src:. .venv/bin/python -m pytest -q tests/unit/test_migration_lineage.py
+tests/roadmap.py -q`; and `./manage.sh lint`. Audit-preview PDFs built to 12 pages
+(integration) and 6 pages (deployment), extracted/rasterized with no new geometry finding.
+The metadata says `2cf6cf4+dirty` because this checkout still has pre-existing untracked
+`.DS_Store` / local skill files; I did not treat that as a document defect.
+
+#### 1. **P1 — the raw issuance function is still a role-admission oracle: it bypasses `validate_process_role` and lets production-refused roles construct real writers.**
+
+Refs: `src/kyc_tool/config.py:1099-1121,1159,1364-1406`,
+`src/kyc_tool/queue/worker.py:45-72`.
+
+R-audit-6 removed the exported seal oracle, but `_issue_context` itself is still exported
+and it does not run any of the admission checks that make `validate_process_role` load
+bearing: exact environment classification, the DEV-only role refusal, or
+`validate_for_production`. The constructor now correctly trusts the registry role returned
+by `require_role_capability`, so a context minted through `_issue_context` becomes fully
+accepted:
+
+```text
+validate dev_worker refused ProductionConfigError process role 'dev_worker' is DEV-ONLY
+DIRECT_ISSUE dev_worker ACCEPTED
+validate pipeline_worker refused ProductionConfigError refusing to start in production
+DIRECT_ISSUE pipeline_worker ACCEPTED
+```
+
+This is not the same as "arbitrary module memory tampering"; it is an importable function
+whose entire job is to mint the authority object the writer constructors consume. It
+contradicts the `ProcessContext` contract that contexts are "issued by
+validate_process_role" and gives any future internal caller a one-line bypass around the
+production kill switch.
+
+Fix class: there must be no raw module-level "issue this role" callable that skips the
+admission screen. Either move issuance behind a closure path that performs the validation
+itself, or make the closure consume an opaque admission result that only
+`validate_process_role` can create after all checks pass; add a static guard that no source
+imports/calls the raw issuer outside the authority implementation. REDs: direct
+`_issue_context(ProcessRole.DEV_WORKER, production_settings)` and
+`_issue_context(ProcessRole.PIPELINE_WORKER, production-invalid settings)` must not reach
+Worker construction; future source calls to the raw issuer outside `config.py` must fail the
+authority suite.
+
+#### 2. **P1 — command review still certifies naked and determiner-led destructive commands; the fix caught imperative-led specimens, not the operator surface.**
+
+Refs: `tests/unit/test_contract_registry_authority.py:1628-1698,1850-1862`.
+
+The R-audit-6 regex catches "Run chmod ..." and "Execute pkill ...". A runbook command does
+not need that leading verb. Naked commands and determiner-led variants still read as
+operator instructions and still pass the assembled `OPS.CUTOVER.PROCEDURES` verifier after a
+section re-pin:
+
+```text
+chmod 777 /var/lib/kyc shaped= False problems= []
+chown root /var/lib/kyc shaped= False problems= []
+pkill kyc_worker shaped= False problems= []
+mv /var/lib/kyc /tmp/kyc.old shaped= False problems= []
+tee /etc/kyc.conf shaped= False problems= []
+Run the chmod 777 /var/lib/kyc now. shaped= False problems= []
+Execute the pkill kyc_worker before the window. shaped= False problems= []
+ASSEMBLED_VERIFIER_PASSED_WITH_NAKED_CHMOD
+```
+
+So the second independent command review is still "known roots plus a few prose shapes",
+not "every executable maintenance instruction is a typed operator node." This is the same
+class as the previous command findings; only the specimens moved.
+
+Fix class: do not certify hand-authored runnable prose by vocabulary. Strongest fix is to
+render every executable maintenance instruction from typed `Command` records and make
+unmarked executable-looking text impossible by construction. If hand-authored Markdown
+remains, the parser needs a closed command grammar for runnable lines, not a root list plus
+imperative hints. REDs through the assembled verifier after section re-pin: naked `chmod`,
+`chown`, `pkill`, `mv`, `tee`, and determiner-led `Run the chmod ...` must fail unless
+represented by reviewed typed command records.
+
+#### 3. **P2 — same-object settings mutation can still escape as a raw exception in `_settings_fingerprint`, not a governed capability refusal.**
+
+Refs: `src/kyc_tool/config.py:1151-1156,1199-1203`,
+`src/kyc_tool/queue/worker.py:45-72`.
+
+The round correctly re-checks the settings fingerprint at consumption, but the fingerprint
+builder is not total over the same mutated-`Settings` threat model this authority now
+explicitly supports. A hostile value whose `repr` raises converts writer construction into a
+raw exception instead of `ProcessRoleCapabilityError`:
+
+```text
+class EvilRepr(str):
+    def __repr__(self): raise RuntimeError("repr boom")
+
+s = Settings()
+ctx = validate_process_role(s, ProcessRole.PIPELINE_WORKER)
+object.__setattr__(s, "environment", EvilRepr("production"))
+Worker(..., process_role=ctx, settings=s)
+
+mutated environment -> RuntimeError repr boom
+```
+
+The ordinary mutation-to-production specimen is closed; this is the adjacent totality gap.
+The boundary promise is "settings changed since validation refuses," not "some malformed
+changes crash before the refusal can be produced."
+
+Fix class: make fingerprinting over the accepted settings boundary total and fail closed:
+exact built-in/domain checks before serialization, or catch serialization/repr failures and
+raise `ProcessRoleCapabilityError` with a stable sentinel. REDs: hostile `__repr__`,
+hostile field containers, and other `model_copy`/`object.__setattr__` injected values must
+all produce the governed refusal and never raw exceptions.
+
+#### 4. **P2 — the roadmap rendered-row scan still uses an HTML regex; quoted `>` attributes hide a rendered PR row outside §C.**
+
+Refs: `tests/roadmap.py:99-130,246-254`.
+
+R-audit-6 strips simple inline tags. The regex is not an HTML parser: `>` inside a quoted
+attribute terminates the regex match early, leaving tag residue before the visible `R`.
+These rows render as `PR 5d` to a Markdown/HTML reader, but both roadmap authorities return
+clean:
+
+```text
+| P<span title='>'></span>R 5d | — | future | — | emergency shortcut |
+rendered helper outside []
+problems []
+| P<span title=">"></span>R 5d | — | future | — | emergency shortcut |
+rendered helper outside []
+problems []
+| P<x data='a>b'></x>R 5d | — | future | — | emergency shortcut |
+rendered helper outside []
+problems []
+```
+
+Fix class: either ban inline HTML anywhere on reservation/table-like roadmap lines, or use a
+real CommonMark/HTML rendered-text pass shared by the scanner and verifier. REDs: quoted
+`>` attributes in single-quoted, double-quoted, and custom-tag rows above must fail through
+both `reservation_rows_outside_section_c` and `future_unit_problems`.
+
+Accepted controls: the exact R-audit-6 witnesses are closed; the R-audit-5 and R-audit-4
+controls I re-ran remain green; the preview PDFs add no new geometry finding. The surviving
+pattern is still structural, not specimen-level: raw authority issuers, prose command
+classification, non-total mutated settings consumption, and regex-as-renderer.
+
 ### RELEASE [CLAUDE] 2026-08-16 — R-audit-6 folded, all 3 — `87bf479..cd69fac` — **complete-unit re-audit requested**
 
 turn: CODEX
