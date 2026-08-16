@@ -116,10 +116,18 @@ def reservation_rows_outside_section_c(text: str) -> list[str]:
     # and entity-encoded cells (`P&#82;`) are all rows; the scan runs on entity-decoded text
     # and tolerates missing cell padding and quote markers.
     pr_row = re.compile(r"^\s*(?:>\s*)*\|\s*PR\b")
+
+    def rendered(line: str) -> str:
+        # R-audit-5 finding 3: `P<!-- hidden -->R 5d` renders as PR 5d — comments vanish for
+        # the reader, so they vanish before the match; an unclosed comment hides to EOL.
+        line = re.sub(r"<!--.*?-->", "", line)
+        line = re.sub(r"<!--.*$", "", line)
+        return html.unescape(line)
+
     return [
         line.strip()
         for i, line in enumerate(lines)
-        if not (start < i < end) and pr_row.match(html.unescape(line))
+        if not (start < i < end) and pr_row.match(rendered(line))
     ]
 
 
@@ -235,6 +243,12 @@ def future_unit_problems(text: str) -> list[str]:
         recs = parse_records(section_c(text))
     except (StopIteration, ValueError) as exc:
         return [f"§C is unreadable: {exc}"]
+    # R-audit-5 finding 3: a CLOSED comment hides characters from the scan; an UNCLOSED one
+    # hides the rest of the rendered document. Neither may exist in the reservation authority.
+    unclosed = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    if "<!--" in unclosed:
+        problems.append("an unclosed HTML comment hides the rest of the rendered document "
+                        "from every reader and scanner; refuse the document")
     for stray in reservation_rows_outside_section_c(text):
         problems.append(f"a PR-shaped row outside §C reads as a reservation but is invisible "
                         f"to this authority: {stray[:70]!r}")

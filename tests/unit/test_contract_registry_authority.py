@@ -65,7 +65,7 @@ from kyc_tool.security import (
     sign_v2,
 )
 from tests import roadmap
-from tests.conftest import process_context
+from tests.conftest import bound_process
 
 from .test_production_config import hardened
 
@@ -1657,11 +1657,13 @@ def _command_shaped(text: str, strict: bool = False) -> bool:
                 return True
         for i, token in enumerate(tokens[:-1]):
             bare = token.strip(".,;:()`'\"")
-            # a known root — bare or by absolute path — followed by a path/flag argument is an
-            # instruction wherever it sits in the sentence ("confirm with sha256sum /etc/...")
+            # a known root — bare or by absolute path — followed by ANY operand is an
+            # instruction wherever it sits (R-audit-5 finding 2: `dropdb kyc_prod`,
+            # `systemctl restart kyc`, `kubectl delete pod` carry no flag and no path, and
+            # certified as reviewed prose)
+            operand = tokens[i + 1].strip(".,;:()`'\"")
             if (bare.lower() in _COMMANDLIKE_ROOTS
-                    or bare.rpartition("/")[2].lower() in _COMMANDLIKE_ROOTS) and (
-                    tokens[i + 1].startswith("-") or tokens[i + 1].startswith("/")):
+                    or bare.rpartition("/")[2].lower() in _COMMANDLIKE_ROOTS) and operand:
                 return True
     return False
 
@@ -5112,7 +5114,7 @@ def test_ru5_a_retention_process_cannot_register_a_decision_writer():
 
     with pytest.raises(ProcessRoleCapabilityError, match="retention"):
         Worker(object(), {"run_transition": lambda s, j: None},
-               process_role=process_context(ProcessRole.RETENTION))
+               **bound_process(ProcessRole.RETENTION))
 
 
 def test_ru5_aliases_factories_and_partials_cannot_dodge_the_gate():
@@ -5120,20 +5122,23 @@ def test_ru5_aliases_factories_and_partials_cannot_dodge_the_gate():
     never see hit the same refusal."""
     import functools
 
-    from kyc_tool.config import ProcessRoleCapabilityError
+    from kyc_tool.config import ProcessRoleCapabilityError, Settings, validate_process_role
     from kyc_tool.queue.worker import Worker
 
     W = Worker
+    settings = Settings()
 
     def factory():
         return W(object(), {"run_transition": lambda s, j: None},
-                 process_role=process_context(ProcessRole.RETENTION))
+                 process_role=validate_process_role(settings, ProcessRole.RETENTION),
+                 settings=settings)
 
     with pytest.raises(ProcessRoleCapabilityError):
         factory()
     bound = functools.partial(W, object(), {"run_transition": lambda s, j: None})
     with pytest.raises(ProcessRoleCapabilityError):
-        bound(process_role=process_context(ProcessRole.RETENTION))
+        bound(process_role=validate_process_role(settings, ProcessRole.RETENTION),
+              settings=settings)
 
 
 def test_ru5_an_unclassified_handler_kind_is_refused():
@@ -5145,7 +5150,7 @@ def test_ru5_an_unclassified_handler_kind_is_refused():
 
     with pytest.raises(ProcessRoleCapabilityError, match="run_transition_v2"):
         Worker(object(), {"run_transition_v2": lambda s, j: None},
-               process_role=process_context(ProcessRole.PIPELINE_WORKER))
+               **bound_process(ProcessRole.PIPELINE_WORKER))
 
 
 def test_ru5_a_role_outside_the_capability_map_is_refused(monkeypatch):
@@ -5159,7 +5164,7 @@ def test_ru5_a_role_outside_the_capability_map_is_refused(monkeypatch):
     monkeypatch.delitem(kyc_config.ROLE_CAPABILITIES, ProcessRole.PIPELINE_WORKER)
     with pytest.raises(ProcessRoleCapabilityError, match="classif"):
         Worker(object(), {"run_transition": lambda s, j: None},
-               process_role=process_context(ProcessRole.PIPELINE_WORKER))
+               **bound_process(ProcessRole.PIPELINE_WORKER))
 
 
 def test_ru5_the_publisher_demands_the_callback_capability():
@@ -5188,22 +5193,29 @@ def test_ru5_writer_roles_construct_and_the_gate_reads_the_live_map(monkeypatch)
     roles construct today, and demoting dev_worker in the map refuses its constructions — the
     class-level control and the runtime gate cannot drift apart."""
     import kyc_tool.config as kyc_config
-    from kyc_tool.config import CAP_CALLBACK_PUBLISH, ProcessRoleCapabilityError
+    from kyc_tool.config import (
+        CAP_CALLBACK_PUBLISH,
+        ProcessRoleCapabilityError,
+        Settings,
+        validate_process_role,
+    )
     from kyc_tool.queue.worker import Worker
-    from tests.conftest import process_context as issue
 
+    settings = Settings()
     for role in (ProcessRole.PIPELINE_WORKER, ProcessRole.DEV_WORKER):
-        Worker(object(), {"run_transition": lambda s, j: None}, process_role=issue(role))
+        Worker(object(), {"run_transition": lambda s, j: None},
+               process_role=validate_process_role(settings, role), settings=settings)
     # R-audit-3 finding 10 — the audit's exact lie: validate as one role, then pass a WRITER
     # ENUM directly; a freely selected enum is self-attestation and refuses outright
     with pytest.raises(ProcessRoleCapabilityError, match="self-attestation"):
         Worker(object(), {"run_transition": lambda s, j: None},
-               process_role=ProcessRole.PIPELINE_WORKER)
+               process_role=ProcessRole.PIPELINE_WORKER, settings=settings)
     monkeypatch.setitem(kyc_config.ROLE_CAPABILITIES, ProcessRole.DEV_WORKER,
                         frozenset({CAP_CALLBACK_PUBLISH}))
     with pytest.raises(ProcessRoleCapabilityError, match="dev_worker"):
         Worker(object(), {"run_transition": lambda s, j: None},
-               process_role=issue(ProcessRole.DEV_WORKER))
+               process_role=validate_process_role(settings, ProcessRole.DEV_WORKER),
+               settings=settings)
 
 
 # ── R-audit-3 `5c14537..6ef6fc7` unit 1: receiver authority (findings 1-6) ────────────────────────
@@ -5797,3 +5809,126 @@ def test_r4f7_compact_blockquoted_and_entity_pr_rows_outside_section_c_are_refus
         assert any("5d" in s for s in stray)
         problems = roadmap.future_unit_problems(mutated)
         assert any("outside §C" in p for p in problems), problems
+
+
+# ── R-audit-5 `ca122ee..e757c3a` (findings 1-3) ───────────────────────────────────────────────────
+
+
+def test_r5f1_malformed_environments_refuse_instead_of_reading_as_dev():
+    """The audit's witnesses: environment=123, None, and a hostile str subclass whose __ne__
+    lies all classified as non-production and issued the DEV-ONLY writer role. The environment
+    predicate is now exact and closed — anything outside the exact-type closed set REFUSES."""
+    from kyc_tool.config import ProcessRoleCapabilityError, Settings, validate_process_role
+
+    class EvilProd(str):
+        def __ne__(self, other):
+            return True  # "not production", says the object itself
+
+        def __eq__(self, other):
+            return False
+
+        __hash__ = str.__hash__
+
+    for environment in (123, None, EvilProd("production"), "prod", ""):
+        settings = Settings().model_copy(update={"environment": environment})
+        with pytest.raises((ProcessRoleCapabilityError, Exception)) as excinfo:
+            validate_process_role(settings, ProcessRole.DEV_WORKER)
+        assert not isinstance(excinfo.value, AssertionError)
+
+
+def test_r5f1_post_validation_settings_mutation_refuses_at_both_constructors():
+    """The audit's reproduction verbatim: validate under development, mutate the SAME Settings
+    object to production, construct. The issuance snapshots a fingerprint of the validated
+    settings and every consumption re-checks it — drift refuses."""
+    from kyc_tool.config import (
+        ProcessRoleCapabilityError,
+        Settings,
+        validate_process_role,
+    )
+    from kyc_tool.outbox.publisher import OutboxPublisher
+    from kyc_tool.queue.worker import Worker
+
+    s = Settings()
+    ctx = validate_process_role(s, ProcessRole.OUTBOX_WORKER)
+    s.environment = "production"
+    with pytest.raises(ProcessRoleCapabilityError, match="changed since"):
+        OutboxPublisher(object(), s, http_client=object(), email_sender=object(),
+                        process_role=ctx)
+    s2 = Settings()
+    wctx = validate_process_role(s2, ProcessRole.PIPELINE_WORKER)
+    s2.environment = "production"
+    with pytest.raises(ProcessRoleCapabilityError, match="changed since"):
+        Worker(object(), {"run_transition": lambda s_, j: None},
+               process_role=wctx, settings=s2)
+
+
+def test_r5f1_the_worker_settings_bind_is_mandatory():
+    """`settings=None` was a role-only path around the bind; the decision-writer constructor
+    now demands the settings it will run under."""
+    from kyc_tool.config import Settings, validate_process_role
+    from kyc_tool.queue.worker import Worker
+
+    s = Settings()
+    ctx = validate_process_role(s, ProcessRole.PIPELINE_WORKER)
+    with pytest.raises(TypeError):
+        Worker(object(), {"run_transition": lambda s_, j: None}, process_role=ctx)
+
+
+def test_r5f1_a_registry_inserted_forged_context_cannot_authorize():
+    """The audit's PRIVATE_REGISTRY_FORGED_CONTEXT_ACCEPTED witness: importing the module
+    registry and inserting an object.__new__ context authorized a writer. Issuance records now
+    carry a MAC keyed inside a closure — an inserted record cannot produce it, so the forgery
+    refuses at consumption."""
+    import kyc_tool.config as kyc_config
+    from kyc_tool.config import (
+        ProcessContext,
+        ProcessRoleCapabilityError,
+        Settings,
+        validate_process_role,
+    )
+    from kyc_tool.queue.worker import Worker
+
+    s = Settings()
+    genuine = validate_process_role(s, ProcessRole.PIPELINE_WORKER)
+    record = kyc_config._ISSUED_CONTEXTS[genuine]
+    forged = object.__new__(ProcessContext)
+    object.__setattr__(forged, "role", ProcessRole.PIPELINE_WORKER)
+    kyc_config._ISSUED_CONTEXTS[forged] = record  # replayed genuine record
+    with pytest.raises(ProcessRoleCapabilityError):
+        Worker(object(), {"run_transition": lambda s_, j: None},
+               process_role=forged, settings=s)
+
+
+def test_r5f2_root_with_bare_operand_commands_are_refused_after_repin():
+    """The audit's witnesses through the SAME assembled path: destructive operator commands
+    whose roots take bare operands — no dash flag, no absolute path — certified as reviewed
+    prose after a re-pin. A known root followed by an operand is runnable, wherever it sits."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    base = _section_bytes(ref)
+    for witness in ("Run dropdb kyc_prod now.",
+                    "Run systemctl restart kyc now.",
+                    "Run kubectl delete pod worker now.",
+                    "Run git clean now.",
+                    "Run pg_restore backup.dump now."):
+        mutated = base + "\n" + witness + "\n"
+        problems = _command_inventory_problems(_repinned(ref, mutated), mutated)
+        assert any("command-shaped" in p for p in problems), (witness, problems)
+
+
+def test_r5f3_comment_hidden_pr_rows_outside_section_c_are_refused():
+    """The audit's witness: `P<!-- hidden -->R 5d` renders as PR 5d but the raw scan read the
+    comment and saw non-input. Comments are stripped like entities before the match — plain
+    and blockquoted, closed and unclosed."""
+    text = roadmap.ROADMAP.read_text().rstrip("\n")
+    for row in ("| P<!-- hidden -->R 5d | — | future | — | emergency retirement shortcut |",
+                "> | P<!-- hidden -->R 5d | — | future | — | emergency retirement shortcut |"):
+        mutated = text + "\n\n" + row + "\n"
+        stray = roadmap.reservation_rows_outside_section_c(mutated)
+        assert stray, f"comment-hidden row invisible: {row!r}"
+        problems = roadmap.future_unit_problems(mutated)
+        assert any("outside §C" in p for p in problems), problems
+    # an UNCLOSED comment does not render a row — it hides the rest of the document, which is
+    # its own document-level refusal
+    unclosed = text + "\n\n| P<!-- unclosed R 5d | — | future | — | emergency shortcut |\n"
+    problems = roadmap.future_unit_problems(unclosed)
+    assert any("unclosed HTML comment" in p for p in problems), problems

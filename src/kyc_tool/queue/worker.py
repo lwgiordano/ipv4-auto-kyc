@@ -49,7 +49,7 @@ class Worker:
         handlers: dict[str, object],
         *,
         process_role: "ProcessContext",
-        settings: object | None = None,
+        settings: object,
         lease_seconds: int = 120,
         backoff_base_seconds: int = 5,
         poll_seconds: float = 0.5,

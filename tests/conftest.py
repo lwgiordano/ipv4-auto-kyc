@@ -259,7 +259,7 @@ def worker(session_factory, settings, pipeline) -> Worker:
         lease_seconds=settings.job_lease_seconds,
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
-    process_role=process_context(ProcessRole.PIPELINE_WORKER))
+    **bound_process(ProcessRole.PIPELINE_WORKER))
 
 
 class CallbackCapture:
@@ -317,3 +317,13 @@ def process_context(role, settings=None):
     from kyc_tool.config import Settings, validate_process_role
 
     return validate_process_role(settings if settings is not None else Settings(), role)
+
+
+def bound_process(role):
+    """A (process_role, settings) pair issued together through the real path — for Worker
+    constructions, whose settings bind is mandatory (R-audit-5 finding 1). Splat as
+    `**bound_process(role)`."""
+    from kyc_tool.config import Settings, validate_process_role
+
+    settings = Settings()
+    return {"process_role": validate_process_role(settings, role), "settings": settings}

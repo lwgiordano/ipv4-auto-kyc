@@ -10,7 +10,7 @@ from kyc_tool.config import ProcessRole
 from kyc_tool.db.session import uow
 from kyc_tool.queue import jobs
 from kyc_tool.queue.worker import Worker
-from tests.conftest import process_context
+from tests.conftest import bound_process
 
 pytestmark = pytest.mark.postgres
 
@@ -75,7 +75,7 @@ def test_fail_at_a_high_attempt_count_requeues_without_overflow(session_factory,
 def test_worker_refuses_a_bad_poll_at_construction(session_factory, bad_poll):
     with pytest.raises(ValueError):
         Worker(session_factory, {"run_transition": lambda j: None}, poll_seconds=bad_poll,
-               process_role=process_context(ProcessRole.PIPELINE_WORKER))
+               **bound_process(ProcessRole.PIPELINE_WORKER))
 
 
 def _seed_case_and_run(session_factory, case_id):

@@ -19,7 +19,7 @@ from kyc_tool.policy.loader import POLICY_FILES, read_policy_files
 from kyc_tool.policy_store import repo as store
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
-from tests.conftest import process_context
+from tests.conftest import bound_process
 from tests.integration._bundle_helpers import bundle_x, make_bundle_y, raw_x
 from tests.integration.shared import ACME_KYB
 
@@ -102,7 +102,7 @@ def test_flag_on_absent_bundle_dead_letters_zero_side_effects(
                   adapters={"rir_poc": _CountingPoc()})
     Worker(session_factory, {"run_transition": pl.handle_job},
            backoff_base_seconds=0, on_dead_letter=pl.on_dead_letter,
-                  process_role=process_context(ProcessRole.PIPELINE_WORKER)).run_until_idle()
+                  **bound_process(ProcessRole.PIPELINE_WORKER)).run_until_idle()
     with session_factory() as s:
         for tbl in ("review_tasks","poc_tokens","outbox","checks","decisions"):   # case_id-keyed tables
             n = s.execute(text(f"SELECT count(*) FROM {tbl} WHERE case_id='case-absent'")).scalar_one()
@@ -145,7 +145,7 @@ def test_mixed_era_reprices_score_gate_and_callback(
         pl = Pipeline(session_factory, policy, FsStore(tmp_path / f"e{flag}"), cfg, adapters={})
         Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
                on_dead_letter=pl.on_dead_letter,
-                      process_role=process_context(ProcessRole.PIPELINE_WORKER)).run_until_idle()
+                      **bound_process(ProcessRole.PIPELINE_WORKER)).run_until_idle()
         with session_factory() as s:
             r = s.execute(text("SELECT score, gates_json FROM decisions WHERE case_id='case-mix' "
                                "ORDER BY decided_at DESC LIMIT 1")).one()
@@ -162,7 +162,7 @@ def test_mixed_era_reprices_score_gate_and_callback(
     pl = Pipeline(session_factory, policy, FsStore(tmp_path / "ecb"), cfg, adapters={})
     Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
            on_dead_letter=pl.on_dead_letter,
-                  process_role=process_context(ProcessRole.PIPELINE_WORKER)).run_until_idle()
+                  **bound_process(ProcessRole.PIPELINE_WORKER)).run_until_idle()
     publisher.process_pending()
     checks = callback_capture.requests[-1]["body"]["checks"]
     assert any(c["type"] == T and c["points"] == 10 for c in checks)  # re-priced points in callback
@@ -188,7 +188,7 @@ def test_cross_bundle_provenance(session_factory, policy, settings, tmp_path, en
                   adapters={"email_verification": _OkEmailAdapter()})
     Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
            on_dead_letter=pl.on_dead_letter,
-                  process_role=process_context(ProcessRole.PIPELINE_WORKER)).run_until_idle()
+                  **bound_process(ProcessRole.PIPELINE_WORKER)).run_until_idle()
     expected = bx if resolved_is_x else by
     with session_factory() as s:
         run = s.execute(text("SELECT policy_bundle_hash, engine_build_id FROM runs "
@@ -231,7 +231,7 @@ def test_cross_bundle_decision_diverges_approve_x_manual_y(
         pl = Pipeline(session_factory, by, FsStore(tmp_path / f"e{flag}"), cfg, adapters={})
         Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
                on_dead_letter=pl.on_dead_letter,
-                      process_role=process_context(ProcessRole.PIPELINE_WORKER)).run_until_idle()
+                      **bound_process(ProcessRole.PIPELINE_WORKER)).run_until_idle()
         with session_factory() as s:
             return s.execute(text("SELECT decision FROM decisions WHERE case_id='case-div' "
                                   "ORDER BY decided_at DESC LIMIT 1")).scalar_one()
@@ -265,7 +265,7 @@ def test_broker_blocked_short_circuit_stamps_provenance(
     pl = Pipeline(session_factory, policy, FsStore(tmp_path/"e"), cfg, adapters={})  # no broker_matcher
     Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
            on_dead_letter=pl.on_dead_letter,
-                  process_role=process_context(ProcessRole.PIPELINE_WORKER)).run_until_idle()
+                  **bound_process(ProcessRole.PIPELINE_WORKER)).run_until_idle()
     with session_factory() as s:
         dec = s.execute(text("SELECT decision, policy_shas, engine_build_id FROM decisions "
                              "WHERE case_id='case-blk' ORDER BY decided_at DESC LIMIT 1")).first()
@@ -295,7 +295,7 @@ def test_cascade_successor_carries_resolved_hash(
     pl = Pipeline(session_factory, policy, FsStore(tmp_path/"e"), cfg, adapters={})  # no rdap
     Worker(session_factory, {"run_transition": pl.handle_job}, backoff_base_seconds=0,
            on_dead_letter=pl.on_dead_letter,
-                  process_role=process_context(ProcessRole.PIPELINE_WORKER)).run_until_idle()
+                  **bound_process(ProcessRole.PIPELINE_WORKER)).run_until_idle()
     with session_factory() as s:
         live_rows = {
             r.check_type: r

@@ -13,7 +13,7 @@ from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
-from tests.conftest import process_context
+from tests.conftest import bound_process
 from tests.integration.shared import ACME_KYB, ACME_KYB_WITH_CONTACT, FLOQER_RECORDS
 
 pytestmark = pytest.mark.postgres
@@ -75,7 +75,7 @@ def test_floqer_never_awards_points_alone(client, engine, post_event, session_fa
         {"run_transition": pipeline.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
-    process_role=process_context(ProcessRole.PIPELINE_WORKER))
+    **bound_process(ProcessRole.PIPELINE_WORKER))
     post_event("case-floqer", "kyb.run_requested", ACME_KYB_WITH_CONTACT)
     worker.run_until_idle()
 
@@ -109,7 +109,7 @@ def test_linkedin_mismatch_awards_nothing(client, post_event, session_factory, p
         {"run_transition": pipeline.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
-    process_role=process_context(ProcessRole.PIPELINE_WORKER))
+    **bound_process(ProcessRole.PIPELINE_WORKER))
     # submitted contact differs from discovered LinkedIn person
     post_event(
         "case-li-miss",

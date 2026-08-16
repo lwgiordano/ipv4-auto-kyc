@@ -26,7 +26,7 @@ from kyc_tool.orchestration.pipeline import Pipeline
 from kyc_tool.queue import jobs
 from kyc_tool.queue.worker import Worker
 from kyc_tool.storage.object_store import FsStore
-from tests.conftest import process_context
+from tests.conftest import bound_process
 
 pytestmark = pytest.mark.postgres
 
@@ -207,7 +207,7 @@ def _worker_for(session_factory, policy, settings, tmp_path) -> Worker:
         {"run_transition": pipeline.handle_job},
         backoff_base_seconds=0,
         on_dead_letter=pipeline.on_dead_letter,
-    process_role=process_context(ProcessRole.PIPELINE_WORKER))
+    **bound_process(ProcessRole.PIPELINE_WORKER))
 
 
 def _drive_run(session_factory, policy, settings, tmp_path, run_id: str) -> None:

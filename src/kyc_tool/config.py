@@ -1087,16 +1087,62 @@ class ProcessContext:
         raise ProcessRoleCapabilityError("an issued ProcessContext is immutable")
 
 
-# context identity -> (issued role, weakref to the validated Settings). Weak keys: a context
-# that dies releases its issuance; nothing accumulates.
+# context identity -> (issued role, weakref to the validated Settings, settings fingerprint,
+# issuance MAC). Weak keys: a context that dies releases its issuance; nothing accumulates.
+# The MAC is keyed inside a closure (R-audit-5 finding 1): the registry object itself is
+# importable, but an inserted or replayed record cannot produce the seal for a different
+# context identity, so tampering is DETECTED at consumption rather than trusted.
 _ISSUED_CONTEXTS: "weakref.WeakKeyDictionary[ProcessContext, tuple]" = (
     weakref.WeakKeyDictionary())
+
+
+def _make_issuance_seal():
+    import hmac as _hmac
+    import secrets as _secrets
+
+    key = _secrets.token_bytes(32)
+
+    def seal(context: "ProcessContext", role: ProcessRole, fingerprint: str) -> bytes:
+        message = f"{id(context)}|{role.value}|{fingerprint}".encode()
+        return _hmac.new(key, message, "sha256").digest()
+
+    return seal
+
+
+_seal_issuance = _make_issuance_seal()
+
+_KNOWN_ENVIRONMENTS = ("development", "test", "production")
+
+
+def exact_environment(settings: "Settings") -> str:
+    """The ONE environment predicate (R-audit-5 finding 1): exact `str` type, closed set. A
+    malformed environment — an int, None, a hostile str subclass whose comparisons lie — is a
+    REFUSAL, never "not production": classifying garbage as dev is how a production-shaped
+    settings object issued the DEV-ONLY writer role."""
+    environment = settings.environment
+    if type(environment) is not str or environment not in _KNOWN_ENVIRONMENTS:
+        raise ProcessRoleCapabilityError(
+            f"environment {environment!r} is outside the exact closed set "
+            f"{_KNOWN_ENVIRONMENTS}; refusing to classify a malformed environment"
+        )
+    return environment
+
+
+def _settings_fingerprint(settings: "Settings") -> str:
+    import hashlib as _hashlib
+
+    dumped = settings.model_dump()
+    return _hashlib.sha256(
+        repr(sorted((str(k), repr(v)) for k, v in dumped.items())).encode()).hexdigest()
 
 
 def _issue_context(role: ProcessRole, settings: "Settings") -> ProcessContext:
     context = object.__new__(ProcessContext)
     object.__setattr__(context, "role", ProcessRole(role))
-    _ISSUED_CONTEXTS[context] = (ProcessRole(role), weakref.ref(settings))
+    fingerprint = _settings_fingerprint(settings)
+    _ISSUED_CONTEXTS[context] = (
+        ProcessRole(role), weakref.ref(settings), fingerprint,
+        _seal_issuance(context, ProcessRole(role), fingerprint))
     return context
 
 
@@ -1119,12 +1165,25 @@ def require_role_capability(context: "ProcessContext", capability: str, construc
             f"{construction}: this context was never issued by validate_process_role — a "
             "forged or unvalidated identity"
         )
-    role, settings_ref = issued
-    if settings is not None and settings_ref() is not settings:
+    role, settings_ref, fingerprint, mac = issued
+    import hmac as _hmac
+
+    if not _hmac.compare_digest(mac, _seal_issuance(context, role, fingerprint)):
         raise ProcessRoleCapabilityError(
-            f"{construction}: the context was validated under different settings; validate "
-            "this process's own settings to construct against them"
+            f"{construction}: the issuance record does not verify for this context — a "
+            "forged or tampered registry entry"
         )
+    if settings is not None:
+        if settings_ref() is not settings:
+            raise ProcessRoleCapabilityError(
+                f"{construction}: the context was validated under different settings; "
+                "validate this process's own settings to construct against them"
+            )
+        if _settings_fingerprint(settings) != fingerprint:
+            raise ProcessRoleCapabilityError(
+                f"{construction}: the settings changed since validation — boot-time "
+                "validation is not a boundary once the object mutates; re-validate"
+            )
     granted = ROLE_CAPABILITIES.get(role)
     if granted is None:
         raise ProcessRoleCapabilityError(
@@ -1318,7 +1377,7 @@ def validate_process_role(settings: Settings, role: ProcessRole) -> "ProcessCont
                 f"{settings.outbox_max_attempts_attested} (KYC_OUTBOX_MAX_ATTEMPTS_ATTESTED) — a "
                 "stale task definition; refusing to start (DEPLOYMENT §8 drained cutover)"
             )
-    if settings.environment != "production":
+    if exact_environment(settings) != "production":
         return _issue_context(role, settings)
     if role in _DEV_ONLY_ROLES:
         raise ProductionConfigError(
