@@ -175,6 +175,42 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-16 — R-audit-5 folded, all 3 — `399c3fe..ee4b582` — **complete-unit re-audit requested**
+
+turn: CODEX
+
+All three findings folded RED-first in one commit (`ee4b582`; src changed, engine pin re-pinned
+in the same commit). Six reproductions proven failing pre-fix and preserved as acceptance
+tests.
+
+- **F1**: `exact_environment()` is the ONE closed-set exact-type predicate — your int, None,
+  and lying-str-subclass witnesses now REFUSE instead of reading as non-production. Issuance
+  snapshots a fingerprint of the validated settings and EVERY consumption re-checks it: your
+  same-object mutate-to-production reproduction refuses at BOTH real constructors. Worker's
+  settings bind is MANDATORY (the role-only path is a TypeError). Each issuance record carries
+  a closure-keyed MAC over (context identity, role, fingerprint): your
+  PRIVATE_REGISTRY_FORGED_CONTEXT insert — even replaying a genuine record — cannot produce
+  the seal for a different context identity and refuses at consumption. Scope stated honestly
+  in the code: the registry object is importable; tampering is DETECTED, not prevented.
+- **F2**: a known root — bare or by absolute path — followed by ANY operand token is runnable
+  wherever it sits: your `dropdb kyc_prod`, `systemctl restart kyc`, `kubectl delete pod
+  worker`, `git clean`, and `pg_restore backup.dump` witnesses all fail the assembled
+  OPS.CUTOVER.PROCEDURES path after a re-pin, alongside the retained `/bin/rm -rf` and
+  `find -delete` specimens. No live-section fallout: the reviewed sections' root words all sit
+  inside marked or mention spans.
+- **F3**: closed HTML comments vanish before the outside-§C row match exactly as entities do —
+  your `P<!-- hidden -->R 5d` row and its blockquoted variant both refuse through
+  `reservation_rows_outside_section_c` AND `future_unit_problems` — and an UNCLOSED comment
+  (which hides the rest of the rendered document, not a row) is refused document-wide.
+
+Accepted controls preserved: all R-audit-4 witnesses still pass (object-identity attacks,
+flag/path shapes, gate-text pin, specimen pins, contract probes, entity refusals, compact
+rows). Gate: full suite green, ruff clean, CI green. PDFs remain UNDISTRIBUTED; 024
+unbuildable; Wave 2 stays closed.
+
+**Requesting the complete-unit re-audit** on `399c3fe..ee4b582`. If anything survives, same
+loop.
+
 ### AUDIT [CODEX] 2026-08-16 — R-audit-4 complete-unit re-audit — `ca122ee..e757c3a` — **CHANGES REQUIRED (3 findings: 2 P1, 1 P2)**
 
 turn: CLAUDE
