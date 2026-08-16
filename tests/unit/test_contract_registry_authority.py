@@ -1629,6 +1629,17 @@ _COMMANDLIKE_ROOTS = frozenset({
     "python", "python3", "alembic", "rm", "psql", "aws", "curl", "sha256sum", "bash", "sh",
     "docker", "git", "pip", "kubectl", "systemctl", "dropdb", "pg_dump", "pg_restore"})
 _SHELL_METACHAR = re.compile(r"\$\(|&&|\|\||<\(")
+# R-audit-6 finding 2: an IMPERATIVE-led instruction is command-shaped whatever its verb's
+# vocabulary — `Run chmod 777 ...`, `Execute pkill ...` — a growing root list is not an
+# authority. English determiners after the verb ("run the restore CLI") and reviewed-span
+# placeholders stay prose: the closed class excluded is function words, not executables.
+_IMPERATIVE_LEAD = re.compile(
+    r"(?i)(?:^|[.;:!?]\s+)(?:then\s+|first\s+|now\s+)?(?:run|execute|invoke)\s+"
+    r"(?!the\b|a\b|an\b|it\b|this\b|that\b|these\b|those\b|them\b|your\b|its\b|"
+    r"each\b|every\b|all\b|any\b|both\b|one\b|only\b|per\b|as\b|with\b|in\b|on\b|"
+    r"under\b|from\b|at\b|against\b|after\b|before\b|during\b|once\b|again\b|"
+    r"twice\b|\u2039)"
+    r"\S+\s+\S")
 _STRICT_METACHAR = re.compile(r"\$\(|&&|\|\||<\(|;\s|\s>\s")
 
 
@@ -1643,6 +1654,8 @@ def _command_shaped(text: str, strict: bool = False) -> bool:
     if not tokens:
         return False
     if (_STRICT_METACHAR if strict else _SHELL_METACHAR).search(text):
+        return True
+    if _IMPERATIVE_LEAD.search(text):
         return True
     if tokens[0].lower() in _COMMANDLIKE_ROOTS and len(tokens) >= 2:
         return True
@@ -5932,3 +5945,98 @@ def test_r5f3_comment_hidden_pr_rows_outside_section_c_are_refused():
     unclosed = text + "\n\n| P<!-- unclosed R 5d | — | future | — | emergency shortcut |\n"
     problems = roadmap.future_unit_problems(unclosed)
     assert any("unclosed HTML comment" in p for p in problems), problems
+
+
+# ── R-audit-6 `399c3fe..ee4b582` (findings 1-3) ───────────────────────────────────────────────────
+
+
+def test_r6f1_explicit_none_settings_refuses_at_both_constructors():
+    """The audit's witness: `settings=None` passed EXPLICITLY skipped the fingerprint proof.
+    The consumed boundary now demands an exact Settings object — absent or malformed refuses
+    before any capability lookup."""
+    from kyc_tool.config import (
+        ProcessRoleCapabilityError,
+        Settings,
+        validate_process_role,
+    )
+    from kyc_tool.outbox.publisher import OutboxPublisher
+    from kyc_tool.queue.worker import Worker
+
+    s = Settings()
+    wctx = validate_process_role(s, ProcessRole.PIPELINE_WORKER)
+    with pytest.raises(ProcessRoleCapabilityError, match="Settings"):
+        Worker(object(), {"run_transition": lambda s_, j: None},
+               process_role=wctx, settings=None)
+    pctx = validate_process_role(s, ProcessRole.OUTBOX_WORKER)
+    with pytest.raises(ProcessRoleCapabilityError, match="Settings"):
+        OutboxPublisher(object(), None, http_client=object(), email_sender=object(),
+                        process_role=pctx)
+
+
+def test_r6f1_no_exported_seal_and_registry_role_is_the_authority():
+    """The audit's forgery: import the module seal oracle, seal a forged tuple, insert it —
+    accepted, and the constructor then stored the OBJECT's role while the registry said
+    another. The seal now lives only inside the issuance closure (no module-level oracle),
+    and a registry/object role disagreement refuses outright."""
+    import kyc_tool.config as kyc_config
+    from kyc_tool.config import (
+        ProcessContext,
+        ProcessRoleCapabilityError,
+        Settings,
+        validate_process_role,
+    )
+    from kyc_tool.queue.worker import Worker
+
+    assert not hasattr(kyc_config, "_seal_issuance"), (
+        "the seal oracle is still exported beside the registry it protects"
+    )
+    s = Settings()
+    genuine = validate_process_role(s, ProcessRole.PIPELINE_WORKER)
+    # replay the genuine record under a forged context (no oracle available to reseal)
+    forged = object.__new__(ProcessContext)
+    object.__setattr__(forged, "role", ProcessRole.PIPELINE_WORKER)
+    kyc_config._ISSUED_CONTEXTS[forged] = kyc_config._ISSUED_CONTEXTS[genuine]
+    with pytest.raises(ProcessRoleCapabilityError):
+        Worker(object(), {"run_transition": lambda s_, j: None},
+               process_role=forged, settings=s)
+    # a genuine record whose OBJECT lies about its role: the disagreement refuses
+    liar = validate_process_role(s, ProcessRole.PIPELINE_WORKER)
+    object.__setattr__(liar, "role", ProcessRole.RETENTION)
+    with pytest.raises(ProcessRoleCapabilityError, match="disagree"):
+        Worker(object(), {"run_transition": lambda s_, j: None},
+               process_role=liar, settings=s)
+
+
+def test_r6f2_imperative_prose_instructions_refuse_regardless_of_root_vocabulary():
+    """The audit's witnesses: chmod/mv/tee/pkill (and dd/truncate/cp) carried no flag, no
+    absolute path beside a known root, and no listed root — and certified as reviewed prose
+    after a re-pin. An imperative-led instruction is command-shaped whatever its verb's
+    vocabulary, through the same assembled inventory path."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    base = _section_bytes(ref)
+    for witness in ("Run chmod 777 /var/lib/kyc now.",
+                    "Run mv /var/lib/kyc /tmp/kyc.old now.",
+                    "Run tee /etc/kyc.conf now.",
+                    "Run pkill kyc_worker now.",
+                    "Run dd if=/dev/zero of=/var/lib/kyc/db now.",
+                    "Run truncate -s 0 /var/lib/kyc/wal now.",
+                    "Run cp /tmp/evil /etc/kyc.conf now.",
+                    "Execute pkill kyc_worker before the window."):
+        mutated = base + "\n" + witness + "\n"
+        problems = _command_inventory_problems(_repinned(ref, mutated), mutated)
+        assert any("command-shaped" in p for p in problems), (witness, problems)
+
+
+def test_r6f3_inline_html_tags_cannot_hide_a_pr_row_outside_section_c():
+    """The audit's witnesses: `P<span></span>R 5d`, `P<em></em>R 5d`, and the blockquoted
+    `<span hidden>` row all render as PR rows but scanned clean. Inline tags vanish for a
+    reader, so they vanish before the match."""
+    text = roadmap.ROADMAP.read_text().rstrip("\n")
+    for row in ("| P<span></span>R 5d | — | future | — | emergency shortcut |",
+                "| P<em></em>R 5d | — | future | — | emergency shortcut |",
+                "> | P<span hidden>R</span> 5d | — | future | — | emergency shortcut |"):
+        mutated = text + "\n\n" + row + "\n"
+        stray = roadmap.reservation_rows_outside_section_c(mutated)
+        assert stray, f"tag-hidden row invisible: {row!r}"
+        problems = roadmap.future_unit_problems(mutated)
+        assert any("outside §C" in p for p in problems), problems

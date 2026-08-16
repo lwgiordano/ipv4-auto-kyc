@@ -1096,20 +1096,40 @@ _ISSUED_CONTEXTS: "weakref.WeakKeyDictionary[ProcessContext, tuple]" = (
     weakref.WeakKeyDictionary())
 
 
-def _make_issuance_seal():
+def _make_issuance_authority():
+    """Issue and verify issuance records over one closure-held key (R-audit-6 finding 1: a
+    module-level seal function was an ORACLE — a registry inserter could seal its own tuple).
+    Only these two functions can compute the MAC. Scope stated honestly: this detects
+    tampered, replayed, or self-sealed REGISTRY RECORDS; code that calls the module's own
+    issuance function is module-level access and outside this boundary."""
     import hmac as _hmac
     import secrets as _secrets
 
     key = _secrets.token_bytes(32)
 
-    def seal(context: "ProcessContext", role: ProcessRole, fingerprint: str) -> bytes:
+    def _mac(context: "ProcessContext", role: ProcessRole, fingerprint: str) -> bytes:
         message = f"{id(context)}|{role.value}|{fingerprint}".encode()
         return _hmac.new(key, message, "sha256").digest()
 
-    return seal
+    def issue(role: ProcessRole, settings: "Settings") -> "ProcessContext":
+        context = object.__new__(ProcessContext)
+        object.__setattr__(context, "role", ProcessRole(role))
+        fingerprint = _settings_fingerprint(settings)
+        _ISSUED_CONTEXTS[context] = (
+            ProcessRole(role), weakref.ref(settings), fingerprint,
+            _mac(context, ProcessRole(role), fingerprint))
+        return context
 
+    def verify(context: "ProcessContext"):
+        issued = _ISSUED_CONTEXTS.get(context)
+        if issued is None:
+            return None
+        role, settings_ref, fingerprint, mac = issued
+        if not _hmac.compare_digest(mac, _mac(context, role, fingerprint)):
+            return None
+        return issued
 
-_seal_issuance = _make_issuance_seal()
+    return issue, verify
 
 _KNOWN_ENVIRONMENTS = ("development", "test", "production")
 
@@ -1136,18 +1156,11 @@ def _settings_fingerprint(settings: "Settings") -> str:
         repr(sorted((str(k), repr(v)) for k, v in dumped.items())).encode()).hexdigest()
 
 
-def _issue_context(role: ProcessRole, settings: "Settings") -> ProcessContext:
-    context = object.__new__(ProcessContext)
-    object.__setattr__(context, "role", ProcessRole(role))
-    fingerprint = _settings_fingerprint(settings)
-    _ISSUED_CONTEXTS[context] = (
-        ProcessRole(role), weakref.ref(settings), fingerprint,
-        _seal_issuance(context, ProcessRole(role), fingerprint))
-    return context
+_issue_context, _verify_issuance = _make_issuance_authority()
 
 
 def require_role_capability(context: "ProcessContext", capability: str, construction: str,
-                            *, settings: "Settings | None" = None) -> None:
+                            *, settings: "Settings") -> ProcessRole:
     """The construction-time side of the capability map (re-audit `1826661..b5c7a83` finding
     5; R-audit-3 finding 10; R-audit-4 finding 1). Called INSIDE the writer constructors with
     the BOUND ProcessContext. The decision reads the ISSUANCE REGISTRY, never the object: the
@@ -1159,31 +1172,35 @@ def require_role_capability(context: "ProcessContext", capability: str, construc
             f"{construction} requires the ProcessContext issued by validate_process_role; a "
             f"caller-selected {type(context).__name__} is self-attestation and is refused"
         )
-    issued = _ISSUED_CONTEXTS.get(context)
+    if type(settings) is not Settings:
+        raise ProcessRoleCapabilityError(
+            f"{construction}: an exact Settings object is required — absent or malformed "
+            "settings cannot prove the validated environment (R-audit-6: an explicit None "
+            "was a role-only escape hatch)"
+        )
+    issued = _verify_issuance(context)
     if issued is None:
         raise ProcessRoleCapabilityError(
-            f"{construction}: this context was never issued by validate_process_role — a "
-            "forged or unvalidated identity"
+            f"{construction}: this context was never issued by validate_process_role, or its "
+            "registry record does not verify — a forged, tampered, or replayed identity"
         )
-    role, settings_ref, fingerprint, mac = issued
-    import hmac as _hmac
-
-    if not _hmac.compare_digest(mac, _seal_issuance(context, role, fingerprint)):
+    role, settings_ref, fingerprint, _mac_unused = issued
+    if context.role is not role:
         raise ProcessRoleCapabilityError(
-            f"{construction}: the issuance record does not verify for this context — a "
-            "forged or tampered registry entry"
+            f"{construction}: the context object and its issuance record disagree about the "
+            f"role ({context.role!r} vs {role!r}); the record is the authority and the "
+            "disagreement is refused outright"
         )
-    if settings is not None:
-        if settings_ref() is not settings:
-            raise ProcessRoleCapabilityError(
-                f"{construction}: the context was validated under different settings; "
-                "validate this process's own settings to construct against them"
-            )
-        if _settings_fingerprint(settings) != fingerprint:
-            raise ProcessRoleCapabilityError(
-                f"{construction}: the settings changed since validation — boot-time "
-                "validation is not a boundary once the object mutates; re-validate"
-            )
+    if settings_ref() is not settings:
+        raise ProcessRoleCapabilityError(
+            f"{construction}: the context was validated under different settings; "
+            "validate this process's own settings to construct against them"
+        )
+    if _settings_fingerprint(settings) != fingerprint:
+        raise ProcessRoleCapabilityError(
+            f"{construction}: the settings changed since validation — boot-time "
+            "validation is not a boundary once the object mutates; re-validate"
+        )
     granted = ROLE_CAPABILITIES.get(role)
     if granted is None:
         raise ProcessRoleCapabilityError(
@@ -1196,6 +1213,7 @@ def require_role_capability(context: "ProcessContext", capability: str, construc
             f"not grant {capability!r} — an unaccounted writer, exactly what the O4 matrix "
             f"exists to prevent"
         )
+    return role  # the VERIFIED registry role — the consumer stores this, never context.role
 
 
 _KEY_ID_MAX_LEN = 128

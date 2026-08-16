@@ -246,9 +246,8 @@ class OutboxPublisher:
         # Constructing a publisher is acquiring the callback-publish capability (re-audit
         # `1826661..b5c7a83` finding 5): the declared role must carry it in the canonical map,
         # checked here so no alias, factory, or disposable entry point publishes unaccounted.
-        require_role_capability(process_role, CAP_CALLBACK_PUBLISH, "OutboxPublisher",
-                                settings=settings)
-        self.process_role = process_role.role
+        self.process_role = require_role_capability(
+            process_role, CAP_CALLBACK_PUBLISH, "OutboxPublisher", settings=settings)
         self.session_factory = session_factory
         self.settings = settings
         self.http = http_client or httpx.Client(timeout=settings.outbox_http_timeout_seconds)

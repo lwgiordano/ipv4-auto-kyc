@@ -122,6 +122,9 @@ def reservation_rows_outside_section_c(text: str) -> list[str]:
         # the reader, so they vanish before the match; an unclosed comment hides to EOL.
         line = re.sub(r"<!--.*?-->", "", line)
         line = re.sub(r"<!--.*$", "", line)
+        # R-audit-6 finding 3: inline HTML tags do not display — `P<span></span>R` reads as
+        # PR — so they vanish before the match too.
+        line = re.sub(r"</?[A-Za-z][^>]*>", "", line)
         return html.unescape(line)
 
     return [

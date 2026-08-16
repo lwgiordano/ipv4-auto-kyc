@@ -60,6 +60,7 @@ class Worker:
         # states the ProcessRole it runs under, and registering each handler kind demands that
         # kind's capability from the canonical map — inside the constructor, so aliases,
         # factories, and disposable entry points cannot become unaccounted writers.
+        verified_role = None
         for kind in handlers:
             capability = HANDLER_KIND_CAPABILITIES.get(kind)
             if capability is None:
@@ -67,9 +68,15 @@ class Worker:
                     f"handler kind {kind!r} is not classified in HANDLER_KIND_CAPABILITIES; "
                     f"classify its write capability before any role may register it"
                 )
-            require_role_capability(process_role, capability, f"a {kind!r} handler",
-                                    settings=settings)
-        self.process_role = process_role.role
+            verified_role = require_role_capability(
+                process_role, capability, f"a {kind!r} handler", settings=settings)
+        if verified_role is None:
+            raise ProcessRoleCapabilityError(
+                "a Worker with no handlers has no accountable write surface; refuse"
+            )
+        # the consumed role is the VERIFIED registry role (R-audit-6 finding 1: the object's
+        # own attribute lied while the registry said another)
+        self.process_role = verified_role
         # Process boundary (re-audit `5b0f0b8..b75a320` R4-F3): validate the timing knobs at
         # construction so a nonpositive/non-finite poll cannot kill the idle loop at the first
         # `time.sleep`, and a bad lease/backoff refuses BEFORE the worker starts claiming — not mid-run.
