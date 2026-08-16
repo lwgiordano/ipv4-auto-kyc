@@ -289,7 +289,7 @@ Steps:
    `No module named …`.
 1. **Pause all platform event submission** (every event type, not only the
    two sensitive ones) and block the ops composer: the platform buffers
-   outbound events, and the composer route (`POST /ui/api/send-event`) is
+   outbound events, and the composer route (a `POST` to `/ui/api/send-event`) is
    edge-blocked — or old replicas are flipped to `KYC_UI_ENABLED=false` — so
    an operator on a still-live old replica can't post an inline forged
    approval. The whole window is a maintenance pause; a partial pause cannot
@@ -350,8 +350,8 @@ digest that has the module), redeploy the prior image for API **and**
 workers, verify, start workers, resume — accepting that the prior image
 restores pre-PR-5b behavior.
 
-**Rollback verification is non-mutating only:** `GET /readyz`, `GET
-/healthz`, and prior-image digest attestation. Do **not** run the step-5
+**Rollback verification is non-mutating only:** `GET` probes of `/readyz`
+and `/healthz`, and prior-image digest attestation. Do **not** run the step-5
 sensitive-mutation probes against the prior image — that image is the current
 vulnerable code with no actor floor, so a mismatched-actor `manual_approve`
 probe would actually `approve` the case inline, and a `system`-actor
@@ -381,7 +381,7 @@ on-disk policy bundle at startup (failing closed on a corrupt persisted row)
 and every automatic/manual decision starts recording bundle **and** engine
 provenance immediately — `Settings.enforce_bundle_pinning`
 (`KYC_ENFORCE_BUNDLE_PINNING`) stays `false`, so scoring itself is
-byte-identical to pre-PR6 (a strict no-op; see ADR-005). `GET /readyz`
+byte-identical to pre-PR6 (a strict no-op; see ADR-005). A `GET` on `/readyz`
 unconditionally confirms the process's loaded bundle is durably resolvable
 from the store — watch it like any other readiness check during this
 rollout.
@@ -558,7 +558,7 @@ python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
         the predicate. `IS NOT DISTINCT FROM` is used for nullables so NULL matches NULL.
     (d) THE SEQUENCE IS THE RESTORE CLI'S JOB — there is NO separate precondition to satisfy
         first (re-audit `8377440` F3: the old text made the restore reachable only after a
-        `next_id > original_outbox_id` check that the documented max=5/missing-id=100 case fails,
+        `next_id > original_outbox_id` check that the documented `max=5`/`missing-id=100` case fails,
         which is exactly the case the restore exists for). `restore_pr7b_core_callback` floors the
         sequence to `GREATEST(max(id), original_id) + 1` in the SAME transaction as the row
         insert, under `ACCESS EXCLUSIVE`, with a fail-closed read-back — whether the missing id is

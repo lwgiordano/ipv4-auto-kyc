@@ -123,14 +123,22 @@ def reservation_rows_outside_section_c(text: str) -> list[str]:
         line = re.sub(r"<!--.*?-->", "", line)
         line = re.sub(r"<!--.*$", "", line)
         # R-audit-6 finding 3: inline HTML tags do not display — `P<span></span>R` reads as
-        # PR — so they vanish before the match too.
-        line = re.sub(r"</?[A-Za-z][^>]*>", "", line)
+        # PR — so they vanish before the match too. R-audit-7 finding 4: quote-AWARE, so a
+        # `>` inside a quoted attribute cannot terminate the tag early.
+        line = re.sub(r"</?[A-Za-z!](?:\"[^\"]*\"|'[^']*'|[^>])*>", "", line)
         return html.unescape(line)
 
+    # R-audit-7 finding 4, the belt over the strip: the reservation authority is PLAIN, so a
+    # table-row-shaped line outside §C carrying ANY inline HTML is refused outright — no HTML
+    # parsing race decides.
+    table_shaped = re.compile(r"^\s*(?:>\s*)*\|")
     return [
         line.strip()
         for i, line in enumerate(lines)
-        if not (start < i < end) and pr_row.match(rendered(line))
+        if not (start < i < end) and (
+            pr_row.match(rendered(line))
+            or (table_shaped.match(line) and re.search(r"<[A-Za-z!/]", line))
+        )
     ]
 
 

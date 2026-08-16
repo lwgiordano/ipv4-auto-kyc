@@ -1641,15 +1641,35 @@ _IMPERATIVE_LEAD = re.compile(
     r"twice\b|\u2039)"
     r"\S+\s+\S")
 _STRICT_METACHAR = re.compile(r"\$\(|&&|\|\||<\(|;\s|\s>\s")
+# R-audit-7 finding 2: commands need no leading verb and no vocabulary root — naked
+# `chmod 777 /var/lib/kyc`, `pkill kyc_worker`, determiner-led `Run the chmod ...` all
+# certified — so shape closes over the ARGV GRAMMAR itself, applied to runs of
+# consecutive argv-charset tokens. The word side excludes only closed-class English
+# function words (never executables), same principle as the imperative rule.
+_ARGV_TOKEN = re.compile(r"[A-Za-z0-9._/:=@~+-]+")
+_ARGV_BARE_WORD = re.compile(r"[a-z][a-z0-9._-]*")
+_ARGV_FUNCTION_WORDS = frozenset({
+    "the", "a", "an", "it", "this", "that", "these", "those", "them", "they", "your",
+    "its", "each", "every", "all", "any", "both", "one", "only", "per", "as", "with",
+    "in", "on", "under", "from", "at", "against", "after", "before", "during", "once",
+    "again", "twice", "of", "for", "to", "and", "or", "nor", "but", "if", "when",
+    "while", "than", "then", "so", "such", "via", "into", "onto", "over", "between",
+    "within", "without", "across", "along", "behind", "beside", "beyond", "by", "near",
+    "toward", "towards", "upon", "since", "until", "till", "above", "below", "off",
+    "out", "up", "down", "not", "no", "is", "are", "was", "were", "be", "been", "being",
+    "am", "has", "have", "had", "do", "does", "did", "can", "could", "may", "might",
+    "must", "shall", "should", "will", "would", "there", "here"})
 
 
 def _command_shaped(text: str, strict: bool = False) -> bool:
     """Would a reader read `text` as something to RUN? Shape is STRUCTURAL (R-audit-4 finding
-    2 — a finite root list missed `/bin/rm` and `find ... -delete`): any multi-token text
-    carrying a dash-flag token or an absolute-path token is runnable whatever its first word,
-    a known executable root leading an argv is runnable, and shell metacharacters are
-    runnable. A LONE flag or path token is a mention — you cannot run a flag. Unicode
-    whitespace lookalikes split like whitespace, so an NBSP variant is still command-shaped."""
+    2 — a finite root list missed `/bin/rm` and `find ... -delete`; R-audit-7 finding 2 — a
+    verb-led grammar missed naked `chmod 777 /var/lib/kyc`): shell metacharacters, dash-flag
+    tokens, imperative leads, known roots beside an operand, and the closed argv grammar —
+    within a run of consecutive argv-charset tokens, an absolute path beside anything, or a
+    bare word adjoining a machine-shaped operand. A LONE flag or path token is a mention —
+    you cannot run a flag. Unicode whitespace lookalikes split like whitespace, so an NBSP
+    variant is still command-shaped."""
     tokens = text.split()
     if not tokens:
         return False
@@ -1664,8 +1684,9 @@ def _command_shaped(text: str, strict: bool = False) -> bool:
             bare = token.strip(".,;:()`'\"")
             # a dash-flag token is executable fingerprint whatever the first word is
             # (`/bin/rm -rf`, `find -delete`, `mytool --wipe-everything`); an absolute path
-            # ALONE is not — these documents legitimately mention API routes like
-            # /v1/cases/{id}/events in prose. A path only counts beside a flag or root.
+            # ALONE is still a mention, but a path INSIDE a token run refuses below (r1) —
+            # API routes like /v1/cases/{id}/events keep their `{id}` placeholders, which
+            # break the argv charset; other path mentions belong in backtick spans.
             if re.fullmatch(r"-{1,2}[A-Za-z][A-Za-z0-9-]*(=\S*)?", bare):
                 return True
         for i, token in enumerate(tokens[:-1]):
@@ -1678,6 +1699,37 @@ def _command_shaped(text: str, strict: bool = False) -> bool:
             if (bare.lower() in _COMMANDLIKE_ROOTS
                     or bare.rpartition("/")[2].lower() in _COMMANDLIKE_ROOTS) and operand:
                 return True
+        # the closed argv grammar (R-audit-7 finding 2), over each maximal run of
+        # consecutive argv-charset tokens — a token carrying a comma is LIST syntax, not
+        # an argv word, and terminates its run (argv arguments are space-separated):
+        # (r1) a run carrying an absolute-path token is runnable — a path ALONE stays a
+        # mention (API routes with `{id}` placeholders break the charset and never join
+        # runs; other path mentions belong in backtick spans); (r2) a lowercase bare word
+        # adjoining a machine-shaped operand (snake_case, an `=`-assignment, or a leading
+        # `/` — each longer than the bare punctuation prose uses for "either/or" and
+        # "equals") is a root beside its argument whatever its vocabulary —
+        # `pkill kyc_worker` refuses with no root list at all.
+        runs, run = [], []
+        for token in tokens:
+            bare = token.strip(".;:()`'\"")
+            if bare and "," not in token and _ARGV_TOKEN.fullmatch(bare):
+                run.append(bare)
+            else:
+                if len(run) >= 2:
+                    runs.append(run)
+                run = []
+        if len(run) >= 2:
+            runs.append(run)
+        for run in runs:
+            if any(t.startswith("/") and len(t) > 1 for t in run):
+                return True
+            for word, operand in zip(run, run[1:], strict=False):
+                if (_ARGV_BARE_WORD.fullmatch(word)
+                        and word not in _ARGV_FUNCTION_WORDS
+                        and len(operand) > 1
+                        and ("_" in operand or "=" in operand
+                             or operand.startswith("/"))):
+                    return True
     return False
 
 
@@ -6040,3 +6092,104 @@ def test_r6f3_inline_html_tags_cannot_hide_a_pr_row_outside_section_c():
         assert stray, f"tag-hidden row invisible: {row!r}"
         problems = roadmap.future_unit_problems(mutated)
         assert any("outside §C" in p for p in problems), problems
+
+
+# ── R-audit-7 `87bf479..cd69fac` (findings 1-4) ───────────────────────────────────────────────────
+
+
+def test_r7f1_the_raw_issuer_runs_the_full_admission_screen():
+    """The audit's witnesses: `_issue_context(DEV_WORKER, production_settings)` minted a
+    fully-accepted context around the production kill switch. Issuance now RUNS the admission
+    screen itself — there is no importable mint that skips it — and no src module outside the
+    authority implementation references the issuer."""
+    import kyc_tool.config as kyc_config
+    from kyc_tool.config import ProductionConfigError
+    from tests.unit.test_production_config import hardened
+
+    production = hardened()
+    with pytest.raises(ProductionConfigError):
+        kyc_config._issue_context(ProcessRole.DEV_WORKER, production)
+    invalid_production = production.model_copy(update={"platform_hmac_secret": ""})
+    with pytest.raises(ProductionConfigError):
+        kyc_config._issue_context(ProcessRole.PIPELINE_WORKER, invalid_production)
+    for path in sorted(SRC.rglob("*.py")):
+        if path.name == "config.py":
+            continue
+        assert "_issue_context" not in path.read_text(), (
+            f"{path.relative_to(REPO)} references the raw issuer"
+        )
+
+
+def test_r7f2_naked_and_determiner_led_commands_are_refused_after_repin():
+    """The audit's witnesses: runbook commands need no leading verb — naked `chmod 777 ...`,
+    `chown`, `pkill`, `mv`, `tee`, and determiner-led `Run the chmod ...` all certified after
+    a re-pin. Unmarked text now refuses by a closed argv grammar (within a run of argv-charset
+    tokens: an absolute path beside anything, or a bare word adjoining a machine-shaped
+    operand), not by verb vocabulary."""
+    ref = _pr("Migrations 013-023").playbook_ref
+    base = _section_bytes(ref)
+    for witness in ("chmod 777 /var/lib/kyc",
+                    "chown root /var/lib/kyc",
+                    "pkill kyc_worker.",
+                    "mv /var/lib/kyc /tmp/kyc.old",
+                    "tee /etc/kyc.conf",
+                    "Run the chmod 777 /var/lib/kyc now.",
+                    "Execute the pkill kyc_worker before the window."):
+        mutated = base + "\n" + witness + "\n"
+        problems = _command_inventory_problems(_repinned(ref, mutated), mutated)
+        assert any("command-shaped" in p for p in problems), (witness, problems)
+
+
+def test_r7f3_unfingerprintable_settings_refuse_with_the_governed_error():
+    """The audit's witness: a mutated value whose repr raises turned construction into a raw
+    RuntimeError instead of the governed refusal. Fingerprinting is total over the mutated-
+    Settings threat model — serialization failure IS a capability refusal."""
+    from kyc_tool.config import (
+        ProcessRoleCapabilityError,
+        Settings,
+        validate_process_role,
+    )
+    from kyc_tool.queue.worker import Worker
+
+    class EvilRepr(str):
+        def __repr__(self):
+            raise RuntimeError("repr boom")
+
+        __hash__ = str.__hash__
+
+    s = Settings()
+    ctx = validate_process_role(s, ProcessRole.PIPELINE_WORKER)
+    object.__setattr__(s, "environment", EvilRepr("production"))
+    with pytest.raises(ProcessRoleCapabilityError, match="fingerprint"):
+        Worker(object(), {"run_transition": lambda s_, j: None},
+               process_role=ctx, settings=s)
+
+    class EvilContainer(dict):
+        def __repr__(self):
+            raise RuntimeError("container boom")
+
+    # model_dump() flattens the dict SUBCLASS to a plain dict, so the container's own
+    # repr never runs — the hostile payload that survives serialization is its CONTENT.
+    s2 = Settings()
+    ctx2 = validate_process_role(s2, ProcessRole.PIPELINE_WORKER)
+    object.__setattr__(
+        s2, "hmac_inbound_extra_keys", EvilContainer({"key-id": EvilRepr("secret")})
+    )
+    with pytest.raises(ProcessRoleCapabilityError, match="fingerprint"):
+        Worker(object(), {"run_transition": lambda s_, j: None},
+               process_role=ctx2, settings=s2)
+
+
+def test_r7f4_inline_html_on_a_table_shaped_row_is_refused_outright():
+    """The audit's witnesses: a quoted `>` inside an attribute defeats any tag-stripping
+    regex. The reservation authority is PLAIN: a table-row-shaped roadmap line containing
+    inline HTML is refused outright — no HTML parsing, no stripping race."""
+    text = roadmap.ROADMAP.read_text().rstrip("\n")
+    for row in ("| P<span title='>'></span>R 5d | — | future | — | emergency shortcut |",
+                '| P<span title=">"></span>R 5d | — | future | — | emergency shortcut |',
+                "| P<x data='a>b'></x>R 5d | — | future | — | emergency shortcut |"):
+        mutated = text + "\n\n" + row + "\n"
+        stray = roadmap.reservation_rows_outside_section_c(mutated)
+        assert stray, f"quoted-attribute row invisible: {row!r}"
+        problems = roadmap.future_unit_problems(mutated)
+        assert any("outside §C" in p or "inline HTML" in p for p in problems), problems

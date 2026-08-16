@@ -382,7 +382,7 @@ python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
         the predicate. `IS NOT DISTINCT FROM` is used for nullables so NULL matches NULL.
     (d) THE SEQUENCE IS THE RESTORE CLI'S JOB — there is NO separate precondition to satisfy
         first (re-audit `8377440` F3: the old text made the restore reachable only after a
-        `next_id > original_outbox_id` check that the documented max=5/missing-id=100 case fails,
+        `next_id > original_outbox_id` check that the documented `max=5`/`missing-id=100` case fails,
         which is exactly the case the restore exists for). `restore_pr7b_core_callback` floors the
         sequence to `GREATEST(max(id), original_id) + 1` in the SAME transaction as the row
         insert, under `ACCESS EXCLUSIVE`, with a fail-closed read-back — whether the missing id is

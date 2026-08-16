@@ -1099,9 +1099,11 @@ _ISSUED_CONTEXTS: "weakref.WeakKeyDictionary[ProcessContext, tuple]" = (
 def _make_issuance_authority():
     """Issue and verify issuance records over one closure-held key (R-audit-6 finding 1: a
     module-level seal function was an ORACLE — a registry inserter could seal its own tuple).
-    Only these two functions can compute the MAC. Scope stated honestly: this detects
-    tampered, replayed, or self-sealed REGISTRY RECORDS; code that calls the module's own
-    issuance function is module-level access and outside this boundary."""
+    Only these two functions can compute the MAC. Issuance RUNS the admission screen itself
+    (R-audit-7 finding 1: the raw issuer minted a fully-accepted context around the
+    production kill switch) — there is no importable mint that skips the screen. Scope
+    stated honestly: this detects tampered, replayed, or self-sealed REGISTRY RECORDS;
+    forging one would require the closure key, which nothing exports."""
     import hmac as _hmac
     import secrets as _secrets
 
@@ -1112,12 +1114,13 @@ def _make_issuance_authority():
         return _hmac.new(key, message, "sha256").digest()
 
     def issue(role: ProcessRole, settings: "Settings") -> "ProcessContext":
+        role = _admission_checks(settings, role)
         context = object.__new__(ProcessContext)
-        object.__setattr__(context, "role", ProcessRole(role))
+        object.__setattr__(context, "role", role)
         fingerprint = _settings_fingerprint(settings)
         _ISSUED_CONTEXTS[context] = (
-            ProcessRole(role), weakref.ref(settings), fingerprint,
-            _mac(context, ProcessRole(role), fingerprint))
+            role, weakref.ref(settings), fingerprint,
+            _mac(context, role, fingerprint))
         return context
 
     def verify(context: "ProcessContext"):
@@ -1149,11 +1152,20 @@ def exact_environment(settings: "Settings") -> str:
 
 
 def _settings_fingerprint(settings: "Settings") -> str:
+    """Total over the mutated-Settings threat model (R-audit-7 finding 3): a hostile value
+    whose repr or serialization raises is a GOVERNED capability refusal, never a raw
+    exception escaping mid-construction."""
     import hashlib as _hashlib
 
-    dumped = settings.model_dump()
-    return _hashlib.sha256(
-        repr(sorted((str(k), repr(v)) for k, v in dumped.items())).encode()).hexdigest()
+    try:
+        dumped = settings.model_dump()
+        return _hashlib.sha256(
+            repr(sorted((str(k), repr(v)) for k, v in dumped.items())).encode()).hexdigest()
+    except Exception as exc:
+        raise ProcessRoleCapabilityError(
+            f"the settings cannot be fingerprinted ({type(exc).__name__}) — a malformed or "
+            "hostile value; re-validate this process's settings"
+        ) from exc
 
 
 _issue_context, _verify_issuance = _make_issuance_authority()
@@ -1361,14 +1373,18 @@ _DEV_ONLY_ROLES = frozenset({ProcessRole.DEV_WORKER})
 _PUBLISHER_ROLES = frozenset({ProcessRole.OUTBOX_WORKER, ProcessRole.DEV_WORKER})
 
 
-def validate_process_role(settings: Settings, role: ProcessRole) -> "ProcessContext":
-    """The single process-role authority (re-audit `03dbfab..bc325e7` R5-F1). Called by EVERY
-    executable entry point BEFORE it creates a database engine, network client, or object store.
+def _admission_checks(settings: Settings, role: ProcessRole) -> ProcessRole:
+    """The FULL admission screen, run by issuance itself (R-audit-7 finding 1: as a separate
+    pre-check, `_issue_context(DEV_WORKER, production_settings)` minted a fully-accepted
+    context around the production kill switch — the screen must be unskippable, not merely
+    documented). Returns the coerced role; every refusal below raises before any context
+    exists.
 
     In a production environment a DEV-ONLY role (fixture adapters — synthetic checks/decisions/
     callbacks, and it would consume real `run_transition` jobs) is refused CATEGORICALLY, independent
     of whether the rest of the configuration is otherwise valid; a production role runs the full
-    production kill switch. Outside production this is a no-op — dev/staging may run any role."""
+    production kill switch. Outside production only the cutover start gate applies — dev/staging
+    may run any role."""
     role = ProcessRole(role)
     # Cutover start gate (re-audit `f2929f8..6a4cd87` F4) — enforced in EVERY environment whenever
     # the operator has set an attested target, because the drained cutover is rehearsed in staging
@@ -1396,13 +1412,23 @@ def validate_process_role(settings: Settings, role: ProcessRole) -> "ProcessCont
                 "stale task definition; refusing to start (DEPLOYMENT §8 drained cutover)"
             )
     if exact_environment(settings) != "production":
-        return _issue_context(role, settings)
+        return role
     if role in _DEV_ONLY_ROLES:
         raise ProductionConfigError(
             f"process role {role.value!r} is DEV-ONLY (fixture adapters) and must never run in a "
             "production environment — refusing before any database/network/store access"
         )
     validate_for_production(settings)
+    return role
+
+
+def validate_process_role(settings: Settings, role: ProcessRole) -> "ProcessContext":
+    """The single process-role authority (re-audit `03dbfab..bc325e7` R5-F1). Called by EVERY
+    executable entry point BEFORE it creates a database engine, network client, or object store.
+
+    The admission screen itself lives in `_admission_checks` and is run BY issuance (R-audit-7
+    finding 1), so this entry point is a name for the guarantee, not the only path to it —
+    calling the issuer directly cannot skip the screen."""
     return _issue_context(role, settings)
 
 

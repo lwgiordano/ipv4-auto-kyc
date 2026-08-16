@@ -226,7 +226,7 @@ FULL_WINDOW = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 9. PR 5b cutover — brief full maintenance window",
-        sha256="8f3c7769f696ecb647b00fa550dda3a1d8e10d355f0fb3e7305ed5414e3c8dc8",
+        sha256="9b61656bfef3d67c90948ba15ef873249d1b7154e10c535108b39ea48a39e749",
         commands=(
             Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
         ),
@@ -264,7 +264,7 @@ BUNDLE_PINNING = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 10. PR 6 cutover — bundle-pinning activation",
-        sha256="487cfedfdf2cd670b633ff09cdb774e3802406d0b56f425ba9f49a7324f106f4",
+        sha256="c7b02139284b25ba30cd431a3de508f51681eb1be9d15b0dd443947afd88b96a",
         commands=(
             Command(("python", "-m", "kyc_tool.ops.seed_policy_bundle",
                      "--expect-hash", "<sha256>")),
@@ -351,7 +351,7 @@ PR7B_CORE = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 11. PR 7b-core cutover — drained maintenance window (migration 013)",
-        sha256="0ebe52984e80f3b68c004149dbee6f9c2eaaf59c7f98e16c6157177e46e8791a",
+        sha256="3cf24cfee80a34a3dc37edadda0fb46756c7675ecffa40322d6e10539b60cf2a",
         # Every operator-run command the section publishes, as parsed argv. The placeholders
         # (`<file.json>`, `<id>`, `<sha256>`) are the section's own literal text.
         commands=(
