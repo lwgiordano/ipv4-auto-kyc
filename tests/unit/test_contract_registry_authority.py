@@ -1736,12 +1736,16 @@ def _command_shaped(text: str, strict: bool = False) -> bool:
 
 def _rendered_inline(text: str) -> str:
     """What a CommonMark reader SEES for inline prose (R-audit-8 finding 2: `pk**ill**`
-    renders as `pkill`, `&#47;` as `/` — review over source tokens certified commands the
-    reader would run). Order mirrors the spec: emphasis and links are SYNTAX, resolved
-    first; entities decode LAST, on the parsed text, so a decoded `&#42;` is a literal `*`
-    and can never become a new delimiter. Star emphasis binds intraword; underscore
-    emphasis does not (CommonMark flanking), so `kyc_worker` keeps its underscores. Code
-    spans are the caller's lane and never reach here."""
+    renders as `pkill`, `&#47;` as `/`; R-audit-9 finding 1: `pk<span>ill</span>` and
+    `pk<!--hide-->ill` render as `pkill` — tags and comments do not display). Order
+    mirrors the spec: raw HTML (comments, then quote-aware tags) vanishes first, emphasis
+    and links resolve next, and entities decode LAST on the parsed text, so a decoded
+    `&#60;` or `&#42;` is a literal character and can never become new markup. Star
+    emphasis binds intraword; underscore emphasis does not (CommonMark flanking), so
+    `kyc_worker` keeps its underscores. Code spans are the caller's lane and never reach
+    here."""
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    text = re.sub(r"</?[A-Za-z!](?:\"[^\"]*\"|'[^']*'|[^>])*>", "", text)
     previous = None
     while previous != text:
         previous = text
@@ -6354,3 +6358,100 @@ def test_r8f3_markdown_formatting_cannot_hide_a_table_shaped_row_outside_section
         assert stray, f"markdown-hidden row invisible: {row!r}"
         problems = roadmap.future_unit_problems(mutated)
         assert any("outside §C" in p for p in problems), problems
+
+
+# ── R-audit-9 `4abd64e..76947a7` (findings 1-3) ───────────────────────────────────────────────────
+
+
+def test_r9f1_inline_html_and_comments_cannot_hide_a_command_from_the_assembled_verifier(
+        tmp_path, monkeypatch):
+    """The audit's witnesses, same class one inline syntax later: a reader sees
+    `pk<span>ill</span> kyc_worker` and `pk<!--hide-->ill kyc_worker` as `pkill kyc_worker`
+    — tags and comments do not display — while the reviewer saw malformed non-command
+    tokens. Through the real assembled AUTHORITY_VERIFIERS['OPS.CUTOVER.PROCEDURES'] with
+    the section sha coherently re-pinned, exactly like the R8 harness."""
+    import copy
+    import shutil
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    live_doc = (REPO / ref.path).read_text()
+    section = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "alembic").symlink_to(REPO / "alembic")
+    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+    for witness in ("pk<span>ill</span> kyc_worker",
+                    "pk<!--hide-->ill kyc_worker",
+                    "Run the pk<span>ill</span> kyc_worker before the window."):
+        mutated_section = section + "\n" + witness + "\n"
+        assert live_doc.count(section) == 1, "the section must be a unique byte span"
+        (tmp_path / ref.path).write_text(
+            live_doc.replace(section, mutated_section, 1))
+        for other in ("docs/RUNBOOK.md",):
+            if (REPO / other).exists() and not (tmp_path / other).exists():
+                shutil.copy(REPO / other, tmp_path / other)
+        tampered = copy.copy(pr7b)
+        object.__setattr__(
+            tampered, "playbook_ref",
+            dataclasses.replace(
+                ref, sha256=hashlib.sha256(mutated_section.encode()).hexdigest()))
+        monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+        monkeypatch.setattr(_this_module(), "OPERATIONS",
+                            _operations_with_procedure(tampered))
+        with pytest.raises(AssertionError, match="command-shaped"):
+            AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        monkeypatch.undo()
+
+
+def test_r9f2_the_admitted_snapshot_is_immutable_at_the_send_boundary():
+    """The audit's witness: `publisher.settings.platform_callback_url = EvilUrl(...)` by
+    PLAIN assignment — Settings is not frozen — and the next build dispatched the hostile
+    `rstrip` at the wire. 'The consumed value is the admitted value' must survive the
+    publisher's whole lifetime: the snapshot refuses field mutation, the attribute cannot
+    be rebound, and the built request still uses the originally admitted values."""
+    from pydantic import ValidationError as PydanticValidationError
+
+    from kyc_tool.config import ProcessRole, validate_process_role
+    from kyc_tool.outbox.publisher import OutboxPublisher
+    from tests.unit.test_production_config import hardened
+
+    class EvilUrl(str):
+        __hash__ = str.__hash__
+
+        def rstrip(self, chars=None):
+            return "https://attacker.invalid" if chars == "/" else super().rstrip(chars)
+
+    s = hardened()
+    original_url = s.platform_callback_url
+    ctx = validate_process_role(s, ProcessRole.OUTBOX_WORKER)
+    publisher = OutboxPublisher(object(), s, process_role=ctx)
+    for field, hostile in (("platform_callback_url", EvilUrl(original_url)),
+                           ("hmac_outbound_secret", EvilUrl(s.hmac_outbound_secret)),
+                           ("hmac_v1_outbound_sunset_at", None)):
+        with pytest.raises((PydanticValidationError, TypeError, AttributeError)):
+            setattr(publisher.settings, field, hostile)
+    with pytest.raises(AttributeError):
+        publisher.settings = s
+    request, _ = publisher._build_callback_request({"probe": 1})
+    assert request.url.host != "attacker.invalid"
+    assert str(request.url).startswith(original_url.rstrip("/"))
+
+
+def test_r9f3_an_html_table_outside_section_c_is_refused_like_a_pipe_table():
+    """The audit's witness: a raw HTML table outside §C renders as a table — the same
+    visible competing authority as a pipe table — while both gates returned empty. §C is
+    the only table this authority publishes, so raw HTML table constructs outside it
+    refuse outright, single-line and multi-line alike; the live document still parses."""
+    text = roadmap.ROADMAP.read_text().rstrip("\n")
+    single = ("<table><tr><td>PR 5d</td><td>—</td><td>future</td><td>—</td>"
+              "<td>emergency shortcut</td></tr></table>")
+    multi = ("<table>\n  <tr>\n    <td>PR 5d</td><td>—</td><td>future</td><td>—</td>"
+             "<td>emergency shortcut</td>\n  </tr>\n</table>")
+    for witness in (single, multi):
+        mutated = text + "\n\n" + witness + "\n"
+        stray = roadmap.reservation_rows_outside_section_c(mutated)
+        assert stray, f"HTML table invisible: {witness[:40]!r}"
+        problems = roadmap.future_unit_problems(mutated)
+        assert any("outside §C" in p for p in problems), problems
+    assert roadmap.future_unit_problems(text) == []

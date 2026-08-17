@@ -253,14 +253,23 @@ class OutboxPublisher:
         # Execute the ADMITTED snapshot, never the caller's live object (R-audit-8 finding
         # 1): a same-value hostile subclass swapped in after validation fingerprints equal,
         # so the wire target, signing inputs, sunsets, and knobs below all read
-        # self.settings — canonical built-ins the admission screen actually judged.
-        self.settings = admitted.settings
+        # self.settings — canonical built-ins the admission screen actually judged. The
+        # snapshot is FROZEN and the attribute is read-only (R-audit-9 finding 2): plain
+        # assignment on either refuses, so the value consumed at send time is the admitted
+        # value for the publisher's whole lifetime.
+        self._settings = admitted.settings
         self.http = http_client or httpx.Client(
             timeout=self.settings.outbox_http_timeout_seconds)
         self.email_sender = email_sender or LoggingEmailSender()
         self._claimant = f"{socket.gethostname()}:{os.getpid()}"
         self._orphans: list[threading.Thread] = []
         self._saturated = False
+
+    @property
+    def settings(self) -> Settings:
+        """The admitted, frozen execution snapshot (R-audit-9 finding 2). Read-only: the
+        send path must consume the value admission validated, so there is no setter."""
+        return self._settings
 
     # -- delivery -----------------------------------------------------------
 

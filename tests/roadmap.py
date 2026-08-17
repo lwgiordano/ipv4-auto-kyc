@@ -136,11 +136,18 @@ def reservation_rows_outside_section_c(text: str) -> list[str]:
     # interpreted at all. The rendered() strip still catches rows whose leading `|` is
     # itself manufactured by markup (an HTML wrapper ahead of the pipe).
     table_shaped = re.compile(r"^\s*(?:>\s*)*\|")
+    # R-audit-9 finding 3: a raw HTML table renders as a table too — the same visible
+    # competing authority with no pipe in sight — so HTML table constructs outside §C
+    # refuse outright as well. Entity-encoded lookalikes (`&lt;table&gt;`) decode to
+    # literal TEXT, never markup, and are rightly ignored here.
+    html_table = re.compile(r"</?(?:table|thead|tbody|tfoot|tr|td|th)\b", re.IGNORECASE)
     return [
         line.strip()
         for i, line in enumerate(lines)
         if not (start < i < end) and (
-            table_shaped.match(line) or pr_row.match(rendered(line))
+            table_shaped.match(line)
+            or html_table.search(line)
+            or pr_row.match(rendered(line))
         )
     ]
 

@@ -1241,16 +1241,27 @@ def _canonical_settings_dump(settings: "Settings") -> dict:
         ) from exc
 
 
+class _AdmittedSettings(Settings):
+    """The execution snapshot's TYPE (R-audit-9 finding 2): identical fields, validators,
+    and behavior to Settings, but FROZEN — the send boundary reads this object for the
+    publisher's whole lifetime, so a post-construction field assignment must refuse, not
+    quietly redirect the wire. Only `_canonical_execution_snapshot` constructs it."""
+
+    model_config = SettingsConfigDict(frozen=True)
+
+
 def _canonical_execution_snapshot(canonical: dict) -> "Settings":
-    """The canonical, REVALIDATED execution snapshot issuance owns (R-audit-8 finding 1: the
-    fingerprint erases runtime types, so a same-value hostile subclass passed the digest and
-    the publisher dispatched its methods on the live object). The canonical values are
-    re-run through full Settings validation; consumers execute THIS object, which nothing
-    outside the issuance registry holds a reference to. Total: a set of values that cannot
-    revalidate is a governed refusal (the admission screen has already had its say — see
-    issue() for the ordering)."""
+    """The canonical, REVALIDATED, IMMUTABLE execution snapshot issuance owns (R-audit-8
+    finding 1: the fingerprint erases runtime types, so a same-value hostile subclass
+    passed the digest and the publisher dispatched its methods on the live object;
+    R-audit-9 finding 2: the snapshot must also refuse mutation at the send boundary).
+    The canonical values are re-run through full Settings validation into a frozen
+    instance; consumers execute THIS object, which nothing outside the issuance registry
+    holds a reference to. Total: a set of values that cannot revalidate is a governed
+    refusal (the admission screen has already had its say — see issue() for the
+    ordering)."""
     try:
-        return Settings(**canonical)
+        return _AdmittedSettings(**canonical)
     except Exception as exc:
         raise ProcessRoleCapabilityError(
             f"the canonical settings snapshot fails revalidation ({type(exc).__name__}); "
