@@ -1749,7 +1749,14 @@ def _rendered_inline(text: str) -> str:
     previous = None
     while previous != text:
         previous = text
+        # links and images render as their visible text: inline `[text](url)`, then the
+        # REFERENCE family — full `[text][label]`, collapsed `[text][]`, and shortcut
+        # `[text]` — and their `![...]` image forms. A defined reference renders a clean
+        # link showing `text`; matching how the inline form is already handled closes the
+        # whole link class (self-audit extension of the R9 rendered-review seam).
         text = re.sub(r"!?\[([^\]]*)\]\([^()\s]*(?:\s+\"[^\"]*\")?\)", r"\1", text)
+        text = re.sub(r"!?\[([^\]]*)\]\[[^\]]*\]", r"\1", text)
+        text = re.sub(r"!?\[([^\]]*)\](?!\[|\()", r"\1", text)
         text = re.sub(r"\*\*(?=\S)([^*]+?)(?<=\S)\*\*", r"\1", text)
         text = re.sub(r"\*(?=[^\s*])([^*]+?)(?<=[^\s*])\*", r"\1", text)
         text = re.sub(r"(?<![A-Za-z0-9_])__(?=\S)([^_]+?)(?<=\S)__(?![A-Za-z0-9_])",
@@ -6455,3 +6462,52 @@ def test_r9f3_an_html_table_outside_section_c_is_refused_like_a_pipe_table():
         problems = roadmap.future_unit_problems(mutated)
         assert any("outside §C" in p for p in problems), problems
     assert roadmap.future_unit_problems(text) == []
+
+
+# ── Self-audit extension of the rendered-review class (not a Codex finding) ────────────────────────
+# Probing the R9 rendered-review seam for CommonMark inline surface `_rendered_inline` did not
+# yet resolve, one link syntax past the R8 inline-link and R9 raw-HTML witnesses: REFERENCE-style
+# links and images (`[text][label]`, collapsed `[text][]`, shortcut `[text]`, and the `![...]`
+# image forms) render as their visible text but left bracketed source the reviewer read as a
+# non-command. The three live playbook sections carry no bracket constructs, so the strip is
+# monotonic (it can only reveal more to the scanner, never hide) and adds no live false positive.
+
+
+def test_selfaudit_reference_style_links_cannot_hide_a_command_from_the_assembled_verifier(
+        tmp_path, monkeypatch):
+    """A reader sees `[pkill kyc_worker][x]` (defined reference), `[pkill kyc_worker][]`, and
+    `![pkill kyc_worker][x]` as the visible text `pkill kyc_worker`; the reviewer read the
+    bracketed source and missed the command. Same class as the R8/R9 rendered-review
+    witnesses, through the real assembled OPS.CUTOVER.PROCEDURES verifier with a coherent
+    section re-pin."""
+    import copy
+    import shutil
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    live_doc = (REPO / ref.path).read_text()
+    section = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "alembic").symlink_to(REPO / "alembic")
+    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+    for witness in ("[pkill kyc_worker][x] first.\n\n[x]: https://example.invalid/ops",
+                    "[pkill kyc_worker][] first.\n\n[pkill kyc_worker]: https://example.invalid",
+                    "![pkill kyc_worker][x] first.\n\n[x]: https://example.invalid/ops"):
+        mutated_section = section + "\n" + witness + "\n"
+        assert live_doc.count(section) == 1, "the section must be a unique byte span"
+        (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
+        for other in ("docs/RUNBOOK.md",):
+            if (REPO / other).exists() and not (tmp_path / other).exists():
+                shutil.copy(REPO / other, tmp_path / other)
+        tampered = copy.copy(pr7b)
+        object.__setattr__(
+            tampered, "playbook_ref",
+            dataclasses.replace(
+                ref, sha256=hashlib.sha256(mutated_section.encode()).hexdigest()))
+        monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+        monkeypatch.setattr(_this_module(), "OPERATIONS",
+                            _operations_with_procedure(tampered))
+        with pytest.raises(AssertionError, match="command-shaped"):
+            AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        monkeypatch.undo()
