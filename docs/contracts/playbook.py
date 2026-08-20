@@ -458,6 +458,13 @@ class PlaybookRef:
     heading: str
     sha256: str
     commands: tuple[Command, ...] = ()
+    # R-audit-13 finding 1: the document section is a PROJECTION of this typed source
+    # file, byte for byte. The document stops being an authoring lane entirely — an
+    # instruction appended to the section alone, whatever its case, arity, or vocabulary,
+    # breaks projection identity and no digest re-pin can restore it; changing what the
+    # projection permits means authoring the typed source, in its own reviewed, pinned
+    # lane. Empty only for refs predating the projection surface.
+    body_source: str = ""
 
     def __post_init__(self) -> None:
         # CommonMark ATX only (re-audit `1826661..b5c7a83` finding 11): one to six hashes

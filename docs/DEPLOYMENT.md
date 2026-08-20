@@ -338,7 +338,7 @@ Steps:
    **before the window, in staging**, against the exact §0 digest; attest the
    same digest here.
 6. **Start the new workers** (they now claim the recovered queue under the
-   new decide-txn actor guard), then **resume**: unpause platform event
+   new decide-txn actor guard), then **resume** — unpause platform event
    submission and unblock the composer route.
 
 ### Rollback

@@ -226,7 +226,8 @@ FULL_WINDOW = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 9. PR 5b cutover — brief full maintenance window",
-        sha256="9b61656bfef3d67c90948ba15ef873249d1b7154e10c535108b39ea48a39e749",
+        body_source="docs/contracts/playbooks/pr5b_full_maintenance_window.md",
+        sha256="44b8e1613d30b4f76c58bfaf5378111ee824ba77f552c310159b3efa24883d1f",
         commands=(
             Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
         ),
@@ -264,6 +265,7 @@ BUNDLE_PINNING = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 10. PR 6 cutover — bundle-pinning activation",
+        body_source="docs/contracts/playbooks/bundle_pinning_activation.md",
         sha256="c7b02139284b25ba30cd431a3de508f51681eb1be9d15b0dd443947afd88b96a",
         commands=(
             Command(("python", "-m", "kyc_tool.ops.seed_policy_bundle",
@@ -351,6 +353,7 @@ PR7B_CORE = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 11. PR 7b-core cutover — drained maintenance window (migration 013)",
+        body_source="docs/contracts/playbooks/migrations_013_023.md",
         sha256="3cf24cfee80a34a3dc37edadda0fb46756c7675ecffa40322d6e10539b60cf2a",
         # Every operator-run command the section publishes, as parsed argv. The placeholders
         # (`<file.json>`, `<id>`, `<sha256>`) are the section's own literal text.
@@ -647,6 +650,7 @@ def procedure_projection(procedure: Procedure) -> tuple:
         plan_contract.subject,
         procedure.playbook_ref.path,
         procedure.playbook_ref.heading,
+        procedure.playbook_ref.body_source,
         tuple(c.line for c in procedure.playbook_ref.commands),
         (span.base_revision, span.target_revision) if span is not None else None,
         prerequisites,

@@ -1670,14 +1670,18 @@ _ARGV_FUNCTION_WORDS = frozenset({
 
 
 def _command_shaped(text: str, strict: bool = False, sentence_start: bool = True) -> bool:
-    """Would a reader read `text` as something to RUN? Shape is STRUCTURAL (R-audit-4 finding
-    2 — a finite root list missed `/bin/rm` and `find ... -delete`; R-audit-7 finding 2 — a
-    verb-led grammar missed naked `chmod 777 /var/lib/kyc`): shell metacharacters, dash-flag
-    tokens, imperative leads, known roots beside an operand, and the closed argv grammar —
-    within a run of consecutive argv-charset tokens, an absolute path beside anything, or a
-    bare word adjoining a machine-shaped operand. A LONE flag or path token is a mention —
-    you cannot run a flag. Unicode whitespace lookalikes split like whitespace, so an NBSP
-    variant is still command-shaped."""
+    """Would a reader read `text` as something to RUN? DEFENSE IN DEPTH, not the authority
+    (R-audit-13 finding 1): the reviewed playbook sections are byte-identical PROJECTIONS
+    of typed body sources, so certification never rests on this classifier — a doc-only
+    addition of ANY shape breaks projection identity first. What this heuristic models,
+    structurally and vocabulary-free: shell metacharacters, dash-flag tokens, imperative
+    leads, known roots beside an operand, the closed argv grammar (paths in runs,
+    machine-shaped operand pairs), and the sentence-position rules (lowercase
+    function-word-free leads, heading/list roles, colon clauses, single-token list items).
+    Honestly OUTSIDE its scope by design: a capitalized imperative with plain-word operands
+    reads as an English sentence at this granularity and is left to projection identity. A
+    LONE flag or path token is a mention — you cannot run a flag. Unicode whitespace
+    lookalikes split like whitespace, so an NBSP variant is still command-shaped."""
     tokens = text.split()
     if not tokens:
         return False
@@ -1753,12 +1757,22 @@ def _command_shaped(text: str, strict: bool = False, sentence_start: bool = True
         # reaches "the"/"of"/"are" inside two tokens — "run the restore CLI", "workers are
         # stopped before the window" — never qualifies, and a capitalized imperative
         # ("Confirm both pools...") is an English sentence, exactly as always.
-        sentences = re.split(r"(?<=[.!?])\s+", text)
+        # R-audit-13 finding 1 widened this from lowercase multi-token runs to the five
+        # boundary dimensions the audit proved unmodeled — executable-token grammar
+        # (hyphenated first tokens), rendered block role (heading markers join the skip
+        # set, so a heading's VISIBLE text is judged), clause boundary (a colon opens a
+        # clause inside a line), case (a capitalized word beside a machine-shaped or
+        # hyphenated operand), and arity (a list item that is nothing but one bare word).
+        # Still no vocabulary anywhere.
+        sentences = re.split(r"(?<=[.!?:])\s+", text)
         if not sentence_start:
             sentences = sentences[1:]
         for sentence in sentences:
             stokens = sentence.split()
-            while stokens and re.fullmatch(r"[-*+>]|\d+[.)]|\([a-z0-9]{1,2}\)", stokens[0]):
+            marker_led = False
+            while stokens and re.fullmatch(
+                    r"[-*+>]|#{1,6}|\d+[.)]|\([a-z0-9]{1,2}\)", stokens[0]):
+                marker_led = marker_led or stokens[0].lstrip("#") != ""
                 stokens = stokens[1:]
             lead: list = []
             for token in stokens:
@@ -1767,7 +1781,10 @@ def _command_shaped(text: str, strict: bool = False, sentence_start: bool = True
                         or bare.lower() in _ARGV_FUNCTION_WORDS):
                     break
                 lead.append(bare)
-            if len(lead) >= 2 and re.fullmatch(r"[a-z][a-z0-9._]*", lead[0]):
+            if len(lead) >= 2 and re.fullmatch(r"[a-z][a-z0-9._-]*", lead[0]):
+                return True
+            if (marker_led and len(stokens) == 1 and len(lead) == 1
+                    and re.fullmatch(r"[a-z][a-z0-9._-]*", lead[0])):
                 return True
     return False
 
@@ -2026,9 +2043,9 @@ def _command_inventory_problems(ref, section: str) -> list[str]:
 # command lines, span endpoints, every prerequisite's every field value, every aggregate and
 # branch answer with its evidence. Editing ANY of it is a re-pin, the act of review.
 PROCEDURE_DEFINITION_PINS = {
-    "PR 5b full maintenance window": "4f872afc1bf22f3c",
-    "Bundle-pinning activation": "728f296c280d0b37",
-    "Migrations 013-023": "8e715cb619906abc",
+    "PR 5b full maintenance window": "90b8a35c7c803cce",
+    "Bundle-pinning activation": "c8865938bfbb7b62",
+    "Migrations 013-023": "3751e0ae4c53ef30",
 }
 
 
@@ -2078,6 +2095,19 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
         # re-pin, and a command edit is still caught even when the record moves too.
         inventory_problems = _command_inventory_problems(ref, section)
         assert not inventory_problems, f"{procedure.name}: {inventory_problems}"
+        # R-audit-13 finding 1: the document section is a PROJECTION of the typed body
+        # source — byte for byte — so the document is no longer an authoring lane at all.
+        # An instruction appended to the section alone, whatever its case, arity, or
+        # vocabulary, breaks this identity and NO digest re-pin can restore it; what the
+        # projection permits changes only by authoring the typed source, whose path sits
+        # inside the pinned definition projection below. The prose classifier above stays
+        # as DEFENSE IN DEPTH over the same bytes, not as the authority.
+        assert ref.body_source, f"{procedure.name}: the ref names no typed body source"
+        source = (REPO / ref.body_source).read_bytes().decode("utf-8").replace("\r\n", "\n")
+        assert section == source, (
+            f"{procedure.name}: the document section is not the typed body projection "
+            f"({ref.body_source}); author the typed source, never the document"
+        )
         # gate finding 5: the derived fields are REBOUND to the plan's own derivations every
         # run, so object.__setattr__ on the frozen procedure cannot outlive one verification
         assert procedure.when == procedure.plan.when(), (
@@ -6393,8 +6423,12 @@ def test_r8f2_rendered_markdown_cannot_hide_a_command_from_the_assembled_verifie
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(
             live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",):
+        for other in ("docs/RUNBOOK.md",
+                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
+                      "docs/contracts/playbooks/bundle_pinning_activation.md",
+                      "docs/contracts/playbooks/migrations_013_023.md"):
             if (REPO / other).exists() and not (tmp_path / other).exists():
+                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6456,8 +6490,12 @@ def test_r9f1_inline_html_and_comments_cannot_hide_a_command_from_the_assembled_
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(
             live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",):
+        for other in ("docs/RUNBOOK.md",
+                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
+                      "docs/contracts/playbooks/bundle_pinning_activation.md",
+                      "docs/contracts/playbooks/migrations_013_023.md"):
             if (REPO / other).exists() and not (tmp_path / other).exists():
+                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6558,8 +6596,12 @@ def test_selfaudit_reference_style_links_cannot_hide_a_command_from_the_assemble
         mutated_section = section + "\n" + witness + "\n"
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",):
+        for other in ("docs/RUNBOOK.md",
+                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
+                      "docs/contracts/playbooks/bundle_pinning_activation.md",
+                      "docs/contracts/playbooks/migrations_013_023.md"):
             if (REPO / other).exists() and not (tmp_path / other).exists():
+                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6602,8 +6644,12 @@ def test_r10f1_backslash_escapes_cannot_hide_a_command_from_the_assembled_verifi
         mutated_section = section + "\n" + witness + "\n"
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",):
+        for other in ("docs/RUNBOOK.md",
+                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
+                      "docs/contracts/playbooks/bundle_pinning_activation.md",
+                      "docs/contracts/playbooks/migrations_013_023.md"):
             if (REPO / other).exists() and not (tmp_path / other).exists():
+                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6660,8 +6706,12 @@ def test_r11f1_witnessed_maintenance_roots_own_any_operand_shape(tmp_path, monke
         mutated_section = section + "\n" + witness + "\n"
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",):
+        for other in ("docs/RUNBOOK.md",
+                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
+                      "docs/contracts/playbooks/bundle_pinning_activation.md",
+                      "docs/contracts/playbooks/migrations_013_023.md"):
             if (REPO / other).exists() and not (tmp_path / other).exists():
+                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6732,8 +6782,12 @@ def test_r12f1_naked_commands_refuse_with_no_root_vocabulary_at_all(tmp_path, mo
         mutated_section = section + "\n" + witness + "\n"
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",):
+        for other in ("docs/RUNBOOK.md",
+                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
+                      "docs/contracts/playbooks/bundle_pinning_activation.md",
+                      "docs/contracts/playbooks/migrations_013_023.md"):
             if (REPO / other).exists() and not (tmp_path / other).exists():
+                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6761,3 +6815,95 @@ def test_r12f1_english_sentences_and_protected_prose_stay_prose():
                   "a fail-closed read-back verifies the floor.",
                   "Hard termination is safe here."):
         assert not _command_shaped(prose), prose
+
+
+# ── R-audit-13 `a0e6e47..d839a52` (finding 1) ─────────────────────────────────────────────────────
+
+
+def test_r13f1_the_five_boundary_dimensions_refuse_through_the_assembled_verifier(
+        tmp_path, monkeypatch):
+    """The audit's witnesses, one per unmodeled boundary: executable-token grammar
+    (`my-tool worker`), rendered block role (`### kill kyc-worker` — a heading's visible
+    text IS the instruction), clause boundary (`Preparation: kill kyc-worker`), case
+    (`Kill kyc-worker`), and arity (`- reboot`). Four close in the defense-in-depth
+    grammar — token class, marker roles, colon clauses, single-token list items — and the
+    fifth is exactly why the classifier is no longer the authority: `Kill kyc-worker` is
+    indistinguishable from an English imperative at this granularity, and it refuses
+    through PROJECTION IDENTITY instead — the document is not an authoring lane, so an
+    appended paragraph of ANY shape fails `section == typed body source` and no digest
+    re-pin can restore it. Through the real assembled verifier, per witness."""
+    import copy
+    import shutil
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    live_doc = (REPO / ref.path).read_text()
+    section = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "alembic").symlink_to(REPO / "alembic")
+    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+    for witness, expect in (("my-tool worker", "command-shaped"),
+                            ("### kill kyc-worker", "command-shaped"),
+                            ("Preparation: kill kyc-worker", "command-shaped"),
+                            ("Kill kyc-worker", "typed body projection"),
+                            ("- reboot", "command-shaped")):
+        mutated_section = section + "\n" + witness + "\n"
+        assert live_doc.count(section) == 1, "the section must be a unique byte span"
+        (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
+        for other in ("docs/RUNBOOK.md",
+                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
+                      "docs/contracts/playbooks/bundle_pinning_activation.md",
+                      "docs/contracts/playbooks/migrations_013_023.md"):
+            if (REPO / other).exists() and not (tmp_path / other).exists():
+                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(REPO / other, tmp_path / other)
+        tampered = copy.copy(pr7b)
+        object.__setattr__(
+            tampered, "playbook_ref",
+            dataclasses.replace(
+                ref, sha256=hashlib.sha256(mutated_section.encode()).hexdigest()))
+        monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+        monkeypatch.setattr(_this_module(), "OPERATIONS",
+                            _operations_with_procedure(tampered))
+        with pytest.raises(AssertionError, match=expect):
+            AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        monkeypatch.undo()
+
+
+def test_r13f1_every_appended_paragraph_breaks_projection_identity_regardless_of_shape(
+        tmp_path, monkeypatch):
+    """The positive closure behind the five witnesses: projection identity refuses ANY
+    doc-only addition — even one the defense-in-depth classifier reads as innocent prose —
+    so certification no longer depends on classifying text at all. The document is a
+    projection; authoring happens only in the typed source."""
+    import copy
+    import shutil
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    live_doc = (REPO / ref.path).read_text()
+    section = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "alembic").symlink_to(REPO / "alembic")
+    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+    witness = "The window is generous and the team is well rested."
+    mutated_section = section + "\n" + witness + "\n"
+    (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
+    for other in ("docs/RUNBOOK.md",
+                  "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
+                  "docs/contracts/playbooks/bundle_pinning_activation.md",
+                  "docs/contracts/playbooks/migrations_013_023.md"):
+        (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO / other, tmp_path / other)
+    tampered = copy.copy(pr7b)
+    object.__setattr__(
+        tampered, "playbook_ref",
+        dataclasses.replace(
+            ref, sha256=hashlib.sha256(mutated_section.encode()).hexdigest()))
+    monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+    monkeypatch.setattr(_this_module(), "OPERATIONS",
+                        _operations_with_procedure(tampered))
+    with pytest.raises(AssertionError, match="typed body projection"):
+        AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
