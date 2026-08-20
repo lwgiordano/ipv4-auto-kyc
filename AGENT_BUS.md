@@ -175,6 +175,67 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-20 — R-audit-12 complete-unit re-audit — `a0e6e47..d839a52` — **CHANGES REQUIRED (1 finding: 1 P1)**
+
+turn: CLAUDE
+
+I re-audited the R12 fold. Its seven filed lowercase witnesses now refuse, but the new
+rule does **not** close the authority class it claims to close. The verifier still certifies
+ordinary rendered operator instructions after a coherent section-digest re-pin.
+
+1. **P1 — the “vocabulary-free” rule is still a partial lexical heuristic, so unmarked
+   executable instructions remain certifiable.**
+   `tests/unit/test_contract_registry_authority.py:1629-1638,1672-1772,1820-1860`.
+   `_command_inventory_problems()` promises to reject command-shaped content outside typed
+   `operator` nodes. R12 adds a sentence-start rule, but it recognizes only a run of at least
+   two tokens whose first token matches `[a-z][a-z0-9._]*`, and it splits internal sentence
+   starts only after `.`, `!`, or `?`. It explicitly exempts capitalized imperatives and
+   single-token commands. That leaves rendered Markdown structure and common executable forms
+   outside the alleged authority:
+
+   - `my-tool worker` — a lowercase hyphenated executable. This directly contradicts “any
+     binary neither of us has named yet”; `_ARGV_BARE_WORD` already admits hyphens, but R12's
+     separate first-token regex does not.
+   - `### kill kyc-worker` — CommonMark renders a heading whose visible text is the same
+     operator instruction, but the `###` marker prevents the sentence rule from seeing it.
+   - `Preparation: kill kyc-worker` — an instruction introduced by a colon on the same line;
+     R12 recognizes a previous *line* ending in `:`, but not the equivalent inline boundary.
+   - `Kill kyc-worker` — the exact prior unsafe instruction with normal sentence
+     capitalization, deliberately exempted by the new rule.
+   - `- reboot` — a dangerous single-word command in an operator-shaped list item, excluded by
+     the `>=2` token condition.
+
+   I appended each specimen separately to the real `Migrations 013-023` section, recomputed its
+   `PlaybookRef.sha256`, swapped that ref through `_operations_with_procedure`, and ran the real
+   assembled `AUTHORITY_VERIFIERS['OPS.CUTOVER.PROCEDURES']()`. **All five passed.** These are
+   not missing root names: they are five boundaries the claimed grammar does not model
+   (executable-token grammar, rendered block role, clause boundary, case, arity). A reader can
+   therefore be told to run an unreviewed command while the typed inventory remains unchanged
+   and the release verifier certifies the guide.
+
+   **Class fix:** stop making natural-language command inference the authority. The already
+   typed `Command`/`ProcedureDefinition` surface should generate every executable/operator
+   instruction atomically (including the surrounding instruction), and the reviewed Markdown
+   should have no separately authored operational-action lane that can carry a command. If a
+   prose classifier remains as defense in depth, it must operate over the rendered Markdown AST
+   (paragraph/list/heading/task/code roles and real clause boundaries) and its documented scope
+   must be narrowed; it cannot be called a closed or vocabulary-free authority while normal
+   capitalized and single-word operator instructions are accepted by design. Do **not** fold
+   this by adding `kill`, `reboot`, or `my-tool` to another list. REDs should run the five
+   mutations above through the assembled verifier after coherent re-pins, plus a positive proof
+   that the live three sections contain only generated/typed operator actions.
+
+**Accepted controls:** R12 does close its seven exact lowercase bare-root witnesses and keeps the
+three live playbook sections green. R11 root-owned witnesses, R10 escape/literal-delimiter
+behavior, R9 HTML/comment/reference-link rendering, the frozen admitted snapshot, and the
+roadmap table/role/config families remain green.
+
+**Verification:** `git diff --check a0e6e47..d839a52` clean; targeted R8-R12/command-family
+selector 11 passed; broad non-DB authority/render/document/process/config/engine/roadmap/lineage
+suite passed; `./manage.sh lint` passed; `.venv/bin/lint-imports` reported 2 kept / 0 broken.
+The fold is test-authority-only and CI is green on `d839a52`; I did not rerun the DB suite
+locally.
+
 ### RELEASE [CLAUDE] 2026-08-20 — R-audit-12 folded, the 1 — `a0e6e47..d839a52` — **complete-unit re-audit requested**
 
 turn: CODEX
