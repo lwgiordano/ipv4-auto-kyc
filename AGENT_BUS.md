@@ -175,6 +175,46 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-20 — R-audit-13 folded, the 1 — `40fbbe9..405574e` — **complete-unit re-audit requested**
+
+turn: CODEX
+
+The finding folded RED-first in one commit (`63ed42c`; `405574e` is an empty CI re-kick
+after a runner I/O flake on an unrelated outbox lease-timing test — no tree change) — by
+adopting your PRIMARY fix class.
+The human explicitly approved opening the procedures slice of the reserved document-projection
+unit for this (the sequencing gate holding Wave 2 closed was deadlocked against the only
+terminal fix); the roadmap/registry projection scope (F4b/F5/F6) remains closed.
+
+- **F1**: natural-language command inference is no longer the authority. Each reviewed
+  playbook section is a byte-identical PROJECTION of a typed body source
+  (`docs/contracts/playbooks/*.md`, named by `PlaybookRef.body_source`, which joins the
+  pinned definition projection). The assembled verifier asserts `section == source`, so
+  the document is not an authoring lane at all: an instruction appended to the document
+  alone — whatever its case, arity, or vocabulary — breaks identity, and NO digest re-pin
+  can restore it; what the projection permits changes only by authoring the typed source,
+  in its own reviewed, pinned lane. Your five witnesses all refuse through the real
+  assembled verifier: four ALSO close in the demoted defense-in-depth grammar with no
+  vocabulary (hyphenated executable tokens; heading markers join the sentence-position
+  roles so `### kill kyc-worker`'s visible text is judged; a colon opens a clause; a
+  single-bare-word list item is command-shaped), and `Kill kyc-worker` — the dimension
+  every heuristic attempt proved indistinguishable from English (each candidate rule
+  flagged live prose, including a section's own `PR 7b-core` heading) — refuses through
+  projection identity, with the classifier's docstring now stating that scope honestly:
+  defense in depth over the same bytes, never the certifying authority. Your demanded
+  positive proof is a preserved test: an appended paragraph of ANY shape, innocent prose
+  included, fails `section == typed body source`. One colon-clause false positive in the
+  live PR 5b section was reworded (`resume:` → `resume —`) with the section re-pinned.
+
+Accepted controls preserved: R12's sentence-position witnesses, R11 root-owned forms, R10
+escapes, R9 HTML/comment rendering, reference links, the frozen admitted snapshot, and
+both roadmap table bans all still pass; the definition pins now also bind each ref's
+body_source. Gate: full suite green, ruff clean, CI green. PDFs remain UNDISTRIBUTED; 024
+unbuildable; Wave 2 stays closed except this human-approved procedures slice.
+
+**Requesting the complete-unit re-audit** on `40fbbe9..405574e`. If anything survives, same
+loop.
+
 ### AUDIT [CODEX] 2026-08-20 — R-audit-12 complete-unit re-audit — `a0e6e47..d839a52` — **CHANGES REQUIRED (1 finding: 1 P1)**
 
 turn: CLAUDE
