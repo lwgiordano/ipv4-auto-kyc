@@ -1743,7 +1743,19 @@ def _rendered_inline(text: str) -> str:
     `&#60;` or `&#42;` is a literal character and can never become new markup. Star
     emphasis binds intraword; underscore emphasis does not (CommonMark flanking), so
     `kyc_worker` keeps its underscores. Code spans are the caller's lane and never reach
-    here."""
+    here.
+
+    Backslash escapes come FIRST of all (R-audit-10 finding 1: `\\/` renders as `/`,
+    `kyc\\_worker` as `kyc_worker`, and the reviewer saw backslash-broken non-command
+    tokens): a backslash before ASCII punctuation renders the character LITERALLY and
+    suppresses any markup role it had — `\\*` opens no emphasis, `\\<` opens no tag — so
+    each escaped character is parked in a private-use placeholder before any parsing and
+    restored as the bare character after entity decoding. A backslash before anything
+    else is a visible backslash and stays. (A private-use codepoint already in the source
+    would be restored as punctuation — that direction only REVEALS more to the scanner,
+    never hides.)"""
+    text = re.sub(r"\\([!-/:-@\[-`{-~])",
+                  lambda m: chr(0xE000 + ord(m.group(1))), text)
     text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
     text = re.sub(r"</?[A-Za-z!](?:\"[^\"]*\"|'[^']*'|[^>])*>", "", text)
     previous = None
@@ -1763,7 +1775,8 @@ def _rendered_inline(text: str) -> str:
                       r"\1", text)
         text = re.sub(r"(?<![A-Za-z0-9_])_(?=[^\s_])([^_]+?)(?<=[^\s_])_(?![A-Za-z0-9_])",
                       r"\1", text)
-    return html.unescape(text)
+    text = html.unescape(text)
+    return re.sub(r"[-]", lambda m: chr(ord(m.group(0)) - 0xE000), text)
 
 
 def _unmarked_instruction_problems(section_text: str) -> list:
@@ -6511,3 +6524,59 @@ def test_selfaudit_reference_style_links_cannot_hide_a_command_from_the_assemble
         with pytest.raises(AssertionError, match="command-shaped"):
             AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
         monkeypatch.undo()
+
+
+# ── R-audit-10 `3ee0b1b..588e02f` (finding 1) ─────────────────────────────────────────────────────
+
+
+def test_r10f1_backslash_escapes_cannot_hide_a_command_from_the_assembled_verifier(
+        tmp_path, monkeypatch):
+    """The audit's witnesses, the backslash side of the rendered-inline class: a reader sees
+    `chmod 777 \\/var\\/lib\\/kyc` as `chmod 777 /var/lib/kyc` and `pkill kyc\\_worker` as
+    `pkill kyc_worker` — CommonMark renders a backslash-escaped ASCII punctuation character
+    as the character — while the reviewer saw backslash-broken tokens outside the argv
+    grammar. Through the real assembled AUTHORITY_VERIFIERS['OPS.CUTOVER.PROCEDURES'] with
+    the section sha coherently re-pinned, exactly like the prior command harnesses."""
+    import copy
+    import shutil
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    live_doc = (REPO / ref.path).read_text()
+    section = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "alembic").symlink_to(REPO / "alembic")
+    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+    for witness in ("chmod 777 \\/var\\/lib\\/kyc",
+                    "Run the chmod 777 \\/var\\/lib\\/kyc now.",
+                    "pkill kyc\\_worker"):
+        mutated_section = section + "\n" + witness + "\n"
+        assert live_doc.count(section) == 1, "the section must be a unique byte span"
+        (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
+        for other in ("docs/RUNBOOK.md",):
+            if (REPO / other).exists() and not (tmp_path / other).exists():
+                shutil.copy(REPO / other, tmp_path / other)
+        tampered = copy.copy(pr7b)
+        object.__setattr__(
+            tampered, "playbook_ref",
+            dataclasses.replace(
+                ref, sha256=hashlib.sha256(mutated_section.encode()).hexdigest()))
+        monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+        monkeypatch.setattr(_this_module(), "OPERATIONS",
+                            _operations_with_procedure(tampered))
+        with pytest.raises(AssertionError, match="command-shaped"):
+            AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        monkeypatch.undo()
+
+
+def test_r10f1_an_escaped_delimiter_does_not_become_markup():
+    """The escape rule's other half, so the fix cannot overshoot: an escaped delimiter is a
+    LITERAL character, never markup — `\\*stop\\*` renders `*stop*` (no emphasis to strip),
+    `\\<span\\>` renders `<span>` (no tag to vanish), and a lone backslash before a
+    non-punctuation character stays a visible backslash."""
+    assert _rendered_inline("\\*stop\\*") == "*stop*"
+    assert _rendered_inline("\\<span\\>text") == "<span>text"
+    assert _rendered_inline("pk\\ill") == "pk\\ill"
+    assert _rendered_inline("chmod 777 \\/var\\/lib\\/kyc") == "chmod 777 /var/lib/kyc"
+    assert _rendered_inline("pkill kyc\\_worker") == "pkill kyc_worker"
