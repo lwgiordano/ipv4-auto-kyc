@@ -1669,7 +1669,7 @@ _ARGV_FUNCTION_WORDS = frozenset({
     "must", "shall", "should", "will", "would", "there", "here"})
 
 
-def _command_shaped(text: str, strict: bool = False) -> bool:
+def _command_shaped(text: str, strict: bool = False, sentence_start: bool = True) -> bool:
     """Would a reader read `text` as something to RUN? Shape is STRUCTURAL (R-audit-4 finding
     2 — a finite root list missed `/bin/rm` and `find ... -delete`; R-audit-7 finding 2 — a
     verb-led grammar missed naked `chmod 777 /var/lib/kyc`): shell metacharacters, dash-flag
@@ -1740,6 +1740,35 @@ def _command_shaped(text: str, strict: bool = False) -> bool:
                         and ("_" in operand or "=" in operand
                              or operand.startswith("/"))):
                     return True
+        # the SENTENCE-INITIAL naked-command rule (R-audit-12 finding 1: every root list is
+        # specimen-grown — kill, killall, sudo, rsync, scp, ssh, make certified — so this
+        # shape carries NO vocabulary at all). Written English capitalizes its sentence
+        # starts and reaches a function word almost immediately; a pasted command does
+        # neither. At each sentence start — the text's start when the CALLER says this text
+        # begins a sentence (the prose scanner tracks paragraph boundaries and the previous
+        # line's terminal punctuation; a hard-wrap continuation does NOT begin one), plus
+        # after ./!/? within the text, list and quote markers skipped — a leading
+        # comma-free, function-word-free argv run of >=2 tokens whose FIRST token is a
+        # plain lowercase bare word is a command whatever its vocabulary. A clause that
+        # reaches "the"/"of"/"are" inside two tokens — "run the restore CLI", "workers are
+        # stopped before the window" — never qualifies, and a capitalized imperative
+        # ("Confirm both pools...") is an English sentence, exactly as always.
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        if not sentence_start:
+            sentences = sentences[1:]
+        for sentence in sentences:
+            stokens = sentence.split()
+            while stokens and re.fullmatch(r"[-*+>]|\d+[.)]|\([a-z0-9]{1,2}\)", stokens[0]):
+                stokens = stokens[1:]
+            lead: list = []
+            for token in stokens:
+                bare = token.strip(".;:()`'\"")
+                if (not bare or "," in token or not _ARGV_TOKEN.fullmatch(bare)
+                        or bare.lower() in _ARGV_FUNCTION_WORDS):
+                    break
+                lead.append(bare)
+            if len(lead) >= 2 and re.fullmatch(r"[a-z][a-z0-9._]*", lead[0]):
+                return True
     return False
 
 
@@ -1795,29 +1824,39 @@ def _unmarked_instruction_problems(section_text: str) -> list:
     judged as RENDERED (R-audit-8 finding 2); fence and span content is literal for a
     reader, so it is scanned exactly as written."""
     problems = []
+    # sentence-position tracking for the naked-command rule (R-audit-12 finding 1): a line
+    # begins a sentence when it opens a block (section start, after a fence, after a
+    # heading, after a blank) or when the previous prose line ended with terminal
+    # punctuation. A hard-wrap continuation line does NOT — its first word is the middle
+    # of an English sentence, and treating wraps as starts drowned the scan in prose.
+    starts_sentence = True
     for node in _markdown_blocks(section_text):
         if node[0] == "fence":
-            if node[2] == "operator":
-                continue
-            for line in node[3]:
-                if _command_shaped(line, strict=True):
-                    problems.append(
-                        f"a {node[2] or 'bare'} fence carries a command-shaped line outside "
-                        f"the operator lane: {line.strip()[:70]!r}")
+            if node[2] != "operator":
+                for line in node[3]:
+                    if _command_shaped(line, strict=True):
+                        problems.append(
+                            f"a {node[2] or 'bare'} fence carries a command-shaped line "
+                            f"outside the operator lane: {line.strip()[:70]!r}")
+            starts_sentence = True
             continue
         line = re.sub(r"(?<!`)``[^`]+?``(?!`)", "\u2039span\u203a", node[1])  # reviewed
         for span in re.findall(r"(?<!`)`([^`]+?)`(?!`)", line):
-            if _command_shaped(span):
+            # a span is a mid-prose MENTION — it never occupies sentence position
+            if _command_shaped(span, sentence_start=False):
                 problems.append(
                     f"a single-backtick span is command-shaped — a mention cannot be "
                     f"runnable: {span[:70]!r}")
         # prose is judged as RENDERED (R-audit-8 finding 2): code spans are the reader's
         # literal lane and were lifted out above; everything else renders before review.
         prose = _rendered_inline(re.sub(r"(?<!`)`[^`]+?`(?!`)", "\u2039span\u203a", line))
-        if _command_shaped(prose):
+        if _command_shaped(prose, sentence_start=starts_sentence):
             problems.append(
                 f"prose carries a command-shaped instruction outside any marked node: "
                 f"{prose.strip()[:70]!r}")
+        stripped = prose.strip()
+        starts_sentence = (not stripped or stripped.endswith((".", "!", "?", ":"))
+                           or _parse_atx_heading(node[1]) is not None)
     return problems
 
 
@@ -6652,6 +6691,73 @@ def test_r11f1_relative_operand_maintenance_commands_are_command_shaped():
         assert _command_shaped(text), text
     for prose in ("run the restore CLI",
                   "Run per restored table",
-                  "workers fail-closed on error",
                   "the drained cutover is rehearsed in staging"):
+        assert not _command_shaped(prose), prose
+    # position-dependent since R-audit-12: mid-sentence (its real position in prose) this
+    # stays prose; the same words at a lowercase SENTENCE START read as a pasted command
+    # and demand marking — over-flagging there is the fail-closed direction.
+    assert not _command_shaped("workers fail-closed on error", sentence_start=False)
+    assert _command_shaped("workers fail-closed on error")
+
+
+# ── R-audit-12 `3048329..8fc5ca0` (finding 1) ─────────────────────────────────────────────────────
+
+
+def test_r12f1_naked_commands_refuse_with_no_root_vocabulary_at_all(tmp_path, monkeypatch):
+    """The audit's witnesses: the root inventory was still specimen-grown — kill, killall,
+    sudo, rsync, scp, ssh, and make all certified after an honest re-pin. The naked-command
+    shape is now recognized with NO vocabulary: a sentence-initial, function-word-free run
+    of argv tokens starting with a plain lowercase word is a pasted command, not an English
+    sentence — sentences capitalize and reach for function words almost immediately.
+    Through the real assembled AUTHORITY_VERIFIERS['OPS.CUTOVER.PROCEDURES'] with the
+    section sha coherently re-pinned, exactly like the prior command harnesses."""
+    import copy
+    import shutil
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    live_doc = (REPO / ref.path).read_text()
+    section = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "alembic").symlink_to(REPO / "alembic")
+    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+    for witness in ("kill kyc-worker",
+                    "killall kyc-worker",
+                    "sudo reboot now",
+                    "rsync backup-data prod-data",
+                    "scp backup-data prod-host",
+                    "ssh prod-host reboot",
+                    "make deploy-prod"):
+        mutated_section = section + "\n" + witness + "\n"
+        assert live_doc.count(section) == 1, "the section must be a unique byte span"
+        (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
+        for other in ("docs/RUNBOOK.md",):
+            if (REPO / other).exists() and not (tmp_path / other).exists():
+                shutil.copy(REPO / other, tmp_path / other)
+        tampered = copy.copy(pr7b)
+        object.__setattr__(
+            tampered, "playbook_ref",
+            dataclasses.replace(
+                ref, sha256=hashlib.sha256(mutated_section.encode()).hexdigest()))
+        monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+        monkeypatch.setattr(_this_module(), "OPERATIONS",
+                            _operations_with_procedure(tampered))
+        with pytest.raises(AssertionError, match="command-shaped"):
+            AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        monkeypatch.undo()
+
+
+def test_r12f1_english_sentences_and_protected_prose_stay_prose():
+    """The rule's other half, so the fix cannot overshoot: capitalized sentences, clauses
+    that reach a function word inside the first two tokens, and the long-protected
+    imperative-determiner forms all stay prose under the vocabulary-free rule."""
+    for prose in ("run the restore CLI against the manifest.",
+                  "Run per restored table.",
+                  "Confirm both pools are at zero before continuing.",
+                  "Rollback mirrors the same window.",
+                  "workers are stopped before the window.",
+                  "retention of evidence follows the schedule.",
+                  "a fail-closed read-back verifies the floor.",
+                  "Hard termination is safe here."):
         assert not _command_shaped(prose), prose
