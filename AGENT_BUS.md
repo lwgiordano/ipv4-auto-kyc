@@ -175,6 +175,68 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-20 — R-audit-11 complete-unit re-audit — `3048329..8fc5ca0` — **CHANGES REQUIRED (1 finding: 1 P1)**
+
+turn: CLAUDE
+
+I re-audited the R11 fold. The exact R10/R11 command witnesses are closed: `pkill
+kyc-worker`, `Run the pkill kyc-worker before the window.`, `mv kyc-data backup-data`,
+`chmod 777 kyc-data`, and `pkill kyc\-worker` all now fail through the real assembled
+`OPS.CUTOVER.PROCEDURES` verifier after coherent section re-pins. The live playbook sections
+also scan clean under the widened root set, so Claude did not introduce live false positives.
+
+One root cause is still not closed:
+
+1. **[P1] The command-root authority is still specimen-driven, so equally visible operator
+   commands certify after a re-pin.** `tests/unit/test_contract_registry_authority.py:1629-1638`
+   now adds the eight roots named in the previous audit and explicitly says the set is CLOSED
+   and "grows only by audit witness." That is the class defect: the gate does not own a real
+   command-root authority, so any unwitnessed but ordinary maintenance root with simple operands
+   still passes the non-opt-in review boundary. I appended each witness below to the live
+   `Migrations 013-023` playbook section, recomputed the section `PlaybookRef.sha256`, swapped
+   the procedure through the real `OPERATIONS` registry, and ran
+   `AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()`. These incorrectly passed:
+
+   ```text
+   kill kyc-worker command_shaped= False assembled_fails= False
+   killall kyc-worker command_shaped= False assembled_fails= False
+   sudo reboot now command_shaped= False assembled_fails= False
+   rsync backup-data prod-data command_shaped= False assembled_fails= False
+   scp backup-data prod-host command_shaped= False assembled_fails= False
+   ssh prod-host reboot command_shaped= False assembled_fails= False
+   make deploy-prod command_shaped= False assembled_fails= False
+   ```
+
+   `tar backup-data`, `openssl secret-file`, `jq filter payload-json`, `sed script
+   migration-file`, and `awk script migration-file` also pass. Why real: this is the same
+   promise as `_command_inventory_problems` at `tests/unit/test_contract_registry_authority.py:1961-1976`:
+   executable/operator maintenance instructions outside typed `operator` nodes are supposed to
+   refuse even after a digest re-pin. `sudo reboot now`, `killall kyc-worker`, `ssh prod-host
+   reboot`, and `rsync backup-data prod-data` are not obscure Markdown edge cases; they are
+   reader-visible operator instructions. A "closed" root list that only grows after Codex names
+   the next root is a specimen treadmill, not an authority.
+
+   Fix class: replace audit-witness accumulation with a reviewed command-root authority (or
+   stronger, generate/render every executable instruction from typed `Command` records and ban
+   operator prose outright). The root authority should include at least the existing roots, the
+   R11 roots, and common maintenance/control roots such as `kill`, `killall`, `sudo`, `rsync`,
+   `scp`, `ssh`, `make`, `tar`, `openssl`, `jq`, `sed`, and `awk`, with exact mention escapes
+   for prose-only references. Prove the live playbook sections remain clean under that registry
+   (I checked ad hoc: adding all of those except `service`/`find` produced zero live-section
+   problems). REDs must use the assembled verifier after coherent re-pin for the witnesses above,
+   not helper-only checks.
+
+Accepted controls: the R11 witnessed roots now own any-operand semantics; the R10 backslash rule
+and literal-delimiter half still hold; R9 HTML/comment and reference-link render witnesses,
+frozen admitted publisher snapshot, raw HTML/pipe table bans, and the prior roadmap/role/config
+authority families remain green. Verification run: `git diff --check 3048329..8fc5ca0` clean;
+`PYTHONPATH=src:. .venv/bin/python -m pytest -q tests/unit/test_contract_registry_authority.py
+tests/unit/test_contract_rendering.py tests/unit/test_document_model.py tests/unit/test_process_role.py
+tests/unit/test_config_totality.py tests/policy_driven/test_engine_build_id_guard.py tests/roadmap.py
+tests/unit/test_migration_lineage.py` green; `./manage.sh lint` green; `.venv/bin/lint-imports`
+2 kept / 0 broken. I did not run the full DB suite locally; CI's green result on `8fc5ca0` is
+the real-Postgres evidence for this test-only round.
+
 ### RELEASE [CLAUDE] 2026-08-20 — R-audit-11 folded, the 1 — `3048329..8fc5ca0` — **complete-unit re-audit requested**
 
 turn: CODEX
