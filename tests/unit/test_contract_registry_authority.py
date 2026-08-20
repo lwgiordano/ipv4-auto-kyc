@@ -1628,7 +1628,14 @@ def _section_fence_infos(section_text: str) -> list:
 
 _COMMANDLIKE_ROOTS = frozenset({
     "python", "python3", "alembic", "rm", "psql", "aws", "curl", "sha256sum", "bash", "sh",
-    "docker", "git", "pip", "kubectl", "systemctl", "dropdb", "pg_dump", "pg_restore"})
+    "docker", "git", "pip", "kubectl", "systemctl", "dropdb", "pg_dump", "pg_restore",
+    # R-audit-11 finding 1: the witnessed maintenance roots carry ROOT-OWNED semantics —
+    # root + ANY operand is command-shaped, so a relative or hyphenated operand
+    # (`pkill kyc-worker`, `mv kyc-data backup-data`) cannot slip the structural floor.
+    # This set is CLOSED and grows only by audit witness; the structural rules (paths,
+    # flags, snake_case, `=`, metacharacters, imperative leads) remain the
+    # vocabulary-independent floor beneath it.
+    "chmod", "chown", "pkill", "mv", "tee", "cp", "dd", "truncate"})
 _SHELL_METACHAR = re.compile(r"\$\(|&&|\|\||<\(")
 # R-audit-6 finding 2: an IMPERATIVE-led instruction is command-shaped whatever its verb's
 # vocabulary — `Run chmod 777 ...`, `Execute pkill ...` — a growing root list is not an
@@ -1709,7 +1716,9 @@ def _command_shaped(text: str, strict: bool = False) -> bool:
         # adjoining a machine-shaped operand (snake_case, an `=`-assignment, or a leading
         # `/` — each longer than the bare punctuation prose uses for "either/or" and
         # "equals") is a root beside its argument whatever its vocabulary —
-        # `pkill kyc_worker` refuses with no root list at all.
+        # an UNKNOWN root beside a snake_case operand refuses with no root list at all
+        # (the closed root set above additionally owns ANY-operand shapes for witnessed
+        # roots — R-audit-11 finding 1 — so the two authorities overlap, never compete).
         runs, run = [], []
         for token in tokens:
             bare = token.strip(".;:()`'\"")
@@ -6580,3 +6589,69 @@ def test_r10f1_an_escaped_delimiter_does_not_become_markup():
     assert _rendered_inline("pk\\ill") == "pk\\ill"
     assert _rendered_inline("chmod 777 \\/var\\/lib\\/kyc") == "chmod 777 /var/lib/kyc"
     assert _rendered_inline("pkill kyc\\_worker") == "pkill kyc_worker"
+
+
+# ── R-audit-11 `1346e6b..c64ac1d` (finding 1) ─────────────────────────────────────────────────────
+
+
+def test_r11f1_witnessed_maintenance_roots_own_any_operand_shape(tmp_path, monkeypatch):
+    """The audit's witnesses: the structural floor (paths, snake_case, `=`) missed naked
+    maintenance commands whose operands are RELATIVE or HYPHENATED — `pkill kyc-worker`,
+    `mv kyc-data backup-data`, `chmod 777 kyc-data` — visible prose any reader treats as an
+    operator command. The witnessed maintenance roots now carry root-owned semantics in the
+    closed root set: root + ANY operand is command-shaped wherever it appears. Through the
+    real assembled AUTHORITY_VERIFIERS['OPS.CUTOVER.PROCEDURES'] with the section sha
+    coherently re-pinned, including the R10 backslash form."""
+    import copy
+    import shutil
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    live_doc = (REPO / ref.path).read_text()
+    section = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "alembic").symlink_to(REPO / "alembic")
+    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+    for witness in ("pkill kyc-worker",
+                    "Run the pkill kyc-worker before the window.",
+                    "mv kyc-data backup-data",
+                    "chmod 777 kyc-data",
+                    "pkill kyc\\-worker"):
+        mutated_section = section + "\n" + witness + "\n"
+        assert live_doc.count(section) == 1, "the section must be a unique byte span"
+        (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
+        for other in ("docs/RUNBOOK.md",):
+            if (REPO / other).exists() and not (tmp_path / other).exists():
+                shutil.copy(REPO / other, tmp_path / other)
+        tampered = copy.copy(pr7b)
+        object.__setattr__(
+            tampered, "playbook_ref",
+            dataclasses.replace(
+                ref, sha256=hashlib.sha256(mutated_section.encode()).hexdigest()))
+        monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+        monkeypatch.setattr(_this_module(), "OPERATIONS",
+                            _operations_with_procedure(tampered))
+        with pytest.raises(AssertionError, match="command-shaped"):
+            AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        monkeypatch.undo()
+
+
+def test_r11f1_relative_operand_maintenance_commands_are_command_shaped():
+    """The audit's helper-level list, preserved so the root-owned semantics cannot silently
+    narrow: every witnessed maintenance root beside a relative or hyphenated operand is
+    command-shaped, and the closed-class prose exclusions stay prose."""
+    for text in ("pkill kyc-worker",
+                 "chmod 777 kyc-data",
+                 "chown root kyc-data",
+                 "mv kyc-data backup-data",
+                 "cp backup-data kyc-data",
+                 "truncate kyc-data",
+                 "tee kyc.conf",
+                 "dd of=backup-img"):
+        assert _command_shaped(text), text
+    for prose in ("run the restore CLI",
+                  "Run per restored table",
+                  "workers fail-closed on error",
+                  "the drained cutover is rehearsed in staging"):
+        assert not _command_shaped(prose), prose
