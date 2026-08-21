@@ -140,14 +140,8 @@ def build(*, contact: str, due_date: str) -> Doc:
     doc.claim_note("WIRE.ORDERING.PENDING_INPUTS")
     doc.claim_table(
         "WIRE.ORDERING.PENDING_INPUTS",
-        ("#", "Owner", "What we need to know", "Answer shape",
-         "Blocked deliverable — answer alone does not unblock"),
         # the deliverable column has to fit `manual.release_requested` whole
         [0.35 * INCH, 0.8 * INCH, 2.35 * INCH, 1.25 * INCH, 1.95 * INCH],
-        rows=[(i.obligation, i.owner, i.question, i.answer_type, i.blocked_deliverable)
-              for i in WIRE.value("WIRE.ORDERING.PENDING_INPUTS")],
-        # `authority` is the internal spec reference; it is checked, not printed.
-        row_fields=("obligation", "owner", "question", "answer_type", "blocked_deliverable"),
     )
     doc.p(
         "<b>1.2 Dedupe commitment.</b> Confirm you dedupe callbacks on (case_id, run_id) and "
@@ -177,26 +171,9 @@ def build(*, contact: str, due_date: str) -> Doc:
         "rather than you. We return no 429 today; if a limit is ever added it will be 429 with "
         "Retry-After, announced in advance."
     )
-    headers = WIRE.value("WIRE.INGEST.HEADERS")
     doc.claim_table(
         "WIRE.INGEST.HEADERS",
-        ("Header", "Value", "Why"),
         [1.35 * INCH, 1.75 * INCH, 3.6 * INCH],
-        rows=[
-            (
-                headers[0],
-                "unique per logical event",
-                "a replay returns the stored response verbatim; the same key with a different "
-                "payload is a 409, so retries are always safe",
-            ),
-            (
-                headers[1],
-                "unix seconds",
-                f"replay window is {WIRE.value('WIRE.SIGN.SKEW_SECONDS')}s either side",
-            ),
-            (headers[2], "your inbound key id", "supports zero-downtime key rotation"),
-            (headers[3], "hex HMAC-SHA256", "section 4; binds method, path, idempotency key, and body"),
-        ],
         code_columns=(0,),
     )
     doc.space()
@@ -231,25 +208,15 @@ def build(*, contact: str, due_date: str) -> Doc:
 
     doc.claim_table(
         "WIRE.EVENT.TABLE",
-        ("event_type", "Required payload", "Optional payload", "Notes"),
         # column 0 fits `website.review_completed`, the longest event name, whole; the payload
         # columns fit `platform_account_id`. _token_cell raises rather than clipping, so a name
         # that outgrows its column fails the build instead of printing one character short.
         [1.75 * INCH, 1.4 * INCH, 1.4 * INCH, 2.15 * INCH],
-        rows=[
-            (name, ", ".join(req) or "(none)", ", ".join(opt) or "(none)", note)
-            for name, req, opt, note in WIRE.value("WIRE.EVENT.TABLE")
-        ],
         code_columns=(0, 1, 2),
     )
     doc.space()
     doc.h2("Response codes")
-    doc.claim_table(
-        "WIRE.INGEST.STATUS",
-        ("Code", "Meaning"),
-        [0.6 * INCH, 6.1 * INCH],
-        rows=[(str(code), meaning) for code, meaning in WIRE.value("WIRE.INGEST.STATUS")],
-    )
+    doc.claim_table("WIRE.INGEST.STATUS", [0.6 * INCH, 6.1 * INCH])
 
     # ── 3. callbacks ───────────────────────────────────────────────────────────────────────────
     doc.section("callbacks", "3. Callbacks we send you")
@@ -279,14 +246,7 @@ def build(*, contact: str, due_date: str) -> Doc:
 
     doc.h2("Validate before you classify")
     doc.claim_note("WIRE.CALLBACK.VALIDATION")
-    doc.claim_table(
-        "WIRE.CALLBACK.VALIDATION",
-        ("Invalid input", "Disposition"),
-        [3.35 * INCH, 3.6 * INCH],
-        rows=[(rule.invalid_input, rule.disposition)
-              for rule in WIRE.value("WIRE.CALLBACK.VALIDATION")],
-        row_fields=("invalid_input", "disposition"),
-    )
+    doc.claim_table("WIRE.CALLBACK.VALIDATION", [3.35 * INCH, 3.6 * INCH])
     doc.keep_last_together(3)
 
     doc.h2("Your endpoint must commit before it answers")
@@ -295,37 +255,23 @@ def build(*, contact: str, due_date: str) -> Doc:
 
     doc.h2("Recording a callback is not the same as acting on it")
     doc.claim_note("WIRE.CALLBACK.EFFECTIVENESS")
+    # the outcome booleans are the machine-checkable mirror of the printed `record`/`effective`
+    # cells; both derive from the same OutcomeKind record, and a test asserts the halves agree
     doc.claim_table(
         "WIRE.CALLBACK.EFFECTIVENESS",
-        ("Phase", "When this row applies", "Record", "Effective?", "Why"),
         [0.6 * INCH, 1.85 * INCH, 1.2 * INCH, 1.15 * INCH, 2.15 * INCH],
-        rows=[(t.phase, t.condition, t.record, t.effective, t.why)
-              for t in WIRE.value("WIRE.CALLBACK.EFFECTIVENESS")],
-        # the booleans are the machine-checkable mirror of `record`/`effective`; the prose is what
-        # the reader gets, and a test asserts the two halves agree
-        row_fields=("phase", "condition", "record", "effective", "why"),
     )
     # heading + note + table travel as one unit: the heading must never sit alone at a page
     # bottom with the table starting overleaf (gate finding 15)
     doc.keep_last_together(3)
-    doc.claim_table(
-        "WIRE.CALLBACK.LEGEND",
-        ("Token", "Meaning"),
-        [1.55 * INCH, 5.15 * INCH],
-        rows=[(token, meaning) for token, meaning in WIRE.value("WIRE.CALLBACK.LEGEND")],
-        code_columns=(0,),
-    )
+    doc.claim_table("WIRE.CALLBACK.LEGEND", [1.55 * INCH, 5.15 * INCH], code_columns=(0,))
     doc.claim_note("WIRE.CALLBACK.LEGEND")
 
     doc.h2("While a release is pending (post-024 only)")
     doc.claim_note("WIRE.CALLBACK.RELEASE")
     doc.claim_table(
         "WIRE.CALLBACK.RELEASE",
-        ("When this row applies", "Record", "Effective?", "Why"),
         [2.1 * INCH, 1.25 * INCH, 1.5 * INCH, 1.85 * INCH],
-        rows=[(t.condition, t.record, t.effective, t.why)
-              for t in WIRE.value("WIRE.CALLBACK.RELEASE")],
-        row_fields=("condition", "record", "effective", "why"),
     )
 
     doc.h2("Timing")
@@ -377,12 +323,9 @@ def build(*, contact: str, due_date: str) -> Doc:
     doc.claim_bullets("WIRE.SIGN.ROTATION")
     doc.claim_table(
         "WIRE.SIGN.ROTATION_RETIREMENT",
-        ("Direction", "Blocked step", "Why it cannot be exercised today", "What unblocks it"),
         # "Blocked step" must fit the longer gated clause wrapped; the two prose columns share
         # the rest of the frame.
         [0.85 * INCH, 1.45 * INCH, 2.3 * INCH, 2.1 * INCH],
-        rows=[(g.direction, g.transition, g.why_blocked, g.unblocked_by)
-              for g in WIRE.value("WIRE.SIGN.ROTATION_RETIREMENT")],
         # `refuse`/`must_reject` are the executable gate and its red specimens; checked, not shown.
         row_fields=("direction", "transition", "why_blocked", "unblocked_by"),
     )
@@ -433,7 +376,7 @@ def build(*, contact: str, due_date: str) -> Doc:
     # ── 6. retention ───────────────────────────────────────────────────────────────────────────
     doc.section("retention", "6. Retention")
     doc.claim_paragraph("WIRE.RETENTION.WINDOW_DAYS", prefix="<b>Compliance window (days): </b>")
-    doc.claim_table("WIRE.RETENTION.BY_KIND", ("Kind", "What happens"), [1.5 * INCH, 5.2 * INCH])
+    doc.claim_table("WIRE.RETENTION.BY_KIND", [1.5 * INCH, 5.2 * INCH])
 
     # ── 7. checklist ───────────────────────────────────────────────────────────────────────────
     doc.section("checklist", "7. Go-live checklist")

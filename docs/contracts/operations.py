@@ -11,6 +11,7 @@ The blocker at the top is the reason this document is titled a staging guide.
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 from docs.contracts import Claim, ClaimState, Registry, plan
 from docs.contracts.plan import (
@@ -353,6 +354,30 @@ PR7B_CORE = Procedure(
     ),
 )
 
+
+@dataclass(frozen=True)
+class SettingDefault:
+    """One documented Settings default: the field name and its exact default value.
+
+    The printed cells are DERIVED (Wave 2 F5): the environment-variable spelling and the
+    displayed value used to be computed by the renderer's caller (`f"KYC_{name.upper()}"`,
+    `str(value)`), which made the published Setting column caller-authored text no authority
+    saw. The derivation lives on the row now, so the table's matrix comes from the claim alone
+    and the authority verifier binds `name`/`default` to the real Settings fields.
+    """
+
+    name: str
+    default: object
+    variable: str = field(default="", init=False)
+    display: str = field(default="", init=False)
+
+    PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = ("variable", "display")
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "variable", f"KYC_{self.name.upper()}")
+        object.__setattr__(self, "display", str(self.default))
+
+
 OPERATIONS = Registry(
     name="operations",
     claims=(
@@ -398,6 +423,7 @@ OPERATIONS = Registry(
                  "a dry run"),
             ),
             authority="module existence under src/kyc_tool + Dockerfile command comments",
+            table_headers=("Process", "Command", "Notes"),
         ),
         Claim(
             id="OPS.PROCESS.DEV_WORKER_BANNED",
@@ -431,23 +457,25 @@ OPERATIONS = Registry(
                  "from authoritative backup"),
             ),
             authority="docs/DEPLOYMENT.md §3 + kyc_tool.config storage settings",
+            table_headers=("Component", "Requirement", "Why"),
         ),
         # ── configuration ─────────────────────────────────────────────────────────────────────
         Claim(
             id="OPS.CONFIG.DEFAULTS",
-            value={
-                "job_lease_seconds": 120,
-                "job_max_attempts": 5,
-                "job_recovery_attempt_grant": 5,
-                "outbox_lease_seconds": 300,
-                "outbox_http_timeout_seconds": 10,
-                "outbox_max_attempts": 8,
-                "outbox_backoff_base_seconds": 10,
-                "retention_days": 2555,
-                "adapter_max_response_bytes": 5242880,
-                "poc_token_ttl_hours": 72,
-            },
+            value=(
+                SettingDefault("job_lease_seconds", 120),
+                SettingDefault("job_max_attempts", 5),
+                SettingDefault("job_recovery_attempt_grant", 5),
+                SettingDefault("outbox_lease_seconds", 300),
+                SettingDefault("outbox_http_timeout_seconds", 10),
+                SettingDefault("outbox_max_attempts", 8),
+                SettingDefault("outbox_backoff_base_seconds", 10),
+                SettingDefault("retention_days", 2555),
+                SettingDefault("adapter_max_response_bytes", 5242880),
+                SettingDefault("poc_token_ttl_hours", 72),
+            ),
             authority="kyc_tool.config.Settings field defaults",
+            table_headers=("Setting", "Default"),
         ),
         Claim(
             id="OPS.CONFIG.PRODUCTION_FLOORS",
@@ -515,6 +543,7 @@ OPERATIONS = Registry(
                  "and the event-to-decision p95"),
             ),
             authority="kyc_tool.api.app health routes + routes_metrics",
+            table_headers=("Surface", "Contract", "Action"),
         ),
         # ── releases, cutovers, rollback ──────────────────────────────────────────────────────
         Claim(

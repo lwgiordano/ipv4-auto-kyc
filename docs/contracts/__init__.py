@@ -64,6 +64,11 @@ class Claim:
     state: ClaimState = ClaimState.SHIPPED
     note: str = ""
     exclusive_terms: tuple[str, ...] = ()
+    # The ordered column titles, REQUIRED for a claim rendered as a table (Wave 2 F5). The
+    # registry owns the complete matrix — header row included — so a renderer has nothing of a
+    # table's content left to author: `projection.expected_matrix` derives header + rows from
+    # this claim alone and refuses a claim whose declared width its own rows do not fit.
+    table_headers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -529,14 +529,19 @@ class Doc:
     def claim_table(
         self,
         claim_id: str,
-        headers: tuple[str, ...],
         widths,
-        rows=None,
         heading: str | None = None,
         code_columns: tuple[int, ...] = (),
         row_fields: tuple[str, ...] = (),
     ):
-        """Render a claim whose value is a sequence of row tuples.
+        """Render a claim's table from its registry-derived matrix — header row included.
+
+        Wave 2 F5 (`4cb2cb7` finding 5): this method used to accept caller-authored `rows=` and
+        `headers=`, which left every cell and column title the CALLER's text — reversed rows,
+        swapped Effective?/Why values, and a condition moved to its neighbour all certified,
+        because the page checks read tables back as bags of leaves. The complete ordered matrix
+        now comes from `projection.expected_matrix(claim)`, so the renderer contributes geometry
+        only: `widths` and `code_columns` cannot change a cell's text, order, or column.
 
         `code_columns` marks columns holding machine identifiers. Those render in a fixed-width
         face and break only between comma-separated items, never inside a token: an identifier
@@ -545,13 +550,10 @@ class Doc:
         (re-audit `6feca36..4f23f23` F10).
         """
         claim = self.registry[claim_id]
-        # TABLE projects the claim's own rows; COMPOSED means the caller assembled them and the
-        # test instead requires every leaf of the claim's value to appear somewhere in the table.
-        name = projection.COMPOSED if rows is not None else projection.TABLE
-        if name == projection.TABLE:
-            rows = projection.expected_rows(claim, projection.TABLE, row_fields)
+        matrix = projection.expected_matrix(claim, row_fields)
+        headers, body_rows = matrix[0], matrix[1:]
         data = [[Paragraph(escape(h), CELLB) for h in headers]]
-        for row in rows:
+        for row in body_rows:
             data.append(
                 [
                     _token_cell(cell, widths[index])
@@ -566,10 +568,8 @@ class Doc:
         lines = (heading,) if heading else ()
         if heading:
             flowables = [KeepTogether([Paragraph(escape(heading), H2), table])]
-        body_rows = tuple(tuple(str(cell) for cell in row) for row in rows)
-        self._emit(claim_id, flowables, lines, kind="table",
-                   rows=((tuple(headers),) + body_rows),
-                   projection_name=name, row_fields=row_fields)
+        self._emit(claim_id, flowables, lines, kind="table", rows=matrix,
+                   projection_name=projection.TABLE, row_fields=row_fields)
 
     def table(self, headers: tuple[str, ...], rows, widths, code_columns: tuple[int, ...] = ()):
         """A table whose cells are already formatted from claims recorded elsewhere."""

@@ -68,18 +68,14 @@ def build() -> Doc:
         "so two builds of one commit resolve identically). Every process is that image with a "
         "different command."
     )
-    doc.claim_table(
-        "OPS.PROCESS.COMMANDS", ("Process", "Command", "Notes"), [1.15 * INCH, 2.9 * INCH, 2.65 * INCH]
-    )
+    doc.claim_table("OPS.PROCESS.COMMANDS", [1.15 * INCH, 2.9 * INCH, 2.65 * INCH])
     doc.space()
     doc.p("Disable the image's HTTP healthcheck on worker containers; they serve no HTTP.")
     doc.claim_paragraph("OPS.PROCESS.DEV_WORKER_BANNED")
 
     # ── infrastructure ─────────────────────────────────────────────────────────────────────────
     doc.section("infrastructure", "2. Infrastructure")
-    doc.claim_table(
-        "OPS.INFRA.COMPONENTS", ("Component", "Requirement", "Why"), [1.05 * INCH, 2.7 * INCH, 2.95 * INCH]
-    )
+    doc.claim_table("OPS.INFRA.COMPONENTS", [1.05 * INCH, 2.7 * INCH, 2.95 * INCH])
 
     # ── configuration ──────────────────────────────────────────────────────────────────────────
     doc.section("configuration", "3. Configuration (KYC_ prefix)")
@@ -88,14 +84,7 @@ def build() -> Doc:
         "production kill switch validates everything at boot and prints every violation at "
         "once, so one failed boot gives you the whole list."
     )
-    defaults = OPERATIONS.value("OPS.CONFIG.DEFAULTS")
-    doc.claim_table(
-        "OPS.CONFIG.DEFAULTS",
-        ("Setting", "Default"),
-        [3.6 * INCH, 3.1 * INCH],
-        rows=[(f"KYC_{name.upper()}", str(value)) for name, value in defaults.items()],
-        code_columns=(0,),
-    )
+    doc.claim_table("OPS.CONFIG.DEFAULTS", [3.6 * INCH, 3.1 * INCH], code_columns=(0,))
     doc.space()
     doc.h2("Bounds production enforces")
     doc.claim_bullets("OPS.CONFIG.PRODUCTION_FLOORS")
@@ -111,9 +100,7 @@ def build() -> Doc:
 
     # ── health ─────────────────────────────────────────────────────────────────────────────────
     doc.section("health", "4. Health and monitoring")
-    doc.claim_table(
-        "OPS.HEALTH.PROBES", ("Surface", "Contract", "Action"), [1.5 * INCH, 2.5 * INCH, 2.7 * INCH]
-    )
+    doc.claim_table("OPS.HEALTH.PROBES", [1.5 * INCH, 2.5 * INCH, 2.7 * INCH])
 
     # ── releases ───────────────────────────────────────────────────────────────────────────────
     doc.section("releases", "5. Releases and cutovers")

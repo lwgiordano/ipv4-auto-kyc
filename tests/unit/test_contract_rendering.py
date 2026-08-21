@@ -322,7 +322,8 @@ def test_event_table_publishes_every_field_in_the_right_cell(tmp_path):
     rendered = _event_table_cells(path)
 
     documented = {
-        name: (frozenset(req), frozenset(opt)) for name, req, opt, _note in WIRE.value("WIRE.EVENT.TABLE")
+        row.name: (frozenset(row.required), frozenset(row.optional))
+        for row in WIRE.value("WIRE.EVENT.TABLE")
     }
     assert set(rendered) == set(documented), (
         f"rows on the page do not match the registry: "
@@ -343,14 +344,15 @@ def test_a_token_too_wide_for_its_column_fails_the_build(tmp_path):
     doc = Doc(
         Registry(
             name="narrow",
-            claims=(Claim(id="X.WIDE", value=(("website.review_completed", "note"),), authority="test"),),
+            claims=(Claim(id="X.WIDE", value=(("website.review_completed", "note"),),
+                          authority="test", table_headers=("event_type", "Notes")),),
         )
     )
     with pytest.raises(ValueError, match="would be clipped"):
-        doc.claim_table("X.WIDE", ("event_type", "Notes"), [0.5 * INCH, 3 * INCH], code_columns=(0,))
+        doc.claim_table("X.WIDE", [0.5 * INCH, 3 * INCH], code_columns=(0,))
     assert "X.WIDE" not in doc.rendered, "a failed cell still counted as rendered"
 
-    doc.claim_table("X.WIDE", ("event_type", "Notes"), [2 * INCH, 3 * INCH], code_columns=(0,))
+    doc.claim_table("X.WIDE", [2 * INCH, 3 * INCH], code_columns=(0,))
     path = str(tmp_path / "wide.pdf")
     doc.build(path, "wide")
     with pdfplumber.open(path) as pdf:
@@ -422,12 +424,13 @@ def test_a_word_wider_than_its_column_fails_the_build():
     """The prose-cell half of the clipping guard. CELL sets splitLongWords=0 so identifiers are
     never cut in half — which means an over-wide one is clipped instead, so it must raise."""
     doc = Doc(Registry(name="narrowprose", claims=(
-        Claim(id="X.LONG", value=(("BLOCKED_NO_AUTHORITATIVE_MAPPING", "note"),), authority="t"),
+        Claim(id="X.LONG", value=(("BLOCKED_NO_AUTHORITATIVE_MAPPING", "note"),), authority="t",
+              table_headers=("Term", "Notes")),
     )))
     with pytest.raises(ValueError, match="would be\n?\\s*clipped"):
-        doc.claim_table("X.LONG", ("Term", "Notes"), [0.7 * INCH, 3 * INCH])
+        doc.claim_table("X.LONG", [0.7 * INCH, 3 * INCH])
     assert "X.LONG" not in doc.rendered
-    doc.claim_table("X.LONG", ("Term", "Notes"), [3 * INCH, 3 * INCH])
+    doc.claim_table("X.LONG", [3 * INCH, 3 * INCH])
 
 
 def test_the_deployment_guide_publishes_no_cutover_step_numbering(deploy_text):
@@ -445,9 +448,9 @@ def test_hmac_variable_set_renders_completely(deploy_text):
 
 def test_config_defaults_render_with_their_values(deploy_text):
     flat = _flat(deploy_text)
-    for name, value in OPERATIONS.value("OPS.CONFIG.DEFAULTS").items():
-        assert f"KYC_{name.upper()}" in flat
-        assert str(value) in flat
+    for row in OPERATIONS.value("OPS.CONFIG.DEFAULTS"):
+        assert f"KYC_{row.name.upper()}" in flat
+        assert str(row.default) in flat
 
 
 def test_pending_claims_render_as_pending(contract_text):
@@ -499,10 +502,11 @@ def test_mutation_sha1_sample_would_not_match():
 def test_mutation_missing_required_field_fails_the_event_table_check():
     from kyc_tool.api.schemas import PAYLOAD_MODELS
 
-    table = {row[0]: row for row in WIRE.value("WIRE.EVENT.TABLE")}
-    name, required, _optional, _note = table["poc.token_verified"]
-    trimmed = tuple(f for f in required if f != "token")
-    model_required = tuple(sorted(f for f, i in PAYLOAD_MODELS[name].model_fields.items() if i.is_required()))
+    table = {row.name: row for row in WIRE.value("WIRE.EVENT.TABLE")}
+    row = table["poc.token_verified"]
+    trimmed = tuple(f for f in row.required if f != "token")
+    model_required = tuple(
+        sorted(f for f, i in PAYLOAD_MODELS[row.name].model_fields.items() if i.is_required()))
     assert tuple(sorted(trimmed)) != model_required
 
 

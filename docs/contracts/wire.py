@@ -692,6 +692,11 @@ class PendingInput:
     accept: object = None  # Callable[[dict], list[str]] -> reasons it is NOT acceptable
     must_reject: tuple[tuple[str, dict], ...] = ()  # named unusable answers, for the RED tests
 
+    # `authority` is the internal spec reference and `accept`/`must_reject` are executable —
+    # checked, never shown.
+    PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = (
+        "obligation", "owner", "question", "answer_type", "blocked_deliverable")
+
 
 
 # ── what makes each answer USABLE, not merely present ─────────────────────────────────────────────
@@ -1496,32 +1501,101 @@ SIGNATURE_VECTOR = {
     "signature": "0dc9ff66f1a9e096b0dcae311efe15799b88f9f7475f3999cee10aaebcbacdba",
 }
 
-# (event_type, required payload fields, optional payload fields, note)
+@dataclass(frozen=True)
+class EventRow:
+    """One row of the accepted-events table.
+
+    The printed payload cells are DERIVED from the structured field tuples (Wave 2 F5, the same
+    move as `Transition`'s visible cells): the renderer used to compute `", ".join(...) or
+    "(none)"` at the call site, which made the caller the author of a published cell. The join
+    lives here now, so the projection of this row is fixed by the row alone.
+    """
+
+    name: str
+    required: tuple[str, ...]
+    optional: tuple[str, ...]
+    note: str
+    required_display: str = field(default="", init=False)
+    optional_display: str = field(default="", init=False)
+
+    PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = (
+        "name", "required_display", "optional_display", "note")
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "required_display", ", ".join(self.required) or "(none)")
+        object.__setattr__(self, "optional_display", ", ".join(self.optional) or "(none)")
+
+
 EVENT_TABLE = (
-    ("kyb.run_requested", ("company_legal_name",),
-     ("address", "contact", "jurisdiction", "platform_account_id", "registration_number",
-      "website"),
-     "First event for a case creates it; there is no registration call. Incomplete submissions "
-     "ingest fine, and missing evidence simply never passes a check."),
-    ("email.verified", ("domain", "email", "verified_at"), (),
-     "You verify the mailbox; we score it."),
-    ("org_id.submitted", ("org_handle", "rir"), (),
-     "rir is one of arin, ripe, apnic, lacnic, afrinic."),
-    ("poc.submitted", ("poc_handle", "rir"), ("org_handle", "resource"),
-     "Triggers our verification email to the RIR-listed address."),
-    ("poc.token_verified", ("token", "token_id", "verified_at"), (),
-     "You host the verify page and echo the raw token from the email link. We store only its "
-     "digest, and tokens expire after 72 hours."),
-    ("document.uploaded", ("doc_type", "object_ref"), (),
-     "object_ref points at the object your side wrote under uploads/."),
-    ("website.review_completed", ("result", "reviewer_id", "task_id"), ("reason_codes",),
-     "result is pass or fail. SENSITIVE EVENT: see the reviewer-actor rule; the task must be an "
-     "open website task on the same case."),
-    ("reviewer.manual_approve", ("reviewer_id",), ("note",),
-     "SENSITIVE EVENT: see the reviewer-actor rule. Handled inline: no run, no callback, and it "
-     "returns 200 rather than 202."),
-    ("recalculate.requested", (), (),
-     "Re-scores from stored evidence with no new fetches, and does not re-run the broker screen."),
+    EventRow("kyb.run_requested", ("company_legal_name",),
+             ("address", "contact", "jurisdiction", "platform_account_id", "registration_number",
+              "website"),
+             "First event for a case creates it; there is no registration call. Incomplete "
+             "submissions ingest fine, and missing evidence simply never passes a check."),
+    EventRow("email.verified", ("domain", "email", "verified_at"), (),
+             "You verify the mailbox; we score it."),
+    EventRow("org_id.submitted", ("org_handle", "rir"), (),
+             "rir is one of arin, ripe, apnic, lacnic, afrinic."),
+    EventRow("poc.submitted", ("poc_handle", "rir"), ("org_handle", "resource"),
+             "Triggers our verification email to the RIR-listed address."),
+    EventRow("poc.token_verified", ("token", "token_id", "verified_at"), (),
+             "You host the verify page and echo the raw token from the email link. We store "
+             "only its digest, and tokens expire after 72 hours."),
+    EventRow("document.uploaded", ("doc_type", "object_ref"), (),
+             "object_ref points at the object your side wrote under uploads/."),
+    EventRow("website.review_completed", ("result", "reviewer_id", "task_id"), ("reason_codes",),
+             "result is pass or fail. SENSITIVE EVENT: see the reviewer-actor rule; the task "
+             "must be an open website task on the same case."),
+    EventRow("reviewer.manual_approve", ("reviewer_id",), ("note",),
+             "SENSITIVE EVENT: see the reviewer-actor rule. Handled inline: no run, no "
+             "callback, and it returns 200 rather than 202."),
+    EventRow("recalculate.requested", (), (),
+             "Re-scores from stored evidence with no new fetches, and does not re-run the "
+             "broker screen."),
+)
+
+
+# Replay tolerance, one source: the claim value and the ingest-headers row both derive from
+# this constant, and the claim's authority verifier binds it to
+# kyc_tool.security.MAX_HMAC_SKEW_SECONDS.
+_SKEW_SECONDS = 300
+
+
+@dataclass(frozen=True)
+class HeaderSpec:
+    """One required ingest header: its exact name, the value shape, and why it exists.
+
+    These three cells were authored inline at the render call before Wave 2 F5, which left the
+    Value and Why columns as caller prose no authority ever saw. They are registry rows now, so
+    the table's complete matrix is derived from this claim and the header-name column stays
+    bound to the request verifier by the claim's authority test.
+    """
+
+    name: str
+    value_note: str
+    why: str
+
+    PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = ("name", "value_note", "why")
+
+
+INGEST_HEADERS = (
+    HeaderSpec(
+        "Idempotency-Key",
+        "unique per logical event",
+        "a replay returns the stored response verbatim; the same key with a different payload "
+        "is a 409, so retries are always safe",
+    ),
+    HeaderSpec(
+        "X-KYC-Timestamp",
+        "unix seconds",
+        f"replay window is {_SKEW_SECONDS}s either side",
+    ),
+    HeaderSpec("X-KYC-Key-Id", "your inbound key id", "supports zero-downtime key rotation"),
+    HeaderSpec(
+        "X-KYC-Signature-V2",
+        "hex HMAC-SHA256",
+        "section 4; binds method, path, idempotency key, and body",
+    ),
 )
 
 WIRE = Registry(
@@ -1535,8 +1609,9 @@ WIRE = Registry(
         ),
         Claim(
             id="WIRE.INGEST.HEADERS",
-            value=("Idempotency-Key", "X-KYC-Timestamp", "X-KYC-Key-Id", "X-KYC-Signature-V2"),
+            value=INGEST_HEADERS,
             authority="kyc_tool.api.routes_events.post_event + kyc_tool.api.auth",
+            table_headers=("Header", "Value", "Why"),
         ),
         Claim(
             id="WIRE.INGEST.STATUS",
@@ -1554,6 +1629,7 @@ WIRE = Registry(
             authority="kyc_tool.events.ingest.ingest_event",
             note="A queued event is 202. Treating 200 as the success case would misread every "
                  "normal submission.",
+            table_headers=("Code", "Meaning"),
         ),
         Claim(
             id="WIRE.INGEST.EXTRA_FIELDS",
@@ -1591,6 +1667,7 @@ WIRE = Registry(
             id="WIRE.EVENT.TABLE",
             value=EVENT_TABLE,
             authority="kyc_tool.api.schemas.EventType / PAYLOAD_MODELS required+optional fields",
+            table_headers=("event_type", "Required payload", "Optional payload", "Notes"),
         ),
         # ── signing ───────────────────────────────────────────────────────────────────────────
         Claim(
@@ -1608,7 +1685,7 @@ WIRE = Registry(
         ),
         Claim(
             id="WIRE.SIGN.SKEW_SECONDS",
-            value=300,
+            value=_SKEW_SECONDS,
             authority="kyc_tool.security.MAX_HMAC_SKEW_SECONDS",
         ),
         Claim(
@@ -1658,6 +1735,8 @@ WIRE = Registry(
                       "closed column inventory, kyc_tool.ops.cutover closed record inventory, "
                       "SIGNED_FLEET_RECEIPT_SCHEMA",
             state=ClaimState.BLOCKED,
+            table_headers=("Direction", "Blocked step", "Why it cannot be exercised today",
+                           "What unblocks it"),
         ),
         # ── callbacks ─────────────────────────────────────────────────────────────────────────
         Claim(
@@ -1717,6 +1796,7 @@ WIRE = Registry(
                  "replay history or either table. Each row below is an input that must be "
                  "HELD, not recorded or acknowledged as processed — a malformed callback "
                  "acknowledged with 2xx is unrecoverable under at-least-once delivery.",
+            table_headers=("Invalid input", "Disposition"),
         ),
         Claim(
             id="WIRE.CALLBACK.RECEIVER_TXN",
@@ -1758,6 +1838,7 @@ WIRE = Registry(
                  "returns ONLY through the authenticated platform-owned release protocol, and "
                  "while a release is OPEN the case is in manual_release_pending and the release "
                  "table below governs instead.",
+            table_headers=("Phase", "When this row applies", "Record", "Effective?", "Why"),
         ),
         Claim(
             id="WIRE.CALLBACK.LEGEND",
@@ -1767,6 +1848,7 @@ WIRE = Registry(
                       "paired sibling's",
             note="Every condition in the two tables is built from exactly these tokens; a token "
                  "means this and nothing else.",
+            table_headers=("Token", "Meaning"),
         ),
         Claim(
             id="WIRE.CALLBACK.RELEASE",
@@ -1782,6 +1864,7 @@ WIRE = Registry(
                  "release; a new manual approval cancels the pending release outright; expiry is "
                  "driven by the platform's stored deadline, never by waiting for traffic. "
                  + RELEASE_REPLAY_RULE.text,
+            table_headers=("When this row applies", "Record", "Effective?", "Why"),
         ),
         Claim(
             id="WIRE.CALLBACK.RETRY",
@@ -1865,6 +1948,8 @@ WIRE = Registry(
         Claim(
             id="WIRE.ORDERING.PENDING_INPUTS",
             value=PENDING_024_INPUTS,
+            table_headers=("#", "Owner", "What we need to know", "Answer shape",
+                           "Blocked deliverable — answer alone does not unblock"),
             authority=".agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-"
                       "design.md open blockers O1-O4 (parsed live by the authority test) + "
                       "docs.contracts.wire.resolution_problems (refuses every artifact until the "
@@ -1914,6 +1999,7 @@ WIRE = Registry(
                  "poc.submitted."),
             ),
             authority="kyc_tool.workers.retention + kyc_tool.outbox.publisher terminal writes",
+            table_headers=("Kind", "What happens"),
         ),
         Claim(
             id="WIRE.RETENTION.WINDOW_DAYS",

@@ -22,11 +22,13 @@ from collections import Counter
 
 import pdfplumber
 import pytest
-from docs.contracts import projection
+from docs.contracts import Claim, Registry, projection
 from docs.contracts.operations import OPERATIONS
 from docs.contracts.wire import WIRE
+from docs.generators import render as render_module
 from docs.generators import techcraft_deployment_guide as deploy_gen
 from docs.generators import techcraft_integration_contract as contract_gen
+from docs.generators.render import Doc
 
 from .test_contract_rendering import SAMPLE_CONTACT, SAMPLE_DUE_DATE, _build
 
@@ -210,27 +212,89 @@ def test_every_claim_renders_inside_its_declared_section(rendered):
             )
 
 
-def test_every_table_block_is_on_the_page_cell_for_cell(rendered):
-    """Tables are matched by header row and then compared cell by cell, because reading them out
-    of the page text interleaves the columns."""
-    _generator, _registry, doc, _page, tables = rendered
+def _cellnorm(cell) -> str:
+    """One cell's comparable text. A token cell renders its comma-separated list with the commas
+    REPLACED by line breaks (`_token_cell`), so the extractor hands back the tokens with no
+    commas at all; a comma-plus-spacing therefore normalizes to a single space on BOTH sides.
+    That is the entire forgiveness — token order, multiplicity, and every other character of
+    every cell take part in the ordered comparison."""
+    return _flat(re.sub(r",\s*", " ", _flat(cell)))
+
+
+def _verify_tables_match_model(doc, tables) -> None:
+    """The COMPLETE table lane, both directions (Wave 2 F5, and F6's table half).
+
+    Before this, tables were verified as bags: the model's cells had to APPEAR somewhere in the
+    page's cell pool (cells under 12 characters skipped — YES and NO never checked at all), and a
+    claim's caller-assembled rows only had to CONTAIN the claim's leaves. Reversing every
+    effectiveness row, swapping the Effective? and Why values under unchanged headers, and moving
+    a condition to its neighbour all certified, and an entire injected duplicate table rode along
+    unnoticed, because none of that changes a bag.
+
+    Three exact comparisons replace the bags:
+
+    1. MODEL == REGISTRY: every claim table's recorded matrix equals
+       `projection.expected_matrix(claim)` — the renderer cannot author a cell, a column title,
+       or an order. (A structural table — claim_id None — has no registry matrix; its content is
+       digest-pinned in NARRATION_LABELS instead, and rule 3 still holds its page rendering to
+       the recorded matrix.)
+    2. NO ORPHAN TABLES, EITHER WAY: every header class on the page belongs to some model block,
+       and every model header class reaches the page — an injected table with a novel header is
+       refused by name.
+    3. PAGE == MODEL, ORDERED: per header class, the concatenation of page tables in page order
+       equals the concatenation of model matrices in document order — order, column index, and
+       multiplicity included, short cells included. A table split across a page break simply
+       contributes its continuation rows (the repeated header names its class), and an injected
+       DUPLICATE of a real table breaks the concatenation even though every one of its cells is
+       already legitimate.
+    """
+    model_by_header: dict[tuple, list] = {}
     for block in doc.blocks:
         if block.kind != "table" or not block.rows:
             continue
-        header = [_flat(cell) for cell in block.rows[0]]
-        candidates = [t for t in tables if t and t[0] == header]
-        assert candidates, f"{block.claim_id or 'table'}: no rendered table with header {header}"
-        rendered_cells = {cell for table in candidates for row in table for cell in row}
-        for row in block.rows[1:]:
-            for cell in row:
-                wanted = _flat(cell)
-                if len(wanted) < 12:
-                    continue
-                # a token cell replaces its commas with line breaks, so compare comma-insensitively
-                assert any(
-                    wanted == seen or wanted.replace(",", "") == seen.replace(",", "")
-                    for seen in rendered_cells
-                ), f"{block.claim_id or 'table'}: cell not on the page: {wanted[:60]!r}"
+        if block.claim_id is not None:
+            assert block.projection == projection.TABLE, (
+                f"{block.claim_id}: a claim table renders only under the TABLE projection, "
+                f"not {block.projection!r}"
+            )
+            wanted = projection.expected_matrix(doc.registry[block.claim_id], block.row_fields)
+            assert block.rows == wanted, (
+                f"{block.claim_id}: the recorded table is not the registry's matrix.\n"
+                f"  registry: {wanted[:3]}...\n  recorded: {block.rows[:3]}..."
+            )
+        header = tuple(_cellnorm(cell) for cell in block.rows[0])
+        model_by_header.setdefault(header, []).append(
+            [tuple(_cellnorm(cell) for cell in row) for row in block.rows[1:]])
+
+    page_by_header: dict[tuple, list] = {}
+    for table in tables:  # already in page order
+        if not table:
+            continue
+        header = tuple(_cellnorm(cell) for cell in table[0])
+        page_by_header.setdefault(header, []).append(
+            [tuple(_cellnorm(cell) for cell in row) for row in table[1:]])
+
+    unclaimed = sorted(set(page_by_header) - set(model_by_header))
+    assert not unclaimed, (
+        f"the page renders a table no model block accounts for: {unclaimed}"
+    )
+    missing = sorted(set(model_by_header) - set(page_by_header))
+    assert not missing, f"a recorded table never reached the page: {missing}"
+
+    for header, model_groups in model_by_header.items():
+        expected = [row for group in model_groups for row in group]
+        actual = [row for group in page_by_header[header] for row in group]
+        assert actual == expected, (
+            f"table {header[:3]}...: the page's rows are not the model's rows in order.\n"
+            f"  first difference: "
+            f"""{next(((a, e) for a, e in zip(actual, expected, strict=False) if a != e),
+                      (len(actual), len(expected)))!r}"""
+        )
+
+
+def test_every_table_is_the_registry_matrix_on_the_page_in_order(rendered):
+    _generator, _registry, doc, _page, tables = rendered
+    _verify_tables_match_model(doc, tables)
 
 
 # ── attribution: nothing authoritative is said outside the claim that owns it ─────────────────────
@@ -301,7 +365,10 @@ def _mutated(registry, claim_id, **changes):
 
 
 def _top_level_verify(generator, registry, tmp_path):
-    """Everything a release runs: the authority map and the rendered-page comparison."""
+    """Everything a release runs: the authority map, the rendered-page comparison, and the
+    ordered table-matrix comparison (Wave 2 F5 — a mutation that only reorders or re-columns a
+    table is invisible to the prose lane, so leaving tables out of this harness would let every
+    table mutation 'fail' against a bespoke check the release never runs)."""
     from .test_contract_registry_authority import AUTHORITY_VERIFIERS
 
     for claim in registry.claims:
@@ -311,6 +378,12 @@ def _top_level_verify(generator, registry, tmp_path):
     path = str(tmp_path / "mutant.pdf")
     doc.build(path, "mutant")
     _verify_page_matches_model(doc, body_text(path))
+    tables = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            for table in page.extract_tables():
+                tables.append([[_flat(cell or "") for cell in row] for row in table])
+    _verify_tables_match_model(doc, tables)
 
 
 MUTATIONS = [
@@ -399,6 +472,154 @@ def test_mutation_moving_a_claim_to_the_wrong_section_fails(tmp_path):
     assert page.find(anchor) < start, "the misfiled claim would have to move on the page too"
 
 
+# ── the F5/F6 table witnesses, each proven certifying before the matrix lane existed ──────────────
+#
+# Survey probes against the pre-fold tree (`a4d9be4`): with the caller still assembling rows,
+# reversing every effectiveness row, swapping the Effective?/Why values under unchanged headers,
+# moving a Why to its neighbouring row, and appending a whole reversed duplicate of the table
+# directly to the story each left BOTH document suites fully green (123 passed, every time).
+# The tests below hold the exact witnesses against the comparison a release now runs.
+
+def _extracted_tables(doc, tmp_path, name):
+    path = str(tmp_path / f"{name}.pdf")
+    doc.build(path, name)
+    tables = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            for table in page.extract_tables():
+                tables.append([[_flat(cell or "") for cell in row] for row in table])
+    return tables
+
+
+TABLE_BETRAYALS = [
+    ("drawing every row reversed", lambda rows: tuple(reversed(rows))),
+    ("swapping the Effective? and Why values under unchanged headers",
+     lambda rows: tuple((*row[:3], row[4], row[3]) for row in rows)),
+    ("moving one row's Why onto its neighbour",
+     lambda rows: ((*rows[0][:4], rows[1][4]), (*rows[1][:4], rows[0][4]), *rows[2:])),
+    ("duplicating the first row over its neighbour",
+     lambda rows: (rows[0], rows[0], *rows[2:])),
+]
+
+
+@pytest.mark.parametrize(("label", "mutate"), TABLE_BETRAYALS, ids=[t[0] for t in TABLE_BETRAYALS])
+def test_a_renderer_that_draws_other_than_its_recorded_matrix_fails(tmp_path, label, mutate):
+    """The hostile half the model cannot see: the renderer RECORDS the honest registry matrix
+    and DRAWS something else. Only the page-side ordered comparison can refuse this — a bag of
+    cells cannot, which is how all four of these certified before the fold."""
+    claim_id = "WIRE.CALLBACK.EFFECTIVENESS"
+    real = render_module.Doc.claim_table
+
+    def hostile(self, cid, widths, heading=None, code_columns=(), row_fields=()):
+        if cid != claim_id:
+            return real(self, cid, widths, heading=heading, code_columns=code_columns,
+                        row_fields=row_fields)
+        claim = self.registry[cid]
+        matrix = projection.expected_matrix(claim, row_fields)
+        drawn = (matrix[0], *mutate(matrix[1:]))
+        data = [[render_module.Paragraph(render_module.escape(h), render_module.CELLB)
+                 for h in drawn[0]]]
+        for row in drawn[1:]:
+            data.append([render_module._prose_cell(cell, widths[i])
+                         for i, cell in enumerate(row)])
+        table = render_module.Table(data, colWidths=widths, repeatRows=1)
+        table.setStyle(render_module._TABLE_STYLE)
+        self.story.append(table)
+        self.rendered.append(cid)
+        self._add(render_module.Block(kind="table", claim_id=cid, lines=(), rows=matrix,
+                                      projection=projection.TABLE, row_fields=row_fields))
+
+    render_module.Doc.claim_table = hostile
+    try:
+        doc = _build(contract_gen)
+    finally:
+        render_module.Doc.claim_table = real
+    tables = _extracted_tables(doc, tmp_path, "betrayal")
+    with pytest.raises(AssertionError, match="not the model's rows in order"):
+        _verify_tables_match_model(doc, tables)
+
+
+@pytest.mark.parametrize(("label", "mutate"), TABLE_BETRAYALS, ids=[t[0] for t in TABLE_BETRAYALS])
+def test_a_recorded_matrix_that_is_not_the_registrys_fails(label, mutate):
+    """The coherent half: the renderer records exactly what it draws, but neither is the
+    registry's matrix. MODEL == REGISTRY refuses it before the page is even consulted, so a
+    coherent dual mutation cannot certify the way the caller-assembled rows once did."""
+    doc = _build(contract_gen)
+    for section in doc.sections:
+        for i, block in enumerate(section.blocks):
+            if block.claim_id == "WIRE.CALLBACK.EFFECTIVENESS" and block.kind == "table":
+                tampered = (block.rows[0], *mutate(block.rows[1:]))
+                section.blocks[i] = dataclasses.replace(block, rows=tampered)
+    with pytest.raises(AssertionError, match="not the registry's matrix"):
+        _verify_tables_match_model(doc, [])
+
+
+def _injected_table(matrix, widths):
+    data = [[render_module.Paragraph(render_module.escape(h), render_module.CELLB)
+             for h in matrix[0]]]
+    for row in matrix[1:]:
+        data.append([render_module._prose_cell(cell, widths[i]) for i, cell in enumerate(row)])
+    table = render_module.Table(data, colWidths=widths, repeatRows=1)
+    table.setStyle(render_module._TABLE_STYLE)
+    return table
+
+
+def test_an_injected_duplicate_table_fails_the_concatenation(tmp_path):
+    """The R15 F6 table witness, verbatim: a whole reversed duplicate of the effectiveness table
+    appended straight to the story — no block, no claim, every word already legitimate. The
+    survey probe proved it certified (123 passed). Multiplicity in the per-header concatenation
+    refuses it now: the header class gains rows the model never recorded."""
+    doc = _build(contract_gen)
+    claim = doc.registry["WIRE.CALLBACK.EFFECTIVENESS"]
+    matrix = projection.expected_matrix(claim)
+    widths = [0.6 * render_module.INCH, 1.85 * render_module.INCH, 1.2 * render_module.INCH,
+              1.15 * render_module.INCH, 2.15 * render_module.INCH]
+    doc.story.append(_injected_table((matrix[0], *reversed(matrix[1:])), widths))
+    tables = _extracted_tables(doc, tmp_path, "dup-table")
+    with pytest.raises(AssertionError, match="not the model's rows in order"):
+        _verify_tables_match_model(doc, tables)
+
+
+def test_an_injected_novel_header_table_is_refused_by_name(tmp_path):
+    """A table whose header tuple belongs to no model block — built from words the documents
+    already use, so the vocabulary check cannot be the control that speaks."""
+    doc = _build(contract_gen)
+    doc.story.append(_injected_table(
+        (("Record", "Why"), ("record it", "the platform recovers it")),
+        [2 * render_module.INCH, 3 * render_module.INCH]))
+    tables = _extracted_tables(doc, tmp_path, "novel-table")
+    with pytest.raises(AssertionError, match="no model block accounts for"):
+        _verify_tables_match_model(doc, tables)
+
+
+def test_claim_table_accepts_no_caller_rows_or_headers():
+    """The escape hatch is gone at the signature, not policed by convention: there is no
+    parameter through which a caller could hand claim_table a cell or a column title."""
+    doc = _build(contract_gen)
+    with pytest.raises(TypeError):
+        doc.claim_table("WIRE.CALLBACK.LEGEND", [1 * render_module.INCH], rows=[("a", "b")])
+    with pytest.raises(TypeError):
+        doc.claim_table("WIRE.CALLBACK.LEGEND", [1 * render_module.INCH],
+                        headers=("Token", "Meaning"))
+    import inspect
+
+    params = inspect.signature(render_module.Doc.claim_table).parameters
+    assert "rows" not in params and "headers" not in params
+
+
+def test_a_table_claim_without_declared_headers_cannot_render():
+    """expected_matrix refuses a claim with no table_headers, so the registry cannot quietly
+    hand column-title authorship back to a caller."""
+    doc = Doc(Registry(name="headless", claims=(
+        Claim(id="X.NOHEAD", value=(("a", "b"),), authority="test"),
+    )))
+    with pytest.raises(ValueError, match="declares no table_headers"):
+        doc.claim_table("X.NOHEAD", [1 * render_module.INCH, 1 * render_module.INCH])
+    with pytest.raises(ValueError, match="does not fit the declared"):
+        projection.expected_matrix(Claim(id="X.WIDTH", value=(("a", "b", "c"),),
+                                         authority="test", table_headers=("One", "Two")))
+
+
 def test_the_release_inputs_still_reach_the_page(rendered):
     _generator, _registry, _doc, page, _tables = rendered
     if _generator is contract_gen:
@@ -432,15 +653,16 @@ def test_the_page_matches_content_recomputed_from_the_registry(rendered):
         claim = registry[block.claim_id]
 
         if block.projection == projection.COMPOSED:
-            # The caller wrote the sentence, but every leaf the claim owns must still be printed.
+            # A table can no longer be COMPOSED (Wave 2 F5): claim_table derives the whole
+            # matrix, so the caller has no rows to assemble. Prose composition remains — the
+            # caller writes the sentence, but every leaf the claim owns must still be printed.
             # Compared NORMALIZED — casefolded with punctuation removed — because a caller
             # legitimately reformats a leaf on its way to the page (`job_max_attempts` is printed
             # as the environment variable `KYC_JOB_MAX_ATTEMPTS`). Omission and contradiction are
             # still caught; only presentation is tolerated.
+            assert block.kind != "table", (
+                f"{block.claim_id}: a COMPOSED table block should be unconstructible now")
             haystack = _normalize(page)
-            if block.kind == "table":
-                haystack = _normalize(" ".join(
-                    cell for table in tables for row in table for cell in row))
             for leaf in projection.leaf_strings(claim.value, block.row_fields):
                 needle = _normalize(leaf)
                 if len(needle) < 4:
@@ -450,19 +672,8 @@ def test_the_page_matches_content_recomputed_from_the_registry(rendered):
             continue
 
         if block.projection == projection.TABLE:
-            wanted = projection.expected_rows(claim, projection.TABLE, block.row_fields)
-            header = [_flat(cell) for cell in block.rows[0]]
-            candidates = [t for t in tables if t and t[0] == header]
-            assert candidates, f"{block.claim_id}: no rendered table with header {header}"
-            cells = {cell for table in candidates for row in table for cell in row}
-            for row in wanted:
-                for cell in row:
-                    needle = _flat(cell)
-                    if len(needle) < 12:
-                        continue
-                    assert any(needle == seen or needle.replace(",", "") == seen.replace(",", "")
-                               for seen in cells), (
-                        f"{block.claim_id}: recomputed cell not on the page: {needle[:60]!r}")
+            # the ordered-matrix lane owns tables completely: model == registry matrix and
+            # page == model in order, multiplicity included (_verify_tables_match_model)
             continue
 
         wanted = projection.expected_lines(claim, block.projection)
@@ -837,25 +1048,21 @@ def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatc
 # EVERY character on the page is either derived from the registry or pinned here.
 
 RENDERER_PROSE = {
+    # Table blocks no longer appear here at all (Wave 2 F5): their column titles come from
+    # Claim.table_headers and every cell from the projection, so a claim table carries no
+    # renderer-authored words to pin.
     # ── contract ──────────────────────────────────────────────────────────────────────────────
-    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 0): ("19c2b2f7d5f9a473",
+    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 0): ("08e7faeb6a24eaff",
                                                       "what 024 cannot be built without + no "
                                                       "reply can RESOLVE an obligation until the "
                                                       "answer-artifact schema ships (the alert "
                                                       "now PRECEDES the table, gate finding 10)"),
-    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 1): ("3bd98b07b64356ec",
-                                                      "024 asks table headers; the deliverable "
-                                                      "column is negated: answer alone does not "
-                                                      "unblock"),
-    ("contract", "WIRE.INGEST.HEADERS", 0): ("9e9d62e11f51e35c", "header table headers + why column"),
     ("contract", "WIRE.INGEST.EXTRA_FIELDS", 0): ("3dbd54f03ecebb08",
                                                   "the forward-compatibility commitment: we add "
                                                   "without notice, never remove or repurpose "
                                                   "without an agreed version bump"),
     ("contract", "WIRE.ACTOR.SENSITIVE", 0): ("841eed537d25b0f4",
                                               "actor.type/actor.id equality rule and its trap"),
-    ("contract", "WIRE.EVENT.TABLE", 0): ("a2d3ac04ae2bfc2e", "event table headers"),
-    ("contract", "WIRE.INGEST.STATUS", 0): ("482149e6396f9a45", "status table headers"),
     ("contract", "WIRE.CALLBACK.FIELDS", 0): ("fd2b8fddb0219846", "required body fields lead-in"),
     ("contract", "WIRE.CALLBACK.DECISIONS", 0): ("efd06031f9154b80", "decision enumeration lead-in"),
     ("contract", "WIRE.CALLBACK.GATES", 0): ("60ff773c179a76ed", "gates enumeration lead-in"),
@@ -867,14 +1074,6 @@ RENDERER_PROSE = {
                                                      "legend tokens; rows partition the state "
                                                      "space; release-pending points at its own "
                                                      "table"),
-    ("contract", "WIRE.CALLBACK.EFFECTIVENESS", 1): ("116c95cbf7ad7f0d",
-                                                     "transition table headers"),
-    ("contract", "WIRE.CALLBACK.LEGEND", 0): ("7234b0308090d929", "condition-token legend headers"),
-    ("contract", "WIRE.CALLBACK.VALIDATION", 0): ("f813152c02a3a312",
-                                                   "validation table headers (R-audit-3 "
-                                                   "finding 6: validate before classify)"),
-    ("contract", "WIRE.CALLBACK.RELEASE", 0): ("c27832f0debc8aa4",
-                                               "release-pending table headers"),
     ("contract", "WIRE.CALLBACK.RETRY", 0): ("e07949a7ee8f8121",
                                              "retry schedule lead-in and totals"),
     ("contract", "WIRE.SIGN.CANONICAL", 0): ("44258b84c7d9f360", "canonical-string lead-in"),
@@ -882,17 +1081,9 @@ RENDERER_PROSE = {
                                               "direction tokens are literals; prose will not "
                                               "verify; what slot and path?query are"),
     ("contract", "WIRE.SIGN.COMPANION", 0): ("62bed443d66d463f", "companion filename + sha256 line"),
-    ("contract", "WIRE.SIGN.ROTATION_RETIREMENT", 0): ("f995814ca1e2e5c2",
-                                                       "blocked-retirement gate table headers"),
     ("contract", "WIRE.SIGN.VECTOR", 0): ("723d2cc6883b5453", "worked vector lead-in"),
-    ("contract", "WIRE.RETENTION.BY_KIND", 0): ("c5357842f39273b0", "retention table headers"),
     # ── guide ─────────────────────────────────────────────────────────────────────────────────
-    ("guide", "OPS.PROCESS.COMMANDS", 0): ("2cea52c0e7fb495d", "process table headers"),
-    ("guide", "OPS.INFRA.COMPONENTS", 0): ("de69ec6459140a78", "infrastructure table headers"),
-    ("guide", "OPS.CONFIG.DEFAULTS", 0): ("edfd8a6f27a9d8c4",
-                                          "settings table headers and the KYC_ variable names"),
     ("guide", "OPS.CONFIG.HMAC_SET", 0): ("eeead37d4b6834fd", "the HMAC set lead-in"),
-    ("guide", "OPS.HEALTH.PROBES", 0): ("7655d03e90ea7729", "health table headers"),
     ("guide", "OPS.CUTOVER.PROCEDURES", 0): ("33b3260daf6c3302",
                                              "per-procedure framing: what must be true before "
                                              "you start, Reversible?, Rolling back, Playbook"),
@@ -914,8 +1105,11 @@ def _connective_text(block, claim) -> str:
     for row in block.rows:
         parts.extend(row)
     text = "\n".join(parts)
+    # column titles are claim-supplied too (Claim.table_headers, Wave 2 F5), so they are not
+    # the renderer's words any more than the cells are
     leaves = sorted(
-        (leaf for leaf in projection.leaf_strings(claim.value, block.row_fields) if leaf),
+        (leaf for leaf in (*projection.leaf_strings(claim.value, block.row_fields),
+                           *claim.table_headers) if leaf),
         key=len, reverse=True,
     )
     for leaf in leaves:

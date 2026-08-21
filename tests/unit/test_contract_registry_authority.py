@@ -438,7 +438,7 @@ def _documented_headers_are_the_ones_the_verifier_reads():
 
     from kyc_tool.api import auth
 
-    documented = WIRE.value("WIRE.INGEST.HEADERS")
+    documented = tuple(row.name for row in WIRE.value("WIRE.INGEST.HEADERS"))
     assert len(documented) == len(set(documented)) == 4
     idempotency, timestamp_header, key_id_header, signature_header = documented
 
@@ -532,15 +532,18 @@ def _event_table_matches_the_payload_models_exactly():
     """Names AND field lists, both directions. An earlier guard only checked that accepted names
     appeared somewhere in the prose, so a documented-but-rejected event, or a required field that
     quietly moved, both passed."""
-    table = {row[0]: row for row in WIRE.value("WIRE.EVENT.TABLE")}
+    table = {row.name: row for row in WIRE.value("WIRE.EVENT.TABLE")}
     assert set(table) == set(EventType.__args__) == set(PAYLOAD_MODELS)
 
     for event_type, model in PAYLOAD_MODELS.items():
         required = tuple(sorted(f for f, i in model.model_fields.items() if i.is_required()))
         optional = tuple(sorted(f for f, i in model.model_fields.items() if not i.is_required()))
-        _, documented_required, documented_optional, _ = table[event_type]
-        assert tuple(sorted(documented_required)) == required, f"{event_type} required fields"
-        assert tuple(sorted(documented_optional)) == optional, f"{event_type} optional fields"
+        row = table[event_type]
+        assert tuple(sorted(row.required)) == required, f"{event_type} required fields"
+        assert tuple(sorted(row.optional)) == optional, f"{event_type} optional fields"
+        # the derived display cells are what the page prints; hold them to the same fields
+        assert row.required_display == (", ".join(row.required) or "(none)")
+        assert row.optional_display == (", ".join(row.optional) or "(none)")
 
 
 @verifies("WIRE.ACTOR.SENSITIVE")
@@ -1378,8 +1381,11 @@ def _infrastructure_rows_match_the_settings_that_back_them():
 @verifies("OPS.CONFIG.DEFAULTS")
 def _config_defaults_match_settings():
     settings = Settings()
-    for field, documented in OPERATIONS.value("OPS.CONFIG.DEFAULTS").items():
-        assert int(getattr(settings, field)) == documented, f"{field} default moved"
+    for row in OPERATIONS.value("OPS.CONFIG.DEFAULTS"):
+        assert int(getattr(settings, row.name)) == row.default, f"{row.name} default moved"
+        # the derived cells are what the page prints; hold them to the same source
+        assert row.variable == f"KYC_{row.name.upper()}"
+        assert row.display == str(row.default)
 
 
 @verifies("OPS.CONFIG.PRODUCTION_FLOORS")

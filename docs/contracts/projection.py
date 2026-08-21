@@ -121,16 +121,49 @@ def expected_rows(claim, projection: str, row_fields: tuple[str, ...] = ()) -> t
     """The body rows this claim must contribute, header row excluded.
 
     `row_fields` names the dataclass attributes to project, in column order, when the claim's rows
-    are dataclasses rather than tuples.
+    are dataclasses rather than tuples; when omitted, the row type's own `PUBLISHED_FIELDS`
+    declaration is used, so the column order is stated once, at the type.
     """
     if projection != TABLE:
         return ()
     rows = []
     for row in claim.value:
         if is_dataclass(row) and not isinstance(row, type):
-            rows.append(tuple(str(getattr(row, name)) for name in row_fields))
+            names = row_fields or getattr(type(row), "PUBLISHED_FIELDS", None)
+            if not names:
+                raise ValueError(
+                    f"{claim.id}: {type(row).__name__} rows need row_fields or a "
+                    "PUBLISHED_FIELDS declaration to fix their column order"
+                )
+            rows.append(tuple(str(getattr(row, name)) for name in names))
         elif isinstance(row, (tuple, list)):
             rows.append(tuple(str(cell) for cell in row))
         else:
             rows.append((str(row),))
     return tuple(rows)
+
+
+def expected_matrix(claim, row_fields: tuple[str, ...] = ()) -> tuple[tuple[str, ...], ...]:
+    """The COMPLETE table this claim publishes: header row first, then every body row, in order.
+
+    Wave 2 F5 (`4cb2cb7` finding 5): the previous comparison read tables back as bags of leaves,
+    so reversed rows, swapped Effective?/Why values, and a condition moved to its neighbour all
+    certified. The matrix is the unit of authority now — ordered, column-indexed, multiplicity
+    included — and it is derived HERE, from the claim alone, so the renderer contributes no cell
+    and no column title. A claim rendered as a table must declare `table_headers`; every row must
+    match the declared width exactly.
+    """
+    if not claim.table_headers:
+        raise ValueError(
+            f"{claim.id} is rendered as a table but declares no table_headers; the registry, "
+            "not the renderer, owns a table's column titles"
+        )
+    headers = tuple(str(cell) for cell in claim.table_headers)
+    rows = expected_rows(claim, TABLE, row_fields)
+    for row in rows:
+        if len(row) != len(headers):
+            raise ValueError(
+                f"{claim.id}: a row of width {len(row)} does not fit the declared "
+                f"{len(headers)}-column header {headers}: {row}"
+            )
+    return (headers, *rows)
