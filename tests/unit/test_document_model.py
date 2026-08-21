@@ -28,7 +28,7 @@ from docs.contracts.wire import WIRE
 from docs.generators import render as render_module
 from docs.generators import techcraft_deployment_guide as deploy_gen
 from docs.generators import techcraft_integration_contract as contract_gen
-from docs.generators.render import Doc
+from docs.generators.render import Doc, DocumentManifest
 
 from .test_contract_rendering import SAMPLE_CONTACT, SAMPLE_DUE_DATE, _build
 
@@ -36,6 +36,11 @@ from .test_contract_rendering import SAMPLE_CONTACT, SAMPLE_DUE_DATE, _build
 # Above it, a second occurrence is a duplicate nobody asked for — which is the mutation
 # "add an unrecorded duplicate block".
 UNIQUE_LINE_CHARS = 45
+
+# Ad-hoc Docs below are FIXTURES, not published documents; they still need an owning
+# manifest, because the title is document identity now rather than a build argument
+# (Wave-2 audit finding 3).
+TEST_MANIFEST = DocumentManifest(title="KYC Tool — test fixture", out="fixture.pdf")
 
 GENERATORS = [(contract_gen, WIRE), (deploy_gen, OPERATIONS)]
 
@@ -129,13 +134,13 @@ def body_text(path: str) -> str:
 
 def _page_text(generator, tmp_path) -> str:
     path = str(tmp_path / "model.pdf")
-    _build(generator).build(path, "model")
+    _build(generator).build(path)
     return body_text(path)
 
 
 def _page_tables(generator, tmp_path):
     path = str(tmp_path / "model-tables.pdf")
-    _build(generator).build(path, "model")
+    _build(generator).build(path)
     tables = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -387,10 +392,121 @@ def _verify_prose_stream(doc, page_prose: str) -> None:
     )
 
 
+# ── the furniture lane: the footer band is derived, not free (Wave-2 audit finding 3) ────────────
+def _page_footers(path: str) -> list[str]:
+    """Everything drawn in each page's footer band, left to right, in page order.
+
+    Read by GEOMETRY — the same band `_page_prose` subtracts — and returned WHOLE rather than
+    split by position: a positional split is a heuristic that can be wrong (a long title crosses
+    the page midpoint), while the joined band is exact and leaves nowhere for extra furniture
+    text to hide.
+    """
+    found = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            cutoff = page.height - FOOTER_BAND_INCHES * 72
+            words = sorted((w for w in page.extract_words() if w["top"] >= cutoff),
+                           key=lambda w: w["x0"])
+            found.append(_flat(" ".join(w["text"] for w in words)))
+    return found
+
+
+def _verify_footers(doc, path: str) -> None:
+    """PAGE FURNITURE == THE MANIFEST'S DERIVATION, page by page.
+
+    Wave-2 audit finding 3: `build()` took a caller-authored title, drew it in every footer and
+    into the PDF metadata, and the body comparisons subtract the footer band by geometry — so
+    building the real contract with the title "KYC Tool — Return 2xx before COMMIT" published a
+    false instruction on all twelve pages while every content check passed. The footer-shape test
+    only asked that `source`, `Page N of`, and the section appear SOMEWHERE in the band, so extra
+    text was legal.
+
+    The title is the manifest's now, and this lane compares the exact per-page tuple — title,
+    that page's own section, the stamped revision, and an honest `Page N of M` — to the text
+    drawn in the band. Nothing else fits.
+    """
+    expected = [_flat(f"{left} {right}") for left, right in doc.expected_footers()]
+    actual = _page_footers(path)
+    assert actual == expected, (
+        "the page furniture is not the manifest's derivation.\n"
+        f"  first difference: "
+        f"""{next(((a, e) for a, e in zip(actual, expected, strict=False) if a != e),
+                  (len(actual), len(expected)))!r}"""
+    )
+    # and the sections it names are the document's own, in document order
+    declared = [s.title for s in doc.sections if s.title]
+    seen = [doc.page_sections.get(n, "") for n in range(1, doc._total_pages + 1)]
+    assert set(seen) <= set(declared) | {""}, (
+        f"a footer names a section the document does not declare: {sorted(set(seen) - set(declared))}")
+    order = [declared.index(s) for s in seen if s]
+    assert order == sorted(order), f"footer sections are out of document order: {seen}"
+
+
+def test_the_page_furniture_is_exactly_the_manifests_derivation(rendered, tmp_path):
+    generator, _registry, _doc, _page, _tables = rendered
+    doc = _build(generator)
+    path = str(tmp_path / "furniture.pdf")
+    doc.build(path)
+    _verify_footers(doc, path)
+
+
+def test_w2f3_a_false_title_cannot_be_supplied_at_build_time():
+    """The audit's exact trigger, refused at the signature: there is no title parameter left to
+    pass, and the manifest a Doc is built against is required and typed."""
+    doc = _build(contract_gen)
+    with pytest.raises(TypeError):
+        doc.build("/tmp/unused.pdf", "KYC Tool — Return 2xx before COMMIT")
+    import inspect
+
+    assert "title" not in inspect.signature(render_module.Doc.build).parameters
+    with pytest.raises(ValueError, match="owns the title"):
+        render_module.Doc(WIRE, "KYC Tool — Return 2xx before COMMIT")
+
+
+def test_w2f3_a_tampered_footer_title_fails_the_furniture_lane(tmp_path):
+    """And if the stamp itself is subverted — a manifest swapped between layout and stamping —
+    the lane refuses, so the control is the comparison and not merely the signature."""
+    doc = _build(contract_gen)
+    hostile = render_module.DocumentManifest(
+        title="KYC Tool — Return 2xx before COMMIT", out="hostile.pdf")
+    real = render_module._stamped_canvas
+
+    def stamped_with_lie(_manifest, revision, page_sections=None):
+        return real(hostile, revision, page_sections)
+
+    render_module._stamped_canvas = stamped_with_lie
+    try:
+        path = str(tmp_path / "false-footer.pdf")
+        doc.build(path)
+    finally:
+        render_module._stamped_canvas = real
+    with pytest.raises(AssertionError, match="not the manifest's derivation"):
+        _verify_footers(doc, path)
+
+
+@pytest.mark.parametrize("generator", [contract_gen, deploy_gen], ids=["contract", "guide"])
+def test_w2f3_the_real_release_paths_publish_governed_furniture(generator, tmp_path, monkeypatch):
+    """Both real `main()` entry points, executed — the paths a release actually runs, not a
+    rebuilt Doc that happens to resemble them."""
+    monkeypatch.chdir(tmp_path)
+    if generator is contract_gen:
+        out = generator.main(["--integration-contact", SAMPLE_CONTACT,
+                             "--response-due-date", SAMPLE_DUE_DATE])
+        doc = generator.build(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+    else:
+        out = generator.main()
+        doc = generator.build()
+    doc.build(str(tmp_path / "twin.pdf"))
+    assert _page_footers(out) == _page_footers(str(tmp_path / "twin.pdf"))
+    _verify_footers(doc, out)
+    with pdfplumber.open(out) as pdf:
+        assert (pdf.metadata.get("Title") or "") == generator.MANIFEST.title
+
+
 def test_the_page_prose_is_exactly_the_model_and_nothing_else(rendered, tmp_path):
     generator, _registry, doc, _page, _tables = rendered
     path = str(tmp_path / "prose-total.pdf")
-    _build(generator).build(path, "prose-total")
+    _build(generator).build(path)
     _verify_prose_stream(doc, _page_prose(path))
 
 
@@ -473,7 +589,7 @@ def _top_level_verify(generator, registry, tmp_path):
 
     doc = _build(generator)
     path = str(tmp_path / "mutant.pdf")
-    doc.build(path, "mutant")
+    doc.build(path)
     _verify_page_matches_model(doc, body_text(path))
     tables = []
     with pdfplumber.open(path) as pdf:
@@ -482,6 +598,7 @@ def _top_level_verify(generator, registry, tmp_path):
                 tables.append([[_flat(cell or "") for cell in row] for row in table])
     _verify_tables_match_model(doc, tables)
     _verify_prose_stream(doc, _page_prose(path))
+    _verify_footers(doc, path)  # the band the other three lanes subtract (Wave-2 finding 3)
 
 
 MUTATIONS = [
@@ -562,7 +679,7 @@ def test_mutation_moving_a_claim_to_the_wrong_section_fails(tmp_path):
     assert doc.section_of("WIRE.ORDERING.NO_DECIDED_AT") == "retention"
     # and the real check would reject it, because the text renders before the Retention heading
     path = str(tmp_path / "misfiled.pdf")
-    doc.build(path, "misfiled")
+    doc.build(path)
     with pdfplumber.open(path) as pdf:
         page = _flat("\n".join(p.extract_text() or "" for p in pdf.pages))
     start = page.find(_flat(misfiled.title))
@@ -580,7 +697,7 @@ def test_mutation_moving_a_claim_to_the_wrong_section_fails(tmp_path):
 
 def _extracted_tables(doc, tmp_path, name):
     path = str(tmp_path / f"{name}.pdf")
-    doc.build(path, name)
+    doc.build(path)
     tables = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -710,7 +827,7 @@ def test_a_table_claim_without_declared_headers_cannot_render():
     hand column-title authorship back to a caller."""
     doc = Doc(Registry(name="headless", claims=(
         Claim(id="X.NOHEAD", value=(("a", "b"),), authority="test"),
-    )))
+    )), TEST_MANIFEST)
     with pytest.raises(ValueError, match="declares no table_headers"):
         doc.claim_table("X.NOHEAD", [1 * render_module.INCH, 1 * render_module.INCH])
     with pytest.raises(ValueError, match="does not fit the declared"):
@@ -773,7 +890,7 @@ def test_an_injected_prose_flowable_fails_the_total_stream(tmp_path):
     doc = _build(contract_gen)
     doc._story.append(render_module.Paragraph("Return 2xx before COMMIT.", render_module.BODY))
     path = str(tmp_path / "injected-prose.pdf")
-    doc.build(path, "injected-prose")
+    doc.build(path)
     with pytest.raises(AssertionError, match="not exactly the model's prose"):
         _verify_prose_stream(doc, _page_prose(path))
 
@@ -789,7 +906,7 @@ def test_a_duplicated_governed_paragraph_fails_the_total_stream(tmp_path):
     line = next(str(li) for li in block.lines if len(_flat(li)) < UNIQUE_LINE_CHARS)
     doc._story.append(render_module.Paragraph(render_module.escape(line), render_module.BODY))
     path = str(tmp_path / "dup-prose.pdf")
-    doc.build(path, "dup-prose")
+    doc.build(path)
     with pytest.raises(AssertionError, match="not exactly the model's prose"):
         _verify_prose_stream(doc, _page_prose(path))
 
@@ -907,7 +1024,7 @@ def test_a_renderer_that_displays_something_other_than_the_claim_fails(
     monkeypatch.setattr(render_module.Doc, "claim_paragraph", lying_claim_paragraph)
     doc = _build(generator)
     path = str(tmp_path / "lie.pdf")
-    doc.build(path, "lie")
+    doc.build(path)
     page = body_text(path)
 
     wanted = projection.expected_lines(registry[claim_id], projection.PARAGRAPH)[0]
@@ -1170,7 +1287,7 @@ def test_a_reworded_label_fails_the_pin(monkeypatch, tmp_path):
     monkeypatch.setattr(render_module.Doc, "claim_paragraph", relabelled)
     doc = _build(contract_gen)
     path = str(tmp_path / "relabelled.pdf")
-    doc.build(path, "relabelled")
+    doc.build(path)
     page = body_text(path)
 
     assert "Compliance window (years): 2555" in page, "the mutation did not reach the page"
@@ -1196,7 +1313,7 @@ def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatc
     doc = _build(deploy_gen)
     monkeypatch.setattr(render_module.Doc, "p", original)
     path = str(tmp_path / "unrecorded.pdf")
-    doc.build(path, "unrecorded")
+    doc.build(path)
     page = body_text(path)
 
     assert "zzyzx" in page, "the unrecorded paragraph did not reach the page"

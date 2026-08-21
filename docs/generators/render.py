@@ -128,7 +128,7 @@ def source_revision() -> str:
         return "unknown"
 
 
-def _stamped_canvas(title: str, revision: str, page_sections: dict | None = None):
+def _stamped_canvas(manifest, revision: str, page_sections: dict | None = None):
     """A canvas that holds each finished page until `save()`, then stamps the footer.
 
     The total page count is not known while a page is being drawn, so the footer cannot be
@@ -152,9 +152,8 @@ def _stamped_canvas(title: str, revision: str, page_sections: dict | None = None
                 self.setFont("Helvetica", 7)
                 self.setFillColor(colors.HexColor("#666666"))
                 section = (page_sections or {}).get(number, "")
-                left = f"{title}  ·  {section}  ·  source {revision}" if section else (
-                    f"{title}  ·  source {revision}")
-                self.drawString(0.75 * inch, 0.45 * inch, left)
+                self.drawString(0.75 * inch, 0.45 * inch,
+                                manifest.footer_line(section, revision))
                 self.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {number} of {total}")
                 self.restoreState()
                 super().showPage()
@@ -261,6 +260,39 @@ class Section:
     blocks: list
 
 
+@dataclass(frozen=True)
+class DocumentManifest:
+    """What the page FURNITURE says, owned once by the document (Wave-2 audit finding 3).
+
+    The title used to be a free parameter of `build()`, duplicated as a literal in each
+    generator's `main()`. It is drawn in every page footer and written into the PDF metadata, so
+    a caller could publish an instruction there — `KYC Tool — Return 2xx before COMMIT` appeared
+    on all twelve contract pages while the body/model comparisons, which subtract the footer band
+    by geometry, all passed.
+
+    The title is therefore document identity, not a call argument: it lives here, one per
+    document, and `build()` takes no title at all. The furniture lane
+    (`test_document_model._verify_footers`) then holds every page's footer to the exact derived
+    tuple — this title, the page's own section, the stamped revision, and `Page N of M` — so no
+    other text can ride along in that band either.
+    """
+
+    title: str
+    out: str
+
+    def __post_init__(self) -> None:
+        if type(self.title) is not str or not self.title.strip():
+            raise ValueError("a document manifest carries a non-empty title")
+        if type(self.out) is not str or not self.out.endswith(".pdf"):
+            raise ValueError("a document manifest names its output .pdf")
+
+    def footer_line(self, section: str, revision: str) -> str:
+        """The exact left-hand footer string for a page in `section`. ONE derivation, shared by
+        the stamping canvas and the verifier, so neither can drift from the other."""
+        return (f"{self.title}  ·  {section}  ·  source {revision}" if section
+                else f"{self.title}  ·  source {revision}")
+
+
 class Doc:
     """A document under construction, as a typed ordered model of what it will display.
 
@@ -275,8 +307,14 @@ class Doc:
     the built PDF span by span, in order, once each, inside the declared section.
     """
 
-    def __init__(self, registry) -> None:
+    def __init__(self, registry, manifest: DocumentManifest) -> None:
+        if type(manifest) is not DocumentManifest:
+            raise ValueError(
+                "a Doc is built against its document manifest, which owns the title the page "
+                "furniture publishes"
+            )
         self.registry = registry
+        self.manifest = manifest
         # PRIVATE on purpose (Wave 2 F6): when this was `self.story`, a caller could append a
         # flowable directly — visible on the page, recorded in no block — and the R15 witness
         # (`doc.story.append(Paragraph("Return 2xx before COMMIT."))`) certified because every
@@ -288,6 +326,7 @@ class Doc:
         self.placements: list[dict] = []  # filled by build(): where each flowable landed
         self.page_sections: dict[int, str] = {}  # filled by build(): page -> section title
         self._total_pages = 0
+        self._revision = ""
         self._open_section("(front matter)", "")
 
     # ---- the document model ------------------------------------------------------------------
@@ -327,7 +366,13 @@ class Doc:
         return None
 
     # ---- structural prose (carries no authoritative value) ----------------------------------
-    def title(self, text: str):
+    def title(self):
+        """The cover title — the manifest's, not a caller's.
+
+        It was a second literal of the same sentence (Wave-2 audit finding 3): the page could
+        say one thing and every footer another, and neither had an owner.
+        """
+        text = self.manifest.title
         self._story.append(Paragraph(escape(text), _styles["Title"]))
         self._add(Block(kind="heading", claim_id=None, lines=(text,)))
 
@@ -609,8 +654,12 @@ class Doc:
         self._add(Block(kind="table", claim_id=None, lines=(),
                         rows=(tuple(headers),) + tuple(tuple(str(c) for c in r) for r in rows)))
 
-    def build(self, path: str, title: str, *, release: bool = False) -> str:
-        """Render to `path`, stamping provenance on every page.
+    def build(self, path: str, *, release: bool = False) -> str:
+        """Render to `path`, stamping the manifest's furniture on every page.
+
+        There is no `title` parameter (Wave-2 audit finding 3): the title is document identity,
+        owned by the manifest and verified as its own furniture lane, not a string a caller
+        supplies at build time.
 
         A document read for years without the repo beside it needs to say which commit produced
         it and how many pages it has, so a stale copy is distinguishable from the audited one and
@@ -678,13 +727,31 @@ class Doc:
             rightMargin=0.75 * inch,
             topMargin=0.7 * inch,
             bottomMargin=0.8 * inch,
-            title=title,
+            title=self.manifest.title,
             author="IPv4.Global",
             subject=f"source revision {revision}",
         )
-        template.build(self._story, canvasmaker=_stamped_canvas(title, revision, page_sections))
+        template.build(self._story,
+                       canvasmaker=_stamped_canvas(self.manifest, revision, page_sections))
         self._total_pages = template.page
+        self._revision = revision
         return path
+
+    def expected_footers(self) -> tuple[tuple[str, str], ...]:
+        """The exact (left, right) footer pair for every page, derived after the layout pass.
+
+        The furniture lane compares this to the text actually drawn in the footer band, so the
+        band carries the manifest's title, the page's own section, the stamped revision, and an
+        honest `Page N of M` — and nothing else (Wave-2 audit finding 3).
+        """
+        if not self._total_pages:
+            raise ValueError("footers are known only after build() lays the document out")
+        total = self._total_pages
+        return tuple(
+            (self.manifest.footer_line(self.page_sections.get(number, ""), self._revision),
+             f"Page {number} of {total}")
+            for number in range(1, total + 1)
+        )
 
 
 INCH = inch

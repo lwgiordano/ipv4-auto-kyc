@@ -9,9 +9,15 @@ this document stands a staging environment up and tells you what production stil
 """
 
 from docs.contracts.operations import OPERATIONS
-from docs.generators.render import INCH, Doc, escape
+from docs.generators.render import INCH, Doc, DocumentManifest, escape
 
-OUT = "techcraft-deployment-guide.pdf"
+# The document's own identity: the title every page footer and the PDF metadata publish, owned
+# here rather than passed to build() (Wave-2 audit finding 3).
+MANIFEST = DocumentManifest(
+    title="KYC Tool — Staging Integration and Production Readiness Guide",
+    out="techcraft-deployment-guide.pdf",
+)
+OUT = MANIFEST.out
 
 REQUIRED_CLAIMS = (
     "OPS.BLOCKER.PRODUCTION_PROVIDERS",
@@ -34,8 +40,8 @@ REQUIRED_CLAIMS = (
 
 
 def build() -> Doc:
-    doc = Doc(OPERATIONS)
-    doc.title("KYC Tool — Staging Integration and Production Readiness Guide")
+    doc = Doc(OPERATIONS, MANIFEST)
+    doc.title()
     doc.p(
         "<b>Audience: the TechCraft team that will host and operate the KYC tool.</b> The "
         "Platform Integration Contract is the companion document and covers the wire protocol."
@@ -161,7 +167,7 @@ def build() -> Doc:
 
 def main() -> str:
     doc = build()
-    return doc.build(OUT, "KYC Tool — Staging Integration and Production Readiness Guide")
+    return doc.build(MANIFEST.out)
 
 
 if __name__ == "__main__":

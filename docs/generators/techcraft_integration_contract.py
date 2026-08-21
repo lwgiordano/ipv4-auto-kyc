@@ -14,9 +14,15 @@ from datetime import date
 from docs.contracts.companion import ARTIFACT_NAME, artifact_digest
 from docs.contracts.signing_example import published_snippet
 from docs.contracts.wire import WIRE
-from docs.generators.render import INCH, Doc, escape
+from docs.generators.render import INCH, Doc, DocumentManifest, escape
 
-OUT = "techcraft-integration-contract.pdf"
+# The document's own identity: the title every page footer and the PDF metadata
+# publish, owned here rather than passed to build() (Wave-2 audit finding 3).
+MANIFEST = DocumentManifest(
+    title="KYC Tool — Platform Integration Contract",
+    out="techcraft-integration-contract.pdf",
+)
+OUT = MANIFEST.out
 
 # Release inputs. These are NOT registry claims — they change per send, and nothing in the repo
 # governs them — so they are required arguments with NO defaults (re-audit `6feca36..4f23f23` F11).
@@ -93,8 +99,8 @@ REQUIRED_CLAIMS = (
 
 def build(*, contact: str, due_date: str) -> Doc:
     contact, due_date = validate_release_inputs(contact, due_date)
-    doc = Doc(WIRE)
-    doc.title("KYC Tool — Platform Integration Contract")
+    doc = Doc(WIRE, MANIFEST)
+    doc.title()
     doc.p(
         "<b>Audience: TechCraft integration developers.</b> This covers your side of the wire: "
         "what to POST, what callbacks to receive and verify, and what to stand up (the "
@@ -414,7 +420,7 @@ def main(argv: list[str] | None = None) -> str:
     parser.add_argument("--out", default=OUT)
     args = parser.parse_args(argv)
     doc = build(contact=args.integration_contact, due_date=args.response_due_date)
-    return doc.build(args.out, "KYC Tool — Platform Integration Contract")
+    return doc.build(args.out)
 
 
 if __name__ == "__main__":

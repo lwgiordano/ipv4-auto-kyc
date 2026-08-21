@@ -21,7 +21,7 @@ from docs.contracts.signing_example import published_snippet
 from docs.contracts.wire import WIRE
 from docs.generators import techcraft_deployment_guide as deploy_gen
 from docs.generators import techcraft_integration_contract as contract_gen
-from docs.generators.render import INCH, Doc
+from docs.generators.render import INCH, Doc, DocumentManifest
 
 # reportlab and pdfplumber are imported at module scope ON PURPOSE (re-audit `6feca36..4f23f23`
 # F4). These were `importorskip` guards, which meant an environment without the PDF extras ran the
@@ -33,6 +33,11 @@ from docs.generators.render import INCH, Doc
 # does for rendering; `test_release_inputs_*` covers the validation itself.
 SAMPLE_CONTACT = "kyc-integration@ipv4.global"
 SAMPLE_DUE_DATE = "2026-09-15"
+
+# Ad-hoc Docs below are FIXTURES, not published documents; they still need an owning
+# manifest, because the title is document identity now rather than a build argument
+# (Wave-2 audit finding 3).
+TEST_MANIFEST = DocumentManifest(title="KYC Tool — test fixture", out="fixture.pdf")
 _BUILD_ARGS = {
     id(contract_gen): {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE},
     id(deploy_gen): {},
@@ -46,7 +51,7 @@ def _build(generator) -> Doc:
 def _render_text(generator, tmp_path) -> str:
     doc = _build(generator)
     path = str(tmp_path / "out.pdf")
-    doc.build(path, "test")
+    doc.build(path)
     with pdfplumber.open(path) as pdf:
         return "\n".join(page.extract_text() or "" for page in pdf.pages)
 
@@ -121,7 +126,7 @@ def test_no_glyph_is_printed_outside_the_page_margins(generator, tmp_path):
     the right edge, and every content assertion passed. Geometry is the only check that sees it.
     """
     path = str(tmp_path / "margins.pdf")
-    _build(generator).build(path, "margins")
+    _build(generator).build(path)
 
     overflowing = []
     with pdfplumber.open(path) as pdf:
@@ -144,7 +149,7 @@ def test_no_body_text_collides_with_the_footer_or_the_page_edges(generator, tmp_
     the footer is the one thing on the page that says which commit it came from.
     """
     path = str(tmp_path / "vertical.pdf")
-    _build(generator).build(path, "vertical")
+    _build(generator).build(path)
     offenders = []
     with pdfplumber.open(path) as pdf:
         for number, page in enumerate(pdf.pages, 1):
@@ -166,7 +171,7 @@ def test_no_two_rendered_lines_are_drawn_on_top_of_each_other(generator, tmp_pat
     """Overlap. A negative spacer prints one paragraph over another and every x/y BOUNDS check
     still passes — both flowables are inside the frame, they are just in the same place."""
     path = str(tmp_path / "overlap.pdf")
-    _build(generator).build(path, "overlap")
+    _build(generator).build(path)
     collisions = []
     with pdfplumber.open(path) as pdf:
         for number, page in enumerate(pdf.pages, 1):
@@ -192,12 +197,12 @@ def test_the_overlap_guard_can_actually_fail(tmp_path):
     """Codex's exact mutation: a negative spacer that prints one paragraph over another."""
     from reportlab.platypus import Spacer
 
-    doc = Doc(WIRE)
+    doc = Doc(WIRE, TEST_MANIFEST)
     doc.p("The first paragraph, which should be legible on its own line.")
     doc._story.append(Spacer(1, -24))
     doc.p("The second paragraph, printed straight over the top of the first.")
     path = str(tmp_path / "collide.pdf")
-    doc.build(path, "collide")
+    doc.build(path)
 
     with pdfplumber.open(path) as pdf:
         page = pdf.pages[0]
@@ -221,17 +226,17 @@ def test_a_release_build_refuses_unverifiable_provenance(tmp_path, monkeypatch):
     doc = _build(contract_gen)
     monkeypatch.setattr(render, "source_revision", lambda: "unknown")
     with pytest.raises(render.ProvenanceError, match="source commit"):
-        doc.build(str(tmp_path / "release.pdf"), "release", release=True)
+        doc.build(str(tmp_path / "release.pdf"), release=True)
 
     monkeypatch.setattr(render, "source_revision", lambda: "abc1234+dirty")
     with pytest.raises(render.ProvenanceError, match="uncommitted"):
-        doc.build(str(tmp_path / "release.pdf"), "release", release=True)
+        doc.build(str(tmp_path / "release.pdf"), release=True)
 
     # a clean commit is fine, and a preview never asks
     monkeypatch.setattr(render, "source_revision", lambda: "abc1234")
-    doc.build(str(tmp_path / "release.pdf"), "release", release=True)
+    doc.build(str(tmp_path / "release.pdf"), release=True)
     monkeypatch.setattr(render, "source_revision", lambda: "unknown")
-    doc.build(str(tmp_path / "preview.pdf"), "preview")
+    doc.build(str(tmp_path / "preview.pdf"))
 
 
 def test_the_margin_guard_can_actually_fail():
@@ -239,7 +244,7 @@ def test_the_margin_guard_can_actually_fail():
     line at build time, which is the same boundary the geometric test measures after the fact."""
     from docs.generators.render import _guard_preformatted
 
-    doc = Doc(WIRE)
+    doc = Doc(WIRE, TEST_MANIFEST)
     with pytest.raises(ValueError, match="run off the page"):
         doc.code("x = " + "y" * 400)
     # the join that produced the run-on line: `<br/>` is dropped by XPreformatted, so passing it
@@ -318,7 +323,7 @@ def test_event_table_publishes_every_field_in_the_right_cell(tmp_path):
     as much as required ones here: a caller who never learns a field is accepted cannot send it,
     and payloads allow extras, so a misspelling 202s while populating nothing."""
     path = str(tmp_path / "cells.pdf")
-    _build(contract_gen).build(path, "cells")
+    _build(contract_gen).build(path)
     rendered = _event_table_cells(path)
 
     documented = {
@@ -347,14 +352,14 @@ def test_a_token_too_wide_for_its_column_fails_the_build(tmp_path):
             claims=(Claim(id="X.WIDE", value=(("website.review_completed", "note"),),
                           authority="test", table_headers=("event_type", "Notes")),),
         )
-    )
+    , TEST_MANIFEST)
     with pytest.raises(ValueError, match="would be clipped"):
         doc.claim_table("X.WIDE", [0.5 * INCH, 3 * INCH], code_columns=(0,))
     assert "X.WIDE" not in doc.rendered, "a failed cell still counted as rendered"
 
     doc.claim_table("X.WIDE", [2 * INCH, 3 * INCH], code_columns=(0,))
     path = str(tmp_path / "wide.pdf")
-    doc.build(path, "wide")
+    doc.build(path)
     with pdfplumber.open(path) as pdf:
         assert "website.review_completed" in _flat(pdf.pages[0].extract_text() or "")
 
@@ -426,7 +431,7 @@ def test_a_word_wider_than_its_column_fails_the_build():
     doc = Doc(Registry(name="narrowprose", claims=(
         Claim(id="X.LONG", value=(("BLOCKED_NO_AUTHORITATIVE_MAPPING", "note"),), authority="t",
               table_headers=("Term", "Notes")),
-    )))
+    )), TEST_MANIFEST)
     with pytest.raises(ValueError, match="would be\n?\\s*clipped"):
         doc.claim_table("X.LONG", [0.7 * INCH, 3 * INCH])
     assert "X.LONG" not in doc.rendered
@@ -463,14 +468,14 @@ def test_pending_claims_render_as_pending(contract_text):
 
 # ── mutation: each bypass Codex demonstrated must fail the SAME verifier ──────────────────────────
 def _doc_with(claim: Claim) -> Doc:
-    doc = Doc(Registry(name="mutant", claims=(claim,)))
+    doc = Doc(Registry(name="mutant", claims=(claim,)), TEST_MANIFEST)
     doc.claim_paragraph(claim.id)
     return doc
 
 
 def _rendered_text(doc: Doc, tmp_path) -> str:
     path = str(tmp_path / "mutant.pdf")
-    doc.build(path, "mutant")
+    doc.build(path)
     with pdfplumber.open(path) as pdf:
         return "\n".join(page.extract_text() or "" for page in pdf.pages)
 
@@ -522,7 +527,7 @@ def test_mutation_unused_bait_string_does_not_satisfy_rendering(tmp_path):
                 Claim(id="X.HIDDEN", value="the bait nobody renders", authority="test"),
             ),
         )
-    )
+    , TEST_MANIFEST)
     doc.claim_paragraph("X.SHOWN")
     text = _rendered_text(doc, tmp_path)
     assert "the value a reader sees" in _flat(text)
@@ -549,7 +554,7 @@ def test_mutation_markup_wrapped_prohibition_still_renders_as_text(tmp_path):
                 Claim(id="X.PROHIBITED", value="apply the newest decided_at per case", authority="test"),
             ),
         )
-    )
+    , TEST_MANIFEST)
     doc.claim_paragraph("X.PROHIBITED")
     assert "newest decided_at" in _flat(_rendered_text(doc, tmp_path))
 
@@ -612,7 +617,7 @@ def test_the_signer_block_is_whole_and_on_one_page(tmp_path):
     from docs.contracts.signing_example import COPY_BEGIN, COPY_END
 
     path = str(tmp_path / "signer.pdf")
-    _build(contract_gen).build(path, "signer")
+    _build(contract_gen).build(path)
 
     with pdfplumber.open(path) as pdf:
         pages = [(number, page.extract_text() or "") for number, page in enumerate(pdf.pages, 1)]
@@ -644,10 +649,10 @@ def test_code_on_the_page_keeps_its_indentation(tmp_path):
     off the page. Rendered code must preserve the x-offset of nested lines."""
     from docs.generators.render import Doc as _Doc
 
-    doc = _Doc(WIRE)
+    doc = _Doc(WIRE, TEST_MANIFEST)
     doc.code("def outer():\n    nested = 1\n    return nested")
     path = str(tmp_path / "indent.pdf")
-    doc.build(path, "indent")
+    doc.build(path)
     with pdfplumber.open(path) as pdf:
         words = pdf.pages[0].extract_words()
     offsets = {w["text"]: w["x0"] for w in words}
@@ -702,7 +707,7 @@ def test_page_indentation_structure_matches_the_compilable_source(tmp_path):
     would be a test of pdfplumber rather than of the document. Distinct source indent levels must
     appear as distinct, correspondingly ordered x-offsets on the page."""
     path = str(tmp_path / "contract.pdf")
-    _build(contract_gen).build(path, "t")
+    _build(contract_gen).build(path)
 
     # rebuild rendered LINES (grouped by vertical position), not loose words: the same token
     # appears elsewhere in the document, so matching by word text alone reads x-offsets from
@@ -778,7 +783,7 @@ def test_no_two_flowables_are_laid_out_on_top_of_each_other(generator, tmp_path)
     baseline; the page is visibly interleaved, but the extractor merges their glyphs into one word
     so a line-box detector reports zero collisions. The layout engine knows the rectangles."""
     doc = _build(generator)
-    doc.build(str(tmp_path / "overlap-layout.pdf"), "overlap")
+    doc.build(str(tmp_path / "overlap-layout.pdf"))
     collisions = _sibling_overlaps(doc)
     assert not collisions, f"flowables laid out over one another: {collisions[:6]}"
 
@@ -787,11 +792,11 @@ def test_the_layout_overlap_guard_catches_the_exact_baseline_case(tmp_path):
     """The mutation the page-level check could not see, run against the layout-level one."""
     from reportlab.platypus import Spacer
 
-    doc = Doc(WIRE)
+    doc = Doc(WIRE, TEST_MANIFEST)
     doc.p("The first paragraph, which should be legible on its own line.")
     doc._story.append(Spacer(1, -18))
     doc.p("The second paragraph, laid out on the same baseline as the first.")
-    doc.build(str(tmp_path / "collide-layout.pdf"), "collide")
+    doc.build(str(tmp_path / "collide-layout.pdf"))
 
     assert _sibling_overlaps(doc), (
         "the negative spacer produced no detected overlap, so the guard above proves nothing"
@@ -808,7 +813,7 @@ def test_every_page_names_the_section_it_belongs_to(generator, tmp_path):
     about, which is that a separated page was not independently understandable."""
     path = str(tmp_path / "sections.pdf")
     doc = _build(generator)
-    doc.build(path, "sections")
+    doc.build(path)
 
     with pdfplumber.open(path) as pdf:
         pages = [(n, page.extract_text() or "") for n, page in enumerate(pdf.pages, 1)]
@@ -828,7 +833,7 @@ def test_the_section_footer_tracks_section_changes(tmp_path):
     """Guard the guard: if every page reported the same section the test above would pass while
     telling a reader nothing."""
     doc = _build(deploy_gen)
-    doc.build(str(tmp_path / "track.pdf"), "track")
+    doc.build(str(tmp_path / "track.pdf"))
     assert len(set(doc.page_sections.values())) > 1, doc.page_sections
 
 
@@ -838,7 +843,7 @@ def test_f15_gate_the_effectiveness_heading_shares_a_page_with_its_table(tmp_pat
     overleaf with no repeated heading. The heading, its note, and the table now travel as one
     KeepTogether unit, proven by geometry: the heading's page must also carry the table header."""
     path = str(tmp_path / "keep.pdf")
-    _build(contract_gen).build(path, "keep")
+    _build(contract_gen).build(path)
     heading = "Recording a callback is not the same as acting on it"
     with pdfplumber.open(path) as pdf:
         pages = [(p.extract_text() or "") for p in pdf.pages]
@@ -855,7 +860,7 @@ def test_r3f6_the_built_pdf_orders_validation_before_history_and_table(tmp_path)
     verification -> shape/integrity validation -> transaction/history/table, and a partial or
     mismatched release binding is described as a HOLD — never as record-and-2xx."""
     path = str(tmp_path / "order.pdf")
-    _build(contract_gen).build(path, "order")
+    _build(contract_gen).build(path)
     with pdfplumber.open(path) as pdf:
         text = "\n".join(page.extract_text() or "" for page in pdf.pages)
     validate_at = text.find("Validate before you classify")
