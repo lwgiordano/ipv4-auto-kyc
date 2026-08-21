@@ -18,6 +18,7 @@ from docs.contracts import (
     Registry,
     predicates,  # noqa: I001 — sibling module, not the package root
 )
+from docs.contracts.statements import statement
 
 # The one deliberate runtime dependency (re-audit `1826661..b5c7a83` finding 6): the capability
 # registry is RUNTIME state, owned by the dependency-neutral, stdlib-only
@@ -1627,8 +1628,6 @@ WIRE = Registry(
                 (404, "review task not found"),
             ),
             authority="kyc_tool.events.ingest.ingest_event",
-            note="A queued event is 202. Treating 200 as the success case would misread every "
-                 "normal submission.",
             table_headers=("Code", "Meaning"),
         ),
         Claim(
@@ -1675,13 +1674,11 @@ WIRE = Registry(
             value=("v2", "key_id", "direction", "method", "path?query", "timestamp", "slot",
                    "sha256(body) hex"),
             authority="kyc_tool.security.canonical_v2",
-            note="Eight lines, LF-joined, in this order.",
         ),
         Claim(
             id="WIRE.SIGN.DIRECTIONS",
             value={"platform_to_tool": "platform->tool", "tool_to_platform": "tool->platform"},
             authority="kyc_tool.security.DIRECTION_INBOUND / DIRECTION_OUTBOUND",
-            note="Literal tokens. Prose like 'inbound' will not verify.",
         ),
         Claim(
             id="WIRE.SIGN.SKEW_SECONDS",
@@ -1696,16 +1693,12 @@ WIRE = Registry(
                   "not a reliable clipboard for indentation-sensitive source, so copying it off "
                   "the page is not supported and we do not ask you to.",
             authority="docs.contracts.companion (digest recomputed over the shipped bytes)",
-            note="Our test suite executes the file's exact bytes against the published vector and "
-                 "asserts they reproduce the published signature, so a digest mismatch means the "
-                 "file changed in transit rather than the algorithm changing.",
             exclusive_terms=("kyc-signer-example.py",),
         ),
         Claim(
             id="WIRE.SIGN.VECTOR",
             value=SIGNATURE_VECTOR,
             authority="kyc_tool.security.sign_v2 via docs.contracts.signing_example.sign",
-            note="Verify your implementation against this before writing any other code.",
         ),
         Claim(
             id="WIRE.SIGN.V1_SUNSET",
@@ -1723,9 +1716,6 @@ WIRE = Registry(
             authority="kyc_tool.config.hmac_extra_key_violations + kyc_tool.api.auth._inbound_secret "
                       "+ kyc_tool.outbox.publisher (one outbound signer) + "
                       "WIRE.SIGN.ROTATION_RETIREMENT (both retirement steps gated BLOCKED)",
-            note="Both directions are ordered, and both orders are the way they are because one "
-                 "side can hold two keys and the other cannot. The overlap phases work today; "
-                 "the retirement steps do not, and the gate table says exactly why.",
         ),
         Claim(
             id="WIRE.SIGN.ROTATION_RETIREMENT",
@@ -1754,8 +1744,6 @@ WIRE = Registry(
             id="WIRE.CALLBACK.OPTIONAL_FIELDS",
             value=("event_sequence", "enforcement_held"),
             authority="kyc_tool.api.schemas.DecisionCallback (optional fields)",
-            note="Tolerate and preserve both. enforcement_held carries the computed decision "
-                 "while the enforcement hold is active; the outer decision stays authoritative.",
         ),
         Claim(
             id="WIRE.CALLBACK.GATES",
@@ -1791,11 +1779,6 @@ WIRE = Registry(
             value=RECEIVER_VALIDATION_RULES,
             authority="docs/contracts/receiver_reference.py _validate/validate_state — every "
                       "rule's specimen is executed by the authority verifier and must refuse",
-            note="VALIDATE BEFORE YOU CLASSIFY: after the signature verifies, check the "
-                 "callback's shape and your own ledger's integrity BEFORE consulting the "
-                 "replay history or either table. Each row below is an input that must be "
-                 "HELD, not recorded or acknowledged as processed — a malformed callback "
-                 "acknowledged with 2xx is unrecoverable under at-least-once delivery.",
             table_headers=("Invalid input", "Disposition"),
         ),
         Claim(
@@ -1815,9 +1798,6 @@ WIRE = Registry(
             authority="the accepted receiver design (activation design doc) + publisher "
                       "terminalizes on 2xx",
             exclusive_terms=("return 2xx", "COMMIT"),
-            note="A 2xx returned before your commit is unrecoverable: we mark the row delivered "
-                 "and at-least-once cannot help you. This is the single most important "
-                 "requirement on your side.",
         ),
         Claim(
             id="WIRE.CALLBACK.EFFECTIVENESS",
@@ -1826,18 +1806,6 @@ WIRE = Registry(
                       "docs/contracts/receiver_reference.py (executable, scenario-tested) + the "
                       "invariant oracle in the authority test (every row and the executed "
                       "decision held against it)",
-            note="ACKNOWLEDGING a callback and APPLYING it are different decisions: "
-                 "acknowledge and record every VALID callback (validation table above; invalid "
-                 "input is HELD, never recorded), then consult this table for whether it takes "
-                 "effect. "
-                 "Conditions are written in a fixed grammar over the legend's tokens — each "
-                 "clause names a facet, and every clause must hold. Within a phase the rows "
-                 "PARTITION the receiver's state space — every state matches exactly one row, "
-                 "checked by enumeration — so there is no 'otherwise' branch to fall through to "
-                 "and no state with two answers. Automatic authority over a manual-current case "
-                 "returns ONLY through the authenticated platform-owned release protocol, and "
-                 "while a release is OPEN the case is in manual_release_pending and the release "
-                 "table below governs instead.",
             table_headers=("Phase", "When this row applies", "Record", "Effective?", "Why"),
         ),
         Claim(
@@ -1846,8 +1814,6 @@ WIRE = Registry(
             authority="docs.contracts.predicates FACET_LEGEND/RELEASE_LEGEND, cross-bound: each "
                       "meaning must carry its own token's distinguishing term and never its "
                       "paired sibling's",
-            note="Every condition in the two tables is built from exactly these tokens; a token "
-                 "means this and nothing else.",
             table_headers=("Token", "Meaning"),
         ),
         Claim(
@@ -1858,12 +1824,6 @@ WIRE = Registry(
                       "receiver_reference.py (executable, scenario-tested) + the release oracle "
                       "in the authority test; partition proven over all 72 states",
             state=ClaimState.PENDING,
-            note="POST-024 ONLY: the release protocol arrives with the activation unit, so this "
-                 "table is the accepted design, not a wire you can exercise today. While a "
-                 "release is pending, MANUAL REMAINS EFFECTIVE. Exactly one row completes the "
-                 "release; a new manual approval cancels the pending release outright; expiry is "
-                 "driven by the platform's stored deadline, never by waiting for traffic. "
-                 + RELEASE_REPLAY_RULE.text,
             table_headers=("When this row applies", "Record", "Effective?", "Why"),
         ),
         Claim(
@@ -1940,9 +1900,6 @@ WIRE = Registry(
             ),
             authority=".agents/ROADMAP.md D1 (PR 2 event_sequence / PR 7b decision_sequence) + "
                       "the activation spec wire-emission section",
-            note="Two ordinals for one case, and only one of them orders decisions. Getting this "
-                 "backwards is silent: both are monotonic per case, so a receiver built on the "
-                 "wrong one looks correct until two runs overlap.",
             exclusive_terms=("INGEST PROVENANCE", "CALLBACK-ORDER AUTHORITY"),
         ),
         Claim(
@@ -1955,13 +1912,6 @@ WIRE = Registry(
                       "docs.contracts.wire.resolution_problems (refuses every artifact until the "
                       "answer-artifact schema ships; .agents/ROADMAP.md §C, PR 7b-inputs)",
             state=ClaimState.PENDING,
-            note="These are the decisions 024 cannot be built without, and every one of them is "
-                 "the platform's to make. Answering the three questions in section 1.1 alone "
-                 "leaves the unit blocked. And no reply can RESOLVE an obligation yet: resolution "
-                 "requires a versioned, approved and signed answer artifact, and that schema and "
-                 "its verifying authority are a future unit of ours that has not shipped — so "
-                 "O1-O4 remain PENDING however complete an emailed answer looks. What we can do "
-                 "with your answers today is screen their content and agree them in principle.",
         ),
         Claim(
             id="WIRE.ORDERING.BOOTSTRAP_024",
@@ -2005,6 +1955,153 @@ WIRE = Registry(
             id="WIRE.RETENTION.WINDOW_DAYS",
             value=2555,
             authority="kyc_tool.config.Settings.retention_days default",
+        ),
+        # ── published statements: each sentence SELECTED by an executed fact ─────────────
+        #
+        # These were `Claim.note` — prose beside a claim that no verifier read (Wave-2 audit
+        # finding 1). Each is its own claim now, valued by a `Statement`: the published text
+        # is `alternatives[answer]`, and the claim's verifier EXECUTES the fact and refuses a
+        # declared answer the running system contradicts.
+        Claim(
+            id="WIRE.CALLBACK.ACK_CONSEQUENCE",
+            value=statement("ack_before_commit", "unrecoverable", {
+                "unrecoverable":
+                    "A 2xx returned before your commit is unrecoverable: we mark the row delivered and "
+                    "at-least-once cannot help you. This is the single most important requirement on "
+                    "your side.",
+                "recovered":
+                    "A 2xx returned before your commit is safe: we retry the row until your side "
+                    "confirms it, so a lost commit costs nothing.",
+            }),
+            authority="kyc_tool.outbox.publisher (a 2xx terminalizes the row: delivered, no further attempt)",
+        ),
+        Claim(
+            id="WIRE.SIGN.DIRECTION_FORM",
+            value=statement("direction_token_form", "literal_only", {
+                "literal_only": "Literal tokens. Prose like 'inbound' will not verify.",
+                "prose_ok": "Either spelling works: prose also verifies alongside the literal token.",
+            }),
+            authority="kyc_tool.security.verify_v2 executed against a prose direction",
+        ),
+        Claim(
+            id="WIRE.SIGN.COMPANION_PROOF",
+            value=statement("companion_is_executed", "executed", {
+                "executed":
+                    "Our test suite executes the file's exact bytes against the published vector and "
+                    "asserts they reproduce the published signature, so a digest mismatch means the file "
+                    "changed in transit rather than the algorithm changing.",
+                "unread":
+                    "The shipped file is not executed by our suite, so a digest mismatch tells you only "
+                    "that the bytes differ.",
+            }),
+            authority="docs.contracts.signing_example executed against WIRE.SIGN.VECTOR",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.OPTIONAL_FIELD_RULE",
+            value=statement("optional_field_handling", "tolerate_and_preserve", {
+                "tolerate_and_preserve":
+                    "Tolerate and preserve both. enforcement_held carries the computed decision while "
+                    "the enforcement hold is active; the outer decision stays authoritative.",
+                "may_drop":
+                    "You may drop either field: nothing downstream depends on them being kept.",
+            }),
+            authority="kyc_tool.api.schemas.DecisionCallback optional fields + enforcement_held semantics",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.VALIDATION_ORDER",
+            value=statement("validation_order", "validate_first", {
+                "validate_first":
+                    "VALIDATE BEFORE YOU CLASSIFY: after the signature verifies, check the callback's "
+                    "shape and your own ledger's integrity BEFORE consulting the replay history or "
+                    "either table. Each row below is an input that must be HELD, not recorded or "
+                    "acknowledged as processed — a malformed callback acknowledged with 2xx is "
+                    "unrecoverable under at-least-once delivery.",
+                "classify_first":
+                    "You may classify first and validate afterwards: consult the tables, then check the "
+                    "callback's shape and your ledger's integrity.",
+            }),
+            authority="docs.contracts.receiver_reference (_validate runs before classification)",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.ACK_VS_APPLY",
+            value=statement("ack_vs_apply", "different_decisions", {
+                "different_decisions":
+                    "ACKNOWLEDGING a callback and APPLYING it are different decisions: acknowledge and "
+                    "record every VALID callback (validation table above; invalid input is HELD, never "
+                    "recorded), then consult this table for whether it takes effect. "
+                    "Conditions are written in a fixed grammar over the legend's tokens — each clause "
+                    "names a facet, and every clause must hold. Within a phase the rows PARTITION the "
+                    "receiver's state space — every state matches exactly one row, checked by "
+                    "enumeration — so there is no 'otherwise' branch to fall through to and no state "
+                    "with two answers. Automatic authority over a manual-current case returns ONLY "
+                    "through the authenticated platform-owned release protocol, and while a release is "
+                    "OPEN the case is in manual_release_pending and the release table below governs "
+                    "instead.",
+                "same_decision":
+                    "Acknowledging a callback and applying it are the same: a callback you record is a "
+                    "callback that has taken effect.",
+            }),
+            authority="docs.contracts.receiver_reference + the phase partition enumeration",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.LEGEND_CLOSURE",
+            value=statement("legend_closure", "closed", {
+                "closed":
+                    "Every condition in the two tables is built from exactly these tokens; a token means "
+                    "this and nothing else.",
+                "open":
+                    "The conditions read as ordinary English, and other terms may appear beside these.",
+            }),
+            authority="docs.contracts.predicates.legend() covering every published condition token",
+        ),
+        Claim(
+            id="WIRE.CALLBACK.RELEASE_STATE",
+            value=statement("release_protocol_state", "post_024_only", {
+                # the replay rule is itself a typed record (RELEASE_REPLAY_RULE), so this
+                # alternative composes two derivations rather than restating either
+                "post_024_only":
+                    "POST-024 ONLY: the release protocol arrives with the activation unit, so "
+                    "this table is the accepted design, not a wire you can exercise today. "
+                    "While a release is pending, MANUAL REMAINS EFFECTIVE. Exactly one row "
+                    "completes the release; a new manual approval cancels the pending release "
+                    "outright; expiry is driven by the platform's stored deadline, never by "
+                    "waiting for traffic. " + RELEASE_REPLAY_RULE.text,
+                "live":
+                    "The release protocol is live today, so this table describes a wire you can exercise "
+                    "now.",
+            }),
+            authority=".agents/ROADMAP.md PR 7b-activation (024 pending; no code path emits a release state)",
+        ),
+        Claim(
+            id="WIRE.ORDERING.ORDINAL_AUTHORITY",
+            value=statement("ordering_ordinal", "only_one_orders", {
+                "only_one_orders":
+                    "Two ordinals for one case, and only one of them orders decisions. Getting this "
+                    "backwards is silent: both are monotonic per case, so a receiver built on the wrong "
+                    "one looks correct until two runs overlap.",
+                "both_order":
+                    "Two ordinals for one case, and either ordinal orders decisions equally well.",
+            }),
+            authority="kyc_tool.api.schemas.DecisionCallback + the D1 sequence domains "
+                      "(decision_sequence orders decisions, event_sequence does not)",
+        ),
+        Claim(
+            id="WIRE.ORDERING.OBLIGATION_STATE",
+            value=statement("obligation_resolution", "unresolvable", {
+                "unresolvable":
+                    "These are the decisions 024 cannot be built without, and every one of them is the "
+                    "platform's to make. Answering the three questions in section 1.1 alone leaves the "
+                    "unit blocked. And no reply can RESOLVE an obligation yet: resolution requires a "
+                    "versioned, approved and signed answer artifact, and that schema and its verifying "
+                    "authority are a future unit of ours that has not shipped — so O1-O4 remain PENDING "
+                    "however complete an emailed answer looks. What we can do with your answers today is "
+                    "screen their content and agree them in principle.",
+                "resolvable":
+                    "A complete emailed answer clears the obligation it addresses, so O1-O4 close as "
+                    "your replies arrive.",
+            }),
+            authority="docs.contracts.wire.resolution_problems (refuses every artifact "
+                      "until the answer-artifact schema ships)",
         ),
     ),
 )

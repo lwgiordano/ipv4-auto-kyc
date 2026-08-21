@@ -94,6 +94,17 @@ REQUIRED_CLAIMS = (
     "WIRE.ORDERING.INTEGRITY_MISMATCH",
     "WIRE.RETENTION.BY_KIND",
     "WIRE.RETENTION.WINDOW_DAYS",
+    # the published statements — each sentence selected by an executed fact
+    "WIRE.SIGN.DIRECTION_FORM",
+    "WIRE.SIGN.COMPANION_PROOF",
+    "WIRE.CALLBACK.OPTIONAL_FIELD_RULE",
+    "WIRE.CALLBACK.VALIDATION_ORDER",
+    "WIRE.CALLBACK.ACK_CONSEQUENCE",
+    "WIRE.CALLBACK.ACK_VS_APPLY",
+    "WIRE.CALLBACK.LEGEND_CLOSURE",
+    "WIRE.CALLBACK.RELEASE_STATE",
+    "WIRE.ORDERING.ORDINAL_AUTHORITY",
+    "WIRE.ORDERING.OBLIGATION_STATE",
 )
 
 
@@ -143,7 +154,7 @@ def build(*, contact: str, due_date: str) -> Doc:
     # The PENDING alert renders BEFORE any answer row (gate finding 10): the note carries the
     # no-reply-can-RESOLVE statement, and putting it after the table handed the reader the rows
     # first and the truth second.
-    doc.claim_note("WIRE.ORDERING.PENDING_INPUTS")
+    doc.claim_statement("WIRE.ORDERING.OBLIGATION_STATE")
     doc.claim_table(
         "WIRE.ORDERING.PENDING_INPUTS",
         # the deliverable column has to fit `manual.release_requested` whole
@@ -243,24 +254,26 @@ def build(*, contact: str, due_date: str) -> Doc:
         "WIRE.CALLBACK.OPTIONAL_FIELDS",
         "Optional fields to tolerate and preserve: <b>"
         + escape(", ".join(optional.value))
-        + "</b>. "
-        + escape(optional.note),
+        + "</b>.",
     )
+    # the handling rule is its own claim now, selected by an executed fact rather than carried
+    # as prose inside this sentence (Wave-2 audit finding 1)
+    doc.claim_statement("WIRE.CALLBACK.OPTIONAL_FIELD_RULE")
 
     doc.h2("Delivery: what actually reaches you")
     doc.claim_bullets("WIRE.CALLBACK.DELIVERY")
 
     doc.h2("Validate before you classify")
-    doc.claim_note("WIRE.CALLBACK.VALIDATION")
+    doc.claim_statement("WIRE.CALLBACK.VALIDATION_ORDER")
     doc.claim_table("WIRE.CALLBACK.VALIDATION", [3.35 * INCH, 3.6 * INCH])
     doc.keep_last_together(3)
 
     doc.h2("Your endpoint must commit before it answers")
     doc.claim_steps("WIRE.CALLBACK.RECEIVER_TXN")
-    doc.claim_note("WIRE.CALLBACK.RECEIVER_TXN")
+    doc.claim_statement("WIRE.CALLBACK.ACK_CONSEQUENCE")
 
     doc.h2("Recording a callback is not the same as acting on it")
-    doc.claim_note("WIRE.CALLBACK.EFFECTIVENESS")
+    doc.claim_statement("WIRE.CALLBACK.ACK_VS_APPLY")
     # the outcome booleans are the machine-checkable mirror of the printed `record`/`effective`
     # cells; both derive from the same OutcomeKind record, and a test asserts the halves agree
     doc.claim_table(
@@ -271,10 +284,10 @@ def build(*, contact: str, due_date: str) -> Doc:
     # bottom with the table starting overleaf (gate finding 15)
     doc.keep_last_together(3)
     doc.claim_table("WIRE.CALLBACK.LEGEND", [1.55 * INCH, 5.15 * INCH], code_columns=(0,))
-    doc.claim_note("WIRE.CALLBACK.LEGEND")
+    doc.claim_statement("WIRE.CALLBACK.LEGEND_CLOSURE")
 
     doc.h2("While a release is pending (post-024 only)")
-    doc.claim_note("WIRE.CALLBACK.RELEASE")
+    doc.claim_statement("WIRE.CALLBACK.RELEASE_STATE")
     doc.claim_table(
         "WIRE.CALLBACK.RELEASE",
         [2.1 * INCH, 1.25 * INCH, 1.5 * INCH, 1.85 * INCH],
@@ -313,11 +326,10 @@ def build(*, contact: str, due_date: str) -> Doc:
         + escape(directions.value["platform_to_tool"])
         + "</b> for your calls to us and <b>"
         + escape(directions.value["tool_to_platform"])
-        + "</b> for ours to you. "
-        + escape(directions.note)
-        + " slot is the Idempotency-Key on "
+        + "</b> for ours to you. slot is the Idempotency-Key on "
         "event POSTs and empty otherwise; path?query is the raw request target.",
     )
+    doc.claim_statement("WIRE.SIGN.DIRECTION_FORM")
     doc.claim_paragraph("WIRE.SIGN.SKEW_SECONDS", prefix="<b>Skew window (seconds): </b>")
     doc.why(
         "v1 signed only timestamp and body, so a captured signature could replay against a "
@@ -341,7 +353,7 @@ def build(*, contact: str, due_date: str) -> Doc:
         ("p", escape(WIRE.value("WIRE.SIGN.COMPANION"))),
         ("code", f"{ARTIFACT_NAME}\nsha256  {artifact_digest()}"),
     ])
-    doc.claim_note("WIRE.SIGN.COMPANION")
+    doc.claim_statement("WIRE.SIGN.COMPANION_PROOF")
 
     doc.h2("Test vector: verify against this before writing anything else")
     v = WIRE.value("WIRE.SIGN.VECTOR")
@@ -375,7 +387,7 @@ def build(*, contact: str, due_date: str) -> Doc:
     doc.claim_paragraph("WIRE.ORDERING.NO_DECIDED_AT")
     doc.h2("Two per-case ordinals, and only one of them orders decisions")
     doc.claim_bullets("WIRE.ORDERING.SEQUENCE_DOMAINS")
-    doc.claim_note("WIRE.ORDERING.SEQUENCE_DOMAINS")
+    doc.claim_statement("WIRE.ORDERING.ORDINAL_AUTHORITY")
     doc.claim_paragraph("WIRE.ORDERING.INTERIM", prefix="<b>Until activation: </b>")
     doc.claim_paragraph("WIRE.ORDERING.INTEGRITY_MISMATCH", prefix="<b>Note: </b>")
 

@@ -36,6 +36,11 @@ REQUIRED_CLAIMS = (
     "OPS.ROLLBACK.MIGRATION_BOUNDARY",
     "OPS.HMAC.ROLLOUT_ORDER",
     "OPS.RECOVERY.REQUEUE",
+    # the published statements — each sentence selected by an executed fact
+    "OPS.CONFIG.HMAC_SET_RULE",
+    "OPS.CUTOVER.EXECUTION_SOURCE",
+    "OPS.CUTOVER.CEILING_RULE",
+    "OPS.HMAC.V1_DROP_TIMING",
 )
 
 
@@ -99,7 +104,7 @@ def build() -> Doc:
         "OPS.CONFIG.HMAC_SET",
         heading=f"The HMAC set: all {len(hmac_set.value)} values are required together",
     )
-    doc.claim_note("OPS.CONFIG.HMAC_SET")
+    doc.claim_statement("OPS.CONFIG.HMAC_SET_RULE")
     doc.claim_paragraph("OPS.CONFIG.ROTATION_KEYS", prefix="<b>Rotation keys: </b>")
     doc.h2("The one flag nobody flips from this guide")
     doc.claim_paragraph("OPS.CONFIG.M2_GATE")
@@ -117,7 +122,7 @@ def build() -> Doc:
         "restart API then workers, then run the section 4 checks."
     )
     doc.h2("Non-rolling procedures: plan here, execute from the playbook")
-    doc.claim_note("OPS.CUTOVER.PROCEDURES")
+    doc.claim_statement("OPS.CUTOVER.EXECUTION_SOURCE")
     # Full-width blocks, not a five-column table. The table was cramped and, worse, unprintable:
     # at every column split that fit the page, BLOCKED_NO_AUTHORITATIVE_MAPPING — a sentinel an
     # operator greps for — was too wide for its cell, and a prose cell clips rather than wraps
@@ -138,10 +143,10 @@ def build() -> Doc:
         "name", "when", "blocks_start", "irreversible", "rollback", "playbook"))
 
     doc.claim_steps("OPS.CUTOVER.OUTBOX_CEILING", heading="Changing the outbox attempt ceiling")
-    doc.claim_note("OPS.CUTOVER.OUTBOX_CEILING")
+    doc.claim_statement("OPS.CUTOVER.CEILING_RULE")
 
     doc.claim_steps("OPS.HMAC.ROLLOUT_ORDER", heading="HMAC v2 rollout order")
-    doc.claim_note("OPS.HMAC.ROLLOUT_ORDER")
+    doc.claim_statement("OPS.HMAC.V1_DROP_TIMING")
 
     # ── rollback ───────────────────────────────────────────────────────────────────────────────
     doc.section("rollback", "6. Rollback")

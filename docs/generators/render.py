@@ -433,20 +433,19 @@ class Doc:
     # display something else, or display it twice, and the coverage count would still be 1. Every
     # method below appends first and records only on success, so `self.rendered` counts flowables
     # that exist rather than intentions.
-    def claim_note(self, claim_id: str, *, style=WHY):
-        """Render a claim's NOTE, attributed to that claim.
+    def claim_statement(self, claim_id: str, *, style=WHY):
+        """Render a claim whose value is a `Statement` — a sentence its fact SELECTED.
 
-        Notes were being emitted through `p()`/`why()`, which made them unattributed prose — and
-        unattributed prose is exactly what nothing verifies (re-audit `4f23f23..97deeae` F3). The
-        receiver contract's note, "a 2xx returned before your commit is unrecoverable", is
-        load-bearing guidance sitting outside the claim it belongs to. It does not count as the
-        claim's VALUE for coverage purposes, so it carries role="note".
+        This replaces `claim_note` (Wave-2 audit finding 1). The text is not the renderer's, not
+        the caller's, and not even the registry author's free choice: it is
+        `alternatives[answer]`, and the claim's own verifier executes the fact. The block is a
+        VALUE block like any other, because the sentence is the claim's value now — there is no
+        "attributed but unverified" role left to carry.
         """
         claim = self.registry[claim_id]
-        lines = projection.expected_lines(claim, projection.NOTE)
-        self._story.append(Paragraph(escape(lines[0]), style))
-        self._add(Block(kind="prose", claim_id=claim_id, lines=lines, role="note",
-                        projection=projection.NOTE))
+        lines = projection.expected_lines(claim, projection.PARAGRAPH)
+        self._emit(claim_id, [Paragraph(escape(lines[0]), style)], lines,
+                   projection_name=projection.PARAGRAPH)
 
     def _emit(self, claim_id: str, flowables: list, lines, *, kind: str = "prose", rows=(),
               projection_name: str = "", row_fields: tuple[str, ...] = (),

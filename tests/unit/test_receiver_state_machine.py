@@ -64,7 +64,7 @@ def test_no_row_falls_through_to_an_otherwise():
     """The exact defect. A row whose condition is 'otherwise' is not a condition."""
     for transition in RECEIVER_TRANSITIONS:
         assert "otherwise" not in transition.condition.lower(), transition
-    note = WIRE["WIRE.CALLBACK.EFFECTIVENESS"].note.lower()
+    note = WIRE.value("WIRE.CALLBACK.ACK_VS_APPLY").text.lower()
     # The note used to promise "first match wins" over an "exhaustive" list — order-dependent
     # selection over rows nothing verified. It now states the property the enumeration actually
     # proves: the rows PARTITION the state space, so no state has zero answers or two.
@@ -187,7 +187,7 @@ def test_only_an_authenticated_release_restores_automatic_authority():
             state = LedgerState(current_source="manual", high_water=5)
             assert not decide(state, Callback(CASE, "r", decision_sequence=sequence),
                               phase=phase).effective
-    note = WIRE["WIRE.CALLBACK.EFFECTIVENESS"].note
+    note = WIRE.value("WIRE.CALLBACK.ACK_VS_APPLY").text
     assert "authenticated" in note and "release protocol" in note
 
 

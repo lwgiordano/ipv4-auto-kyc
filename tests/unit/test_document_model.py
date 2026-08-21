@@ -554,8 +554,9 @@ def test_claim_ids_and_blocks_agree(rendered):
     from_blocks = Counter(b.claim_id for b in doc.blocks if b.claim_id and b.role == "value")
     assert from_blocks == Counter(doc.rendered)
     # a note is attributed but is not the claim's value, so it never inflates coverage
-    notes = [b.claim_id for b in doc.blocks if b.role == "note"]
-    assert len(notes) == len(set(notes)), f"a note is rendered twice: {notes}"
+    # every block is a VALUE block now: the old "attributed but unverified" note role is gone
+    assert not [b for b in doc.blocks if b.role != "value"], (
+        "a block still claims the retired note role")
 
 
 # ── the named mutations from the audit, each of which used to pass ────────────────────────────────
@@ -601,6 +602,16 @@ def _top_level_verify(generator, registry, tmp_path):
     _verify_footers(doc, path)  # the band the other three lanes subtract (Wave-2 finding 3)
 
 
+def _hmac_rule_saying(answer: str):
+    """The HMAC-set statement re-declared with the other answer, so it publishes the other
+    sentence. Used by the mutation table below."""
+    from docs.contracts.statements import Statement
+
+    published = OPERATIONS.value("OPS.CONFIG.HMAC_SET_RULE")
+    return Statement(fact=published.fact, answer=answer,
+                     alternatives=dict(published.alternatives))
+
+
 MUTATIONS = [
     # Every one of these left the previous top-level suite green.
     ("renaming a canonical signing line", WIRE, contract_gen, "WIRE.SIGN.CANONICAL",
@@ -612,9 +623,11 @@ MUTATIONS = [
                 "KYC_HMAC_OUTBOUND_KEY_ID", "KYC_HMAC_OUTBOUND_SECRET",
                 "KYC_HMAC_V1_INBOUND_SUNSET_AT", "KYC_HMAC_V1_OUTBOUND_SUNSET_AT",
                 "KYC_HMAC_V1_OBSERVATION_WINDOW_DAYS")}),
-    ("advertising an 8-character secret floor and naive dates", OPERATIONS, deploy_gen,
-     "OPS.CONFIG.HMAC_SET",
-     {"note": "Secrets are at least 8 characters and sunset dates may be naive."}),
+    # the floor/date promise is its own claim now (Wave-2 finding 1). Declaring the other answer
+    # publishes "Production accepts a subset…", which the executed boundary refuses.
+    ("advertising a partial HMAC set as acceptable", OPERATIONS, deploy_gen,
+     "OPS.CONFIG.HMAC_SET_RULE",
+     {"value": _hmac_rule_saying("accepts_partial")}),
     ("prescribing a rolling security cutover", OPERATIONS, deploy_gen,
      "OPS.RELEASE.CLASSIFICATION",
      {"value": "Releases without a migration are always safe to deploy rolling, including "
@@ -1343,11 +1356,6 @@ RENDERER_PROSE = {
     # Claim.table_headers and every cell from the projection, so a claim table carries no
     # renderer-authored words to pin.
     # ── contract ──────────────────────────────────────────────────────────────────────────────
-    ("contract", "WIRE.ORDERING.PENDING_INPUTS", 0): ("08e7faeb6a24eaff",
-                                                      "what 024 cannot be built without + no "
-                                                      "reply can RESOLVE an obligation until the "
-                                                      "answer-artifact schema ships (the alert "
-                                                      "now PRECEDES the table, gate finding 10)"),
     ("contract", "WIRE.INGEST.EXTRA_FIELDS", 0): ("3dbd54f03ecebb08",
                                                   "the forward-compatibility commitment: we add "
                                                   "without notice, never remove or repurpose "
@@ -1357,20 +1365,18 @@ RENDERER_PROSE = {
     ("contract", "WIRE.CALLBACK.FIELDS", 0): ("fd2b8fddb0219846", "required body fields lead-in"),
     ("contract", "WIRE.CALLBACK.DECISIONS", 0): ("efd06031f9154b80", "decision enumeration lead-in"),
     ("contract", "WIRE.CALLBACK.GATES", 0): ("60ff773c179a76ed", "gates enumeration lead-in"),
-    ("contract", "WIRE.CALLBACK.OPTIONAL_FIELDS", 0): ("febe3f9a74da208d",
-                                                       "tolerate and preserve; which decision "
-                                                       "stays authoritative under the hold"),
-    ("contract", "WIRE.CALLBACK.EFFECTIVENESS", 0): ("0f89c296195add53",
-                                                     "acknowledging vs applying; grammar over "
-                                                     "legend tokens; rows partition the state "
-                                                     "space; release-pending points at its own "
-                                                     "table"),
+    ("contract", "WIRE.CALLBACK.OPTIONAL_FIELDS", 0): ("adcaa34e853e35fc",
+                                                       "the optional-field lead-in; the handling "
+                                                       "RULE moved to its own statement claim "
+                                                       "(Wave-2 finding 1)"),
     ("contract", "WIRE.CALLBACK.RETRY", 0): ("e07949a7ee8f8121",
                                              "retry schedule lead-in and totals"),
     ("contract", "WIRE.SIGN.CANONICAL", 0): ("44258b84c7d9f360", "canonical-string lead-in"),
-    ("contract", "WIRE.SIGN.DIRECTIONS", 0): ("689f7fa5982d3d68",
-                                              "direction tokens are literals; prose will not "
-                                              "verify; what slot and path?query are"),
+    ("contract", "WIRE.SIGN.DIRECTIONS", 0): ("3db54252a0da969e",
+                                              "direction tokens are literals; what slot and "
+                                              "path?query are (the prose-will-not-verify RULE "
+                                              "moved to its own statement claim, Wave-2 "
+                                              "finding 1)"),
     ("contract", "WIRE.SIGN.COMPANION", 0): ("62bed443d66d463f", "companion filename + sha256 line"),
     ("contract", "WIRE.SIGN.VECTOR", 0): ("723d2cc6883b5453", "worked vector lead-in"),
     # ── guide ─────────────────────────────────────────────────────────────────────────────────
@@ -1405,8 +1411,7 @@ def _connective_text(block, claim) -> str:
     )
     for leaf in leaves:
         text = text.replace(leaf, "\x00")
-    if claim.note:
-        text = text.replace(claim.note, "\x00")
+
     return re.sub(r"\x00+", "\x00", text)
 
 
@@ -1512,10 +1517,16 @@ def test_f10_gate_the_unresolvable_alert_precedes_the_answer_table():
     """The PENDING note (which carries the no-reply-can-resolve statement) must be VISIBLE before
     any answer row, and the deliverable column must be negated, not affirmative."""
     doc = _build(contract_gen)
-    blocks = [b for b in doc.blocks if b.claim_id == "WIRE.ORDERING.PENDING_INPUTS"]
-    note_at = next(i for i, b in enumerate(blocks) if b.projection == projection.NOTE)
-    table_at = next(i for i, b in enumerate(blocks) if b.kind == "table")
-    assert note_at < table_at, "the resolution-impossible note renders after the answer rows"
+    blocks = doc.blocks
+    # the no-reply-can-resolve sentence is its own claim now (Wave-2 finding 1), so the
+    # ordering is compared across the two claims rather than within one
+    statement_at = next(
+        i for i, b in enumerate(blocks) if b.claim_id == "WIRE.ORDERING.OBLIGATION_STATE")
+    table_at = next(
+        i for i, b in enumerate(blocks)
+        if b.claim_id == "WIRE.ORDERING.PENDING_INPUTS" and b.kind == "table")
+    assert statement_at < table_at, (
+        "the resolution-impossible statement renders after the answer rows")
     header_row = blocks[table_at].rows[0]
     assert any("does not unblock" in cell for cell in header_row), header_row
     assert not any(cell == "What it unblocks" for cell in header_row), (

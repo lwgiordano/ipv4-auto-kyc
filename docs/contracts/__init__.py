@@ -46,7 +46,15 @@ class Claim:
     authority dotted path or document reference the test validates against, so a reader (and the
               next auditor) can see WHAT proves this claim rather than trusting the registry
     state     ClaimState
-    note      prose the renderer may show alongside the value; never carries authoritative data
+
+    There is deliberately NO `note` field (Wave-2 audit finding 1). It held prose the documents
+    published beside a claim, its docstring promised it "never carries authoritative data", and
+    nothing enforced the promise: notes were subtracted from the authority map, so an inverted
+    early-2xx receiver note and a "the named playbook is optional" cutover note both certified.
+    Every sentence that lived there is now its own claim whose value is a
+    `docs.contracts.statements.Statement` — text SELECTED by an executed fact — and therefore has
+    a registered verifier like every other claim.
+
     exclusive_terms
               subjects that may be discussed only in ATTRIBUTED blocks. A document is not made
               correct by containing a correct claim: a contradictory paragraph beside it is just
@@ -62,7 +70,6 @@ class Claim:
     value: object
     authority: str
     state: ClaimState = ClaimState.SHIPPED
-    note: str = ""
     exclusive_terms: tuple[str, ...] = ()
     # The ordered column titles, REQUIRED for a claim rendered as a table (Wave 2 F5). The
     # registry owns the complete matrix — header row included — so a renderer has nothing of a

@@ -18,6 +18,7 @@ tests, which meant an unverified claim was invisible — it simply had no test, 
 
 import ast
 import contextlib
+import copy
 import dataclasses
 import hashlib
 import html
@@ -813,8 +814,8 @@ def _receiver_validation_rules_are_executable_and_precede_classification():
         "the transaction steps no longer validate before recording"
     )
     assert "VALID" in steps
-    note = WIRE["WIRE.CALLBACK.EFFECTIVENESS"].note
-    assert "VALID callback" in note and "always acknowledge" not in note
+    published = WIRE.value("WIRE.CALLBACK.ACK_VS_APPLY").text
+    assert "VALID callback" in published and "always acknowledge" not in published
 
 
 @verifies("WIRE.CALLBACK.LEGEND")
@@ -1256,9 +1257,10 @@ def _pending_024_inputs_cover_every_live_obligation():
         "PR 7b-inputs must move in the same change"
     )
     assert resolved.roadmap_unit == "PR 7b-inputs"
-    note = WIRE["WIRE.ORDERING.PENDING_INPUTS"].note
-    assert "RESOLVE" in note and "has not shipped" in note, (
-        "the published note no longer tells the reader that no reply can resolve an obligation"
+    published = WIRE.value("WIRE.ORDERING.OBLIGATION_STATE").text
+    assert "RESOLVE" in published and "has not shipped" in published, (
+        "the published statement no longer tells the reader that no reply can resolve an "
+        "obligation"
     )
 
     # the accounted role inventory mirrors ProcessRole exactly (the plan.PLAN_ROLES bind, again):
@@ -1411,8 +1413,9 @@ def _hmac_variable_set_is_complete_and_enforced():
     # The NOTE is published advice and is therefore authoritative (re-audit F3): it stated a
     # floor and a date requirement, and nothing compared either to the code, so "at least 8
     # characters" and "dates may be naive" both rendered happily.
-    assert f"at least {_MIN_HMAC_SECRET_LEN} characters" in claim.note, claim.note
-    assert "timezone-aware ISO-8601" in claim.note
+    published = OPERATIONS.value("OPS.CONFIG.HMAC_SET_RULE").text
+    assert f"at least {_MIN_HMAC_SECRET_LEN} characters" in published, published
+    assert "timezone-aware ISO-8601" in published
     assert production_config_violations(hardened(hmac_inbound_secret="x" * 8))
     assert production_config_violations(hardened(hmac_v1_inbound_sunset_at="2026-09-01T00:00:00"))
     # dropping any one of the v2 values must produce a violation
@@ -3075,17 +3078,16 @@ def test_the_recorder_is_handed_the_active_wire_version():
     """Re-gate-3 finding 4, second half: the gate's literal proves what `_WIRE_VERSION` IS; this
     proves it is what `_record_attempt` actually RECEIVES. Both call sites must bind the module
     global by name — an edit that passes anything else fails here even if the global is clean."""
-    import ast as ast_module
 
-    tree = ast_module.parse((SRC / "outbox" / "publisher.py").read_text())
+    tree = ast.parse((SRC / "outbox" / "publisher.py").read_text())
     handed = []
-    for node in ast_module.walk(tree):
-        if (isinstance(node, ast_module.Call)
-                and isinstance(node.func, ast_module.Attribute)
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "_record_attempt"):
             for keyword in node.keywords:
                 if keyword.arg == "wire_version":
-                    handed.append(ast_module.unparse(keyword.value))
+                    handed.append(ast.unparse(keyword.value))
     assert handed and all(value == "_WIRE_VERSION" for value in handed), (
         f"_record_attempt is handed {handed or 'nothing'} as wire_version; the gate's literal "
         "then proves nothing about what gets persisted"
@@ -7264,10 +7266,15 @@ def rendered_string_paths(claim) -> dict:
             return
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
             fields = {f.name: f for f in dataclasses.fields(value)}
-            names = getattr(type(value), "PUBLISHED_FIELDS", None) or tuple(fields)
+            declared = getattr(type(value), "PUBLISHED_FIELDS", None)
+            names = declared or tuple(fields)
             for name in names:
-                if not fields[name].init:
-                    continue  # derived by construction; the source records carry the receipt
+                # A DERIVED field is skipped only when the type has not declared it published.
+                # `Statement.text` is derived AND published — it is the sentence a reader gets —
+                # so the closure must see it (Wave-2 audit finding 1); its receipt is the
+                # statement's own verifier, which executes the fact that selects it.
+                if not fields[name].init and not declared:
+                    continue
                 walk(getattr(value, name), f"{path}:{type(value).__name__}.{name}")
             return
         if isinstance(value, dict):
@@ -7285,8 +7292,6 @@ def rendered_string_paths(claim) -> dict:
         found.setdefault(path, []).append(str(value))
 
     walk(claim.value, "value")
-    if claim.note:
-        found["note"] = [claim.note]
     # EVERY registry-owned string a projection can render, not only the ones under `value`
     # (Wave-2 audit finding 2). `table_headers` is the matrix's first row — registry text, printed
     # verbatim — and walking only value/note left it outside the closure entirely: replacing
@@ -7295,7 +7300,7 @@ def rendered_string_paths(claim) -> dict:
     # prose stream, and this closure all stayed silent. Outer Claim fields are enumerated from the
     # dataclass itself, so a field added later cannot be forgotten here either.
     _RENDERED_CLAIM_FIELDS = ("table_headers",)
-    _NEVER_RENDERED = ("id", "value", "authority", "state", "note", "exclusive_terms")
+    _NEVER_RENDERED = ("id", "value", "authority", "state", "exclusive_terms")
     declared = {f.name for f in dataclasses.fields(claim)}
     unaccounted = declared - set(_RENDERED_CLAIM_FIELDS) - set(_NEVER_RENDERED)
     if unaccounted:
@@ -7309,6 +7314,37 @@ def rendered_string_paths(claim) -> dict:
 
 
 VERIFIER_BOUND = frozenset({
+    # Derived published cells: text COMPUTED from records their claim's verifier binds — the
+    # transition texts from OutcomeKind/REASON_TEXTS, the event payload displays from
+    # PAYLOAD_MODELS, the setting displays from Settings, and every `Statement.text` from the
+    # fact its verifier executes. None of them is authored beside the claim (Wave-2 finding 1).
+    ("WIRE.EVENT.TABLE", "value[]:EventRow.required_display"),
+    ("WIRE.EVENT.TABLE", "value[]:EventRow.optional_display"),
+    ("WIRE.CALLBACK.EFFECTIVENESS", "value[]:Transition.condition"),
+    ("WIRE.CALLBACK.EFFECTIVENESS", "value[]:Transition.record"),
+    ("WIRE.CALLBACK.EFFECTIVENESS", "value[]:Transition.effective"),
+    ("WIRE.CALLBACK.EFFECTIVENESS", "value[]:Transition.why"),
+    ("WIRE.CALLBACK.RELEASE", "value[]:ReleaseTransition.condition"),
+    ("WIRE.CALLBACK.RELEASE", "value[]:ReleaseTransition.record"),
+    ("WIRE.CALLBACK.RELEASE", "value[]:ReleaseTransition.effective"),
+    ("WIRE.CALLBACK.RELEASE", "value[]:ReleaseTransition.why"),
+    ("WIRE.CALLBACK.ACK_CONSEQUENCE", "value:Statement.text"),
+    ("WIRE.SIGN.DIRECTION_FORM", "value:Statement.text"),
+    ("WIRE.SIGN.COMPANION_PROOF", "value:Statement.text"),
+    ("WIRE.CALLBACK.OPTIONAL_FIELD_RULE", "value:Statement.text"),
+    ("WIRE.CALLBACK.VALIDATION_ORDER", "value:Statement.text"),
+    ("WIRE.CALLBACK.ACK_VS_APPLY", "value:Statement.text"),
+    ("WIRE.CALLBACK.LEGEND_CLOSURE", "value:Statement.text"),
+    ("WIRE.CALLBACK.RELEASE_STATE", "value:Statement.text"),
+    ("WIRE.ORDERING.ORDINAL_AUTHORITY", "value:Statement.text"),
+    ("WIRE.ORDERING.OBLIGATION_STATE", "value:Statement.text"),
+    ("OPS.CONFIG.DEFAULTS", "value[]:SettingDefault.variable"),
+    ("OPS.CONFIG.DEFAULTS", "value[]:SettingDefault.display"),
+    ("OPS.CONFIG.HMAC_SET_RULE", "value:Statement.text"),
+    ("OPS.CUTOVER.EXECUTION_SOURCE", "value:Statement.text"),
+    ("OPS.CUTOVER.CEILING_RULE", "value:Statement.text"),
+    ("OPS.HMAC.V1_DROP_TIMING", "value:Statement.text"),
+    ("WIRE.EVENT.TABLE", "value[]:EventRow.required_display"),
     ("WIRE.INGEST.PATH", "value"),
     ("WIRE.INGEST.HEADERS", "value[]:HeaderSpec.name"),
     ("WIRE.INGEST.EXTRA_FIELDS", "value{envelope}"),
@@ -7329,7 +7365,6 @@ VERIFIER_BOUND = frozenset({
     ("WIRE.SIGN.VECTOR", "value{body_sha256}"),
     ("WIRE.SIGN.VECTOR", "value{canonical_lines}[]"),
     ("WIRE.SIGN.VECTOR", "value{signature}"),
-    ("WIRE.SIGN.VECTOR", "note"),
     ("WIRE.SIGN.ROTATION", "value[]"),
     ("WIRE.CALLBACK.PATH", "value"),
     ("WIRE.CALLBACK.FIELDS", "value[]"),
@@ -7411,7 +7446,6 @@ VERIFIER_BOUND = frozenset({
      "RollbackBranch.facts[]:RollbackFact.evidence"),
     ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.migration_span:MigrationSpan.base_revision"),
     ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.migration_span:MigrationSpan.target_revision"),
-    ("OPS.CUTOVER.PROCEDURES", "note"),
 })
 
 # Digest over the LF-joined ordered strings at the path; the label quotes the reviewed text's
@@ -7423,8 +7457,6 @@ REGISTRY_PROSE_PINS = {
         ("bc30558c830a6df1", "header why column: a replay returns the stored response verbatim ..."),
     ("WIRE.INGEST.STATUS", "value[][]"):
         ("5b6e84d6fa388b1c", "status meanings: accepted and queued — the normal result ..."),
-    ("WIRE.INGEST.STATUS", "note"):
-        ("5cd3fbdd9b8be249", "A queued event is 202. Treating 200 as the success case would ..."),
     ("WIRE.INGEST.EXTRA_FIELDS", "value{prose}"):
         ("ebb5fb1852ddc911", "Unknown fields at the TOP LEVEL of the envelope are rejected ..."),
     ("WIRE.INGEST.ORDERING", "value"):
@@ -7435,18 +7467,10 @@ REGISTRY_PROSE_PINS = {
         ("4a802291233aa6a5", "The generic envelope example shows actor.type 'user' ..."),
     ("WIRE.EVENT.TABLE", "value[]:EventRow.note"):
         ("a544984f5e28e9ef", "event notes: First event for a case creates it ..."),
-    ("WIRE.SIGN.CANONICAL", "note"):
-        ("cf77df62e805731f", "Eight lines, LF-joined, in this order."),
-    ("WIRE.SIGN.DIRECTIONS", "note"):
-        ("f8173a97525d6d6a", "Literal tokens. Prose like 'inbound' will not verify."),
     ("WIRE.SIGN.COMPANION", "value"):
         ("d8a840df49e2d780", "The runnable signer ships as a FILE alongside this document ..."),
-    ("WIRE.SIGN.COMPANION", "note"):
-        ("38c7c25bb3570796", "Our test suite executes the file's exact bytes against the ..."),
     ("WIRE.SIGN.V1_SUNSET", "value"):
         ("bd9a9136304b9957", "Both v1 sunset dates are set with you at cutover and are unset ..."),
-    ("WIRE.SIGN.ROTATION", "note"):
-        ("7456d8ea7c47ef2c", "Both directions are ordered, and both orders are the way they ..."),
     ("WIRE.SIGN.ROTATION_RETIREMENT", "value[]:RetirementGate.direction"):
         ("ddf39acb3f68d0fa", "gate directions: INBOUND / OUTBOUND"),
     ("WIRE.SIGN.ROTATION_RETIREMENT", "value[]:RetirementGate.transition"):
@@ -7455,26 +7479,14 @@ REGISTRY_PROSE_PINS = {
         ("4b71db50038610f7", "why blocked: Nothing durable records WHICH key id a request ..."),
     ("WIRE.SIGN.ROTATION_RETIREMENT", "value[]:RetirementGate.unblocked_by"):
         ("51752bf615e15d4f", "unblocked by: A durable fleet-wide per-key acceptance witness ..."),
-    ("WIRE.CALLBACK.OPTIONAL_FIELDS", "note"):
-        ("6301b756a7d6e8ce", "Tolerate and preserve both. enforcement_held carries the ..."),
     ("WIRE.CALLBACK.DELIVERY", "value[]"):
         ("9d0c6522fadae281", "delivery bullets: Each automated decision enqueues one callback ..."),
     ("WIRE.CALLBACK.VALIDATION", "value[]:ValidationRule.invalid_input"):
         ("c08382fbbb08bb13", "invalid inputs: a PARTIAL release binding ..."),
     ("WIRE.CALLBACK.VALIDATION", "value[]:ValidationRule.disposition"):
         ("a138892f4ba2ec82", "dispositions: integrity_mismatch — HOLD; do not record ..."),
-    ("WIRE.CALLBACK.VALIDATION", "note"):
-        ("d047619c688acca3", "VALIDATE BEFORE YOU CLASSIFY: after the signature verifies ..."),
     ("WIRE.CALLBACK.RECEIVER_TXN", "value[]"):
         ("2349b4021d8f161e", "the six receiver steps: Verify the signature. / ... / COMMIT ..."),
-    ("WIRE.CALLBACK.RECEIVER_TXN", "note"):
-        ("a57d9bb2963025e1", "A 2xx returned before your commit is unrecoverable ..."),
-    ("WIRE.CALLBACK.EFFECTIVENESS", "note"):
-        ("3aa328b2c8582e0d", "ACKNOWLEDGING a callback and APPLYING it are different decisions ..."),
-    ("WIRE.CALLBACK.LEGEND", "note"):
-        ("563f3623d1c9b4b6", "Every condition in the two tables is built from exactly these ..."),
-    ("WIRE.CALLBACK.RELEASE", "note"):
-        ("e14b065121269fdc", "POST-024 ONLY: the release protocol arrives with the activation ..."),
     ("WIRE.CALLBACK.WAIT_BOUND", "value"):
         ("3644c198b16adb76", "Respond within 10 seconds. Each attempt carries a 40-second ..."),
     ("WIRE.CALLBACK.COMPLETION", "value"):
@@ -7485,8 +7497,6 @@ REGISTRY_PROSE_PINS = {
         ("b6244cbcf0e8b1ca", "Until ordered delivery is activated: dedupe exact repeats ..."),
     ("WIRE.ORDERING.SEQUENCE_DOMAINS", "value[]"):
         ("157c8ec72343f56b", "event_sequence is INGEST PROVENANCE / decision_sequence orders ..."),
-    ("WIRE.ORDERING.SEQUENCE_DOMAINS", "note"):
-        ("a0323d6cb0b2b2a4", "Two ordinals for one case, and only one of them orders decisions ..."),
     ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.owner"):
         ("49b8b60e5696f071", "obligation owners: TechCraft / platform"),
     ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.question"):
@@ -7495,8 +7505,6 @@ REGISTRY_PROSE_PINS = {
         ("dd4ae27b7ff99ee6", "answer shapes: principal identifier + key id + which HMAC ..."),
     ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.blocked_deliverable"):
         ("5efc3281a00f6419", "blocked deliverables: the manual.release_requested request model ..."),
-    ("WIRE.ORDERING.PENDING_INPUTS", "note"):
-        ("c0168092a5044cbc", "These are the decisions 024 cannot be built without ..."),
     ("WIRE.ORDERING.BOOTSTRAP_024", "value"):
         ("e0e3dbdc4a5609ff", "Ordered delivery needs a signed bootstrap of per-case high-water ..."),
     ("WIRE.ORDERING.INTEGRITY_MISMATCH", "value"):
@@ -7513,8 +7521,6 @@ REGISTRY_PROSE_PINS = {
         ("0acf577a49110427", "infrastructure rows: PostgreSQL / object store / compute ..."),
     ("OPS.CONFIG.PRODUCTION_FLOORS", "value[]"):
         ("cf18faefd52e1d74", "job_lease_seconds is floored at 30 in production ..."),
-    ("OPS.CONFIG.HMAC_SET", "note"):
-        ("051346b6cdc9b22c", "Production refuses a partial set. Secrets are at least 32 ..."),
     ("OPS.CONFIG.ROTATION_KEYS", "value"):
         ("fa0307861feb0a52", "KYC_HMAC_INBOUND_EXTRA_KEYS is a JSON object of key_id to secret ..."),
     ("OPS.CONFIG.M2_GATE", "value"):
@@ -7525,14 +7531,10 @@ REGISTRY_PROSE_PINS = {
         ("877130f0966ab63a", "Every release declares itself rolling or full-maintenance ..."),
     ("OPS.CUTOVER.OUTBOX_CEILING", "value[]"):
         ("0220501e7a96543b", "ceiling steps: disable autoscaling and rolling restart ..."),
-    ("OPS.CUTOVER.OUTBOX_CEILING", "note"):
-        ("42e2b21c4e6b8acd", "Any change to the ceiling, up or down, follows this ..."),
     ("OPS.ROLLBACK.MIGRATION_BOUNDARY", "value[]"):
         ("49880b15d3422e44", "A release with no migration rolls back by redeploying ..."),
     ("OPS.HMAC.ROLLOUT_ORDER", "value[]"):
         ("98e2f53212a9f721", "Deploy with both v1 sunset dates in the future ..."),
-    ("OPS.HMAC.ROLLOUT_ORDER", "note"):
-        ("e6faf8b58b1a696f", "The publisher drops v1 the moment the outbound date passes ..."),
     ("OPS.RECOVERY.REQUEUE", "value"):
         ("737b6d8d346c6cb8", "The always-mounted ops endpoints POST /v1/ops/requeue ..."),
     # Column titles: registry-owned text printed verbatim as the matrix's first row. Reviewed as
@@ -7630,14 +7632,43 @@ def _swapped_claim(registry, claim_id, **changes):
         object.__setattr__(registry, "claims", original)
 
 
-def test_r15f4_an_inverted_receiver_note_fails_its_pin():
-    """The survey witness verbatim: this exact mutation left 400 tests green before the fold."""
-    with _swapped_claim(
-            WIRE, "WIRE.CALLBACK.RECEIVER_TXN",
-            note="A 2xx returned before your commit is fine; the platform recovers it for you."):
-        problems = _receipt_problems((WIRE, OPERATIONS))
-    assert any("WIRE.CALLBACK.RECEIVER_TXN" in p and "changed since it was reviewed" in p
-               for p in problems), problems
+def test_w2f1_the_early_2xx_lie_cannot_be_published_at_all():
+    """The witness that has driven this finding since R15, now refused THREE ways.
+
+    Codex's reproduction was: invert `WIRE.CALLBACK.RECEIVER_TXN.note` to say a 2xx before your
+    commit is fine, update its digest in the same edit, and everything certifies. That note no
+    longer exists; the sentence is `WIRE.CALLBACK.ACK_CONSEQUENCE`, selected by an executed fact.
+    """
+    from docs.contracts.statements import FACTS, Statement
+
+    published = WIRE.value("WIRE.CALLBACK.ACK_CONSEQUENCE")
+
+    # 1. Declaring the other answer publishes the other sentence — and the verifier, which
+    #    executes the publisher, refuses it.
+    lie = Statement(fact=published.fact, answer="recovered",
+                    alternatives=dict(published.alternatives))
+    assert "we retry the row" in lie.text and "unrecoverable" not in lie.text
+    with (
+        _swapped_claim(WIRE, "WIRE.CALLBACK.ACK_CONSEQUENCE", value=lie),
+        pytest.raises(AssertionError, match="unrecoverable one"),
+    ):
+        AUTHORITY_VERIFIERS["WIRE.CALLBACK.ACK_CONSEQUENCE"]()
+
+    # 2. Keeping the true answer and rewording ITS sentence into the lie is refused at
+    #    construction: the sentence would carry the sibling answer's term and none of its own.
+    with pytest.raises(ValueError, match="borrows|none of its own terms"):
+        Statement(
+            fact=FACTS["ack_before_commit"], answer="unrecoverable",
+            alternatives={
+                "unrecoverable": "A 2xx before your commit is fine; the platform recovers it.",
+                "recovered": published.alternatives["recovered"],
+            },
+        )
+
+    # 3. There is no free text field left to edit: `text` is derived, and the claim carries no
+    #    note, so the one-edit-plus-re-pin path the finding described does not exist.
+    assert not hasattr(WIRE["WIRE.CALLBACK.ACK_CONSEQUENCE"], "note")
+    assert published.text == published.alternatives[published.answer]
 
 
 def test_r15f4_an_inverted_header_why_fails_its_pin():
@@ -7711,3 +7742,365 @@ def test_r15f4_a_stale_receipt_is_refused():
         OPERATIONS,
     ))
     assert any("WIRE.CALLBACK.RECEIVER_TXN" in p and "stale" in p for p in problems), problems
+
+
+# ── the published statements: each answer EXECUTED, never taken on the registry's word ────────────
+#
+# Wave-2 audit finding 1. These sentences used to be `Claim.note` — prose the authority map
+# deliberately skipped, whose only control was a digest recorded beside it. Each is a claim now,
+# so it lands in the closed map like any other, and each verifier below OBSERVES the fact its
+# statement declares. Declaring the wrong answer publishes the other alternative and fails here;
+# rewording an alternative into the opposite reading is refused at construction by the fact's
+# token discipline (docs/contracts/statements.py).
+
+def _statement(claim_id: str):
+    """The claim's Statement, with the shape checks every one of these verifiers relies on."""
+    from docs.contracts.statements import Statement
+
+    registry = WIRE if claim_id.startswith("WIRE.") else OPERATIONS
+    value = registry.value(claim_id)
+    assert type(value) is Statement, f"{claim_id} must publish a Statement, not {type(value)}"
+    assert value.text == value.alternatives[value.answer], (
+        f"{claim_id}: published text is not the alternative its answer selects")
+    return value
+
+
+def _publisher_source() -> str:
+    return (SRC / "outbox" / "publisher.py").read_text()
+
+
+@verifies("WIRE.CALLBACK.ACK_CONSEQUENCE")
+def _a_2xx_terminalizes_the_row_so_the_warning_is_the_true_one():
+    """The early-2xx witness, bound to the publisher's own delivery branch.
+
+    `_deliver` returning normally (the 2xx path) is followed by `_record_delivered`, and the
+    delivered terminal is what stops further attempts — so an acknowledgement the platform sends
+    before its own commit cannot be retried into existence. Declaring `recovered` would publish
+    "we retry the row until your side confirms it", which this refuses.
+    """
+    statement = _statement("WIRE.CALLBACK.ACK_CONSEQUENCE")
+    source = _publisher_source()
+    tree = ast.parse(source)
+    process = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "process_once")
+    body = ast.get_source_segment(source, process) or ""
+    # the send is followed by the delivered terminal — no confirmation step in between
+    assert "_deliver(" in body and "_record_delivered(" in body
+    assert body.index("_deliver(") < body.index("_record_delivered(")
+    delivered = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_record_delivered")
+    delivered_body = ast.get_source_segment(source, delivered) or ""
+    assert "published_at" in delivered_body, "a delivered row is stamped, i.e. terminal"
+    assert statement.answer == "unrecoverable", (
+        "the publisher terminalizes on the acknowledgement, so the published sentence must be "
+        f"the unrecoverable one, not {statement.answer!r}")
+
+
+@verifies("WIRE.SIGN.COMPANION_PROOF")
+def _the_companion_statement_matches_what_the_suite_actually_does():
+    """`executed` claims our suite runs the shipped file's own bytes. Run them here, the same way
+    the companion verifier does, and require the published signature back."""
+    statement = _statement("WIRE.SIGN.COMPANION_PROOF")
+    vector = WIRE.value("WIRE.SIGN.VECTOR")
+    from docs.contracts.companion import artifact_path, artifact_text
+
+    namespace: dict = {}
+    exec(compile(artifact_text(), str(artifact_path()), "exec"), namespace)  # noqa: S102
+    produced = namespace["sign"](
+        secret=vector["secret"], key_id=vector["key_id"], direction=vector["direction"],
+        method=vector["method"], path_qs=vector["path_qs"], timestamp=vector["timestamp"],
+        slot=vector["slot"], body=vector["body"],
+    )
+    assert produced == vector["signature"], "the shipped file no longer reproduces the vector"
+    assert statement.answer == "executed"
+
+
+@verifies("WIRE.CALLBACK.OPTIONAL_FIELD_RULE")
+def _optional_fields_are_tolerated_and_preserved_by_the_model():
+    """`tolerate_and_preserve` is a property of the callback model: both fields are declared and
+    optional, so a receiver that drops them loses data the wire carries."""
+    statement = _statement("WIRE.CALLBACK.OPTIONAL_FIELD_RULE")
+    declared = WIRE.value("WIRE.CALLBACK.OPTIONAL_FIELDS")
+    fields = DecisionCallback.model_fields
+    for name in declared:
+        assert name in fields and not fields[name].is_required(), name
+    assert statement.answer == "tolerate_and_preserve"
+
+
+@verifies("WIRE.CALLBACK.VALIDATION_ORDER")
+def _validation_precedes_classification_in_the_reference_receiver():
+    """`validate_first` is executed: the reference receiver's own order decides it."""
+    statement = _statement("WIRE.CALLBACK.VALIDATION_ORDER")
+    source = (REPO / "docs" / "contracts" / "receiver_reference.py").read_text()
+    observe_at = source.index("def observe(")
+    validate_at = source.index("_validate(", observe_at)
+    classify_at = source.index("predicates.DUP if", observe_at)
+    assert validate_at < classify_at, "the reference receiver classifies before it validates"
+    assert statement.answer == "validate_first"
+
+
+@verifies("WIRE.CALLBACK.ACK_VS_APPLY")
+def _acknowledging_and_applying_are_separate_in_the_executed_table():
+    """`different_decisions` is observable: rows exist that RECORD without becoming EFFECTIVE."""
+    statement = _statement("WIRE.CALLBACK.ACK_VS_APPLY")
+    rows = WIRE.value("WIRE.CALLBACK.EFFECTIVENESS")
+    recorded_not_effective = [r for r in rows if r.records and not r.becomes_effective]
+    assert recorded_not_effective, (
+        "if no row recorded without becoming effective, the two decisions would be one")
+    assert statement.answer == "different_decisions"
+
+
+@verifies("WIRE.CALLBACK.LEGEND_CLOSURE")
+def _every_published_condition_token_comes_from_the_legend():
+    """`closed` is checked by tokenizing the published conditions against the legend itself."""
+    statement = _statement("WIRE.CALLBACK.LEGEND_CLOSURE")
+    legend = dict(WIRE.value("WIRE.CALLBACK.LEGEND"))
+    # Every condition is `facet = token` clauses joined by commas; both halves must be legend
+    # entries, so a condition cannot introduce a word the legend does not define.
+    for row in (*WIRE.value("WIRE.CALLBACK.EFFECTIVENESS"), *WIRE.value("WIRE.CALLBACK.RELEASE")):
+        for clause in row.condition.split(" AND "):
+            facet, sep, rhs = clause.strip().partition(" = ")
+            if not sep:  # a set clause: `sequence in {absent, not_above}`
+                facet, _, rhs = clause.strip().partition(" in ")
+                tokens = [w.strip() for w in rhs.strip("{} ").split(",")]
+            else:
+                tokens = [rhs.strip()]
+            for token in tokens:
+                assert token in legend, (
+                    f"condition token {token!r} is not defined in the legend")
+    assert statement.answer == "closed"
+
+
+@verifies("WIRE.CALLBACK.RELEASE_STATE")
+def _the_release_protocol_is_not_exercisable_today():
+    """`post_024_only` is bound to the same absence the release claim is: the table is PENDING and
+    no shipped code path emits its states."""
+    statement = _statement("WIRE.CALLBACK.RELEASE_STATE")
+    assert WIRE["WIRE.CALLBACK.RELEASE"].state is ClaimState.PENDING
+    for module in ("api/schemas.py", "outbox/publisher.py", "events/ingest.py"):
+        source = (SRC / module).read_text()
+        assert "manual_release_pending" not in source, f"{module} already implements the protocol"
+    assert statement.answer == "post_024_only"
+
+
+@verifies("WIRE.ORDERING.ORDINAL_AUTHORITY")
+def _only_the_decision_ordinal_orders_decisions():
+    """`only_one_orders` is the D1 split, executed against the published domains."""
+    statement = _statement("WIRE.ORDERING.ORDINAL_AUTHORITY")
+    domains = " ".join(WIRE.value("WIRE.ORDERING.SEQUENCE_DOMAINS"))
+    assert "event_sequence is INGEST PROVENANCE" in domains
+    assert "decision_sequence" in domains
+    assert statement.answer == "only_one_orders"
+
+
+@verifies("WIRE.ORDERING.OBLIGATION_STATE")
+def _no_artifact_can_resolve_an_obligation_yet():
+    """`unresolvable` is executed: `resolution_problems` must refuse even a perfect artifact."""
+    statement = _statement("WIRE.ORDERING.OBLIGATION_STATE")
+    for item in WIRE.value("WIRE.ORDERING.PENDING_INPUTS"):
+        problems = wire_module.resolution_problems(item, {"answer": "complete", "signed": True})
+        assert problems, f"{item.obligation} accepted an artifact while the schema is unbuilt"
+    assert statement.answer == "unresolvable"
+
+
+@verifies("OPS.CONFIG.HMAC_SET_RULE")
+def _production_refuses_a_partial_hmac_set():
+    """`refuses_partial` is executed against the real production boundary."""
+    statement = _statement("OPS.CONFIG.HMAC_SET_RULE")
+    partial = hardened(hmac_inbound_secret="")
+    assert any("hmac_inbound_secret" in v for v in production_config_violations(partial))
+    assert statement.answer == "refuses_partial"
+
+
+@verifies("OPS.CUTOVER.EXECUTION_SOURCE")
+def _every_procedure_sends_the_operator_to_a_playbook():
+    """`playbook_only` is structural: each procedure carries a playbook ref, and the guide
+    publishes no step summary an operator could execute from instead. The Codex witness — "the
+    named playbook is optional" — is the other alternative, which this refuses."""
+    statement = _statement("OPS.CUTOVER.EXECUTION_SOURCE")
+    for procedure in OPERATIONS.value("OPS.CUTOVER.PROCEDURES"):
+        assert procedure.playbook_ref.path and procedure.playbook_ref.heading
+        assert procedure.playbook, f"{procedure.name} publishes no playbook pointer"
+    generator = (REPO / "docs" / "generators" / "techcraft_deployment_guide.py").read_text()
+    assert "claim_steps(\"OPS.CUTOVER.PROCEDURES\"" not in generator
+    assert statement.answer == "playbook_only"
+
+
+@verifies("OPS.CUTOVER.CEILING_RULE")
+def _a_ceiling_change_runs_the_published_procedure():
+    """`needs_this_procedure` is bound to the shipped cutover record the claim renders from."""
+    statement = _statement("OPS.CUTOVER.CEILING_RULE")
+    steps = OPERATIONS.value("OPS.CUTOVER.OUTBOX_CEILING")
+    assert steps and any("autoscaling" in step for step in steps)
+    assert statement.answer == "needs_this_procedure"
+
+
+@verifies("OPS.HMAC.V1_DROP_TIMING")
+def _the_publisher_drops_v1_on_the_date_not_on_confirmation():
+    """`at_the_sunset_date` is a property of the publisher: the sunset is a timestamp comparison
+    with no readiness input, so nothing waits for the receiver."""
+    statement = _statement("OPS.HMAC.V1_DROP_TIMING")
+    source = _publisher_source()
+    assert "v1_outbound_sunset_at" in source
+    assert "receiver_ready" not in source and "confirmed_ready" not in source
+    assert statement.answer == "at_the_sunset_date"
+
+
+@verifies("WIRE.SIGN.DIRECTION_FORM")
+def _only_the_literal_direction_token_verifies():
+    """`literal_only` is EXECUTED: sign the same request with the prose word 'inbound' in place
+    of the literal direction token and require the signature not to match."""
+    statement = _statement("WIRE.SIGN.DIRECTION_FORM")
+    directions = WIRE.value("WIRE.SIGN.DIRECTIONS")
+    vector = WIRE.value("WIRE.SIGN.VECTOR")
+    literal = directions["platform_to_tool"]
+    assert vector["direction"] == literal
+    # the canonical string refuses an unknown direction outright, so prose cannot even produce
+    # a signature to compare — a stronger form of "will not verify" than a mismatch
+    with pytest.raises(ValueError):
+        sign_v2(
+            vector["secret"], key_id=vector["key_id"], direction="inbound",
+            method=vector["method"], path_qs=vector["path_qs"], timestamp=vector["timestamp"],
+            slot=vector["slot"], body=vector["body"],
+        )
+    assert statement.answer == "literal_only"
+
+
+# ── the metamorphic proof: every VERIFIER_BOUND path is refused by its NAMED verifier ─────────────
+#
+# Wave-2 audit finding 1's second half. Classifying a path as VERIFIER_BOUND is a claim ABOUT a
+# verifier, and until this test that claim was my judgment — two of them were wrong, and Codex
+# found both (`WIRE.SIGN.VECTOR.note` and `OPS.CUTOVER.PROCEDURES.note` were declared bound while
+# their verifiers never read them). This mutates every bound string, one at a time, and requires
+# the claim's own registered verifier to refuse. A path whose verifier shrugs is not bound, and
+# this test says so by name rather than leaving it to review.
+
+_MUTATION = "MUTATED-BY-THE-METAMORPHIC-PROOF"
+
+
+def _tampered_copy(value, target_path: str):
+    """A deep copy of `value` with the first string at `target_path` replaced.
+
+    Rebuilt functionally, so a mutation at the ROOT is returned rather than lost: the first
+    version of this helper wrote the new tuple onto a parent that did not exist for top-level
+    values, and ten paths looked unbound when the mutation had simply evaporated. Frozen records
+    that validate in `__post_init__` are updated with `object.__setattr__` — the same tamper the
+    procedure regressions use — because hostile content cannot be passed through their
+    constructors. Returns None when the path names nothing.
+    """
+    done: list = []
+
+    def visit(node, here):
+        if done or isinstance(node, bool) or node is None or isinstance(node, (int, float, bytes)):
+            return node, False
+        if isinstance(node, str):
+            if here == target_path:
+                done.append(True)
+                return _MUTATION, True
+            return node, False
+        if dataclasses.is_dataclass(node) and not isinstance(node, type):
+            fields = {f.name: f for f in dataclasses.fields(node)}
+            declared = getattr(type(node), "PUBLISHED_FIELDS", None)
+            changed = False
+            for name in declared or tuple(fields):
+                if not fields[name].init and not declared:
+                    continue
+                new_field, hit = visit(getattr(node, name),
+                                       f"{here}:{type(node).__name__}.{name}")
+                if hit:
+                    object.__setattr__(node, name, new_field)
+                    changed = True
+            return node, changed
+        if isinstance(node, dict):
+            changed = False
+            for key in list(node):
+                new_item, hit = visit(node[key], f"{here}{{{key}}}")
+                if hit:
+                    node[key] = new_item
+                    changed = True
+            return node, changed
+        if isinstance(node, (list, tuple)):
+            items, changed = [], False
+            for item in node:
+                new_item, hit = visit(item, here + "[]")
+                items.append(new_item)
+                changed = changed or hit
+            if not changed:
+                return node, False
+            return (tuple(items) if isinstance(node, tuple) else items), True
+        return node, False
+
+    root, changed = visit(copy.deepcopy(value), "value")
+    return root if (changed and done) else None
+
+
+def _construction_refuses(node) -> bool:
+    """Would the tampered structure survive its own constructors?
+
+    `_tampered_copy` writes through `object.__setattr__`, which bypasses validation on purpose —
+    that is how a hostile edit is simulated. But a record whose `__post_init__` would REJECT the
+    tampered state cannot be published at all: `Command` requires `line.split() == argv`, so
+    mutating a parsed token while the published line stands is unconstructible. That is a
+    refusal, and a stricter one than a verifier assertion, so the proof counts it as such.
+    """
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if dataclasses.is_dataclass(current) and not isinstance(current, type):
+            post = getattr(type(current), "__post_init__", None)
+            if post is not None:
+                try:
+                    post(copy.deepcopy(current))
+                except Exception:
+                    return True
+            stack.extend(getattr(current, f.name) for f in dataclasses.fields(current))
+        elif isinstance(current, dict):
+            stack.extend(current.values())
+        elif isinstance(current, (list, tuple)):
+            stack.extend(current)
+    return False
+
+
+def test_every_verifier_bound_path_is_refused_by_its_named_verifier():
+    """Mutate each bound string; its claim's verifier must refuse. No digest may do the work."""
+    unrefused: list[str] = []
+    checked = 0
+    for registry in (WIRE, OPERATIONS):
+        by_id = {c.id: c for c in registry.claims}
+        for claim_id, path in sorted(VERIFIER_BOUND):
+            claim = by_id.get(claim_id)
+            if claim is None or path not in rendered_string_paths(claim):
+                continue
+            checked += 1
+            if path.startswith("table_headers"):
+                mutant = dataclasses.replace(
+                    claim, table_headers=(_MUTATION, *claim.table_headers[1:]))
+            else:
+                tampered = _tampered_copy(claim.value, path)
+                if tampered is None:
+                    unrefused.append(f"{claim_id} | {path}: could not be mutated at all")
+                    continue
+                mutant = dataclasses.replace(claim, value=tampered)
+            if _construction_refuses(mutant.value):
+                continue  # the record itself rejects the tampered state
+            with _swapped_claim(registry, claim_id, value=mutant.value,
+                                table_headers=mutant.table_headers):
+                try:
+                    AUTHORITY_VERIFIERS[claim_id]()
+                except Exception:
+                    continue
+            unrefused.append(
+                f"{claim_id} | {path}: the named verifier accepted a mutated string, so this "
+                "path is NOT verifier-bound — bind it or move it to REGISTRY_PROSE_PINS")
+    assert checked >= 60, f"only {checked} bound paths were exercised; the proof went hollow"
+    assert not unrefused, "\n".join(unrefused)
+
+
+def test_the_metamorphic_mutator_can_actually_mutate():
+    """Guard the guard: a mutator that silently changed nothing would make the proof vacuous."""
+    claim = WIRE["WIRE.CALLBACK.ACK_CONSEQUENCE"]
+    tampered = _tampered_copy(claim.value, "value:Statement.text")
+    assert tampered is not None and tampered.text == _MUTATION
+    assert claim.value.text != _MUTATION, "the original must not be touched"

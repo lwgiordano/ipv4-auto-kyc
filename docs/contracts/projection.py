@@ -25,12 +25,11 @@ STEPS = "steps"  # value is an ORDERED sequence -> numbered lines
 CODE = "code"  # value is a sequence of literals -> one fixed-width line each
 NUMBERED_CODE = "numbered_code"  # same, numbered, when the ORDER is the point
 ALERT = "alert"  # value is a sequence of strings, rendered as a warning block
-NOTE = "note"  # the claim's note, not its value
 TABLE = "table"  # value is a sequence of row tuples/dataclasses
 COMPOSED = "composed"  # the caller builds the rows; every leaf of the value must still appear
 
 PROJECTIONS = frozenset(
-    {PARAGRAPH, BULLETS, STEPS, CODE, NUMBERED_CODE, ALERT, NOTE, TABLE, COMPOSED}
+    {PARAGRAPH, BULLETS, STEPS, CODE, NUMBERED_CODE, ALERT, TABLE, COMPOSED}
 )
 
 
@@ -97,11 +96,13 @@ def expected_lines(claim, projection: str) -> tuple[str, ...]:
     """The exact text lines this claim must contribute, in order."""
     if projection not in PROJECTIONS:
         raise ValueError(f"unknown projection {projection!r}")
-    if projection == NOTE:
-        if not claim.note.strip():
-            raise ValueError(f"{claim.id} has no note to project")
-        return (claim.note,)
     if projection == PARAGRAPH:
+        # A Statement publishes the sentence its fact SELECTED (Wave-2 audit finding 1); its
+        # `text` is derived at construction, so there is no authored string here to project.
+        if is_dataclass(claim.value) and not isinstance(claim.value, type):
+            declared = getattr(type(claim.value), "PUBLISHED_FIELDS", ())
+            if declared == ("text",):
+                return (claim.value.text,)
         if isinstance(claim.value, (list, tuple, dict, set, frozenset)):
             raise TypeError(
                 f"{claim.id} holds {type(claim.value).__name__}; a paragraph projection would "

@@ -70,6 +70,7 @@ from docs.contracts.playbook_bodies import (
     PR5B_BODY,
     PR7B_CORE_BODY,
 )
+from docs.contracts.statements import statement
 
 # CUTOVERS ARE NOT SUMMARIZED HERE (re-audit `6feca36..4f23f23` F5).
 #
@@ -498,8 +499,6 @@ OPERATIONS = Registry(
                    "KYC_HMAC_OUTBOUND_SECRET", "KYC_HMAC_V1_INBOUND_SUNSET_AT",
                    "KYC_HMAC_V1_OUTBOUND_SUNSET_AT", "KYC_HMAC_V1_OBSERVATION_WINDOW_DAYS"),
             authority="kyc_tool.config.production_config_violations HMAC block",
-            note="Production refuses a partial set. Secrets are at least 32 characters and sunset "
-                 "dates must be timezone-aware ISO-8601.",
         ),
         Claim(
             id="OPS.CONFIG.ROTATION_KEYS",
@@ -559,9 +558,6 @@ OPERATIONS = Registry(
             id="OPS.CUTOVER.PROCEDURES",
             value=(FULL_WINDOW, BUNDLE_PINNING, PR7B_CORE),
             authority="docs/DEPLOYMENT.md cutover sections (referenced, never restated)",
-            note="Plan from these entries; EXECUTE from the named playbook. Step summaries are "
-                 "deliberately absent: a second copy of a safety procedure drifts, and every "
-                 "step list we tried dropped a control that prevents irreversible damage.",
         ),
         Claim(
             id="OPS.CUTOVER.OUTBOX_CEILING",
@@ -573,8 +569,6 @@ OPERATIONS = Registry(
                 "start publishers of roles: outbox_worker, dev_worker",
             ),
             authority="kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER (canonical record)",
-            note="Any change to the ceiling, up or down, follows this. A rolling restart runs two "
-                 "ceilings against the same rows and can irreversibly burn POC email retries.",
         ),
         Claim(
             id="OPS.ROLLBACK.MIGRATION_BOUNDARY",
@@ -609,8 +603,6 @@ OPERATIONS = Registry(
             ),
             authority="docs/architecture-decisions.md ADR-003 + kyc_tool.outbox.publisher v1 "
                       "dual-emit",
-            note="The publisher drops v1 the moment the outbound date passes, so an unready "
-                 "receiver starts rejecting callbacks until they dead-letter.",
         ),
         Claim(
             id="OPS.RECOVERY.REQUEUE",
@@ -621,6 +613,60 @@ OPERATIONS = Registry(
                   "that the failed run it resets belongs to the same case. Treat a 409 as the "
                   "guard working and investigate the pairing.",
             authority="kyc_tool.ops.requeue_service.requeue_dead_job",
+        ),
+        # ── published statements: each sentence SELECTED by an executed fact ─────────────
+        #
+        # These were `Claim.note` — prose beside a claim that no verifier read (Wave-2 audit
+        # finding 1). Each is its own claim now, valued by a `Statement`: the published text
+        # is `alternatives[answer]`, and the claim's verifier EXECUTES the fact and refuses a
+        # declared answer the running system contradicts.
+        Claim(
+            id="OPS.CONFIG.HMAC_SET_RULE",
+            value=statement("hmac_set_completeness", "refuses_partial", {
+                "refuses_partial":
+                    "Production refuses a partial set. Secrets are at least 32 characters and sunset "
+                    "dates must be timezone-aware ISO-8601.",
+                "accepts_partial":
+                    "Production accepts a subset of these variables and fills the rest with defaults.",
+            }),
+            authority="kyc_tool.config.production_config_violations HMAC block",
+        ),
+        Claim(
+            id="OPS.CUTOVER.EXECUTION_SOURCE",
+            value=statement("procedure_execution_source", "playbook_only", {
+                "playbook_only":
+                    "Plan from these entries; EXECUTE from the named playbook. Step summaries are "
+                    "deliberately absent: a second copy of a safety procedure drifts, and every step "
+                    "list we tried dropped a control that prevents irreversible damage.",
+                "summaries_ok":
+                    "Plan and execute from these entries; the named playbook is optional detail.",
+            }),
+            authority="every OPS.CUTOVER.PROCEDURES entry carries a playbook_ref, and the "
+                      "deployment guide publishes no step numbering",
+        ),
+        Claim(
+            id="OPS.CUTOVER.CEILING_RULE",
+            value=statement("ceiling_change_window", "needs_this_procedure", {
+                "needs_this_procedure":
+                    "Any change to the ceiling, up or down, follows this. A rolling restart runs two "
+                    "ceilings against the same rows and can irreversibly burn POC email retries.",
+                "rolling_ok":
+                    "For a ceiling change a rolling restart is fine; the two ceilings reconcile "
+                    "themselves.",
+            }),
+            authority="OPS.CUTOVER.OUTBOX_CEILING steps + kyc_tool.outbox.publisher attempt ceiling",
+        ),
+        Claim(
+            id="OPS.HMAC.V1_DROP_TIMING",
+            value=statement("v1_drop_timing", "at_the_sunset_date", {
+                "at_the_sunset_date":
+                    "The publisher drops v1 the moment the outbound date passes, so an unready receiver "
+                    "starts rejecting callbacks until they dead-letter.",
+                "after_confirmation":
+                    "The publisher keeps signing v1 until your side confirms it is ready, only once you "
+                    "confirm does it stop.",
+            }),
+            authority="kyc_tool.outbox.publisher v1 sunset behaviour",
         ),
     ),
 )
