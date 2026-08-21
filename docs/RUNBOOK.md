@@ -312,32 +312,32 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
 python -m kyc_tool.ops.verify_pr7b_ops_prerequisites --expect-revision 012
 ```
 
-    A wrong maintenance credential OR wrong phase is caught HERE, not at `ALTER SEQUENCE`
-    inside the stop; then pause submissions,
-    hard-stop and attest EVERY writer (API,
-    pipeline, outbox, `dev_worker`, retention), then run
-    the restore CLI (dry-run first; add `--apply` to perform):
+A wrong maintenance credential OR wrong phase is caught HERE, not at `ALTER SEQUENCE`
+inside the stop; then pause submissions,
+hard-stop and attest EVERY writer (API,
+pipeline, outbox, `dev_worker`, retention), then run
+the restore CLI (dry-run first; add `--apply` to perform):
 
 ```operator
 python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
     --expect-original-id <id> --expect-manifest-digest <sha256>
 ```
 
-    `--expect-manifest-digest` is MANDATORY and is an INTEGRITY check: the tool recomputes
-    the sha256 of the evidence file (``sha256sum <file.json>``) and refuses unless it matches, so a
-    tampered or wrong file is rejected before any DB work — the file cannot self-certify by carrying
-    its own digest. The tool does NOT verify a cryptographic signature; the digest's authenticity is
-    yours to establish out of band, from a trusted/signed backup manifest (machine-verified signing
-    is a future option).
-    It validates the whole
-    contract below, inserts the exact original row, floors the sequence past the restored id
-    (`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
-    the acceptance predicate and the sequence before committing — any mismatch rolls back row and
-    sequence together. Then rerun 0.4 (the gate that reopens cutover) and either RESUME service or
-    proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path — the earlier
-    revision of this section prescribed exactly that and was circular: the diagnostic stayed red
-    until the restore, while the sequence repair was documented as reachable only after cutover
-    step 2 and knew nothing of the id being restored (re-audit `f495de8` F1).
+`--expect-manifest-digest` is MANDATORY and is an INTEGRITY check: the tool recomputes
+the sha256 of the evidence file (``sha256sum <file.json>``) and refuses unless it matches, so a
+tampered or wrong file is rejected before any DB work — the file cannot self-certify by carrying
+its own digest. The tool does NOT verify a cryptographic signature; the digest's authenticity is
+yours to establish out of band, from a trusted/signed backup manifest (machine-verified signing
+is a future option).
+It validates the whole
+contract below, inserts the exact original row, floors the sequence past the restored id
+(`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
+the acceptance predicate and the sequence before committing — any mismatch rolls back row and
+sequence together. Then rerun 0.4 (the gate that reopens cutover) and either RESUME service or
+proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path — the earlier
+revision of this section prescribed exactly that and was circular: the diagnostic stayed red
+until the restore, while the sequence repair was documented as reachable only after cutover
+step 2 and knew nothing of the id being restored (re-audit `f495de8` F1).
 0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
     advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
     (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing

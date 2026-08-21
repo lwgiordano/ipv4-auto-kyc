@@ -31,6 +31,11 @@ dev = [
     # dev extra so CI proves the rendered page, not just the registry.
     "reportlab>=4.0",
     "pdfplumber>=0.11",
+    # The typed playbook bodies (docs/contracts/body.py) refuse code blocks inside prose
+    # by consuming a REAL CommonMark block tree (R-audit-15): a line-prefix check missed
+    # fences nested in blockquotes, indented code, and raw <pre>. Doc-side only, like the
+    # two renderers above — src/kyc_tool never imports docs/contracts.
+    "markdown-it-py>=3.0",
 ]
 s3 = ["boto3>=1.34"]
 

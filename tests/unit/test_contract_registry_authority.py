@@ -2045,7 +2045,7 @@ def _command_inventory_problems(ref, section: str) -> list[str]:
 PROCEDURE_DEFINITION_PINS = {
     "PR 5b full maintenance window": "74dc08a643bcc640",
     "Bundle-pinning activation": "1906bcffd7980305",
-    "Migrations 013-023": "718580b66ee67160",
+    "Migrations 013-023": "4447ddc48c2844ae",
 }
 
 
@@ -2109,6 +2109,23 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
             f"{procedure.name}: the document section is not the typed body projection; "
             "author the typed body in docs/contracts/playbook_bodies.py, never the "
             "document"
+        )
+        # R-audit-15 finding 1: construction and verification consume the SAME real
+        # CommonMark block tree. Every code block a reader gets from the published
+        # section — at ANY container depth, fenced or indented or raw <pre> — must be
+        # exactly an OperatorInstruction's fence, in order. A `>`-nested operator fence,
+        # an indented block, or a raw <pre> is a code block to the reader and therefore
+        # an executable lane; there is no depth at which one hides from this.
+        from docs.contracts import body as body_model
+
+        published = body_model.code_blocks(section)
+        typed = [("fence", "operator", "\n".join(block.rendered().split("\n")[1:-1]) + "\n")
+                 for block in ref.body
+                 if type(block) is body_model.OperatorInstruction]
+        assert published == typed, (
+            f"{procedure.name}: the section's code blocks are not exactly its typed "
+            f"operator lane.\n  published: {[(k, i) for k, i, _ in published]}\n"
+            f"  typed:     {[(k, i) for k, i, _ in typed]}"
         )
         # gate finding 5: the derived fields are REBOUND to the plan's own derivations every
         # run, so object.__setattr__ on the frozen procedure cannot outlive one verification
@@ -6961,7 +6978,7 @@ def test_r14f1_prose_cannot_smuggle_the_operator_lane_or_an_undeclared_command()
     from docs.contracts.body import Narrative, OperatorInstruction
     from docs.contracts.playbook import Command
 
-    with pytest.raises(ValueError, match="may not open an operator fence"):
+    with pytest.raises(ValueError, match="may not contain a code block"):
         Narrative("intro\n```operator\nrm -rf /var/lib/kyc\n```\n")
     with pytest.raises(ValueError, match="declared as a typed"):
         Narrative("run ``rm -rf /var/lib/kyc`` now\n")
@@ -6990,3 +7007,91 @@ def test_r14f1_the_operator_lane_is_rendered_only_from_typed_commands():
                 assert fence[0] == "```operator" and fence[-1] == "```"
                 assert _join_operator_lines(fence[1:-1]) == [c.line
                                                              for c in block.commands]
+
+
+# ── R-audit-15 `dd72855..809a1fa` (finding 1) ─────────────────────────────────────────────────────
+
+
+def test_r15f1_container_nested_code_blocks_refuse_at_construction_and_in_the_document(
+        tmp_path, monkeypatch):
+    """The audit's witnesses: a line-prefix fence check is not a parser. `>` + an operator
+    fence is a REAL operator code block inside a blockquote; nested blockquotes, indented
+    code, and raw <pre><code> are code blocks too, and none of them start the line with a
+    fence — so all four published runnable text with no typed Command behind it, through
+    the assembled verifier, after coherent sha and definition re-pins. Construction and
+    verification now consume the SAME real CommonMark block tree, so depth is irrelevant:
+    prose refuses to hold a code block, and the document's code blocks must be exactly the
+    typed operator lane."""
+    import copy
+    import shutil
+
+    from docs.contracts.body import Narrative
+
+    witnesses = (
+        ("blockquoted fence", "> ```operator\n> pkill kyc_worker\n> ```\n"),
+        ("nested blockquotes", ">> ```operator\n>> pkill kyc_worker\n>> ```\n"),
+        ("indented code", "    pkill kyc_worker\n"),
+        ("raw html pre", "<pre><code>pkill kyc_worker</code></pre>\n"),
+    )
+    # (a) construction: prose cannot hold any of them, at any depth
+    for label, witness in witnesses:
+        with pytest.raises(ValueError, match="may not contain a code block") as refusal:
+            Narrative("intro paragraph\n\n" + witness)
+        assert "pkill kyc_worker" in str(refusal.value), label
+
+    # (b) the document: even if a body were built around the guard, the published section's
+    # code blocks must equal the typed operator lane exactly
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    live_doc = (REPO / ref.path).read_text()
+    section = _section_bytes(ref)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "alembic").symlink_to(REPO / "alembic")
+    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+    shutil.copy(REPO / "docs/RUNBOOK.md", tmp_path / "docs/RUNBOOK.md")
+    for label, witness in witnesses:
+        assert witness, label
+        mutated = section + "\n" + witness
+        (tmp_path / ref.path).write_text(live_doc.replace(section, mutated, 1))
+        tampered = copy.copy(pr7b)
+        object.__setattr__(
+            tampered, "playbook_ref",
+            dataclasses.replace(
+                ref, sha256=hashlib.sha256(mutated.encode()).hexdigest(), commands=()))
+        monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+        monkeypatch.setattr(_this_module(), "OPERATIONS",
+                            _operations_with_procedure(tampered))
+        with pytest.raises(AssertionError):
+            AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        monkeypatch.undo()
+
+
+def test_r15f1_ordinary_containers_stay_legal_prose():
+    """The rule's other half, so the parser cannot overshoot: non-code blockquotes, lists,
+    nested lists, headings, and tables are ordinary prose and stay constructible. Only CODE
+    blocks are the executable lane."""
+    from docs.contracts.body import Narrative
+
+    for prose in ("> a quoted caution about the window\n",
+                  "> outer\n> > inner quoted note\n",
+                  "1. first step\n2. second step\n   - a nested bullet\n",
+                  "### A heading\n\nand a paragraph with `inline code` in it\n",
+                  "| a | b |\n|---|---|\n| 1 | 2 |\n"):
+        assert Narrative(prose).text == prose
+
+
+def test_r15f1_the_live_documents_publish_no_prose_as_code():
+    """The rendering defect the real parser surfaced in the live documents: two prose
+    paragraphs sat 4-space indented after a column-0 fence, so CommonMark — and GitHub —
+    rendered them as CODE. They are prose and now render as prose; neither published
+    document may present prose in a code box again."""
+    from docs.contracts import body as body_model
+
+    for name in ("docs/DEPLOYMENT.md", "docs/RUNBOOK.md"):
+        text = (REPO / name).read_text()
+        indented = [c for c in body_model.code_blocks(text) if c[0] == "indented"]
+        assert indented == [], (
+            f"{name}: prose rendered as an indented code block: "
+            f"{[c[2].strip()[:60] for c in indented]}"
+        )

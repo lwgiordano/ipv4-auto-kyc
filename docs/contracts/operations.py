@@ -347,7 +347,7 @@ PR7B_CORE = Procedure(
         path="docs/DEPLOYMENT.md",
         heading="## 11. PR 7b-core cutover — drained maintenance window (migration 013)",
         body=PR7B_CORE_BODY,
-        sha256="3cf24cfee80a34a3dc37edadda0fb46756c7675ecffa40322d6e10539b60cf2a",
+        sha256="b4bd97bada2f96cc0f3002e0a9cc4be740230aa8797faed3e555871da5af23f6",
         # Every operator-run command the section publishes, as parsed argv. The placeholders
         # (`<file.json>`, `<id>`, `<sha256>`) are the section's own literal text.
     ),

@@ -24,9 +24,37 @@ the one deliberate re-pin a human reviews.
 import re
 from dataclasses import dataclass
 
+from markdown_it import MarkdownIt
+
 from docs.contracts.playbook import Command
 
-_FENCE_OPENERS = ("```", "~~~")
+# ONE real CommonMark block tree, shared by construction and verification (R-audit-15
+# finding 1: a line-prefix fence check is not a parser — `>` + an operator fence is a
+# real code block inside a blockquote, and indented code and raw <pre> are code blocks
+# too, none of which start the line with a fence).
+_PARSER = MarkdownIt("commonmark")
+_HTML_CODE = re.compile(r"<\s*(pre|code|script|style|textarea)\b", re.IGNORECASE)
+
+
+def code_blocks(text: str) -> list:
+    """Every CODE block a CommonMark reader gets, at ANY container depth.
+
+    Returns `(kind, info, content)` in document order — fenced blocks (```/~~~),
+    indented code blocks, and raw-HTML blocks that open a code-ish element. Nesting is
+    irrelevant by construction: this walks the parser's own token stream, so a fence
+    inside a blockquote, inside nested blockquotes, or inside a list item is found the
+    same way a reader finds it. Ordinary blockquotes, lists, headings, and paragraphs
+    are not code and are not reported.
+    """
+    found = []
+    for token in _PARSER.parse(text):
+        if token.type == "fence":
+            found.append(("fence", token.info.strip(), token.content))
+        elif token.type == "code_block":
+            found.append(("indented", "", token.content))
+        elif token.type == "html_block" and _HTML_CODE.search(token.content):
+            found.append(("html", "", token.content))
+    return found
 
 
 @dataclass(frozen=True)
@@ -45,13 +73,19 @@ class Narrative:
     def __post_init__(self) -> None:
         if type(self.text) is not str or not self.text:
             raise ValueError("a Narrative carries exact non-empty prose text")
-        for line in self.text.split("\n"):
-            stripped = line.lstrip(" ")
-            if stripped.startswith(_FENCE_OPENERS) and "operator" in stripped:
-                raise ValueError(
-                    "a Narrative may not open an operator fence — runnable lines are "
-                    "published only by OperatorInstruction, from typed Command records"
-                )
+        # R-audit-15 finding 1: judged by the REAL block tree, so nesting cannot hide a
+        # code block. Prose carries NO code block of any kind — an operator fence is the
+        # obvious one, but an indented block, a raw <pre>, or any fence inside a
+        # blockquote or list item publishes runnable-looking text just as loudly.
+        blocks = code_blocks(self.text)
+        if blocks:
+            kind, info, content = blocks[0]
+            raise ValueError(
+                f"a Narrative may not contain a code block ({kind}"
+                f"{'/' + info if info else ''}, at any nesting depth): "
+                f"{content.strip()[:60]!r} — runnable lines are published only by "
+                "OperatorInstruction, from typed Command records"
+            )
         if any(type(c) is not Command for c in self.commands):
             raise ValueError("a Narrative's declared commands are typed Command records")
         marked = tuple(re.findall(r"(?<!`)``([^`]+?)``(?!`)", self.text))
