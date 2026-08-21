@@ -7012,6 +7012,54 @@ def test_r14f1_the_operator_lane_is_rendered_only_from_typed_commands():
 # ── R-audit-15 `dd72855..809a1fa` (finding 1) ─────────────────────────────────────────────────────
 
 
+def _body_planted_with(witness, tmp_path):
+    """A PR7b procedure whose TYPED BODY carries `witness`, with the document regenerated
+    from it and every digest recomputed — the coherent state an author would produce.
+
+    The witness is planted past `Narrative`'s construction guard on purpose: that guard is
+    boundary one, and a body in this state can only exist if boundary one were bypassed.
+    What this builds is the state in which render identity holds, the section sha is
+    honest, and the definition pin matches — so the ONLY control left is the code-lane
+    comparison, which is exactly the boundary under test. Returns `(procedure, pins)`.
+    """
+    import copy
+    import shutil
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    live_doc = (REPO / ref.path).read_text()
+    section = _section_bytes(ref)
+
+    planted = copy.copy(ref.body[-1])
+    object.__setattr__(planted, "text", ref.body[-1].text + "\n" + witness)
+    body = ref.body[:-1] + (planted,)
+
+    tampered = copy.copy(pr7b)
+    object.__setattr__(tampered, "playbook_ref",
+                       dataclasses.replace(ref, body=body, commands=()))
+    rendered = tampered.playbook_ref.rendered_body
+    object.__setattr__(
+        tampered, "playbook_ref",
+        dataclasses.replace(tampered.playbook_ref, body=body, commands=(),
+                            sha256=hashlib.sha256(rendered.encode()).hexdigest()))
+
+    if not (tmp_path / "docs").exists():
+        (tmp_path / "docs").mkdir(parents=True)
+        (tmp_path / "alembic").symlink_to(REPO / "alembic")
+        (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+        shutil.copy(REPO / "docs/RUNBOOK.md", tmp_path / "docs/RUNBOOK.md")
+    (tmp_path / ref.path).write_text(live_doc.replace(section, rendered, 1))
+
+    from docs.contracts.operations import procedure_projection
+
+    pins = dict(PROCEDURE_DEFINITION_PINS)
+    pins[tampered.name] = hashlib.sha256(
+        repr(procedure_projection(tampered)).encode()).hexdigest()[:16]
+    return tampered, pins
+
+
+
 def test_r15f1_container_nested_code_blocks_refuse_at_construction_and_in_the_document(
         tmp_path, monkeypatch):
     """The audit's witnesses: a line-prefix fence check is not a parser. `>` + an operator
@@ -7022,8 +7070,6 @@ def test_r15f1_container_nested_code_blocks_refuse_at_construction_and_in_the_do
     verification now consume the SAME real CommonMark block tree, so depth is irrelevant:
     prose refuses to hold a code block, and the document's code blocks must be exactly the
     typed operator lane."""
-    import copy
-    import shutil
 
     from docs.contracts.body import Narrative
 
@@ -7039,31 +7085,30 @@ def test_r15f1_container_nested_code_blocks_refuse_at_construction_and_in_the_do
             Narrative("intro paragraph\n\n" + witness)
         assert "pkill kyc_worker" in str(refusal.value), label
 
-    # (b) the document: even if a body were built around the guard, the published section's
-    # code blocks must equal the typed operator lane exactly
-    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
-                if p.name == "Migrations 013-023")
-    ref = pr7b.playbook_ref
-    live_doc = (REPO / ref.path).read_text()
-    section = _section_bytes(ref)
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "alembic").symlink_to(REPO / "alembic")
-    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
-    shutil.copy(REPO / "docs/RUNBOOK.md", tmp_path / "docs/RUNBOOK.md")
-    for label, witness in witnesses:
-        assert witness, label
-        mutated = section + "\n" + witness
-        (tmp_path / ref.path).write_text(live_doc.replace(section, mutated, 1))
-        tampered = copy.copy(pr7b)
-        object.__setattr__(
-            tampered, "playbook_ref",
-            dataclasses.replace(
-                ref, sha256=hashlib.sha256(mutated.encode()).hexdigest(), commands=()))
+    # (b) the SECOND boundary, exercised for real (R-audit-16 finding 1's second half:
+    # the first version of this test mutated only the document and its sha, so it failed
+    # in the older command classifier before ever reaching the code-lane comparison —
+    # deleting that comparison would have left it green). Here the typed body itself
+    # carries the witness (planted past construction, which is the only way such a body
+    # could exist), the document is REGENERATED from that body, and BOTH the section sha
+    # and the complete-definition pin are recomputed. Render identity holds, the digests
+    # are honest, the classifier has nothing to say — the code-lane assertion is the only
+    # thing left that can refuse, and the match string proves it is what did.
+    # The payload here is deliberately NOT command-shaped ("Echo hello"): the older prose
+    # classifier would otherwise refuse a `pkill` payload first and this test would prove
+    # nothing about the code lane — which is precisely the criticism being folded. With a
+    # payload the classifier has no opinion on, the code-lane comparison is the only
+    # control that can speak, and the match string proves it is what did.
+    for label, shape in (("nested blockquotes", ">> ```operator\n>> Echo hello\n>> ```\n"),
+                         ("indented code", "    Echo hello\n")):
+        tampered, pins = _body_planted_with(shape, tmp_path)
         monkeypatch.setattr(_this_module(), "REPO", tmp_path)
         monkeypatch.setattr(_this_module(), "OPERATIONS",
                             _operations_with_procedure(tampered))
-        with pytest.raises(AssertionError):
+        monkeypatch.setattr(_this_module(), "PROCEDURE_DEFINITION_PINS", pins)
+        with pytest.raises(AssertionError, match="not exactly its typed") as refused:
             AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        assert "complete definition changed" not in str(refused.value), label
         monkeypatch.undo()
 
 
@@ -7095,3 +7140,75 @@ def test_r15f1_the_live_documents_publish_no_prose_as_code():
             f"{name}: prose rendered as an indented code block: "
             f"{[c[2].strip()[:60] for c in indented]}"
         )
+
+
+# ── R-audit-16 `918cd11..3a5c7c7` (finding 1) ─────────────────────────────────────────────────────
+
+
+def test_r16f1_inline_raw_html_cannot_hide_a_code_element_from_either_boundary(
+        tmp_path, monkeypatch):
+    """The audit's witnesses: `<pre><code>…</code></pre>` inside a paragraph is stored as
+    `html_inline` CHILDREN of the paragraph's inline token, so a top-level-only token scan
+    returned an empty list while CommonMark rendered a real code element. Paragraph,
+    blockquote, list-item, and attributed uppercase `<PRE>` variants all reproduced. The
+    walk is recursive now, and raw HTML is refused wholesale rather than by element name —
+    the three reviewed sections contain zero raw-HTML tokens, so the ban closes the class
+    instead of its current members."""
+    from docs.contracts.body import Narrative, code_blocks
+
+    witnesses = (
+        ("paragraph", "Before <pre><code>Echo hello</code></pre> after\n"),
+        ("blockquote", "> Before <pre><code>Echo hello</code></pre> after\n"),
+        ("list item", "- Before <pre><code>Echo hello</code></pre> after\n"),
+        ("uppercase attributed", 'Text <PRE class="x" id=1>Echo hello</PRE> more\n'),
+        ("bare inline element", "Text <textarea>Echo hello</textarea> more\n"),
+    )
+    # boundary one — construction
+    for label, witness in witnesses:
+        assert code_blocks(witness), f"{label}: the parse tree must see the element"
+        with pytest.raises(ValueError, match="code block or raw HTML") as refusal:
+            Narrative("intro paragraph\n\n" + witness)
+        assert "raw HTML" in str(refusal.value), label
+
+    # boundary two — the assembled verifier, with the typed body carrying the witness, the
+    # document regenerated from it, and BOTH digests recomputed. Nothing else can refuse:
+    # render identity holds, the sha is honest, the definition pin matches, and the prose
+    # classifier has no opinion on "Echo hello".
+    for label, witness in witnesses:
+        tampered, pins = _body_planted_with(witness, tmp_path)
+        monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+        monkeypatch.setattr(_this_module(), "OPERATIONS",
+                            _operations_with_procedure(tampered))
+        monkeypatch.setattr(_this_module(), "PROCEDURE_DEFINITION_PINS", pins)
+        with pytest.raises(AssertionError, match="not exactly its typed") as refused:
+            AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        assert "complete definition changed" not in str(refused.value), label
+        monkeypatch.undo()
+
+
+def test_r16f1_the_code_lane_assertion_is_load_bearing_not_incidental():
+    """The audit's second half, kept honest permanently: the earlier assembled regression
+    passed for the WRONG reason — it failed in the prose classifier before reaching the
+    code-lane comparison, so deleting that comparison would have left it green. This pins
+    the property directly: for a body carrying a classifier-silent raw-HTML element, the
+    published section's code blocks differ from its typed operator lane, and the classifier
+    reports nothing. If the code-lane comparison were removed, nothing else would refuse."""
+    import copy
+
+    from docs.contracts import body as body_model
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    ref = pr7b.playbook_ref
+    planted = copy.copy(ref.body[-1])
+    object.__setattr__(
+        planted, "text",
+        ref.body[-1].text + "\nBefore <pre><code>Echo hello</code></pre> after\n")
+    rendered = body_model.render_body(ref.body[:-1] + (planted,))
+
+    published = body_model.code_blocks(rendered)
+    typed = [b for b in ref.body if type(b) is body_model.OperatorInstruction]
+    assert len(published) > len(typed), "the code lane must see the smuggled element"
+    # ...and the classifier, the only other reader of these bytes, stays silent on it
+    assert not any("Echo hello" in problem
+                   for problem in _unmarked_instruction_problems(_section_body(rendered)))
