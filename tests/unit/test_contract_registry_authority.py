@@ -17,6 +17,7 @@ tests, which meant an unverified claim was invisible — it simply had no test, 
 """
 
 import ast
+import contextlib
 import dataclasses
 import hashlib
 import html
@@ -7218,3 +7219,424 @@ def test_r16f1_the_code_lane_assertion_is_load_bearing_not_incidental():
     # ...and the classifier, the only other reader of these bytes, stays silent on it
     assert not any("Echo hello" in problem
                    for problem in _unmarked_instruction_problems(_section_body(rendered)))
+
+
+# ── Wave 2 F4b: every rendered registry string has a named, independent receipt ───────────────────
+#
+# R15 audit finding 4 (`4cb2cb7`), the half Wave 1's ProcedurePlanContract did not close: the
+# registries still carry free prose that reaches TechCraft's page with NO verifier behind it.
+# The survey probe against the pre-fold tree proved it end to end: inverting
+# WIRE.CALLBACK.RECEIVER_TXN.note to "a 2xx before your commit is fine; the platform recovers it
+# for you" left both document suites AND this entire authority file green — 400 tests — because
+# `Claim.note` promises "never carries authoritative data" and nothing enforces the promise.
+#
+# The closure below makes the rendered text surface CLOSED. Every string a claim can put on a
+# page is enumerated as a (claim id, type-level field path) pair, and every pair must hold
+# exactly one receipt:
+#
+#   * VERIFIER_BOUND — the claim's authority verifier demonstrably binds these exact strings to
+#     an independent source: executed code (the signing vector reproduces its signature; the
+#     header names each 401 when renamed), parsed spec (O1-O4), closed derivation records
+#     (rotation_lines(), the predicates legend), or the assembled OPS.CUTOVER.PROCEDURES
+#     verifier with its complete-definition pins.
+#   * REGISTRY_PROSE_PINS — reviewed free prose no verifier derives: pinned by digest with a
+#     human label, so any edit is the one deliberate re-pin a reviewer reads (the same accepted
+#     mechanism as NARRATION_LABELS, RENDERER_PROSE, and PROCEDURE_DEFINITION_PINS).
+#
+# Numeric leaves are outside this closure's scope on purpose: every number a claim renders is
+# already the claim's VALUE, held by its own authority verifier (defaults to Settings, skew to
+# MAX_HMAC_SKEW_SECONDS, retry arithmetic recomputed). Prose is the lane that had no receipt.
+# Derived dataclass fields (init=False) are skipped as receipted-by-construction: their text
+# comes from closed source records whose own verifiers pin the complete surface
+# (OutcomeKind/REASON_TEXTS via TransitionSemantic, Procedure.when/rollback via the contracts).
+
+def rendered_string_paths(claim) -> dict:
+    """Every (type-level path -> ordered strings) this claim can render, note included."""
+    found: dict = {}
+
+    def walk(value, path):
+        if isinstance(value, bool) or value is None:
+            return
+        if isinstance(value, str):
+            found.setdefault(path, []).append(value)
+            return
+        if isinstance(value, (int, float, bytes)):
+            return
+        if dataclasses.is_dataclass(value) and not isinstance(value, type):
+            fields = {f.name: f for f in dataclasses.fields(value)}
+            names = getattr(type(value), "PUBLISHED_FIELDS", None) or tuple(fields)
+            for name in names:
+                if not fields[name].init:
+                    continue  # derived by construction; the source records carry the receipt
+                walk(getattr(value, name), f"{path}:{type(value).__name__}.{name}")
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                walk(item, f"{path}{{{key}}}")
+            return
+        if isinstance(value, (set, frozenset)):
+            raise AssertionError(
+                f"{claim.id}: unordered collection at {path} — a rendered value must have a "
+                "stable order for its digest to mean anything")
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item, path + "[]")
+            return
+        found.setdefault(path, []).append(str(value))
+
+    walk(claim.value, "value")
+    if claim.note:
+        found["note"] = [claim.note]
+    return found
+
+
+VERIFIER_BOUND = frozenset({
+    ("WIRE.INGEST.PATH", "value"),
+    ("WIRE.INGEST.HEADERS", "value[]:HeaderSpec.name"),
+    ("WIRE.INGEST.EXTRA_FIELDS", "value{envelope}"),
+    ("WIRE.INGEST.EXTRA_FIELDS", "value{payload}"),
+    ("WIRE.ACTOR.SENSITIVE", "value{events}[]"),
+    ("WIRE.ACTOR.SENSITIVE", "value{actor_type}"),
+    ("WIRE.EVENT.TABLE", "value[]:EventRow.name"),
+    ("WIRE.SIGN.CANONICAL", "value[]"),
+    ("WIRE.SIGN.DIRECTIONS", "value{platform_to_tool}"),
+    ("WIRE.SIGN.DIRECTIONS", "value{tool_to_platform}"),
+    ("WIRE.SIGN.VECTOR", "value{secret}"),
+    ("WIRE.SIGN.VECTOR", "value{key_id}"),
+    ("WIRE.SIGN.VECTOR", "value{direction}"),
+    ("WIRE.SIGN.VECTOR", "value{method}"),
+    ("WIRE.SIGN.VECTOR", "value{path_qs}"),
+    ("WIRE.SIGN.VECTOR", "value{timestamp}"),
+    ("WIRE.SIGN.VECTOR", "value{slot}"),
+    ("WIRE.SIGN.VECTOR", "value{body_sha256}"),
+    ("WIRE.SIGN.VECTOR", "value{canonical_lines}[]"),
+    ("WIRE.SIGN.VECTOR", "value{signature}"),
+    ("WIRE.SIGN.VECTOR", "note"),
+    ("WIRE.SIGN.ROTATION", "value[]"),
+    ("WIRE.CALLBACK.PATH", "value"),
+    ("WIRE.CALLBACK.FIELDS", "value[]"),
+    ("WIRE.CALLBACK.OPTIONAL_FIELDS", "value[]"),
+    ("WIRE.CALLBACK.GATES", "value[]"),
+    ("WIRE.CALLBACK.DECISIONS", "value[]"),
+    ("WIRE.CALLBACK.EFFECTIVENESS", "value[]:Transition.phase"),
+    ("WIRE.CALLBACK.LEGEND", "value[][]"),
+    ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.obligation"),
+    ("OPS.CONFIG.HMAC_SET", "value[]"),
+    ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.name"),
+    ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.plan:ProcedurePlanContract.phase"),
+    ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.plan:ProcedurePlanContract.subject_id"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:PinnedImage.evidence"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:"
+     "PlatformWrittenCommitment.commitments[]"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:"
+     "PlatformWrittenCommitment.evidence"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:TrustedPathProbes.evidence"),
+    ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.playbook_ref:PlaybookRef.path"),
+    ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.playbook_ref:PlaybookRef.heading"),
+    ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.playbook_ref:PlaybookRef.sha256"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.playbook_ref:PlaybookRef.commands[]:Command.argv[]"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.playbook_ref:PlaybookRef.commands[]:Command.line"),
+    ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.playbook_ref:PlaybookRef.body[]:Narrative.text"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.playbook_ref:PlaybookRef.body[]:Narrative.commands[]:Command.argv[]"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.playbook_ref:PlaybookRef.body[]:Narrative.commands[]:Command.line"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.rollback_contract:RollbackContract.facts[]:RollbackFact.question"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.rollback_contract:RollbackContract.facts[]:RollbackFact.answer"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.rollback_contract:RollbackContract.facts[]:RollbackFact.evidence"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:FlagStillOff.flag_env"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:FlagStillOff.evidence"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:SeedAndReadBack.evidence"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:BacklogPreflight.evidence"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:StoppedAttestedZero.roles[]"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:StoppedAttestedZero.evidence"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.playbook_ref:PlaybookRef.body[]:"
+     "OperatorInstruction.commands[]:Command.argv[]"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.playbook_ref:PlaybookRef.body[]:"
+     "OperatorInstruction.commands[]:Command.line"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.playbook_ref:PlaybookRef.body[]:OperatorInstruction.wraps[][]"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:"
+     "RetentionSuspendedAttested.evidence"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:PreWindowDiagnostic.evidence"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.plan:ProcedurePlanContract.prerequisites[]:AuthoritativeBackup.evidence"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.rollback_contract:RollbackContract.branches[]:RollbackBranch.outcome"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.rollback_contract:RollbackContract.branches[]:"
+     "RollbackBranch.facts[]:RollbackFact.question"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.rollback_contract:RollbackContract.branches[]:"
+     "RollbackBranch.facts[]:RollbackFact.answer"),
+    ("OPS.CUTOVER.PROCEDURES",
+     "value[]:Procedure.rollback_contract:RollbackContract.branches[]:"
+     "RollbackBranch.facts[]:RollbackFact.evidence"),
+    ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.migration_span:MigrationSpan.base_revision"),
+    ("OPS.CUTOVER.PROCEDURES", "value[]:Procedure.migration_span:MigrationSpan.target_revision"),
+    ("OPS.CUTOVER.PROCEDURES", "note"),
+})
+
+# Digest over the LF-joined ordered strings at the path; the label quotes the reviewed text's
+# opening words so the next reviewer knows what they are approving without recomputing.
+REGISTRY_PROSE_PINS = {
+    ("WIRE.INGEST.HEADERS", "value[]:HeaderSpec.value_note"):
+        ("d1688c6441401460", "header value shapes: unique per logical event / unix seconds ..."),
+    ("WIRE.INGEST.HEADERS", "value[]:HeaderSpec.why"):
+        ("bc30558c830a6df1", "header why column: a replay returns the stored response verbatim ..."),
+    ("WIRE.INGEST.STATUS", "value[][]"):
+        ("5b6e84d6fa388b1c", "status meanings: accepted and queued — the normal result ..."),
+    ("WIRE.INGEST.STATUS", "note"):
+        ("5cd3fbdd9b8be249", "A queued event is 202. Treating 200 as the success case would ..."),
+    ("WIRE.INGEST.EXTRA_FIELDS", "value{prose}"):
+        ("ebb5fb1852ddc911", "Unknown fields at the TOP LEVEL of the envelope are rejected ..."),
+    ("WIRE.INGEST.ORDERING", "value"):
+        ("4082744023a50603", "Events for one case are serialized by the order we admit them ..."),
+    ("WIRE.ACTOR.SENSITIVE", "value{rule}"):
+        ("38189f7f98c705ba", "actor.type must equal 'reviewer', and actor.id must equal ..."),
+    ("WIRE.ACTOR.SENSITIVE", "value{trap}"):
+        ("4a802291233aa6a5", "The generic envelope example shows actor.type 'user' ..."),
+    ("WIRE.EVENT.TABLE", "value[]:EventRow.note"):
+        ("a544984f5e28e9ef", "event notes: First event for a case creates it ..."),
+    ("WIRE.SIGN.CANONICAL", "note"):
+        ("cf77df62e805731f", "Eight lines, LF-joined, in this order."),
+    ("WIRE.SIGN.DIRECTIONS", "note"):
+        ("f8173a97525d6d6a", "Literal tokens. Prose like 'inbound' will not verify."),
+    ("WIRE.SIGN.COMPANION", "value"):
+        ("d8a840df49e2d780", "The runnable signer ships as a FILE alongside this document ..."),
+    ("WIRE.SIGN.COMPANION", "note"):
+        ("38c7c25bb3570796", "Our test suite executes the file's exact bytes against the ..."),
+    ("WIRE.SIGN.V1_SUNSET", "value"):
+        ("bd9a9136304b9957", "Both v1 sunset dates are set with you at cutover and are unset ..."),
+    ("WIRE.SIGN.ROTATION", "note"):
+        ("7456d8ea7c47ef2c", "Both directions are ordered, and both orders are the way they ..."),
+    ("WIRE.SIGN.ROTATION_RETIREMENT", "value[]:RetirementGate.direction"):
+        ("ddf39acb3f68d0fa", "gate directions: INBOUND / OUTBOUND"),
+    ("WIRE.SIGN.ROTATION_RETIREMENT", "value[]:RetirementGate.transition"):
+        ("0a0a486a14dfa220", "blocked steps: We prove no request has arrived under the old id ..."),
+    ("WIRE.SIGN.ROTATION_RETIREMENT", "value[]:RetirementGate.why_blocked"):
+        ("4b71db50038610f7", "why blocked: Nothing durable records WHICH key id a request ..."),
+    ("WIRE.SIGN.ROTATION_RETIREMENT", "value[]:RetirementGate.unblocked_by"):
+        ("51752bf615e15d4f", "unblocked by: A durable fleet-wide per-key acceptance witness ..."),
+    ("WIRE.CALLBACK.OPTIONAL_FIELDS", "note"):
+        ("6301b756a7d6e8ce", "Tolerate and preserve both. enforcement_held carries the ..."),
+    ("WIRE.CALLBACK.DELIVERY", "value[]"):
+        ("9d0c6522fadae281", "delivery bullets: Each automated decision enqueues one callback ..."),
+    ("WIRE.CALLBACK.VALIDATION", "value[]:ValidationRule.invalid_input"):
+        ("c08382fbbb08bb13", "invalid inputs: a PARTIAL release binding ..."),
+    ("WIRE.CALLBACK.VALIDATION", "value[]:ValidationRule.disposition"):
+        ("a138892f4ba2ec82", "dispositions: integrity_mismatch — HOLD; do not record ..."),
+    ("WIRE.CALLBACK.VALIDATION", "note"):
+        ("d047619c688acca3", "VALIDATE BEFORE YOU CLASSIFY: after the signature verifies ..."),
+    ("WIRE.CALLBACK.RECEIVER_TXN", "value[]"):
+        ("2349b4021d8f161e", "the six receiver steps: Verify the signature. / ... / COMMIT ..."),
+    ("WIRE.CALLBACK.RECEIVER_TXN", "note"):
+        ("a57d9bb2963025e1", "A 2xx returned before your commit is unrecoverable ..."),
+    ("WIRE.CALLBACK.EFFECTIVENESS", "note"):
+        ("3aa328b2c8582e0d", "ACKNOWLEDGING a callback and APPLYING it are different decisions ..."),
+    ("WIRE.CALLBACK.LEGEND", "note"):
+        ("563f3623d1c9b4b6", "Every condition in the two tables is built from exactly these ..."),
+    ("WIRE.CALLBACK.RELEASE", "note"):
+        ("e14b065121269fdc", "POST-024 ONLY: the release protocol arrives with the activation ..."),
+    ("WIRE.CALLBACK.WAIT_BOUND", "value"):
+        ("3644c198b16adb76", "Respond within 10 seconds. Each attempt carries a 40-second ..."),
+    ("WIRE.CALLBACK.COMPLETION", "value"):
+        ("58004ff4528ff759", "For an automated decision that produces an eligible callback ..."),
+    ("WIRE.ORDERING.NO_DECIDED_AT", "value"):
+        ("c4e6d4ca523c3e2e", "decided_at is a display timestamp and is not an ordering key ..."),
+    ("WIRE.ORDERING.INTERIM", "value"):
+        ("b6244cbcf0e8b1ca", "Until ordered delivery is activated: dedupe exact repeats ..."),
+    ("WIRE.ORDERING.SEQUENCE_DOMAINS", "value[]"):
+        ("157c8ec72343f56b", "event_sequence is INGEST PROVENANCE / decision_sequence orders ..."),
+    ("WIRE.ORDERING.SEQUENCE_DOMAINS", "note"):
+        ("a0323d6cb0b2b2a4", "Two ordinals for one case, and only one of them orders decisions ..."),
+    ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.owner"):
+        ("49b8b60e5696f071", "obligation owners: TechCraft / platform"),
+    ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.question"):
+        ("476f3e9b300db914", "O1-O4 questions: Which platform principal is authorised ..."),
+    ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.answer_type"):
+        ("dd4ae27b7ff99ee6", "answer shapes: principal identifier + key id + which HMAC ..."),
+    ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.blocked_deliverable"):
+        ("5efc3281a00f6419", "blocked deliverables: the manual.release_requested request model ..."),
+    ("WIRE.ORDERING.PENDING_INPUTS", "note"):
+        ("c0168092a5044cbc", "These are the decisions 024 cannot be built without ..."),
+    ("WIRE.ORDERING.BOOTSTRAP_024", "value"):
+        ("e0e3dbdc4a5609ff", "Ordered delivery needs a signed bootstrap of per-case high-water ..."),
+    ("WIRE.ORDERING.INTEGRITY_MISMATCH", "value"):
+        ("07d15b3e8ed5c95e", "integrity_mismatch is a POST-ACTIVATION terminal state ..."),
+    ("WIRE.RETENTION.BY_KIND", "value[][]"):
+        ("3b1e60e21247c182", "retention rows: decision callbacks / POC verification emails ..."),
+    ("OPS.BLOCKER.PRODUCTION_PROVIDERS", "value[]"):
+        ("acb99d446c3b05a6", "This tool cannot run in production yet, and no configuration ..."),
+    ("OPS.PROCESS.COMMANDS", "value[][]"):
+        ("7a59c32b1e5070b9", "process table rows: API / Migrations / workers, commands, notes"),
+    ("OPS.PROCESS.DEV_WORKER_BANNED", "value"):
+        ("df4438bbe893ea56", "dev_worker is a development role that wires fixture adapters ..."),
+    ("OPS.INFRA.COMPONENTS", "value[][]"):
+        ("0acf577a49110427", "infrastructure rows: PostgreSQL / object store / compute ..."),
+    ("OPS.CONFIG.PRODUCTION_FLOORS", "value[]"):
+        ("cf18faefd52e1d74", "job_lease_seconds is floored at 30 in production ..."),
+    ("OPS.CONFIG.HMAC_SET", "note"):
+        ("051346b6cdc9b22c", "Production refuses a partial set. Secrets are at least 32 ..."),
+    ("OPS.CONFIG.ROTATION_KEYS", "value"):
+        ("fa0307861feb0a52", "KYC_HMAC_INBOUND_EXTRA_KEYS is a JSON object of key_id to secret ..."),
+    ("OPS.CONFIG.M2_GATE", "value"):
+        ("4e2a1218d6d6a959", "KYC_ENFORCE_POSITIVE_DECISIONS stays false in production ..."),
+    ("OPS.HEALTH.PROBES", "value[][]"):
+        ("337d8c489ebf9c5d", "health rows: /healthz, /readyz, metrics — contracts and actions"),
+    ("OPS.RELEASE.CLASSIFICATION", "value"):
+        ("877130f0966ab63a", "Every release declares itself rolling or full-maintenance ..."),
+    ("OPS.CUTOVER.OUTBOX_CEILING", "value[]"):
+        ("0220501e7a96543b", "ceiling steps: disable autoscaling and rolling restart ..."),
+    ("OPS.CUTOVER.OUTBOX_CEILING", "note"):
+        ("42e2b21c4e6b8acd", "Any change to the ceiling, up or down, follows this ..."),
+    ("OPS.ROLLBACK.MIGRATION_BOUNDARY", "value[]"):
+        ("49880b15d3422e44", "A release with no migration rolls back by redeploying ..."),
+    ("OPS.HMAC.ROLLOUT_ORDER", "value[]"):
+        ("98e2f53212a9f721", "Deploy with both v1 sunset dates in the future ..."),
+    ("OPS.HMAC.ROLLOUT_ORDER", "note"):
+        ("e6faf8b58b1a696f", "The publisher drops v1 the moment the outbound date passes ..."),
+    ("OPS.RECOVERY.REQUEUE", "value"):
+        ("737b6d8d346c6cb8", "The always-mounted ops endpoints POST /v1/ops/requeue ..."),
+}
+
+
+def _prose_digest(texts) -> str:
+    return hashlib.sha256("\n".join(texts).encode()).hexdigest()[:16]
+
+
+def _receipt_problems(registries) -> list[str]:
+    """Every rendered string path holds exactly one receipt; every receipt names a live path."""
+    problems: list[str] = []
+    seen: set = set()
+    for registry in registries:
+        for claim in registry.claims:
+            for path, texts in rendered_string_paths(claim).items():
+                key = (claim.id, path)
+                seen.add(key)
+                bound = key in VERIFIER_BOUND
+                pinned = REGISTRY_PROSE_PINS.get(key)
+                if bound and pinned:
+                    problems.append(f"{key}: carries TWO receipts; one authority of record")
+                elif bound:
+                    continue
+                elif pinned is None:
+                    problems.append(
+                        f"{key}: rendered registry text with NO receipt — bind it in a "
+                        "verifier or pin it, which is the act of reviewing it: "
+                        f"{texts[0][:60]!r}")
+                elif pinned[0] != _prose_digest(texts):
+                    problems.append(
+                        f"{key} ({pinned[1]}) changed since it was reviewed: "
+                        f"reviewed {pinned[0]}, now {_prose_digest(texts)}. Read the new "
+                        "text, then re-pin it in the SAME commit.")
+    for key in VERIFIER_BOUND - seen:
+        problems.append(f"{key}: VERIFIER_BOUND names a path no claim renders (stale)")
+    for key in set(REGISTRY_PROSE_PINS) - seen:
+        problems.append(f"{key}: REGISTRY_PROSE_PINS pins a path no claim renders (stale)")
+    return problems
+
+
+def test_every_rendered_registry_string_has_a_receipt():
+    problems = _receipt_problems((WIRE, OPERATIONS))
+    assert not problems, "\n".join(problems)
+
+
+def test_every_prose_pin_carries_a_usable_label():
+    for key, (digest, label) in REGISTRY_PROSE_PINS.items():
+        assert re.fullmatch(r"[0-9a-f]{16}", digest), key
+        assert len(label.strip()) >= 12, f"{key} has no usable label"
+
+
+@contextlib.contextmanager
+def _swapped_claim(registry, claim_id, **changes):
+    """Swap one claim in place for the duration of a test — in place, not a copy, so every
+    holder of the Registry object sees the mutant."""
+    original = registry.claims
+    mutant = dataclasses.replace(registry[claim_id], **changes)
+    object.__setattr__(
+        registry, "claims", tuple(mutant if c.id == claim_id else c for c in original))
+    try:
+        yield
+    finally:
+        object.__setattr__(registry, "claims", original)
+
+
+def test_r15f4_an_inverted_receiver_note_fails_its_pin():
+    """The survey witness verbatim: this exact mutation left 400 tests green before the fold."""
+    with _swapped_claim(
+            WIRE, "WIRE.CALLBACK.RECEIVER_TXN",
+            note="A 2xx returned before your commit is fine; the platform recovers it for you."):
+        problems = _receipt_problems((WIRE, OPERATIONS))
+    assert any("WIRE.CALLBACK.RECEIVER_TXN" in p and "changed since it was reviewed" in p
+               for p in problems), problems
+
+
+def test_r15f4_an_inverted_header_why_fails_its_pin():
+    """Value-path prose whose claim verifier binds only the NAME column: without the pin, the
+    why column could promise an unlimited replay window and the header verifier stays green."""
+    rows = WIRE.value("WIRE.INGEST.HEADERS")
+    hostile = tuple(
+        dataclasses.replace(
+            row, why="replay window is unlimited; stale timestamps verify fine")
+        if row.name == "X-KYC-Timestamp" else row
+        for row in rows
+    )
+    with _swapped_claim(WIRE, "WIRE.INGEST.HEADERS", value=hostile):
+        problems = _receipt_problems((WIRE, OPERATIONS))
+    assert any("HeaderSpec.why" in p and "changed since it was reviewed" in p
+               for p in problems), problems
+
+
+def test_r15f4_one_mutated_instance_among_many_fails_the_path_digest():
+    """The digest is over the ORDERED strings at the path, so changing one of the nine event
+    notes — or reordering them — is not absorbed by the other eight."""
+    rows = WIRE.value("WIRE.EVENT.TABLE")
+    hostile = tuple(
+        dataclasses.replace(row, note="Optional; skip this event if inconvenient.")
+        if row.name == "poc.token_verified" else row
+        for row in rows
+    )
+    with _swapped_claim(WIRE, "WIRE.EVENT.TABLE", value=hostile):
+        problems = _receipt_problems((WIRE, OPERATIONS))
+    assert any("EventRow.note" in p and "changed since it was reviewed" in p
+               for p in problems), problems
+
+
+def test_r15f4_a_new_string_path_is_refused_until_receipted():
+    """Closure, forward: tomorrow's free-text field cannot ride in unreceipted."""
+    extra = dict(WIRE.value("WIRE.INGEST.EXTRA_FIELDS"))
+    extra["escape_hatch"] = "If validation is inconvenient, skip it."
+    with _swapped_claim(WIRE, "WIRE.INGEST.EXTRA_FIELDS", value=extra):
+        problems = _receipt_problems((WIRE, OPERATIONS))
+    assert any("value{escape_hatch}" in p and "NO receipt" in p for p in problems), problems
+
+
+def test_r15f4_a_stale_receipt_is_refused():
+    """Closure, backward: a receipt outliving its path silently widens the allowlist for
+    whatever takes the name next."""
+    problems = _receipt_problems((
+        dataclasses.replace(
+            WIRE, claims=tuple(c for c in WIRE.claims if c.id != "WIRE.CALLBACK.RECEIVER_TXN")),
+        OPERATIONS,
+    ))
+    assert any("WIRE.CALLBACK.RECEIVER_TXN" in p and "stale" in p for p in problems), problems
