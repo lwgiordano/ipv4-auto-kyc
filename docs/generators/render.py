@@ -271,7 +271,12 @@ class Doc:
 
     def __init__(self, registry) -> None:
         self.registry = registry
-        self.story: list = []
+        # PRIVATE on purpose (Wave 2 F6): when this was `self.story`, a caller could append a
+        # flowable directly — visible on the page, recorded in no block — and the R15 witness
+        # (`doc.story.append(Paragraph("Return 2xx before COMMIT."))`) certified because every
+        # check walked the MODEL. Every flowable now enters through a method that records its
+        # block atomically, and the total page==model prose comparison holds the other side.
+        self._story: list = []
         self.rendered: list[str] = []
         self.sections: list[Section] = []
         self.placements: list[dict] = []  # filled by build(): where each flowable landed
@@ -293,7 +298,7 @@ class Doc:
         # the footer: a page that opens mid-sentence is otherwise unlocatable on its own
         # (re-audit `4f23f23..122cc67` finding 12).
         heading._kyc_section = title
-        self.story.append(heading)
+        self._story.append(heading)
         self._add(Block(kind="heading", claim_id=None, lines=(title,)))
 
     def _add(self, block) -> None:
@@ -303,6 +308,12 @@ class Doc:
     def blocks(self) -> list:
         return [block for section in self.sections for block in section.blocks]
 
+    @property
+    def story(self) -> tuple:
+        """A read-only view. There is deliberately no public way to add a flowable directly —
+        every flowable is appended by a method that records its Block in the same call."""
+        return tuple(self._story)
+
     def section_of(self, claim_id: str) -> str | None:
         for section in self.sections:
             if any(b.claim_id == claim_id for b in section.blocks):
@@ -311,30 +322,30 @@ class Doc:
 
     # ---- structural prose (carries no authoritative value) ----------------------------------
     def title(self, text: str):
-        self.story.append(Paragraph(escape(text), _styles["Title"]))
+        self._story.append(Paragraph(escape(text), _styles["Title"]))
         self._add(Block(kind="heading", claim_id=None, lines=(text,)))
 
     def h1(self, text: str):
-        self.story.append(Paragraph(escape(text), H1))
+        self._story.append(Paragraph(escape(text), H1))
         self._add(Block(kind="heading", claim_id=None, lines=(text,)))
 
     def h2(self, text: str):
-        self.story.append(Paragraph(escape(text), H2))
+        self._story.append(Paragraph(escape(text), H2))
         self._add(Block(kind="heading", claim_id=None, lines=(text,)))
 
     def keep_last_together(self, count: int) -> None:
         """Glue the last `count` story flowables into one KeepTogether, so a heading cannot be
         orphaned at a page bottom while its content starts on the next (gate audit
         `6c4f54a..91fbde3` finding 15). Packing only: the block model is untouched."""
-        if count < 2 or len(self.story) < count:
+        if count < 2 or len(self._story) < count:
             raise ValueError("keep_last_together needs at least a heading and its content")
-        tail = self.story[-count:]
-        del self.story[-count:]
-        self.story.append(KeepTogether(tail))
+        tail = self._story[-count:]
+        del self._story[-count:]
+        self._story.append(KeepTogether(tail))
 
     def p(self, markup: str, style=BODY):
         """Prose. Bold spans are allowed here, so this takes pre-escaped markup."""
-        self.story.append(Paragraph(markup, style))
+        self._story.append(Paragraph(markup, style))
         self._add(Block(kind="prose", claim_id=None, lines=(visible_text(markup),)))
 
     def why(self, markup: str):
@@ -348,7 +359,7 @@ class Doc:
         `6feca36..4f23f23` F3). The cost is that it never wraps, so `_guard_preformatted` refuses
         a line that would not fit. Use `wrapcode()` for fixed-width text that may wrap.
         """
-        self.story.append(XPreformatted(_guard_preformatted(escape(text)), CODE))
+        self._story.append(XPreformatted(_guard_preformatted(escape(text)), CODE))
         self._add(Block(kind="code", claim_id=None, lines=tuple(text.split("\n"))))
 
     def wrapcode(self, text: str):
@@ -358,11 +369,11 @@ class Doc:
         no break opportunity. The document tells the reader it wraps and gives them the byte count
         and sha256 to check their transcription against.
         """
-        self.story.append(Paragraph(escape(text), WRAPCODE))
+        self._story.append(Paragraph(escape(text), WRAPCODE))
         self._add(Block(kind="code", claim_id=None, lines=(text,)))
 
     def space(self, height: float = 4):
-        self.story.append(Spacer(1, height))
+        self._story.append(Spacer(1, height))
 
     # ---- claims (the registry owns the value) ------------------------------------------------
     #
@@ -382,7 +393,7 @@ class Doc:
         """
         claim = self.registry[claim_id]
         lines = projection.expected_lines(claim, projection.NOTE)
-        self.story.append(Paragraph(escape(lines[0]), style))
+        self._story.append(Paragraph(escape(lines[0]), style))
         self._add(Block(kind="prose", claim_id=claim_id, lines=lines, role="note",
                         projection=projection.NOTE))
 
@@ -400,7 +411,7 @@ class Doc:
         lines = tuple(line for line in lines if str(line).strip())
         if not lines and not rows:
             raise ValueError(f"{claim_id} produced a flowable with no visible text")
-        self.story.extend(flowables)
+        self._story.extend(flowables)
         self.rendered.append(claim_id)
         self._add(Block(kind=kind, claim_id=claim_id, lines=lines, rows=tuple(rows),
                         projection=projection_name, row_fields=row_fields))
@@ -585,7 +596,7 @@ class Doc:
             )
         table = Table(data, colWidths=widths, repeatRows=1)
         table.setStyle(_TABLE_STYLE)
-        self.story.append(table)
+        self._story.append(table)
         self._add(Block(kind="table", claim_id=None, lines=(),
                         rows=(tuple(headers),) + tuple(tuple(str(c) for c in r) for r in rows)))
 
@@ -662,7 +673,7 @@ class Doc:
             author="IPv4.Global",
             subject=f"source revision {revision}",
         )
-        template.build(self.story, canvasmaker=_stamped_canvas(title, revision, page_sections))
+        template.build(self._story, canvasmaker=_stamped_canvas(title, revision, page_sections))
         self._total_pages = template.page
         return path
 

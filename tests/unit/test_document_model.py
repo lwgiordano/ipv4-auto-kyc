@@ -297,6 +297,72 @@ def test_every_table_is_the_registry_matrix_on_the_page_in_order(rendered):
     _verify_tables_match_model(doc, tables)
 
 
+# ── the page is the model and NOTHING ELSE (Wave 2 F6, prose half) ────────────────────────────────
+def _prose_stream(doc) -> str:
+    """Every character the model says the page's PROSE lane displays, in document order,
+    whitespace removed. Bullet and alert lines carry the en-dash the renderer prints before
+    them; every other decoration is whitespace and vanishes in the squash."""
+    parts = []
+    for block in doc.blocks:
+        decorated = block.kind == "alert" or block.projection == projection.BULLETS
+        for line in block.lines:
+            parts.append(("–" + str(line)) if decorated else str(line))
+    return "".join("".join(part.split()) for part in parts)
+
+
+def _page_prose(path: str) -> str:
+    """Every character actually drawn in the prose lane: body words outside every table's
+    bounding box and above the footer band, in reading order, whitespace removed."""
+    out = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            cutoff = page.height - FOOTER_BAND_INCHES * 72
+            boxes = [t.bbox for t in page.find_tables()]
+
+            def in_table(word, boxes=boxes) -> bool:
+                cx = (word["x0"] + word["x1"]) / 2
+                cy = (word["top"] + word["bottom"]) / 2
+                return any(x0 <= cx <= x1 and y0 <= cy <= y1 for (x0, y0, x1, y1) in boxes)
+
+            words = [w for w in page.extract_words() if w["top"] < cutoff and not in_table(w)]
+            lines: dict[float, list] = {}
+            for word in words:
+                lines.setdefault(round(word["top"], 1), []).append(word)
+            for top in sorted(lines):
+                row = sorted(lines[top], key=lambda w: w["x0"])
+                out.append("".join(w["text"] for w in row))
+    return "".join(out)
+
+
+def _verify_prose_stream(doc, page_prose: str) -> None:
+    """PAGE == MODEL, totally. The order/once/section checks all ask whether the model reaches
+    the page; none of them ask what ELSE the page carries, which is exactly the R15 F6 witness:
+    `doc.story.append(Paragraph("Return 2xx before COMMIT."))` — every word already legitimate,
+    no block, visible to a reader, invisible to every model-walking check (survey probe: 123
+    passed). Character-for-character equality of the two streams refuses any injection, any
+    deletion, any reorder, and any duplication at once, with no floor a short line can duck
+    under."""
+    expected = _prose_stream(doc)
+    if page_prose == expected:
+        return
+    at = next((i for i, (a, b) in enumerate(zip(page_prose, expected, strict=False)) if a != b),
+              min(len(page_prose), len(expected)))
+    raise AssertionError(
+        "the page's prose is not exactly the model's prose.\n"
+        f"  first difference at {at} (page has {len(page_prose)} chars, "
+        f"model expects {len(expected)}):\n"
+        f"  page:  ...{page_prose[max(0, at - 40):at + 60]!r}...\n"
+        f"  model: ...{expected[max(0, at - 40):at + 60]!r}..."
+    )
+
+
+def test_the_page_prose_is_exactly_the_model_and_nothing_else(rendered, tmp_path):
+    generator, _registry, doc, _page, _tables = rendered
+    path = str(tmp_path / "prose-total.pdf")
+    _build(generator).build(path, "prose-total")
+    _verify_prose_stream(doc, _page_prose(path))
+
+
 # ── attribution: nothing authoritative is said outside the claim that owns it ─────────────────────
 def test_exclusive_terms_appear_only_in_their_own_claim(rendered):
     """The appended-contradictory-paragraph mutation. A claim being correct does not make the page
@@ -384,6 +450,7 @@ def _top_level_verify(generator, registry, tmp_path):
             for table in page.extract_tables():
                 tables.append([[_flat(cell or "") for cell in row] for row in table])
     _verify_tables_match_model(doc, tables)
+    _verify_prose_stream(doc, _page_prose(path))
 
 
 MUTATIONS = [
@@ -524,7 +591,7 @@ def test_a_renderer_that_draws_other_than_its_recorded_matrix_fails(tmp_path, la
                          for i, cell in enumerate(row)])
         table = render_module.Table(data, colWidths=widths, repeatRows=1)
         table.setStyle(render_module._TABLE_STYLE)
-        self.story.append(table)
+        self._story.append(table)
         self.rendered.append(cid)
         self._add(render_module.Block(kind="table", claim_id=cid, lines=(), rows=matrix,
                                       projection=projection.TABLE, row_fields=row_fields))
@@ -574,7 +641,7 @@ def test_an_injected_duplicate_table_fails_the_concatenation(tmp_path):
     matrix = projection.expected_matrix(claim)
     widths = [0.6 * render_module.INCH, 1.85 * render_module.INCH, 1.2 * render_module.INCH,
               1.15 * render_module.INCH, 2.15 * render_module.INCH]
-    doc.story.append(_injected_table((matrix[0], *reversed(matrix[1:])), widths))
+    doc._story.append(_injected_table((matrix[0], *reversed(matrix[1:])), widths))
     tables = _extracted_tables(doc, tmp_path, "dup-table")
     with pytest.raises(AssertionError, match="not the model's rows in order"):
         _verify_tables_match_model(doc, tables)
@@ -584,7 +651,7 @@ def test_an_injected_novel_header_table_is_refused_by_name(tmp_path):
     """A table whose header tuple belongs to no model block — built from words the documents
     already use, so the vocabulary check cannot be the control that speaks."""
     doc = _build(contract_gen)
-    doc.story.append(_injected_table(
+    doc._story.append(_injected_table(
         (("Record", "Why"), ("record it", "the platform recovers it")),
         [2 * render_module.INCH, 3 * render_module.INCH]))
     tables = _extracted_tables(doc, tmp_path, "novel-table")
@@ -618,6 +685,46 @@ def test_a_table_claim_without_declared_headers_cannot_render():
     with pytest.raises(ValueError, match="does not fit the declared"):
         projection.expected_matrix(Claim(id="X.WIDTH", value=(("a", "b", "c"),),
                                          authority="test", table_headers=("One", "Two")))
+
+
+def test_the_story_has_no_public_append():
+    """The R15 F6 witness was one line: `doc.story.append(...)`. That line no longer exists —
+    the public story is a read-only tuple view, so a flowable can only enter through a method
+    that records its Block in the same call."""
+    doc = _build(contract_gen)
+    with pytest.raises(AttributeError):
+        doc.story.append("anything")
+    with pytest.raises(AttributeError):
+        doc.story = []
+
+
+def test_an_injected_prose_flowable_fails_the_total_stream(tmp_path):
+    """The R15 F6 witness verbatim, forced through the PRIVATE story the way a hostile module
+    would: every word already legitimate, no block, visible to a reader. The survey probe proved
+    the full suites stayed green on the pre-fold tree; the total page==model prose stream is the
+    control that refuses it now."""
+    doc = _build(contract_gen)
+    doc._story.append(render_module.Paragraph("Return 2xx before COMMIT.", render_module.BODY))
+    path = str(tmp_path / "injected-prose.pdf")
+    doc.build(path, "injected-prose")
+    with pytest.raises(AssertionError, match="not exactly the model's prose"):
+        _verify_prose_stream(doc, _page_prose(path))
+
+
+def test_a_duplicated_governed_paragraph_fails_the_total_stream(tmp_path):
+    """Duplicate-and-relocate, tuned to duck every older control: the re-drawn line is a real
+    recorded step SHORT enough to fall under the exactly-once check's UNIQUE_LINE_CHARS floor,
+    so the multiplicity test skips it, the order check skips it, and the vocabulary is all
+    legitimate. Character equality of the total stream has no floor, so it is the one control
+    that refuses the page carrying the model twice."""
+    doc = _build(contract_gen)
+    block = next(b for b in doc.blocks if b.claim_id == "WIRE.CALLBACK.RECEIVER_TXN")
+    line = next(str(li) for li in block.lines if len(_flat(li)) < UNIQUE_LINE_CHARS)
+    doc._story.append(render_module.Paragraph(render_module.escape(line), render_module.BODY))
+    path = str(tmp_path / "dup-prose.pdf")
+    doc.build(path, "dup-prose")
+    with pytest.raises(AssertionError, match="not exactly the model's prose"):
+        _verify_prose_stream(doc, _page_prose(path))
 
 
 def test_the_release_inputs_still_reach_the_page(rendered):
@@ -724,7 +831,7 @@ def test_a_renderer_that_displays_something_other_than_the_claim_fails(
             return original(self, cid, style=style, prefix=prefix)
         from docs.generators.render import Block, Paragraph, escape
 
-        self.story.append(Paragraph(prefix + escape(lie), style))
+        self._story.append(Paragraph(prefix + escape(lie), style))
         self.rendered.append(cid)
         self._add(Block(kind="prose", claim_id=cid, lines=(lie,),
                         projection=projection.PARAGRAPH))
@@ -1015,7 +1122,7 @@ def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatc
     def also_draw_unrecorded(self, markup, style=render_module.BODY):
         original(self, markup, style)
         # appended to the story, deliberately NOT to any block
-        self.story.append(render_module.Paragraph("Superseding addendum: zzyzx.", style))
+        self._story.append(render_module.Paragraph("Superseding addendum: zzyzx.", style))
         render_module.Doc.p = original  # once is enough
 
     monkeypatch.setattr(render_module.Doc, "p", also_draw_unrecorded)

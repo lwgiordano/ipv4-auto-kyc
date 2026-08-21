@@ -194,7 +194,7 @@ def test_the_overlap_guard_can_actually_fail(tmp_path):
 
     doc = Doc(WIRE)
     doc.p("The first paragraph, which should be legible on its own line.")
-    doc.story.append(Spacer(1, -24))
+    doc._story.append(Spacer(1, -24))
     doc.p("The second paragraph, printed straight over the top of the first.")
     path = str(tmp_path / "collide.pdf")
     doc.build(path, "collide")
@@ -789,7 +789,7 @@ def test_the_layout_overlap_guard_catches_the_exact_baseline_case(tmp_path):
 
     doc = Doc(WIRE)
     doc.p("The first paragraph, which should be legible on its own line.")
-    doc.story.append(Spacer(1, -18))
+    doc._story.append(Spacer(1, -18))
     doc.p("The second paragraph, laid out on the same baseline as the first.")
     doc.build(str(tmp_path / "collide-layout.pdf"), "collide")
 
