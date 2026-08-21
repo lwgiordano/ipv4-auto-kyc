@@ -246,6 +246,12 @@ class Block:
     # the renderer never supplies the answer it is checked against (finding 3).
     projection: str = ""
     row_fields: tuple[str, ...] = ()
+    # Which columns render as TOKEN cells (Wave-2 audit finding 4). `_token_cell` replaces a
+    # cell's commas with line breaks, so the extractor hands those cells back unpunctuated — a
+    # difference the page comparison must forgive THERE and nowhere else. Recording the display
+    # schema beside the content is what lets the comparison stay exact everywhere else: a prose
+    # cell that silently loses its commas is a real defect, not a rendering artifact.
+    code_columns: tuple[int, ...] = ()
 
 
 @dataclass
@@ -398,7 +404,8 @@ class Doc:
                         projection=projection.NOTE))
 
     def _emit(self, claim_id: str, flowables: list, lines, *, kind: str = "prose", rows=(),
-              projection_name: str = "", row_fields: tuple[str, ...] = ()):
+              projection_name: str = "", row_fields: tuple[str, ...] = (),
+              code_columns: tuple[int, ...] = ()):
         """Append the flowables, record the claim, and record EXACTLY what went on the page.
 
         `lines` is not decoration. Recording an id proves a call happened; recording the visible
@@ -414,7 +421,8 @@ class Doc:
         self._story.extend(flowables)
         self.rendered.append(claim_id)
         self._add(Block(kind=kind, claim_id=claim_id, lines=lines, rows=tuple(rows),
-                        projection=projection_name, row_fields=row_fields))
+                        projection=projection_name, row_fields=row_fields,
+                        code_columns=code_columns))
         return claim
 
     def claim_paragraph(self, claim_id: str, *, style=BODY, prefix: str = ""):
@@ -580,7 +588,8 @@ class Doc:
         if heading:
             flowables = [KeepTogether([Paragraph(escape(heading), H2), table])]
         self._emit(claim_id, flowables, lines, kind="table", rows=matrix,
-                   projection_name=projection.TABLE, row_fields=row_fields)
+                   projection_name=projection.TABLE, row_fields=row_fields,
+                   code_columns=tuple(code_columns))
 
     def table(self, headers: tuple[str, ...], rows, widths, code_columns: tuple[int, ...] = ()):
         """A table whose cells are already formatted from claims recorded elsewhere."""

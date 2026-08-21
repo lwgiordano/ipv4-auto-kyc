@@ -7287,6 +7287,24 @@ def rendered_string_paths(claim) -> dict:
     walk(claim.value, "value")
     if claim.note:
         found["note"] = [claim.note]
+    # EVERY registry-owned string a projection can render, not only the ones under `value`
+    # (Wave-2 audit finding 2). `table_headers` is the matrix's first row — registry text, printed
+    # verbatim — and walking only value/note left it outside the closure entirely: replacing
+    # WIRE.INGEST.STATUS's headers with ("Code", "Treat this response as optional") printed that
+    # instruction on the page while the authority map, the ordered matrix comparison, the total
+    # prose stream, and this closure all stayed silent. Outer Claim fields are enumerated from the
+    # dataclass itself, so a field added later cannot be forgotten here either.
+    _RENDERED_CLAIM_FIELDS = ("table_headers",)
+    _NEVER_RENDERED = ("id", "value", "authority", "state", "note", "exclusive_terms")
+    declared = {f.name for f in dataclasses.fields(claim)}
+    unaccounted = declared - set(_RENDERED_CLAIM_FIELDS) - set(_NEVER_RENDERED)
+    if unaccounted:
+        raise AssertionError(
+            f"Claim gained field(s) {sorted(unaccounted)}: declare whether a projection can "
+            "render them, so the receipt closure covers them or provably need not"
+        )
+    for name in _RENDERED_CLAIM_FIELDS:
+        walk(getattr(claim, name), name)
     return found
 
 
@@ -7517,6 +7535,37 @@ REGISTRY_PROSE_PINS = {
         ("e6faf8b58b1a696f", "The publisher drops v1 the moment the outbound date passes ..."),
     ("OPS.RECOVERY.REQUEUE", "value"):
         ("737b6d8d346c6cb8", "The always-mounted ops endpoints POST /v1/ops/requeue ..."),
+    # Column titles: registry-owned text printed verbatim as the matrix's first row. Reviewed as
+    # LABELS — they name a column, they do not instruct — so a rewrite that turns one into an
+    # instruction ("Treat this response as optional") is a re-pin a reviewer reads.
+    ("WIRE.INGEST.HEADERS", "table_headers[]"):
+        ("850fe8bf33e67110", "columns: Header | Value | Why"),
+    ("WIRE.INGEST.STATUS", "table_headers[]"):
+        ("396356ba1aec5749", "columns: Code | Meaning"),
+    ("WIRE.EVENT.TABLE", "table_headers[]"):
+        ("2c6b7085596c4258", "columns: event_type | Required payload | Optional payload | Notes"),
+    ("WIRE.SIGN.ROTATION_RETIREMENT", "table_headers[]"):
+        ("02127eca44c1607b", "columns: Direction | Blocked step | Why blocked | What unblocks it"),
+    ("WIRE.CALLBACK.VALIDATION", "table_headers[]"):
+        ("54e80acd7032ce61", "columns: Invalid input | Disposition"),
+    ("WIRE.CALLBACK.EFFECTIVENESS", "table_headers[]"):
+        ("d0efce82c130ff22", "columns: Phase | When this row applies | Record | Effective? | Why"),
+    ("WIRE.CALLBACK.LEGEND", "table_headers[]"):
+        ("a2bf7a42c69a4737", "columns: Token | Meaning"),
+    ("WIRE.CALLBACK.RELEASE", "table_headers[]"):
+        ("cd84a75e6429e5eb", "columns: When this row applies | Record | Effective? | Why"),
+    ("WIRE.ORDERING.PENDING_INPUTS", "table_headers[]"):
+        ("43eab4f9e30f89aa", "columns: # | Owner | question | answer shape | blocked deliverable"),
+    ("WIRE.RETENTION.BY_KIND", "table_headers[]"):
+        ("c54b7c11309c5fc9", "columns: Kind | What happens"),
+    ("OPS.PROCESS.COMMANDS", "table_headers[]"):
+        ("cb90fa299ee91ed9", "columns: Process | Command | Notes"),
+    ("OPS.INFRA.COMPONENTS", "table_headers[]"):
+        ("d9ac3561a1db5d11", "columns: Component | Requirement | Why"),
+    ("OPS.CONFIG.DEFAULTS", "table_headers[]"):
+        ("aa580cc604c89097", "columns: Setting | Default"),
+    ("OPS.HEALTH.PROBES", "table_headers[]"):
+        ("62bf0bb1e296336c", "columns: Surface | Contract | Action"),
 }
 
 
@@ -7629,6 +7678,28 @@ def test_r15f4_a_new_string_path_is_refused_until_receipted():
     with _swapped_claim(WIRE, "WIRE.INGEST.EXTRA_FIELDS", value=extra):
         problems = _receipt_problems((WIRE, OPERATIONS))
     assert any("value{escape_hatch}" in p and "NO receipt" in p for p in problems), problems
+
+
+def test_w2f2_a_false_table_header_fails_the_receipt_closure():
+    """Wave-2 audit finding 2, the exact trigger. Before the enumerator walked outer Claim
+    fields, this printed an instruction as a column title while the authority map, the ordered
+    matrix comparison, the total prose stream, AND this closure all reported nothing."""
+    with _swapped_claim(WIRE, "WIRE.INGEST.STATUS",
+                        table_headers=("Code", "Treat this response as optional")):
+        problems = _receipt_problems((WIRE, OPERATIONS))
+    assert any("table_headers" in p and "changed since it was reviewed" in p
+               for p in problems), problems
+
+
+def test_w2f2_a_new_outer_claim_field_must_declare_whether_it_renders():
+    """Closure, forward, at the type: a rendered field added to Claim tomorrow cannot be
+    forgotten — the enumerator refuses any field not classified as rendered or never-rendered."""
+    extra = dataclasses.make_dataclass(
+        "ClaimWithExtra", [("tagline", str, dataclasses.field(default=""))],
+        bases=(type(WIRE.claims[0]),), frozen=True)
+    with pytest.raises(AssertionError, match="declare whether a projection can render"):
+        rendered_string_paths(extra(
+            id="X.EXTRA", value="v", authority="a", tagline="published, unreceipted"))
 
 
 def test_r15f4_a_stale_receipt_is_refused():

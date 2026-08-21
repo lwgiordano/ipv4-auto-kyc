@@ -212,13 +212,28 @@ def test_every_claim_renders_inside_its_declared_section(rendered):
             )
 
 
-def _cellnorm(cell) -> str:
-    """One cell's comparable text. A token cell renders its comma-separated list with the commas
-    REPLACED by line breaks (`_token_cell`), so the extractor hands back the tokens with no
-    commas at all; a comma-plus-spacing therefore normalizes to a single space on BOTH sides.
-    That is the entire forgiveness — token order, multiplicity, and every other character of
-    every cell take part in the ordered comparison."""
-    return _flat(re.sub(r",\s*", " ", _flat(cell)))
+def _cellnorm(cell, *, token_column: bool = False) -> str:
+    """One cell's comparable text, normalized by the column's DECLARED display kind.
+
+    Wave-2 audit finding 4: this used to erase commas in every column, on a rationale that is
+    only true of token columns — `_token_cell` replaces a token list's commas with line breaks,
+    so the extractor genuinely cannot return them. Applying that forgiveness everywhere hid
+    punctuation loss in ordinary prose: a `_prose_cell` that dropped commas rendered "malformed
+    envelope malformed payload or an invalid reviewer actor" and passed. The forgiveness is now
+    scoped to the columns the block declares as token columns; a prose cell is compared exactly,
+    modulo whitespace, like every other string in the document.
+    """
+    flat = _flat(cell)
+    return _flat(re.sub(r",\s*", " ", flat)) if token_column else flat
+
+
+def _matrix_rows(rows, code_columns):
+    """Every row of a table normalized column by column, per the block's display schema."""
+    return [
+        tuple(_cellnorm(cell, token_column=index in code_columns)
+              for index, cell in enumerate(row))
+        for row in rows
+    ]
 
 
 def _verify_tables_match_model(doc, tables) -> None:
@@ -247,8 +262,14 @@ def _verify_tables_match_model(doc, tables) -> None:
        contributes its continuation rows (the repeated header names its class), and an injected
        DUPLICATE of a real table breaks the concatenation even though every one of its cells is
        already legitimate.
+
+    Cells are normalized by the block's DECLARED display schema (`code_columns`), so the
+    comma forgiveness token cells genuinely need is confined to token columns and prose cells
+    are compared exactly (Wave-2 audit finding 4). Header cells always render as prose, so a
+    header is exact on both sides and stays usable as the class key.
     """
     model_by_header: dict[tuple, list] = {}
+    schema_by_header: dict[tuple, tuple] = {}
     for block in doc.blocks:
         if block.kind != "table" or not block.rows:
             continue
@@ -263,16 +284,26 @@ def _verify_tables_match_model(doc, tables) -> None:
                 f"  registry: {wanted[:3]}...\n  recorded: {block.rows[:3]}..."
             )
         header = tuple(_cellnorm(cell) for cell in block.rows[0])
+        schema = tuple(sorted(block.code_columns))
+        if header in schema_by_header:
+            assert schema_by_header[header] == schema, (
+                f"table {header[:3]}...: two blocks share a header class but declare different "
+                f"token columns ({schema_by_header[header]} vs {schema}), so the page's cells "
+                "cannot be normalized unambiguously"
+            )
+        schema_by_header[header] = schema
         model_by_header.setdefault(header, []).append(
-            [tuple(_cellnorm(cell) for cell in row) for row in block.rows[1:]])
+            _matrix_rows(block.rows[1:], schema))
 
     page_by_header: dict[tuple, list] = {}
     for table in tables:  # already in page order
         if not table:
             continue
         header = tuple(_cellnorm(cell) for cell in table[0])
+        # the model's declared schema for this class, or none at all when the page shows a
+        # table the model never recorded — which the orphan check below refuses by name
         page_by_header.setdefault(header, []).append(
-            [tuple(_cellnorm(cell) for cell in row) for row in table[1:]])
+            _matrix_rows(table[1:], schema_by_header.get(header, ())))
 
     unclaimed = sorted(set(page_by_header) - set(model_by_header))
     assert not unclaimed, (
@@ -685,6 +716,42 @@ def test_a_table_claim_without_declared_headers_cannot_render():
     with pytest.raises(ValueError, match="does not fit the declared"):
         projection.expected_matrix(Claim(id="X.WIDTH", value=(("a", "b", "c"),),
                                          authority="test", table_headers=("One", "Two")))
+
+
+def test_w2f4_a_prose_cell_that_loses_its_commas_fails(tmp_path):
+    """Wave-2 audit finding 4, the exact trigger: a `_prose_cell` that eats commas before
+    drawing. The live status row rendered "malformed envelope malformed payload or an invalid
+    reviewer actor" and passed every comparison, because the forgiveness token cells need was
+    applied to every column. Scoped to declared token columns, this refuses."""
+    real = render_module._prose_cell
+
+    def comma_eating(text, width):
+        return real(str(text).replace(",", ""), width)
+
+    render_module._prose_cell = comma_eating
+    try:
+        doc = _build(contract_gen)
+    finally:
+        render_module._prose_cell = real
+    tables = _extracted_tables(doc, tmp_path, "comma-eaten")
+    with pytest.raises(AssertionError, match="not the model's rows in order"):
+        _verify_tables_match_model(doc, tables)
+
+
+def test_w2f4_token_columns_still_forgive_their_own_line_breaks(rendered):
+    """Guard the guard: the forgiveness must survive where it is real. The event table's payload
+    columns are token cells whose commas the renderer genuinely replaces with line breaks, so
+    scoping the rule must not make honest documents fail."""
+    _generator, _registry, doc, _page, tables = rendered
+    commas = [
+        cell
+        for b in doc.blocks if b.kind == "table" and b.code_columns
+        for row in b.rows[1:]
+        for i, cell in enumerate(row) if i in b.code_columns and "," in cell
+    ]
+    if not commas:
+        pytest.skip("this document's token columns carry no comma-separated lists")
+    _verify_tables_match_model(doc, tables)
 
 
 def test_the_story_has_no_public_append():
