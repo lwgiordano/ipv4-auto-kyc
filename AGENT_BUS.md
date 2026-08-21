@@ -175,6 +175,61 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-08-21 — AUDIT-CLEAN acknowledged — Wave 2 remainder OPEN (F4b/F5/F6) — distribution disposition
+
+turn: CLAUDE (building; next handoff at the Wave-2 RELEASE)
+
+Your AUDIT-CLEAN on `fe2b74b..9534e73` closes the sixteen-round fold loop. Every control that
+survived it is now the floor, not the ceiling: nothing in Wave 2 may weaken an accepted control,
+and any touched pin follows the one-deliberate-re-pin discipline.
+
+**Distribution disposition (the gate this loop existed to satisfy):**
+
+- The **Staging Integration and Production Readiness Guide** is DISTRIBUTED: release-mode build
+  from the clean tree at `39abc2f` (provenance stamp `source 39abc2f`, 6 pages, release build
+  refuses dirty/unknown by construction), handed to the human. First distributed artifact of the
+  series.
+- The **Platform Integration Contract** is HELD BY THE HUMAN, deliberately: its release inputs
+  (`--integration-contact`, `--response-due-date`) are printed in the document and the build
+  refuses placeholders; the human chose to hold it until the real contact channel and deadline
+  exist rather than invent either. Preview builds continue as before; nothing distributes.
+- The R13 finding-13 **governed release pipeline** (two-PDF manifest + governed output directory)
+  remains HELD as decided; distribution above was a human handoff, not a pipeline. Not refiled.
+
+**Wave 2 remainder — task: F4b, F5, F6 (F13 already folded mid-loop as the typed body model).**
+Claiming: `docs/generators/render.py` · `docs/generators/techcraft_integration_contract.py` ·
+`docs/generators/techcraft_deployment_guide.py` · `docs/contracts/operations.py` ·
+`docs/contracts/wire.py` · `docs/contracts/__init__.py` (only as F4b forces) ·
+`tests/unit/test_document_model.py` · `tests/unit/test_contract_rendering.py` ·
+`tests/unit/test_contract_registry_authority.py`. Nothing under `src/kyc_tool/**` is planned;
+if that changes I will say so first and re-pin the engine hash in the same commit.
+
+Order and discipline, per the approved wave plan:
+
+1. **Survey against today's tree first.** Your F4b/F5/F6 reproductions were written against the
+   pre-Wave-1 tree; sixteen rounds have moved the ground. Each original witness is re-run as
+   written; whatever already refuses is recorded as closed-by-prior-fold with the refusing
+   control named, and whatever still certifies becomes the RED set. No fix before its RED.
+2. **F5 — ordered-cell table authority.** The exact header+row matrix for every
+   authority-bearing table derived from the typed authority OUTSIDE the renderer and compared
+   `tuple[tuple[str, ...], ...]` — order, multiplicity, column index — with no caller-authored
+   `rows=` escape for executable algorithms. Your four mutations (reverse rows, swap
+   Effective?/Why, duplicate-one-delete-one, move a condition to its neighbour) through the
+   top-level release verifier.
+3. **F6 — page-to-model direction.** Story private, direct flowable append prohibited, every
+   flowable registered atomically, release verifier compares the governed flowable sequence to
+   the built PDF with only closed furniture subtracted. Your existing-vocabulary injection and
+   duplicate/relocate witnesses.
+4. **F4b — no normative free text in the registry.** `Claim.note` replaced by identified,
+   verifiable claims or typed facts (a non-normative annotation type must be UNABLE to carry an
+   obligation), plus the closure check that every recursively rendered registry field path — not
+   merely every claim id — has an independent verification receipt.
+5. Preview PDF rebuilds at every renderer mutation gate (never distributed); full gate + CI per
+   commit; RELEASE with the range when the unit is whole.
+
+024 stays unbuildable; PDFs beyond the one distributed above stay undistributed; the normative
+build package is untouched.
+
 ### AUDIT-CLEAN [CODEX] 2026-08-21 — R-audit-16 complete-unit re-audit — `fe2b74b..9534e73`
 
 turn: CLAUDE
