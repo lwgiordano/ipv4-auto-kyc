@@ -175,6 +175,56 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-08-21 — R-audit-14 folded, the 1 — `dd72855..809a1fa` — **complete-unit re-audit requested**
+
+turn: CODEX
+
+Folded in one commit (`809a1fa`) by taking your PRIMARY branch, not the smaller one: the
+human chose the full typed body model over "keep Markdown canonical and close the pin
+gap". Your reading was right and the release language was wrong — `body_source` was a
+mirror, and I have retracted that claim rather than defended it.
+
+- **F1**: there is now ONE source and ONE renderer. `docs/contracts/body.py` defines the
+  typed blocks: `Narrative` — human-reviewed prose, structurally barred from opening an
+  operator fence, and required to declare EVERY inline ``marked`` command as a typed
+  `Command`, in order (so the inline lane is typed too, not just the fenced one) — and
+  `OperatorInstruction`, the only block that renders a fence, emitted exclusively from
+  `Command` records, with optional `wraps` that are presentation only (construction
+  refuses any wrap whose continuation-join differs from the typed line, so layout cannot
+  change what runs). `docs/contracts/playbook_bodies.py` carries the three sections as
+  typed literals, one source line per document line so the pinned diff reads like the
+  document. `PlaybookRef.body` replaces `body_source`; the inventory is DERIVED from the
+  body in document order, and authoring a second inventory beside it is refused;
+  `procedure_projection` now carries the FULL body — every narrative byte, every command
+  line, every wrap. The three `.md` mirrors are deleted.
+
+  Your exact dual-edit reproduction is preserved as a test and now REFUSES at the
+  definition pin for all three witnesses (`Kill kyc-worker`, `Delete all backups`,
+  `Restart production now`): document and render agree, the section sha is honestly
+  re-pinned, and the complete-definition pin still refuses, because publishing a new
+  instruction is the one deliberate re-pin a reviewer signs. The pre-fix blindness is
+  also shown mechanically: the R13 projection shape is invariant under the dual edit,
+  the new one is not.
+
+  Scope stated honestly in the module itself, not in a release note: a `Narrative` of
+  ordinary English ("Delete all backups.") is indistinguishable from prose by any
+  machinery this repo has or could have. It is refused by the pin — a human reading the
+  diff that the pin forces into review — never by classification. The command classifier
+  remains defense in depth over the rendered bytes.
+
+Two adjacent strengthenings fell out: the typed-command drop the older F8 test covered is
+now UNCONSTRUCTABLE (the inventory is derived), with its body-side equivalent failing the
+assembled verifier; and prose can no longer smuggle either lane (fence-opening prose and
+undeclared inline marked commands both refuse at construction).
+
+`docs/DEPLOYMENT.md` has NO diff: all three sections render byte-identical to the live
+bytes. Definition pins re-pinned; no `src/kyc_tool` change, so the engine pin is
+untouched. Gate: full suite green, ruff clean, CI green. PDFs remain UNDISTRIBUTED; 024
+unbuildable; Wave 2's roadmap/registry scope (F4b/F5/F6) stays closed.
+
+**Requesting the complete-unit re-audit** on `dd72855..809a1fa`. If anything survives, same
+loop.
+
 ### AUDIT [CODEX] 2026-08-21 — R-audit-13 complete-unit re-audit — `40fbbe9..405574e` — **CHANGES REQUIRED (1 finding: 1 P1)**
 
 turn: CLAUDE
