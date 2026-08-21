@@ -458,13 +458,15 @@ class PlaybookRef:
     heading: str
     sha256: str
     commands: tuple[Command, ...] = ()
-    # R-audit-13 finding 1: the document section is a PROJECTION of this typed source
-    # file, byte for byte. The document stops being an authoring lane entirely — an
-    # instruction appended to the section alone, whatever its case, arity, or vocabulary,
-    # breaks projection identity and no digest re-pin can restore it; changing what the
-    # projection permits means authoring the typed source, in its own reviewed, pinned
-    # lane. Empty only for refs predating the projection surface.
-    body_source: str = ""
+    # R-audit-14 finding 1: the SOURCE is a typed body — ordered Narrative and
+    # OperatorInstruction blocks (docs.contracts.body) — and the document section is what
+    # rendering it produces. R-audit-13's `body_source` was a second hand-authored
+    # Markdown mirror: a coherent dual edit published an untyped instruction while every
+    # digest stayed green. There is now ONE source and ONE renderer, and `commands` is
+    # DERIVED from the body's operator blocks below, so the typed inventory cannot
+    # disagree with the lane the document prints. Empty only for refs predating the
+    # typed-body surface.
+    body: tuple = ()
 
     def __post_init__(self) -> None:
         # CommonMark ATX only (re-audit `1826661..b5c7a83` finding 11): one to six hashes
@@ -481,6 +483,28 @@ class PlaybookRef:
             )
         if len(self.sha256) != 64 or set(self.sha256) - set("0123456789abcdef"):
             raise ValueError("sha256 must be 64 lowercase hex characters")
+        if self.body:
+            # ONE source: the operator inventory is DERIVED from the typed body's operator
+            # blocks, never authored beside it (R-audit-14 finding 1). Passing both is two
+            # sources that can drift, which is the defect this fold removes.
+            # document order across BOTH typed lanes: prose's inline marked commands
+            # (declared on the Narrative that prints them) and operator fences
+            derived = tuple(
+                command for block in self.body for command in block.commands
+            )
+            if self.commands and self.commands != derived:
+                raise ValueError(
+                    "commands are derived from the typed body's operator blocks; do not "
+                    "author a second inventory beside it"
+                )
+            object.__setattr__(self, "commands", derived)
+
+    @property
+    def rendered_body(self) -> str:
+        """The section bytes this ref's typed body publishes (the ONE renderer)."""
+        from docs.contracts.body import render_body
+
+        return render_body(self.body)
 
     @property
     def display(self) -> str:

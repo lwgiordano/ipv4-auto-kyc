@@ -2043,9 +2043,9 @@ def _command_inventory_problems(ref, section: str) -> list[str]:
 # command lines, span endpoints, every prerequisite's every field value, every aggregate and
 # branch answer with its evidence. Editing ANY of it is a re-pin, the act of review.
 PROCEDURE_DEFINITION_PINS = {
-    "PR 5b full maintenance window": "90b8a35c7c803cce",
-    "Bundle-pinning activation": "c8865938bfbb7b62",
-    "Migrations 013-023": "3751e0ae4c53ef30",
+    "PR 5b full maintenance window": "74dc08a643bcc640",
+    "Bundle-pinning activation": "1906bcffd7980305",
+    "Migrations 013-023": "718580b66ee67160",
 }
 
 
@@ -2095,18 +2095,20 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
         # re-pin, and a command edit is still caught even when the record moves too.
         inventory_problems = _command_inventory_problems(ref, section)
         assert not inventory_problems, f"{procedure.name}: {inventory_problems}"
-        # R-audit-13 finding 1: the document section is a PROJECTION of the typed body
-        # source — byte for byte — so the document is no longer an authoring lane at all.
-        # An instruction appended to the section alone, whatever its case, arity, or
-        # vocabulary, breaks this identity and NO digest re-pin can restore it; what the
-        # projection permits changes only by authoring the typed source, whose path sits
-        # inside the pinned definition projection below. The prose classifier above stays
-        # as DEFENSE IN DEPTH over the same bytes, not as the authority.
-        assert ref.body_source, f"{procedure.name}: the ref names no typed body source"
-        source = (REPO / ref.body_source).read_bytes().decode("utf-8").replace("\r\n", "\n")
-        assert section == source, (
-            f"{procedure.name}: the document section is not the typed body projection "
-            f"({ref.body_source}); author the typed source, never the document"
+        # R-audit-14 finding 1: the document section is what RENDERING the typed body
+        # produces — ordered Narrative and OperatorInstruction records, the operator lane
+        # emitted only from typed Command records, the inline marked lane declared on the
+        # Narrative that prints it. R-audit-13's `body_source` was a second hand-authored
+        # Markdown mirror whose PATH alone was pinned, so a coherent dual edit published
+        # an untyped instruction with no pin change; now there is ONE source, ONE
+        # renderer, and every byte of every block sits inside the definition pin below —
+        # so any source edit forces the one deliberate re-pin a reviewer signs. The prose
+        # classifier stays as DEFENSE IN DEPTH over the same bytes, never the authority.
+        assert ref.body, f"{procedure.name}: the ref carries no typed body"
+        assert section == ref.rendered_body, (
+            f"{procedure.name}: the document section is not the typed body projection; "
+            "author the typed body in docs/contracts/playbook_bodies.py, never the "
+            "document"
         )
         # gate finding 5: the derived fields are REBOUND to the plan's own derivations every
         # run, so object.__setattr__ on the frozen procedure cannot outlive one verification
@@ -4057,16 +4059,27 @@ def test_f8_an_appended_command_fails_even_after_a_digest_repin(tmp_path):
     )
 
 
-def test_f8_dropping_a_typed_command_fails_the_assembled_verifier(monkeypatch):
-    """Same exactness from the other side, through the assembled verifier on the REAL file:
-    deleting a typed record while the section still publishes the command must fail."""
+def test_f8_dropping_a_typed_command_is_unconstructable_then_fails_the_verifier(monkeypatch):
+    """Same exactness from the other side, strengthened by R-audit-14: the inventory is
+    DERIVED from the typed body, so deleting a record while the body still publishes the
+    command is not a state that can be built at all. Dropping it from the BODY — the only
+    remaining route — then fails the assembled verifier on the REAL file, because the
+    render no longer equals the document."""
     import copy
 
     pr6 = _pr("Bundle-pinning activation")
-    weakened_ref = dataclasses.replace(pr6.playbook_ref,
-                                       commands=pr6.playbook_ref.commands[:-1])
+    ref = pr6.playbook_ref
+    with pytest.raises(ValueError, match="derived from the typed body"):
+        dataclasses.replace(ref, commands=ref.commands[:-1])
+
+    from docs.contracts.body import OperatorInstruction
+
+    last_fence = max(i for i, b in enumerate(ref.body)
+                     if type(b) is OperatorInstruction)
+    body = tuple(b for i, b in enumerate(ref.body) if i != last_fence)
     tampered = copy.copy(pr6)
-    object.__setattr__(tampered, "playbook_ref", weakened_ref)
+    object.__setattr__(tampered, "playbook_ref",
+                       dataclasses.replace(ref, body=body, commands=()))
     monkeypatch.setattr(_this_module(), "OPERATIONS", _operations_with_procedure(tampered))
     with pytest.raises(AssertionError):
         AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
@@ -6423,12 +6436,8 @@ def test_r8f2_rendered_markdown_cannot_hide_a_command_from_the_assembled_verifie
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(
             live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",
-                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
-                      "docs/contracts/playbooks/bundle_pinning_activation.md",
-                      "docs/contracts/playbooks/migrations_013_023.md"):
+        for other in ("docs/RUNBOOK.md",):
             if (REPO / other).exists() and not (tmp_path / other).exists():
-                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6490,12 +6499,8 @@ def test_r9f1_inline_html_and_comments_cannot_hide_a_command_from_the_assembled_
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(
             live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",
-                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
-                      "docs/contracts/playbooks/bundle_pinning_activation.md",
-                      "docs/contracts/playbooks/migrations_013_023.md"):
+        for other in ("docs/RUNBOOK.md",):
             if (REPO / other).exists() and not (tmp_path / other).exists():
-                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6596,12 +6601,8 @@ def test_selfaudit_reference_style_links_cannot_hide_a_command_from_the_assemble
         mutated_section = section + "\n" + witness + "\n"
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",
-                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
-                      "docs/contracts/playbooks/bundle_pinning_activation.md",
-                      "docs/contracts/playbooks/migrations_013_023.md"):
+        for other in ("docs/RUNBOOK.md",):
             if (REPO / other).exists() and not (tmp_path / other).exists():
-                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6644,12 +6645,8 @@ def test_r10f1_backslash_escapes_cannot_hide_a_command_from_the_assembled_verifi
         mutated_section = section + "\n" + witness + "\n"
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",
-                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
-                      "docs/contracts/playbooks/bundle_pinning_activation.md",
-                      "docs/contracts/playbooks/migrations_013_023.md"):
+        for other in ("docs/RUNBOOK.md",):
             if (REPO / other).exists() and not (tmp_path / other).exists():
-                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6706,12 +6703,8 @@ def test_r11f1_witnessed_maintenance_roots_own_any_operand_shape(tmp_path, monke
         mutated_section = section + "\n" + witness + "\n"
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",
-                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
-                      "docs/contracts/playbooks/bundle_pinning_activation.md",
-                      "docs/contracts/playbooks/migrations_013_023.md"):
+        for other in ("docs/RUNBOOK.md",):
             if (REPO / other).exists() and not (tmp_path / other).exists():
-                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6782,12 +6775,8 @@ def test_r12f1_naked_commands_refuse_with_no_root_vocabulary_at_all(tmp_path, mo
         mutated_section = section + "\n" + witness + "\n"
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",
-                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
-                      "docs/contracts/playbooks/bundle_pinning_activation.md",
-                      "docs/contracts/playbooks/migrations_013_023.md"):
+        for other in ("docs/RUNBOOK.md",):
             if (REPO / other).exists() and not (tmp_path / other).exists():
-                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6851,12 +6840,8 @@ def test_r13f1_the_five_boundary_dimensions_refuse_through_the_assembled_verifie
         mutated_section = section + "\n" + witness + "\n"
         assert live_doc.count(section) == 1, "the section must be a unique byte span"
         (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
-        for other in ("docs/RUNBOOK.md",
-                      "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
-                      "docs/contracts/playbooks/bundle_pinning_activation.md",
-                      "docs/contracts/playbooks/migrations_013_023.md"):
+        for other in ("docs/RUNBOOK.md",):
             if (REPO / other).exists() and not (tmp_path / other).exists():
-                (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(REPO / other, tmp_path / other)
         tampered = copy.copy(pr7b)
         object.__setattr__(
@@ -6891,11 +6876,7 @@ def test_r13f1_every_appended_paragraph_breaks_projection_identity_regardless_of
     witness = "The window is generous and the team is well rested."
     mutated_section = section + "\n" + witness + "\n"
     (tmp_path / ref.path).write_text(live_doc.replace(section, mutated_section, 1))
-    for other in ("docs/RUNBOOK.md",
-                  "docs/contracts/playbooks/pr5b_full_maintenance_window.md",
-                  "docs/contracts/playbooks/bundle_pinning_activation.md",
-                  "docs/contracts/playbooks/migrations_013_023.md"):
-        (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
+    for other in ("docs/RUNBOOK.md",):
         shutil.copy(REPO / other, tmp_path / other)
     tampered = copy.copy(pr7b)
     object.__setattr__(
@@ -6907,3 +6888,105 @@ def test_r13f1_every_appended_paragraph_breaks_projection_identity_regardless_of
                         _operations_with_procedure(tampered))
     with pytest.raises(AssertionError, match="typed body projection"):
         AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+
+
+# ── R-audit-14 `40fbbe9..405574e` (finding 1) ─────────────────────────────────────────────────────
+
+
+def _pr7b_with_body(body):
+    """The live PR7b procedure with a replaced typed body (inventory re-derived)."""
+    import copy
+
+    pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                if p.name == "Migrations 013-023")
+    tampered = copy.copy(pr7b)
+    object.__setattr__(
+        tampered, "playbook_ref",
+        dataclasses.replace(pr7b.playbook_ref, body=body, commands=()))
+    return pr7b, tampered
+
+
+def test_r14f1_the_canonical_dual_edit_refuses_without_a_deliberate_definition_repin(
+        tmp_path, monkeypatch):
+    """The audit's exact reproduction of the CANONICAL edit workflow — append the line to
+    the document AND to its named source, re-pin the section sha, run the assembled
+    verifier — which passed for `Kill kyc-worker`, `Delete all backups`, and
+    `Restart production now` with no definition-pin change at all, because R-audit-13
+    pinned only the source's PATH. Every byte of the typed body now sits inside the
+    complete-definition projection, so the same coherent workflow refuses at the
+    definition pin: publishing a new instruction is the ONE deliberate re-pin a reviewer
+    signs off."""
+    import shutil
+
+    from docs.contracts.body import Narrative
+
+    pr7b_ref = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
+                    if p.name == "Migrations 013-023").playbook_ref
+    live_doc = (REPO / pr7b_ref.path).read_text()
+    section = _section_bytes(pr7b_ref)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "alembic").symlink_to(REPO / "alembic")
+    (tmp_path / "alembic.ini").symlink_to(REPO / "alembic.ini")
+    shutil.copy(REPO / "docs/RUNBOOK.md", tmp_path / "docs/RUNBOOK.md")
+    for witness in ("Kill kyc-worker", "Delete all backups", "Restart production now"):
+        # BOTH sides edited coherently, exactly as an author would: the typed source
+        # gains the line, the document gains the same line, the section sha is re-pinned.
+        body = list(pr7b_ref.body)
+        body[-1] = Narrative(body[-1].text + "\n" + witness + "\n",
+                             commands=body[-1].commands)
+        _, tampered = _pr7b_with_body(tuple(body))
+        rendered = tampered.playbook_ref.rendered_body
+        assert witness in rendered, "the dual edit must really publish the instruction"
+        (tmp_path / pr7b_ref.path).write_text(live_doc.replace(section, rendered, 1))
+        object.__setattr__(
+            tampered, "playbook_ref",
+            dataclasses.replace(tampered.playbook_ref,
+                                sha256=hashlib.sha256(rendered.encode()).hexdigest(),
+                                commands=()))
+        monkeypatch.setattr(_this_module(), "REPO", tmp_path)
+        monkeypatch.setattr(_this_module(), "OPERATIONS",
+                            _operations_with_procedure(tampered))
+        # document and render agree, and the section digest is honestly re-pinned — the
+        # refusal is the DEFINITION pin, which now covers the source's every byte
+        with pytest.raises(AssertionError, match="complete definition changed"):
+            AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
+        monkeypatch.undo()
+
+
+def test_r14f1_prose_cannot_smuggle_the_operator_lane_or_an_undeclared_command():
+    """The typed body's two structural guards, so 'one source' cannot be reopened as free
+    text: a Narrative may not open an operator fence, and any inline marked command in
+    prose must be declared as a typed Command in order. A runnable line has no free-text
+    route into a body, fenced or inline."""
+    from docs.contracts.body import Narrative, OperatorInstruction
+    from docs.contracts.playbook import Command
+
+    with pytest.raises(ValueError, match="may not open an operator fence"):
+        Narrative("intro\n```operator\nrm -rf /var/lib/kyc\n```\n")
+    with pytest.raises(ValueError, match="declared as a typed"):
+        Narrative("run ``rm -rf /var/lib/kyc`` now\n")
+    declared = Narrative("run ``rm -rf /var/lib/kyc`` now\n",
+                         commands=(Command(("rm", "-rf", "/var/lib/kyc")),))
+    assert declared.commands[0].line == "rm -rf /var/lib/kyc"
+    # and a wrap is presentation only: it cannot change what the typed record runs
+    with pytest.raises(ValueError, match="presentation only"):
+        OperatorInstruction(commands=(Command(("python", "-m", "kyc_tool.ops.x")),),
+                            wraps=(("python -m kyc_tool.ops.EVIL",),))
+
+
+def test_r14f1_the_operator_lane_is_rendered_only_from_typed_commands():
+    """The positive half: every operator fence the three live sections publish is emitted
+    from typed Command records, and the ref's inventory is exactly what the body owns —
+    there is no second authored inventory that could drift from the printed lane."""
+    from docs.contracts.body import OperatorInstruction
+
+    for procedure in OPERATIONS.value("OPS.CUTOVER.PROCEDURES"):
+        ref = procedure.playbook_ref
+        derived = tuple(c for block in ref.body for c in block.commands)
+        assert ref.commands == derived, f"{procedure.name}: inventory is not the body's"
+        for block in ref.body:
+            if type(block) is OperatorInstruction:
+                fence = block.rendered().split("\n")
+                assert fence[0] == "```operator" and fence[-1] == "```"
+                assert _join_operator_lines(fence[1:-1]) == [c.line
+                                                             for c in block.commands]

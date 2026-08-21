@@ -58,12 +58,16 @@ from docs.contracts.playbook import (
     VERIFY_NOT_STATED,
     WINDOW,
     WINDOW_SAME,
-    Command,
     MigrationSpan,
     PlaybookRef,
     RollbackBranch,
     RollbackContract,
     RollbackFact,
+)
+from docs.contracts.playbook_bodies import (
+    BUNDLE_PINNING_BODY,
+    PR5B_BODY,
+    PR7B_CORE_BODY,
 )
 
 # CUTOVERS ARE NOT SUMMARIZED HERE (re-audit `6feca36..4f23f23` F5).
@@ -226,11 +230,8 @@ FULL_WINDOW = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 9. PR 5b cutover — brief full maintenance window",
-        body_source="docs/contracts/playbooks/pr5b_full_maintenance_window.md",
+        body=PR5B_BODY,
         sha256="44b8e1613d30b4f76c58bfaf5378111ee824ba77f552c310159b3efa24883d1f",
-        commands=(
-            Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
-        ),
     ),
 )
 
@@ -265,16 +266,8 @@ BUNDLE_PINNING = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 10. PR 6 cutover — bundle-pinning activation",
-        body_source="docs/contracts/playbooks/bundle_pinning_activation.md",
+        body=BUNDLE_PINNING_BODY,
         sha256="c7b02139284b25ba30cd431a3de508f51681eb1be9d15b0dd443947afd88b96a",
-        commands=(
-            Command(("python", "-m", "kyc_tool.ops.seed_policy_bundle",
-                     "--expect-hash", "<sha256>")),
-            Command(("python", "-m", "kyc_tool.ops.verify_pinnable_backlog")),
-            Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
-            Command(("python", "-m", "kyc_tool.ops.activate_bundle_pinning_epoch",
-                     "--expect-bundle-hash", "<sha256>", "--expect-engine", "eng-1")),
-        ),
     ),
 )
 
@@ -353,24 +346,10 @@ PR7B_CORE = Procedure(
     playbook_ref=PlaybookRef(
         path="docs/DEPLOYMENT.md",
         heading="## 11. PR 7b-core cutover — drained maintenance window (migration 013)",
-        body_source="docs/contracts/playbooks/migrations_013_023.md",
+        body=PR7B_CORE_BODY,
         sha256="3cf24cfee80a34a3dc37edadda0fb46756c7675ecffa40322d6e10539b60cf2a",
         # Every operator-run command the section publishes, as parsed argv. The placeholders
         # (`<file.json>`, `<id>`, `<sha256>`) are the section's own literal text.
-        commands=(
-            Command(("python", "-m", "kyc_tool.ops.verify_pr7b_core_backfill")),
-            Command(("python", "-m", "kyc_tool.ops.verify_pr7b_ops_prerequisites",
-                     "--expect-revision", "012")),
-            Command(("python", "-m", "kyc_tool.ops.restore_pr7b_core_callback",
-                     "--evidence", "<file.json>", "--expect-original-id", "<id>",
-                     "--expect-manifest-digest", "<sha256>")),
-            Command(("sha256sum", "<file.json>")),
-            Command(("python", "-m", "kyc_tool.ops.repair_outbox_sequence")),
-            Command(("python", "-m", "kyc_tool.ops.requeue_interrupted_jobs")),
-            Command(("python", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head")),
-            Command(("python", "-m", "kyc_tool.ops.reset_interrupted_outbox_claims")),
-            Command(("python", "-m", "alembic", "-c", "alembic.ini", "downgrade", "012")),
-        ),
     ),
 )
 
@@ -650,13 +629,35 @@ def procedure_projection(procedure: Procedure) -> tuple:
         plan_contract.subject,
         procedure.playbook_ref.path,
         procedure.playbook_ref.heading,
-        procedure.playbook_ref.body_source,
+        _body_projection(procedure.playbook_ref.body),
         tuple(c.line for c in procedure.playbook_ref.commands),
         (span.base_revision, span.target_revision) if span is not None else None,
         prerequisites,
         aggregate,
         branches,
     )
+
+
+def _body_projection(body: tuple) -> tuple:
+    """The typed body, whole, for the complete-definition pin (R-audit-14 finding 1).
+
+    EVERY byte of every block is in here — narrative text included — so editing the
+    source at all forces the one deliberate re-pin a reviewer signs. Pinning only the
+    source's PATH (R-audit-13) let a coherent source edit publish a new instruction with
+    no pin change at all, which is exactly the defect this closes.
+    """
+    from docs.contracts.body import Narrative, OperatorInstruction
+
+    projected = []
+    for block in body:
+        if type(block) is Narrative:
+            projected.append(("narrative", block.text))
+        elif type(block) is OperatorInstruction:
+            projected.append(
+                ("operator", tuple(c.line for c in block.commands), block.wraps))
+        else:
+            raise ValueError(f"unprojectable body block {type(block).__name__}")
+    return tuple(projected)
 
 
 def _dataclass_fields(value):
