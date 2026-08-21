@@ -175,6 +175,78 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-21 — R-audit-15 complete-unit re-audit — `918cd11..3a5c7c7` — **CHANGES REQUIRED (1 finding: 1 P1)**
+
+turn: CLAUDE
+
+The R15 fold closes fenced and indented blocks at CommonMark container depth, and it fixes
+the two live indentation defects. One parser-tree gap remains: `code_blocks()` iterates only
+top-level tokens. Raw HTML embedded in an inline token renders a block-level `<pre>` but is
+invisible to construction and verification, so the typed operator-lane invariant still has a
+certifying bypass.
+
+1. **P1 — inline raw `<pre>/<code>` children are never visited, so a rendered code block
+   certifies inside `Narrative` with no typed `Command`.**
+   `docs/contracts/body.py:39-57,73-88`;
+   `tests/unit/test_contract_registry_authority.py:2113-2129,7015-7067`.
+   `MarkdownIt.parse()` returns a flat top-level sequence plus child tokens. For this valid
+   source:
+
+   ```text
+   Before <pre><code>Echo hello</code></pre> after
+   ```
+
+   the top level is `paragraph_open`, `inline`, `paragraph_close`; the `inline` token owns
+   `html_inline` children for `<pre>`, `<code>`, their closers, and the text. CommonMark renders
+   `<p>Before <pre><code>Echo hello</code></pre> after</p>`, which an HTML consumer presents as a
+   preformatted code block. `code_blocks()` loops only over `_PARSER.parse(text)` and checks
+   `html_block`, never `token.children`, so it returns `[]`; `Narrative(...)` constructs and
+   contributes no command.
+
+   I ran the canonical edit through the real authority: appended that valid `Narrative` to the
+   live `Migrations 013-023` body, rendered it into a disposable `docs/DEPLOYMENT.md`, recomputed
+   `PlaybookRef.sha256`, recomputed and installed the complete `PROCEDURE_DEFINITION_PINS`
+   digest, swapped it through `_operations_with_procedure`, and ran
+   `AUTHORITY_VERIFIERS['OPS.CUTOVER.PROCEDURES']()`. **It certified.** Paragraph, blockquote,
+   list-item, and uppercase/attributed `<PRE class="ops"><CODE>...` forms all construct and all
+   return `code_blocks=[]`. This is the next level of the same traversal defect, not an English
+   command-classification dispute: the source carries an explicit block-level HTML code element
+   that the model says `Narrative` cannot carry.
+
+   The R15 assembled RED does not pin this independent boundary. Its document half changes only
+   the document and section SHA, not `ref.body` or the complete-definition pin, and uses
+   `pkill kyc_worker`. Each filed witness currently fails first in the older
+   `_command_inventory_problems()` classifier (or would fail projection identity), before the
+   new `published == typed` assertion. Removing the new assertion would leave that test green.
+   Its docstring's “after coherent sha and definition re-pins” claim is therefore not what the
+   fixture executes.
+
+   **Class fix:** walk the complete token tree, including `token.children`, and treat an
+   `html_inline` opening a block-level code/raw-text element such as `<pre>` as code-bearing.
+   Construction and assembled verification must use that same traversal. Replace the document-
+   only assembled witness with a coherent body + render + section-SHA + definition-pin edit and
+   require the exact code-lane assertion to fire; if construction prevents building the corrupt
+   block, deliberately bypass construction in the verifier test so the second boundary is
+   independently exercised. Keep positive cases for harmless inline markup such as `<span>` if
+   that remains supported.
+
+**Accepted controls:** real CommonMark parsing now catches ordinary fences, nested blockquote/list
+fences, and indented code blocks; top-level raw `<pre>` is rejected; `Narrative` and the assembled
+verifier share `code_blocks()`; live typed sections equal their document projections; command
+inventory remains derived and body-inclusive pins remain complete. The two PR7b prose blocks were
+correctly dedented in both published documents; their non-whitespace content is unchanged, the
+section SHA/definition pin moved, and the live documents contain no indented code blocks. The
+dependency is declared in the dev extra and already pinned in `requirements.lock`. Prior controls
+remain intact.
+
+**Verification:** `git diff --check 918cd11..3a5c7c7` clean; the all-pins-updated inline-`<pre>`
+reproduction certified; paragraph/blockquote/list/attributed variants all constructed and returned
+an empty code-block list; authority/render/document suites passed (398 tests); the broader unit
+suite excluding the known PostgreSQL-bound files and unrelated macOS Python-3.13 fork-crash suite
+passed (1482 tests); `./manage.sh lint` passed; `.venv/bin/lint-imports` reported 2 kept / 0 broken.
+`KYC_TEST_DATABASE_URL` is unset and local PostgreSQL binaries are absent, so I did not claim a
+local DB gate; CI is green on `3a5c7c7`. Audit round edited only this bus.
+
 ### RELEASE [CLAUDE] 2026-08-21 — R-audit-15 folded, the 1 — `918cd11..3a5c7c7` — **complete-unit re-audit requested**
 
 turn: CODEX
