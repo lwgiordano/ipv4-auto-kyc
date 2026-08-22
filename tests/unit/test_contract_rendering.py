@@ -16,12 +16,13 @@ from collections import Counter
 import pdfplumber
 import pytest
 from docs.contracts import Claim, Registry
+from docs.contracts.documents import TEST_FIXTURE
 from docs.contracts.operations import OPERATIONS
 from docs.contracts.signing_example import published_snippet
 from docs.contracts.wire import WIRE
 from docs.generators import techcraft_deployment_guide as deploy_gen
 from docs.generators import techcraft_integration_contract as contract_gen
-from docs.generators.render import INCH, Doc, DocumentManifest
+from docs.generators.render import INCH, Doc
 
 # reportlab and pdfplumber are imported at module scope ON PURPOSE (re-audit `6feca36..4f23f23`
 # F4). These were `importorskip` guards, which meant an environment without the PDF extras ran the
@@ -34,10 +35,10 @@ from docs.generators.render import INCH, Doc, DocumentManifest
 SAMPLE_CONTACT = "kyc-integration@ipv4.global"
 SAMPLE_DUE_DATE = "2026-09-15"
 
-# Ad-hoc Docs below are FIXTURES, not published documents; they still need an owning
-# manifest, because the title is document identity now rather than a build argument
-# (Wave-2 audit finding 3).
-TEST_MANIFEST = DocumentManifest(title="KYC Tool — test fixture", out="fixture.pdf")
+# Ad-hoc Docs below are FIXTURES, not published documents; they name a fixture identity that
+# lives in the same closed registry as the real ones, because identity is never a caller's to
+# invent (Wave-2 re-audit finding 3).
+TEST_DOCUMENT = TEST_FIXTURE
 _BUILD_ARGS = {
     id(contract_gen): {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE},
     id(deploy_gen): {},
@@ -197,7 +198,7 @@ def test_the_overlap_guard_can_actually_fail(tmp_path):
     """Codex's exact mutation: a negative spacer that prints one paragraph over another."""
     from reportlab.platypus import Spacer
 
-    doc = Doc(WIRE, TEST_MANIFEST)
+    doc = Doc(WIRE, TEST_DOCUMENT)
     doc.p("The first paragraph, which should be legible on its own line.")
     doc._story.append(Spacer(1, -24))
     doc.p("The second paragraph, printed straight over the top of the first.")
@@ -244,7 +245,7 @@ def test_the_margin_guard_can_actually_fail():
     line at build time, which is the same boundary the geometric test measures after the fact."""
     from docs.generators.render import _guard_preformatted
 
-    doc = Doc(WIRE, TEST_MANIFEST)
+    doc = Doc(WIRE, TEST_DOCUMENT)
     with pytest.raises(ValueError, match="run off the page"):
         doc.code("x = " + "y" * 400)
     # the join that produced the run-on line: `<br/>` is dropped by XPreformatted, so passing it
@@ -350,14 +351,15 @@ def test_a_token_too_wide_for_its_column_fails_the_build(tmp_path):
         Registry(
             name="narrow",
             claims=(Claim(id="X.WIDE", value=(("website.review_completed", "note"),),
-                          authority="test", table_headers=("event_type", "Notes")),),
+                          authority="test", table_headers=("event_type", "Notes"),
+                          token_columns=(0,)),),
         )
-    , TEST_MANIFEST)
+    , TEST_DOCUMENT)
     with pytest.raises(ValueError, match="would be clipped"):
-        doc.claim_table("X.WIDE", [0.5 * INCH, 3 * INCH], code_columns=(0,))
+        doc.claim_table("X.WIDE", [0.5 * INCH, 3 * INCH])
     assert "X.WIDE" not in doc.rendered, "a failed cell still counted as rendered"
 
-    doc.claim_table("X.WIDE", [2 * INCH, 3 * INCH], code_columns=(0,))
+    doc.claim_table("X.WIDE", [2 * INCH, 3 * INCH])
     path = str(tmp_path / "wide.pdf")
     doc.build(path)
     with pdfplumber.open(path) as pdf:
@@ -431,7 +433,7 @@ def test_a_word_wider_than_its_column_fails_the_build():
     doc = Doc(Registry(name="narrowprose", claims=(
         Claim(id="X.LONG", value=(("BLOCKED_NO_AUTHORITATIVE_MAPPING", "note"),), authority="t",
               table_headers=("Term", "Notes")),
-    )), TEST_MANIFEST)
+    )), TEST_DOCUMENT)
     with pytest.raises(ValueError, match="would be\n?\\s*clipped"):
         doc.claim_table("X.LONG", [0.7 * INCH, 3 * INCH])
     assert "X.LONG" not in doc.rendered
@@ -468,7 +470,7 @@ def test_pending_claims_render_as_pending(contract_text):
 
 # ── mutation: each bypass Codex demonstrated must fail the SAME verifier ──────────────────────────
 def _doc_with(claim: Claim) -> Doc:
-    doc = Doc(Registry(name="mutant", claims=(claim,)), TEST_MANIFEST)
+    doc = Doc(Registry(name="mutant", claims=(claim,)), TEST_DOCUMENT)
     doc.claim_paragraph(claim.id)
     return doc
 
@@ -527,7 +529,7 @@ def test_mutation_unused_bait_string_does_not_satisfy_rendering(tmp_path):
                 Claim(id="X.HIDDEN", value="the bait nobody renders", authority="test"),
             ),
         )
-    , TEST_MANIFEST)
+    , TEST_DOCUMENT)
     doc.claim_paragraph("X.SHOWN")
     text = _rendered_text(doc, tmp_path)
     assert "the value a reader sees" in _flat(text)
@@ -554,7 +556,7 @@ def test_mutation_markup_wrapped_prohibition_still_renders_as_text(tmp_path):
                 Claim(id="X.PROHIBITED", value="apply the newest decided_at per case", authority="test"),
             ),
         )
-    , TEST_MANIFEST)
+    , TEST_DOCUMENT)
     doc.claim_paragraph("X.PROHIBITED")
     assert "newest decided_at" in _flat(_rendered_text(doc, tmp_path))
 
@@ -649,7 +651,7 @@ def test_code_on_the_page_keeps_its_indentation(tmp_path):
     off the page. Rendered code must preserve the x-offset of nested lines."""
     from docs.generators.render import Doc as _Doc
 
-    doc = _Doc(WIRE, TEST_MANIFEST)
+    doc = _Doc(WIRE, TEST_DOCUMENT)
     doc.code("def outer():\n    nested = 1\n    return nested")
     path = str(tmp_path / "indent.pdf")
     doc.build(path)
@@ -792,7 +794,7 @@ def test_the_layout_overlap_guard_catches_the_exact_baseline_case(tmp_path):
     """The mutation the page-level check could not see, run against the layout-level one."""
     from reportlab.platypus import Spacer
 
-    doc = Doc(WIRE, TEST_MANIFEST)
+    doc = Doc(WIRE, TEST_DOCUMENT)
     doc.p("The first paragraph, which should be legible on its own line.")
     doc._story.append(Spacer(1, -18))
     doc.p("The second paragraph, laid out on the same baseline as the first.")

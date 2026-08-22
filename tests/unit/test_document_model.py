@@ -22,13 +22,14 @@ from collections import Counter
 
 import pdfplumber
 import pytest
-from docs.contracts import Claim, Registry, projection
+from docs.contracts import Claim, Registry, documents, projection
+from docs.contracts.documents import TEST_FIXTURE
 from docs.contracts.operations import OPERATIONS
 from docs.contracts.wire import WIRE
 from docs.generators import render as render_module
 from docs.generators import techcraft_deployment_guide as deploy_gen
 from docs.generators import techcraft_integration_contract as contract_gen
-from docs.generators.render import Doc, DocumentManifest
+from docs.generators.render import Doc
 
 from .test_contract_rendering import SAMPLE_CONTACT, SAMPLE_DUE_DATE, _build
 
@@ -37,10 +38,10 @@ from .test_contract_rendering import SAMPLE_CONTACT, SAMPLE_DUE_DATE, _build
 # "add an unrecorded duplicate block".
 UNIQUE_LINE_CHARS = 45
 
-# Ad-hoc Docs below are FIXTURES, not published documents; they still need an owning
-# manifest, because the title is document identity now rather than a build argument
-# (Wave-2 audit finding 3).
-TEST_MANIFEST = DocumentManifest(title="KYC Tool — test fixture", out="fixture.pdf")
+# Ad-hoc Docs below are FIXTURES, not published documents; they name a fixture identity that
+# lives in the same closed registry as the real ones, because identity is never a caller's to
+# invent (Wave-2 re-audit finding 3).
+TEST_DOCUMENT = TEST_FIXTURE
 
 GENERATORS = [(contract_gen, WIRE), (deploy_gen, OPERATIONS)]
 
@@ -289,7 +290,15 @@ def _verify_tables_match_model(doc, tables) -> None:
                 f"  registry: {wanted[:3]}...\n  recorded: {block.rows[:3]}..."
             )
         header = tuple(_cellnorm(cell) for cell in block.rows[0])
-        schema = tuple(sorted(block.code_columns))
+        # the CLAIM's declaration, not the block's record of what the renderer used: the verifier
+        # must not take its forgiveness rule from the layer that chose the lossy rendering
+        # (Wave-2 re-audit finding 2)
+        schema = tuple(sorted(
+            doc.registry[block.claim_id].token_columns if block.claim_id else block.code_columns))
+        if block.claim_id is not None:
+            assert tuple(sorted(block.code_columns)) == schema, (
+                f"{block.claim_id}: the renderer drew token columns {block.code_columns} but the "
+                f"claim declares {doc.registry[block.claim_id].token_columns}")
         if header in schema_by_header:
             assert schema_by_header[header] == schema, (
                 f"table {header[:3]}...: two blocks share a header class but declare different "
@@ -425,7 +434,14 @@ def _verify_footers(doc, path: str) -> None:
     that page's own section, the stamped revision, and an honest `Page N of M` — to the text
     drawn in the band. Nothing else fits.
     """
-    expected = [_flat(f"{left} {right}") for left, right in doc.expected_footers()]
+    # the registry's entry for the document under test — NOT `doc.identity`, which is the same
+    # object the stamp used and would only prove self-consistency (Wave-2 re-audit finding 3)
+    published = documents.identity(doc.document_id)
+    expected = [
+        _flat(f"{published.footer_line(doc.page_sections.get(number, ''), doc._revision)} "
+              f"Page {number} of {doc._total_pages}")
+        for number in range(1, doc._total_pages + 1)
+    ]
     actual = _page_footers(path)
     assert actual == expected, (
         "the page furniture is not the manifest's derivation.\n"
@@ -451,27 +467,75 @@ def test_the_page_furniture_is_exactly_the_manifests_derivation(rendered, tmp_pa
 
 
 def test_w2f3_a_false_title_cannot_be_supplied_at_build_time():
-    """The audit's exact trigger, refused at the signature: there is no title parameter left to
-    pass, and the manifest a Doc is built against is required and typed."""
+    """The original witness, refused at the signature: no title parameter, and no identity
+    OBJECT either — a Doc names its document by id and looks the identity up itself."""
     doc = _build(contract_gen)
     with pytest.raises(TypeError):
         doc.build("/tmp/unused.pdf", "KYC Tool — Return 2xx before COMMIT")
     import inspect
 
     assert "title" not in inspect.signature(render_module.Doc.build).parameters
-    with pytest.raises(ValueError, match="owns the title"):
+    with pytest.raises(KeyError, match="no document identity"):
         render_module.Doc(WIRE, "KYC Tool — Return 2xx before COMMIT")
 
 
-def test_w2f3_a_tampered_footer_title_fails_the_furniture_lane(tmp_path):
-    """And if the stamp itself is subverted — a manifest swapped between layout and stamping —
-    the lane refuses, so the control is the comparison and not merely the signature."""
+def test_w3f3_a_generator_cannot_publish_an_identity_it_authors(tmp_path):
+    """Wave-2 re-audit finding 3, the exact trigger. Monkeypatching the generator's MANIFEST used
+    to republish a false title on every page with `_top_level_verify` green, because the verifier
+    derived its expectation from the same object the renderer stamped.
+
+    There is no such object now: the generator holds an ID, and both the stamp and the check read
+    the closed identity registry. Setting the ID to anything unregistered fails at build, and
+    monkeypatching the module's DOCUMENT_ID to another REGISTERED document publishes that
+    document's real title — which the furniture lane, reading the identity for the document the
+    verifier was asked about, refuses.
+    """
+    monkey = contract_gen.DOCUMENT_ID
+    try:
+        contract_gen.DOCUMENT_ID = "KYC Tool — Return 2xx before COMMIT"
+        with pytest.raises(KeyError, match="no document identity"):
+            _build(contract_gen)
+    finally:
+        contract_gen.DOCUMENT_ID = monkey
+
+    # …and a swap to the OTHER registered document is caught by the lane, because the expected
+    # furniture comes from the registry entry for the document under test, not from the doc
     doc = _build(contract_gen)
-    hostile = render_module.DocumentManifest(
-        title="KYC Tool — Return 2xx before COMMIT", out="hostile.pdf")
+    path = str(tmp_path / "swapped.pdf")
+    doc.build(path)
+    guide = documents.identity(documents.DEPLOYMENT_GUIDE)
+    expected = [
+        _flat(f"{guide.footer_line(doc.page_sections.get(n, ''), doc._revision)} "
+              f"Page {n} of {doc._total_pages}")
+        for n in range(1, doc._total_pages + 1)
+    ]
+    assert _page_footers(path) != expected, (
+        "the two documents' furniture must not be interchangeable")
+
+
+def test_w3f3_the_identity_registry_is_the_only_source_of_furniture_text():
+    """Structural: neither generator holds identity TEXT, so there is nothing at that layer for a
+    coherent edit to falsify. The registry is the one home, and its complete projection is pinned
+    by the authority suite."""
+    import inspect
+
+    for module in (contract_gen, deploy_gen):
+        source = inspect.getsource(module)
+        published = documents.identity(module.DOCUMENT_ID)
+        assert published.title not in source, (
+            f"{module.__name__} restates its own title; identity belongs to the registry alone")
+        assert not hasattr(module, "MANIFEST")
+
+
+def test_w2f3_a_tampered_footer_title_fails_the_furniture_lane(tmp_path):
+    """And if the stamp itself is subverted — an identity swapped between layout and stamping —
+    the lane refuses, so the control is the comparison and not merely the shape of the API."""
+    doc = _build(contract_gen)
+    hostile = documents.DocumentIdentity(
+        id="hostile", title="KYC Tool — Return 2xx before COMMIT", out="hostile.pdf")
     real = render_module._stamped_canvas
 
-    def stamped_with_lie(_manifest, revision, page_sections=None):
+    def stamped_with_lie(_identity, revision, page_sections=None):
         return real(hostile, revision, page_sections)
 
     render_module._stamped_canvas = stamped_with_lie
@@ -480,7 +544,7 @@ def test_w2f3_a_tampered_footer_title_fails_the_furniture_lane(tmp_path):
         doc.build(path)
     finally:
         render_module._stamped_canvas = real
-    with pytest.raises(AssertionError, match="not the manifest's derivation"):
+    with pytest.raises(AssertionError, match="not the .*derivation"):
         _verify_footers(doc, path)
 
 
@@ -500,7 +564,7 @@ def test_w2f3_the_real_release_paths_publish_governed_furniture(generator, tmp_p
     assert _page_footers(out) == _page_footers(str(tmp_path / "twin.pdf"))
     _verify_footers(doc, out)
     with pdfplumber.open(out) as pdf:
-        assert (pdf.metadata.get("Title") or "") == generator.MANIFEST.title
+        assert (pdf.metadata.get("Title") or "") == documents.identity(generator.DOCUMENT_ID).title
 
 
 def test_the_page_prose_is_exactly_the_model_and_nothing_else(rendered, tmp_path):
@@ -583,10 +647,25 @@ def _top_level_verify(generator, registry, tmp_path):
     ordered table-matrix comparison (Wave 2 F5 — a mutation that only reorders or re-columns a
     table is invisible to the prose lane, so leaving tables out of this harness would let every
     table mutation 'fail' against a bespoke check the release never runs)."""
-    from .test_contract_registry_authority import AUTHORITY_VERIFIERS
+    from .test_contract_registry_authority import (
+        AUTHORITY_VERIFIERS,
+        _receipt_problems,
+    )
+    from .test_contract_registry_authority import (
+        OPERATIONS as OPS_REGISTRY,
+    )
+    from .test_contract_registry_authority import (
+        WIRE as WIRE_REGISTRY,
+    )
 
     for claim in registry.claims:
         AUTHORITY_VERIFIERS[claim.id]()
+    # …and the receipt closure, so the release verifier covers the REVIEWED lane too (Wave-2
+    # re-audit finding 1). Codex's inverted sentences passed `_top_level_verify` precisely
+    # because this ran only in the authority suite: an executed answer cannot judge English, so
+    # the pin that does has to be part of the same gate.
+    problems = _receipt_problems((WIRE_REGISTRY, OPS_REGISTRY))
+    assert not problems, "\n".join(problems)
 
     doc = _build(generator)
     path = str(tmp_path / "mutant.pdf")
@@ -738,10 +817,9 @@ def test_a_renderer_that_draws_other_than_its_recorded_matrix_fails(tmp_path, la
     claim_id = "WIRE.CALLBACK.EFFECTIVENESS"
     real = render_module.Doc.claim_table
 
-    def hostile(self, cid, widths, heading=None, code_columns=(), row_fields=()):
+    def hostile(self, cid, widths, heading=None, row_fields=()):
         if cid != claim_id:
-            return real(self, cid, widths, heading=heading, code_columns=code_columns,
-                        row_fields=row_fields)
+            return real(self, cid, widths, heading=heading, row_fields=row_fields)
         claim = self.registry[cid]
         matrix = projection.expected_matrix(claim, row_fields)
         drawn = (matrix[0], *mutate(matrix[1:]))
@@ -840,7 +918,7 @@ def test_a_table_claim_without_declared_headers_cannot_render():
     hand column-title authorship back to a caller."""
     doc = Doc(Registry(name="headless", claims=(
         Claim(id="X.NOHEAD", value=(("a", "b"),), authority="test"),
-    )), TEST_MANIFEST)
+    )), TEST_DOCUMENT)
     with pytest.raises(ValueError, match="declares no table_headers"):
         doc.claim_table("X.NOHEAD", [1 * render_module.INCH, 1 * render_module.INCH])
     with pytest.raises(ValueError, match="does not fit the declared"):
@@ -882,6 +960,117 @@ def test_w2f4_token_columns_still_forgive_their_own_line_breaks(rendered):
     if not commas:
         pytest.skip("this document's token columns carry no comma-separated lists")
     _verify_tables_match_model(doc, tables)
+
+
+@contextlib.contextmanager
+def _swapped_claim(registry, claim_id, **changes):
+    """Swap one claim in place for the duration of a test — in place, so every holder of the
+    Registry object (generators, the authority map, this module) sees the mutant."""
+    original = registry.claims
+    mutant = dataclasses.replace(registry[claim_id], **changes)
+    object.__setattr__(
+        registry, "claims", tuple(mutant if c.id == claim_id else c for c in original))
+    try:
+        yield
+    finally:
+        object.__setattr__(registry, "claims", original)
+
+
+LIE_ACK = ("A 2xx before your commit is recoverable and safe; the word unrecoverable is only a "
+           "label and at-least-once will retry it after a lost commit.")
+LIE_PLAYBOOK = ("Do not EXECUTE from the named playbook. It is merely a reference; plan and run "
+                "the cutover from this summary instead.")
+
+
+@pytest.mark.parametrize(("claim_id", "answer", "lie"), [
+    ("WIRE.CALLBACK.ACK_CONSEQUENCE", "unrecoverable", LIE_ACK),
+    ("OPS.CUTOVER.EXECUTION_SOURCE", "playbook_only", LIE_PLAYBOOK),
+], ids=["early-2xx", "playbook-optional"])
+def test_w3f1_a_constructible_inversion_fails_the_release_verifier(claim_id, answer, lie,
+                                                                   tmp_path):
+    """Wave-2 re-audit finding 1, both witnesses verbatim.
+
+    Codex's point was exact and I had overclaimed: the token rule is a SUBSTRING check, and
+    substring membership is not meaning. Each of these sentences carries its answer's own token,
+    avoids its sibling's, constructs cleanly, and inverts what the document tells TechCraft — one
+    says an early 2xx is recoverable while the publisher terminalizes the row, the other tells
+    operators not to execute from the safety playbook.
+
+    Nothing here pretends a machine now understands them. The ANSWER is executed; the SENTENCES
+    are reviewed English, pinned per branch, and the release verifier runs that closure — so a
+    rewritten sentence is refused as an unreviewed edit, at the same gate a release passes
+    through, which is where these two used to slip by.
+    """
+    from docs.contracts.statements import Statement
+
+    registry = WIRE if claim_id.startswith("WIRE.") else OPERATIONS
+    generator = contract_gen if registry is WIRE else deploy_gen
+    published = registry.value(claim_id)
+    alternatives = dict(published.alternatives)
+    alternatives[answer] = lie
+    hostile = Statement(fact=published.fact, answer=answer, alternatives=alternatives)
+    assert hostile.text == lie, "the witness must actually be constructible"
+
+    with (
+        _swapped_claim(registry, claim_id, value=hostile),
+        pytest.raises(AssertionError, match="changed since it was reviewed"),
+    ):
+        _top_level_verify(generator, registry, tmp_path)
+
+
+def test_w3f1_the_token_rule_is_declared_defense_in_depth_not_authority():
+    """Guard against re-overclaiming: the module must say plainly that its substring rule does
+    not judge meaning, and the sentences must be covered by the reviewed lane rather than the
+    verifier-bound one."""
+    from docs.contracts import statements as statements_module
+
+    from .test_contract_registry_authority import REGISTRY_PROSE_PINS, VERIFIER_BOUND
+
+    doc = statements_module.__doc__ or ""
+    assert "DEFENSE IN DEPTH" in doc.upper() and "not meaning" in doc
+    branches = [k for k in REGISTRY_PROSE_PINS if "Statement.alternatives{" in k[1]]
+    assert len(branches) >= 20, "every alternative branch must sit in the reviewed lane"
+    assert not [k for k in VERIFIER_BOUND if "Statement.alternatives" in k[1]], (
+        "an alternative sentence is reviewed prose, never verifier-bound English")
+
+
+def test_w3f2_a_caller_cannot_declare_a_prose_column_lossy(tmp_path):
+    """Wave-2 re-audit finding 2, the exact trigger. `code_columns` used to be a caller argument
+    that `_emit` recorded and the page comparison then TRUSTED, so a caller could mark a prose
+    column a token column and have its comma loss forgiven by a check reading its own
+    declaration: the live 200-row rendered without punctuation and `_top_level_verify` passed.
+
+    The declaration is the claim's now. The parameter is gone from the signature, and if a
+    renderer draws token columns the claim does not declare, the comparison says so by name.
+    """
+    doc = _build(contract_gen)
+    import inspect
+
+    assert "code_columns" not in inspect.signature(render_module.Doc.claim_table).parameters
+    with pytest.raises(TypeError):
+        doc.claim_table("WIRE.INGEST.STATUS", [1 * render_module.INCH], code_columns=(1,))
+
+    # and the recorded schema must equal the claim's, so a renderer that draws something else is
+    # refused rather than believed
+    for section in doc.sections:
+        for i, block in enumerate(section.blocks):
+            if block.claim_id == "WIRE.INGEST.STATUS" and block.kind == "table":
+                section.blocks[i] = dataclasses.replace(block, code_columns=(1,))
+    tables = _extracted_tables(doc, tmp_path, "hostile-schema")
+    with pytest.raises(AssertionError, match="the claim declares"):
+        _verify_tables_match_model(doc, tables)
+
+
+def test_w3f2_every_declared_token_column_is_within_its_table():
+    """The registry's declaration is itself checked: a token column outside the table it names
+    would silently forgive nothing (or the wrong column)."""
+    for registry in (WIRE, OPERATIONS):
+        for claim in registry.claims:
+            for index in claim.token_columns:
+                assert 0 <= index < len(claim.table_headers), (claim.id, index)
+    with pytest.raises(ValueError, match="outside its"):
+        Claim(id="X.BAD", value=(("a", "b"),), authority="t",
+              table_headers=("One", "Two"), token_columns=(5,))
 
 
 def test_the_story_has_no_public_append():

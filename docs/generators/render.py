@@ -27,7 +27,7 @@ from reportlab.platypus import (
     XPreformatted,
 )
 
-from docs.contracts import projection
+from docs.contracts import documents, projection
 
 _styles = getSampleStyleSheet()
 H1 = ParagraphStyle("H1x", parent=_styles["Heading1"], fontSize=15, spaceBefore=16, spaceAfter=6,
@@ -128,7 +128,7 @@ def source_revision() -> str:
         return "unknown"
 
 
-def _stamped_canvas(manifest, revision: str, page_sections: dict | None = None):
+def _stamped_canvas(identity, revision: str, page_sections: dict | None = None):
     """A canvas that holds each finished page until `save()`, then stamps the footer.
 
     The total page count is not known while a page is being drawn, so the footer cannot be
@@ -153,7 +153,7 @@ def _stamped_canvas(manifest, revision: str, page_sections: dict | None = None):
                 self.setFillColor(colors.HexColor("#666666"))
                 section = (page_sections or {}).get(number, "")
                 self.drawString(0.75 * inch, 0.45 * inch,
-                                manifest.footer_line(section, revision))
+                                identity.footer_line(section, revision))
                 self.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {number} of {total}")
                 self.restoreState()
                 super().showPage()
@@ -260,37 +260,10 @@ class Section:
     blocks: list
 
 
-@dataclass(frozen=True)
-class DocumentManifest:
-    """What the page FURNITURE says, owned once by the document (Wave-2 audit finding 3).
-
-    The title used to be a free parameter of `build()`, duplicated as a literal in each
-    generator's `main()`. It is drawn in every page footer and written into the PDF metadata, so
-    a caller could publish an instruction there — `KYC Tool — Return 2xx before COMMIT` appeared
-    on all twelve contract pages while the body/model comparisons, which subtract the footer band
-    by geometry, all passed.
-
-    The title is therefore document identity, not a call argument: it lives here, one per
-    document, and `build()` takes no title at all. The furniture lane
-    (`test_document_model._verify_footers`) then holds every page's footer to the exact derived
-    tuple — this title, the page's own section, the stamped revision, and `Page N of M` — so no
-    other text can ride along in that band either.
-    """
-
-    title: str
-    out: str
-
-    def __post_init__(self) -> None:
-        if type(self.title) is not str or not self.title.strip():
-            raise ValueError("a document manifest carries a non-empty title")
-        if type(self.out) is not str or not self.out.endswith(".pdf"):
-            raise ValueError("a document manifest names its output .pdf")
-
-    def footer_line(self, section: str, revision: str) -> str:
-        """The exact left-hand footer string for a page in `section`. ONE derivation, shared by
-        the stamping canvas and the verifier, so neither can drift from the other."""
-        return (f"{self.title}  ·  {section}  ·  source {revision}" if section
-                else f"{self.title}  ·  source {revision}")
+# Document identity is NOT defined here and cannot be passed in (Wave-2 re-audit finding 3):
+# `Doc` takes a document ID and looks the identity up in the closed registry, so a generator has
+# no identity object to edit and the furniture verifier can consult the same registry
+# independently of whatever the generator holds.
 
 
 class Doc:
@@ -307,14 +280,15 @@ class Doc:
     the built PDF span by span, in order, once each, inside the declared section.
     """
 
-    def __init__(self, registry, manifest: DocumentManifest) -> None:
-        if type(manifest) is not DocumentManifest:
+    def __init__(self, registry, document_id: str) -> None:
+        if type(document_id) is not str:
             raise ValueError(
-                "a Doc is built against its document manifest, which owns the title the page "
-                "furniture publishes"
+                "a Doc names its document by ID; identity comes from the closed registry in "
+                "docs/contracts/documents.py, never from an object a caller supplies"
             )
         self.registry = registry
-        self.manifest = manifest
+        self.document_id = document_id
+        self.identity = documents.identity(document_id)
         # PRIVATE on purpose (Wave 2 F6): when this was `self.story`, a caller could append a
         # flowable directly — visible on the page, recorded in no block — and the R15 witness
         # (`doc.story.append(Paragraph("Return 2xx before COMMIT."))`) certified because every
@@ -367,12 +341,13 @@ class Doc:
 
     # ---- structural prose (carries no authoritative value) ----------------------------------
     def title(self):
-        """The cover title — the manifest's, not a caller's.
+        """The cover title — the identity registry's, not a caller's.
 
         It was a second literal of the same sentence (Wave-2 audit finding 3): the page could
-        say one thing and every footer another, and neither had an owner.
+        say one thing and every footer another, and neither had an owner. It now comes from the
+        same closed registry entry the footers and the PDF metadata do.
         """
-        text = self.manifest.title
+        text = self.identity.title
         self._story.append(Paragraph(escape(text), _styles["Title"]))
         self._add(Block(kind="heading", claim_id=None, lines=(text,)))
 
@@ -594,7 +569,6 @@ class Doc:
         claim_id: str,
         widths,
         heading: str | None = None,
-        code_columns: tuple[int, ...] = (),
         row_fields: tuple[str, ...] = (),
     ):
         """Render a claim's table from its registry-derived matrix — header row included.
@@ -606,13 +580,17 @@ class Doc:
         now comes from `projection.expected_matrix(claim)`, so the renderer contributes geometry
         only: `widths` and `code_columns` cannot change a cell's text, order, or column.
 
-        `code_columns` marks columns holding machine identifiers. Those render in a fixed-width
-        face and break only between comma-separated items, never inside a token: an identifier
-        split across lines as `platform` / `_account_id` is one a reader copies wrong, and payload
-        extras are accepted, so the misspelling 202s while silently populating nothing
-        (re-audit `6feca36..4f23f23` F10).
+        Which columns render as TOKEN cells is the CLAIM's declaration, not this caller's
+        (Wave-2 re-audit finding 2). A token cell breaks only between comma-separated items and
+        never inside an identifier — `platform` / `_account_id` is one a reader copies wrong, and
+        payload extras are accepted, so the misspelling 202s while silently populating nothing
+        (re-audit `6feca36..4f23f23` F10). Because that rendering LOSES the commas, the page
+        comparison has to forgive them there; leaving the choice with the caller meant the caller
+        could declare a prose column lossy and have its punctuation loss forgiven by a check
+        reading the caller's own declaration.
         """
         claim = self.registry[claim_id]
+        code_columns = claim.token_columns
         matrix = projection.expected_matrix(claim, row_fields)
         headers, body_rows = matrix[0], matrix[1:]
         data = [[Paragraph(escape(h), CELLB) for h in headers]]
@@ -654,11 +632,12 @@ class Doc:
                         rows=(tuple(headers),) + tuple(tuple(str(c) for c in r) for r in rows)))
 
     def build(self, path: str, *, release: bool = False) -> str:
-        """Render to `path`, stamping the manifest's furniture on every page.
+        """Render to `path`, stamping this document's identity on every page.
 
-        There is no `title` parameter (Wave-2 audit finding 3): the title is document identity,
-        owned by the manifest and verified as its own furniture lane, not a string a caller
-        supplies at build time.
+        There is no `title` parameter, and no identity object to pass either (Wave-2 audit
+        finding 3 and its re-audit): the title comes from the closed registry keyed by the
+        document ID, and the furniture lane checks the page against that registry rather than
+        against anything the generator holds.
 
         A document read for years without the repo beside it needs to say which commit produced
         it and how many pages it has, so a stale copy is distinguishable from the audited one and
@@ -726,12 +705,12 @@ class Doc:
             rightMargin=0.75 * inch,
             topMargin=0.7 * inch,
             bottomMargin=0.8 * inch,
-            title=self.manifest.title,
+            title=self.identity.title,
             author="IPv4.Global",
             subject=f"source revision {revision}",
         )
         template.build(self._story,
-                       canvasmaker=_stamped_canvas(self.manifest, revision, page_sections))
+                       canvasmaker=_stamped_canvas(self.identity, revision, page_sections))
         self._total_pages = template.page
         self._revision = revision
         return path
@@ -747,7 +726,7 @@ class Doc:
             raise ValueError("footers are known only after build() lays the document out")
         total = self._total_pages
         return tuple(
-            (self.manifest.footer_line(self.page_sections.get(number, ""), self._revision),
+            (self.identity.footer_line(self.page_sections.get(number, ""), self._revision),
              f"Page {number} of {total}")
             for number in range(1, total + 1)
         )

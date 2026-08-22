@@ -477,6 +477,7 @@ OPERATIONS = Registry(
             ),
             authority="kyc_tool.config.Settings field defaults",
             table_headers=("Setting", "Default"),
+            token_columns=(0,),
         ),
         Claim(
             id="OPS.CONFIG.PRODUCTION_FLOORS",

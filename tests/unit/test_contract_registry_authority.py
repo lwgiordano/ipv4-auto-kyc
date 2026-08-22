@@ -25,6 +25,7 @@ import html
 import math
 import re
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from unittest import mock
 
@@ -7267,7 +7268,12 @@ def rendered_string_paths(claim) -> dict:
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
             fields = {f.name: f for f in dataclasses.fields(value)}
             declared = getattr(type(value), "PUBLISHED_FIELDS", None)
-            names = declared or tuple(fields)
+            # PUBLISHED_FIELDS is what reaches the page; REVIEWED_FIELDS is prose the type
+            # declares as human-reviewed — a Statement's alternatives, INCLUDING the branches it
+            # did not select (Wave-2 re-audit finding 1). Both need receipts; neither may hide
+            # behind the other.
+            names = (*(declared or tuple(fields)),
+                     *getattr(type(value), "REVIEWED_FIELDS", ()))
             for name in names:
                 # A DERIVED field is skipped only when the type has not declared it published.
                 # `Statement.text` is derived AND published — it is the sentence a reader gets —
@@ -7277,7 +7283,7 @@ def rendered_string_paths(claim) -> dict:
                     continue
                 walk(getattr(value, name), f"{path}:{type(value).__name__}.{name}")
             return
-        if isinstance(value, dict):
+        if isinstance(value, Mapping):
             for key, item in value.items():
                 walk(item, f"{path}{{{key}}}")
             return
@@ -7300,7 +7306,11 @@ def rendered_string_paths(claim) -> dict:
     # prose stream, and this closure all stayed silent. Outer Claim fields are enumerated from the
     # dataclass itself, so a field added later cannot be forgotten here either.
     _RENDERED_CLAIM_FIELDS = ("table_headers",)
-    _NEVER_RENDERED = ("id", "value", "authority", "state", "exclusive_terms")
+    # `token_columns` publishes no TEXT — it is column indices declaring how this claim's own
+    # cells may be drawn (Wave-2 re-audit finding 2). It is display authority, so it is checked
+    # by `Claim.__post_init__` (in range for the declared table) and by the table lane (the
+    # renderer must draw the columns the claim declares), not by a prose receipt.
+    _NEVER_RENDERED = ("id", "value", "authority", "state", "exclusive_terms", "token_columns")
     declared = {f.name for f in dataclasses.fields(claim)}
     unaccounted = declared - set(_RENDERED_CLAIM_FIELDS) - set(_NEVER_RENDERED)
     if unaccounted:
@@ -7451,6 +7461,94 @@ VERIFIER_BOUND = frozenset({
 # Digest over the LF-joined ordered strings at the path; the label quotes the reviewed text's
 # opening words so the next reviewer knows what they are approving without recomputing.
 REGISTRY_PROSE_PINS = {
+    # Every STATEMENT alternative — the selected reading and the one it was chosen over.
+    # These are reviewed English, not machine-judged claims (Wave-2 re-audit finding 1): the
+    # answer is executed, the sentences are read by a human and pinned here, and an edit to any
+    # branch is a deliberate re-pin. The release verifier runs this closure.
+    ("OPS.CONFIG.HMAC_SET_RULE", "value:Statement.alternatives{accepts_partial}"):
+        ("3a26d7c0abb4389a",
+         "the accepts_partial reading: Production accepts a subset of these variables a"),
+    ("OPS.CONFIG.HMAC_SET_RULE", "value:Statement.alternatives{refuses_partial}"):
+        ("051346b6cdc9b22c",
+         "the refuses_partial reading: Production refuses a partial set. Secrets are at"),
+    ("OPS.CUTOVER.CEILING_RULE", "value:Statement.alternatives{needs_this_procedure}"):
+        ("42e2b21c4e6b8acd",
+         "the needs_this_procedure reading: Any change to the ceiling, up or down, follows t"),
+    ("OPS.CUTOVER.CEILING_RULE", "value:Statement.alternatives{rolling_ok}"):
+        ("a8fb9dc30018b018",
+         "the rolling_ok reading: For a ceiling change a rolling restart is fine; "),
+    ("OPS.CUTOVER.EXECUTION_SOURCE", "value:Statement.alternatives{playbook_only}"):
+        ("38d54c94048aa347",
+         "the playbook_only reading: Plan from these entries; EXECUTE from the named "),
+    ("OPS.CUTOVER.EXECUTION_SOURCE", "value:Statement.alternatives{summaries_ok}"):
+        ("33a043ebc1f75950",
+         "the summaries_ok reading: Plan and execute from these entries; the named p"),
+    ("OPS.HMAC.V1_DROP_TIMING", "value:Statement.alternatives{after_confirmation}"):
+        ("86267412a6b58645",
+         "the after_confirmation reading: The publisher keeps signing v1 until your side c"),
+    ("OPS.HMAC.V1_DROP_TIMING", "value:Statement.alternatives{at_the_sunset_date}"):
+        ("e6faf8b58b1a696f",
+         "the at_the_sunset_date reading: The publisher drops v1 the moment the outbound d"),
+    ("WIRE.CALLBACK.ACK_CONSEQUENCE", "value:Statement.alternatives{recovered}"):
+        ("dac88c8a87765d75",
+         "the recovered reading: A 2xx returned before your commit is safe: we re"),
+    ("WIRE.CALLBACK.ACK_CONSEQUENCE", "value:Statement.alternatives{unrecoverable}"):
+        ("a57d9bb2963025e1",
+         "the unrecoverable reading: A 2xx returned before your commit is unrecoverab"),
+    ("WIRE.CALLBACK.ACK_VS_APPLY", "value:Statement.alternatives{different_decisions}"):
+        ("3aa328b2c8582e0d",
+         "the different_decisions reading: ACKNOWLEDGING a callback and APPLYING it are dif"),
+    ("WIRE.CALLBACK.ACK_VS_APPLY", "value:Statement.alternatives{same_decision}"):
+        ("f31629b336317c87",
+         "the same_decision reading: Acknowledging a callback and applying it are the"),
+    ("WIRE.CALLBACK.LEGEND_CLOSURE", "value:Statement.alternatives{closed}"):
+        ("563f3623d1c9b4b6",
+         "the closed reading: Every condition in the two tables is built from "),
+    ("WIRE.CALLBACK.LEGEND_CLOSURE", "value:Statement.alternatives{open}"):
+        ("18f5ab561e3077ed",
+         "the open reading: The conditions read as ordinary English, and oth"),
+    ("WIRE.CALLBACK.OPTIONAL_FIELD_RULE", "value:Statement.alternatives{may_drop}"):
+        ("fa5fd417bcaa84cd",
+         "the may_drop reading: You may drop either field: nothing downstream de"),
+    ("WIRE.CALLBACK.OPTIONAL_FIELD_RULE", "value:Statement.alternatives{tolerate_and_preserve}"):
+        ("6301b756a7d6e8ce",
+         "the tolerate_and_preserve reading: Tolerate and preserve both. enforcement_held car"),
+    ("WIRE.CALLBACK.RELEASE_STATE", "value:Statement.alternatives{live}"):
+        ("95983e50056df421",
+         "the live reading: The release protocol is live today, so this tabl"),
+    ("WIRE.CALLBACK.RELEASE_STATE", "value:Statement.alternatives{post_024_only}"):
+        ("e14b065121269fdc",
+         "the post_024_only reading: POST-024 ONLY: the release protocol arrives with"),
+    ("WIRE.CALLBACK.VALIDATION_ORDER", "value:Statement.alternatives{classify_first}"):
+        ("b4902f5bc3078cc9",
+         "the classify_first reading: You may classify first and validate afterwards: "),
+    ("WIRE.CALLBACK.VALIDATION_ORDER", "value:Statement.alternatives{validate_first}"):
+        ("d047619c688acca3",
+         "the validate_first reading: VALIDATE BEFORE YOU CLASSIFY: after the signatur"),
+    ("WIRE.ORDERING.OBLIGATION_STATE", "value:Statement.alternatives{resolvable}"):
+        ("ac81e3d4c342138a",
+         "the resolvable reading: A complete emailed answer clears the obligation "),
+    ("WIRE.ORDERING.OBLIGATION_STATE", "value:Statement.alternatives{unresolvable}"):
+        ("c0168092a5044cbc",
+         "the unresolvable reading: These are the decisions 024 cannot be built with"),
+    ("WIRE.ORDERING.ORDINAL_AUTHORITY", "value:Statement.alternatives{both_order}"):
+        ("e35b34b359a5016e",
+         "the both_order reading: Two ordinals for one case, and either ordinal or"),
+    ("WIRE.ORDERING.ORDINAL_AUTHORITY", "value:Statement.alternatives{only_one_orders}"):
+        ("a0323d6cb0b2b2a4",
+         "the only_one_orders reading: Two ordinals for one case, and only one of them "),
+    ("WIRE.SIGN.COMPANION_PROOF", "value:Statement.alternatives{executed}"):
+        ("38c7c25bb3570796",
+         "the executed reading: Our test suite executes the file's exact bytes a"),
+    ("WIRE.SIGN.COMPANION_PROOF", "value:Statement.alternatives{unread}"):
+        ("ee9f169dedc6d87b",
+         "the unread reading: The shipped file is not executed by our suite, s"),
+    ("WIRE.SIGN.DIRECTION_FORM", "value:Statement.alternatives{literal_only}"):
+        ("f8173a97525d6d6a",
+         "the literal_only reading: Literal tokens. Prose like 'inbound' will not ve"),
+    ("WIRE.SIGN.DIRECTION_FORM", "value:Statement.alternatives{prose_ok}"):
+        ("5b0e9c369d22ea8d",
+         "the prose_ok reading: Either spelling works: prose also verifies along"),
     ("WIRE.INGEST.HEADERS", "value[]:HeaderSpec.value_note"):
         ("d1688c6441401460", "header value shapes: unique per logical event / unix seconds ..."),
     ("WIRE.INGEST.HEADERS", "value[]:HeaderSpec.why"):
@@ -8013,14 +8111,15 @@ def _tampered_copy(value, target_path: str):
                     object.__setattr__(node, name, new_field)
                     changed = True
             return node, changed
-        if isinstance(node, dict):
-            changed = False
+        if isinstance(node, Mapping):
+            items, changed = {}, False
             for key in list(node):
                 new_item, hit = visit(node[key], f"{here}{{{key}}}")
-                if hit:
-                    node[key] = new_item
-                    changed = True
-            return node, changed
+                items[key] = new_item
+                changed = changed or hit
+            # read-only mappings (a Statement's alternatives) cannot be assigned into, so the
+            # tampered copy is rebuilt in the same flavour
+            return (type(node)(items) if changed else node), changed
         if isinstance(node, (list, tuple)):
             items, changed = [], False
             for item in node:
@@ -8056,7 +8155,7 @@ def _construction_refuses(node) -> bool:
                 except Exception:
                     return True
             stack.extend(getattr(current, f.name) for f in dataclasses.fields(current))
-        elif isinstance(current, dict):
+        elif isinstance(current, Mapping):
             stack.extend(current.values())
         elif isinstance(current, (list, tuple)):
             stack.extend(current)
@@ -8104,3 +8203,39 @@ def test_the_metamorphic_mutator_can_actually_mutate():
     tampered = _tampered_copy(claim.value, "value:Statement.text")
     assert tampered is not None and tampered.text == _MUTATION
     assert claim.value.text != _MUTATION, "the original must not be touched"
+
+
+# ── the document identity registry: reviewed furniture, pinned (Wave-2 re-audit finding 3) ────────
+#
+# A title is English and no machine judges English, so this is honestly a REVIEW gate, not a
+# proof: what it buys is that every document's published identity has exactly one home, outside
+# the renderer's reach, and changing it is a deliberate re-pin someone reads. The generators hold
+# only an ID; `Doc` and the furniture verifier both look the identity up here.
+
+DOCUMENT_IDENTITY_PIN = ("5a625e1aee1221f0", "contract, deployment guide, and the test fixture: "
+                                             "id, published title, output filename")
+
+
+def test_the_document_identity_registry_matches_its_review_pin():
+    from docs.contracts.documents import DOCUMENT_IDENTITIES
+
+    parts: list[str] = []
+    for key in sorted(DOCUMENT_IDENTITIES):
+        entry = DOCUMENT_IDENTITIES[key]
+        parts.extend((entry.id, entry.title, entry.out))
+    digest = hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]
+    pinned, label = DOCUMENT_IDENTITY_PIN
+    assert digest == pinned, (
+        f"the published document identities changed since they were reviewed ({label}).\n"
+        f"  reviewed: {pinned}\n  now:      {digest}\n"
+        "Read the new titles, then re-pin them in the SAME commit."
+    )
+
+
+def test_a_document_identity_cannot_be_blank_or_mistyped():
+    from docs.contracts.documents import DocumentIdentity
+
+    with pytest.raises(ValueError, match="non-empty title"):
+        DocumentIdentity(id="x", title="   ", out="x.pdf")
+    with pytest.raises(ValueError, match="output .pdf"):
+        DocumentIdentity(id="x", title="X", out="x.txt")

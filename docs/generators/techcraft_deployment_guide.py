@@ -8,16 +8,14 @@ OPS.BLOCKER.PRODUCTION_PROVIDERS, which the tests prove by executing the provide
 this document stands a staging environment up and tells you what production still needs.
 """
 
+from docs.contracts.documents import DEPLOYMENT_GUIDE, identity
 from docs.contracts.operations import OPERATIONS
-from docs.generators.render import INCH, Doc, DocumentManifest, escape
+from docs.generators.render import INCH, Doc, escape
 
-# The document's own identity: the title every page footer and the PDF metadata publish, owned
-# here rather than passed to build() (Wave-2 audit finding 3).
-MANIFEST = DocumentManifest(
-    title="KYC Tool — Staging Integration and Production Readiness Guide",
-    out="techcraft-deployment-guide.pdf",
-)
-OUT = MANIFEST.out
+# This document names itself by ID; its title and output live in the closed identity registry
+# (Wave-2 re-audit finding 3), so there is nothing here for a coherent edit to falsify.
+DOCUMENT_ID = DEPLOYMENT_GUIDE
+OUT = identity(DOCUMENT_ID).out
 
 REQUIRED_CLAIMS = (
     "OPS.BLOCKER.PRODUCTION_PROVIDERS",
@@ -45,7 +43,7 @@ REQUIRED_CLAIMS = (
 
 
 def build() -> Doc:
-    doc = Doc(OPERATIONS, MANIFEST)
+    doc = Doc(OPERATIONS, DOCUMENT_ID)
     doc.title()
     doc.p(
         "<b>Audience: the TechCraft team that will host and operate the KYC tool.</b> The "
@@ -95,7 +93,7 @@ def build() -> Doc:
         "production kill switch validates everything at boot and prints every violation at "
         "once, so one failed boot gives you the whole list."
     )
-    doc.claim_table("OPS.CONFIG.DEFAULTS", [3.6 * INCH, 3.1 * INCH], code_columns=(0,))
+    doc.claim_table("OPS.CONFIG.DEFAULTS", [3.6 * INCH, 3.1 * INCH])
     doc.space()
     doc.h2("Bounds production enforces")
     doc.claim_bullets("OPS.CONFIG.PRODUCTION_FLOORS")
@@ -172,7 +170,7 @@ def build() -> Doc:
 
 def main() -> str:
     doc = build()
-    return doc.build(MANIFEST.out)
+    return doc.build(OUT)
 
 
 if __name__ == "__main__":

@@ -76,6 +76,27 @@ class Claim:
     # table's content left to author: `projection.expected_matrix` derives header + rows from
     # this claim alone and refuses a claim whose declared width its own rows do not fit.
     table_headers: tuple[str, ...] = ()
+    # Which of this table's columns hold machine identifiers (Wave-2 re-audit finding 2). The
+    # renderer draws those as TOKEN cells, which replace a comma-separated list's commas with
+    # line breaks — so the page comparison must forgive comma loss there and nowhere else. That
+    # made it display AUTHORITY, and it was supplied by the generator call site and then recorded
+    # as the verifier's own truth: a caller that declared a PROSE column a token column had its
+    # punctuation loss forgiven by a check reading the caller's declaration. The registry owns it
+    # now, so the claim decides how its own values may be rendered.
+    token_columns: tuple[int, ...] = ()
+
+
+    def __post_init__(self) -> None:
+        if self.token_columns and not self.table_headers:
+            raise ValueError(
+                f"{self.id}: token_columns names columns of a table this claim does not declare"
+            )
+        for index in self.token_columns:
+            if type(index) is not int or not 0 <= index < len(self.table_headers):
+                raise ValueError(
+                    f"{self.id}: token column {index!r} is outside its "
+                    f"{len(self.table_headers)}-column table"
+                )
 
 
 @dataclass(frozen=True)

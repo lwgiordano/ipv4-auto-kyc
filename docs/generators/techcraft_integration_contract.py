@@ -12,17 +12,15 @@ import re
 from datetime import date
 
 from docs.contracts.companion import ARTIFACT_NAME, artifact_digest
+from docs.contracts.documents import CONTRACT, identity
 from docs.contracts.signing_example import published_snippet
 from docs.contracts.wire import WIRE
-from docs.generators.render import INCH, Doc, DocumentManifest, escape
+from docs.generators.render import INCH, Doc, escape
 
-# The document's own identity: the title every page footer and the PDF metadata
-# publish, owned here rather than passed to build() (Wave-2 audit finding 3).
-MANIFEST = DocumentManifest(
-    title="KYC Tool — Platform Integration Contract",
-    out="techcraft-integration-contract.pdf",
-)
-OUT = MANIFEST.out
+# This document names itself by ID; its title and output live in the closed identity registry
+# (Wave-2 re-audit finding 3), so there is nothing here for a coherent edit to falsify.
+DOCUMENT_ID = CONTRACT
+OUT = identity(DOCUMENT_ID).out
 
 # Release inputs. These are NOT registry claims — they change per send, and nothing in the repo
 # governs them — so they are required arguments with NO defaults (re-audit `6feca36..4f23f23` F11).
@@ -110,7 +108,7 @@ REQUIRED_CLAIMS = (
 
 def build(*, contact: str, due_date: str) -> Doc:
     contact, due_date = validate_release_inputs(contact, due_date)
-    doc = Doc(WIRE, MANIFEST)
+    doc = Doc(WIRE, DOCUMENT_ID)
     doc.title()
     doc.p(
         "<b>Audience: TechCraft integration developers.</b> This covers your side of the wire: "
@@ -191,7 +189,6 @@ def build(*, contact: str, due_date: str) -> Doc:
     doc.claim_table(
         "WIRE.INGEST.HEADERS",
         [1.35 * INCH, 1.75 * INCH, 3.6 * INCH],
-        code_columns=(0,),
     )
     doc.space()
     doc.p("Envelope:")
@@ -229,7 +226,6 @@ def build(*, contact: str, due_date: str) -> Doc:
         # columns fit `platform_account_id`. _token_cell raises rather than clipping, so a name
         # that outgrows its column fails the build instead of printing one character short.
         [1.75 * INCH, 1.4 * INCH, 1.4 * INCH, 2.15 * INCH],
-        code_columns=(0, 1, 2),
     )
     doc.space()
     doc.h2("Response codes")
@@ -283,7 +279,7 @@ def build(*, contact: str, due_date: str) -> Doc:
     # heading + note + table travel as one unit: the heading must never sit alone at a page
     # bottom with the table starting overleaf (gate finding 15)
     doc.keep_last_together(3)
-    doc.claim_table("WIRE.CALLBACK.LEGEND", [1.55 * INCH, 5.15 * INCH], code_columns=(0,))
+    doc.claim_table("WIRE.CALLBACK.LEGEND", [1.55 * INCH, 5.15 * INCH])
     doc.claim_statement("WIRE.CALLBACK.LEGEND_CLOSURE")
 
     doc.h2("While a release is pending (post-024 only)")

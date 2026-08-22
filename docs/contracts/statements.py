@@ -18,20 +18,25 @@ never read them. Codex published the reproductions: an early-2xx receiver note a
   per possible answer. The published `text` is `alternatives[answer]`, computed at construction:
   there is no free text field to edit.
 
-What that buys, precisely. To publish "a 2xx before your commit is fine", the statement must
-declare `answer="recoverable"` — and `tests/unit/test_contract_registry_authority.py` executes
-the publisher and asserts the observed answer is `unrecoverable`, so the claim fails. To keep
-`answer="unrecoverable"` and simply reword its sentence into the lie, the token discipline
-refuses it: the sentence must carry that answer's own token and none of its sibling's. The
-alternatives are total over the answer domain, so the inconvenient branch cannot be deleted
-either, and both readings sit side by side in the source where a reviewer sees what each answer
-would publish.
+What is MACHINE-CHECKED, exactly. The ANSWER is: a verifier executes the running system and
+refuses a declared answer it contradicts, so publishing the "recovered" branch while the
+publisher terminalizes on a 2xx fails. The SELECTION is: `text` must equal
+`alternatives[answer]`, so a text edit alone is refused. The COVERAGE is: alternatives are total
+over the answer domain, so the inconvenient branch cannot be deleted, and both readings sit side
+by side where a reviewer compares them.
 
-Honest scope, stated once. This binds MEANING to an executed fact; it cannot make English
-self-verifying. A reviewer editing this module can still change what a fact's tokens mean, in
-code, in a diff — and that is the terminus every control in this repo reaches. The difference
-from a note is that the terminus is now reviewed code beside an executed probe, rather than a
-prose field with a digest that the same edit updates.
+What is NOT machine-checked, stated plainly because a previous release note claimed otherwise
+(Wave-2 re-audit finding 1). The token rule below is a SUBSTRING check, and substring membership
+is not meaning: Codex published `A 2xx before your commit is recoverable and safe; the word
+unrecoverable is only a label…`, which carries the `unrecoverable` token, avoids its sibling's,
+and inverts the sentence. It is kept as DEFENSE IN DEPTH — it catches the careless case — and it
+is not the authority for anything.
+
+The authority for the sentences is therefore review: every alternative is enumerated by the
+receipt closure and pinned with a human label, so any edit to any branch is a deliberate re-pin,
+and the release verifier runs that closure. That is the honest terminus for English in this
+repo, the same one `body.py` states for prose: a machine can bind an answer to executed
+behaviour; it cannot judge a sentence.
 """
 
 import copy
@@ -98,6 +103,10 @@ class Statement:
     text: str = field(default="", init=False)
 
     PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = ("text",)
+    # The sentences themselves are REVIEWED PROSE, not machine-judged claims (Wave-2 re-audit
+    # finding 1). The receipt closure enumerates every branch through this declaration, so each
+    # one is pinned and an edit to ANY of them — selected or not — is a re-pin a human reads.
+    REVIEWED_FIELDS: ClassVar[tuple[str, ...]] = ("alternatives",)
 
     def __post_init__(self) -> None:
         if type(self.fact) is not Fact:
@@ -116,6 +125,9 @@ class Statement:
         for answer, sentence in self.alternatives.items():
             if type(sentence) is not str or not sentence.strip():
                 raise ValueError(f"{self.fact.id}/{answer}: every answer publishes a sentence")
+            # DEFENSE IN DEPTH, not authority: a substring check cannot judge meaning (see the
+            # module docstring). It catches the careless inversion; the reviewed pin catches the
+            # deliberate one.
             own = self.fact.tokens[answer]
             if not any(term.casefold() in sentence.casefold() for term in own):
                 raise ValueError(

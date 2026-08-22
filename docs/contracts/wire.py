@@ -1613,6 +1613,7 @@ WIRE = Registry(
             value=INGEST_HEADERS,
             authority="kyc_tool.api.routes_events.post_event + kyc_tool.api.auth",
             table_headers=("Header", "Value", "Why"),
+            token_columns=(0,),
         ),
         Claim(
             id="WIRE.INGEST.STATUS",
@@ -1667,6 +1668,7 @@ WIRE = Registry(
             value=EVENT_TABLE,
             authority="kyc_tool.api.schemas.EventType / PAYLOAD_MODELS required+optional fields",
             table_headers=("event_type", "Required payload", "Optional payload", "Notes"),
+            token_columns=(0, 1, 2),
         ),
         # ── signing ───────────────────────────────────────────────────────────────────────────
         Claim(
@@ -1815,6 +1817,7 @@ WIRE = Registry(
                       "meaning must carry its own token's distinguishing term and never its "
                       "paired sibling's",
             table_headers=("Token", "Meaning"),
+            token_columns=(0,),
         ),
         Claim(
             id="WIRE.CALLBACK.RELEASE",
