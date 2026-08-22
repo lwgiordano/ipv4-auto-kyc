@@ -175,6 +175,107 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-22 - `62ac44e..e840589` - **CHANGES REQUIRED (2)**
+
+turn: CLAUDE
+
+I audited the re-audit fold as a complete document-authority unit. I re-ran the targeted
+authority/document/rendering suite, linted, and rendered both PDFs to PNGs:
+
+- `.venv/bin/pytest -q tests/unit/test_contract_registry_authority.py tests/unit/test_document_model.py tests/unit/test_contract_rendering.py`
+  - passed
+- `./manage.sh lint`
+  - passed
+- rendered `/tmp/kyc-doc-audit-r2/techcraft-integration-contract.pdf` and
+  `/tmp/kyc-doc-audit-r2/techcraft-deployment-guide.pdf` with `pdftoppm`
+  - visually sane: 12-page contract, 6-page deployment guide, no unrelated layout failure found
+
+Accepted controls: the two constructible `Statement` inversions from my prior round now fail at
+`_top_level_verify` via the reviewed branch pins; the old caller-supplied `code_columns=` argument
+is gone; and the unregistered hostile document id fails at build. The two surviving defects are
+second-order versions of the same class: the new registry-owned decision is still unreceipted, or
+the generator still selects which registry identity applies to itself.
+
+1. **P1 - `Claim.token_columns` is display authority but is explicitly excluded from the receipt
+   closure, so a coherent registry edit can still make prose-column comma loss certify.**
+
+   Real surface: `docs/contracts/__init__.py:79-99`,
+   `docs/generators/render.py:567-614`, `tests/unit/test_document_model.py:292-301`, and
+   `tests/unit/test_contract_registry_authority.py:7308-7313`. Moving `code_columns` from the
+   generator call to `Claim.token_columns` removes the caller argument, but `token_columns` is then
+   classified as `_NEVER_RENDERED` because it "publishes no TEXT". That misses the authority it
+   actually carries: it decides which visible cells may lose commas and which cells the page
+   verifier normalizes with `_cellnorm(..., token_column=True)`.
+
+   Trigger, reproduced on current HEAD:
+
+   - Replace `WIRE.INGEST.STATUS` with `dataclasses.replace(
+     WIRE["WIRE.INGEST.STATUS"], token_columns=(1,))`.
+   - Run `_receipt_problems((WIRE, OPERATIONS))`.
+   - Run `_top_level_verify(techcraft_integration_contract, WIRE, tmp_path)`.
+
+   Result:
+
+   - `RECEIPT: PASS`
+   - `TOP_LEVEL: PASS`
+   - the rendered 200 row loses the prose commas:
+     - source/model: `replay of a seen Idempotency-Key (stored response verbatim), or an inline reviewer.manual_approve, which runs without a queued job`
+     - page under the mutated claim schema: `replay of a seen Idempotency-Key (stored response verbatim) or an inline reviewer.manual_approve which runs without a queued job`
+
+   Impact: finding 4's lossy-comma class is not closed at the registry boundary; it moved from a
+   caller-authored tuple to an unreviewed claim field. A future edit can still mark a prose column
+   as token and make the release verifier forgive punctuation loss in externally-binding text.
+
+   Required fix class: treat the table display schema as governed authority. Either include
+   `token_columns` / column roles in an independently reviewed receipt, or replace the integer tuple
+   with a typed table schema whose column roles are part of the same closed projection as headers.
+   A RED should use the exact `WIRE.INGEST.STATUS token_columns=(1,)` witness above and fail through
+   `_top_level_verify`, not only through a bespoke check.
+
+2. **P1 - the document identity registry is closed, but each generator still self-selects which
+   registered identity it publishes under.**
+
+   Real surface: `docs/generators/techcraft_integration_contract.py:20-23`,
+   `docs/generators/techcraft_deployment_guide.py:15-18,45-47`, and
+   `tests/unit/test_document_model.py:437-444,482-513`. `DocumentIdentity` now pins the titles
+   themselves, which is good, but the binding between a generator and its expected identity is still
+   a mutable module global (`DOCUMENT_ID`). `_verify_footers` reads `documents.identity(doc.document_id)`,
+   and `doc.document_id` is exactly the generator-selected id used by `Doc` to stamp the page. That
+   proves the chosen registered identity is self-consistent; it does not prove the deployment guide
+   used the deployment-guide identity or the integration contract used the contract identity.
+
+   Trigger, reproduced on current HEAD:
+
+   - Set `techcraft_deployment_guide.DOCUMENT_ID = documents.CONTRACT`.
+   - Run `_top_level_verify(techcraft_deployment_guide, OPERATIONS, tmp_path)`.
+
+   Result: `TOP_LEVEL: PASS`. The six-page deployment guide body now publishes with:
+
+   - metadata title: `KYC Tool — Platform Integration Contract`
+   - first page title: `KYC Tool — Platform Integration Contract`
+   - first footer: `KYC Tool — Platform Integration Contract · 1. What you run: one image, six commands · source 861e2a6+dirty Page 1 of 6`
+
+   The current registered-swap test does not exercise this. At
+   `tests/unit/test_document_model.py:501-513` it builds the normal contract document and compares
+   its footer to the guide identity, so it proves only that the two titles differ today. It does not
+   monkeypatch either generator to the other registered id and drive the result through the release
+   verifier.
+
+   Impact: a valid, pinned title from the closed registry can still be attached to the wrong
+   document body. This is an external-contract problem: a reader can receive the operational guide
+   as "Platform Integration Contract" with the verifier green.
+
+   Required fix class: bind generator/module, registry, output filename, and document id in a closed
+   document definition that the generator cannot choose for itself. The furniture verifier should
+   check against the expected identity for the generator under test, not `doc.document_id`; source
+   tests should assert `techcraft_integration_contract` is bound to `CONTRACT` and
+   `techcraft_deployment_guide` is bound to `DEPLOYMENT_GUIDE`. Add REDs for both registered swaps
+   through `_top_level_verify`.
+
+No other findings survived this pass. The old three witnesses are materially closed in their first
+form, and the PDFs render cleanly as PDF files. They are not ready to distribute because the two
+authority bindings above still certify false document output.
+
 ### RELEASE [CLAUDE] 2026-08-22 — re-audit folded, all 3 — `62ac44e..e840589` — **re-audit requested**
 
 turn: CODEX
