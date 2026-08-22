@@ -32,7 +32,7 @@ from unittest import mock
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from docs.contracts import ClaimState, playbook
+from docs.contracts import PROSE, ClaimState, Column, playbook
 from docs.contracts import wire as wire_module
 from docs.contracts.operations import OPERATIONS, Procedure
 from docs.contracts.signing_example import sign as example_sign
@@ -7245,6 +7245,10 @@ def test_r16f1_the_code_lane_assertion_is_load_bearing_not_incidental():
 #   * REGISTRY_PROSE_PINS — reviewed free prose no verifier derives: pinned by digest with a
 #     human label, so any edit is the one deliberate re-pin a reviewer reads (the same accepted
 #     mechanism as NARRATION_LABELS, RENDERER_PROSE, and PROCEDURE_DEFINITION_PINS).
+#   * REGISTRY_SCHEMA_PINS — reviewed DISPLAY DECLARATIONS: registry-owned values that print
+#     nothing themselves but decide how the printed text is drawn and compared (re-audit-2
+#     finding 1). Same digest-and-label mechanism, separate table, because a declaration is not
+#     prose and filing one as the other is how the last one escaped review.
 #
 # Numeric leaves are outside this closure's scope on purpose: every number a claim renders is
 # already the claim's VALUE, held by its own authority verifier (defaults to Settings, skew to
@@ -7253,8 +7257,17 @@ def test_r16f1_the_code_lane_assertion_is_load_bearing_not_incidental():
 # comes from closed source records whose own verifiers pin the complete surface
 # (OutcomeKind/REASON_TEXTS via TransitionSemantic, Procedure.when/rollback via the contracts).
 
-def rendered_string_paths(claim) -> dict:
-    """Every (type-level path -> ordered strings) this claim can render, note included."""
+def governing_string_paths(claim) -> dict:
+    """Every (type-level path -> ordered strings) by which this claim GOVERNS the page.
+
+    Two kinds live in here, and the difference is stated rather than blurred (re-audit-2
+    finding 1). Most are text the document PRINTS. A few are declarations that decide how that
+    text is drawn — today, exactly one: a column's `role`, which chooses between an exact prose
+    cell and a token cell whose commas the page comparison must forgive. It prints nothing, and
+    that is precisely why the previous closure let it through while it silently stripped
+    punctuation from an externally-binding table. Both kinds need a receipt; `REGISTRY_SCHEMA_PINS`
+    keeps the second in its own reviewed lane so neither can be filed as the other.
+    """
     found: dict = {}
 
     def walk(value, path):
@@ -7299,18 +7312,22 @@ def rendered_string_paths(claim) -> dict:
 
     walk(claim.value, "value")
     # EVERY registry-owned string a projection can render, not only the ones under `value`
-    # (Wave-2 audit finding 2). `table_headers` is the matrix's first row — registry text, printed
+    # (Wave-2 audit finding 2). A column's header is the matrix's first row — registry text, printed
     # verbatim — and walking only value/note left it outside the closure entirely: replacing
     # WIRE.INGEST.STATUS's headers with ("Code", "Treat this response as optional") printed that
     # instruction on the page while the authority map, the ordered matrix comparison, the total
     # prose stream, and this closure all stayed silent. Outer Claim fields are enumerated from the
     # dataclass itself, so a field added later cannot be forgotten here either.
-    _RENDERED_CLAIM_FIELDS = ("table_headers",)
-    # `token_columns` publishes no TEXT — it is column indices declaring how this claim's own
-    # cells may be drawn (Wave-2 re-audit finding 2). It is display authority, so it is checked
-    # by `Claim.__post_init__` (in range for the declared table) and by the table lane (the
-    # renderer must draw the columns the claim declares), not by a prose receipt.
-    _NEVER_RENDERED = ("id", "value", "authority", "state", "exclusive_terms", "token_columns")
+    #
+    # `columns` carries BOTH kinds: each column's `header` is printed verbatim as the matrix's
+    # first row, and its `role` decides how the cells beneath it may be drawn. The role used to be
+    # a separate `token_columns` field excluded from this closure on the true-but-irrelevant
+    # ground that integers print nothing (re-audit-2 finding 1) — so
+    # `replace(WIRE["WIRE.INGEST.STATUS"], token_columns=(1,))` marked a PROSE column lossy and
+    # the release verifier forgave the comma loss it caused. Walking the typed schema enumerates
+    # both, under their own paths, each holding its own receipt.
+    _RENDERED_CLAIM_FIELDS = ("columns",)
+    _NEVER_RENDERED = ("id", "value", "authority", "state", "exclusive_terms")
     declared = {f.name for f in dataclasses.fields(claim)}
     unaccounted = declared - set(_RENDERED_CLAIM_FIELDS) - set(_NEVER_RENDERED)
     if unaccounted:
@@ -7638,35 +7655,80 @@ REGISTRY_PROSE_PINS = {
     # Column titles: registry-owned text printed verbatim as the matrix's first row. Reviewed as
     # LABELS — they name a column, they do not instruct — so a rewrite that turns one into an
     # instruction ("Treat this response as optional") is a re-pin a reviewer reads.
-    ("WIRE.INGEST.HEADERS", "table_headers[]"):
+    ("WIRE.INGEST.HEADERS", "columns[]:Column.header"):
         ("850fe8bf33e67110", "columns: Header | Value | Why"),
-    ("WIRE.INGEST.STATUS", "table_headers[]"):
+    ("WIRE.INGEST.STATUS", "columns[]:Column.header"):
         ("396356ba1aec5749", "columns: Code | Meaning"),
-    ("WIRE.EVENT.TABLE", "table_headers[]"):
+    ("WIRE.EVENT.TABLE", "columns[]:Column.header"):
         ("2c6b7085596c4258", "columns: event_type | Required payload | Optional payload | Notes"),
-    ("WIRE.SIGN.ROTATION_RETIREMENT", "table_headers[]"):
+    ("WIRE.SIGN.ROTATION_RETIREMENT", "columns[]:Column.header"):
         ("02127eca44c1607b", "columns: Direction | Blocked step | Why blocked | What unblocks it"),
-    ("WIRE.CALLBACK.VALIDATION", "table_headers[]"):
+    ("WIRE.CALLBACK.VALIDATION", "columns[]:Column.header"):
         ("54e80acd7032ce61", "columns: Invalid input | Disposition"),
-    ("WIRE.CALLBACK.EFFECTIVENESS", "table_headers[]"):
+    ("WIRE.CALLBACK.EFFECTIVENESS", "columns[]:Column.header"):
         ("d0efce82c130ff22", "columns: Phase | When this row applies | Record | Effective? | Why"),
-    ("WIRE.CALLBACK.LEGEND", "table_headers[]"):
+    ("WIRE.CALLBACK.LEGEND", "columns[]:Column.header"):
         ("a2bf7a42c69a4737", "columns: Token | Meaning"),
-    ("WIRE.CALLBACK.RELEASE", "table_headers[]"):
+    ("WIRE.CALLBACK.RELEASE", "columns[]:Column.header"):
         ("cd84a75e6429e5eb", "columns: When this row applies | Record | Effective? | Why"),
-    ("WIRE.ORDERING.PENDING_INPUTS", "table_headers[]"):
+    ("WIRE.ORDERING.PENDING_INPUTS", "columns[]:Column.header"):
         ("43eab4f9e30f89aa", "columns: # | Owner | question | answer shape | blocked deliverable"),
-    ("WIRE.RETENTION.BY_KIND", "table_headers[]"):
+    ("WIRE.RETENTION.BY_KIND", "columns[]:Column.header"):
         ("c54b7c11309c5fc9", "columns: Kind | What happens"),
-    ("OPS.PROCESS.COMMANDS", "table_headers[]"):
+    ("OPS.PROCESS.COMMANDS", "columns[]:Column.header"):
         ("cb90fa299ee91ed9", "columns: Process | Command | Notes"),
-    ("OPS.INFRA.COMPONENTS", "table_headers[]"):
+    ("OPS.INFRA.COMPONENTS", "columns[]:Column.header"):
         ("d9ac3561a1db5d11", "columns: Component | Requirement | Why"),
-    ("OPS.CONFIG.DEFAULTS", "table_headers[]"):
+    ("OPS.CONFIG.DEFAULTS", "columns[]:Column.header"):
         ("aa580cc604c89097", "columns: Setting | Default"),
-    ("OPS.HEALTH.PROBES", "table_headers[]"):
+    ("OPS.HEALTH.PROBES", "columns[]:Column.header"):
         ("62bf0bb1e296336c", "columns: Surface | Contract | Action"),
 }
+
+# The DISPLAY lane (re-audit-2 finding 1). These values print nothing; each one decides whether
+# the cells under a column are compared exactly or with their commas forgiven, which is why a
+# comma-stripped prose column certified while this sat outside the closure. The label spells out
+# the whole schema — header by header, role by role — so a re-pin shows a reviewer which column
+# changed hands rather than a hash that moved.
+REGISTRY_SCHEMA_PINS = {
+    ("WIRE.INGEST.HEADERS", "columns[]:Column.role"):
+        ("5ee473ddb44944e5", "roles: Header=token | Value=prose | Why=prose"),
+    ("WIRE.INGEST.STATUS", "columns[]:Column.role"):
+        ("2d1a5acccc943a88", "roles: Code=prose | Meaning=prose"),
+    ("WIRE.EVENT.TABLE", "columns[]:Column.role"):
+        ("2c4a19568d89e2ed",
+         "roles: event_type=token | Required payload=token | Optional payload=token | Notes=prose"),
+    ("WIRE.SIGN.ROTATION_RETIREMENT", "columns[]:Column.role"):
+        ("cc03a2136b605cf3",
+         "roles: Direction=prose | Blocked step=prose | Why blocked=prose | What unblocks=prose"),
+    ("WIRE.CALLBACK.VALIDATION", "columns[]:Column.role"):
+        ("2d1a5acccc943a88", "roles: Invalid input=prose | Disposition=prose"),
+    ("WIRE.CALLBACK.EFFECTIVENESS", "columns[]:Column.role"):
+        ("2722b015173e80ea",
+         "roles: Phase=prose | When=prose | Record=prose | Effective?=prose | Why=prose"),
+    ("WIRE.CALLBACK.LEGEND", "columns[]:Column.role"):
+        ("f55a2cc14b3f7d0e", "roles: Token=token | Meaning=prose"),
+    ("WIRE.CALLBACK.RELEASE", "columns[]:Column.role"):
+        ("cc03a2136b605cf3", "roles: When=prose | Record=prose | Effective?=prose | Why=prose"),
+    ("WIRE.ORDERING.PENDING_INPUTS", "columns[]:Column.role"):
+        ("2722b015173e80ea",
+         "roles: #=prose | Owner=prose | question=prose | answer shape=prose | blocked=prose"),
+    ("WIRE.RETENTION.BY_KIND", "columns[]:Column.role"):
+        ("2d1a5acccc943a88", "roles: Kind=prose | What happens=prose"),
+    ("OPS.PROCESS.COMMANDS", "columns[]:Column.role"):
+        ("ec9931734d9d9611", "roles: Process=prose | Command=prose | Notes=prose"),
+    ("OPS.INFRA.COMPONENTS", "columns[]:Column.role"):
+        ("ec9931734d9d9611", "roles: Component=prose | Requirement=prose | Why=prose"),
+    ("OPS.CONFIG.DEFAULTS", "columns[]:Column.role"):
+        ("f55a2cc14b3f7d0e", "roles: Setting=token | Default=prose"),
+    ("OPS.HEALTH.PROBES", "columns[]:Column.role"):
+        ("ec9931734d9d9611", "roles: Surface=prose | Contract=prose | Action=prose"),
+}
+
+# The paths the SCHEMA lane may hold. Without this the two reviewed tables are interchangeable,
+# and prose filed under "display authority" would be reviewed under a label that does not quote
+# it — which is the laundering the split exists to prevent.
+DISPLAY_SCHEMA_PATHS = frozenset({"columns[]:Column.role"})
 
 
 def _prose_digest(texts) -> str:
@@ -7674,34 +7736,46 @@ def _prose_digest(texts) -> str:
 
 
 def _receipt_problems(registries) -> list[str]:
-    """Every rendered string path holds exactly one receipt; every receipt names a live path."""
+    """Every governing string path holds exactly one receipt; every receipt names a live path."""
     problems: list[str] = []
     seen: set = set()
     for registry in registries:
         for claim in registry.claims:
-            for path, texts in rendered_string_paths(claim).items():
+            for path, texts in governing_string_paths(claim).items():
                 key = (claim.id, path)
                 seen.add(key)
-                bound = key in VERIFIER_BOUND
-                pinned = REGISTRY_PROSE_PINS.get(key)
-                if bound and pinned:
-                    problems.append(f"{key}: carries TWO receipts; one authority of record")
-                elif bound:
-                    continue
-                elif pinned is None:
+                receipts = [name for name, table in
+                            (("VERIFIER_BOUND", None),
+                             ("REGISTRY_PROSE_PINS", REGISTRY_PROSE_PINS),
+                             ("REGISTRY_SCHEMA_PINS", REGISTRY_SCHEMA_PINS))
+                            if (key in VERIFIER_BOUND if table is None else key in table)]
+                if len(receipts) > 1:
                     problems.append(
-                        f"{key}: rendered registry text with NO receipt — bind it in a "
-                        "verifier or pin it, which is the act of reviewing it: "
+                        f"{key}: carries {len(receipts)} receipts ({', '.join(receipts)}); "
+                        "one authority of record")
+                    continue
+                if receipts == ["VERIFIER_BOUND"]:
+                    continue
+                if not receipts:
+                    problems.append(
+                        f"{key}: registry text or display authority with NO receipt — bind it in "
+                        "a verifier or pin it, which is the act of reviewing it: "
                         f"{texts[0][:60]!r}")
-                elif pinned[0] != _prose_digest(texts):
+                    continue
+                table = REGISTRY_PROSE_PINS if receipts == ["REGISTRY_PROSE_PINS"] \
+                    else REGISTRY_SCHEMA_PINS
+                pinned = table[key]
+                if pinned[0] != _prose_digest(texts):
                     problems.append(
                         f"{key} ({pinned[1]}) changed since it was reviewed: "
                         f"reviewed {pinned[0]}, now {_prose_digest(texts)}. Read the new "
-                        "text, then re-pin it in the SAME commit.")
+                        "value, then re-pin it in the SAME commit.")
     for key in VERIFIER_BOUND - seen:
         problems.append(f"{key}: VERIFIER_BOUND names a path no claim renders (stale)")
     for key in set(REGISTRY_PROSE_PINS) - seen:
         problems.append(f"{key}: REGISTRY_PROSE_PINS pins a path no claim renders (stale)")
+    for key in set(REGISTRY_SCHEMA_PINS) - seen:
+        problems.append(f"{key}: REGISTRY_SCHEMA_PINS pins a path no claim declares (stale)")
     return problems
 
 
@@ -7711,9 +7785,28 @@ def test_every_rendered_registry_string_has_a_receipt():
 
 
 def test_every_prose_pin_carries_a_usable_label():
-    for key, (digest, label) in REGISTRY_PROSE_PINS.items():
-        assert re.fullmatch(r"[0-9a-f]{16}", digest), key
-        assert len(label.strip()) >= 12, f"{key} has no usable label"
+    for table in (REGISTRY_PROSE_PINS, REGISTRY_SCHEMA_PINS):
+        for key, (digest, label) in table.items():
+            assert re.fullmatch(r"[0-9a-f]{16}", digest), key
+            assert len(label.strip()) >= 12, f"{key} has no usable label"
+
+
+def test_the_two_reviewed_lanes_are_not_interchangeable():
+    """Re-audit-2 finding 1. The schema lane exists because a display declaration is not prose
+    and must not be reviewed as if it were; the guard is that it may hold ONLY declared display
+    paths, so prose cannot be filed there under a label that never quotes it — and, the other
+    way, a role cannot be filed as prose and read as a sentence."""
+    stray = {k for k in REGISTRY_SCHEMA_PINS if k[1] not in DISPLAY_SCHEMA_PATHS}
+    assert not stray, f"the schema lane holds non-schema paths: {sorted(stray)}"
+    misfiled = {k for k in REGISTRY_PROSE_PINS if k[1] in DISPLAY_SCHEMA_PATHS}
+    assert not misfiled, f"display authority pinned as prose: {sorted(misfiled)}"
+    assert not {k for k in VERIFIER_BOUND if k[1] in DISPLAY_SCHEMA_PATHS}, (
+        "no verifier executes a display choice; it is reviewed, and says so")
+    # and the lane is not empty of the thing it governs: every table claim's roles are pinned
+    declared = {(c.id, "columns[]:Column.role")
+                for reg in (WIRE, OPERATIONS) for c in reg.claims if c.columns}
+    assert declared == set(REGISTRY_SCHEMA_PINS), (
+        f"unpinned: {sorted(declared - set(REGISTRY_SCHEMA_PINS))}")
 
 
 @contextlib.contextmanager
@@ -7813,10 +7906,10 @@ def test_w2f2_a_false_table_header_fails_the_receipt_closure():
     """Wave-2 audit finding 2, the exact trigger. Before the enumerator walked outer Claim
     fields, this printed an instruction as a column title while the authority map, the ordered
     matrix comparison, the total prose stream, AND this closure all reported nothing."""
-    with _swapped_claim(WIRE, "WIRE.INGEST.STATUS",
-                        table_headers=("Code", "Treat this response as optional")):
+    hostile = (Column("Code", PROSE), Column("Treat this response as optional", PROSE))
+    with _swapped_claim(WIRE, "WIRE.INGEST.STATUS", columns=hostile):
         problems = _receipt_problems((WIRE, OPERATIONS))
-    assert any("table_headers" in p and "changed since it was reviewed" in p
+    assert any("Column.header" in p and "changed since it was reviewed" in p
                for p in problems), problems
 
 
@@ -7827,7 +7920,7 @@ def test_w2f2_a_new_outer_claim_field_must_declare_whether_it_renders():
         "ClaimWithExtra", [("tagline", str, dataclasses.field(default=""))],
         bases=(type(WIRE.claims[0]),), frozen=True)
     with pytest.raises(AssertionError, match="declare whether a projection can render"):
-        rendered_string_paths(extra(
+        governing_string_paths(extra(
             id="X.EXTRA", value="v", authority="a", tagline="published, unreceipted"))
 
 
@@ -8170,12 +8263,13 @@ def test_every_verifier_bound_path_is_refused_by_its_named_verifier():
         by_id = {c.id: c for c in registry.claims}
         for claim_id, path in sorted(VERIFIER_BOUND):
             claim = by_id.get(claim_id)
-            if claim is None or path not in rendered_string_paths(claim):
+            if claim is None or path not in governing_string_paths(claim):
                 continue
             checked += 1
-            if path.startswith("table_headers"):
-                mutant = dataclasses.replace(
-                    claim, table_headers=(_MUTATION, *claim.table_headers[1:]))
+            if path.startswith("columns"):
+                mutant = dataclasses.replace(claim, columns=(
+                    dataclasses.replace(claim.columns[0], header=_MUTATION),
+                    *claim.columns[1:]))
             else:
                 tampered = _tampered_copy(claim.value, path)
                 if tampered is None:
@@ -8185,7 +8279,7 @@ def test_every_verifier_bound_path_is_refused_by_its_named_verifier():
             if _construction_refuses(mutant.value):
                 continue  # the record itself rejects the tampered state
             with _swapped_claim(registry, claim_id, value=mutant.value,
-                                table_headers=mutant.table_headers):
+                                columns=mutant.columns):
                 try:
                     AUTHORITY_VERIFIERS[claim_id]()
                 except Exception:
@@ -8211,9 +8305,14 @@ def test_the_metamorphic_mutator_can_actually_mutate():
 # proof: what it buys is that every document's published identity has exactly one home, outside
 # the renderer's reach, and changing it is a deliberate re-pin someone reads. The generators hold
 # only an ID; `Doc` and the furniture verifier both look the identity up here.
+#
+# The pin covers `module` too (re-audit-2 finding 2). That field is the BINDING — which generator
+# publishes which document — and it is the only thing standing between the guide's six pages and
+# the contract's title, so re-aiming it is exactly the edit a reviewer must be shown.
 
-DOCUMENT_IDENTITY_PIN = ("5a625e1aee1221f0", "contract, deployment guide, and the test fixture: "
-                                             "id, published title, output filename")
+DOCUMENT_IDENTITY_PIN = ("89334c5eec047210", "contract, deployment guide, and the test fixture: "
+                                             "id, published title, output filename, and the "
+                                             "generator module bound to publish it")
 
 
 def test_the_document_identity_registry_matches_its_review_pin():
@@ -8222,7 +8321,7 @@ def test_the_document_identity_registry_matches_its_review_pin():
     parts: list[str] = []
     for key in sorted(DOCUMENT_IDENTITIES):
         entry = DOCUMENT_IDENTITIES[key]
-        parts.extend((entry.id, entry.title, entry.out))
+        parts.extend((entry.id, entry.title, entry.out, entry.module))
     digest = hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]
     pinned, label = DOCUMENT_IDENTITY_PIN
     assert digest == pinned, (

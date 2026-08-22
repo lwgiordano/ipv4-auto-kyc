@@ -15,7 +15,7 @@ from collections import Counter
 
 import pdfplumber
 import pytest
-from docs.contracts import Claim, Registry
+from docs.contracts import PROSE, TOKEN, Claim, Column, Registry
 from docs.contracts.documents import TEST_FIXTURE
 from docs.contracts.operations import OPERATIONS
 from docs.contracts.signing_example import published_snippet
@@ -351,8 +351,8 @@ def test_a_token_too_wide_for_its_column_fails_the_build(tmp_path):
         Registry(
             name="narrow",
             claims=(Claim(id="X.WIDE", value=(("website.review_completed", "note"),),
-                          authority="test", table_headers=("event_type", "Notes"),
-                          token_columns=(0,)),),
+                          authority="test",
+                          columns=(Column("event_type", TOKEN), Column("Notes", PROSE))),),
         )
     , TEST_DOCUMENT)
     with pytest.raises(ValueError, match="would be clipped"):
@@ -432,7 +432,7 @@ def test_a_word_wider_than_its_column_fails_the_build():
     never cut in half — which means an over-wide one is clipped instead, so it must raise."""
     doc = Doc(Registry(name="narrowprose", claims=(
         Claim(id="X.LONG", value=(("BLOCKED_NO_AUTHORITATIVE_MAPPING", "note"),), authority="t",
-              table_headers=("Term", "Notes")),
+              columns=(Column("Term", PROSE), Column("Notes", PROSE))),
     )), TEST_DOCUMENT)
     with pytest.raises(ValueError, match="would be\n?\\s*clipped"):
         doc.claim_table("X.LONG", [0.7 * INCH, 3 * INCH])

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
-from docs.contracts import Claim, ClaimState, Registry, plan
+from docs.contracts import PROSE, TOKEN, Claim, ClaimState, Column, Registry, plan
 from docs.contracts.plan import (
     COMMIT_PAUSE_BUFFER,
     COMMIT_RESIGN_RETRIES,
@@ -424,7 +424,8 @@ OPERATIONS = Registry(
                  "a dry run"),
             ),
             authority="module existence under src/kyc_tool + Dockerfile command comments",
-            table_headers=("Process", "Command", "Notes"),
+            columns=(Column("Process", PROSE), Column("Command", PROSE),
+                     Column("Notes", PROSE)),
         ),
         Claim(
             id="OPS.PROCESS.DEV_WORKER_BANNED",
@@ -458,7 +459,8 @@ OPERATIONS = Registry(
                  "from authoritative backup"),
             ),
             authority="docs/DEPLOYMENT.md §3 + kyc_tool.config storage settings",
-            table_headers=("Component", "Requirement", "Why"),
+            columns=(Column("Component", PROSE), Column("Requirement", PROSE),
+                     Column("Why", PROSE)),
         ),
         # ── configuration ─────────────────────────────────────────────────────────────────────
         Claim(
@@ -476,8 +478,7 @@ OPERATIONS = Registry(
                 SettingDefault("poc_token_ttl_hours", 72),
             ),
             authority="kyc_tool.config.Settings field defaults",
-            table_headers=("Setting", "Default"),
-            token_columns=(0,),
+            columns=(Column("Setting", TOKEN), Column("Default", PROSE)),
         ),
         Claim(
             id="OPS.CONFIG.PRODUCTION_FLOORS",
@@ -543,7 +544,8 @@ OPERATIONS = Registry(
                  "and the event-to-decision p95"),
             ),
             authority="kyc_tool.api.app health routes + routes_metrics",
-            table_headers=("Surface", "Contract", "Action"),
+            columns=(Column("Surface", PROSE), Column("Contract", PROSE),
+                     Column("Action", PROSE)),
         ),
         # ── releases, cutovers, rollback ──────────────────────────────────────────────────────
         Claim(

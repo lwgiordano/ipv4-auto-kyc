@@ -12,14 +12,17 @@ import re
 from datetime import date
 
 from docs.contracts.companion import ARTIFACT_NAME, artifact_digest
-from docs.contracts.documents import CONTRACT, identity
+from docs.contracts.documents import bound_id, identity
 from docs.contracts.signing_example import published_snippet
 from docs.contracts.wire import WIRE
 from docs.generators.render import INCH, Doc, escape
 
-# This document names itself by ID; its title and output live in the closed identity registry
-# (Wave-2 re-audit finding 3), so there is nothing here for a coherent edit to falsify.
-DOCUMENT_ID = CONTRACT
+# This module does not CHOOSE which document it is (re-audit-2 finding 2). The registry binds
+# generator to document, and this asks it; the furniture verifier asks the same registry the same
+# question about the module under test, so the two answers are independent of anything here.
+# Title and output follow from the id, so there is no identity text at this layer either
+# (Wave-2 re-audit finding 3).
+DOCUMENT_ID = bound_id(__name__)
 OUT = identity(DOCUMENT_ID).out
 
 # Release inputs. These are NOT registry claims — they change per send, and nothing in the repo

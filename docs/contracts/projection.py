@@ -151,15 +151,15 @@ def expected_matrix(claim, row_fields: tuple[str, ...] = ()) -> tuple[tuple[str,
     so reversed rows, swapped Effective?/Why values, and a condition moved to its neighbour all
     certified. The matrix is the unit of authority now — ordered, column-indexed, multiplicity
     included — and it is derived HERE, from the claim alone, so the renderer contributes no cell
-    and no column title. A claim rendered as a table must declare `table_headers`; every row must
+    and no column title. A claim rendered as a table must declare its `columns`; every row must
     match the declared width exactly.
     """
-    if not claim.table_headers:
+    if not claim.columns:
         raise ValueError(
-            f"{claim.id} is rendered as a table but declares no table_headers; the registry, "
-            "not the renderer, owns a table's column titles"
+            f"{claim.id} is rendered as a table but declares no columns; the registry, "
+            "not the renderer, owns a table's column titles and their display roles"
         )
-    headers = tuple(str(cell) for cell in claim.table_headers)
+    headers = tuple(str(cell) for cell in claim.headers)
     rows = expected_rows(claim, TABLE, row_fields)
     for row in rows:
         if len(row) != len(headers):

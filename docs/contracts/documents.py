@@ -28,11 +28,24 @@ from types import MappingProxyType
 
 @dataclass(frozen=True)
 class DocumentIdentity:
-    """One document's published identity: what its cover, footers, and metadata may say."""
+    """One document's published identity: what its cover, footers, and metadata may say.
+
+    `module` is the dotted name of the generator that publishes this document, and it is the half
+    of the record that makes the identity BINDING rather than merely well-formed (re-audit-2
+    finding 2). Without it the registry proved only that some registered title was stamped
+    consistently: setting `techcraft_deployment_guide.DOCUMENT_ID = CONTRACT` published the
+    six-page operational guide titled `KYC Tool — Platform Integration Contract`, on the cover, in
+    every footer, and in the PDF metadata, and `_top_level_verify` passed — because the furniture
+    lane looked up `doc.document_id`, which IS the generator's choice. The binding lives here, on
+    the registry side, so the verifier can ask "which document is THIS generator's?" without
+    consulting the generator. An identity with no module is not published by a generator at all
+    (the test fixture).
+    """
 
     id: str
     title: str
     out: str
+    module: str = ""
 
     def __post_init__(self) -> None:
         if not self.id.strip():
@@ -41,6 +54,8 @@ class DocumentIdentity:
             raise ValueError(f"{self.id}: a document identity carries a non-empty title")
         if type(self.out) is not str or not self.out.endswith(".pdf"):
             raise ValueError(f"{self.id}: a document identity names its output .pdf")
+        if type(self.module) is not str:
+            raise ValueError(f"{self.id}: a publishing module is named by its dotted path")
 
     def footer_line(self, section: str, revision: str) -> str:
         """The exact left-hand footer string for a page in `section`. ONE derivation, shared by
@@ -63,11 +78,13 @@ DOCUMENT_IDENTITIES = MappingProxyType({
             id=CONTRACT,
             title="KYC Tool — Platform Integration Contract",
             out="techcraft-integration-contract.pdf",
+            module="docs.generators.techcraft_integration_contract",
         ),
         DocumentIdentity(
             id=DEPLOYMENT_GUIDE,
             title="KYC Tool — Staging Integration and Production Readiness Guide",
             out="techcraft-deployment-guide.pdf",
+            module="docs.generators.techcraft_deployment_guide",
         ),
         DocumentIdentity(
             id=TEST_FIXTURE,
@@ -76,6 +93,21 @@ DOCUMENT_IDENTITIES = MappingProxyType({
         ),
     )
 })
+
+# module -> the ONE document it publishes. Built here rather than written out twice, and closed
+# in both directions: two generators cannot claim one document, and one generator cannot claim
+# two.
+_BY_MODULE: dict = {}
+for _entry in DOCUMENT_IDENTITIES.values():
+    if not _entry.module:
+        continue
+    if _entry.module in _BY_MODULE:
+        raise ValueError(
+            f"{_entry.module} is bound to both {_BY_MODULE[_entry.module]!r} and {_entry.id!r}; "
+            "a generator publishes exactly one document"
+        )
+    _BY_MODULE[_entry.module] = _entry.id
+PUBLISHED_BY_MODULE = MappingProxyType(_BY_MODULE)
 
 
 def identity(document_id: str) -> DocumentIdentity:
@@ -87,3 +119,25 @@ def identity(document_id: str) -> DocumentIdentity:
             f"no document identity {document_id!r}; the closed set is "
             f"{sorted(DOCUMENT_IDENTITIES)}"
         ) from None
+
+
+def bound_id(module: str) -> str:
+    """The id of the document `module` publishes — the registry's answer, not the module's.
+
+    Both the generator (which asks what it is) and the furniture verifier (which asks what the
+    generator under test should have published) resolve through here. That is the whole point:
+    the two sides no longer share the generator's own variable, so a generator that stamps
+    another registered document's identity is contradicted rather than confirmed.
+    """
+    try:
+        return PUBLISHED_BY_MODULE[module]
+    except KeyError:
+        raise KeyError(
+            f"{module!r} publishes no registered document; the closed set is "
+            f"{sorted(PUBLISHED_BY_MODULE)}"
+        ) from None
+
+
+def identity_of(module: str) -> DocumentIdentity:
+    """The identity of the document `module` publishes."""
+    return identity(bound_id(module))

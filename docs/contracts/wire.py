@@ -13,8 +13,11 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from docs.contracts import (
+    PROSE,
+    TOKEN,
     Claim,
     ClaimState,
+    Column,
     Registry,
     predicates,  # noqa: I001 — sibling module, not the package root
 )
@@ -1612,8 +1615,8 @@ WIRE = Registry(
             id="WIRE.INGEST.HEADERS",
             value=INGEST_HEADERS,
             authority="kyc_tool.api.routes_events.post_event + kyc_tool.api.auth",
-            table_headers=("Header", "Value", "Why"),
-            token_columns=(0,),
+            columns=(Column("Header", TOKEN), Column("Value", PROSE),
+                     Column("Why", PROSE)),
         ),
         Claim(
             id="WIRE.INGEST.STATUS",
@@ -1629,7 +1632,7 @@ WIRE = Registry(
                 (404, "review task not found"),
             ),
             authority="kyc_tool.events.ingest.ingest_event",
-            table_headers=("Code", "Meaning"),
+            columns=(Column("Code", PROSE), Column("Meaning", PROSE)),
         ),
         Claim(
             id="WIRE.INGEST.EXTRA_FIELDS",
@@ -1667,8 +1670,8 @@ WIRE = Registry(
             id="WIRE.EVENT.TABLE",
             value=EVENT_TABLE,
             authority="kyc_tool.api.schemas.EventType / PAYLOAD_MODELS required+optional fields",
-            table_headers=("event_type", "Required payload", "Optional payload", "Notes"),
-            token_columns=(0, 1, 2),
+            columns=(Column("event_type", TOKEN), Column("Required payload", TOKEN),
+                     Column("Optional payload", TOKEN), Column("Notes", PROSE)),
         ),
         # ── signing ───────────────────────────────────────────────────────────────────────────
         Claim(
@@ -1727,8 +1730,9 @@ WIRE = Registry(
                       "closed column inventory, kyc_tool.ops.cutover closed record inventory, "
                       "SIGNED_FLEET_RECEIPT_SCHEMA",
             state=ClaimState.BLOCKED,
-            table_headers=("Direction", "Blocked step", "Why it cannot be exercised today",
-                           "What unblocks it"),
+            columns=(Column("Direction", PROSE), Column("Blocked step", PROSE),
+                     Column("Why it cannot be exercised today", PROSE),
+                     Column("What unblocks it", PROSE)),
         ),
         # ── callbacks ─────────────────────────────────────────────────────────────────────────
         Claim(
@@ -1781,7 +1785,7 @@ WIRE = Registry(
             value=RECEIVER_VALIDATION_RULES,
             authority="docs/contracts/receiver_reference.py _validate/validate_state — every "
                       "rule's specimen is executed by the authority verifier and must refuse",
-            table_headers=("Invalid input", "Disposition"),
+            columns=(Column("Invalid input", PROSE), Column("Disposition", PROSE)),
         ),
         Claim(
             id="WIRE.CALLBACK.RECEIVER_TXN",
@@ -1808,7 +1812,9 @@ WIRE = Registry(
                       "docs/contracts/receiver_reference.py (executable, scenario-tested) + the "
                       "invariant oracle in the authority test (every row and the executed "
                       "decision held against it)",
-            table_headers=("Phase", "When this row applies", "Record", "Effective?", "Why"),
+            columns=(Column("Phase", PROSE), Column("When this row applies", PROSE),
+                     Column("Record", PROSE), Column("Effective?", PROSE),
+                     Column("Why", PROSE)),
         ),
         Claim(
             id="WIRE.CALLBACK.LEGEND",
@@ -1816,8 +1822,7 @@ WIRE = Registry(
             authority="docs.contracts.predicates FACET_LEGEND/RELEASE_LEGEND, cross-bound: each "
                       "meaning must carry its own token's distinguishing term and never its "
                       "paired sibling's",
-            table_headers=("Token", "Meaning"),
-            token_columns=(0,),
+            columns=(Column("Token", TOKEN), Column("Meaning", PROSE)),
         ),
         Claim(
             id="WIRE.CALLBACK.RELEASE",
@@ -1827,7 +1832,8 @@ WIRE = Registry(
                       "receiver_reference.py (executable, scenario-tested) + the release oracle "
                       "in the authority test; partition proven over all 72 states",
             state=ClaimState.PENDING,
-            table_headers=("When this row applies", "Record", "Effective?", "Why"),
+            columns=(Column("When this row applies", PROSE), Column("Record", PROSE),
+                     Column("Effective?", PROSE), Column("Why", PROSE)),
         ),
         Claim(
             id="WIRE.CALLBACK.RETRY",
@@ -1908,8 +1914,9 @@ WIRE = Registry(
         Claim(
             id="WIRE.ORDERING.PENDING_INPUTS",
             value=PENDING_024_INPUTS,
-            table_headers=("#", "Owner", "What we need to know", "Answer shape",
-                           "Blocked deliverable — answer alone does not unblock"),
+            columns=(Column("#", PROSE), Column("Owner", PROSE),
+                     Column("What we need to know", PROSE), Column("Answer shape", PROSE),
+                     Column("Blocked deliverable — answer alone does not unblock", PROSE)),
             authority=".agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-"
                       "design.md open blockers O1-O4 (parsed live by the authority test) + "
                       "docs.contracts.wire.resolution_problems (refuses every artifact until the "
@@ -1952,7 +1959,7 @@ WIRE = Registry(
                  "poc.submitted."),
             ),
             authority="kyc_tool.workers.retention + kyc_tool.outbox.publisher terminal writes",
-            table_headers=("Kind", "What happens"),
+            columns=(Column("Kind", PROSE), Column("What happens", PROSE)),
         ),
         Claim(
             id="WIRE.RETENTION.WINDOW_DAYS",

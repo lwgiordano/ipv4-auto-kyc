@@ -37,6 +37,51 @@ class ClaimState(StrEnum):
     BLOCKED = "blocked"
 
 
+class ColumnRole(StrEnum):
+    """How the cells under one column may be DRAWN. Display authority, owned by the claim.
+
+    PROSE — an English cell, rendered and compared EXACTLY (modulo whitespace). Punctuation loss
+            here is a defect in externally-binding text, not a rendering artifact.
+    TOKEN — a cell of machine identifiers, wrapped between comma-separated items and never inside
+            an identifier, because `platform` / `_account_id` is one a reader copies wrong and
+            payload extras are accepted, so the misspelling 202s while populating nothing
+            (re-audit `6feca36..4f23f23` F10). That rendering LOSES the commas, so the page
+            comparison has to forgive them — which is exactly why the choice is authority and
+            belongs to the registry rather than to whoever draws the table.
+    """
+
+    PROSE = "prose"
+    TOKEN = "token"
+
+
+# Short names for the declaration sites, so a column's role reads at a glance beside its title.
+PROSE = ColumnRole.PROSE
+TOKEN = ColumnRole.TOKEN
+
+
+@dataclass(frozen=True)
+class Column:
+    """One column of a claim's table: its title, and the role that governs its cells.
+
+    The role has NO default on purpose (Wave-2 re-audit-2 finding 1). A default is a role nobody
+    wrote down, and this field decides which visible cells the release verifier will forgive
+    punctuation loss in — so every column states its own, in the same reviewed record as the
+    header it sits above, and the receipt closure pins the pair.
+    """
+
+    header: str
+    role: ColumnRole
+
+    def __post_init__(self) -> None:
+        if type(self.header) is not str or not self.header.strip():
+            raise ValueError("a column carries a non-empty title")
+        if type(self.role) is not ColumnRole:
+            raise ValueError(
+                f"{self.header!r}: {self.role!r} is not a ColumnRole; the closed set is "
+                f"{[r.value for r in ColumnRole]}"
+            )
+
+
 @dataclass(frozen=True)
 class Claim:
     """One externally-binding fact.
@@ -71,32 +116,43 @@ class Claim:
     authority: str
     state: ClaimState = ClaimState.SHIPPED
     exclusive_terms: tuple[str, ...] = ()
-    # The ordered column titles, REQUIRED for a claim rendered as a table (Wave 2 F5). The
-    # registry owns the complete matrix — header row included — so a renderer has nothing of a
-    # table's content left to author: `projection.expected_matrix` derives header + rows from
-    # this claim alone and refuses a claim whose declared width its own rows do not fit.
-    table_headers: tuple[str, ...] = ()
-    # Which of this table's columns hold machine identifiers (Wave-2 re-audit finding 2). The
-    # renderer draws those as TOKEN cells, which replace a comma-separated list's commas with
-    # line breaks — so the page comparison must forgive comma loss there and nowhere else. That
-    # made it display AUTHORITY, and it was supplied by the generator call site and then recorded
-    # as the verifier's own truth: a caller that declared a PROSE column a token column had its
-    # punctuation loss forgiven by a check reading the caller's declaration. The registry owns it
-    # now, so the claim decides how its own values may be rendered.
-    token_columns: tuple[int, ...] = ()
-
+    # The ordered COLUMN SCHEMA, REQUIRED for a claim rendered as a table (Wave 2 F5, and its
+    # re-audit twice over). The registry owns the complete matrix — header row included — so a
+    # renderer has nothing of a table's content left to author: `projection.expected_matrix`
+    # derives header + rows from this claim alone and refuses a claim whose declared width its
+    # own rows do not fit.
+    columns: tuple["Column", ...] = ()
 
     def __post_init__(self) -> None:
-        if self.token_columns and not self.table_headers:
-            raise ValueError(
-                f"{self.id}: token_columns names columns of a table this claim does not declare"
-            )
-        for index in self.token_columns:
-            if type(index) is not int or not 0 <= index < len(self.table_headers):
+        for index, column in enumerate(self.columns):
+            if type(column) is not Column:
                 raise ValueError(
-                    f"{self.id}: token column {index!r} is outside its "
-                    f"{len(self.table_headers)}-column table"
+                    f"{self.id}: column {index} is {column!r}; a table's columns are typed "
+                    "`Column` records carrying a header and the role that governs how the "
+                    "cells beneath it may be drawn"
                 )
+
+    @property
+    def headers(self) -> tuple[str, ...]:
+        """The column titles, in order — the matrix's first row."""
+        return tuple(column.header for column in self.columns)
+
+    @property
+    def token_columns(self) -> tuple[int, ...]:
+        """Indices of the columns whose cells render as TOKEN cells.
+
+        DERIVED from the schema, never stored beside it (Wave-2 re-audit-2 finding 1). This was a
+        `token_columns` FIELD holding a parallel tuple of integers, and the receipt closure
+        classified it as publishing no text — true of the integers, false of the authority they
+        carry. `dataclasses.replace(WIRE["WIRE.INGEST.STATUS"], token_columns=(1,))` was a
+        coherent registry edit that made the release verifier forgive punctuation loss in a PROSE
+        column: the rendered 200 row shipped `(stored response verbatim) or an inline
+        reviewer.manual_approve which runs` — commas gone from externally-binding text — with the
+        receipt closure, the table lane, and `_top_level_verify` all green. The role now lives ON
+        the column it governs, inside the same reviewed projection as the header, so flipping it
+        is a re-pin a human reads. There is no field of this name left to replace.
+        """
+        return tuple(i for i, column in enumerate(self.columns) if column.role is ColumnRole.TOKEN)
 
 
 @dataclass(frozen=True)

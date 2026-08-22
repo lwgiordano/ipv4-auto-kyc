@@ -22,7 +22,7 @@ from collections import Counter
 
 import pdfplumber
 import pytest
-from docs.contracts import Claim, Registry, documents, projection
+from docs.contracts import PROSE, Claim, Column, ColumnRole, Registry, documents, projection
 from docs.contracts.documents import TEST_FIXTURE
 from docs.contracts.operations import OPERATIONS
 from docs.contracts.wire import WIRE
@@ -420,8 +420,8 @@ def _page_footers(path: str) -> list[str]:
     return found
 
 
-def _verify_footers(doc, path: str) -> None:
-    """PAGE FURNITURE == THE MANIFEST'S DERIVATION, page by page.
+def _verify_footers(doc, path: str, module) -> None:
+    """PAGE FURNITURE == THE REGISTRY'S DERIVATION FOR THIS GENERATOR, page by page.
 
     Wave-2 audit finding 3: `build()` took a caller-authored title, drew it in every footer and
     into the PDF metadata, and the body comparisons subtract the footer band by geometry — so
@@ -430,13 +430,19 @@ def _verify_footers(doc, path: str) -> None:
     only asked that `source`, `Page N of`, and the section appear SOMEWHERE in the band, so extra
     text was legal.
 
-    The title is the manifest's now, and this lane compares the exact per-page tuple — title,
+    The title is the registry's now, and this lane compares the exact per-page tuple — title,
     that page's own section, the stamped revision, and an honest `Page N of M` — to the text
     drawn in the band. Nothing else fits.
+
+    `module` is the GENERATOR under test, and reading the expectation from it is the second half
+    of the control (re-audit-2 finding 2). Looking the identity up by `doc.document_id` proved
+    only that some registered title was stamped consistently, because that id is the generator's
+    own choice: with `techcraft_deployment_guide.DOCUMENT_ID = CONTRACT` the six-page operational
+    guide published as `KYC Tool — Platform Integration Contract` — cover, twelve footers, PDF
+    metadata — and passed. The question this lane asks now is the one that has an outside answer:
+    which document is THIS module bound to publish, and is that what the page says?
     """
-    # the registry's entry for the document under test — NOT `doc.identity`, which is the same
-    # object the stamp used and would only prove self-consistency (Wave-2 re-audit finding 3)
-    published = documents.identity(doc.document_id)
+    published = documents.identity_of(module.__name__)
     expected = [
         _flat(f"{published.footer_line(doc.page_sections.get(number, ''), doc._revision)} "
               f"Page {number} of {doc._total_pages}")
@@ -463,7 +469,7 @@ def test_the_page_furniture_is_exactly_the_manifests_derivation(rendered, tmp_pa
     doc = _build(generator)
     path = str(tmp_path / "furniture.pdf")
     doc.build(path)
-    _verify_footers(doc, path)
+    _verify_footers(doc, path, generator)
 
 
 def test_w2f3_a_false_title_cannot_be_supplied_at_build_time():
@@ -498,19 +504,58 @@ def test_w3f3_a_generator_cannot_publish_an_identity_it_authors(tmp_path):
     finally:
         contract_gen.DOCUMENT_ID = monkey
 
-    # …and a swap to the OTHER registered document is caught by the lane, because the expected
-    # furniture comes from the registry entry for the document under test, not from the doc
-    doc = _build(contract_gen)
-    path = str(tmp_path / "swapped.pdf")
-    doc.build(path)
-    guide = documents.identity(documents.DEPLOYMENT_GUIDE)
-    expected = [
-        _flat(f"{guide.footer_line(doc.page_sections.get(n, ''), doc._revision)} "
-              f"Page {n} of {doc._total_pages}")
-        for n in range(1, doc._total_pages + 1)
-    ]
-    assert _page_footers(path) != expected, (
-        "the two documents' furniture must not be interchangeable")
+
+@pytest.mark.parametrize(
+    ("module", "registry", "stolen"),
+    [(deploy_gen, OPERATIONS, documents.CONTRACT),
+     (contract_gen, WIRE, documents.DEPLOYMENT_GUIDE)],
+    ids=["guide-as-contract", "contract-as-guide"])
+def test_w4f2_a_generator_cannot_publish_another_registered_documents_identity(
+        module, registry, stolen, tmp_path, monkeypatch):
+    """Re-audit-2 finding 2, both swaps, through the gate a release actually runs.
+
+    The identity registry being closed stopped a generator inventing a title; it did not stop one
+    publishing under another registered document's. `techcraft_deployment_guide.DOCUMENT_ID =
+    CONTRACT` shipped the six-page operational guide with the cover, all six footers and the PDF
+    metadata reading `KYC Tool — Platform Integration Contract`, and `_top_level_verify` passed —
+    a reader could receive the guide AS the contract with the verifier green. The old check here
+    only compared the two documents' footers to each other, which proves the titles differ today,
+    not that either document used its own.
+
+    The registry binds generator to document now, and the furniture lane asks it about the module
+    under test rather than reading the id the module chose. A stolen identity is a real, pinned
+    title on the wrong body — and that is exactly what fails.
+    """
+    monkeypatch.setattr(module, "DOCUMENT_ID", stolen)
+    with pytest.raises(AssertionError, match="not the .*derivation"):
+        _top_level_verify(module, registry, tmp_path)
+
+
+def test_w4f2_the_registry_binds_each_generator_to_the_document_it_publishes():
+    """And the binding is the registry's, not a restatement of what the generators already say:
+    a module asks which document it is, so the two sides cannot agree by construction."""
+    import inspect
+
+    bindings = {
+        contract_gen: documents.CONTRACT,
+        deploy_gen: documents.DEPLOYMENT_GUIDE,
+    }
+    for module, expected in bindings.items():
+        assert documents.bound_id(module.__name__) == expected
+        assert expected == module.DOCUMENT_ID, (
+            f"{module.__name__} publishes as {module.DOCUMENT_ID!r}, not its bound document")
+        source = inspect.getsource(module)
+        assert "bound_id(__name__)" in source, (
+            f"{module.__name__} must ASK the registry which document it is")
+        for literal in (documents.CONTRACT, documents.DEPLOYMENT_GUIDE, documents.TEST_FIXTURE):
+            assert f'"{literal}"' not in source, (
+                f"{module.__name__} names a document id literally; the binding is the registry's")
+    # closed both ways: every published identity is bound to one module, and an unbound module
+    # has no document at all
+    published = {i.id for i in documents.DOCUMENT_IDENTITIES.values() if i.module}
+    assert set(documents.PUBLISHED_BY_MODULE.values()) == published == set(bindings.values())
+    with pytest.raises(KeyError, match="publishes no registered document"):
+        documents.bound_id("docs.generators.not_a_generator")
 
 
 def test_w3f3_the_identity_registry_is_the_only_source_of_furniture_text():
@@ -521,7 +566,7 @@ def test_w3f3_the_identity_registry_is_the_only_source_of_furniture_text():
 
     for module in (contract_gen, deploy_gen):
         source = inspect.getsource(module)
-        published = documents.identity(module.DOCUMENT_ID)
+        published = documents.identity_of(module.__name__)
         assert published.title not in source, (
             f"{module.__name__} restates its own title; identity belongs to the registry alone")
         assert not hasattr(module, "MANIFEST")
@@ -545,7 +590,7 @@ def test_w2f3_a_tampered_footer_title_fails_the_furniture_lane(tmp_path):
     finally:
         render_module._stamped_canvas = real
     with pytest.raises(AssertionError, match="not the .*derivation"):
-        _verify_footers(doc, path)
+        _verify_footers(doc, path, contract_gen)
 
 
 @pytest.mark.parametrize("generator", [contract_gen, deploy_gen], ids=["contract", "guide"])
@@ -562,7 +607,7 @@ def test_w2f3_the_real_release_paths_publish_governed_furniture(generator, tmp_p
         doc = generator.build()
     doc.build(str(tmp_path / "twin.pdf"))
     assert _page_footers(out) == _page_footers(str(tmp_path / "twin.pdf"))
-    _verify_footers(doc, out)
+    _verify_footers(doc, out, generator)
     with pdfplumber.open(out) as pdf:
         assert (pdf.metadata.get("Title") or "") == documents.identity(generator.DOCUMENT_ID).title
 
@@ -678,7 +723,9 @@ def _top_level_verify(generator, registry, tmp_path):
                 tables.append([[_flat(cell or "") for cell in row] for row in table])
     _verify_tables_match_model(doc, tables)
     _verify_prose_stream(doc, _page_prose(path))
-    _verify_footers(doc, path)  # the band the other three lanes subtract (Wave-2 finding 3)
+    # the band the other three lanes subtract (Wave-2 finding 3), checked against the identity
+    # the REGISTRY binds to this generator rather than the one the generator picked
+    _verify_footers(doc, path, generator)
 
 
 def _hmac_rule_saying(answer: str):
@@ -914,16 +961,16 @@ def test_claim_table_accepts_no_caller_rows_or_headers():
 
 
 def test_a_table_claim_without_declared_headers_cannot_render():
-    """expected_matrix refuses a claim with no table_headers, so the registry cannot quietly
+    """expected_matrix refuses a claim with no declared columns, so the registry cannot quietly
     hand column-title authorship back to a caller."""
     doc = Doc(Registry(name="headless", claims=(
         Claim(id="X.NOHEAD", value=(("a", "b"),), authority="test"),
     )), TEST_DOCUMENT)
-    with pytest.raises(ValueError, match="declares no table_headers"):
+    with pytest.raises(ValueError, match="declares no columns"):
         doc.claim_table("X.NOHEAD", [1 * render_module.INCH, 1 * render_module.INCH])
     with pytest.raises(ValueError, match="does not fit the declared"):
-        projection.expected_matrix(Claim(id="X.WIDTH", value=(("a", "b", "c"),),
-                                         authority="test", table_headers=("One", "Two")))
+        projection.expected_matrix(Claim(id="X.WIDTH", value=(("a", "b", "c"),), authority="test",
+                                         columns=(Column("One", PROSE), Column("Two", PROSE))))
 
 
 def test_w2f4_a_prose_cell_that_loses_its_commas_fails(tmp_path):
@@ -1061,16 +1108,49 @@ def test_w3f2_a_caller_cannot_declare_a_prose_column_lossy(tmp_path):
         _verify_tables_match_model(doc, tables)
 
 
-def test_w3f2_every_declared_token_column_is_within_its_table():
-    """The registry's declaration is itself checked: a token column outside the table it names
-    would silently forgive nothing (or the wrong column)."""
+def test_w4f1_a_column_role_cannot_exist_apart_from_the_column_it_governs():
+    """Re-audit-2 finding 1, the structural half. The declaration used to be a parallel tuple of
+    integers — a second list to keep in step with the headers, and a field a coherent
+    `dataclasses.replace` could rewrite. There is no such field: a role is a member of a closed
+    set, written on the column it governs, so 'outside its table' and 'aimed at the wrong column'
+    are not states this registry can be in.
+    """
     for registry in (WIRE, OPERATIONS):
         for claim in registry.claims:
+            assert len(claim.headers) == len(claim.columns)
             for index in claim.token_columns:
-                assert 0 <= index < len(claim.table_headers), (claim.id, index)
-    with pytest.raises(ValueError, match="outside its"):
-        Claim(id="X.BAD", value=(("a", "b"),), authority="t",
-              table_headers=("One", "Two"), token_columns=(5,))
+                assert 0 <= index < len(claim.columns), (claim.id, index)
+    with pytest.raises(TypeError):  # no field of this name is left to replace
+        dataclasses.replace(WIRE["WIRE.INGEST.STATUS"], token_columns=(1,))
+    with pytest.raises(ValueError, match="not a ColumnRole"):
+        Column("One", "token")
+    with pytest.raises(ValueError, match="typed `Column` records"):
+        Claim(id="X.BAD", value=(("a", "b"),), authority="t", columns=("One", "Two"))
+
+
+def test_w4f1_a_registry_edit_cannot_make_a_prose_column_lossy(tmp_path):
+    """Re-audit-2 finding 1, Codex's exact witness, through the gate a release actually runs.
+
+    Marking `WIRE.INGEST.STATUS`'s Meaning column as a token column is a coherent registry edit:
+    every row still fits, the renderer honours it, and the page comparison then forgives the
+    commas `_token_cell` destroys. On the pre-fold tree it printed `(stored response verbatim) or
+    an inline reviewer.manual_approve which runs without a queued job` — punctuation stripped
+    from externally-binding text — with `_receipt_problems` and `_top_level_verify` both green,
+    because the display schema was classified as publishing no text.
+
+    The role is reviewed registry authority now, so the same edit changes a pinned receipt and
+    the release verifier refuses it by name.
+    """
+    from .test_contract_registry_authority import _receipt_problems, _swapped_claim
+
+    lossy = tuple(dataclasses.replace(column, role=ColumnRole.TOKEN) if index == 1 else column
+                  for index, column in enumerate(WIRE["WIRE.INGEST.STATUS"].columns))
+    with _swapped_claim(WIRE, "WIRE.INGEST.STATUS", columns=lossy):
+        problems = _receipt_problems((WIRE, OPERATIONS))
+        assert any("Column.role" in p and "changed since it was reviewed" in p
+                   for p in problems), problems
+        with pytest.raises(AssertionError, match="changed since it was reviewed"):
+            _top_level_verify(contract_gen, WIRE, tmp_path)
 
 
 def test_the_story_has_no_public_append():
@@ -1542,7 +1622,7 @@ def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatc
 
 RENDERER_PROSE = {
     # Table blocks no longer appear here at all (Wave 2 F5): their column titles come from
-    # Claim.table_headers and every cell from the projection, so a claim table carries no
+    # Claim.columns and every cell from the projection, so a claim table carries no
     # renderer-authored words to pin.
     # ── contract ──────────────────────────────────────────────────────────────────────────────
     ("contract", "WIRE.INGEST.EXTRA_FIELDS", 0): ("3dbd54f03ecebb08",
@@ -1591,11 +1671,11 @@ def _connective_text(block, claim) -> str:
     for row in block.rows:
         parts.extend(row)
     text = "\n".join(parts)
-    # column titles are claim-supplied too (Claim.table_headers, Wave 2 F5), so they are not
+    # column titles are claim-supplied too (Claim.columns, Wave 2 F5), so they are not
     # the renderer's words any more than the cells are
     leaves = sorted(
         (leaf for leaf in (*projection.leaf_strings(claim.value, block.row_fields),
-                           *claim.table_headers) if leaf),
+                           *claim.headers) if leaf),
         key=len, reverse=True,
     )
     for leaf in leaves:

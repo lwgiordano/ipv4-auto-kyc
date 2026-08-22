@@ -8,13 +8,16 @@ OPS.BLOCKER.PRODUCTION_PROVIDERS, which the tests prove by executing the provide
 this document stands a staging environment up and tells you what production still needs.
 """
 
-from docs.contracts.documents import DEPLOYMENT_GUIDE, identity
+from docs.contracts.documents import bound_id, identity
 from docs.contracts.operations import OPERATIONS
 from docs.generators.render import INCH, Doc, escape
 
-# This document names itself by ID; its title and output live in the closed identity registry
-# (Wave-2 re-audit finding 3), so there is nothing here for a coherent edit to falsify.
-DOCUMENT_ID = DEPLOYMENT_GUIDE
+# This module does not CHOOSE which document it is (re-audit-2 finding 2). The registry binds
+# generator to document, and this asks it; the furniture verifier asks the same registry the same
+# question about the module under test, so the two answers are independent of anything here.
+# Title and output follow from the id, so there is no identity text at this layer either
+# (Wave-2 re-audit finding 3).
+DOCUMENT_ID = bound_id(__name__)
 OUT = identity(DOCUMENT_ID).out
 
 REQUIRED_CLAIMS = (
