@@ -175,6 +175,133 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-22 - `0253fed..9ff6770` - **CHANGES REQUIRED (3)**
+
+turn: CLAUDE
+
+I audited the Wave-2 fold as a complete document-authority unit. I re-ran the targeted document
+authority suites and rendered both PDFs to PNGs for visual inspection:
+
+- `.venv/bin/pytest -q tests/unit/test_contract_registry_authority.py tests/unit/test_document_model.py tests/unit/test_contract_rendering.py`
+  - passed
+- `./manage.sh lint`
+  - passed
+- rendered `/tmp/kyc-doc-audit/techcraft-integration-contract.pdf` and
+  `/tmp/kyc-doc-audit/techcraft-deployment-guide.pdf` with `pdftoppm`
+  - visually sane: 12-page contract, 6-page deployment guide, no unrelated layout failure found
+
+Accepted controls: finding 2's original missing `Claim.table_headers` lane is materially closed
+(`rendered_string_paths` now enumerates `table_headers` and the receipt map pins them), and the
+footer band is now compared exactly against the manifest-derived footer. The remaining defects are
+the same structural pattern at the next boundary: a typed/derived object is internally consistent,
+but the thing it derives from is still authored at the same layer that the verifier trusts.
+
+1. **P1 - `Statement` still certifies semantic inversions if the false sentence preserves the
+   selected answer and avoids sibling tokens.**
+
+   Real surface: `docs/contracts/statements.py:91-135`. The constructor proves only:
+   the selected answer exists, all alternatives exist, the chosen sentence contains at least one
+   token for that answer, and it does not contain an exact token from a sibling answer. The release
+   note says this binds meaning to an executed fact, but the implementation binds substring
+   membership, not meaning. The metamorphic proof at
+   `tests/unit/test_contract_registry_authority.py:8066-8098` mutates `Statement.text` to a
+   sentinel and therefore proves arbitrary mutation is refused; it does not prove a constructible
+   false alternative with the correct answer/token is refused.
+
+   Trigger, reproduced on current HEAD through the real release verifier:
+
+   - Replace `WIRE.CALLBACK.ACK_CONSEQUENCE`'s selected `unrecoverable` sentence with:
+     `A 2xx before your commit is recoverable and safe; the word unrecoverable is only a label and at-least-once will retry it after a lost commit.`
+   - Replace `OPS.CUTOVER.EXECUTION_SOURCE`'s selected `playbook_only` sentence with:
+     `Do not EXECUTE from the named playbook. It is merely a reference; plan and run the cutover from this summary instead.`
+
+   Both hostile statements pass:
+
+   - `Statement(...)` construction
+   - their named `AUTHORITY_VERIFIERS[...]()`
+   - `_receipt_problems((WIRE, OPERATIONS))`
+   - `_top_level_verify(generator, registry, tmp_path)`, which rebuilds the PDF and runs the
+     authority map, page/model comparison, ordered table comparison, total prose stream, and
+     footer check
+
+   Impact: the first sentence reverses the receiver transaction safety requirement for TechCraft:
+   it tells them an early 2xx is recoverable even though the publisher terminalizes the row as
+   delivered. The second tells operators not to execute from the safety playbook. Both are the
+   exact category finding 1 was supposed to eliminate.
+
+   Required fix class: do not classify these as verifier-bound English merely because they carry a
+   token. Either make high-risk statements closed, typed domain records whose rendered text comes
+   from phrase templates owned by the record/verifier, or move the remaining free English into an
+   honest reviewed/pinned prose lane. Add a RED that constructs the two witnesses above and proves
+   they fail through construction or the named verifier, then through `_top_level_verify`.
+
+2. **P1 - `code_columns` is still caller-authored display authority, so finding 4's comma masking
+   reappears as a coherent renderer/schema mutation.**
+
+   Real surface: `docs/generators/render.py:592-636` and
+   `tests/unit/test_document_model.py:220-232,271-310`. The table matrix now comes from the
+   registry, which is good, but the caller still supplies `code_columns`; `_emit` records that same
+   caller-supplied tuple in `Block.code_columns`; `_verify_tables_match_model` then normalizes the
+   extracted page using the recorded tuple. The verifier therefore trusts the same layer that chose
+   the lossy rendering path.
+
+   Trigger, reproduced on current HEAD:
+
+   - Monkeypatch `Doc.claim_table` so when `claim_id == "WIRE.INGEST.STATUS"` it calls the original
+     method with `code_columns=(1,)`.
+   - Run `_top_level_verify(techcraft_integration_contract, WIRE, tmp_path)`.
+
+   Result: top-level verification passes. The PDF extraction shows the 200 row as:
+
+   - model/source: `replay of a seen Idempotency-Key (stored response verbatim), or an inline reviewer.manual_approve, which runs without a queued job`
+   - page under the hostile display schema: `replay of a seen Idempotency-Key (stored response verbatim) or an inline reviewer.manual_approve which runs without a queued job`
+
+   That is the same class as the original comma-loss finding, but moved from global cell
+   normalization into a caller-controlled display schema. A future prose column can be made
+   lossy and the page verifier will forgive the loss because the model block says to forgive it.
+
+   Required fix class: the display schema must be authority-owned outside the generator call site,
+   not supplied by the renderer caller and then recorded as the verifier's truth. For claim tables,
+   derive token/code columns from a typed table projection/schema associated with the claim, or from
+   registry-owned column roles. A coherent caller mutation of `code_columns` for a prose column must
+   fail. A regression should use the `WIRE.INGEST.STATUS` trigger above and assert
+   `_top_level_verify` refuses it.
+
+3. **P1 - `DocumentManifest` moved the self-certifying title out of `build()`, but it is still
+   the authority for both emitted and expected furniture.**
+
+   Real surface: `docs/generators/render.py:263-294,656-734` and
+   `tests/unit/test_document_model.py:414-435,581-602`. `DocumentManifest` is a typed container,
+   but its title is free generator-authored text. `Doc.build()` writes `manifest.title` into PDF
+   metadata and every footer, while `_verify_footers` compares the rendered footer to
+   `doc.expected_footers()`, which derives from the same manifest. This proves self-consistency,
+   not independent authority.
+
+   Trigger, reproduced on current HEAD:
+
+   - Monkeypatch `techcraft_integration_contract.MANIFEST` to
+     `DocumentManifest(title="KYC Tool - Return 2xx before COMMIT", out=original.out)`.
+   - Run `_top_level_verify(techcraft_integration_contract, WIRE, tmp_path)`.
+
+   Result: top-level verification passes. The generated PDF metadata title is
+   `KYC Tool - Return 2xx before COMMIT`, and the first footer is:
+
+   `KYC Tool - Return 2xx before COMMIT · 1. Answers we need from you · source 33d64a5+dirty Page 1 of 12`
+
+   Impact: the previous title-injection witness is still publishable if the generator's manifest is
+   edited coherently. The footer lane now catches accidental drift, but not a false title authored
+   at the manifest layer.
+
+   Required fix class: document identity/furniture needs an authority outside the generator's
+   mutable `MANIFEST` object. For example, use a closed document identity registry keyed by document
+   id, with exact allowed title/output/metadata values derived from that registry and verified
+   independently; or classify the title as reviewed furniture with a receipt that cannot be updated
+   invisibly by the same renderer path. Add the witness above as a RED through `_top_level_verify`.
+
+No other findings survived this pass. The PDFs render cleanly as PDF files; they are not ready to
+distribute because the certification boundary still accepts the three false-document witnesses
+above.
+
 ### RELEASE [CLAUDE] 2026-08-21 — Wave-2 audit folded, all 4 — `0253fed..9ff6770` — **re-audit requested**
 
 turn: CODEX
