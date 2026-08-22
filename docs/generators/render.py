@@ -95,15 +95,11 @@ def _guard_preformatted(text: str) -> str:
     return text
 
 
-class ProvenanceError(RuntimeError):
-    """A release build could not establish which commit it came from."""
-
-
 def source_revision() -> str:
     """The commit these pages were rendered from, plus a dirty marker. Printed in the footer so a
     stale PDF is distinguishable from the audited one years later.
 
-    Best-effort BY DESIGN, and that is why `build(release=True)` refuses what it returns here when
+    Best-effort BY DESIGN, and that is why `Publication.publish` refuses what it returns here when
     it degrades: swallowing every failure means a git that is missing, broken, or simply not
     installed on the build host produces a release-looking PDF stamped "source unknown", which is
     exactly the artifact the footer exists to make impossible (re-audit `4f23f23..97deeae`
@@ -564,13 +560,7 @@ class Doc:
         self._emit(claim_id, [Paragraph(body, ALERT)], lines, kind="alert",
                    projection_name=projection.ALERT)
 
-    def claim_table(
-        self,
-        claim_id: str,
-        widths,
-        heading: str | None = None,
-        row_fields: tuple[str, ...] = (),
-    ):
+    def claim_table(self, claim_id: str, widths, heading: str | None = None):
         """Render a claim's table from its registry-derived matrix — header row included.
 
         Wave 2 F5 (`4cb2cb7` finding 5): this method used to accept caller-authored `rows=` and
@@ -588,10 +578,15 @@ class Doc:
         comparison has to forgive them there; leaving the choice with the caller meant the caller
         could declare a prose column lossy and have its punctuation loss forgiven by a check
         reading the caller's own declaration.
+
+        Nor is the FIELD-to-column binding this caller's (re-audit-3 finding 1). `row_fields=`
+        was the last piece of a table's content still chosen here, and it was enough to publish
+        every value truly under every header truly with the two paired wrongly. The claim's
+        columns name the attributes; this method contributes widths and an optional heading.
         """
         claim = self.registry[claim_id]
         code_columns = claim.token_columns
-        matrix = projection.expected_matrix(claim, row_fields)
+        matrix = projection.expected_matrix(claim)
         headers, body_rows = matrix[0], matrix[1:]
         data = [[Paragraph(escape(h), CELLB) for h in headers]]
         for row in body_rows:
@@ -610,7 +605,7 @@ class Doc:
         if heading:
             flowables = [KeepTogether([Paragraph(escape(heading), H2), table])]
         self._emit(claim_id, flowables, lines, kind="table", rows=matrix,
-                   projection_name=projection.TABLE, row_fields=row_fields,
+                   projection_name=projection.TABLE, row_fields=claim.row_fields,
                    code_columns=tuple(code_columns))
 
     def table(self, headers: tuple[str, ...], rows, widths, code_columns: tuple[int, ...] = ()):
@@ -631,8 +626,16 @@ class Doc:
         self._add(Block(kind="table", claim_id=None, lines=(),
                         rows=(tuple(headers),) + tuple(tuple(str(c) for c in r) for r in rows)))
 
-    def build(self, path: str, *, release: bool = False) -> str:
-        """Render to `path`, stamping this document's identity on every page.
+    def render(self, path: str) -> str:
+        """Draw to `path`, stamping this document's identity on every page.
+
+        This is the INTERNAL renderer — previews, tests, intermediate artifacts. It is not how a
+        document leaves the repo. Publishing goes through `docs.generators.publication`, which
+        alone decides the filename and refuses provenance a reader could not check (re-audit-3
+        findings 2-4). This used to be `build(path, *, release=False)`, and the default was the
+        whole defect: both documented `main()` commands called it without the flag, so the only
+        publication path in the repo was the one with the provenance refusal switched off. A
+        release is not a flag on a preview now; it is a different function.
 
         There is no `title` parameter, and no identity object to pass either (Wave-2 audit
         finding 3 and its re-audit): the title comes from the closed registry keyed by the
@@ -650,19 +653,6 @@ class Doc:
         """
         revision = source_revision()
         self.placements = []
-        if release:
-            # A preview may be built from anything. A RELEASE artifact is the thing someone will
-            # still be holding in a year, so it must name a commit anyone can check out.
-            if revision == "unknown":
-                raise ProvenanceError(
-                    "release build cannot determine the source commit; refusing to stamp a PDF "
-                    "'source unknown'. Build from a git checkout."
-                )
-            if revision.endswith("+dirty"):
-                raise ProvenanceError(
-                    f"release build has uncommitted changes ({revision}); the stamped commit "
-                    "would not reproduce these pages. Commit first, then rebuild."
-                )
         placements = self.placements
         page_sections: dict[int, str] = {}
         self.page_sections = page_sections

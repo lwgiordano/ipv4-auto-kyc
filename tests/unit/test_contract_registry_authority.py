@@ -7723,12 +7723,56 @@ REGISTRY_SCHEMA_PINS = {
         ("f55a2cc14b3f7d0e", "roles: Setting=token | Default=prose"),
     ("OPS.HEALTH.PROBES", "columns[]:Column.role"):
         ("ec9931734d9d9611", "roles: Surface=prose | Contract=prose | Action=prose"),
+
+    # …and which ROW ATTRIBUTE lands under each header (re-audit-3 finding 1). This was
+    # `claim_table(row_fields=...)`, chosen at the generator call and recorded on the Block the
+    # checks then read, so re-aiming it published every value truly under every header truly with
+    # the pairs wrong — the missing-authority explanation under `Blocked step`, the acceptance
+    # witness under `Why it cannot be exercised today`, `_top_level_verify` green. The label shows
+    # the pairing itself, because a digest over field names is not something anyone can read.
+    ("WIRE.INGEST.HEADERS", "columns[]:Column.field"):
+        ("42ae47fd4f9e1d17", "binds: Header<-name | Value<-value_note | Why<-why"),
+    ("WIRE.INGEST.STATUS", "columns[]:Column.field"):
+        ("01ba4719c80b6fe9", "binds: positional tuple rows, no column names an attribute"),
+    ("WIRE.EVENT.TABLE", "columns[]:Column.field"):
+        ("0ffca65db090f3aa",
+         "binds: event_type<-name | Required<-required_display | Optional<-optional_display | "
+         "Notes<-note"),
+    ("WIRE.SIGN.ROTATION_RETIREMENT", "columns[]:Column.field"):
+        ("0536d0037b84cb98",
+         "binds: Direction<-direction | Blocked step<-transition | Why blocked<-why_blocked | "
+         "What unblocks it<-unblocked_by"),
+    ("WIRE.CALLBACK.VALIDATION", "columns[]:Column.field"):
+        ("367dab3505422001", "binds: Invalid input<-invalid_input | Disposition<-disposition"),
+    ("WIRE.CALLBACK.EFFECTIVENESS", "columns[]:Column.field"):
+        ("45235df6e16be0d7",
+         "binds: Phase<-phase | When<-condition | Record<-record | Effective?<-effective | "
+         "Why<-why"),
+    ("WIRE.CALLBACK.LEGEND", "columns[]:Column.field"):
+        ("01ba4719c80b6fe9", "binds: positional tuple rows, no column names an attribute"),
+    ("WIRE.CALLBACK.RELEASE", "columns[]:Column.field"):
+        ("e46896959678b9e0",
+         "binds: When<-condition | Record<-record | Effective?<-effective | Why<-why"),
+    ("WIRE.ORDERING.PENDING_INPUTS", "columns[]:Column.field"):
+        ("6e35378a435b3e42",
+         "binds: #<-obligation | Owner<-owner | question<-question | shape<-answer_type | "
+         "blocked<-blocked_deliverable"),
+    ("WIRE.RETENTION.BY_KIND", "columns[]:Column.field"):
+        ("01ba4719c80b6fe9", "binds: positional tuple rows, no column names an attribute"),
+    ("OPS.PROCESS.COMMANDS", "columns[]:Column.field"):
+        ("75a11da44c802486", "binds: positional tuple rows, no column names an attribute"),
+    ("OPS.INFRA.COMPONENTS", "columns[]:Column.field"):
+        ("75a11da44c802486", "binds: positional tuple rows, no column names an attribute"),
+    ("OPS.CONFIG.DEFAULTS", "columns[]:Column.field"):
+        ("279f581798f13762", "binds: Setting<-variable | Default<-display"),
+    ("OPS.HEALTH.PROBES", "columns[]:Column.field"):
+        ("75a11da44c802486", "binds: positional tuple rows, no column names an attribute"),
 }
 
 # The paths the SCHEMA lane may hold. Without this the two reviewed tables are interchangeable,
 # and prose filed under "display authority" would be reviewed under a label that does not quote
 # it — which is the laundering the split exists to prevent.
-DISPLAY_SCHEMA_PATHS = frozenset({"columns[]:Column.role"})
+DISPLAY_SCHEMA_PATHS = frozenset({"columns[]:Column.role", "columns[]:Column.field"})
 
 
 def _prose_digest(texts) -> str:
@@ -7802,9 +7846,11 @@ def test_the_two_reviewed_lanes_are_not_interchangeable():
     assert not misfiled, f"display authority pinned as prose: {sorted(misfiled)}"
     assert not {k for k in VERIFIER_BOUND if k[1] in DISPLAY_SCHEMA_PATHS}, (
         "no verifier executes a display choice; it is reviewed, and says so")
-    # and the lane is not empty of the thing it governs: every table claim's roles are pinned
-    declared = {(c.id, "columns[]:Column.role")
-                for reg in (WIRE, OPERATIONS) for c in reg.claims if c.columns}
+    # and the lane is not empty of the thing it governs: every table claim's roles AND its
+    # header-to-attribute bindings are pinned
+    declared = {(c.id, path)
+                for reg in (WIRE, OPERATIONS) for c in reg.claims if c.columns
+                for path in sorted(DISPLAY_SCHEMA_PATHS)}
     assert declared == set(REGISTRY_SCHEMA_PINS), (
         f"unpinned: {sorted(declared - set(REGISTRY_SCHEMA_PINS))}")
 

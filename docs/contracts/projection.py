@@ -118,23 +118,24 @@ def expected_lines(claim, projection: str) -> tuple[str, ...]:
     raise AssertionError(projection)  # pragma: no cover — PROJECTIONS is closed
 
 
-def expected_rows(claim, projection: str, row_fields: tuple[str, ...] = ()) -> tuple[tuple, ...]:
+def expected_rows(claim, projection: str) -> tuple[tuple, ...]:
     """The body rows this claim must contribute, header row excluded.
 
-    `row_fields` names the dataclass attributes to project, in column order, when the claim's rows
-    are dataclasses rather than tuples; when omitted, the row type's own `PUBLISHED_FIELDS`
-    declaration is used, so the column order is stated once, at the type.
+    Which attribute lands in which column is the CLAIM's, taken from its own column schema
+    (re-audit-3 finding 1). It used to be a `row_fields` argument threaded from the generator
+    call and recorded on the Block the checks then read, so a caller could re-aim the projection
+    and publish true values under true headers in false pairs. There is no argument to pass.
     """
     if projection != TABLE:
         return ()
     rows = []
     for row in claim.value:
         if is_dataclass(row) and not isinstance(row, type):
-            names = row_fields or getattr(type(row), "PUBLISHED_FIELDS", None)
+            names = claim.row_fields
             if not names:
                 raise ValueError(
-                    f"{claim.id}: {type(row).__name__} rows need row_fields or a "
-                    "PUBLISHED_FIELDS declaration to fix their column order"
+                    f"{claim.id}: {type(row).__name__} rows are projected by name, so every "
+                    "column must declare the attribute beneath it"
                 )
             rows.append(tuple(str(getattr(row, name)) for name in names))
         elif isinstance(row, (tuple, list)):
@@ -144,7 +145,7 @@ def expected_rows(claim, projection: str, row_fields: tuple[str, ...] = ()) -> t
     return tuple(rows)
 
 
-def expected_matrix(claim, row_fields: tuple[str, ...] = ()) -> tuple[tuple[str, ...], ...]:
+def expected_matrix(claim) -> tuple[tuple[str, ...], ...]:
     """The COMPLETE table this claim publishes: header row first, then every body row, in order.
 
     Wave 2 F5 (`4cb2cb7` finding 5): the previous comparison read tables back as bags of leaves,
@@ -160,7 +161,7 @@ def expected_matrix(claim, row_fields: tuple[str, ...] = ()) -> tuple[tuple[str,
             "not the renderer, owns a table's column titles and their display roles"
         )
     headers = tuple(str(cell) for cell in claim.headers)
-    rows = expected_rows(claim, TABLE, row_fields)
+    rows = expected_rows(claim, TABLE)
     for row in rows:
         if len(row) != len(headers):
             raise ValueError(

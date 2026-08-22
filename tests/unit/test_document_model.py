@@ -17,8 +17,14 @@ one is located on the built page, in document order, exactly once, inside its de
 import contextlib
 import dataclasses
 import hashlib
+import importlib.machinery
+import inspect
+import os
 import re
+import subprocess
+import sys
 from collections import Counter
+from pathlib import Path
 
 import pdfplumber
 import pytest
@@ -44,6 +50,9 @@ UNIQUE_LINE_CHARS = 45
 TEST_DOCUMENT = TEST_FIXTURE
 
 GENERATORS = [(contract_gen, WIRE), (deploy_gen, OPERATIONS)]
+
+# the documented commands run from the repo root
+REPO_ROOT = str(Path(__file__).resolve().parents[2])
 
 
 def _flat(text: str) -> str:
@@ -135,13 +144,13 @@ def body_text(path: str) -> str:
 
 def _page_text(generator, tmp_path) -> str:
     path = str(tmp_path / "model.pdf")
-    _build(generator).build(path)
+    _build(generator).render(path)
     return body_text(path)
 
 
 def _page_tables(generator, tmp_path):
     path = str(tmp_path / "model-tables.pdf")
-    _build(generator).build(path)
+    _build(generator).render(path)
     tables = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -284,7 +293,14 @@ def _verify_tables_match_model(doc, tables) -> None:
                 f"{block.claim_id}: a claim table renders only under the TABLE projection, "
                 f"not {block.projection!r}"
             )
-            wanted = projection.expected_matrix(doc.registry[block.claim_id], block.row_fields)
+            claim = doc.registry[block.claim_id]
+            # the CLAIM's projection, derived without consulting the Block: `row_fields` was a
+            # caller argument the renderer recorded and this comparison then trusted, so the
+            # generator could re-aim which value fell under which header (re-audit-3 finding 1)
+            wanted = projection.expected_matrix(claim)
+            assert block.row_fields == claim.row_fields, (
+                f"{block.claim_id}: the renderer projected {block.row_fields} but the claim "
+                f"binds {claim.row_fields} to its columns")
             assert block.rows == wanted, (
                 f"{block.claim_id}: the recorded table is not the registry's matrix.\n"
                 f"  registry: {wanted[:3]}...\n  recorded: {block.rows[:3]}..."
@@ -468,7 +484,7 @@ def test_the_page_furniture_is_exactly_the_manifests_derivation(rendered, tmp_pa
     generator, _registry, _doc, _page, _tables = rendered
     doc = _build(generator)
     path = str(tmp_path / "furniture.pdf")
-    doc.build(path)
+    doc.render(path)
     _verify_footers(doc, path, generator)
 
 
@@ -477,10 +493,10 @@ def test_w2f3_a_false_title_cannot_be_supplied_at_build_time():
     OBJECT either — a Doc names its document by id and looks the identity up itself."""
     doc = _build(contract_gen)
     with pytest.raises(TypeError):
-        doc.build("/tmp/unused.pdf", "KYC Tool — Return 2xx before COMMIT")
+        doc.render("/tmp/unused.pdf", "KYC Tool — Return 2xx before COMMIT")
     import inspect
 
-    assert "title" not in inspect.signature(render_module.Doc.build).parameters
+    assert "title" not in inspect.signature(render_module.Doc.render).parameters
     with pytest.raises(KeyError, match="no document identity"):
         render_module.Doc(WIRE, "KYC Tool — Return 2xx before COMMIT")
 
@@ -545,7 +561,7 @@ def test_w4f2_the_registry_binds_each_generator_to_the_document_it_publishes():
         assert expected == module.DOCUMENT_ID, (
             f"{module.__name__} publishes as {module.DOCUMENT_ID!r}, not its bound document")
         source = inspect.getsource(module)
-        assert "bound_id(__name__)" in source, (
+        assert "publication_for(__name__, globals().get(\"__spec__\"))" in source, (
             f"{module.__name__} must ASK the registry which document it is")
         for literal in (documents.CONTRACT, documents.DEPLOYMENT_GUIDE, documents.TEST_FIXTURE):
             assert f'"{literal}"' not in source, (
@@ -556,6 +572,91 @@ def test_w4f2_the_registry_binds_each_generator_to_the_document_it_publishes():
     assert set(documents.PUBLISHED_BY_MODULE.values()) == published == set(bindings.values())
     with pytest.raises(KeyError, match="publishes no registered document"):
         documents.bound_id("docs.generators.not_a_generator")
+
+
+def test_w4f3_the_binding_survives_being_run_as_a_command(tmp_path):
+    """Re-audit-3 finding 3, a regression I shipped in the identity fold.
+
+    Binding on `__name__` is right for an import and wrong for the only way these generators are
+    documented to run. Under `python -m`, `__name__` is `"__main__"`, so both published commands
+    died at import — before argparse, before rendering — with `'__main__' publishes no registered
+    document`. `__spec__.name` is the module's real dotted name either way, and the subprocess
+    REDs below are the boundary an imported-function test cannot reach.
+    """
+    spec = importlib.machinery.ModuleSpec("docs.generators.techcraft_deployment_guide", None)
+    assert documents.canonical_module("__main__", spec) == spec.name
+    assert documents.canonical_module("docs.generators.x", None) == "docs.generators.x"
+    for module in (contract_gen, deploy_gen):
+        assert module.PUBLICATION.module == module.__name__
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [(["-m", "docs.generators.techcraft_deployment_guide"], "techcraft-deployment-guide.pdf"),
+     (["-m", "docs.generators.techcraft_integration_contract",
+       "--integration-contact", SAMPLE_CONTACT, "--response-due-date", SAMPLE_DUE_DATE],
+      "techcraft-integration-contract.pdf")],
+    ids=["guide", "contract"])
+def test_w4f234_the_documented_commands_publish_governed_artifacts(command, expected, tmp_path):
+    """Re-audit-3 findings 2, 3 and 4 at the only place they are all true at once: the commands
+    the documents' own docstrings tell an operator to run, executed as subprocesses.
+
+    A dirty or unknown revision is refused HERE, not merely in a helper the command never called;
+    the artifact is named by the registry, not by an argument; and the command reaches argparse
+    at all. The run is given a clean revision through the environment probe the renderer uses.
+    """
+    env = {**os.environ, "PATH": str(tmp_path / "fakebin") + os.pathsep + os.environ["PATH"]}
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "git").write_text(
+        '#!/bin/sh\ncase "$*" in *"rev-parse"*) echo abc1234 ;; *) echo -n "" ;; esac\n')
+    (fake / "git").chmod(0o755)
+    out_dir = tmp_path / "published"
+    out_dir.mkdir()
+
+    done = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [sys.executable, *command, "--out-dir", str(out_dir)],
+        capture_output=True, text=True, cwd=REPO_ROOT, env=env, check=False)
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert [p.name for p in out_dir.iterdir()] == [expected], (
+        "the published filename is the registry's")
+    with pdfplumber.open(out_dir / expected) as pdf:
+        assert "source abc1234 " in (pdf.pages[0].extract_text() or "")
+
+    # …and the same command refuses a revision a reader could not check out
+    (fake / "git").write_text(
+        '#!/bin/sh\ncase "$*" in *"rev-parse"*) echo abc1234 ;; *) echo " M docs/x.py" ;; esac\n')
+    (fake / "git").chmod(0o755)
+    dirty = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [sys.executable, *command, "--out-dir", str(out_dir)],
+        capture_output=True, text=True, cwd=REPO_ROOT, env=env, check=False)
+    assert dirty.returncode != 0 and "uncommitted changes" in dirty.stderr
+
+    (fake / "git").write_text("#!/bin/sh\nexit 1\n")
+    (fake / "git").chmod(0o755)
+    unknown = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [sys.executable, *command, "--out-dir", str(out_dir)],
+        capture_output=True, text=True, cwd=REPO_ROOT, env=env, check=False)
+    assert unknown.returncode != 0 and "source commit" in unknown.stderr
+
+
+def test_w4f4_a_publication_refuses_another_documents_body_and_basename(tmp_path, monkeypatch):
+    """The two refusals the CLI used to have no opinion about. `--out` took any path, so the
+    contract published itself over `techcraft-deployment-guide.pdf` — the guide's reviewed,
+    registry-owned filename — with a Platform Integration Contract inside and nothing refusing.
+    There is no such argument: a caller picks a DIRECTORY, and the publication that owns the
+    filename also refuses a document that is not the one it publishes."""
+    from docs.generators import publication
+
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    guide_pub = deploy_gen.PUBLICATION
+    assert "--out" not in inspect.getsource(contract_gen.main).replace("--out-dir", "")
+    assert guide_pub.path(str(tmp_path)).endswith("techcraft-deployment-guide.pdf")
+    with pytest.raises(ValueError, match="not a place to change which document"):
+        guide_pub.publish(_build(contract_gen), str(tmp_path))
+    assert not list(tmp_path.iterdir()), "a refused publication writes nothing"
+    assert publication.publication_for(
+        "docs.generators.techcraft_integration_contract", None).identity.id == documents.CONTRACT
 
 
 def test_w3f3_the_identity_registry_is_the_only_source_of_furniture_text():
@@ -586,7 +687,7 @@ def test_w2f3_a_tampered_footer_title_fails_the_furniture_lane(tmp_path):
     render_module._stamped_canvas = stamped_with_lie
     try:
         path = str(tmp_path / "false-footer.pdf")
-        doc.build(path)
+        doc.render(path)
     finally:
         render_module._stamped_canvas = real
     with pytest.raises(AssertionError, match="not the .*derivation"):
@@ -596,16 +697,21 @@ def test_w2f3_a_tampered_footer_title_fails_the_furniture_lane(tmp_path):
 @pytest.mark.parametrize("generator", [contract_gen, deploy_gen], ids=["contract", "guide"])
 def test_w2f3_the_real_release_paths_publish_governed_furniture(generator, tmp_path, monkeypatch):
     """Both real `main()` entry points, executed — the paths a release actually runs, not a
-    rebuilt Doc that happens to resemble them."""
+    rebuilt Doc that happens to resemble them.
+
+    They are RELEASE paths now (re-audit-3 finding 2), so a clean revision is part of running
+    them at all; the suite runs against a working tree, which is exactly the state the real
+    command refuses."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
     if generator is contract_gen:
         out = generator.main(["--integration-contact", SAMPLE_CONTACT,
                              "--response-due-date", SAMPLE_DUE_DATE])
         doc = generator.build(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
     else:
-        out = generator.main()
+        out = generator.main([])
         doc = generator.build()
-    doc.build(str(tmp_path / "twin.pdf"))
+    doc.render(str(tmp_path / "twin.pdf"))
     assert _page_footers(out) == _page_footers(str(tmp_path / "twin.pdf"))
     _verify_footers(doc, out, generator)
     with pdfplumber.open(out) as pdf:
@@ -615,7 +721,7 @@ def test_w2f3_the_real_release_paths_publish_governed_furniture(generator, tmp_p
 def test_the_page_prose_is_exactly_the_model_and_nothing_else(rendered, tmp_path):
     generator, _registry, doc, _page, _tables = rendered
     path = str(tmp_path / "prose-total.pdf")
-    _build(generator).build(path)
+    _build(generator).render(path)
     _verify_prose_stream(doc, _page_prose(path))
 
 
@@ -714,7 +820,7 @@ def _top_level_verify(generator, registry, tmp_path):
 
     doc = _build(generator)
     path = str(tmp_path / "mutant.pdf")
-    doc.build(path)
+    doc.render(path)
     _verify_page_matches_model(doc, body_text(path))
     tables = []
     with pdfplumber.open(path) as pdf:
@@ -818,7 +924,7 @@ def test_mutation_moving_a_claim_to_the_wrong_section_fails(tmp_path):
     assert doc.section_of("WIRE.ORDERING.NO_DECIDED_AT") == "retention"
     # and the real check would reject it, because the text renders before the Retention heading
     path = str(tmp_path / "misfiled.pdf")
-    doc.build(path)
+    doc.render(path)
     with pdfplumber.open(path) as pdf:
         page = _flat("\n".join(p.extract_text() or "" for p in pdf.pages))
     start = page.find(_flat(misfiled.title))
@@ -836,7 +942,7 @@ def test_mutation_moving_a_claim_to_the_wrong_section_fails(tmp_path):
 
 def _extracted_tables(doc, tmp_path, name):
     path = str(tmp_path / f"{name}.pdf")
-    doc.build(path)
+    doc.render(path)
     tables = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -864,11 +970,11 @@ def test_a_renderer_that_draws_other_than_its_recorded_matrix_fails(tmp_path, la
     claim_id = "WIRE.CALLBACK.EFFECTIVENESS"
     real = render_module.Doc.claim_table
 
-    def hostile(self, cid, widths, heading=None, row_fields=()):
+    def hostile(self, cid, widths, heading=None):
         if cid != claim_id:
-            return real(self, cid, widths, heading=heading, row_fields=row_fields)
+            return real(self, cid, widths, heading=heading)
         claim = self.registry[cid]
-        matrix = projection.expected_matrix(claim, row_fields)
+        matrix = projection.expected_matrix(claim)
         drawn = (matrix[0], *mutate(matrix[1:]))
         data = [[render_module.Paragraph(render_module.escape(h), render_module.CELLB)
                  for h in drawn[0]]]
@@ -880,7 +986,8 @@ def test_a_renderer_that_draws_other_than_its_recorded_matrix_fails(tmp_path, la
         self._story.append(table)
         self.rendered.append(cid)
         self._add(render_module.Block(kind="table", claim_id=cid, lines=(), rows=matrix,
-                                      projection=projection.TABLE, row_fields=row_fields))
+                                      projection=projection.TABLE,
+                                      row_fields=claim.row_fields))
 
     render_module.Doc.claim_table = hostile
     try:
@@ -1172,7 +1279,7 @@ def test_an_injected_prose_flowable_fails_the_total_stream(tmp_path):
     doc = _build(contract_gen)
     doc._story.append(render_module.Paragraph("Return 2xx before COMMIT.", render_module.BODY))
     path = str(tmp_path / "injected-prose.pdf")
-    doc.build(path)
+    doc.render(path)
     with pytest.raises(AssertionError, match="not exactly the model's prose"):
         _verify_prose_stream(doc, _page_prose(path))
 
@@ -1188,7 +1295,7 @@ def test_a_duplicated_governed_paragraph_fails_the_total_stream(tmp_path):
     line = next(str(li) for li in block.lines if len(_flat(li)) < UNIQUE_LINE_CHARS)
     doc._story.append(render_module.Paragraph(render_module.escape(line), render_module.BODY))
     path = str(tmp_path / "dup-prose.pdf")
-    doc.build(path)
+    doc.render(path)
     with pytest.raises(AssertionError, match="not exactly the model's prose"):
         _verify_prose_stream(doc, _page_prose(path))
 
@@ -1306,7 +1413,7 @@ def test_a_renderer_that_displays_something_other_than_the_claim_fails(
     monkeypatch.setattr(render_module.Doc, "claim_paragraph", lying_claim_paragraph)
     doc = _build(generator)
     path = str(tmp_path / "lie.pdf")
-    doc.build(path)
+    doc.render(path)
     page = body_text(path)
 
     wanted = projection.expected_lines(registry[claim_id], projection.PARAGRAPH)[0]
@@ -1569,7 +1676,7 @@ def test_a_reworded_label_fails_the_pin(monkeypatch, tmp_path):
     monkeypatch.setattr(render_module.Doc, "claim_paragraph", relabelled)
     doc = _build(contract_gen)
     path = str(tmp_path / "relabelled.pdf")
-    doc.build(path)
+    doc.render(path)
     page = body_text(path)
 
     assert "Compliance window (years): 2555" in page, "the mutation did not reach the page"
@@ -1595,7 +1702,7 @@ def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatc
     doc = _build(deploy_gen)
     monkeypatch.setattr(render_module.Doc, "p", original)
     path = str(tmp_path / "unrecorded.pdf")
-    doc.build(path)
+    doc.render(path)
     page = body_text(path)
 
     assert "zzyzx" in page, "the unrecorded paragraph did not reach the page"

@@ -478,7 +478,8 @@ OPERATIONS = Registry(
                 SettingDefault("poc_token_ttl_hours", 72),
             ),
             authority="kyc_tool.config.Settings field defaults",
-            columns=(Column("Setting", TOKEN), Column("Default", PROSE)),
+            columns=(Column("Setting", TOKEN, "variable"),
+                     Column("Default", PROSE, "display")),
         ),
         Claim(
             id="OPS.CONFIG.PRODUCTION_FLOORS",

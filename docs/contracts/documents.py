@@ -2,7 +2,7 @@
 
 Wave-2 re-audit finding 3. The title moved out of `build()` into a `DocumentManifest`, which
 fixed the caller-supplied-title witness but left the identity itself as free text on a mutable
-object in the GENERATOR: `Doc.build()` wrote `manifest.title` into every footer and the PDF
+object in the GENERATOR: the renderer wrote `manifest.title` into every footer and the PDF
 metadata, and the furniture lane compared the page against `doc.expected_footers()`, derived from
 the same object. That proves self-consistency, not authority — editing the generator's manifest
 coherently republished `KYC Tool - Return 2xx before COMMIT` on twelve pages with every check
@@ -119,6 +119,20 @@ def identity(document_id: str) -> DocumentIdentity:
             f"no document identity {document_id!r}; the closed set is "
             f"{sorted(DOCUMENT_IDENTITIES)}"
         ) from None
+
+
+def canonical_module(name: str, spec) -> str:
+    """The dotted name of a module, the SAME whether it was imported or run with `python -m`.
+
+    Re-audit-3 finding 3, a regression I shipped. Binding on `__name__` was right for an import
+    and wrong for the only way these generators are documented to run: under `-m` Python sets
+    `__name__ == "__main__"`, so both published commands died at import with
+    `KeyError: "'__main__' publishes no registered document"` before argparse saw an argument.
+    `__spec__.name` is the module's real dotted name in both cases, and it is not a literal a
+    generator could choose — it is what the import system loaded.
+    """
+    resolved = getattr(spec, "name", "") if spec is not None else ""
+    return resolved or name
 
 
 def bound_id(module: str) -> str:

@@ -8,17 +8,19 @@ OPS.BLOCKER.PRODUCTION_PROVIDERS, which the tests prove by executing the provide
 this document stands a staging environment up and tells you what production still needs.
 """
 
-from docs.contracts.documents import bound_id, identity
+import argparse
+
 from docs.contracts.operations import OPERATIONS
+from docs.generators.publication import publication_for
 from docs.generators.render import INCH, Doc, escape
 
-# This module does not CHOOSE which document it is (re-audit-2 finding 2). The registry binds
-# generator to document, and this asks it; the furniture verifier asks the same registry the same
-# question about the module under test, so the two answers are independent of anything here.
-# Title and output follow from the id, so there is no identity text at this layer either
-# (Wave-2 re-audit finding 3).
-DOCUMENT_ID = bound_id(__name__)
-OUT = identity(DOCUMENT_ID).out
+# This module does not CHOOSE which document it is (re-audit-2 finding 2), and it does not
+# choose how the document leaves the repo either (re-audit-3 findings 2-4). See the sibling
+# generator's note: the binding is the registry's, resolved from the module's canonical dotted
+# name so `python -m` and `import` agree, and it owns the filename and the provenance refusal.
+PUBLICATION = publication_for(__name__, globals().get("__spec__"))
+DOCUMENT_ID = PUBLICATION.identity.id
+OUT = PUBLICATION.identity.out
 
 REQUIRED_CLAIMS = (
     "OPS.BLOCKER.PRODUCTION_PROVIDERS",
@@ -171,9 +173,14 @@ def build() -> Doc:
     return doc
 
 
-def main() -> str:
-    doc = build()
-    return doc.build(OUT)
+def main(argv: list[str] | None = None) -> str:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--out-dir", default=".",
+        help="directory to publish into; the FILENAME is the registry's, not a caller's"
+    )
+    args = parser.parse_args(argv)
+    return PUBLICATION.publish(build(), args.out_dir)
 
 
 if __name__ == "__main__":

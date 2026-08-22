@@ -16,7 +16,7 @@ Nothing here imports reportlab, so the registries and every authority check run 
 not the rendering toolchain is present.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from enum import StrEnum
 
 
@@ -61,16 +61,26 @@ TOKEN = ColumnRole.TOKEN
 
 @dataclass(frozen=True)
 class Column:
-    """One column of a claim's table: its title, and the role that governs its cells.
+    """One column of a claim's table: its title, the role governing its cells, and the row
+    attribute that fills them.
 
-    The role has NO default on purpose (Wave-2 re-audit-2 finding 1). A default is a role nobody
-    wrote down, and this field decides which visible cells the release verifier will forgive
-    punctuation loss in — so every column states its own, in the same reviewed record as the
-    header it sits above, and the receipt closure pins the pair.
+    The role has NO default on purpose (re-audit-2 finding 1). A default is a role nobody wrote
+    down, and this field decides which visible cells the release verifier will forgive punctuation
+    loss in — so every column states its own, in the same reviewed record as the header it sits
+    above, and the receipt closure pins the pair.
+
+    `field` is the other half of that record (re-audit-3 finding 1). Owning the headers did not
+    own which VALUE appeared beneath each one: `claim_table(row_fields=...)` left the generator
+    free to re-aim the projection, and re-aiming `WIRE.SIGN.ROTATION_RETIREMENT` published the
+    missing-authority explanation under `Blocked step` and the acceptance-witness sentence under
+    `Why it cannot be exercised today` — every value true, every header true, the pairing false,
+    and `_top_level_verify` green. Header and value are one reviewed pair now. Rows that are
+    plain tuples are positional and declare no field.
     """
 
     header: str
     role: ColumnRole
+    field: str = ""
 
     def __post_init__(self) -> None:
         if type(self.header) is not str or not self.header.strip():
@@ -80,6 +90,8 @@ class Column:
                 f"{self.header!r}: {self.role!r} is not a ColumnRole; the closed set is "
                 f"{[r.value for r in ColumnRole]}"
             )
+        if type(self.field) is not str:
+            raise ValueError(f"{self.header!r}: a column names its row attribute by name")
 
 
 @dataclass(frozen=True)
@@ -128,14 +140,58 @@ class Claim:
             if type(column) is not Column:
                 raise ValueError(
                     f"{self.id}: column {index} is {column!r}; a table's columns are typed "
-                    "`Column` records carrying a header and the role that governs how the "
-                    "cells beneath it may be drawn"
+                    "`Column` records carrying a header, the role that governs how the cells "
+                    "beneath it may be drawn, and the row attribute that fills them"
                 )
+        self._check_row_binding()
+
+    def _check_row_binding(self) -> None:
+        """A dataclass row is projected by NAME, and the names are this claim's (re-audit-3
+        finding 1). Checked against the real row type, so a column cannot name an attribute that
+        does not exist, and cross-checked against the type's own `PUBLISHED_FIELDS` so the two
+        declarations cannot disagree about what this table publishes."""
+        if not self.columns:
+            return
+        rows = self.value if isinstance(self.value, (list, tuple)) else ()
+        sample = next((row for row in rows
+                       if is_dataclass(row) and not isinstance(row, type)), None)
+        if sample is None:
+            named = [c.header for c in self.columns if c.field]
+            if named:
+                raise ValueError(
+                    f"{self.id}: columns {named} name a row attribute, but these rows are plain "
+                    "tuples projected by position"
+                )
+            return
+        available = {f.name for f in fields(sample)}
+        for column in self.columns:
+            if not column.field:
+                raise ValueError(
+                    f"{self.id}: column {column.header!r} names no row attribute, so nothing "
+                    f"fixes which {type(sample).__name__} value a reader finds beneath it"
+                )
+            if column.field not in available:
+                raise ValueError(
+                    f"{self.id}: column {column.header!r} projects "
+                    f"{type(sample).__name__}.{column.field}, which does not exist"
+                )
+        published = getattr(type(sample), "PUBLISHED_FIELDS", None)
+        if published is not None and tuple(published) != self.row_fields:
+            raise ValueError(
+                f"{self.id}: this table projects {self.row_fields} but "
+                f"{type(sample).__name__} publishes {tuple(published)}; one document cannot hold "
+                "two answers about which values it shows and in what order"
+            )
 
     @property
     def headers(self) -> tuple[str, ...]:
         """The column titles, in order — the matrix's first row."""
         return tuple(column.header for column in self.columns)
+
+    @property
+    def row_fields(self) -> tuple[str, ...]:
+        """The row attributes this table projects, in COLUMN order. Empty for tuple rows."""
+        return tuple(column.field for column in self.columns if column.field)
 
     @property
     def token_columns(self) -> tuple[int, ...]:

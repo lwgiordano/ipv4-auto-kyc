@@ -12,18 +12,20 @@ import re
 from datetime import date
 
 from docs.contracts.companion import ARTIFACT_NAME, artifact_digest
-from docs.contracts.documents import bound_id, identity
 from docs.contracts.signing_example import published_snippet
 from docs.contracts.wire import WIRE
+from docs.generators.publication import publication_for
 from docs.generators.render import INCH, Doc, escape
 
-# This module does not CHOOSE which document it is (re-audit-2 finding 2). The registry binds
-# generator to document, and this asks it; the furniture verifier asks the same registry the same
-# question about the module under test, so the two answers are independent of anything here.
-# Title and output follow from the id, so there is no identity text at this layer either
-# (Wave-2 re-audit finding 3).
-DOCUMENT_ID = bound_id(__name__)
-OUT = identity(DOCUMENT_ID).out
+# This module does not CHOOSE which document it is (re-audit-2 finding 2), and it does not
+# choose how the document leaves the repo either (re-audit-3 findings 2-4). The registry binds
+# generator to document; `PUBLICATION` is that binding resolved from the module's canonical
+# dotted name, so `python -m` and `import` reach the same answer, and it owns the filename and
+# the release provenance refusal. Title and output follow from the id, so there is no identity
+# text at this layer either (Wave-2 re-audit finding 3).
+PUBLICATION = publication_for(__name__, globals().get("__spec__"))
+DOCUMENT_ID = PUBLICATION.identity.id
+OUT = PUBLICATION.identity.out
 
 # Release inputs. These are NOT registry claims — they change per send, and nothing in the repo
 # governs them — so they are required arguments with NO defaults (re-audit `6feca36..4f23f23` F11).
@@ -343,8 +345,6 @@ def build(*, contact: str, due_date: str) -> Doc:
         # "Blocked step" must fit the longer gated clause wrapped; the two prose columns share
         # the rest of the frame.
         [0.85 * INCH, 1.45 * INCH, 2.3 * INCH, 2.1 * INCH],
-        # `refuse`/`must_reject` are the executable gate and its red specimens; checked, not shown.
-        row_fields=("direction", "transition", "why_blocked", "unblocked_by"),
     )
 
     doc.h2("The runnable signer is a file, not the page")
@@ -428,10 +428,13 @@ def main(argv: list[str] | None = None) -> str:
     parser.add_argument(
         "--response-due-date", required=True, help="ISO-8601 YYYY-MM-DD date those answers are due"
     )
-    parser.add_argument("--out", default=OUT)
+    parser.add_argument(
+        "--out-dir", default=".",
+        help="directory to publish into; the FILENAME is the registry's, not a caller's"
+    )
     args = parser.parse_args(argv)
     doc = build(contact=args.integration_contact, due_date=args.response_due_date)
-    return doc.build(args.out)
+    return PUBLICATION.publish(doc, args.out_dir)
 
 
 if __name__ == "__main__":

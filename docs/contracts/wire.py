@@ -1615,8 +1615,8 @@ WIRE = Registry(
             id="WIRE.INGEST.HEADERS",
             value=INGEST_HEADERS,
             authority="kyc_tool.api.routes_events.post_event + kyc_tool.api.auth",
-            columns=(Column("Header", TOKEN), Column("Value", PROSE),
-                     Column("Why", PROSE)),
+            columns=(Column("Header", TOKEN, "name"), Column("Value", PROSE, "value_note"),
+                     Column("Why", PROSE, "why")),
         ),
         Claim(
             id="WIRE.INGEST.STATUS",
@@ -1670,8 +1670,10 @@ WIRE = Registry(
             id="WIRE.EVENT.TABLE",
             value=EVENT_TABLE,
             authority="kyc_tool.api.schemas.EventType / PAYLOAD_MODELS required+optional fields",
-            columns=(Column("event_type", TOKEN), Column("Required payload", TOKEN),
-                     Column("Optional payload", TOKEN), Column("Notes", PROSE)),
+            columns=(Column("event_type", TOKEN, "name"),
+                     Column("Required payload", TOKEN, "required_display"),
+                     Column("Optional payload", TOKEN, "optional_display"),
+                     Column("Notes", PROSE, "note")),
         ),
         # ── signing ───────────────────────────────────────────────────────────────────────────
         Claim(
@@ -1730,9 +1732,10 @@ WIRE = Registry(
                       "closed column inventory, kyc_tool.ops.cutover closed record inventory, "
                       "SIGNED_FLEET_RECEIPT_SCHEMA",
             state=ClaimState.BLOCKED,
-            columns=(Column("Direction", PROSE), Column("Blocked step", PROSE),
-                     Column("Why it cannot be exercised today", PROSE),
-                     Column("What unblocks it", PROSE)),
+            columns=(Column("Direction", PROSE, "direction"),
+                     Column("Blocked step", PROSE, "transition"),
+                     Column("Why it cannot be exercised today", PROSE, "why_blocked"),
+                     Column("What unblocks it", PROSE, "unblocked_by")),
         ),
         # ── callbacks ─────────────────────────────────────────────────────────────────────────
         Claim(
@@ -1785,7 +1788,8 @@ WIRE = Registry(
             value=RECEIVER_VALIDATION_RULES,
             authority="docs/contracts/receiver_reference.py _validate/validate_state — every "
                       "rule's specimen is executed by the authority verifier and must refuse",
-            columns=(Column("Invalid input", PROSE), Column("Disposition", PROSE)),
+            columns=(Column("Invalid input", PROSE, "invalid_input"),
+                     Column("Disposition", PROSE, "disposition")),
         ),
         Claim(
             id="WIRE.CALLBACK.RECEIVER_TXN",
@@ -1812,9 +1816,11 @@ WIRE = Registry(
                       "docs/contracts/receiver_reference.py (executable, scenario-tested) + the "
                       "invariant oracle in the authority test (every row and the executed "
                       "decision held against it)",
-            columns=(Column("Phase", PROSE), Column("When this row applies", PROSE),
-                     Column("Record", PROSE), Column("Effective?", PROSE),
-                     Column("Why", PROSE)),
+            columns=(Column("Phase", PROSE, "phase"),
+                     Column("When this row applies", PROSE, "condition"),
+                     Column("Record", PROSE, "record"),
+                     Column("Effective?", PROSE, "effective"),
+                     Column("Why", PROSE, "why")),
         ),
         Claim(
             id="WIRE.CALLBACK.LEGEND",
@@ -1832,8 +1838,10 @@ WIRE = Registry(
                       "receiver_reference.py (executable, scenario-tested) + the release oracle "
                       "in the authority test; partition proven over all 72 states",
             state=ClaimState.PENDING,
-            columns=(Column("When this row applies", PROSE), Column("Record", PROSE),
-                     Column("Effective?", PROSE), Column("Why", PROSE)),
+            columns=(Column("When this row applies", PROSE, "condition"),
+                     Column("Record", PROSE, "record"),
+                     Column("Effective?", PROSE, "effective"),
+                     Column("Why", PROSE, "why")),
         ),
         Claim(
             id="WIRE.CALLBACK.RETRY",
@@ -1914,9 +1922,11 @@ WIRE = Registry(
         Claim(
             id="WIRE.ORDERING.PENDING_INPUTS",
             value=PENDING_024_INPUTS,
-            columns=(Column("#", PROSE), Column("Owner", PROSE),
-                     Column("What we need to know", PROSE), Column("Answer shape", PROSE),
-                     Column("Blocked deliverable — answer alone does not unblock", PROSE)),
+            columns=(Column("#", PROSE, "obligation"), Column("Owner", PROSE, "owner"),
+                     Column("What we need to know", PROSE, "question"),
+                     Column("Answer shape", PROSE, "answer_type"),
+                     Column("Blocked deliverable — answer alone does not unblock", PROSE,
+                            "blocked_deliverable")),
             authority=".agents/superpowers/specs/2026-07-22-pr7b-activation-platform-ordering-"
                       "design.md open blockers O1-O4 (parsed live by the authority test) + "
                       "docs.contracts.wire.resolution_problems (refuses every artifact until the "
