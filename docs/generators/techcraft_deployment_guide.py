@@ -180,7 +180,7 @@ def main(argv: list[str] | None = None) -> str:
         help="directory to publish into; the FILENAME is the registry's, not a caller's"
     )
     args = parser.parse_args(argv)
-    return PUBLICATION.publish(build(), args.out_dir)
+    return PUBLICATION.publish(args.out_dir)
 
 
 if __name__ == "__main__":

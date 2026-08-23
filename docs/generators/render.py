@@ -283,7 +283,13 @@ class Doc:
                 "docs/contracts/documents.py, never from an object a caller supplies"
             )
         self.registry = registry
-        self.document_id = document_id
+        # READ-ONLY (re-audit-4 finding 1). `document_id` was ordinary mutable state AND the
+        # only thing publication checked, while rendering used the identity cached beside it:
+        # `doc = deploy_gen.build(); doc.document_id = CONTRACT` published six pages of
+        # operational guide under the contract's governed filename, cover, footers and metadata
+        # all saying guide, and the release path accepted it. A document is what it was
+        # constructed as.
+        self._document_id = document_id
         self.identity = documents.identity(document_id)
         # PRIVATE on purpose (Wave 2 F6): when this was `self.story`, a caller could append a
         # flowable directly — visible on the page, recorded in no block — and the R15 witness
@@ -626,7 +632,11 @@ class Doc:
         self._add(Block(kind="table", claim_id=None, lines=(),
                         rows=(tuple(headers),) + tuple(tuple(str(c) for c in r) for r in rows)))
 
-    def render(self, path: str) -> str:
+    @property
+    def document_id(self) -> str:
+        return self._document_id
+
+    def render(self, path: str, *, revision: str | None = None) -> str:
         """Draw to `path`, stamping this document's identity on every page.
 
         This is the INTERNAL renderer — previews, tests, intermediate artifacts. It is not how a
@@ -651,7 +661,13 @@ class Doc:
         the same story does not work: reportlab mutates flowables as it lays them out (frame
         binding, split state), so a second build over already-rendered objects raises LayoutError.
         """
-        revision = source_revision()
+        # ONE provenance value per artifact (re-audit-4 finding 2). This used to read
+        # `source_revision()` itself while the publication read it separately to decide whether
+        # to allow the release at all, so the value AUTHORIZED and the value STAMPED were two
+        # different reads of a moving world: approving `aaaaaaa` and printing `bbbbbbb`, or
+        # `bbbbbbb+dirty`, needed nothing but a commit between them. A publication passes the
+        # exact value it validated; a preview, which authorizes nothing, may read it here.
+        revision = source_revision() if revision is None else revision
         self.placements = []
         placements = self.placements
         page_sections: dict[int, str] = {}

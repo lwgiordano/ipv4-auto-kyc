@@ -30,7 +30,8 @@ from types import MappingProxyType
 class DocumentIdentity:
     """One document's published identity: what its cover, footers, and metadata may say.
 
-    `module` is the dotted name of the generator that publishes this document, and it is the half
+    `module` and `registry` are the dotted names of the generator that publishes this document
+    and of the registry its body is derived from. They are the half
     of the record that makes the identity BINDING rather than merely well-formed (re-audit-2
     finding 2). Without it the registry proved only that some registered title was stamped
     consistently: setting `techcraft_deployment_guide.DOCUMENT_ID = CONTRACT` published the
@@ -46,6 +47,7 @@ class DocumentIdentity:
     title: str
     out: str
     module: str = ""
+    registry: str = ""
 
     def __post_init__(self) -> None:
         if not self.id.strip():
@@ -56,6 +58,14 @@ class DocumentIdentity:
             raise ValueError(f"{self.id}: a document identity names its output .pdf")
         if type(self.module) is not str:
             raise ValueError(f"{self.id}: a publishing module is named by its dotted path")
+        if type(self.registry) is not str:
+            raise ValueError(f"{self.id}: a source registry is named by `module:attribute`")
+        if bool(self.module) != bool(self.registry):
+            raise ValueError(
+                f"{self.id}: a published document names BOTH the module that publishes it and "
+                "the registry its body comes from; one without the other leaves half the "
+                "publication unbound"
+            )
 
     def footer_line(self, section: str, revision: str) -> str:
         """The exact left-hand footer string for a page in `section`. ONE derivation, shared by
@@ -79,12 +89,14 @@ DOCUMENT_IDENTITIES = MappingProxyType({
             title="KYC Tool — Platform Integration Contract",
             out="techcraft-integration-contract.pdf",
             module="docs.generators.techcraft_integration_contract",
+            registry="docs.contracts.wire:WIRE",
         ),
         DocumentIdentity(
             id=DEPLOYMENT_GUIDE,
             title="KYC Tool — Staging Integration and Production Readiness Guide",
             out="techcraft-deployment-guide.pdf",
             module="docs.generators.techcraft_deployment_guide",
+            registry="docs.contracts.operations:OPERATIONS",
         ),
         DocumentIdentity(
             id=TEST_FIXTURE,

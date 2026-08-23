@@ -609,7 +609,12 @@ def test_w4f234_the_documented_commands_publish_governed_artifacts(command, expe
     fake = tmp_path / "fakebin"
     fake.mkdir()
     (fake / "git").write_text(
-        '#!/bin/sh\ncase "$*" in *"rev-parse"*) echo abc1234 ;; *) echo -n "" ;; esac\n')
+        # `printf`, not `echo -n`: POSIX leaves echo's option handling implementation-defined and
+        # macOS /bin/sh emits the literal bytes `-n\n`, which `source_revision` then reads as a
+        # dirty tree — so this fixture passed on CI and failed the same assertion on a developer's
+        # machine (re-audit-4 finding 3). A release-boundary regression that is not portable is
+        # not a regression test.
+        "#!/bin/sh\ncase \"$*\" in *\"rev-parse\"*) echo abc1234 ;; *) printf '%s' '' ;; esac\n")
     (fake / "git").chmod(0o755)
     out_dir = tmp_path / "published"
     out_dir.mkdir()
@@ -652,11 +657,91 @@ def test_w4f4_a_publication_refuses_another_documents_body_and_basename(tmp_path
     guide_pub = deploy_gen.PUBLICATION
     assert "--out" not in inspect.getsource(contract_gen.main).replace("--out-dir", "")
     assert guide_pub.path(str(tmp_path)).endswith("techcraft-deployment-guide.pdf")
-    with pytest.raises(ValueError, match="not a place to change which document"):
-        guide_pub.publish(_build(contract_gen), str(tmp_path))
+    # the builder is the publication's, so a document that is not this one can only arrive by
+    # the bound generator producing it — and that is refused by name
+    monkeypatch.setattr(deploy_gen, "build",
+                        lambda **_: _build(contract_gen))
+    with pytest.raises(ValueError, match="not the .*this publication publishes"):
+        guide_pub.publish(str(tmp_path))
     assert not list(tmp_path.iterdir()), "a refused publication writes nothing"
     assert publication.publication_for(
         "docs.generators.techcraft_integration_contract", None).identity.id == documents.CONTRACT
+
+
+def test_w5f1_a_document_cannot_be_its_own_evidence_for_what_it_is(tmp_path, monkeypatch):
+    """Re-audit-4 finding 1, both witnesses, at `publish`.
+
+    The publication bound module, identity and filename, then asked the DOCUMENT who it was. Its
+    id was ordinary mutable state and the only thing checked, while rendering used the identity
+    and registry cached at construction:
+
+      doc = techcraft_deployment_guide.build()
+      doc.document_id = documents.CONTRACT
+      techcraft_integration_contract.PUBLICATION.publish(doc, tmp)
+
+    wrote the guide's six pages — cover, footers and metadata all saying guide — as
+    `techcraft-integration-contract.pdf`. And `Doc(OPERATIONS, DEPLOYMENT_GUIDE)` plus two
+    arbitrary blocks published as the guide, because a caller may construct the target id around
+    any body at all.
+
+    Neither witness has a door now: `document_id` is read-only, and `publish` takes no document —
+    it calls the generator the registry binds to this publication and checks the result against
+    the whole closed definition, registry included.
+    """
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    # …no document parameter at all: the first witness cannot even be expressed
+    assert "doc" not in inspect.signature(deploy_gen.PUBLICATION.publish).parameters
+    with pytest.raises(AttributeError):
+        deploy_gen.build().document_id = documents.CONTRACT
+
+    # …and the second: a body from the wrong registry is refused by name, before anything is drawn
+    monkeypatch.setattr(deploy_gen, "build",
+                        lambda **_: _hollow_doc(WIRE, documents.DEPLOYMENT_GUIDE))
+    with pytest.raises(ValueError, match="body must come from"):
+        deploy_gen.PUBLICATION.publish(str(tmp_path))
+    assert not list(tmp_path.iterdir())
+    assert deploy_gen.PUBLICATION.source_registry() is OPERATIONS
+    assert contract_gen.PUBLICATION.source_registry() is WIRE
+
+
+def _hollow_doc(registry, document_id):
+    """A Doc with the target id built around an arbitrary body — Codex's second witness."""
+    doc = Doc(registry, document_id)
+    doc.title()
+    doc.p("Anything at all.")
+    return doc
+
+
+def test_w5f2_a_release_stamps_the_revision_it_authorized(tmp_path, monkeypatch):
+    """Re-audit-4 finding 2. `publish` validated one reading of the source revision and the
+    renderer took another, so a commit landing between the two reads meant a release approved
+    `aaaaaaa` and stamped `bbbbbbb` — or `bbbbbbb+dirty`, the exact artifact this gate promises
+    to refuse — with no refusal anywhere.
+
+    One snapshot is authorized, passed into rendering, and re-attested before the finished file is
+    promoted. A moving tree is now a refusal that leaves nothing distributable behind.
+    """
+    from docs.generators import publication
+
+    final = tmp_path / "techcraft-deployment-guide.pdf"
+    # a clean commit that is simply not the authorized one, and a tree that went dirty under the
+    # build — the second is refused as dirty, which is the more specific of the two true reasons
+    for second, refusal in (("bbbbbbb", "changed while this document"),
+                            ("bbbbbbb+dirty", "uncommitted changes")):
+        seen = iter(("aaaaaaa", second))
+        monkeypatch.setattr(render_module, "source_revision", lambda s=seen: next(s))
+        with pytest.raises(publication.ProvenanceError, match=refusal):
+            deploy_gen.PUBLICATION.publish(str(tmp_path))
+        assert not list(tmp_path.iterdir()), (
+            f"a release refused mid-build left an artifact behind ({second})")
+
+    # a settled tree publishes, and what it stamps is what it authorized
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    out = deploy_gen.PUBLICATION.publish(str(tmp_path))
+    assert out == str(final)
+    with pdfplumber.open(out) as pdf:
+        assert "source abc1234 " in (pdf.pages[0].extract_text() or "")
+    assert [p.name for p in tmp_path.iterdir()] == [final.name], "no staged file survives"
 
 
 def test_w3f3_the_identity_registry_is_the_only_source_of_furniture_text():

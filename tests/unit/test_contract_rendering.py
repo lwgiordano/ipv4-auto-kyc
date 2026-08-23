@@ -230,22 +230,23 @@ def test_a_release_build_refuses_unverifiable_provenance(tmp_path, monkeypatch):
     """
     from docs.generators import publication, render
 
-    doc = _build(contract_gen)
     published = contract_gen.PUBLICATION
+    inputs = dict(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
     monkeypatch.setattr(render, "source_revision", lambda: "unknown")
     with pytest.raises(publication.ProvenanceError, match="source commit"):
-        published.publish(doc, str(tmp_path))
+        published.publish(str(tmp_path), **inputs)
 
     monkeypatch.setattr(render, "source_revision", lambda: "abc1234+dirty")
     with pytest.raises(publication.ProvenanceError, match="uncommitted"):
-        published.publish(doc, str(tmp_path))
+        published.publish(str(tmp_path), **inputs)
+    assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
 
     # a clean commit is fine, and a preview never asks
     monkeypatch.setattr(render, "source_revision", lambda: "abc1234")
-    assert published.publish(doc, str(tmp_path)).endswith(
+    assert published.publish(str(tmp_path), **inputs).endswith(
         "techcraft-integration-contract.pdf")
     monkeypatch.setattr(render, "source_revision", lambda: "unknown")
-    doc.render(str(tmp_path / "preview.pdf"))
+    _build(contract_gen).render(str(tmp_path / "preview.pdf"))
 
 
 def test_the_margin_guard_can_actually_fail():

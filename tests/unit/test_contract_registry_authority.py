@@ -8352,13 +8352,15 @@ def test_the_metamorphic_mutator_can_actually_mutate():
 # the renderer's reach, and changing it is a deliberate re-pin someone reads. The generators hold
 # only an ID; `Doc` and the furniture verifier both look the identity up here.
 #
-# The pin covers `module` too (re-audit-2 finding 2). That field is the BINDING — which generator
-# publishes which document — and it is the only thing standing between the guide's six pages and
-# the contract's title, so re-aiming it is exactly the edit a reviewer must be shown.
+# The pin covers `module` and `registry` too (re-audit-2 finding 2, re-audit-4 finding 1). Those
+# fields are the BINDING — which generator publishes this document, and which registry its body
+# must come from — and they are what stands between the guide's six pages and the contract's
+# title, so re-aiming either is exactly the edit a reviewer must be shown.
 
-DOCUMENT_IDENTITY_PIN = ("89334c5eec047210", "contract, deployment guide, and the test fixture: "
-                                             "id, published title, output filename, and the "
-                                             "generator module bound to publish it")
+DOCUMENT_IDENTITY_PIN = ("a350e8d080bc86e2", "contract, deployment guide, and the test fixture: "
+                                             "id, published title, output filename, the "
+                                             "generator module bound to publish it, and the "
+                                             "registry its body must come from")
 
 
 def test_the_document_identity_registry_matches_its_review_pin():
@@ -8367,7 +8369,7 @@ def test_the_document_identity_registry_matches_its_review_pin():
     parts: list[str] = []
     for key in sorted(DOCUMENT_IDENTITIES):
         entry = DOCUMENT_IDENTITIES[key]
-        parts.extend((entry.id, entry.title, entry.out, entry.module))
+        parts.extend((entry.id, entry.title, entry.out, entry.module, entry.registry))
     digest = hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]
     pinned, label = DOCUMENT_IDENTITY_PIN
     assert digest == pinned, (
