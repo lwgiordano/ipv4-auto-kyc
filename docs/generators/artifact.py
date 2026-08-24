@@ -359,20 +359,40 @@ verify_footers = _verify_footers
 #   not an authority: alpha-0 ink still declares black, black text on a black table background
 #   declares nothing wrong, and an opaque shape painted over a finished page changes no
 #   character at all.
-# - `painted_problems` is the authority: it RASTERIZES each page after all painting — opacity,
-#   render mode, clipping, backgrounds and occlusion included — and requires every character's
-#   own box to show visibly contrasting pixels.
+# - `painted_problems` is the authority, and it measures CONTRIBUTION, not contrast
+#   (re-audit-12 finding 1). The first painted lane accepted a character when its box held both
+#   light and dark pixels — which proves something is painted there, not that the GLYPH is: a
+#   1pt checkerboard stamped over a finished page gave every box maximal contrast while no word
+#   on it was readable. So each page is now rasterized twice with the same renderer — once as
+#   published, once with every text object removed — and each character's box must show a
+#   visible DIFFERENCE between the two: the ink the text layer itself leaves on the finished
+#   page, after opacity, render mode, clipping, backgrounds and anything painted later.
 #
-# Scope, stated honestly: the painted lane measures contrast within each character's box, so a
-# bright non-text mark drawn through that box could in principle supply the contrast an invisible
-# glyph lacks — the renderer draws no such marks, and `verify_role_ink` holds every painted
-# character to a closed role signature, but contrast-under-a-mark is bounded by that closure, not
-# measured per glyph.
+# Robustness is by construction, not by tuning (re-audit-12 finding 2): a tight metric box under
+# a fixed threshold flipped with the platform's rasterizer — the unmodified document failed its
+# own baseline on another machine over an underscore hugging the box's bottom edge, and measured
+# 0.00 here at a coarser scale. The measured quantity is now |with text − without| — the glyph's
+# own ink against its own ground, wherever anti-aliasing lands the stroke — the box is padded
+# below for descender-hugging glyphs, the scale gives the thinnest governed stroke a full pixel,
+# and the real documents are additionally held to MINIMUM_REAL_CONTRIBUTION, so a drifting
+# environment fails the guard loudly while the release floor still holds with headroom.
+#
+# Scope, stated honestly: the box is padded, so a neighbouring glyph's ink can bleed into a
+# character's window — the granularity is the padded box, not the lone glyph. And contribution
+# proves the glyph lands visibly against ITS ground; a ground made deliberately noisy could
+# degrade legibility without erasing contribution — bounded by the role closure over governed
+# grounds, not measured. Text nested where the removal walk cannot reach (form XObjects —
+# nothing this renderer emits) stays in both rasters, measures zero, and is REFUSED.
 
 MINIMUM_GLYPH_POINTS = 6.0  # the smallest governed role is the 7pt footer
 MAXIMUM_INK_LUMINANCE = 0.75  # against the white page; the palest governed ink is #666666 (~0.40)
-RASTER_DPI = 150  # 7pt glyphs are ~15px tall here — thin strokes still leave measurable ink
+RASTER_DPI = 200  # the thinnest governed stroke (a 7pt em-dash, ~0.35pt) is ~a full pixel here
 MINIMUM_PAINTED_CONTRAST = 0.25  # 1 − MAXIMUM_INK_LUMINANCE: the same floor, measured painted
+# The drift guard the REAL documents are held to, sitting between the release floor and the
+# palest governed ink at full coverage (#666666 on white contributes 0.60): an environment that
+# renders governed hairlines below two-thirds of their ink is drifting toward the floor, and the
+# guard fails loudly there while readers are still 0.15 of headroom away from a wrong refusal.
+MINIMUM_REAL_CONTRIBUTION = 0.40
 
 
 def _luminance(color) -> float:
@@ -420,41 +440,78 @@ def visibility_problems(path: str) -> list[str]:
     return found
 
 
-def painted_problems(path: str) -> list[str]:
-    """Every character that leaves no visible mark on the RASTERIZED page (re-audit-11 F1).
+def text_contributions(path: str):
+    """Yield (page, character, contribution) for every extractable character in `path`.
 
-    `visibility_problems` reads what each character DECLARES; this reads what the finished page
-    PAINTS. The page is rendered exactly as a viewer renders it — opacity, render mode, clipping,
-    backgrounds and anything drawn later included — and each character's own box must contain
-    both light and dark pixels: ink with no local contrast is invisible whatever the content
-    stream declares. Alpha-0 "black", black cells on a black table background, and a page wiped
-    by an opaque shape all fail HERE, having each passed the declared-ink check.
+    Contribution is the largest painted difference, 0.0..1.0, between the finished page and the
+    same page with its text layer removed, within the character's padded box — the ink the text
+    itself leaves on the page a reader holds, measured AFTER everything else has painted. A glyph
+    erased by alpha, drowned by its own background, or covered by later paint contributes
+    nothing; a glyph that lands contributes ~its ink-to-ground difference wherever the
+    rasterizer put its stroke, which is what makes the measure stable across renderer builds.
+
+    Both rasters come from the same renderer at the same scale, so they differ ONLY by the text
+    objects removed in between. The box is padded — 2px around, more below, because descender
+    glyphs like `_` hug or cross the metric box's bottom edge and a tight crop turned platform
+    rounding into verdicts (re-audit-12 finding 2).
+    """
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as pdfium_c
+    from PIL import ImageChops
+
+    scale = RASTER_DPI / 72.0
+    inked = pdfium.PdfDocument(path)
+    blank = pdfium.PdfDocument(path)
+    try:
+        with pdfplumber.open(path) as pdf:
+            for index, page in enumerate(pdf.pages):
+                page_a, page_b = inked[index], blank[index]
+                image_a = page_a.render(scale=scale).to_pil().convert("L")
+                # collect first, then remove: removal renumbers the page's object list
+                handles = [pdfium_c.FPDFPage_GetObject(page_b, position)
+                           for position in range(pdfium_c.FPDFPage_CountObjects(page_b))]
+                for handle in handles:
+                    if (pdfium_c.FPDFPageObj_GetType(handle) == pdfium_c.FPDF_PAGEOBJ_TEXT
+                            and pdfium_c.FPDFPage_RemoveObject(page_b, handle)):
+                        pdfium_c.FPDFPageObj_Destroy(handle)
+                pdfium_c.FPDFPage_GenerateContent(page_b)
+                difference = ImageChops.difference(
+                    image_a, page_b.render(scale=scale).to_pil().convert("L"))
+                for char in page.chars:
+                    text = (char.get("text") or "").strip()
+                    if not text:
+                        continue
+                    descent = max(3, int(0.35 * (char["bottom"] - char["top"]) * scale))
+                    left = max(0, int(char["x0"] * scale) - 2)
+                    upper = max(0, int(char["top"] * scale) - 2)
+                    right = min(difference.width, int(char["x1"] * scale) + 3)
+                    lower = min(difference.height, int(char["bottom"] * scale) + descent)
+                    if right <= left or lower <= upper:
+                        yield index + 1, text, 0.0
+                        continue
+                    _, high = difference.crop((left, upper, right, lower)).getextrema()
+                    yield index + 1, text, high / 255.0
+    finally:
+        blank.close()
+        inked.close()
+
+
+def painted_problems(path: str) -> list[str]:
+    """Every character whose text layer leaves no visible mark on the finished page.
+
+    Alpha-0 "black", black cells on a black table background, a page wiped by an opaque shape,
+    and a page wiped and then TILED with a high-contrast pattern (re-audit-12 finding 1 — box
+    contrast said that page was fine) all fail here: whatever else the box shows, removing the
+    text changes nothing a reader could see, so the text was never visible.
     """
     found: list[str] = []
-    with pdfplumber.open(path) as pdf:
-        for number, page in enumerate(pdf.pages, 1):
-            image = page.to_image(resolution=RASTER_DPI).original.convert("L")
-            scale = RASTER_DPI / 72.0
-            for char in page.chars:
-                text = (char.get("text") or "").strip()
-                if not text:
-                    continue
-                left = max(0, int(char["x0"] * scale) - 1)
-                upper = max(0, int(char["top"] * scale) - 1)
-                right = min(image.width, int(char["x1"] * scale) + 2)
-                lower = min(image.height, int(char["bottom"] * scale) + 2)
-                if right <= left or lower <= upper:
-                    found.append(f"page {number}: {text!r} paints no pixels on the visible page")
-                else:
-                    lo, hi = image.crop((left, upper, right, lower)).getextrema()
-                    contrast = (hi - lo) / 255.0
-                    if contrast < MINIMUM_PAINTED_CONTRAST:
-                        found.append(
-                            f"page {number}: {text!r} leaves no visible mark after all painting "
-                            f"(painted contrast {contrast:.2f}, floor "
-                            f"{MINIMUM_PAINTED_CONTRAST})")
-                if len(found) >= 10:
-                    return found
+    for number, text, contribution in text_contributions(path):
+        if contribution < MINIMUM_PAINTED_CONTRAST:
+            found.append(
+                f"page {number}: {text!r} contributes no visible ink to the finished page "
+                f"(painted contribution {contribution:.2f}, floor {MINIMUM_PAINTED_CONTRAST})")
+            if len(found) >= 10:
+                break
     return found
 
 

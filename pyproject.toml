@@ -31,6 +31,11 @@ dev = [
     # dev extra so CI proves the rendered page, not just the registry.
     "reportlab>=4.0",
     "pdfplumber>=0.11",
+    # The painted-page authority (docs/generators/artifact.py, R-audit-12 finding 1) rasterizes
+    # each staged page twice — as published and with the text layer removed — and imports
+    # pypdfium2 directly for the object-removal walk. It arrives with pdfplumber anyway; a
+    # direct import deserves a direct declaration, not a transitive accident.
+    "pypdfium2>=4.18",
     # The typed playbook bodies (docs/contracts/body.py) refuse code blocks inside prose
     # by consuming a REAL CommonMark block tree (R-audit-15): a line-prefix check missed
     # fences nested in blockquotes, indented code, and raw <pre>. Doc-side only, like the

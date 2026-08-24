@@ -2393,3 +2393,72 @@ def test_w12f2_the_outline_reviews_every_blocks_roles():
                     assert spec.roles, f"{entry.document_id}/{section.section_id}: unreviewed roles"
                 assert set(spec.roles) <= set(render_module.ROLE_STYLES), (
                     f"{entry.document_id}/{section.section_id}: unknown roles {spec.roles}")
+
+
+# ── re-audit-12: contribution, not contrast — and a floor that holds across environments ──────────
+
+
+def test_w13f1_a_checkerboard_overpaint_cannot_be_published(tmp_path, monkeypatch):
+    """Re-audit-12 finding 1, the exact witness: after each completed page is stamped, wipe it
+    white and tile a 1pt checkerboard over it, through the same internal canvas hook
+    `Doc.render` uses. Every character's box then holds both black and white pixels — maximal
+    CONTRAST — while not one governed word is readable, and the prior painted gate passed it
+    into a promoted artifact. Contribution refuses it: removing the text layer changes nothing
+    a reader could see, so the text was never visible."""
+    from PIL import Image
+    from reportlab.lib.utils import ImageReader
+
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    checker = Image.new("L", (612, 792))
+    checker.putdata([255 if (x + y) % 2 else 0 for y in range(792) for x in range(612)])
+    tile = ImageReader(checker.convert("RGB"))
+    real_maker = render_module._stamped_canvas
+
+    def sabotaged_maker(identity, revision, page_sections=None):
+        base = real_maker(identity, revision, page_sections)
+
+        class Checkered(base):
+            def drawRightString(self, x, y, text):
+                super().drawRightString(x, y, text)
+                # the page number is the last stamp on each finished page; paint after it
+                self.saveState()
+                self.setFillColorRGB(1, 1, 1)
+                self.rect(-5, -5, 700, 900, stroke=0, fill=1)
+                self.drawImage(tile, 0, 0, width=612, height=792)
+                self.restoreState()
+
+        return Checkered
+
+    monkeypatch.setattr(render_module, "_stamped_canvas", sabotaged_maker)
+    with pytest.raises(ValueError, match="cannot see"):
+        deploy_gen.PUBLICATION.publish(str(tmp_path))
+    assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
+
+
+def test_w13f2_the_real_documents_clear_the_painted_floor_with_margin(tmp_path, monkeypatch):
+    """Re-audit-12 finding 2: a verdict that flips with the platform's rasterizer is not a
+    gate — the unmodified document failed its own baseline on another machine, over an
+    underscore's tight metric box. The measured quantity is the glyph's own contribution now,
+    and the REAL documents must clear the release floor with the governed guard's headroom, so
+    an environment drifting toward the floor fails HERE, loudly, while readers are still a full
+    step away from a wrong refusal. The constants must actually enclose each other for that
+    sentence to mean anything, so their ordering is asserted too."""
+    from docs.generators import artifact
+
+    # the palest governed ink is the #666666 footer: at full coverage it contributes 0.60
+    palest = 0.60
+    assert (artifact.MINIMUM_PAINTED_CONTRAST
+            < artifact.MINIMUM_REAL_CONTRIBUTION
+            < palest), "the guard must sit between the release floor and the palest full ink"
+
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    for generator in (contract_gen, deploy_gen):
+        doc = (generator.build(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+               if generator is contract_gen else generator.build())
+        path = str(tmp_path / f"{generator.DOCUMENT_ID}.pdf")
+        doc.render(path, revision="abc1234")
+        weakest = min(artifact.text_contributions(path), key=lambda row: row[2])
+        page, text, value = weakest
+        assert value >= artifact.MINIMUM_REAL_CONTRIBUTION, (
+            f"{generator.DOCUMENT_ID} page {page}: {text!r} contributes only {value:.2f} in "
+            f"this environment — inside the guard band, drifting toward the release floor")
