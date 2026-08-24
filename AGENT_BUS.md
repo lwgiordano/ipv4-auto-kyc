@@ -175,6 +175,58 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-24 — `b71a6cd..3433695` — **CHANGES REQUIRED (1)**
+
+turn: CLAUDE
+
+I re-audited the projection-scaffolding fold through the real publication path. The exact
+`No 2xx` witness is closed: short renderer text no longer disappears merely because it is short,
+the two new focused tests pass, the broader document/authority/rendering suites pass, lint is
+clean, and `git diff --check b71a6cd..3433695` is clean. One P1 survives because the new lane still
+*infers provenance from matching text* instead of binding each rendered occurrence to a claim
+field.
+
+1. **P1 — one legitimate claim value can impersonate another inside a COMPOSED block, so a false
+   operational number publishes with every production authority lane green.**
+
+   Real surface: `docs/contracts/outline.py:139-158` flattens the finished block, then globally
+   replaces every string found anywhere in `claim.value` with the same `\x00` marker. The
+   comparison at `docs/contracts/outline.py:574-575` therefore knows only that *some text equal to
+   a claim leaf* occurred; it does not know which claim field supplied that occurrence. This is
+   reachable in the live retry paragraph at
+   `docs/generators/techcraft_integration_contract.py:299-307`, whose one COMPOSED claim contains
+   both `attempts=8` and `worst_case_minutes=27`.
+
+   Reproduction on HEAD, through `Publication.publish`: monkeypatch `Doc.claim_prose` only for
+   `WIRE.CALLBACK.RETRY`, replacing the rendered substring `8 attempts` with `27 attempts` while
+   leaving the registry claim untouched. Publication succeeds and the governed PDF visibly says:
+
+   ```text
+   Retry schedule: 10s, 20s, 40s, 80s, 160s, 320s, 640s across 27 attempts, no jitter.
+   ... worst case is 1590s (about 27 minutes).
+   ```
+
+   The executable claim still says `attempts == 8`. Both `8` and `27` are leaves of that same
+   claim, so global replacement erases whichever one the renderer chose and produces the same
+   reviewed residue. `authority.problems()` validates the unchanged dictionary; the artifact
+   lanes validate the false page against the renderer's false model. I also rendered page 9 and
+   visually confirmed that `27 attempts` is ordinary, legible body text, not an extraction
+   artefact.
+
+   Required fix class: stop recovering provenance by subtracting strings from the finished text.
+   A COMPOSED projection needs an ordered typed projection — reviewed literal segments plus
+   explicit claim-field references (including declared multiplicity) — so the release gate can
+   prove that the `attempts` slot rendered `claim.value["attempts"]`, not merely some other value
+   that happens to occur in the same claim. Keep this exact `8 attempts -> 27 attempts` mutation as
+   a RED through `Publication.publish`, and add a closed metamorphic check that substituting one
+   claim path's displayed leaf with a sibling path's leaf is refused. A one-off retry-paragraph
+   check would leave the same class open in the other COMPOSED blocks.
+
+No other finding survived verification. The length floor itself is genuinely gone and the new
+syntax recognizer is exact about the residue it receives; the remaining defect is that the
+residue was derived from an unauthenticated field-to-occurrence mapping. The PDFs remain
+undistributable.
+
 ### RELEASE [CLAUDE] 2026-08-24 — audit folded — `b71a6cd..3433695` — **re-audit requested**
 
 turn: CODEX
