@@ -57,6 +57,12 @@ class BlockOutline:
     # says around its claim's values.
     label: str = ""
     residue: str = ""
+    # The digest of a COMPOSED block's typed template — its reviewed literals AND its
+    # field references with their formatters (re-audit-9 finding 1). The residue lane
+    # recovered provenance by subtracting matching strings, which cannot tell attempts=8
+    # from worst_case_minutes=27 when both live in one claim; the template says which
+    # path fills each hole, and the verifier recomputes the text from it.
+    composed: str = ""
 
     def __post_init__(self) -> None:
         if not self.kind:
@@ -66,10 +72,10 @@ class BlockOutline:
                 "only a claimed block has renderer-authored text INSIDE it; an's "
                 "unattributed block is pinned whole by its digest"
             )
-        if self.label and self.residue:
+        if sum(map(bool, (self.label, self.residue, self.composed))) > 1:
             raise ValueError(
-                "a label is pinned by wording and a residue by digest; pinning one "
-                "block both ways is two places to update"
+                "a claimed block is pinned ONE way: label wording, residue digest, or "
+                "composed template — two receipts is two places to update"
             )
         if self.claim_id and (self.digest or self.slots):
             raise ValueError(
@@ -228,11 +234,11 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='heading', digest='0618c15aff85c825'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.INGEST.EXTRA_FIELDS', projection='composed',
-                        residue='3dbd54f03ecebb08'),
+                        composed='95daacb8831c9894'),
                     BlockOutline(kind='heading', digest='90204440e7af4730'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.ACTOR.SENSITIVE', projection='composed',
-                        residue='841eed537d25b0f4'),
+                        composed='a7b3409e7f7201d4'),
                     BlockOutline(kind='table', claim_id='WIRE.EVENT.TABLE', projection='table'),
                     BlockOutline(kind='heading', digest='abe0d582168011a6'),
                     BlockOutline(kind='table', claim_id='WIRE.INGEST.STATUS', projection='table'),
@@ -249,16 +255,16 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='prose', digest='2196d0acbca869f7'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.FIELDS', projection='composed',
-                        residue='fd2b8fddb0219846'),
+                        composed='df586e1a77e1e919'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.DECISIONS', projection='composed',
-                        residue='efd06031f9154b80'),
+                        composed='0092542096c345e8'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.GATES', projection='composed',
-                        residue='60ff773c179a76ed'),
+                        composed='ee39b2d21c48baf9'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELDS', projection='composed',
-                        residue='adcaa34e853e35fc'),
+                        composed='3fc2828784b5a67c'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELD_RULE', projection='paragraph'),
                     BlockOutline(kind='heading', digest='ead72c5bc41be710'),
@@ -285,7 +291,7 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.WAIT_BOUND', projection='paragraph'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.RETRY', projection='composed',
-                        residue='e07949a7ee8f8121'),
+                        composed='909b93ce47da69b3'),
                     BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.COMPLETION', projection='paragraph'),
                 ),
             ),
@@ -299,7 +305,7 @@ OUTLINES = MappingProxyType({
                         residue='44258b84c7d9f360'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.DIRECTIONS', projection='composed',
-                        residue='3db54252a0da969e'),
+                        composed='b81c76747dc34987'),
                     BlockOutline(kind='prose', claim_id='WIRE.SIGN.DIRECTION_FORM', projection='paragraph'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.SKEW_SECONDS', projection='paragraph',
@@ -314,12 +320,12 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='heading', digest='7b5a3ebfc10a96a0'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.COMPANION', projection='composed',
-                        residue='62bed443d66d463f'),
+                        composed='f86818616e8b90a3'),
                     BlockOutline(kind='prose', claim_id='WIRE.SIGN.COMPANION_PROOF', projection='paragraph'),
                     BlockOutline(kind='heading', digest='c71fc742ef56a692'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.VECTOR', projection='composed',
-                        residue='723d2cc6883b5453'),
+                        composed='b5860459324af71d'),
                 ),
             ),
             SectionOutline(
@@ -446,7 +452,7 @@ OUTLINES = MappingProxyType({
                         kind='prose', claim_id='OPS.CUTOVER.EXECUTION_SOURCE', projection='paragraph'),
                     BlockOutline(
                         kind='prose', claim_id='OPS.CUTOVER.PROCEDURES', projection='composed',
-                        residue='33b3260daf6c3302'),
+                        composed='1c945c644580bc6d'),
                     BlockOutline(
                         kind='prose', claim_id='OPS.CUTOVER.OUTBOX_CEILING', projection='steps',
                         residue='1193b2813e8d6c5b'),
@@ -570,6 +576,27 @@ def _authored_problems(at, spec, block, claim) -> list[str]:
         drawn = claim_label(block, claim)
         if drawn != spec.label:
             return [f"{at}: {claim.id} is framed {drawn!r}, reviewed as {spec.label!r}"]
+        return []
+    if block.projection == projection.COMPOSED:
+        # Field-bound, both halves (re-audit-9 finding 1). The TEMPLATE must be the reviewed
+        # one — literals, paths and formatters, so re-aiming a Ref at a sibling field is a
+        # digest mismatch — and the LINES must equal what that template derives from the
+        # REGISTRY claim, so a renderer drawing anything else is contradicted rather than
+        # believed. Nothing is recovered from the finished text.
+        if not block.composed:
+            return [f"{at}: {claim.id} rendered composed text with no typed template"]
+        drawn = residue_digest(projection.serialize_composed(block.composed))
+        if drawn != spec.composed:
+            return [f"{at}: {claim.id}'s composed template changed since it was reviewed "
+                    f"(reviewed {spec.composed}, now {drawn}). Read it, then re-pin it in "
+                    "the SAME commit."]
+        derived = projection.composed_lines(claim, block.composed)
+        if tuple(block.lines) != derived:
+            mism = next((i for i, (a, b) in enumerate(
+                zip(block.lines, derived, strict=False)) if a != b), min(
+                len(block.lines), len(derived)))
+            return [f"{at}: {claim.id} drew text its template does not derive at line {mism}: "
+                    f"drawn {block.lines[mism][:80] if mism < len(block.lines) else '<missing>'!r}"]
         return []
     text = connective_text(block, claim)
     drawn = "" if is_mechanical(text, block.projection) else residue_digest(text)

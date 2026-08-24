@@ -11,8 +11,9 @@ this document stands a staging environment up and tells you what production stil
 import argparse
 
 from docs.contracts.operations import OPERATIONS
+from docs.contracts.projection import Lit, Ref
 from docs.generators.publication import publication_for
-from docs.generators.render import INCH, Doc, escape
+from docs.generators.render import INCH, Doc
 
 # This module does not CHOOSE which document it is (re-audit-2 finding 2), and it does not
 # choose how the document leaves the repo either (re-audit-3 findings 2-4). See the sibling
@@ -131,15 +132,15 @@ def build() -> Doc:
     # operator greps for — was too wide for its cell, and a prose cell clips rather than wraps
     # such a word. Prerequisites are whole sentences and need the page width.
     parts = []
-    for procedure in OPERATIONS.value("OPS.CUTOVER.PROCEDURES"):
-        parts.append(("p", f"<b>{escape(procedure.name)}</b> — {escape(procedure.when)}"))
-        parts.append(("why", "<b>What must be true before you start:</b> " + "  ".join(
-            f"({n}) {escape(condition)}"
-            for n, condition in enumerate(procedure.blocks_start, 1))))
-        parts.append(("why", f"<b>Reversible?</b> {escape(procedure.irreversible)}"))
-        parts.append(("why", "<b>Rolling back:</b> " + "  ".join(
-            f"({n}) {escape(fact)}" for n, fact in enumerate(procedure.rollback, 1))))
-        parts.append(("why", f"<b>Playbook:</b> {escape(procedure.playbook)}"))
+    for index in range(len(OPERATIONS.value("OPS.CUTOVER.PROCEDURES"))):
+        at = f"[{index}]"
+        parts.append(("p", (Lit("<b>"), Ref(f"{at}.name"), Lit("</b> — "), Ref(f"{at}.when"))))
+        parts.append(("why", (Lit("<b>What must be true before you start:</b> "),
+                              Ref(f"{at}.blocks_start", "enumerated"))))
+        parts.append(("why", (Lit("<b>Reversible?</b> "), Ref(f"{at}.irreversible"))))
+        parts.append(("why", (Lit("<b>Rolling back:</b> "),
+                              Ref(f"{at}.rollback", "enumerated"))))
+        parts.append(("why", (Lit("<b>Playbook:</b> "), Ref(f"{at}.playbook"))))
     # the ref itself (exact heading + exact-bytes sha256 + command records) is checked, not
     # printed; the page shows only the derived pointer.
     doc.claim_mixed("OPS.CUTOVER.PROCEDURES", parts, published_fields=(

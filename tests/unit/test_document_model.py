@@ -1623,21 +1623,23 @@ def test_rewriting_a_binding_commitment_in_connective_prose_is_caught(monkeypatc
 
     original = render_module.Doc.claim_prose
 
-    def weakened(self, cid, markup, *, style=render_module.BODY):
+    def weakened(self, cid, segments, *, style=render_module.BODY):
         if cid == "WIRE.INGEST.EXTRA_FIELDS":
-            markup = markup.replace(
+            segments = [projection.Lit(s.text.replace(
                 "never remove or repurpose one without a version bump agreed with you",
-                "may remove or repurpose one at any time")
-        return original(self, cid, markup, style=style)
+                "may remove or repurpose one at any time"))
+                if type(s) is projection.Lit else s for s in segments]
+        return original(self, cid, segments, style=style)
 
     monkeypatch.setattr(render_module.Doc, "claim_prose", weakened)
     doc = _build(contract_gen)
 
     block = next(b for b in doc.blocks if b.claim_id == "WIRE.INGEST.EXTRA_FIELDS")
-    residue = outline.connective_text(block, WIRE["WIRE.INGEST.EXTRA_FIELDS"])
-    assert "may remove or repurpose one at any time" in residue, "the mutation did not land"
-    assert any("changed since they were reviewed" in problem for problem in outline.problems(
-        doc, {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}))
+    assert any("may remove or repurpose one at any time" in line for line in block.lines), (
+        "the mutation did not land")
+    assert any("composed template changed since it was reviewed" in problem
+               for problem in outline.problems(
+                   doc, {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}))
 
 
 def test_the_connective_residue_is_stable_under_overlapping_leaf_values(rendered):
@@ -1796,17 +1798,20 @@ def _swap_claim(registry, claim_id, **changes):
 @pytest.mark.parametrize(
     ("attr", "claim_id", "hostile", "refusal"),
     [("claim_paragraph", "WIRE.INGEST.PATH", "<b>Do not use this endpoint: </b>", "is framed"),
-     ("claim_prose", "WIRE.CALLBACK.FIELDS", "Required body fields: <b>case_id only</b>.",
-      "changed since they were reviewed")],
-    ids=["paragraph-label", "composed-residue"])
+     ("claim_prose", "WIRE.CALLBACK.FIELDS",
+      [projection.Lit("Required body fields: <b>case_id only</b>.")],
+      "changed since it was reviewed")],
+    ids=["paragraph-label", "composed-template"])
 def test_w8f1_renderer_authored_text_inside_a_claim_cannot_be_published(
         attr, claim_id, hostile, refusal, tmp_path, monkeypatch):
     """Both of Codex's witnesses, through `publish`.
 
     A false frame around a true value is a false document: `Do not use this endpoint:` in front of
-    the ingest path, and `Required body fields: case_id only.` in front of the real field list,
+    the ingest path, and `Required body fields: case_id only.` in place of the real field list,
     both published with the registry lane, the outline lane and all four rendered lanes green —
-    because none of them reads the characters the renderer authors inside a claimed block.
+    because none of them read the characters the renderer authors inside a claimed block. The
+    composed case now fails as a TEMPLATE change: the reviewed template names a Ref to the field
+    list, and the hostile all-literal template digests differently.
     """
     monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
     real = getattr(render_module.Doc, attr)
@@ -1816,8 +1821,8 @@ def test_w8f1_renderer_authored_text_inside_a_claim_cannot_be_published(
             return real(self, cid, style=style,
                         prefix=hostile if cid == claim_id else prefix)
     else:
-        def patched(self, cid, markup, *, style=render_module.BODY):
-            return real(self, cid, hostile if cid == claim_id else markup, style=style)
+        def patched(self, cid, segments, *, style=render_module.BODY):
+            return real(self, cid, hostile if cid == claim_id else segments, style=style)
 
     monkeypatch.setattr(render_module.Doc, attr, patched)
     with pytest.raises(ValueError, match=refusal):
@@ -1841,11 +1846,17 @@ def test_w8f1_every_renderer_authored_span_inside_a_claim_is_reviewed(rendered):
             claim = doc.registry[block.claim_id]
             if block.projection == projection.PARAGRAPH:
                 continue
+            spec = outline.outline(doc.document_id).sections[
+                [s.section_id for s in doc.sections].index(section.section_id)].blocks[index]
+            if block.projection == projection.COMPOSED:
+                # field-bound both ways: the reviewed template, and the lines it derives
+                assert spec.composed == outline.residue_digest(
+                    projection.serialize_composed(block.composed))
+                assert tuple(block.lines) == projection.composed_lines(claim, block.composed)
+                continue
             text = outline.connective_text(block, claim)
             if outline.is_mechanical(text, block.projection):
                 continue
-            spec = outline.outline(doc.document_id).sections[
-                [s.section_id for s in doc.sections].index(section.section_id)].blocks[index]
             assert spec.residue == outline.residue_digest(text), (
                 f"{block.claim_id}: renderer prose reaching the page is not the reviewed prose")
 
@@ -1894,7 +1905,126 @@ def test_w9f1_scaffolding_is_recognised_by_syntax_and_nothing_else():
     for word in ("no", "not", "never", "only", "safe", "No 2xx", "-", ":"):
         assert not outline.is_mechanical(f"{word}\n\x00", projection.BULLETS), word
     # and the length floor it replaced is gone, not renamed: no live reference to it, and no
-    # length test anywhere in the residue lane. It survives only in the comment saying why.
+    # length test in the scaffolding decision. It survives only in the comment saying why.
+    # (`_authored_problems` may measure lengths to NAME a mismatch; it may not use one to
+    # excuse text from review — that is what `is_mechanical` alone decides.)
     assert not hasattr(outline, "CONNECTIVE_FLOOR")
-    body = inspect.getsource(outline.is_mechanical) + inspect.getsource(outline._authored_problems)
-    assert "len(" not in body, "residue authority must not depend on how long the text is"
+    assert "len(" not in inspect.getsource(outline.is_mechanical), (
+        "scaffolding must not depend on how long the text is")
+
+
+def test_w10f1_one_claim_leaf_cannot_impersonate_another(tmp_path, monkeypatch):
+    """Re-audit-9 finding 1, the exact witness, through `publish`.
+
+    `WIRE.CALLBACK.RETRY` holds both attempts=8 and worst_case_minutes=27. The residue lane
+    recovered provenance by SUBTRACTING every string equal to any claim leaf, so a rendered
+    `27 attempts` — registry untouched — erased to the same residue as the honest text, and the
+    governed contract published a false operational number with every production lane green.
+
+    A composed block is typed now: the template's Refs name the path that fills each hole, and
+    the release derives the text from template + REGISTRY. Both doors are closed — drawing text
+    the template does not derive, and re-aiming the Ref at the sibling field.
+    """
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    real = render_module.Doc.claim_mixed
+
+    def tampered_lines(self, cid, parts, **kwargs):
+        real(self, cid, parts, **kwargs)
+        if cid == "WIRE.CALLBACK.RETRY":
+            block = self.sections[-1].blocks[-1]
+            self.sections[-1].blocks[-1] = dataclasses.replace(
+                block, lines=tuple(line.replace("8 attempts", "27 attempts")
+                                   for line in block.lines))
+        return None
+
+    monkeypatch.setattr(render_module.Doc, "claim_mixed", tampered_lines)
+    with pytest.raises(ValueError, match="template does not derive"):
+        contract_gen.PUBLICATION.publish(
+            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+    assert not list(tmp_path.iterdir())
+
+    def reaimed_ref(self, cid, parts, **kwargs):
+        if cid == "WIRE.CALLBACK.RETRY":
+            parts = [(kind, tuple(
+                projection.Ref("{worst_case_minutes}")
+                if type(seg) is projection.Ref and seg.path == "{attempts}" else seg
+                for seg in segments)) for kind, segments in parts]
+        return real(self, cid, parts, **kwargs)
+
+    monkeypatch.setattr(render_module.Doc, "claim_mixed", reaimed_ref)
+    with pytest.raises(ValueError, match="composed template changed"):
+        contract_gen.PUBLICATION.publish(
+            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+    assert not list(tmp_path.iterdir())
+
+
+def test_w10f1_no_ref_in_any_composed_block_survives_a_sibling_swap(rendered):
+    """The closed metamorphic half: in EVERY composed block, re-aiming EVERY Ref at every sibling
+    path in its own container must be visible — as a template change always, and as a text change
+    whenever the sibling's rendered form differs. A one-off retry check would leave the same
+    class open in the other composed blocks."""
+    _generator, registry, doc, _page, _tables = rendered
+    inputs = {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}
+    swaps = checked = 0
+    for section in doc.sections:
+        for block in section.blocks:
+            if block.projection != projection.COMPOSED:
+                continue
+            claim = registry[block.claim_id]
+            honest = projection.composed_lines(claim, block.composed)
+            honest_serial = projection.serialize_composed(block.composed)
+            refs = [(pi, si, seg) for pi, (_k, segs) in enumerate(block.composed)
+                    for si, seg in enumerate(segs) if type(seg) is projection.Ref]
+            checked += len(refs)
+            for pi, si, ref in refs:
+                for sibling in _sibling_paths(claim.value, ref.path):
+                    swapped = tuple(
+                        (kind, tuple(
+                            projection.Ref(sibling, seg.formatter)
+                            if (i, j) == (pi, si) else seg
+                            for j, seg in enumerate(segments)))
+                        for i, (kind, segments) in enumerate(block.composed))
+                    try:
+                        rendered_lines = projection.composed_lines(claim, swapped)
+                    except ValueError:
+                        continue  # the sibling refuses this formatter — already visible
+                    assert projection.serialize_composed(swapped) != honest_serial, (
+                        f"{block.claim_id}: a re-aimed Ref serialized identically")
+                    if rendered_lines != honest:
+                        swaps += 1
+                        # …and the release lane sees it: swap the block in and ask the outline
+                        original = block.composed
+                        object.__setattr__(block, "composed", swapped)
+                        object.__setattr__(block, "lines", rendered_lines)
+                        try:
+                            found = outline.problems(doc, inputs)
+                            assert any("composed template changed" in p for p in found), (
+                                f"{block.claim_id}: sibling swap {ref.path} -> {sibling} "
+                                "published")
+                        finally:
+                            object.__setattr__(block, "composed", original)
+                            object.__setattr__(block, "lines", honest)
+    # per-document floors: the contract's composed blocks carry ~30 refs, the guide's
+    # procedures loop 18; a sweep that suddenly covers fewer has lost blocks, not gained safety
+    assert checked >= 15, f"only {checked} refs swept; the proof went hollow"
+    assert swaps >= 5, f"only {swaps} value-changing swaps exercised"
+
+
+def _sibling_paths(value, path):
+    """Every path addressing a DIFFERENT member of the same container `path` points into."""
+    import re as _re
+
+    if not path:
+        return []
+    head, _, _tail = path.rpartition(".") if "." in path else ("", "", path)
+    last = _re.search(r"(\{[^{}]+\}|\[\d+\]|\.[A-Za-z_][A-Za-z0-9_]*)$", path)
+    prefix = path[:last.start()]
+    container = projection.resolve_path(value, prefix)
+    out = []
+    if isinstance(container, dict):
+        out = [f"{prefix}{{{k}}}" for k in container]
+    elif isinstance(container, (list, tuple)):
+        out = [f"{prefix}[{i}]" for i in range(len(container))]
+    elif dataclasses.is_dataclass(container):
+        out = [f"{prefix}.{f.name}" for f in dataclasses.fields(container)]
+    return [p for p in out if p != path]

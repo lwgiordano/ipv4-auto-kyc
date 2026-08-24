@@ -241,6 +241,12 @@ class Block:
     # the renderer never supplies the answer it is checked against (finding 3).
     projection: str = ""
     row_fields: tuple[str, ...] = ()
+    # The typed template a COMPOSED block was drawn from (re-audit-9 finding 1): ordered
+    # (kind, (Lit|Ref, ...)) parts. The release verifier digests it against the reviewed
+    # outline and recomputes the visible lines from it plus the REGISTRY claim, so every
+    # field occurrence is bound to the path that supplied it rather than recovered by
+    # subtracting matching strings from the finished text.
+    composed: tuple = ()
     # Which columns render as TOKEN cells (Wave-2 audit finding 4). `_token_cell` replaces a
     # cell's commas with line breaks, so the extractor hands those cells back unpunctuated — a
     # difference the page comparison must forgive THERE and nowhere else. Recording the display
@@ -426,7 +432,7 @@ class Doc:
 
     def _emit(self, claim_id: str, flowables: list, lines, *, kind: str = "prose", rows=(),
               projection_name: str = "", row_fields: tuple[str, ...] = (),
-              code_columns: tuple[int, ...] = ()):
+              code_columns: tuple[int, ...] = (), composed: tuple = ()):
         """Append the flowables, record the claim, and record EXACTLY what went on the page.
 
         `lines` is not decoration. Recording an id proves a call happened; recording the visible
@@ -443,7 +449,7 @@ class Doc:
         self.rendered.append(claim_id)
         self._add(Block(kind=kind, claim_id=claim_id, lines=lines, rows=tuple(rows),
                         projection=projection_name, row_fields=row_fields,
-                        code_columns=code_columns))
+                        code_columns=code_columns, composed=composed))
         return claim
 
     def claim_paragraph(self, claim_id: str, *, style=BODY, prefix: str = ""):
@@ -512,33 +518,44 @@ class Doc:
                            ((visible_text(lead),) + lines) if lead else lines,
                            kind="code", projection_name=name)
 
-    def claim_prose(self, claim_id: str, markup: str, *, style=BODY):
-        """Render a claim as prose the caller composed FROM that claim's value.
+    def claim_prose(self, claim_id: str, segments, *, style=BODY):
+        """Render a claim as ONE prose part composed of typed segments.
 
-        Still atomic: the flowable and the record are appended together. The rendering tests are
-        the other half — they assert the claim's own value reaches the extracted page text, so
-        composing a paragraph that omits or contradicts the value fails there.
+        `segments` is a sequence of `projection.Lit` (reviewed literal markup) and
+        `projection.Ref` (a claim field path plus a closed formatter). This method used to take a
+        markup STRING the caller had interpolated claim fields into, which meant the binding
+        between a field and its occurrence was lost the moment the f-string evaluated — and
+        `WIRE.CALLBACK.RETRY` holds both attempts=8 and worst_case_minutes=27, so a rendered
+        `27 attempts` erased to the same residue as the honest text (re-audit-9 finding 1). The
+        text is DERIVED here, from the claim and the template, and the release verifier derives
+        it again independently.
         """
-        self._emit(claim_id, [Paragraph(markup, style)], (visible_text(markup),),
-                   projection_name=projection.COMPOSED)
+        self.claim_mixed(claim_id, [("p", tuple(segments))], style=style)
 
     _PART_STYLES = {"p": BODY, "why": WHY}
 
-    def claim_mixed(self, claim_id: str, parts, *, published_fields: tuple[str, ...] = ()):
+    def claim_mixed(self, claim_id: str, parts, *, published_fields: tuple[str, ...] = (),
+                    style=None):
         """Render one claim that needs several flowables — prose, then a code block, then more.
 
-        `parts` is a sequence of (kind, text) pairs where kind is "p", "why", "code" (fixed-width,
-        indentation preserved, must fit the line), "atomic_code" (the same, but never split across
-        a page), or "wrap" (fixed-width, wraps anywhere). Prose parts take pre-escaped markup;
-        the code and wrap kinds take raw text and are escaped here.
+        `parts` is a sequence of (kind, segments) pairs where kind is "p", "why", "code"
+        (fixed-width, indentation preserved, must fit the line), "atomic_code" (the same, but
+        never split across a page), or "wrap" (fixed-width, wraps anywhere), and `segments` is a
+        tuple of `projection.Lit` / `projection.Ref`. Every part's TEXT is derived from the claim
+        and the template — this method interpolates nothing and accepts no finished string
+        (re-audit-9 finding 1).
 
         This exists so a composite claim — the signing vector is a body, a canonical string, a
         digest, and a runnable snippet — stays ONE atomic emit. The alternative was a public
         record hook beside a pile of loose `p()`/`code()` calls, which is exactly the shape that
         lets a claim count as covered while displaying something else (re-audit F4).
         """
+        claim = self.registry[claim_id]
+        parts = tuple((kind, tuple(segments)) for kind, segments in parts)
+        rendered = [(kind, projection.composed_part_text(claim, kind, segments))
+                    for kind, segments in parts]
         flowables = []
-        for kind, text in parts:
+        for kind, text in rendered:
             if kind == "code":
                 flowables.append(XPreformatted(_guard_preformatted(escape(text)), CODE))
             elif kind == "atomic_code":
@@ -550,13 +567,13 @@ class Doc:
             elif kind == "wrap":
                 flowables.append(Paragraph(escape(text), WRAPCODE))
             else:
-                flowables.append(Paragraph(text, self._PART_STYLES[kind]))
+                flowables.append(Paragraph(text, style or self._PART_STYLES[kind]))
         lines = []
-        for kind, text in parts:
+        for kind, text in rendered:
             lines.extend(
                 (text if kind in ("code", "atomic_code", "wrap") else visible_text(text)).split("\n"))
         self._emit(claim_id, flowables, tuple(lines), projection_name=projection.COMPOSED,
-                   row_fields=published_fields)
+                   row_fields=published_fields, composed=parts)
 
     def claim_alert(self, claim_id: str):
         """A blocked claim, rendered where a reader would otherwise act on the document."""

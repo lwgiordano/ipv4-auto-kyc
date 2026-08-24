@@ -12,6 +12,7 @@ import re
 from datetime import date
 
 from docs.contracts.companion import ARTIFACT_NAME, artifact_digest
+from docs.contracts.projection import Lit, Ref
 from docs.contracts.signing_example import published_snippet
 from docs.contracts.wire import WIRE
 from docs.generators.publication import publication_for
@@ -202,26 +203,21 @@ def build(*, contact: str, due_date: str) -> Doc:
         ' "actor": {"type": "user", "id": "acct-123"}, "payload": { ... }}'
     )
     doc.h2("Unknown fields are not symmetric")
-    extra = WIRE.value("WIRE.INGEST.EXTRA_FIELDS")
     doc.claim_prose(
         "WIRE.INGEST.EXTRA_FIELDS",
-        escape(extra["prose"]) + f" (envelope: <b>{escape(extra['envelope'])}</b>; payload: "
-        f"<b>{escape(extra['payload'])}</b>.) In the other direction, ignore fields we add to "
-        "callbacks: we add without notice and never remove or repurpose one without a version "
-        "bump agreed with you.",
+        [Ref("{prose}"), Lit(" (envelope: <b>"), Ref("{envelope}"), Lit("</b>; payload: <b>"),
+         Ref("{payload}"),
+         Lit("</b>.) In the other direction, ignore fields we add to callbacks: we add without "
+             "notice and never remove or repurpose one without a version bump agreed with you.")],
     )
 
     doc.h2("Sensitive events: the reviewer-actor rule")
-    actor = WIRE.value("WIRE.ACTOR.SENSITIVE")
     doc.claim_mixed(
         "WIRE.ACTOR.SENSITIVE",
         [
-            (
-                "p",
-                "<b>" + escape(", ".join(actor["events"])) + "</b> both require an actor identifying "
-                "the reviewer. " + escape(actor["rule"]),
-            ),
-            ("why", "<b>Trap:</b> " + escape(actor["trap"])),
+            ("p", (Lit("<b>"), Ref("{events}", "comma_list"),
+                   Lit("</b> both require an actor identifying the reviewer. "), Ref("{rule}"))),
+            ("why", (Lit("<b>Trap:</b> "), Ref("{trap}"))),
         ],
     )
 
@@ -240,22 +236,18 @@ def build(*, contact: str, due_date: str) -> Doc:
     doc.section("callbacks", "3. Callbacks we send you")
     doc.claim_paragraph("WIRE.CALLBACK.PATH", prefix="<b>Endpoint: </b>")
     doc.p("Content-Type application/json, signed with our outbound key.")
-    fields = WIRE.value("WIRE.CALLBACK.FIELDS")
-    doc.claim_prose("WIRE.CALLBACK.FIELDS", "Required body fields: <b>" + escape(", ".join(fields)) + "</b>.")
+    doc.claim_prose("WIRE.CALLBACK.FIELDS",
+                    [Lit("Required body fields: <b>"), Ref("", "comma_list"), Lit("</b>.")])
     doc.claim_prose(
         "WIRE.CALLBACK.DECISIONS",
-        "<b>decision is one of: </b>"
-        + escape(", ".join(WIRE.value("WIRE.CALLBACK.DECISIONS"))) + ".")
+        [Lit("<b>decision is one of: </b>"), Ref("", "comma_list"), Lit(".")])
     doc.claim_prose(
         "WIRE.CALLBACK.GATES",
-        "<b>gates carries these booleans: </b>"
-        + escape(", ".join(WIRE.value("WIRE.CALLBACK.GATES"))) + ".")
-    optional = WIRE["WIRE.CALLBACK.OPTIONAL_FIELDS"]
+        [Lit("<b>gates carries these booleans: </b>"), Ref("", "comma_list"), Lit(".")])
     doc.claim_prose(
         "WIRE.CALLBACK.OPTIONAL_FIELDS",
-        "Optional fields to tolerate and preserve: <b>"
-        + escape(", ".join(optional.value))
-        + "</b>.",
+        [Lit("Optional fields to tolerate and preserve: <b>"), Ref("", "comma_list"),
+         Lit("</b>.")],
     )
     # the handling rule is its own claim now, selected by an executed fact rather than carried
     # as prose inside this sentence (Wave-2 audit finding 1)
@@ -296,15 +288,15 @@ def build(*, contact: str, due_date: str) -> Doc:
 
     doc.h2("Timing")
     doc.claim_paragraph("WIRE.CALLBACK.WAIT_BOUND")
-    retry = WIRE.value("WIRE.CALLBACK.RETRY")
     doc.claim_prose(
         "WIRE.CALLBACK.RETRY",
-        "Retry schedule: <b>" + ", ".join(f"{d}s" for d in retry["delays"]) + "</b> across "
-        f"<b>{retry['attempts']} attempts</b>, no jitter. Backoff alone totals "
-        f"{retry['backoff_total_seconds']}s (about {retry['backoff_total_minutes']} minutes); "
-        f"counting every attempt's hard wall the worst case is {retry['worst_case_seconds']}s "
-        f"(about {retry['worst_case_minutes']} minutes). An outage longer than that exhausts "
-        "the schedule and the row dead-letters; tell us and we requeue.",
+        [Lit("Retry schedule: <b>"), Ref("{delays}", "seconds_list"), Lit("</b> across <b>"),
+         Ref("{attempts}"), Lit(" attempts</b>, no jitter. Backoff alone totals "),
+         Ref("{backoff_total_seconds}"), Lit("s (about "), Ref("{backoff_total_minutes}"),
+         Lit(" minutes); counting every attempt's hard wall the worst case is "),
+         Ref("{worst_case_seconds}"), Lit("s (about "), Ref("{worst_case_minutes}"),
+         Lit(" minutes). An outage longer than that exhausts the schedule and the row "
+             "dead-letters; tell us and we requeue.")],
     )
     doc.claim_paragraph("WIRE.CALLBACK.COMPLETION")
 
@@ -320,15 +312,12 @@ def build(*, contact: str, due_date: str) -> Doc:
         lead=f"Signature = hex HMAC-SHA256 over these {len(canonical)} lines, LF-joined, in "
              "this order:",
     )
-    directions = WIRE["WIRE.SIGN.DIRECTIONS"]
     doc.claim_prose(
         "WIRE.SIGN.DIRECTIONS",
-        "The direction tokens are literals: <b>"
-        + escape(directions.value["platform_to_tool"])
-        + "</b> for your calls to us and <b>"
-        + escape(directions.value["tool_to_platform"])
-        + "</b> for ours to you. slot is the Idempotency-Key on "
-        "event POSTs and empty otherwise; path?query is the raw request target.",
+        [Lit("The direction tokens are literals: <b>"), Ref("{platform_to_tool}"),
+         Lit("</b> for your calls to us and <b>"), Ref("{tool_to_platform}"),
+         Lit("</b> for ours to you. slot is the Idempotency-Key on event POSTs and empty "
+             "otherwise; path?query is the raw request target.")],
     )
     doc.claim_statement("WIRE.SIGN.DIRECTION_FORM")
     doc.claim_paragraph("WIRE.SIGN.SKEW_SECONDS", prefix="<b>Skew window (seconds): </b>")
@@ -349,35 +338,39 @@ def build(*, contact: str, due_date: str) -> Doc:
 
     doc.h2("The runnable signer is a file, not the page")
     doc.claim_mixed("WIRE.SIGN.COMPANION", [
-        ("p", escape(WIRE.value("WIRE.SIGN.COMPANION"))),
-        ("code", f"{ARTIFACT_NAME}\nsha256  {artifact_digest()}"),
+        ("p", (Ref(""),)),
+        # the name and digest are the companion module's, bound to the shipped file by this
+        # claim's own verifier; here they are reviewed literals whose drift is a re-pin
+        ("code", (Lit(f"{ARTIFACT_NAME}\nsha256  {artifact_digest()}"),)),
     ])
     doc.claim_statement("WIRE.SIGN.COMPANION_PROOF")
 
     doc.h2("Test vector: verify against this before writing anything else")
-    v = WIRE.value("WIRE.SIGN.VECTOR")
     doc.claim_mixed(
         "WIRE.SIGN.VECTOR",
         [
             (
                 "p",
-                f"Secret <b>{escape(v['secret'])}</b>, key id <b>{escape(v['key_id'])}</b>, "
-                f"timestamp <b>{v['timestamp']}</b>, Idempotency-Key <b>{escape(v['slot'])}</b>, "
-                f"<b>{escape(v['method'])} {escape(v['path_qs'])}</b>. The body is one line, "
-                f"<b>{v['body_bytes']} bytes</b>, UTF-8, no whitespace and no trailing newline. It "
-                "wraps in print below; a newline you add changes the digest.",
+                (Lit("Secret <b>"), Ref("{secret}"), Lit("</b>, key id <b>"), Ref("{key_id}"),
+                 Lit("</b>, timestamp <b>"), Ref("{timestamp}"), Lit("</b>, Idempotency-Key <b>"),
+                 Ref("{slot}"), Lit("</b>, <b>"), Ref("{method}"), Lit(" "), Ref("{path_qs}"),
+                 Lit("</b>. The body is one line, <b>"), Ref("{body_bytes}"),
+                 Lit(" bytes</b>, UTF-8, no whitespace and no trailing newline. It wraps in "
+                     "print below; a newline you add changes the digest.")),
             ),
-            ("wrap", v["body"].decode()),
-            ("p", "Canonical string:"),
-            ("code", "\n".join(v["canonical_lines"])),
-            ("p", "Expected X-KYC-Signature-V2:"),
-            ("code", v["signature"]),
+            ("wrap", (Ref("{body}", "utf8"),)),
+            ("p", (Lit("Canonical string:"),)),
+            ("code", (Ref("{canonical_lines}", "lines"),)),
+            ("p", (Lit("Expected X-KYC-Signature-V2:"),)),
+            ("code", (Ref("{signature}", "raw"),)),
             (
                 "p",
-                "Reference implementation. This is the exact source our tests execute against the "
-                "shipped signer to produce the digest above:",
+                (Lit("Reference implementation. This is the exact source our tests execute "
+                     "against the shipped signer to produce the digest above:"),),
             ),
-            ("atomic_code", published_snippet(delimited=True)),
+            # the snippet is the signing example's published source; its truth is bound to the
+            # shipped signer by this claim's verifier, and its drift here is a template re-pin
+            ("atomic_code", (Lit(published_snippet(delimited=True)),)),
         ],
     )
 

@@ -4357,11 +4357,11 @@ def test_the_document_identity_registry_matches_its_review_pin():
         f"  reviewed: {pinned}\n  now:      {digest}\n"
         "Read the new titles, then re-pin them in the SAME commit."
     )
-RELEASE_OUTLINE_PIN = ("3df354e877bce54e", "the contract's 8 sections and the guide's 9: ordered "
+RELEASE_OUTLINE_PIN = ("cebcd35103a3a9e1", "the contract's 8 sections and the guide's 9: ordered "
                                            "blocks, claim ids and projections, narration digests, "
                                            "the reviewed contact/due-date slot sentence, and every "
-                                           "label and residue the renderer authors "
-                                           "inside a claimed block")
+                                           "label, residue, and composed template the "
+                                           "renderer authors inside a claimed block")
 def test_the_release_outline_matches_its_review_pin():
     from docs.contracts import outline
 
@@ -4374,7 +4374,7 @@ def test_the_release_outline_matches_its_review_pin():
             for block in section.blocks:
                 parts.extend((block.kind, block.claim_id, block.projection, block.digest,
                               "|".join(block.slots), block.template, block.label,
-                              block.residue))
+                              block.residue, block.composed))
     digest = hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]
     pinned, label = RELEASE_OUTLINE_PIN
     assert digest == pinned, (
