@@ -189,14 +189,21 @@ class Publication:
         artifact.verify_tables_match_model(doc, tables)
         artifact.verify_prose_stream(doc, artifact._page_prose(path))
         artifact.verify_footers(doc, path, module)
-        # …and the INK (re-audit-10 finding 2): every lane above reads extracted text, and
-        # extraction is colour-blind — a retry obligation drawn in white passed them all.
-        invisible = artifact.visibility_problems(path)
+        # …and the INK, declared AND painted (re-audit-10 finding 2; re-audit-11 finding 1):
+        # every lane above reads extracted text, and extraction is colour-blind. The declared
+        # lane names cheap defects precisely; the painted lane rasterizes the staged file and is
+        # the authority — alpha-0 ink, black-on-black cells, and a page wiped by an opaque shape
+        # each pass the declared check and fail the paint.
+        invisible = artifact.visibility_problems(path) + artifact.painted_problems(path)
         if invisible:
             raise ValueError(
                 f"{self.identity.id} draws governed text a reader cannot see:\n  "
                 + "\n  ".join(invisible[:10])
             )
+        # …and each character's ink is its reviewed ROLE's (re-audit-11 finding 2): the outline
+        # pins which presentation role every block occupies, and this contradicts a block that
+        # records one role while painting another.
+        artifact.verify_role_ink(doc, path)
 
 
 def _check(revision: str) -> str:

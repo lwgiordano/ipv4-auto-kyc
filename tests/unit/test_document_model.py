@@ -685,12 +685,13 @@ def test_every_claim_block_carries_visible_lines(rendered):
 def test_claim_ids_and_blocks_agree(rendered):
     """`rendered` (the id list) and the block model must describe the same document."""
     _generator, _registry, doc, _page, _tables = rendered
-    from_blocks = Counter(b.claim_id for b in doc.blocks if b.claim_id and b.role == "value")
+    from_blocks = Counter(b.claim_id for b in doc.blocks if b.claim_id)
     assert from_blocks == Counter(doc.rendered)
-    # a note is attributed but is not the claim's value, so it never inflates coverage
-    # every block is a VALUE block now: the old "attributed but unverified" note role is gone
-    assert not [b for b in doc.blocks if b.role != "value"], (
-        "a block still claims the retired note role")
+    # every recorded line carries exactly one closed presentation role (re-audit-11 finding 2);
+    # the Block constructor enforces the pairing, so here we prove the DOCUMENTS exercise it
+    for block in doc.blocks:
+        assert len(block.roles) == len(block.lines)
+        assert set(block.roles) <= set(render_module.ROLE_STYLES)
 
 
 # ── the named mutations from the audit, each of which used to pass ────────────────────────────────
@@ -1317,7 +1318,7 @@ def test_a_renderer_that_displays_something_other_than_the_claim_fails(
 
         self._story.append(Paragraph(prefix + escape(lie), render_module.BODY))
         self.rendered.append(cid)
-        self._add(Block(kind="prose", claim_id=cid, lines=(lie,),
+        self._add(Block(kind="prose", claim_id=cid, lines=(lie,), roles=("BODY",),
                         projection=projection.PARAGRAPH))
         return None
 
@@ -1883,7 +1884,7 @@ def test_w9f1_a_short_renderer_sentence_inside_a_claim_cannot_be_published(tmp_p
             self.registry[claim_id], projection.BULLETS))
         body = "<br/>".join("&bull;  " + render_module.escape(line) for line in lines)
         self._emit(claim_id, [render_module.Paragraph(body, render_module.BODY)], lines,
-                   projection_name=projection.BULLETS)
+                   roles=("BODY",) * len(lines), projection_name=projection.BULLETS)
         return None
 
     monkeypatch.setattr(render_module.Doc, "claim_bullets", with_an_extra_bullet)
@@ -2130,18 +2131,74 @@ def test_w11f2_the_glyph_gate_holds_size_and_frame_too(tmp_path, monkeypatch):
     assert found and "below" in found[0], "2pt text passed the glyph gate"
 
 
+# The COMPLETE public rendering surface of `Doc`, each method with its exact content-only
+# parameters (re-audit-11 finding 2). This is the closed-signature property itself, not a
+# forbidden name: renaming an override parameter — `style`, `_role`, anything — adds a parameter
+# and fails the exact tuple. Extending this table is the deliberate act of widening the surface.
+PUBLIC_RENDERING_SIGNATURES = {
+    "section": ("self", "section_id", "title"),
+    "title": ("self",),
+    "h1": ("self", "text"),
+    "h2": ("self", "text"),
+    "p": ("self", "markup"),
+    "why": ("self", "markup"),
+    "code": ("self", "text"),
+    "wrapcode": ("self", "text"),
+    "space": ("self", "height"),
+    "keep_last_together": ("self", "count"),
+    "claim_statement": ("self", "claim_id"),
+    "claim_paragraph": ("self", "claim_id", "prefix"),
+    "claim_bullets": ("self", "claim_id"),
+    "claim_steps": ("self", "claim_id", "heading"),
+    "claim_code": ("self", "claim_id", "heading", "numbered", "lead"),
+    "claim_prose": ("self", "claim_id", "segments"),
+    "claim_mixed": ("self", "claim_id", "parts", "published_fields"),
+    "claim_alert": ("self", "claim_id"),
+    "claim_table": ("self", "claim_id", "widths", "heading"),
+    "table": ("self", "headers", "rows", "widths", "code_columns"),
+}
+
+
 def test_w11f2_presentation_is_closed_and_the_real_documents_are_visible(tmp_path, monkeypatch):
-    """No public rendering method accepts a style object — the role IS the method — and both real
-    documents pass the gate they are now held to."""
+    """The public rendering surface is CLOSED — content parameters only, pinned exactly — and
+    both real documents pass every ink gate they are now held to.
+
+    Re-audit-11 finding 2 called the old form of this test out by name: asserting that no
+    parameter is literally spelled `style` certifies a spelling, and `_role` walked straight
+    past it. What is asserted now is the property: every public rendering method of `Doc` has
+    exactly its documented content parameters, nothing variadic, so there is no parameter of
+    ANY name through which a caller reaches a style — and each structural method records the
+    one fixed role that is that method.
+    """
     from docs.generators import artifact
 
-    for name in ("p", "why", "claim_paragraph", "claim_bullets", "claim_prose", "claim_mixed",
-                 "claim_statement", "claim_table", "claim_steps", "claim_code", "claim_alert"):
-        method = getattr(render_module.Doc, name, None)
-        if method is None:
-            continue
-        params = inspect.signature(method).parameters
-        assert "style" not in params, f"Doc.{name} accepts a caller-supplied style"
+    public = {name for name in vars(render_module.Doc)
+              if not name.startswith("_") and callable(getattr(render_module.Doc, name))
+              and name not in ("blocks", "story", "document_id", "section_of",
+                               "expected_footers", "render")}
+    assert public == set(PUBLIC_RENDERING_SIGNATURES), (
+        "the public rendering surface changed; review the closed-signature table")
+    for name, wanted in PUBLIC_RENDERING_SIGNATURES.items():
+        signature = inspect.signature(getattr(render_module.Doc, name))
+        assert tuple(signature.parameters) == wanted, (
+            f"Doc.{name} takes {tuple(signature.parameters)}, reviewed as {wanted}")
+        assert not any(p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL)
+                       for p in signature.parameters.values()), (
+            f"Doc.{name} accepts variadic arguments")
+
+    # each structural method records its ONE role — the behavioral half of "the role is the
+    # method"
+    probe = Doc(OPERATIONS, documents.DEPLOYMENT_GUIDE)
+    probe.title()
+    probe.h1("Heading one")
+    probe.h2("Heading two")
+    probe.p("Body prose")
+    probe.why("The indented aside")
+    probe.code("literal()")
+    probe.wrapcode("wrap")
+    assert [b.roles for b in probe.blocks] == [
+        ("TITLE",), ("H1",), ("H2",), ("BODY",), ("WHY",), ("CODE",), ("WRAPCODE",)]
+
     monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
     for generator in (contract_gen, deploy_gen):
         doc = (generator.build(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
@@ -2149,3 +2206,190 @@ def test_w11f2_presentation_is_closed_and_the_real_documents_are_visible(tmp_pat
         path = str(tmp_path / f"{generator.DOCUMENT_ID}.pdf")
         doc.render(path, revision="abc1234")
         assert artifact.visibility_problems(path) == []
+        assert artifact.painted_problems(path) == []
+        artifact.verify_role_ink(doc, path)
+
+
+# ── re-audit-11 finding 1: the gate reads character metadata, not the final painted page ──────────
+#
+# Three independent witnesses, each of which passed `visibility_problems` and published on the
+# prior tree: ink with alpha 0 still DECLARES black; black glyphs on a black table background
+# declare nothing wrong; and an opaque shape painted over a finished page changes no character at
+# all. The authority is the RASTERIZED page now — `artifact.painted_problems` renders each page
+# the way a viewer does and requires every character's own box to show contrasting pixels — and
+# `publish` refuses on any hit, before promotion, leaving nothing behind.
+
+
+def test_w12f1_alpha_zero_ink_cannot_be_published(tmp_path, monkeypatch):
+    """The exact witness: `BODY.textColor = Color(0, 0, 0, alpha=0)` writes an ExtGState with
+    `/ca 0` — pdfplumber reports pure black, the declared-ink gate passes, and the rasterized
+    page shows nothing where most of the body should be."""
+    from reportlab.lib.colors import Color
+
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    monkeypatch.setattr(render_module.BODY, "textColor", Color(0, 0, 0, alpha=0))
+    with pytest.raises(ValueError, match="cannot see"):
+        contract_gen.PUBLICATION.publish(
+            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+    assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
+
+
+def test_w12f1_black_on_black_cannot_be_published(tmp_path, monkeypatch):
+    """The exact witness: a black whole-table BACKGROUND appended to the central `_TABLE_STYLE`.
+    Every table glyph still declares luminance 0 — ink as dark as governed ink gets — and every
+    cell is unreadable, because the declared gate never asked what the ink sits ON."""
+    from reportlab.lib import colors as _colors
+    from reportlab.platypus import TableStyle
+
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    monkeypatch.setattr(
+        render_module, "_TABLE_STYLE",
+        TableStyle(list(render_module._TABLE_STYLE.getCommands())
+                   + [("BACKGROUND", (0, 0), (-1, -1), _colors.black)]))
+    with pytest.raises(ValueError, match="cannot see"):
+        contract_gen.PUBLICATION.publish(
+            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+    assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
+
+
+def test_w12f1_an_overdrawn_page_cannot_be_published(tmp_path, monkeypatch):
+    """The exact witness: one zero-height flowable appended to the private story whose `draw()`
+    paints an opaque white rectangle over the finished page. No character changes — extraction
+    and every model lane stay green — and the page is blank. Private-story injection is this
+    project's own established threat model (re-audit-6 finding 3), so 'the renderer draws no
+    opaque shapes' was never a boundary; the paint is measured now."""
+    from reportlab.platypus import Flowable
+
+    class Blanket(Flowable):
+        width = 0
+        height = 0
+
+        def draw(self):
+            self.canv.saveState()
+            self.canv.setFillColorRGB(1, 1, 1)
+            self.canv.rect(-1000, -1000, 3000, 3000, stroke=0, fill=1)
+            self.canv.restoreState()
+
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    real_build = deploy_gen.build
+
+    def overdrawn_build(**inputs):
+        doc = real_build(**inputs)
+        doc._story.append(Blanket())
+        return doc
+
+    monkeypatch.setattr(deploy_gen, "build", overdrawn_build)
+    with pytest.raises(ValueError, match="cannot see"):
+        deploy_gen.PUBLICATION.publish(str(tmp_path))
+    assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
+
+
+# ── re-audit-11 finding 2: the presentation role is part of the reviewed block identity ───────────
+#
+# The witness: intercept the first audience call to `Doc.p` and draw it as a red ALERT panel.
+# Three doors, all shut: the parameter no longer exists under any spelling (the closed-signature
+# table above); the private emitter records the role it draws, so an honest wrapper is refused by
+# the reviewed outline; and a wrapper that draws one role while RECORDING another is contradicted
+# by the page itself — `verify_role_ink` walks the model and page prose streams in lockstep and
+# holds each painted character to its line's recorded role.
+
+
+def test_w12f2_audience_cannot_be_promoted_to_an_alert(tmp_path, monkeypatch):
+    """Codex's exact witness through every remaining door, each refused through `publish`."""
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    probe = Doc(OPERATIONS, documents.DEPLOYMENT_GUIDE)
+    with pytest.raises(TypeError):
+        probe.p("plain prose", _role=render_module.ALERT)
+    with pytest.raises(TypeError):
+        probe.p("plain prose", style=render_module.ALERT)
+
+    real_build = deploy_gen.build
+    real_p = render_module.Doc.p
+
+    def build_with(first_p):
+        def wrapped(**inputs):
+            state = {"first": True}
+
+            def hostile_p(self, markup):
+                if state["first"]:
+                    state["first"] = False
+                    return first_p(self, markup)
+                return real_p(self, markup)
+
+            render_module.Doc.p = hostile_p
+            try:
+                return real_build(**inputs)
+            finally:
+                render_module.Doc.p = real_p
+        return wrapped
+
+    # the honest door: the private emitter records the role it draws, and the outline refuses it
+    def honest_alert(self, markup):
+        return render_module.Doc._prose(self, markup, "ALERT")
+
+    monkeypatch.setattr(deploy_gen, "build", build_with(honest_alert))
+    out = tmp_path / "honest"
+    out.mkdir()
+    with pytest.raises(ValueError, match=r"presented in roles \('ALERT',\)"):
+        deploy_gen.PUBLICATION.publish(str(out))
+    assert not list(out.iterdir()), "a refused release leaves nothing behind"
+
+    # the forging door: draw ALERT, record BODY — the outline believes the record, the PAGE does
+    # not
+    def forged_alert(self, markup):
+        self._story.append(render_module.Paragraph(markup, render_module.ALERT))
+        self._add(render_module.Block(
+            kind="prose", claim_id=None,
+            lines=(render_module.visible_text(markup),), roles=("BODY",)))
+
+    monkeypatch.setattr(deploy_gen, "build", build_with(forged_alert))
+    out = tmp_path / "forged"
+    out.mkdir()
+    with pytest.raises(AssertionError, match="not the look of 'BODY'"):
+        deploy_gen.PUBLICATION.publish(str(out))
+    assert not list(out.iterdir()), "a refused release leaves nothing behind"
+
+
+def test_w12f2_a_heading_cannot_borrow_another_levels_look(tmp_path, monkeypatch):
+    """The same class at the heading levels the finding named: title/H1/H2 all record `heading`,
+    so an H2 drawn in H1's larger type was invisible to the model. Forging the record is
+    contradicted by the painted size."""
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    real_build = deploy_gen.build
+    real_h2 = render_module.Doc.h2
+
+    def wrapped(**inputs):
+        state = {"first": True}
+
+        def promoted_h2(self, text):
+            if state["first"]:
+                state["first"] = False
+                self._story.append(render_module.Paragraph(
+                    render_module.escape(text), render_module.ROLE_STYLES["H1"]))
+                self._add(render_module.Block(
+                    kind="heading", claim_id=None, lines=(text,), roles=("H2",)))
+                return None
+            return real_h2(self, text)
+
+        render_module.Doc.h2 = promoted_h2
+        try:
+            return real_build(**inputs)
+        finally:
+            render_module.Doc.h2 = real_h2
+
+    monkeypatch.setattr(deploy_gen, "build", wrapped)
+    with pytest.raises(AssertionError, match="not the look of 'H2'"):
+        deploy_gen.PUBLICATION.publish(str(tmp_path))
+    assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
+
+
+def test_w12f2_the_outline_reviews_every_blocks_roles():
+    """Total on the reviewed side: every outline row that shows lines names its roles, drawn
+    from the closed set — so no block's presentation is left unreviewed."""
+    for entry in outline.OUTLINES.values():
+        for section in entry.sections:
+            for spec in section.blocks:
+                if spec.kind != "table":
+                    assert spec.roles, f"{entry.document_id}/{section.section_id}: unreviewed roles"
+                assert set(spec.roles) <= set(render_module.ROLE_STYLES), (
+                    f"{entry.document_id}/{section.section_id}: unknown roles {spec.roles}")

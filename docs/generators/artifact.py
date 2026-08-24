@@ -347,18 +347,32 @@ verify_footers = _verify_footers
 
 # ── the glyphs themselves: governed text must be VISIBLE, not merely extractable ──────────────────
 #
-# Re-audit-10 finding 2. Every lane above reads the page through `extract_text`, and extraction
-# does not care what colour the ink is: the retry obligation rendered in white passed the outline,
-# the page/model comparison, the table, prose and footer lanes, and published — complete to a
-# parser, absent to the person the contract binds. Presentation is part of the artifact.
+# Re-audit-10 finding 2, completed by re-audit-11 finding 1. Every lane above reads the page
+# through extraction, and extraction does not care what the ink looks like: the retry obligation
+# rendered in white passed the outline, the page/model comparison, the table, prose and footer
+# lanes, and published — complete to a parser, absent to the person the contract binds.
 #
-# Scope, stated honestly: this proves every glyph is drawn inside the visible page, at a governed
-# minimum size, in ink that contrasts with the white page. It does not rasterize, so a glyph
-# later painted OVER by an opaque shape is out of scope here — the renderer draws no such shapes,
-# and the closed presentation roles leave no caller parameter to add one.
+# Two lanes, because declared ink and painted ink are different facts:
+#
+# - `visibility_problems` reads each character's DECLARED colour, size and position from the
+#   content stream. It is cheap and it names the defect precisely, and re-audit-11 proved it is
+#   not an authority: alpha-0 ink still declares black, black text on a black table background
+#   declares nothing wrong, and an opaque shape painted over a finished page changes no
+#   character at all.
+# - `painted_problems` is the authority: it RASTERIZES each page after all painting — opacity,
+#   render mode, clipping, backgrounds and occlusion included — and requires every character's
+#   own box to show visibly contrasting pixels.
+#
+# Scope, stated honestly: the painted lane measures contrast within each character's box, so a
+# bright non-text mark drawn through that box could in principle supply the contrast an invisible
+# glyph lacks — the renderer draws no such marks, and `verify_role_ink` holds every painted
+# character to a closed role signature, but contrast-under-a-mark is bounded by that closure, not
+# measured per glyph.
 
 MINIMUM_GLYPH_POINTS = 6.0  # the smallest governed role is the 7pt footer
 MAXIMUM_INK_LUMINANCE = 0.75  # against the white page; the palest governed ink is #666666 (~0.40)
+RASTER_DPI = 150  # 7pt glyphs are ~15px tall here — thin strokes still leave measurable ink
+MINIMUM_PAINTED_CONTRAST = 0.25  # 1 − MAXIMUM_INK_LUMINANCE: the same floor, measured painted
 
 
 def _luminance(color) -> float:
@@ -404,3 +418,153 @@ def visibility_problems(path: str) -> list[str]:
                 if len(found) >= 10:
                     return found
     return found
+
+
+def painted_problems(path: str) -> list[str]:
+    """Every character that leaves no visible mark on the RASTERIZED page (re-audit-11 F1).
+
+    `visibility_problems` reads what each character DECLARES; this reads what the finished page
+    PAINTS. The page is rendered exactly as a viewer renders it — opacity, render mode, clipping,
+    backgrounds and anything drawn later included — and each character's own box must contain
+    both light and dark pixels: ink with no local contrast is invisible whatever the content
+    stream declares. Alpha-0 "black", black cells on a black table background, and a page wiped
+    by an opaque shape all fail HERE, having each passed the declared-ink check.
+    """
+    found: list[str] = []
+    with pdfplumber.open(path) as pdf:
+        for number, page in enumerate(pdf.pages, 1):
+            image = page.to_image(resolution=RASTER_DPI).original.convert("L")
+            scale = RASTER_DPI / 72.0
+            for char in page.chars:
+                text = (char.get("text") or "").strip()
+                if not text:
+                    continue
+                left = max(0, int(char["x0"] * scale) - 1)
+                upper = max(0, int(char["top"] * scale) - 1)
+                right = min(image.width, int(char["x1"] * scale) + 2)
+                lower = min(image.height, int(char["bottom"] * scale) + 2)
+                if right <= left or lower <= upper:
+                    found.append(f"page {number}: {text!r} paints no pixels on the visible page")
+                else:
+                    lo, hi = image.crop((left, upper, right, lower)).getextrema()
+                    contrast = (hi - lo) / 255.0
+                    if contrast < MINIMUM_PAINTED_CONTRAST:
+                        found.append(
+                            f"page {number}: {text!r} leaves no visible mark after all painting "
+                            f"(painted contrast {contrast:.2f}, floor "
+                            f"{MINIMUM_PAINTED_CONTRAST})")
+                if len(found) >= 10:
+                    return found
+    return found
+
+
+# ── the ink each ROLE is allowed to wear: recorded role == painted look, per character ────────────
+#
+# Re-audit-11 finding 2, the page half. The reviewed outline pins which presentation role every
+# block occupies, but the block's `roles` are recorded by the layer under audit — a generator
+# that draws an audience paragraph as a red alert panel and records "BODY" tells the outline a
+# clean story. The prose-stream lane already proves the page's prose characters EQUAL the model's
+# characters in order, so the pairing between a painted character and the line that authorized it
+# is exact: this lane walks the two streams in lockstep and holds each painted character to the
+# closed signature of ITS line's role. Table cells and the footer band close the partition.
+
+
+def _ink_rgb(color) -> tuple[float, float, float]:
+    """A pdfplumber character colour as canonical rounded RGB, whatever space it was declared in."""
+    if color is None:
+        return (0.0, 0.0, 0.0)
+    values = [float(v) for v in (color if isinstance(color, (list, tuple)) else [color])]
+    if len(values) == 1:
+        values = values * 3
+    elif len(values) == 4:
+        c, m, y, k = values
+        values = [(1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k)]
+    return tuple(round(v, 4) for v in values[:3])
+
+
+def _wears(char, signature) -> bool:
+    """Whether this painted character matches one closed role signature exactly."""
+    fonts, size, ink = signature
+    return (char["fontname"] in fonts
+            and abs(float(char.get("size", 0)) - size) < 0.05
+            and _ink_rgb(char.get("non_stroking_color")) == ink)
+
+
+def verify_role_ink(doc, path: str) -> None:
+    """Every painted character wears the ink of the role its line was reviewed in.
+
+    Three checks partition the page:
+
+    1. PROSE, in lockstep: the model's prose stream (each character tagged with its line's
+       recorded role) against the page's prose stream (each character carrying its painted font,
+       size and colour). The streams are character-equal — `verify_prose_stream` holds that — so
+       the pairing is positional, total, and floor-free: character N of the page was authorized
+       by character N of the model, and must be painted in that line's role.
+    2. TABLE cells: every character inside a table's box wears one of the three closed cell
+       styles. No caller can name a cell style, so the closed set is the whole claim.
+    3. FOOTER band: every character in the band wears the furniture's one look.
+    """
+    from docs.generators import render
+
+    signatures = render.ROLE_SIGNATURES
+    expected: list[tuple[str, str, str]] = []  # (character, role, its line, for the message)
+    for block in doc.blocks:
+        decorated = block.kind == "alert" or block.projection == projection.BULLETS
+        for line, role in zip(block.lines, block.roles, strict=True):
+            text = ("–" + str(line)) if decorated else str(line)
+            for character in "".join(text.split()):
+                expected.append((character, role, str(line)))
+
+    cell_signatures = [signatures["CELL"], signatures["CELLB"], signatures["TOKEN"]]
+    cursor = 0
+    with pdfplumber.open(path) as pdf:
+        for number, page in enumerate(pdf.pages, 1):
+            cutoff = page.height - FOOTER_BAND_INCHES * 72
+            boxes = [t.bbox for t in page.find_tables()]
+
+            def in_table(word, boxes=boxes) -> bool:
+                cx = (word["x0"] + word["x1"]) / 2
+                cy = (word["top"] + word["bottom"]) / 2
+                return any(x0 <= cx <= x1 and y0 <= cy <= y1 for (x0, y0, x1, y1) in boxes)
+
+            # split words wherever the painted look changes, so each word wears ONE signature
+            words = page.extract_words(
+                extra_attrs=["fontname", "size", "non_stroking_color"])
+
+            for word in sorted((w for w in words if w["top"] >= cutoff),
+                               key=lambda w: w["x0"]):
+                assert _wears(word, signatures["FOOTER"]), (
+                    f"page {number}: footer-band text {word['text']!r} is painted "
+                    f"({word['fontname']}, {word['size']:.1f}pt, "
+                    f"{_ink_rgb(word.get('non_stroking_color'))}), not the furniture's one look")
+
+            body = [w for w in words if w["top"] < cutoff]
+            for word in (w for w in body if in_table(w)):
+                assert any(_wears(word, s) for s in cell_signatures), (
+                    f"page {number}: table cell text {word['text']!r} is painted "
+                    f"({word['fontname']}, {word['size']:.1f}pt, "
+                    f"{_ink_rgb(word.get('non_stroking_color'))}), not one of the three closed "
+                    "cell styles")
+
+            lines: dict[float, list] = {}
+            for word in (w for w in body if not in_table(w)):
+                lines.setdefault(round(word["top"], 1), []).append(word)
+            for top in sorted(lines):
+                for word in sorted(lines[top], key=lambda w: w["x0"]):
+                    for character in word["text"]:
+                        if not character.strip():
+                            continue
+                        assert cursor < len(expected), (
+                            f"page {number}: prose runs past the model at {word['text']!r}")
+                        wanted, role, line = expected[cursor]
+                        assert character == wanted, (
+                            f"page {number}: prose diverges from the model at character "
+                            f"{cursor} ({character!r} vs {wanted!r}); run verify_prose_stream")
+                        assert _wears(word, signatures[role]), (
+                            f"page {number}: {word['text']!r} is painted "
+                            f"({word['fontname']}, {word['size']:.1f}pt, "
+                            f"{_ink_rgb(word.get('non_stroking_color'))}), which is not the "
+                            f"look of {role!r}, the reviewed role of its line {line[:60]!r}")
+                        cursor += 1
+    assert cursor == len(expected), (
+        f"the page paints {cursor} prose characters but the model records {len(expected)}")

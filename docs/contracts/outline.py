@@ -63,10 +63,23 @@ class BlockOutline:
     # from worst_case_minutes=27 when both live in one claim; the template says which
     # path fills each hole, and the verifier recomputes the text from it.
     composed: str = ""
+    # The PRESENTATION roles this block was reviewed in, consecutive repeats collapsed
+    # (re-audit-11 finding 2). `kind` says how a block is read back, not how it looks:
+    # `p` and `why` both record prose and title/h1/h2 all record headings, so an audience
+    # paragraph promoted to a red alert panel — or an aside promoted to a heading — was
+    # invisible to this outline. The block records the closed role that drew each line,
+    # this pins the reviewed sequence, and `artifact.verify_role_ink` holds the painted
+    # glyphs to the record, so neither half can drift alone.
+    roles: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.kind:
             raise ValueError("a block outline names the kind of block it fixes")
+        if self.kind != "table" and not self.roles:
+            raise ValueError(
+                f"a {self.kind!r} block shows lines, and each line shows in a reviewed "
+                "presentation role; an outline that names none reviews only the words"
+            )
         if not self.claim_id and (self.label or self.residue):
             raise ValueError(
                 "only a claimed block has renderer-authored text INSIDE it; an's "
@@ -170,6 +183,17 @@ def claim_label(block, claim) -> str:
     return " ".join(line for line in block.lines if line not in derived)
 
 
+def collapsed(roles) -> tuple[str, ...]:
+    """A role sequence with consecutive repeats merged — the count of bullets or steps is the
+    registry's to decide, so the outline reviews WHICH roles appear and in what order, not how
+    many lines each one covers."""
+    out: list[str] = []
+    for role in roles:
+        if not out or out[-1] != role:
+            out.append(role)
+    return tuple(out)
+
+
 def residue_digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
@@ -191,56 +215,61 @@ OUTLINES = MappingProxyType({
                 section_id='(front matter)',
                 title='',
                 blocks=(
-                    BlockOutline(kind='heading', digest='46b7d3b137603ddd'),
-                    BlockOutline(kind='prose', digest='4e5032187099aa1e'),
-                    BlockOutline(kind='heading', digest='9c870aa6e5e93270'),
-                    BlockOutline(kind='prose', claim_id='WIRE.INGEST.ORDERING', projection='paragraph'),
-                    BlockOutline(kind='prose', digest='56480299ea6e40e9'),
+                    BlockOutline(kind='heading', digest='46b7d3b137603ddd', roles=('TITLE',)),
+                    BlockOutline(kind='prose', digest='4e5032187099aa1e', roles=('BODY',)),
+                    BlockOutline(kind='heading', digest='9c870aa6e5e93270', roles=('H2',)),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.INGEST.ORDERING', projection='paragraph',
+                        roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='56480299ea6e40e9', roles=('BODY',)),
                     BlockOutline(
                         kind='prose', slots=('contact', 'due_date'),
-                        template='Send answers to the section 1 questions to {contact} by {due_date}.'),
+                        template='Send answers to the section 1 questions to {contact} by {due_date}.',
+                        roles=('WHY',)),
                 ),
             ),
             SectionOutline(
                 section_id='asks',
                 title='1. Answers we need from you',
                 blocks=(
-                    BlockOutline(kind='heading', digest='234929f29ee78a30'),
-                    BlockOutline(kind='prose', digest='ef84d6cefa3fd5e3'),
+                    BlockOutline(kind='heading', digest='234929f29ee78a30', roles=('H1',)),
+                    BlockOutline(kind='prose', digest='ef84d6cefa3fd5e3', roles=('BODY',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.ORDERING.BOOTSTRAP_024', projection='paragraph'),
-                    BlockOutline(kind='prose', digest='5d2918318bf4467c'),
-                    BlockOutline(kind='prose', digest='c73a077c46f1732c'),
+                        kind='prose', claim_id='WIRE.ORDERING.BOOTSTRAP_024', projection='paragraph',
+                        roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='5d2918318bf4467c', roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='c73a077c46f1732c', roles=('BODY',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.ORDERING.OBLIGATION_STATE', projection='paragraph'),
+                        kind='prose', claim_id='WIRE.ORDERING.OBLIGATION_STATE', projection='paragraph',
+                        roles=('WHY',)),
                     BlockOutline(kind='table', claim_id='WIRE.ORDERING.PENDING_INPUTS', projection='table'),
-                    BlockOutline(kind='prose', digest='fd8093c1f89e10cd'),
-                    BlockOutline(kind='prose', digest='96e74fb46a028241'),
-                    BlockOutline(kind='prose', digest='d96e9efec3b326d1'),
+                    BlockOutline(kind='prose', digest='fd8093c1f89e10cd', roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='96e74fb46a028241', roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='d96e9efec3b326d1', roles=('BODY',)),
                 ),
             ),
             SectionOutline(
                 section_id='events',
                 title='2. Events you send us',
                 blocks=(
-                    BlockOutline(kind='heading', digest='e234571e96ca5ffd'),
+                    BlockOutline(kind='heading', digest='e234571e96ca5ffd', roles=('H1',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.INGEST.PATH', projection='paragraph',
-                        label='Endpoint:'),
-                    BlockOutline(kind='prose', digest='1ec5dfd87476be01'),
+                        kind='prose', claim_id='WIRE.INGEST.PATH', projection='paragraph', label='Endpoint:',
+                        roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='1ec5dfd87476be01', roles=('BODY',)),
                     BlockOutline(kind='table', claim_id='WIRE.INGEST.HEADERS', projection='table'),
-                    BlockOutline(kind='prose', digest='3231921901830b1c'),
-                    BlockOutline(kind='code', digest='583787dccbe46194'),
-                    BlockOutline(kind='heading', digest='0618c15aff85c825'),
+                    BlockOutline(kind='prose', digest='3231921901830b1c', roles=('BODY',)),
+                    BlockOutline(kind='code', digest='583787dccbe46194', roles=('CODE',)),
+                    BlockOutline(kind='heading', digest='0618c15aff85c825', roles=('H2',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.INGEST.EXTRA_FIELDS', projection='composed',
-                        composed='a61c6b8ba4878c0b'),
-                    BlockOutline(kind='heading', digest='90204440e7af4730'),
+                        composed='a61c6b8ba4878c0b', roles=('BODY',)),
+                    BlockOutline(kind='heading', digest='90204440e7af4730', roles=('H2',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.ACTOR.SENSITIVE', projection='composed',
-                        composed='927e9cbaaffe2c1c'),
+                        composed='927e9cbaaffe2c1c', roles=('BODY', 'WHY')),
                     BlockOutline(kind='table', claim_id='WIRE.EVENT.TABLE', projection='table'),
-                    BlockOutline(kind='heading', digest='abe0d582168011a6'),
+                    BlockOutline(kind='heading', digest='abe0d582168011a6', roles=('H2',)),
                     BlockOutline(kind='table', claim_id='WIRE.INGEST.STATUS', projection='table'),
                 ),
             ),
@@ -248,114 +277,138 @@ OUTLINES = MappingProxyType({
                 section_id='callbacks',
                 title='3. Callbacks we send you',
                 blocks=(
-                    BlockOutline(kind='heading', digest='52e82de2fbb9b393'),
+                    BlockOutline(kind='heading', digest='52e82de2fbb9b393', roles=('H1',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.PATH', projection='paragraph',
-                        label='Endpoint:'),
-                    BlockOutline(kind='prose', digest='2196d0acbca869f7'),
+                        label='Endpoint:', roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='2196d0acbca869f7', roles=('BODY',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.FIELDS', projection='composed',
-                        composed='5c518b6ba22e9a69'),
+                        composed='5c518b6ba22e9a69', roles=('BODY',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.DECISIONS', projection='composed',
-                        composed='d9dff7f5c3360406'),
+                        composed='d9dff7f5c3360406', roles=('BODY',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.GATES', projection='composed',
-                        composed='f2d00fc08a64610f'),
+                        composed='f2d00fc08a64610f', roles=('BODY',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELDS', projection='composed',
-                        composed='3f0c69610dbed734'),
+                        composed='3f0c69610dbed734', roles=('BODY',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELD_RULE', projection='paragraph'),
-                    BlockOutline(kind='heading', digest='ead72c5bc41be710'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.DELIVERY', projection='bullets'),
-                    BlockOutline(kind='heading', digest='4c375c57c0bba056'),
+                        kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELD_RULE', projection='paragraph',
+                        roles=('WHY',)),
+                    BlockOutline(kind='heading', digest='ead72c5bc41be710', roles=('H2',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.CALLBACK.VALIDATION_ORDER', projection='paragraph'),
+                        kind='prose', claim_id='WIRE.CALLBACK.DELIVERY', projection='bullets',
+                        roles=('BODY',)),
+                    BlockOutline(kind='heading', digest='4c375c57c0bba056', roles=('H2',)),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.VALIDATION_ORDER', projection='paragraph',
+                        roles=('WHY',)),
                     BlockOutline(kind='table', claim_id='WIRE.CALLBACK.VALIDATION', projection='table'),
-                    BlockOutline(kind='heading', digest='7ff558b7c1f44148'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.RECEIVER_TXN', projection='steps'),
+                    BlockOutline(kind='heading', digest='7ff558b7c1f44148', roles=('H2',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.CALLBACK.ACK_CONSEQUENCE', projection='paragraph'),
-                    BlockOutline(kind='heading', digest='3af9f2cc4371da07'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.ACK_VS_APPLY', projection='paragraph'),
+                        kind='prose', claim_id='WIRE.CALLBACK.RECEIVER_TXN', projection='steps',
+                        roles=('STEP',)),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.ACK_CONSEQUENCE', projection='paragraph',
+                        roles=('WHY',)),
+                    BlockOutline(kind='heading', digest='3af9f2cc4371da07', roles=('H2',)),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.ACK_VS_APPLY', projection='paragraph',
+                        roles=('WHY',)),
                     BlockOutline(kind='table', claim_id='WIRE.CALLBACK.EFFECTIVENESS', projection='table'),
                     BlockOutline(kind='table', claim_id='WIRE.CALLBACK.LEGEND', projection='table'),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.CALLBACK.LEGEND_CLOSURE', projection='paragraph'),
-                    BlockOutline(kind='heading', digest='66dd2ae94a3b1d1c'),
+                        kind='prose', claim_id='WIRE.CALLBACK.LEGEND_CLOSURE', projection='paragraph',
+                        roles=('WHY',)),
+                    BlockOutline(kind='heading', digest='66dd2ae94a3b1d1c', roles=('H2',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.CALLBACK.RELEASE_STATE', projection='paragraph'),
+                        kind='prose', claim_id='WIRE.CALLBACK.RELEASE_STATE', projection='paragraph',
+                        roles=('WHY',)),
                     BlockOutline(kind='table', claim_id='WIRE.CALLBACK.RELEASE', projection='table'),
-                    BlockOutline(kind='heading', digest='fc4e84255a41a3a2'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.WAIT_BOUND', projection='paragraph'),
+                    BlockOutline(kind='heading', digest='fc4e84255a41a3a2', roles=('H2',)),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.WAIT_BOUND', projection='paragraph',
+                        roles=('BODY',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.RETRY', projection='composed',
-                        composed='db3bdddd5760f320'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.COMPLETION', projection='paragraph'),
+                        composed='db3bdddd5760f320', roles=('BODY',)),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.COMPLETION', projection='paragraph',
+                        roles=('BODY',)),
                 ),
             ),
             SectionOutline(
                 section_id='signing',
                 title='4. Request signing (HMAC v2)',
                 blocks=(
-                    BlockOutline(kind='heading', digest='bedd5628058f3d03'),
+                    BlockOutline(kind='heading', digest='bedd5628058f3d03', roles=('H1',)),
                     BlockOutline(
                         kind='code', claim_id='WIRE.SIGN.CANONICAL', projection='numbered_code',
-                        residue='44258b84c7d9f360'),
+                        residue='44258b84c7d9f360', roles=('BODY', 'CODE')),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.DIRECTIONS', projection='composed',
-                        composed='ea9c693eea4f710e'),
-                    BlockOutline(kind='prose', claim_id='WIRE.SIGN.DIRECTION_FORM', projection='paragraph'),
+                        composed='ea9c693eea4f710e', roles=('BODY',)),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.SIGN.DIRECTION_FORM', projection='paragraph',
+                        roles=('WHY',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.SKEW_SECONDS', projection='paragraph',
-                        label='Skew window (seconds):'),
-                    BlockOutline(kind='prose', digest='1241961d4e2b11e0'),
+                        label='Skew window (seconds):', roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='1241961d4e2b11e0', roles=('WHY',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.V1_SUNSET', projection='paragraph',
-                        label='On the v1 sunset dates:'),
-                    BlockOutline(kind='heading', digest='0cf745782fb15a3f'),
-                    BlockOutline(kind='prose', claim_id='WIRE.SIGN.ROTATION', projection='bullets'),
+                        label='On the v1 sunset dates:', roles=('BODY',)),
+                    BlockOutline(kind='heading', digest='0cf745782fb15a3f', roles=('H2',)),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.SIGN.ROTATION', projection='bullets', roles=('BODY',)),
                     BlockOutline(kind='table', claim_id='WIRE.SIGN.ROTATION_RETIREMENT', projection='table'),
-                    BlockOutline(kind='heading', digest='7b5a3ebfc10a96a0'),
+                    BlockOutline(kind='heading', digest='7b5a3ebfc10a96a0', roles=('H2',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.COMPANION', projection='composed',
-                        composed='5367f051d43435cc'),
-                    BlockOutline(kind='prose', claim_id='WIRE.SIGN.COMPANION_PROOF', projection='paragraph'),
-                    BlockOutline(kind='heading', digest='c71fc742ef56a692'),
+                        composed='5367f051d43435cc', roles=('BODY', 'CODE')),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.SIGN.COMPANION_PROOF', projection='paragraph',
+                        roles=('WHY',)),
+                    BlockOutline(kind='heading', digest='c71fc742ef56a692', roles=('H2',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.VECTOR', projection='composed',
-                        composed='cd322569b150f62e'),
+                        composed='cd322569b150f62e',
+                        roles=('BODY', 'WRAPCODE', 'BODY', 'CODE', 'BODY', 'CODE', 'BODY', 'CODE')),
                 ),
             ),
             SectionOutline(
                 section_id='ordering',
                 title='5. Ordering, and one field you must not sort by',
                 blocks=(
-                    BlockOutline(kind='heading', digest='eb8c92f5cfa81ddb'),
+                    BlockOutline(kind='heading', digest='eb8c92f5cfa81ddb', roles=('H1',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.ORDERING.NO_DECIDED_AT', projection='paragraph'),
-                    BlockOutline(kind='heading', digest='25e8007953ff51d7'),
+                        kind='prose', claim_id='WIRE.ORDERING.NO_DECIDED_AT', projection='paragraph',
+                        roles=('BODY',)),
+                    BlockOutline(kind='heading', digest='25e8007953ff51d7', roles=('H2',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.ORDERING.SEQUENCE_DOMAINS', projection='bullets'),
+                        kind='prose', claim_id='WIRE.ORDERING.SEQUENCE_DOMAINS', projection='bullets',
+                        roles=('BODY',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.ORDERING.ORDINAL_AUTHORITY', projection='paragraph'),
+                        kind='prose', claim_id='WIRE.ORDERING.ORDINAL_AUTHORITY', projection='paragraph',
+                        roles=('WHY',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.ORDERING.INTERIM', projection='paragraph',
-                        label='Until activation:'),
+                        label='Until activation:', roles=('BODY',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.ORDERING.INTEGRITY_MISMATCH', projection='paragraph',
-                        label='Note:'),
+                        label='Note:', roles=('BODY',)),
                 ),
             ),
             SectionOutline(
                 section_id='retention',
                 title='6. Retention',
                 blocks=(
-                    BlockOutline(kind='heading', digest='62d82fda7569512c'),
+                    BlockOutline(kind='heading', digest='62d82fda7569512c', roles=('H1',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.RETENTION.WINDOW_DAYS', projection='paragraph',
-                        label='Compliance window (days):'),
+                        label='Compliance window (days):', roles=('BODY',)),
                     BlockOutline(kind='table', claim_id='WIRE.RETENTION.BY_KIND', projection='table'),
                 ),
             ),
@@ -363,7 +416,7 @@ OUTLINES = MappingProxyType({
                 section_id='checklist',
                 title='7. Go-live checklist',
                 blocks=(
-                    BlockOutline(kind='heading', digest='477a774ed5761ee6'),
+                    BlockOutline(kind='heading', digest='477a774ed5761ee6', roles=('H1',)),
                     BlockOutline(kind='table', digest='7662ba50bcac0fc4'),
                 ),
             ),
@@ -376,39 +429,41 @@ OUTLINES = MappingProxyType({
                 section_id='(front matter)',
                 title='',
                 blocks=(
-                    BlockOutline(kind='heading', digest='56ebbb485ec76c87'),
-                    BlockOutline(kind='prose', digest='b9b57ddb8bd71d8a'),
+                    BlockOutline(kind='heading', digest='56ebbb485ec76c87', roles=('TITLE',)),
+                    BlockOutline(kind='prose', digest='b9b57ddb8bd71d8a', roles=('BODY',)),
                 ),
             ),
             SectionOutline(
                 section_id='blocker',
                 title='Read this before provisioning anything',
                 blocks=(
-                    BlockOutline(kind='heading', digest='53d619cb818daa55'),
+                    BlockOutline(kind='heading', digest='53d619cb818daa55', roles=('H1',)),
                     BlockOutline(
-                        kind='alert', claim_id='OPS.BLOCKER.PRODUCTION_PROVIDERS', projection='alert'),
-                    BlockOutline(kind='prose', digest='7cc3ea2a09c0f296'),
-                    BlockOutline(kind='prose', digest='ef3453c590155e50'),
-                    BlockOutline(kind='prose', digest='37fb3a031f041fca'),
+                        kind='alert', claim_id='OPS.BLOCKER.PRODUCTION_PROVIDERS', projection='alert',
+                        roles=('ALERT',)),
+                    BlockOutline(kind='prose', digest='7cc3ea2a09c0f296', roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='ef3453c590155e50', roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='37fb3a031f041fca', roles=('BODY',)),
                 ),
             ),
             SectionOutline(
                 section_id='processes',
                 title='1. What you run: one image, six commands',
                 blocks=(
-                    BlockOutline(kind='heading', digest='99ecc044967d83b7'),
-                    BlockOutline(kind='prose', digest='a0fc83c1a80bf8d9'),
+                    BlockOutline(kind='heading', digest='99ecc044967d83b7', roles=('H1',)),
+                    BlockOutline(kind='prose', digest='a0fc83c1a80bf8d9', roles=('BODY',)),
                     BlockOutline(kind='table', claim_id='OPS.PROCESS.COMMANDS', projection='table'),
-                    BlockOutline(kind='prose', digest='9434d1248b71a3c4'),
+                    BlockOutline(kind='prose', digest='9434d1248b71a3c4', roles=('BODY',)),
                     BlockOutline(
-                        kind='prose', claim_id='OPS.PROCESS.DEV_WORKER_BANNED', projection='paragraph'),
+                        kind='prose', claim_id='OPS.PROCESS.DEV_WORKER_BANNED', projection='paragraph',
+                        roles=('BODY',)),
                 ),
             ),
             SectionOutline(
                 section_id='infrastructure',
                 title='2. Infrastructure',
                 blocks=(
-                    BlockOutline(kind='heading', digest='68357a0210721dc9'),
+                    BlockOutline(kind='heading', digest='68357a0210721dc9', roles=('H1',)),
                     BlockOutline(kind='table', claim_id='OPS.INFRA.COMPONENTS', projection='table'),
                 ),
             ),
@@ -416,27 +471,32 @@ OUTLINES = MappingProxyType({
                 section_id='configuration',
                 title='3. Configuration (KYC_ prefix)',
                 blocks=(
-                    BlockOutline(kind='heading', digest='9c01b97bf70297ab'),
-                    BlockOutline(kind='prose', digest='b0d455ec7d8152cc'),
+                    BlockOutline(kind='heading', digest='9c01b97bf70297ab', roles=('H1',)),
+                    BlockOutline(kind='prose', digest='b0d455ec7d8152cc', roles=('BODY',)),
                     BlockOutline(kind='table', claim_id='OPS.CONFIG.DEFAULTS', projection='table'),
-                    BlockOutline(kind='heading', digest='38087bd9789a9520'),
-                    BlockOutline(kind='prose', claim_id='OPS.CONFIG.PRODUCTION_FLOORS', projection='bullets'),
+                    BlockOutline(kind='heading', digest='38087bd9789a9520', roles=('H2',)),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.CONFIG.PRODUCTION_FLOORS', projection='bullets',
+                        roles=('BODY',)),
                     BlockOutline(
                         kind='code', claim_id='OPS.CONFIG.HMAC_SET', projection='code',
-                        residue='eeead37d4b6834fd'),
-                    BlockOutline(kind='prose', claim_id='OPS.CONFIG.HMAC_SET_RULE', projection='paragraph'),
+                        residue='eeead37d4b6834fd', roles=('H2', 'CODE')),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.CONFIG.HMAC_SET_RULE', projection='paragraph',
+                        roles=('WHY',)),
                     BlockOutline(
                         kind='prose', claim_id='OPS.CONFIG.ROTATION_KEYS', projection='paragraph',
-                        label='Rotation keys:'),
-                    BlockOutline(kind='heading', digest='3c791b013d2d89d0'),
-                    BlockOutline(kind='prose', claim_id='OPS.CONFIG.M2_GATE', projection='paragraph'),
+                        label='Rotation keys:', roles=('BODY',)),
+                    BlockOutline(kind='heading', digest='3c791b013d2d89d0', roles=('H2',)),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.CONFIG.M2_GATE', projection='paragraph', roles=('BODY',)),
                 ),
             ),
             SectionOutline(
                 section_id='health',
                 title='4. Health and monitoring',
                 blocks=(
-                    BlockOutline(kind='heading', digest='b24a5ad3c1e5a9f7'),
+                    BlockOutline(kind='heading', digest='b24a5ad3c1e5a9f7', roles=('H1',)),
                     BlockOutline(kind='table', claim_id='OPS.HEALTH.PROBES', projection='table'),
                 ),
             ),
@@ -444,42 +504,52 @@ OUTLINES = MappingProxyType({
                 section_id='releases',
                 title='5. Releases and cutovers',
                 blocks=(
-                    BlockOutline(kind='heading', digest='d6987735ca6011a2'),
-                    BlockOutline(kind='prose', claim_id='OPS.RELEASE.CLASSIFICATION', projection='paragraph'),
-                    BlockOutline(kind='prose', digest='e25872fbd22d85fd'),
-                    BlockOutline(kind='heading', digest='cb798950e6c2011e'),
+                    BlockOutline(kind='heading', digest='d6987735ca6011a2', roles=('H1',)),
                     BlockOutline(
-                        kind='prose', claim_id='OPS.CUTOVER.EXECUTION_SOURCE', projection='paragraph'),
+                        kind='prose', claim_id='OPS.RELEASE.CLASSIFICATION', projection='paragraph',
+                        roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='e25872fbd22d85fd', roles=('BODY',)),
+                    BlockOutline(kind='heading', digest='cb798950e6c2011e', roles=('H2',)),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.CUTOVER.EXECUTION_SOURCE', projection='paragraph',
+                        roles=('WHY',)),
                     BlockOutline(
                         kind='prose', claim_id='OPS.CUTOVER.PROCEDURES', projection='composed',
-                        composed='7f4c1c3ecc2dc80c'),
+                        composed='7f4c1c3ecc2dc80c', roles=('BODY', 'WHY', 'BODY', 'WHY', 'BODY', 'WHY')),
                     BlockOutline(
                         kind='prose', claim_id='OPS.CUTOVER.OUTBOX_CEILING', projection='steps',
-                        residue='1193b2813e8d6c5b'),
-                    BlockOutline(kind='prose', claim_id='OPS.CUTOVER.CEILING_RULE', projection='paragraph'),
+                        residue='1193b2813e8d6c5b', roles=('H2', 'STEP')),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.CUTOVER.CEILING_RULE', projection='paragraph',
+                        roles=('WHY',)),
                     BlockOutline(
                         kind='prose', claim_id='OPS.HMAC.ROLLOUT_ORDER', projection='steps',
-                        residue='b533fa723b3b1f48'),
-                    BlockOutline(kind='prose', claim_id='OPS.HMAC.V1_DROP_TIMING', projection='paragraph'),
+                        residue='b533fa723b3b1f48', roles=('H2', 'STEP')),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.HMAC.V1_DROP_TIMING', projection='paragraph',
+                        roles=('WHY',)),
                 ),
             ),
             SectionOutline(
                 section_id='rollback',
                 title='6. Rollback',
                 blocks=(
-                    BlockOutline(kind='heading', digest='6caf7d4780aff6d8'),
+                    BlockOutline(kind='heading', digest='6caf7d4780aff6d8', roles=('H1',)),
                     BlockOutline(
-                        kind='prose', claim_id='OPS.ROLLBACK.MIGRATION_BOUNDARY', projection='bullets'),
+                        kind='prose', claim_id='OPS.ROLLBACK.MIGRATION_BOUNDARY', projection='bullets',
+                        roles=('BODY',)),
                 ),
             ),
             SectionOutline(
                 section_id='day2',
                 title='7. Day-2 operations',
                 blocks=(
-                    BlockOutline(kind='heading', digest='9f138db6ef8c5dab'),
-                    BlockOutline(kind='prose', claim_id='OPS.RECOVERY.REQUEUE', projection='paragraph'),
-                    BlockOutline(kind='prose', digest='e1ac3e1b791231fe'),
-                    BlockOutline(kind='prose', digest='08111d7054a86a86'),
+                    BlockOutline(kind='heading', digest='9f138db6ef8c5dab', roles=('H1',)),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.RECOVERY.REQUEUE', projection='paragraph',
+                        roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='e1ac3e1b791231fe', roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='08111d7054a86a86', roles=('BODY',)),
                 ),
             ),
         ),
@@ -523,6 +593,11 @@ def problems(doc, inputs: dict | None = None) -> list[str]:
             at = f"{where}[{index}]"
             if block.kind != spec.kind:
                 found.append(f"{at}: {block.kind!r} block, reviewed as {spec.kind!r}")
+                continue
+            if collapsed(block.roles) != spec.roles:
+                found.append(
+                    f"{at}: presented in roles {collapsed(block.roles)}, reviewed as "
+                    f"{spec.roles}")
                 continue
             if spec.claim_id:
                 if block.claim_id != spec.claim_id:

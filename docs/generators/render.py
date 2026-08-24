@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -65,6 +66,55 @@ STEP = ParagraphStyle("Step", parent=BODY, leftIndent=18, firstLineIndent=-14, s
 # Fixed-width text that MUST wrap: wordWrap="CJK" breaks between characters, which is the only way
 # a 163-byte JSON body with no spaces fits a page at all.
 WRAPCODE = ParagraphStyle("WrapCode", parent=CODE, wordWrap="CJK", splitLongWords=1)
+
+TITLE = _styles["Title"]
+
+# The CLOSED presentation roles (re-audit-11 finding 2). No public rendering method accepts a
+# style OR a role: each method draws in the one role that IS that method, through a private
+# emitter that records the same role name on the block it emits — so the reviewed outline pins
+# which visual role every block may occupy, and the artifact lane holds the painted ink to the
+# recorded role's signature. This table is the only place a role name meets a style.
+ROLE_STYLES = MappingProxyType({
+    "TITLE": TITLE, "H1": H1, "H2": H2, "BODY": BODY, "WHY": WHY, "STEP": STEP,
+    "ALERT": ALERT, "CODE": CODE, "WRAPCODE": WRAPCODE,
+})
+
+# The page furniture's one look, shared by the stamping canvas and the signature table below so
+# the two cannot drift apart.
+FOOTER_FONT_NAME = "Helvetica"
+FOOTER_FONT_SIZE = 7
+FOOTER_INK = colors.HexColor("#666666")
+
+_BOLD_VARIANT = {"Helvetica": "Helvetica-Bold", "Courier": "Courier-Bold"}
+
+
+def _painted_signature(style) -> tuple:
+    """What one role's glyphs look like on the PAGE: allowed fonts, exact size, exact ink.
+
+    The bold variant is allowed because prose markup may embolden a span (`<b>`); nothing in the
+    documents changes a glyph's size or colour within a role, so those stay exact.
+    """
+    ink = style.textColor
+    rgb = ink.rgb() if hasattr(ink, "rgb") else (float(ink),) * 3
+    return (
+        frozenset({style.fontName, _BOLD_VARIANT.get(style.fontName, style.fontName)}),
+        round(float(style.fontSize), 2),
+        tuple(round(float(v), 4) for v in rgb),
+    )
+
+
+# Every look a governed page is allowed to paint: the block roles, the three table-cell styles
+# (drawn only by `_token_cell`, `_prose_cell` and `claim_table`'s header row — no caller names
+# them either), and the footer band. `docs.generators.artifact.verify_role_ink` holds every
+# painted character to this closed set, and each prose character to ITS line's recorded role.
+ROLE_SIGNATURES = MappingProxyType({
+    **{role: _painted_signature(style) for role, style in ROLE_STYLES.items()},
+    "CELL": _painted_signature(CELL),
+    "CELLB": _painted_signature(CELLB),
+    "TOKEN": _painted_signature(TOKEN),
+    "FOOTER": (frozenset({FOOTER_FONT_NAME}), float(FOOTER_FONT_SIZE),
+               tuple(round(float(v), 4) for v in FOOTER_INK.rgb())),
+})
 
 # Usable text width: letter minus the 0.75in margins, minus CODE's left indent.
 FRAME_WIDTH = letter[0] - 2 * 0.75 * inch
@@ -145,8 +195,8 @@ def _stamped_canvas(identity, revision: str, page_sections: dict | None = None):
             for number, state in enumerate(self._pending, 1):
                 self.__dict__.update(state)
                 self.saveState()
-                self.setFont("Helvetica", 7)
-                self.setFillColor(colors.HexColor("#666666"))
+                self.setFont(FOOTER_FONT_NAME, FOOTER_FONT_SIZE)
+                self.setFillColor(FOOTER_INK)
                 section = (page_sections or {}).get(number, "")
                 self.drawString(0.75 * inch, 0.45 * inch,
                                 identity.footer_line(section, revision))
@@ -235,7 +285,14 @@ class Block:
     claim_id: str | None
     lines: tuple[str, ...]
     rows: tuple[tuple[str, ...], ...] = ()  # tables only, header row first
-    role: str = "value"  # "value" | "note" — a note is attributed but is not the claim's value
+    # The closed presentation role that drew each line, PARALLEL to `lines` (re-audit-11
+    # finding 2). `kind` says how a block is read back; it cannot say how it LOOKS — `p` and
+    # `why` both record prose, and title/h1/h2 all record headings, so an audience paragraph
+    # promoted to a red alert panel was indistinguishable in the model. The role is recorded by
+    # the same private emitter that draws it, the outline pins the reviewed role sequence, and
+    # `artifact.verify_role_ink` holds the painted glyphs to the recorded role — so a block that
+    # records one role and paints another is contradicted by the page rather than believed.
+    roles: tuple[str, ...] = ()
     # The named projection this block was rendered under. The rendering tests recompute the
     # expected content from the REGISTRY through `docs.contracts.projection` using this name, so
     # the renderer never supplies the answer it is checked against (finding 3).
@@ -253,6 +310,19 @@ class Block:
     # schema beside the content is what lets the comparison stay exact everywhere else: a prose
     # cell that silently loses its commas is a real defect, not a rendering artifact.
     code_columns: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if len(self.roles) != len(self.lines):
+            raise ValueError(
+                f"a block records exactly one closed presentation role per visible line: "
+                f"{len(self.lines)} lines, {len(self.roles)} roles"
+            )
+        unknown = sorted(set(self.roles) - set(ROLE_STYLES))
+        if unknown:
+            raise ValueError(
+                f"{unknown} are not presentation roles this renderer has; the closed set is "
+                f"{sorted(ROLE_STYLES)}"
+            )
 
 
 @dataclass
@@ -320,13 +390,13 @@ class Doc:
         if any(s.section_id == section_id for s in self.sections):
             raise ValueError(f"duplicate section id {section_id!r}")
         self._open_section(section_id, title)
-        heading = Paragraph(escape(title), H1)
+        heading = Paragraph(escape(title), ROLE_STYLES["H1"])
         # Tagged so the layout pass can tell which section each PAGE belongs to and stamp it in
         # the footer: a page that opens mid-sentence is otherwise unlocatable on its own
         # (re-audit `4f23f23..122cc67` finding 12).
         heading._kyc_section = title
         self._story.append(heading)
-        self._add(Block(kind="heading", claim_id=None, lines=(title,)))
+        self._add(Block(kind="heading", claim_id=None, lines=(title,), roles=("H1",)))
 
     def _add(self, block) -> None:
         self.sections[-1].blocks.append(block)
@@ -356,16 +426,16 @@ class Doc:
         same closed registry entry the footers and the PDF metadata do.
         """
         text = self.identity.title
-        self._story.append(Paragraph(escape(text), _styles["Title"]))
-        self._add(Block(kind="heading", claim_id=None, lines=(text,)))
+        self._story.append(Paragraph(escape(text), ROLE_STYLES["TITLE"]))
+        self._add(Block(kind="heading", claim_id=None, lines=(text,), roles=("TITLE",)))
 
     def h1(self, text: str):
-        self._story.append(Paragraph(escape(text), H1))
-        self._add(Block(kind="heading", claim_id=None, lines=(text,)))
+        self._story.append(Paragraph(escape(text), ROLE_STYLES["H1"]))
+        self._add(Block(kind="heading", claim_id=None, lines=(text,), roles=("H1",)))
 
     def h2(self, text: str):
-        self._story.append(Paragraph(escape(text), H2))
-        self._add(Block(kind="heading", claim_id=None, lines=(text,)))
+        self._story.append(Paragraph(escape(text), ROLE_STYLES["H2"]))
+        self._add(Block(kind="heading", claim_id=None, lines=(text,), roles=("H2",)))
 
     def keep_last_together(self, count: int) -> None:
         """Glue the last `count` story flowables into one KeepTogether, so a heading cannot be
@@ -377,18 +447,27 @@ class Doc:
         del self._story[-count:]
         self._story.append(KeepTogether(tail))
 
-    def p(self, markup: str, *, _role=None):
-        """Prose. Bold spans are allowed here, so this takes pre-escaped markup.
+    def _prose(self, markup: str, role: str):
+        """The one door structural prose leaves through: draw in the named CLOSED role, and
+        record that same name on the block, atomically.
 
-        Presentation is CLOSED (re-audit-10 finding 2): a caller names no style. The role is the
-        method — `p` is body prose, `why` is the indented aside — and each role's one style lives
-        at the top of this module, where the glyph-visibility gate holds it to readable ink.
+        Private on purpose (re-audit-11 finding 2). The public methods take content only — the
+        role is the method, and there is no parameter, under any spelling, that reaches a style:
+        `p(markup, _role=ALERT)` used to publish an ordinary audience paragraph as a red alert
+        panel, indistinguishable in the model because the block said only `prose`. The recorded
+        role is pinned by the reviewed outline, and `artifact.verify_role_ink` holds the painted
+        glyphs to it, so recording one role and drawing another is contradicted by the page.
         """
-        self._story.append(Paragraph(markup, _role or BODY))
-        self._add(Block(kind="prose", claim_id=None, lines=(visible_text(markup),)))
+        self._story.append(Paragraph(markup, ROLE_STYLES[role]))
+        self._add(Block(kind="prose", claim_id=None, lines=(visible_text(markup),), roles=(role,)))
+
+    def p(self, markup: str):
+        """Body prose. Bold spans are allowed here, so this takes pre-escaped markup."""
+        self._prose(markup, "BODY")
 
     def why(self, markup: str):
-        self.p(markup, _role=WHY)
+        """The indented gray aside."""
+        self._prose(markup, "WHY")
 
     def code(self, text: str):
         """Fixed-width block whose INDENTATION is meaningful — published Python, mainly.
@@ -398,8 +477,10 @@ class Doc:
         `6feca36..4f23f23` F3). The cost is that it never wraps, so `_guard_preformatted` refuses
         a line that would not fit. Use `wrapcode()` for fixed-width text that may wrap.
         """
-        self._story.append(XPreformatted(_guard_preformatted(escape(text)), CODE))
-        self._add(Block(kind="code", claim_id=None, lines=tuple(text.split("\n"))))
+        lines = tuple(text.split("\n"))
+        self._story.append(XPreformatted(_guard_preformatted(escape(text)), ROLE_STYLES["CODE"]))
+        self._add(Block(kind="code", claim_id=None, lines=lines,
+                        roles=("CODE",) * len(lines)))
 
     def wrapcode(self, text: str):
         """Fixed-width text that is allowed to wrap anywhere, including mid-token.
@@ -408,8 +489,8 @@ class Doc:
         no break opportunity. The document tells the reader it wraps and gives them the byte count
         and sha256 to check their transcription against.
         """
-        self._story.append(Paragraph(escape(text), WRAPCODE))
-        self._add(Block(kind="code", claim_id=None, lines=(text,)))
+        self._story.append(Paragraph(escape(text), ROLE_STYLES["WRAPCODE"]))
+        self._add(Block(kind="code", claim_id=None, lines=(text,), roles=("WRAPCODE",)))
 
     def space(self, height: float = 4):
         self._story.append(Spacer(1, height))
@@ -432,28 +513,34 @@ class Doc:
         """
         claim = self.registry[claim_id]
         lines = projection.expected_lines(claim, projection.PARAGRAPH)
-        self._emit(claim_id, [Paragraph(escape(lines[0]), WHY)], lines,
-                   projection_name=projection.PARAGRAPH)
+        self._emit(claim_id, [Paragraph(escape(lines[0]), ROLE_STYLES["WHY"])], lines,
+                   roles=("WHY",) * len(lines), projection_name=projection.PARAGRAPH)
 
-    def _emit(self, claim_id: str, flowables: list, lines, *, kind: str = "prose", rows=(),
-              projection_name: str = "", row_fields: tuple[str, ...] = (),
-              code_columns: tuple[int, ...] = (), composed: tuple = ()):
+    def _emit(self, claim_id: str, flowables: list, lines, *, roles: tuple[str, ...],
+              kind: str = "prose", rows=(), projection_name: str = "",
+              row_fields: tuple[str, ...] = (), code_columns: tuple[int, ...] = (),
+              composed: tuple = ()):
         """Append the flowables, record the claim, and record EXACTLY what went on the page.
 
         `lines` is not decoration. Recording an id proves a call happened; recording the visible
         lines is what lets a test find that content on the built page, in order, once, in the
-        right section (re-audit `4f23f23..97deeae` F3).
+        right section (re-audit `4f23f23..97deeae` F3). `roles` names the closed presentation
+        role that drew each line, parallel to `lines` — filtered in step with them so the pairing
+        survives the blank-line drop.
         """
         claim = self.registry[claim_id]
         if not flowables:
             raise ValueError(f"{claim_id} produced no flowable")
-        lines = tuple(line for line in lines if str(line).strip())
+        kept = tuple((line, role)
+                     for line, role in zip(lines, roles, strict=True) if str(line).strip())
+        lines = tuple(line for line, _ in kept)
+        roles = tuple(role for _, role in kept)
         if not lines and not rows:
             raise ValueError(f"{claim_id} produced a flowable with no visible text")
         self._story.extend(flowables)
         self.rendered.append(claim_id)
         self._add(Block(kind=kind, claim_id=claim_id, lines=lines, rows=tuple(rows),
-                        projection=projection_name, row_fields=row_fields,
+                        roles=roles, projection=projection_name, row_fields=row_fields,
                         code_columns=code_columns, composed=composed))
         return claim
 
@@ -475,23 +562,27 @@ class Doc:
         # authors has no registry authority to be checked against.
         label = visible_text(prefix).strip()
         lines = (label, line) if label else (line,)
-        self._emit(claim_id, [Paragraph(markup, BODY)], lines,
-                   projection_name=projection.PARAGRAPH)
+        self._emit(claim_id, [Paragraph(markup, ROLE_STYLES["BODY"])], lines,
+                   roles=("BODY",) * len(lines), projection_name=projection.PARAGRAPH)
 
     def claim_bullets(self, claim_id: str):
         """Render a claim whose value is a sequence of strings, one paragraph each."""
         claim = self.registry[claim_id]
         lines = projection.expected_lines(claim, projection.BULLETS)
-        self._emit(claim_id, [Paragraph("\u2013  " + escape(line), BODY) for line in lines],
-                   lines, projection_name=projection.BULLETS)
+        self._emit(claim_id,
+                   [Paragraph("\u2013  " + escape(line), ROLE_STYLES["BODY"]) for line in lines],
+                   lines, roles=("BODY",) * len(lines), projection_name=projection.BULLETS)
 
     def _with_heading(self, claim_id: str, heading: str | None, blocks: list, lines, *,
-                      kind: str = "prose", projection_name: str = ""):
+                      roles: tuple[str, ...], kind: str = "prose", projection_name: str = ""):
         if heading:
-            self._emit(claim_id, [KeepTogether([Paragraph(escape(heading), H2), *blocks])],
-                       (heading, *lines), kind=kind, projection_name=projection_name)
+            self._emit(claim_id,
+                       [KeepTogether([Paragraph(escape(heading), ROLE_STYLES["H2"]), *blocks])],
+                       (heading, *lines), roles=("H2", *roles), kind=kind,
+                       projection_name=projection_name)
         else:
-            self._emit(claim_id, blocks, lines, kind=kind, projection_name=projection_name)
+            self._emit(claim_id, blocks, lines, roles=roles, kind=kind,
+                       projection_name=projection_name)
 
     def claim_steps(self, claim_id: str, *, heading: str | None = None):
         """Render an ORDERED claim as numbered, WRAPPING paragraphs, kept with its heading.
@@ -502,8 +593,10 @@ class Doc:
         claim = self.registry[claim_id]
         lines = projection.expected_lines(claim, projection.STEPS)
         self._with_heading(claim_id, heading,
-                           [Paragraph(escape(line).replace(". ", ".  ", 1), STEP) for line in lines],
-                           lines, projection_name=projection.STEPS)
+                           [Paragraph(escape(line).replace(". ", ".  ", 1), ROLE_STYLES["STEP"])
+                            for line in lines],
+                           lines, roles=("STEP",) * len(lines),
+                           projection_name=projection.STEPS)
 
     def claim_code(self, claim_id: str, *, heading: str | None = None, numbered: bool = False,
                    lead: str | None = None):
@@ -517,10 +610,13 @@ class Doc:
         claim = self.registry[claim_id]
         name = projection.NUMBERED_CODE if numbered else projection.CODE
         lines = projection.expected_lines(claim, name)
-        block = XPreformatted(_guard_preformatted("\n".join(escape(v) for v in lines)), CODE)
-        flowables = [Paragraph(lead, BODY), block] if lead else [block]
+        block = XPreformatted(_guard_preformatted("\n".join(escape(v) for v in lines)),
+                              ROLE_STYLES["CODE"])
+        flowables = [Paragraph(lead, ROLE_STYLES["BODY"]), block] if lead else [block]
+        roles = ("CODE",) * len(lines)
         self._with_heading(claim_id, heading, flowables,
                            ((visible_text(lead),) + lines) if lead else lines,
+                           roles=(("BODY", *roles) if lead else roles),
                            kind="code", projection_name=name)
 
     def claim_prose(self, claim_id: str, segments):
@@ -537,7 +633,10 @@ class Doc:
         """
         self.claim_mixed(claim_id, [("p", tuple(segments))])
 
-    _PART_STYLES = {"p": BODY, "why": WHY}
+    # each composed part KIND draws in exactly one closed role — the typed template reviews the
+    # kinds, so it reviews the roles with them
+    _PART_ROLES = {"p": "BODY", "why": "WHY", "code": "CODE", "atomic_code": "CODE",
+                   "wrap": "WRAPCODE"}
 
     def claim_mixed(self, claim_id: str, parts, *, published_fields: tuple[str, ...] = ()):
         """Render one claim that needs several flowables — prose, then a code block, then more.
@@ -560,23 +659,29 @@ class Doc:
                     for kind, segments in parts]
         flowables = []
         for kind, text in rendered:
+            style = ROLE_STYLES[self._PART_ROLES[kind]]
             if kind == "code":
-                flowables.append(XPreformatted(_guard_preformatted(escape(text)), CODE))
+                flowables.append(XPreformatted(_guard_preformatted(escape(text)), style))
             elif kind == "atomic_code":
                 # ONE page, always. A copyable block split across pages has the page footer
                 # physically between two statements, so a contiguous copy picks up
                 # "... Page 5 of 7" and fails to compile (re-audit `4f23f23..97deeae` finding 4).
                 flowables.append(
-                    KeepTogether([XPreformatted(_guard_preformatted(escape(text)), CODE)]))
+                    KeepTogether([XPreformatted(_guard_preformatted(escape(text)), style)]))
             elif kind == "wrap":
-                flowables.append(Paragraph(escape(text), WRAPCODE))
+                flowables.append(Paragraph(escape(text), style))
             else:
-                flowables.append(Paragraph(text, self._PART_STYLES[kind]))
-        lines = []
+                flowables.append(Paragraph(text, style))
+        lines: list[str] = []
+        roles: list[str] = []
         for kind, text in rendered:
-            lines.extend(
-                (text if kind in ("code", "atomic_code", "wrap") else visible_text(text)).split("\n"))
-        self._emit(claim_id, flowables, tuple(lines), projection_name=projection.COMPOSED,
+            part_lines = (
+                text if kind in ("code", "atomic_code", "wrap") else visible_text(text)
+            ).split("\n")
+            lines.extend(part_lines)
+            roles.extend([self._PART_ROLES[kind]] * len(part_lines))
+        self._emit(claim_id, flowables, tuple(lines), roles=tuple(roles),
+                   projection_name=projection.COMPOSED,
                    row_fields=published_fields, composed=parts)
 
     def claim_alert(self, claim_id: str):
@@ -584,7 +689,8 @@ class Doc:
         claim = self.registry[claim_id]
         lines = projection.expected_lines(claim, projection.ALERT)
         body = "<br/>".join("\u2013  " + escape(line) for line in lines)
-        self._emit(claim_id, [Paragraph(body, ALERT)], lines, kind="alert",
+        self._emit(claim_id, [Paragraph(body, ROLE_STYLES["ALERT"])], lines,
+                   roles=("ALERT",) * len(lines), kind="alert",
                    projection_name=projection.ALERT)
 
     def claim_table(self, claim_id: str, widths, heading: str | None = None):
@@ -630,8 +736,9 @@ class Doc:
         flowables = [table]
         lines = (heading,) if heading else ()
         if heading:
-            flowables = [KeepTogether([Paragraph(escape(heading), H2), table])]
-        self._emit(claim_id, flowables, lines, kind="table", rows=matrix,
+            flowables = [KeepTogether([Paragraph(escape(heading), ROLE_STYLES["H2"]), table])]
+        self._emit(claim_id, flowables, lines, roles=("H2",) if heading else (),
+                   kind="table", rows=matrix,
                    projection_name=projection.TABLE, row_fields=claim.row_fields,
                    code_columns=tuple(code_columns))
 
