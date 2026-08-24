@@ -37,14 +37,19 @@ artifact behind.
 import importlib
 import os
 import pathlib
+import secrets
 from dataclasses import dataclass
 
-from docs.contracts import documents
+from docs.contracts import documents, outline
 from docs.contracts.documents import DocumentIdentity
 
 
 class ProvenanceError(RuntimeError):
     """A release artifact could not name the commit that produced it."""
+
+
+class StagingError(RuntimeError):
+    """The staging file a release needed was already there — so someone else chose the path."""
 
 
 @dataclass(frozen=True)
@@ -69,13 +74,20 @@ class Publication:
         return getattr(importlib.import_module(module_name), attribute)
 
     def build(self, **inputs):
-        """Build this publication's document by calling the BOUND generator.
+        """Build this publication's document by calling the BOUND generator, and verify the BODY.
 
         The builder is part of the definition, not an argument (re-audit-4 finding 1). While
         `publish` took a `Doc`, the only question it could ask was "what do you say you are?" —
         and a caller who assembles the document decides the answer. Asking the registry which
         module publishes this document, and calling THAT module, is the same question with an
         outside answer.
+
+        Calling the bound builder is still only three LABELS, though (re-audit-5 finding 1), and
+        labels are not a document: a builder returning the right id, the right identity object and
+        the right registry around a two-block body published as the governed
+        `techcraft-deployment-guide.pdf` — right title, right footer, one page, every operational
+        section absent. So the reviewed projection is checked here, in the release path, against
+        the outline that describes what this document IS.
         """
         doc = importlib.import_module(self.module).build(**inputs)
         if doc.document_id != self.identity.id or doc.identity is not self.identity:
@@ -87,6 +99,12 @@ class Publication:
             raise ValueError(
                 f"{self.identity.id}: this document's body must come from "
                 f"{self.identity.registry}, not {getattr(doc.registry, 'name', doc.registry)!r}"
+            )
+        found = outline.problems(doc, inputs)
+        if found:
+            raise ValueError(
+                f"{self.identity.id} is not the document that was reviewed:\n  "
+                + "\n  ".join(found[:10])
             )
         return doc
 
@@ -103,9 +121,30 @@ class Publication:
         final = pathlib.Path(self.path(out_dir))
         # Written beside the destination so the promotion is a same-filesystem rename, and named
         # so that a partial file is never mistaken for the artifact.
-        staged = final.with_name(f".{final.name}.{os.getpid()}.partial")
+        #
+        # UNPREDICTABLE and O_EXCL|O_NOFOLLOW (re-audit-5 finding 2). The staged name used to be
+        # `.<governed-name>.<pid>.partial` and was opened by PATHNAME, so anyone who could write
+        # the output directory — or win a race for it — could pre-create that exact name as a
+        # symlink: rendering then followed it and overwrote the target, and `os.replace` promoted
+        # the SYMLINK, leaving the governed PDF pointing at a file the publisher had just
+        # destroyed. A release must not be a way to write to a path someone else chose.
+        staged = final.with_name(f".{final.name}.{secrets.token_hex(8)}.partial")
         try:
-            doc.render(str(staged), revision=authorized)
+            try:
+                handle = os.open(
+                    staged, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+            except OSError as exc:
+                raise StagingError(
+                    f"refusing to publish through {staged.name}: it already exists, so this "
+                    "release would be writing to a file it did not create. Publish into a "
+                    "directory only the publisher can write."
+                ) from exc
+            # rendered through the ALREADY-OPEN descriptor: reopening by name after the check
+            # would put the race back
+            with os.fdopen(handle, "wb") as stream:
+                doc.render(stream, revision=authorized)
+                stream.flush()
+                os.fsync(stream.fileno())
             confirmed = _check(_revision())
             if confirmed != authorized:
                 raise ProvenanceError(

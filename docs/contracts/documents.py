@@ -23,6 +23,7 @@ the right name.
 """
 
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from types import MappingProxyType
 
 
@@ -56,6 +57,18 @@ class DocumentIdentity:
             raise ValueError(f"{self.id}: a document identity carries a non-empty title")
         if type(self.out) is not str or not self.out.endswith(".pdf"):
             raise ValueError(f"{self.id}: a document identity names its output .pdf")
+        # A BASENAME, enforced (re-audit-5 finding 3). `out` is described and used as the file a
+        # reader receives, and `Publication.path` joins it onto the caller's directory — but the
+        # only rule was the suffix, so `../escaped.pdf` resolved outside that directory and
+        # `/tmp/escaped.pdf` discarded it entirely. Today's two values are safe; the invariant was
+        # not, and a registry field that can leave the directory it is joined to is a hole whether
+        # or not anyone has stepped in it.
+        if PurePosixPath(self.out).name != self.out or self.out in (".", "..") or (
+                "/" in self.out or "\\" in self.out):
+            raise ValueError(
+                f"{self.id}: {self.out!r} is not a plain filename; a document identity names the "
+                "file a reader receives, never where on a disk it lands"
+            )
         if type(self.module) is not str:
             raise ValueError(f"{self.id}: a publishing module is named by its dotted path")
         if type(self.registry) is not str:

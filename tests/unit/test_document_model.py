@@ -28,7 +28,16 @@ from pathlib import Path
 
 import pdfplumber
 import pytest
-from docs.contracts import PROSE, Claim, Column, ColumnRole, Registry, documents, projection
+from docs.contracts import (
+    PROSE,
+    Claim,
+    Column,
+    ColumnRole,
+    Registry,
+    documents,
+    outline,
+    projection,
+)
 from docs.contracts.documents import TEST_FIXTURE
 from docs.contracts.operations import OPERATIONS
 from docs.contracts.wire import WIRE
@@ -710,6 +719,118 @@ def _hollow_doc(registry, document_id):
     doc.title()
     doc.p("Anything at all.")
     return doc
+
+
+def test_w6f1_a_correct_label_hollow_body_is_not_the_reviewed_document(tmp_path, monkeypatch):
+    """Re-audit-5 finding 1, the exact witness, through the release path.
+
+    Binding the builder closed "who assembled this document"; it did not ask what the document
+    SAYS. `publish` checked three labels — id, identity object, registry object — and a body of
+
+        doc.title(); doc.p("This arbitrary two-block body is not the reviewed deployment guide.")
+
+    satisfies all three. It published as the governed `techcraft-deployment-guide.pdf`: right
+    title, right metadata, right footer, one page, every operational section a reader needs
+    simply gone. `_top_level_verify` passed it too, because that helper asks whether the PAGE
+    matches the DOCUMENT — which a hollow document answers trivially — and the publication
+    command never ran it.
+
+    The reviewed projection is production authority now, and the release path checks it.
+    """
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    hollow = _hollow_doc(OPERATIONS, documents.DEPLOYMENT_GUIDE)
+
+    found = outline.problems(hollow)
+    assert found and "sections are not the reviewed document's" in found[0]
+
+    monkeypatch.setattr(deploy_gen, "build", lambda **_: hollow)
+    with pytest.raises(ValueError, match="not the document that was reviewed"):
+        deploy_gen.PUBLICATION.publish(str(tmp_path))
+    assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
+
+
+def test_w6f1_the_outline_is_ordered_and_total_over_both_documents():
+    """Guard the guard. The outline has to accept the real documents (or it is not the reviewed
+    projection) and refuse every ordinary way a body can drift (or it is theatre)."""
+    inputs = {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}
+    contract = contract_gen.build(**inputs)
+    assert outline.problems(contract, inputs) == []
+    assert outline.problems(deploy_gen.build()) == []
+
+    # a dropped block, a reordered pair, a claim swapped for another, and edited narration
+    guide = deploy_gen.build()
+    section = next(s for s in guide.sections if s.section_id == "processes")
+    original = list(section.blocks)
+
+    section.blocks = original[:-1]
+    assert any("blocks, reviewed with" in p for p in outline.problems(guide))
+
+    section.blocks = [original[1], original[0], *original[2:]]
+    assert outline.problems(guide), "a reordered pair must be visible"
+
+    section.blocks = list(original)
+    prose = next(i for i, b in enumerate(original) if b.kind == "prose" and not b.claim_id)
+    section.blocks[prose] = dataclasses.replace(
+        original[prose], lines=("Disable the healthcheck on API containers too.",))
+    assert any("text changed since it was reviewed" in p for p in outline.problems(guide))
+
+    section.blocks = list(original)
+    claim_at = next(i for i, b in enumerate(original) if b.claim_id)
+    section.blocks[claim_at] = dataclasses.replace(original[claim_at], claim_id="OPS.HEALTH.PROBES")
+    assert any("reviewed as" in p for p in outline.problems(guide))
+
+    # …and the contract's release slots must carry the values THIS release was given
+    assert any("does not carry the 'contact'" in p
+               for p in outline.problems(contract, {**inputs, "contact": "someone@else.example"}))
+    assert any("supplied no 'due_date'" in p
+               for p in outline.problems(contract, {"contact": SAMPLE_CONTACT}))
+
+
+def test_w6f2_a_prepositioned_staging_symlink_cannot_be_followed_or_promoted(
+        tmp_path, monkeypatch):
+    """Re-audit-5 finding 2, the exact witness.
+
+    The staged name was `.<governed-name>.<pid>.partial` and was opened by pathname, so a symlink
+    pre-positioned there was followed: the target was overwritten with PDF bytes and `os.replace`
+    then promoted the SYMLINK, leaving the governed artifact pointing at the file the release had
+    just destroyed. Anything writable by the publisher was reachable that way.
+    """
+    from docs.generators import publication
+
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    victim = tmp_path / "outside-target.txt"
+    victim.write_bytes(b"DO-NOT-OVERWRITE")
+    out_dir = tmp_path / "publish"
+    out_dir.mkdir()
+    (out_dir / f".techcraft-deployment-guide.pdf.{os.getpid()}.partial").symlink_to(victim)
+
+    final = Path(deploy_gen.PUBLICATION.publish(str(out_dir)))
+    assert victim.read_bytes() == b"DO-NOT-OVERWRITE", "the release wrote through a symlink"
+    assert not final.is_symlink() and final.is_file()
+    assert not any(p.is_symlink() for p in out_dir.iterdir() if p.name == final.name)
+
+    # and the guard itself, with the staging name forced to collide: exclusive, no-follow, refused
+    monkeypatch.setattr(publication.secrets, "token_hex", lambda _n=8: "deadbeefdeadbeef")
+    (out_dir / ".techcraft-deployment-guide.pdf.deadbeefdeadbeef.partial").symlink_to(victim)
+    before = final.read_bytes()
+    with pytest.raises(publication.StagingError, match="it did not create"):
+        deploy_gen.PUBLICATION.publish(str(out_dir))
+    assert victim.read_bytes() == b"DO-NOT-OVERWRITE"
+    assert final.read_bytes() == before, "a refused release replaced the standing artifact"
+
+
+def test_w6f3_a_document_identity_names_a_file_not_a_place(tmp_path):
+    """Re-audit-5 finding 3. `out` is joined onto the caller's directory, and the only rule was
+    the `.pdf` suffix — so `../escaped.pdf` resolved outside that directory and `/tmp/escaped.pdf`
+    discarded it entirely. Today's two values are safe; the invariant was not."""
+    for escape in ("../escaped.pdf", "/tmp/escaped.pdf", "sub/dir.pdf", "..", "."):
+        with pytest.raises(ValueError):
+            documents.DocumentIdentity(id="x", title="X", out=escape,
+                                       module="m", registry="r:R")
+    for module in (contract_gen, deploy_gen):
+        published = Path(module.PUBLICATION.path(str(tmp_path)))
+        assert published.parent == tmp_path, "a published artifact is a child of the chosen dir"
+        assert published.name == module.PUBLICATION.identity.out
 
 
 def test_w5f2_a_release_stamps_the_revision_it_authorized(tmp_path, monkeypatch):

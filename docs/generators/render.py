@@ -636,8 +636,13 @@ class Doc:
     def document_id(self) -> str:
         return self._document_id
 
-    def render(self, path: str, *, revision: str | None = None) -> str:
-        """Draw to `path`, stamping this document's identity on every page.
+    def render(self, destination, *, revision: str | None = None) -> str:
+        """Draw to `destination` — a path, or an ALREADY-OPEN binary stream — stamping this
+        document's identity on every page.
+
+        A release passes its own open descriptor (re-audit-5 finding 2): the publication opens
+        the staging file exclusively and without following symlinks, and reopening it here by
+        name would hand the race straight back.
 
         This is the INTERNAL renderer — previews, tests, intermediate artifacts. It is not how a
         document leaves the repo. Publishing goes through `docs.generators.publication`, which
@@ -705,7 +710,7 @@ class Doc:
                 })
 
         template = _Recording(
-            path,
+            destination,
             pagesize=letter,
             leftMargin=0.75 * inch,
             rightMargin=0.75 * inch,
@@ -719,7 +724,8 @@ class Doc:
                        canvasmaker=_stamped_canvas(self.identity, revision, page_sections))
         self._total_pages = template.page
         self._revision = revision
-        return path
+        return destination if isinstance(destination, str) else getattr(
+            destination, "name", "")
 
     def expected_footers(self) -> tuple[tuple[str, str], ...]:
         """The exact (left, right) footer pair for every page, derived after the layout pass.

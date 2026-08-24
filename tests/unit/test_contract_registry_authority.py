@@ -8379,6 +8379,51 @@ def test_the_document_identity_registry_matches_its_review_pin():
     )
 
 
+# ── the release outline: the reviewed shape of each published document (re-audit-5 finding 1) ─────
+#
+# The same honest scope as the identities above. This does not prove the guide says true things;
+# it proves that what a release publishes is the document that was reviewed — these sections, in
+# this order, carrying these claims under these projections, with unattributed narration fixed by
+# digest and the two per-release spans declared as slots. `Publication.build` runs it, so a body
+# that satisfies the id/identity/registry labels and nothing else cannot reach a reader.
+
+RELEASE_OUTLINE_PIN = ("865498254d5c6ad4", "the contract's 8 sections and the guide's 9: ordered "
+                                           "blocks, claim ids and projections, narration digests, "
+                                           "and the contact/due-date release slots")
+
+
+def test_the_release_outline_matches_its_review_pin():
+    from docs.contracts import outline
+
+    parts: list[str] = []
+    for document_id in sorted(outline.OUTLINES):
+        entry = outline.OUTLINES[document_id]
+        parts.append(entry.document_id)
+        for section in entry.sections:
+            parts.extend((section.section_id, section.title))
+            for block in section.blocks:
+                parts.extend((block.kind, block.claim_id, block.projection, block.digest,
+                              "|".join(block.slots)))
+    digest = hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]
+    pinned, label = RELEASE_OUTLINE_PIN
+    assert digest == pinned, (
+        f"the reviewed release projection changed ({label}).\n"
+        f"  reviewed: {pinned}\n  now:      {digest}\n"
+        "Read what the document now publishes, then re-pin it in the SAME commit."
+    )
+
+
+def test_every_published_document_has_a_release_outline():
+    """Closed both ways: a published identity with no outline could not be checked, and an
+    outline for nothing would be a projection nobody publishes."""
+    from docs.contracts import documents, outline
+
+    published = {i.id for i in documents.DOCUMENT_IDENTITIES.values() if i.module}
+    assert set(outline.OUTLINES) == published
+    with pytest.raises(KeyError, match="no release outline"):
+        outline.outline(documents.TEST_FIXTURE)
+
+
 def test_a_document_identity_cannot_be_blank_or_mistyped():
     from docs.contracts.documents import DocumentIdentity
 
