@@ -1842,9 +1842,59 @@ def test_w8f1_every_renderer_authored_span_inside_a_claim_is_reviewed(rendered):
             if block.projection == projection.PARAGRAPH:
                 continue
             text = outline.connective_text(block, claim)
-            if len(outline._normalize(text)) <= outline.CONNECTIVE_FLOOR:
+            if outline.is_mechanical(text, block.projection):
                 continue
             spec = outline.outline(doc.document_id).sections[
                 [s.section_id for s in doc.sections].index(section.section_id)].blocks[index]
             assert spec.residue == outline.residue_digest(text), (
                 f"{block.claim_id}: renderer prose reaching the page is not the reviewed prose")
+
+
+def test_w9f1_a_short_renderer_sentence_inside_a_claim_cannot_be_published(tmp_path, monkeypatch):
+    """Re-audit-8 finding 1, the exact witness, through `publish`.
+
+    The residue lane exempted anything whose alphanumerics were shorter than six characters, on
+    the theory that such a residue is punctuation. Length is the wrong question: the load-bearing
+    words in an operational contract are the short ones. A first bullet reading `No 2xx` on
+    `WIRE.CALLBACK.DELIVERY` normalized to `no2xx` — five characters — so the residue counted as
+    empty, and the governed contract published a bullet flatly contradicting the four beneath it.
+
+    Scaffolding is SYNTAX now: one `\\x00` per line, plus its own ordinal for the numbered
+    projections, and nothing else. Anything a renderer adds is a sentence that needs review.
+    """
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    real = render_module.Doc.claim_bullets
+
+    def with_an_extra_bullet(self, claim_id, *args, **kwargs):
+        if claim_id != "WIRE.CALLBACK.DELIVERY":
+            return real(self, claim_id, *args, **kwargs)
+        lines = ("No 2xx", *projection.expected_lines(
+            self.registry[claim_id], projection.BULLETS))
+        body = "<br/>".join("&bull;  " + render_module.escape(line) for line in lines)
+        self._emit(claim_id, [render_module.Paragraph(body, render_module.BODY)], lines,
+                   projection_name=projection.BULLETS)
+        return None
+
+    monkeypatch.setattr(render_module.Doc, "claim_bullets", with_an_extra_bullet)
+    with pytest.raises(ValueError, match="nobody reviewed"):
+        contract_gen.PUBLICATION.publish(
+            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+    assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
+
+
+def test_w9f1_scaffolding_is_recognised_by_syntax_and_nothing_else():
+    """Guard the guard: the rule accepts exactly the scaffolding each projection draws, and no
+    word — however short — rides along inside it."""
+    assert outline.is_mechanical("\x00\n\x00\n\x00", projection.BULLETS)
+    assert outline.is_mechanical("1. \x00\n2. \x00\n3. \x00", projection.STEPS)
+    assert not outline.is_mechanical("1. \x00\n2. \x00", projection.BULLETS), (
+        "ordinals are scaffolding only where the projection numbers its lines")
+    assert not outline.is_mechanical("3. \x00\n2. \x00", projection.STEPS), (
+        "an ordinal that is not this line's own number is renderer text")
+    for word in ("no", "not", "never", "only", "safe", "No 2xx", "-", ":"):
+        assert not outline.is_mechanical(f"{word}\n\x00", projection.BULLETS), word
+    # and the length floor it replaced is gone, not renamed: no live reference to it, and no
+    # length test anywhere in the residue lane. It survives only in the comment saying why.
+    assert not hasattr(outline, "CONNECTIVE_FLOOR")
+    body = inspect.getsource(outline.is_mechanical) + inspect.getsource(outline._authored_problems)
+    assert "len(" not in body, "residue authority must not depend on how long the text is"

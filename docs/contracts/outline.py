@@ -111,12 +111,29 @@ class DocumentOutline:
     sections: tuple[SectionOutline, ...]
 
 
-# A residue shorter than this is punctuation and spacing, not prose a reader acts on.
-CONNECTIVE_FLOOR = 6
+# The scaffolding a projection draws around its claim's values, as SYNTAX (re-audit-8 finding 1).
+#
+# This was `CONNECTIVE_FLOOR = 6`: a residue whose alphanumerics were shorter than that counted as
+# punctuation and needed no review. Length is the wrong question — the load-bearing words in an
+# operational contract are the short ones. Adding a first bullet reading `No 2xx` to
+# `WIRE.CALLBACK.DELIVERY` normalized to `no2xx`, five characters, so the residue was treated as
+# empty and the governed contract published a bullet flatly contradicting the four beneath it.
+#
+# A projection either draws scaffolding or it does not, and what it draws is known, not guessed:
+# every leaf becomes `\x00`, one per line, and the numbered projections prefix each line with its
+# own ordinal. Anything else in the residue is a renderer sentence and needs a reviewed pin.
+_NUMBERED = (projection.STEPS, projection.NUMBERED_CODE)
 
 
-def _normalize(text: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(text).casefold())
+def is_mechanical(text: str, projection_name: str) -> bool:
+    """True when the residue is EXACTLY this projection's scaffolding and nothing else."""
+    for index, line in enumerate(text.split("\n"), 1):
+        if line == "\x00":
+            continue
+        if projection_name in _NUMBERED and line == f"{index}. \x00":
+            continue
+        return False
+    return True
 
 
 def connective_text(block, claim) -> str:
@@ -555,7 +572,7 @@ def _authored_problems(at, spec, block, claim) -> list[str]:
             return [f"{at}: {claim.id} is framed {drawn!r}, reviewed as {spec.label!r}"]
         return []
     text = connective_text(block, claim)
-    drawn = residue_digest(text) if len(_normalize(text)) > CONNECTIVE_FLOOR else ""
+    drawn = "" if is_mechanical(text, block.projection) else residue_digest(text)
     if drawn != spec.residue:
         if not spec.residue:
             return [f"{at}: {claim.id} now says something around its values that nobody reviewed: "
