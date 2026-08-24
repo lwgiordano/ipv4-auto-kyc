@@ -1525,47 +1525,10 @@ def test_the_page_uses_no_vocabulary_the_model_does_not_carry(rendered):
 # Recording it fixes the under-description. Pinning it here fixes the rest: a label that the model
 # and the page agree on is still only the renderer agreeing with itself.
 
-CLAIM_LABELS = {
-    ("contract", "WIRE.INGEST.PATH"): "Endpoint:",
-    ("contract", "WIRE.CALLBACK.PATH"): "Endpoint:",
-    ("contract", "WIRE.SIGN.SKEW_SECONDS"): "Skew window (seconds):",
-    ("contract", "WIRE.SIGN.V1_SUNSET"): "On the v1 sunset dates:",
-    ("contract", "WIRE.ORDERING.INTERIM"): "Until activation:",
-    ("contract", "WIRE.ORDERING.INTEGRITY_MISMATCH"): "Note:",
-    ("contract", "WIRE.RETENTION.WINDOW_DAYS"): "Compliance window (days):",
-    ("guide", "OPS.CONFIG.ROTATION_KEYS"): "Rotation keys:",
-}
 
 
-def _claim_labels(doc, name: str) -> dict:
-    """Every block whose recorded lines carry a label ahead of the projected value."""
-    out = {}
-    for block in doc.blocks:
-        if not block.claim_id or block.projection != projection.PARAGRAPH:
-            continue
-        derived = projection.expected_lines(doc.registry[block.claim_id], block.projection)
-        extra = [line for line in block.lines if line not in derived]
-        if extra:
-            out[(name, block.claim_id)] = " ".join(extra)
-    return out
 
 
-def test_renderer_authored_labels_are_pinned(rendered):
-    generator, _registry, doc, page, _tables = rendered
-    name = DOC_NAMES[id(generator)]
-    found = _claim_labels(doc, name)
-    listed = {k: v for k, v in CLAIM_LABELS.items() if k[0] == name}
-    assert set(found) == set(listed), (
-        f"labels added or removed without review: added={sorted(set(found) - set(listed))} "
-        f"removed={sorted(set(listed) - set(found))}"
-    )
-    for key, text in found.items():
-        assert text == listed[key], (
-            f"{key}: the label was reworded.\n  reviewed: {listed[key]!r}\n  now:      {text!r}\n"
-            "A label frames the value beside it; re-read it and re-pin in the SAME commit."
-        )
-        # and it is genuinely on the page, immediately before the value it frames
-        assert _flat(text) in page, f"{key}: the pinned label is not on the page"
 
 
 def test_a_reworded_label_fails_the_pin(monkeypatch, tmp_path):
@@ -1591,8 +1554,8 @@ def test_a_reworded_label_fails_the_pin(monkeypatch, tmp_path):
     page = body_text(path)
 
     assert "Compliance window (years): 2555" in page, "the mutation did not reach the page"
-    with pytest.raises(AssertionError, match="reworded"):
-        test_renderer_authored_labels_are_pinned((contract_gen, WIRE, doc, page, []))
+    assert any("is framed" in problem for problem in outline.problems(
+        doc, {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}))
 
 
 def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatch, tmp_path):
@@ -1638,109 +1601,14 @@ def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatc
 # So the rule becomes uniform, and it is the span-equality property finding 3 actually asked for:
 # EVERY character on the page is either derived from the registry or pinned here.
 
-RENDERER_PROSE = {
-    # Table blocks no longer appear here at all (Wave 2 F5): their column titles come from
-    # Claim.columns and every cell from the projection, so a claim table carries no
-    # renderer-authored words to pin.
-    # ── contract ──────────────────────────────────────────────────────────────────────────────
-    ("contract", "WIRE.INGEST.EXTRA_FIELDS", 0): ("3dbd54f03ecebb08",
-                                                  "the forward-compatibility commitment: we add "
-                                                  "without notice, never remove or repurpose "
-                                                  "without an agreed version bump"),
-    ("contract", "WIRE.ACTOR.SENSITIVE", 0): ("841eed537d25b0f4",
-                                              "actor.type/actor.id equality rule and its trap"),
-    ("contract", "WIRE.CALLBACK.FIELDS", 0): ("fd2b8fddb0219846", "required body fields lead-in"),
-    ("contract", "WIRE.CALLBACK.DECISIONS", 0): ("efd06031f9154b80", "decision enumeration lead-in"),
-    ("contract", "WIRE.CALLBACK.GATES", 0): ("60ff773c179a76ed", "gates enumeration lead-in"),
-    ("contract", "WIRE.CALLBACK.OPTIONAL_FIELDS", 0): ("adcaa34e853e35fc",
-                                                       "the optional-field lead-in; the handling "
-                                                       "RULE moved to its own statement claim "
-                                                       "(Wave-2 finding 1)"),
-    ("contract", "WIRE.CALLBACK.RETRY", 0): ("e07949a7ee8f8121",
-                                             "retry schedule lead-in and totals"),
-    ("contract", "WIRE.SIGN.CANONICAL", 0): ("44258b84c7d9f360", "canonical-string lead-in"),
-    ("contract", "WIRE.SIGN.DIRECTIONS", 0): ("3db54252a0da969e",
-                                              "direction tokens are literals; what slot and "
-                                              "path?query are (the prose-will-not-verify RULE "
-                                              "moved to its own statement claim, Wave-2 "
-                                              "finding 1)"),
-    ("contract", "WIRE.SIGN.COMPANION", 0): ("62bed443d66d463f", "companion filename + sha256 line"),
-    ("contract", "WIRE.SIGN.VECTOR", 0): ("723d2cc6883b5453", "worked vector lead-in"),
-    # ── guide ─────────────────────────────────────────────────────────────────────────────────
-    ("guide", "OPS.CONFIG.HMAC_SET", 0): ("eeead37d4b6834fd", "the HMAC set lead-in"),
-    ("guide", "OPS.CUTOVER.PROCEDURES", 0): ("33b3260daf6c3302",
-                                             "per-procedure framing: what must be true before "
-                                             "you start, Reversible?, Rolling back, Playbook"),
-    ("guide", "OPS.CUTOVER.OUTBOX_CEILING", 0): ("1193b2813e8d6c5b", "ceiling cutover heading"),
-    ("guide", "OPS.HMAC.ROLLOUT_ORDER", 0): ("b533fa723b3b1f48", "rollout order heading"),
-}
 
 # Below this, a block's residue is separators and numbering rather than words.
-CONNECTIVE_FLOOR = 6
 
 
-def _connective_text(block, claim) -> str:
-    """What the block draws, minus everything the CLAIM supplies.
-
-    Longest leaf first: `approve` is a substring of `approve_buy_locked`, and removing the short
-    one first would leave `_buy_locked` behind and make the residue depend on iteration order.
-    """
-    parts = list(block.lines)
-    for row in block.rows:
-        parts.extend(row)
-    text = "\n".join(parts)
-    # column titles are claim-supplied too (Claim.columns, Wave 2 F5), so they are not
-    # the renderer's words any more than the cells are
-    leaves = sorted(
-        (leaf for leaf in (*projection.leaf_strings(claim.value, block.row_fields),
-                           *claim.headers) if leaf),
-        key=len, reverse=True,
-    )
-    for leaf in leaves:
-        text = text.replace(leaf, "\x00")
-
-    return re.sub(r"\x00+", "\x00", text)
 
 
-def _renderer_prose(doc, name: str) -> dict:
-    found, seen = {}, Counter()
-    for block in doc.blocks:
-        # PARAGRAPH prefixes are pinned by exact wording in CLAIM_LABELS, which is stricter and
-        # more readable than a digest; pinning them twice would just mean two places to update.
-        if not block.claim_id or block.projection == projection.PARAGRAPH:
-            continue
-        text = _connective_text(block, doc.registry[block.claim_id])
-        if len(_normalize(text)) <= CONNECTIVE_FLOOR:
-            continue
-        key = (name, block.claim_id, seen[block.claim_id])
-        seen[block.claim_id] += 1
-        found[key] = text
-    return found
 
 
-def test_prose_the_renderer_authors_inside_a_claim_is_pinned(rendered):
-    generator, _registry, doc, _page, _tables = rendered
-    name = DOC_NAMES[id(generator)]
-    found = _renderer_prose(doc, name)
-    listed = {k: v for k, v in RENDERER_PROSE.items() if k[0] == name}
-
-    added = sorted(set(found) - set(listed))
-    assert not added, (
-        f"the renderer authors prose nobody reviewed: {added}\n"
-        "A claim id on the block does not make the words around the claim's values authoritative "
-        "— they are the renderer's. Pin them here, which is the act of reviewing them."
-    )
-    removed = sorted(set(listed) - set(found))
-    assert not removed, f"RENDERER_PROSE pins prose no longer rendered: {removed}"
-    for key, text in found.items():
-        pinned, label = listed[key]
-        actual = hashlib.sha256(text.encode()).hexdigest()[:16]
-        assert actual == pinned, (
-            f"{key} ({label}) changed since it was reviewed.\n"
-            f"  reviewed: {pinned}\n  now:      {actual}\n"
-            f"  text:     {' '.join(text.replace(chr(0), '~').split())[:200]!r}\n"
-            "Read it, then re-pin in the SAME commit."
-        )
 
 
 def test_rewriting_a_binding_commitment_in_connective_prose_is_caught(monkeypatch, tmp_path):
@@ -1765,12 +1633,11 @@ def test_rewriting_a_binding_commitment_in_connective_prose_is_caught(monkeypatc
     monkeypatch.setattr(render_module.Doc, "claim_prose", weakened)
     doc = _build(contract_gen)
 
-    found = _renderer_prose(doc, "contract")
-    key = ("contract", "WIRE.INGEST.EXTRA_FIELDS", 0)
-    assert "may remove or repurpose one at any time" in found[key], "the mutation did not land"
-    with pytest.raises(AssertionError, match="changed since it was reviewed"):
-        test_prose_the_renderer_authors_inside_a_claim_is_pinned(
-            (contract_gen, WIRE, doc, "", []))
+    block = next(b for b in doc.blocks if b.claim_id == "WIRE.INGEST.EXTRA_FIELDS")
+    residue = outline.connective_text(block, WIRE["WIRE.INGEST.EXTRA_FIELDS"])
+    assert "may remove or repurpose one at any time" in residue, "the mutation did not land"
+    assert any("changed since they were reviewed" in problem for problem in outline.problems(
+        doc, {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}))
 
 
 def test_the_connective_residue_is_stable_under_overlapping_leaf_values(rendered):
@@ -1782,8 +1649,8 @@ def test_the_connective_residue_is_stable_under_overlapping_leaf_values(rendered
         if not block.claim_id or block.projection == projection.PARAGRAPH:
             continue
         claim = registry[block.claim_id]
-        first = _connective_text(block, claim)
-        assert _connective_text(block, claim) == first
+        first = outline.connective_text(block, claim)
+        assert outline.connective_text(block, claim) == first
         leaves = [x for x in projection.leaf_strings(claim.value, block.row_fields) if x]
         for leaf in leaves:
             assert leaf not in first, (
@@ -1916,3 +1783,68 @@ def _swap_claim(registry, claim_id, **changes):
         yield
     finally:
         object.__setattr__(registry, "claims", original)
+
+
+# ── the words the RENDERER puts inside a claimed block (re-audit-7 finding 1) ──────────────────
+#
+# `CLAIM_LABELS` and `RENDERER_PROSE` used to live here, and they were right: a claim id on a
+# block makes its VALUES the registry's, and leaves the words drawn around them the generator's.
+# What was wrong is that only this file read them. They are `BlockOutline.label` and
+# `BlockOutline.residue` now — one home, inside the reviewed projection a release runs — and
+# these tests attack that lane instead of a private copy of it.
+
+@pytest.mark.parametrize(
+    ("attr", "claim_id", "hostile", "refusal"),
+    [("claim_paragraph", "WIRE.INGEST.PATH", "<b>Do not use this endpoint: </b>", "is framed"),
+     ("claim_prose", "WIRE.CALLBACK.FIELDS", "Required body fields: <b>case_id only</b>.",
+      "changed since they were reviewed")],
+    ids=["paragraph-label", "composed-residue"])
+def test_w8f1_renderer_authored_text_inside_a_claim_cannot_be_published(
+        attr, claim_id, hostile, refusal, tmp_path, monkeypatch):
+    """Both of Codex's witnesses, through `publish`.
+
+    A false frame around a true value is a false document: `Do not use this endpoint:` in front of
+    the ingest path, and `Required body fields: case_id only.` in front of the real field list,
+    both published with the registry lane, the outline lane and all four rendered lanes green —
+    because none of them reads the characters the renderer authors inside a claimed block.
+    """
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    real = getattr(render_module.Doc, attr)
+
+    if attr == "claim_paragraph":
+        def patched(self, cid, *, style=render_module.BODY, prefix=""):
+            return real(self, cid, style=style,
+                        prefix=hostile if cid == claim_id else prefix)
+    else:
+        def patched(self, cid, markup, *, style=render_module.BODY):
+            return real(self, cid, hostile if cid == claim_id else markup, style=style)
+
+    monkeypatch.setattr(render_module.Doc, attr, patched)
+    with pytest.raises(ValueError, match=refusal):
+        contract_gen.PUBLICATION.publish(
+            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+    assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
+
+
+def test_w8f1_every_renderer_authored_span_inside_a_claim_is_reviewed(rendered):
+    """Closed forward: a claimed block that starts saying something new around its values is a
+    finding, not a silent addition — and every label/residue the outline pins is still drawn."""
+    generator, _registry, doc, _page, _tables = rendered
+    inputs = ({"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}
+              if generator is contract_gen else {})
+    assert outline.problems(doc, inputs) == []
+
+    for section in doc.sections:
+        for index, block in enumerate(section.blocks):
+            if not block.claim_id:
+                continue
+            claim = doc.registry[block.claim_id]
+            if block.projection == projection.PARAGRAPH:
+                continue
+            text = outline.connective_text(block, claim)
+            if len(outline._normalize(text)) <= outline.CONNECTIVE_FLOOR:
+                continue
+            spec = outline.outline(doc.document_id).sections[
+                [s.section_id for s in doc.sections].index(section.section_id)].blocks[index]
+            assert spec.residue == outline.residue_digest(text), (
+                f"{block.claim_id}: renderer prose reaching the page is not the reviewed prose")

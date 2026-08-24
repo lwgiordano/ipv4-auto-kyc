@@ -31,8 +31,11 @@ the page matches the document, and this one asks whether the document is the one
 """
 
 import hashlib
+import re
 from dataclasses import dataclass
 from types import MappingProxyType
+
+from docs.contracts import projection
 
 
 @dataclass(frozen=True)
@@ -45,10 +48,29 @@ class BlockOutline:
     digest: str = ""
     slots: tuple[str, ...] = ()
     template: str = ""
+    # What the RENDERER authors inside a claimed block (re-audit-7 finding 1). A claim
+    # id on a block makes its VALUES the registry's; the words drawn around them stay
+    # the generator's, and nothing in the release path was reading them. `label` is the
+    # exact prefix a PARAGRAPH claim is framed with — pinned by wording, because
+    # "Compliance window (days):" is short enough to review on sight and a digest of it
+    # tells a reviewer nothing. `residue` is the digest of everything a composed block
+    # says around its claim's values.
+    label: str = ""
+    residue: str = ""
 
     def __post_init__(self) -> None:
         if not self.kind:
             raise ValueError("a block outline names the kind of block it fixes")
+        if not self.claim_id and (self.label or self.residue):
+            raise ValueError(
+                "only a claimed block has renderer-authored text INSIDE it; an's "
+                "unattributed block is pinned whole by its digest"
+            )
+        if self.label and self.residue:
+            raise ValueError(
+                "a label is pinned by wording and a residue by digest; pinning one "
+                "block both ways is two places to update"
+            )
         if self.claim_id and (self.digest or self.slots):
             raise ValueError(
                 f"{self.claim_id}: a claim block's content is the registry's; pinning its text "
@@ -89,6 +111,46 @@ class DocumentOutline:
     sections: tuple[SectionOutline, ...]
 
 
+# A residue shorter than this is punctuation and spacing, not prose a reader acts on.
+CONNECTIVE_FLOOR = 6
+
+
+def _normalize(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(text).casefold())
+
+
+def connective_text(block, claim) -> str:
+    """What the block draws, minus everything the CLAIM supplies.
+
+    Longest leaf first: `approve` is a substring of `approve_buy_locked`, and removing the short
+    one first would leave `_buy_locked` behind and make the residue depend on iteration order.
+    """
+    parts = list(block.lines)
+    for row in block.rows:
+        parts.extend(row)
+    text = "\n".join(parts)
+    # column titles are claim-supplied too (Claim.columns, Wave 2 F5), so they are not the
+    # renderer's words any more than the cells are
+    leaves = sorted(
+        (leaf for leaf in (*projection.leaf_strings(claim.value, block.row_fields),
+                           *claim.headers) if leaf),
+        key=len, reverse=True,
+    )
+    for leaf in leaves:
+        text = text.replace(leaf, "\x00")
+    return re.sub(r"\x00+", "\x00", text)
+
+
+def claim_label(block, claim) -> str:
+    """The renderer-authored prefix framing a PARAGRAPH claim's value, or empty."""
+    derived = projection.expected_lines(claim, block.projection)
+    return " ".join(line for line in block.lines if line not in derived)
+
+
+def residue_digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
 def block_digest(block) -> str:
     """The digest of a block's exact visible content — lines first, then table cells in order."""
     return hashlib.sha256(
@@ -122,12 +184,12 @@ OUTLINES = MappingProxyType({
                 blocks=(
                     BlockOutline(kind='heading', digest='234929f29ee78a30'),
                     BlockOutline(kind='prose', digest='ef84d6cefa3fd5e3'),
-                    BlockOutline(kind='prose', claim_id='WIRE.ORDERING.BOOTSTRAP_024',
-                                 projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.ORDERING.BOOTSTRAP_024', projection='paragraph'),
                     BlockOutline(kind='prose', digest='5d2918318bf4467c'),
                     BlockOutline(kind='prose', digest='c73a077c46f1732c'),
-                    BlockOutline(kind='prose', claim_id='WIRE.ORDERING.OBLIGATION_STATE',
-                                 projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.ORDERING.OBLIGATION_STATE', projection='paragraph'),
                     BlockOutline(kind='table', claim_id='WIRE.ORDERING.PENDING_INPUTS', projection='table'),
                     BlockOutline(kind='prose', digest='fd8093c1f89e10cd'),
                     BlockOutline(kind='prose', digest='96e74fb46a028241'),
@@ -139,15 +201,21 @@ OUTLINES = MappingProxyType({
                 title='2. Events you send us',
                 blocks=(
                     BlockOutline(kind='heading', digest='e234571e96ca5ffd'),
-                    BlockOutline(kind='prose', claim_id='WIRE.INGEST.PATH', projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.INGEST.PATH', projection='paragraph',
+                        label='Endpoint:'),
                     BlockOutline(kind='prose', digest='1ec5dfd87476be01'),
                     BlockOutline(kind='table', claim_id='WIRE.INGEST.HEADERS', projection='table'),
                     BlockOutline(kind='prose', digest='3231921901830b1c'),
                     BlockOutline(kind='code', digest='583787dccbe46194'),
                     BlockOutline(kind='heading', digest='0618c15aff85c825'),
-                    BlockOutline(kind='prose', claim_id='WIRE.INGEST.EXTRA_FIELDS', projection='composed'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.INGEST.EXTRA_FIELDS', projection='composed',
+                        residue='3dbd54f03ecebb08'),
                     BlockOutline(kind='heading', digest='90204440e7af4730'),
-                    BlockOutline(kind='prose', claim_id='WIRE.ACTOR.SENSITIVE', projection='composed'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.ACTOR.SENSITIVE', projection='composed',
+                        residue='841eed537d25b0f4'),
                     BlockOutline(kind='table', claim_id='WIRE.EVENT.TABLE', projection='table'),
                     BlockOutline(kind='heading', digest='abe0d582168011a6'),
                     BlockOutline(kind='table', claim_id='WIRE.INGEST.STATUS', projection='table'),
@@ -158,38 +226,49 @@ OUTLINES = MappingProxyType({
                 title='3. Callbacks we send you',
                 blocks=(
                     BlockOutline(kind='heading', digest='52e82de2fbb9b393'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.PATH', projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.PATH', projection='paragraph',
+                        label='Endpoint:'),
                     BlockOutline(kind='prose', digest='2196d0acbca869f7'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.FIELDS', projection='composed'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.DECISIONS', projection='composed'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.GATES', projection='composed'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELDS',
-                                 projection='composed'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELD_RULE',
-                                 projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.FIELDS', projection='composed',
+                        residue='fd2b8fddb0219846'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.DECISIONS', projection='composed',
+                        residue='efd06031f9154b80'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.GATES', projection='composed',
+                        residue='60ff773c179a76ed'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELDS', projection='composed',
+                        residue='adcaa34e853e35fc'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELD_RULE', projection='paragraph'),
                     BlockOutline(kind='heading', digest='ead72c5bc41be710'),
                     BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.DELIVERY', projection='bullets'),
                     BlockOutline(kind='heading', digest='4c375c57c0bba056'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.VALIDATION_ORDER',
-                                 projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.VALIDATION_ORDER', projection='paragraph'),
                     BlockOutline(kind='table', claim_id='WIRE.CALLBACK.VALIDATION', projection='table'),
                     BlockOutline(kind='heading', digest='7ff558b7c1f44148'),
                     BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.RECEIVER_TXN', projection='steps'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.ACK_CONSEQUENCE',
-                                 projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.ACK_CONSEQUENCE', projection='paragraph'),
                     BlockOutline(kind='heading', digest='3af9f2cc4371da07'),
                     BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.ACK_VS_APPLY', projection='paragraph'),
                     BlockOutline(kind='table', claim_id='WIRE.CALLBACK.EFFECTIVENESS', projection='table'),
                     BlockOutline(kind='table', claim_id='WIRE.CALLBACK.LEGEND', projection='table'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.LEGEND_CLOSURE',
-                                 projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.LEGEND_CLOSURE', projection='paragraph'),
                     BlockOutline(kind='heading', digest='66dd2ae94a3b1d1c'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.RELEASE_STATE',
-                                 projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.RELEASE_STATE', projection='paragraph'),
                     BlockOutline(kind='table', claim_id='WIRE.CALLBACK.RELEASE', projection='table'),
                     BlockOutline(kind='heading', digest='fc4e84255a41a3a2'),
                     BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.WAIT_BOUND', projection='paragraph'),
-                    BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.RETRY', projection='composed'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.CALLBACK.RETRY', projection='composed',
+                        residue='e07949a7ee8f8121'),
                     BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.COMPLETION', projection='paragraph'),
                 ),
             ),
@@ -198,20 +277,32 @@ OUTLINES = MappingProxyType({
                 title='4. Request signing (HMAC v2)',
                 blocks=(
                     BlockOutline(kind='heading', digest='bedd5628058f3d03'),
-                    BlockOutline(kind='code', claim_id='WIRE.SIGN.CANONICAL', projection='numbered_code'),
-                    BlockOutline(kind='prose', claim_id='WIRE.SIGN.DIRECTIONS', projection='composed'),
+                    BlockOutline(
+                        kind='code', claim_id='WIRE.SIGN.CANONICAL', projection='numbered_code',
+                        residue='44258b84c7d9f360'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.SIGN.DIRECTIONS', projection='composed',
+                        residue='3db54252a0da969e'),
                     BlockOutline(kind='prose', claim_id='WIRE.SIGN.DIRECTION_FORM', projection='paragraph'),
-                    BlockOutline(kind='prose', claim_id='WIRE.SIGN.SKEW_SECONDS', projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.SIGN.SKEW_SECONDS', projection='paragraph',
+                        label='Skew window (seconds):'),
                     BlockOutline(kind='prose', digest='1241961d4e2b11e0'),
-                    BlockOutline(kind='prose', claim_id='WIRE.SIGN.V1_SUNSET', projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.SIGN.V1_SUNSET', projection='paragraph',
+                        label='On the v1 sunset dates:'),
                     BlockOutline(kind='heading', digest='0cf745782fb15a3f'),
                     BlockOutline(kind='prose', claim_id='WIRE.SIGN.ROTATION', projection='bullets'),
                     BlockOutline(kind='table', claim_id='WIRE.SIGN.ROTATION_RETIREMENT', projection='table'),
                     BlockOutline(kind='heading', digest='7b5a3ebfc10a96a0'),
-                    BlockOutline(kind='prose', claim_id='WIRE.SIGN.COMPANION', projection='composed'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.SIGN.COMPANION', projection='composed',
+                        residue='62bed443d66d463f'),
                     BlockOutline(kind='prose', claim_id='WIRE.SIGN.COMPANION_PROOF', projection='paragraph'),
                     BlockOutline(kind='heading', digest='c71fc742ef56a692'),
-                    BlockOutline(kind='prose', claim_id='WIRE.SIGN.VECTOR', projection='composed'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.SIGN.VECTOR', projection='composed',
+                        residue='723d2cc6883b5453'),
                 ),
             ),
             SectionOutline(
@@ -219,16 +310,19 @@ OUTLINES = MappingProxyType({
                 title='5. Ordering, and one field you must not sort by',
                 blocks=(
                     BlockOutline(kind='heading', digest='eb8c92f5cfa81ddb'),
-                    BlockOutline(kind='prose', claim_id='WIRE.ORDERING.NO_DECIDED_AT',
-                                 projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.ORDERING.NO_DECIDED_AT', projection='paragraph'),
                     BlockOutline(kind='heading', digest='25e8007953ff51d7'),
-                    BlockOutline(kind='prose', claim_id='WIRE.ORDERING.SEQUENCE_DOMAINS',
-                                 projection='bullets'),
-                    BlockOutline(kind='prose', claim_id='WIRE.ORDERING.ORDINAL_AUTHORITY',
-                                 projection='paragraph'),
-                    BlockOutline(kind='prose', claim_id='WIRE.ORDERING.INTERIM', projection='paragraph'),
-                    BlockOutline(kind='prose', claim_id='WIRE.ORDERING.INTEGRITY_MISMATCH',
-                                 projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.ORDERING.SEQUENCE_DOMAINS', projection='bullets'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.ORDERING.ORDINAL_AUTHORITY', projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.ORDERING.INTERIM', projection='paragraph',
+                        label='Until activation:'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.ORDERING.INTEGRITY_MISMATCH', projection='paragraph',
+                        label='Note:'),
                 ),
             ),
             SectionOutline(
@@ -236,7 +330,9 @@ OUTLINES = MappingProxyType({
                 title='6. Retention',
                 blocks=(
                     BlockOutline(kind='heading', digest='62d82fda7569512c'),
-                    BlockOutline(kind='prose', claim_id='WIRE.RETENTION.WINDOW_DAYS', projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='WIRE.RETENTION.WINDOW_DAYS', projection='paragraph',
+                        label='Compliance window (days):'),
                     BlockOutline(kind='table', claim_id='WIRE.RETENTION.BY_KIND', projection='table'),
                 ),
             ),
@@ -266,8 +362,8 @@ OUTLINES = MappingProxyType({
                 title='Read this before provisioning anything',
                 blocks=(
                     BlockOutline(kind='heading', digest='53d619cb818daa55'),
-                    BlockOutline(kind='alert', claim_id='OPS.BLOCKER.PRODUCTION_PROVIDERS',
-                                 projection='alert'),
+                    BlockOutline(
+                        kind='alert', claim_id='OPS.BLOCKER.PRODUCTION_PROVIDERS', projection='alert'),
                     BlockOutline(kind='prose', digest='7cc3ea2a09c0f296'),
                     BlockOutline(kind='prose', digest='ef3453c590155e50'),
                     BlockOutline(kind='prose', digest='37fb3a031f041fca'),
@@ -281,8 +377,8 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='prose', digest='a0fc83c1a80bf8d9'),
                     BlockOutline(kind='table', claim_id='OPS.PROCESS.COMMANDS', projection='table'),
                     BlockOutline(kind='prose', digest='9434d1248b71a3c4'),
-                    BlockOutline(kind='prose', claim_id='OPS.PROCESS.DEV_WORKER_BANNED',
-                                 projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.PROCESS.DEV_WORKER_BANNED', projection='paragraph'),
                 ),
             ),
             SectionOutline(
@@ -302,9 +398,13 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='table', claim_id='OPS.CONFIG.DEFAULTS', projection='table'),
                     BlockOutline(kind='heading', digest='38087bd9789a9520'),
                     BlockOutline(kind='prose', claim_id='OPS.CONFIG.PRODUCTION_FLOORS', projection='bullets'),
-                    BlockOutline(kind='code', claim_id='OPS.CONFIG.HMAC_SET', projection='code'),
+                    BlockOutline(
+                        kind='code', claim_id='OPS.CONFIG.HMAC_SET', projection='code',
+                        residue='eeead37d4b6834fd'),
                     BlockOutline(kind='prose', claim_id='OPS.CONFIG.HMAC_SET_RULE', projection='paragraph'),
-                    BlockOutline(kind='prose', claim_id='OPS.CONFIG.ROTATION_KEYS', projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.CONFIG.ROTATION_KEYS', projection='paragraph',
+                        label='Rotation keys:'),
                     BlockOutline(kind='heading', digest='3c791b013d2d89d0'),
                     BlockOutline(kind='prose', claim_id='OPS.CONFIG.M2_GATE', projection='paragraph'),
                 ),
@@ -325,12 +425,18 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='prose', claim_id='OPS.RELEASE.CLASSIFICATION', projection='paragraph'),
                     BlockOutline(kind='prose', digest='e25872fbd22d85fd'),
                     BlockOutline(kind='heading', digest='cb798950e6c2011e'),
-                    BlockOutline(kind='prose', claim_id='OPS.CUTOVER.EXECUTION_SOURCE',
-                                 projection='paragraph'),
-                    BlockOutline(kind='prose', claim_id='OPS.CUTOVER.PROCEDURES', projection='composed'),
-                    BlockOutline(kind='prose', claim_id='OPS.CUTOVER.OUTBOX_CEILING', projection='steps'),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.CUTOVER.EXECUTION_SOURCE', projection='paragraph'),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.CUTOVER.PROCEDURES', projection='composed',
+                        residue='33b3260daf6c3302'),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.CUTOVER.OUTBOX_CEILING', projection='steps',
+                        residue='1193b2813e8d6c5b'),
                     BlockOutline(kind='prose', claim_id='OPS.CUTOVER.CEILING_RULE', projection='paragraph'),
-                    BlockOutline(kind='prose', claim_id='OPS.HMAC.ROLLOUT_ORDER', projection='steps'),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.HMAC.ROLLOUT_ORDER', projection='steps',
+                        residue='b533fa723b3b1f48'),
                     BlockOutline(kind='prose', claim_id='OPS.HMAC.V1_DROP_TIMING', projection='paragraph'),
                 ),
             ),
@@ -339,8 +445,8 @@ OUTLINES = MappingProxyType({
                 title='6. Rollback',
                 blocks=(
                     BlockOutline(kind='heading', digest='6caf7d4780aff6d8'),
-                    BlockOutline(kind='prose', claim_id='OPS.ROLLBACK.MIGRATION_BOUNDARY',
-                                 projection='bullets'),
+                    BlockOutline(
+                        kind='prose', claim_id='OPS.ROLLBACK.MIGRATION_BOUNDARY', projection='bullets'),
                 ),
             ),
             SectionOutline(
@@ -356,7 +462,6 @@ OUTLINES = MappingProxyType({
         ),
     ),
 })
-
 
 def outline(document_id: str) -> DocumentOutline:
     try:
@@ -404,6 +509,8 @@ def problems(doc, inputs: dict | None = None) -> list[str]:
                     found.append(
                         f"{at}: {spec.claim_id} rendered as {block.projection!r}, reviewed as "
                         f"{spec.projection!r}")
+                else:
+                    found.extend(_authored_problems(at, spec, block, doc.registry[block.claim_id]))
                 continue
             if block.claim_id:
                 found.append(
@@ -431,3 +538,29 @@ def problems(doc, inputs: dict | None = None) -> list[str]:
                     f"{block_digest(block)}). Read it, then re-pin it in the SAME commit: "
                     f"{(block.lines or ('',))[0][:60]!r}")
     return found
+
+
+def _authored_problems(at, spec, block, claim) -> list[str]:
+    """The words the RENDERER puts inside a claimed block, against what was reviewed.
+
+    Re-audit-7 finding 1: `authority.problems()` covers the registry, the outline covered the
+    claim's PLACE, and the rendered lanes compare the page to the model — but the model's own
+    renderer-authored lines were reviewed only by the test suite. A label rewritten to
+    `Do not use this endpoint:` and a composed lead-in rewritten to `Required body fields:
+    case_id only.` both published, every production lane green.
+    """
+    if block.projection == projection.PARAGRAPH:
+        drawn = claim_label(block, claim)
+        if drawn != spec.label:
+            return [f"{at}: {claim.id} is framed {drawn!r}, reviewed as {spec.label!r}"]
+        return []
+    text = connective_text(block, claim)
+    drawn = residue_digest(text) if len(_normalize(text)) > CONNECTIVE_FLOOR else ""
+    if drawn != spec.residue:
+        if not spec.residue:
+            return [f"{at}: {claim.id} now says something around its values that nobody reviewed: "
+                    f"{' '.join(text.replace(chr(0), '~').split())[:120]!r}"]
+        return [f"{at}: the words {claim.id} is wrapped in changed since they were reviewed "
+                f"(reviewed {spec.residue}, now {drawn or 'nothing'}): "
+                f"{' '.join(text.replace(chr(0), '~').split())[:120]!r}"]
+    return []
