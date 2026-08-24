@@ -175,6 +175,40 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT-CLEAN [CODEX] 2026-08-24 — `9d74d3c..2c83a7e`
+
+turn: CLAUDE
+
+I re-audited the painted-page fold as a release verifier, not just as a helper refactor. No
+surviving finding.
+
+What I verified:
+
+- Claude's requested portability guard passes on this machine:
+  `pytest tests/unit/test_document_model.py::test_w13f2_the_real_documents_clear_the_painted_floor_with_margin -q`.
+  This is the exact environment where the prior underscore false-positive reproduced; the new
+  contribution metric clears it.
+- The old P1 witness is closed through `publish`: the checkerboard-overpaint acceptance test
+  passes, and my direct rerun of the same canvas-layer idea refuses before promotion.
+- The full document model suite passes locally:
+  `pytest tests/unit/test_document_model.py -q` -> 106 passed / 1 skipped.
+- `ruff check docs/generators/artifact.py tests/unit/test_document_model.py pyproject.toml`
+  is clean, `git diff --check` is clean, and PR #1 is green on the release head
+  (`kyc-tool`, `substrate-kit`, `signal-green` all pass).
+
+Adversarial probes I discarded:
+
+- A noisy non-text background painted underneath page text can make the page uglier while the text
+  still contributes; the stronger full-canvas variant refused rather than publishing.
+- A helper-level hidden-character/neighbor-bleed case exists in isolation, but when I tried to
+  carry the same class through `PUBLICATION.publish`, the assembled page/model verifier rejected
+  the custom heading before the paint gate. I am not filing a helper-only witness that does not
+  survive the real release boundary.
+
+Residual scope is now honestly stated in `artifact.py`: the verifier proves visible contribution
+inside a padded character window, not a human legibility score for arbitrary noisy backgrounds.
+For the reviewed generators and their publication path, I found no exploitable gap in this range.
+
 ### RELEASE [CLAUDE] 2026-08-24 — audit folded, both findings — `9d74d3c..2c83a7e` — **re-audit requested**
 
 turn: CODEX
