@@ -175,6 +175,63 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-24 — `d99f73e..d369925` — **CHANGES REQUIRED (1)**
+
+turn: CLAUDE
+
+I re-audited the renderer-authored label/residue fold as a complete release-path change. The two
+exact witnesses from the previous round are materially closed: `Do not use this endpoint:` framing
+`WIRE.INGEST.PATH` now refuses at `publish`, and `Required body fields: case_id only.` framing
+`WIRE.CALLBACK.FIELDS` now refuses at `publish`. The focused document tests for those witnesses
+pass, `./manage.sh lint` is clean, and `git diff --check d99f73e..d369925` is clean. One P1
+survived because the new residue lane treats short alphanumeric text as non-prose.
+
+1. **P1 — `CONNECTIVE_FLOOR` lets short but meaningful renderer-authored text publish inside a
+   claimed block with every production lane green.**
+
+   Real surface: `docs/contracts/outline.py:114-115` defines
+   `CONNECTIVE_FLOOR = 6`, and `docs/contracts/outline.py:557-559` converts any
+   non-paragraph claimed block's residue to `""` when the normalized residue length is at or
+   below that floor. Several externally-binding claimed blocks therefore have no reviewed residue
+   at all, including `WIRE.CALLBACK.DELIVERY` at `docs/contracts/outline.py:248`.
+
+   Reproduction on HEAD: monkeypatch `Doc.claim_bullets` for `WIRE.CALLBACK.DELIVERY` so it
+   renders and records an extra first bullet, `No 2xx`, then delegates the original registry
+   bullets. With `source_revision -> "abc1234"`:
+
+   - `outline.problems(doc, {"contact": "ops@example.com", "due_date": "2026-09-30"})` returns
+     `[]`;
+   - `techcraft_integration_contract.PUBLICATION.publish(...)` succeeds;
+   - the governed contract PDF contains:
+
+     ```text
+     Delivery: what actually reaches you
+     - No 2xx
+     - Each automated decision enqueues one callback row in our transactional outbox.
+     - An eligible row is delivered AT LEAST ONCE until you return 2xx ...
+     ```
+
+   Why this passes: `connective_text()` removes the registry-supplied delivery bullets, leaving
+   only `No 2xx`; `_normalize("No 2xx")` is `no2xx`, length 5, so `_authored_problems()` treats
+   the residue as empty. The spec also has empty residue, so the outline lane accepts it. The
+   rendered-artifact lanes compare the page to the renderer's own now-false model and accept it.
+   `authority.problems()` checks the registry facts, not this added renderer sentence.
+
+   This is not a harmless punctuation exemption. Short words are often the load-bearing words in
+   an operational contract: `no`, `not`, `never`, `only`, `safe`, `block`, and compact phrases
+   like `No 2xx` can invert or contradict a rule while staying under the floor.
+
+   Required fix class: remove the semantic length floor from claimed-block residue authority.
+   Every renderer-authored character inside a claimed block must be either (a) derived from the
+   registry, (b) one of a projection-specific mechanical separator that is specified as syntax
+   rather than guessed by length, or (c) reviewed/pinned in the release outline. Keep the
+   `No 2xx` bullet above as a RED through `Publication.publish`, not only through
+   `outline.problems()`.
+
+No other finding survived verification in this pass. The fold correctly moved the previous
+`CLAIM_LABELS` / `RENDERER_PROSE` authority into the production outline path; the remaining issue
+is the length-based exemption inside that new production lane. The PDFs remain undistributable.
+
 ### RELEASE [CLAUDE] 2026-08-24 — audit folded — `d99f73e..d369925` — **re-audit requested**
 
 turn: CODEX
