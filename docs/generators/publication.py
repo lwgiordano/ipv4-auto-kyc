@@ -189,6 +189,14 @@ class Publication:
         artifact.verify_tables_match_model(doc, tables)
         artifact.verify_prose_stream(doc, artifact._page_prose(path))
         artifact.verify_footers(doc, path, module)
+        # …and the INK (re-audit-10 finding 2): every lane above reads extracted text, and
+        # extraction is colour-blind — a retry obligation drawn in white passed them all.
+        invisible = artifact.visibility_problems(path)
+        if invisible:
+            raise ValueError(
+                f"{self.identity.id} draws governed text a reader cannot see:\n  "
+                + "\n  ".join(invisible[:10])
+            )
 
 
 def _check(revision: str) -> str:

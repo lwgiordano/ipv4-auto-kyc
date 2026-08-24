@@ -377,13 +377,18 @@ class Doc:
         del self._story[-count:]
         self._story.append(KeepTogether(tail))
 
-    def p(self, markup: str, style=BODY):
-        """Prose. Bold spans are allowed here, so this takes pre-escaped markup."""
-        self._story.append(Paragraph(markup, style))
+    def p(self, markup: str, *, _role=None):
+        """Prose. Bold spans are allowed here, so this takes pre-escaped markup.
+
+        Presentation is CLOSED (re-audit-10 finding 2): a caller names no style. The role is the
+        method — `p` is body prose, `why` is the indented aside — and each role's one style lives
+        at the top of this module, where the glyph-visibility gate holds it to readable ink.
+        """
+        self._story.append(Paragraph(markup, _role or BODY))
         self._add(Block(kind="prose", claim_id=None, lines=(visible_text(markup),)))
 
     def why(self, markup: str):
-        self.p(markup, WHY)
+        self.p(markup, _role=WHY)
 
     def code(self, text: str):
         """Fixed-width block whose INDENTATION is meaningful — published Python, mainly.
@@ -416,7 +421,7 @@ class Doc:
     # display something else, or display it twice, and the coverage count would still be 1. Every
     # method below appends first and records only on success, so `self.rendered` counts flowables
     # that exist rather than intentions.
-    def claim_statement(self, claim_id: str, *, style=WHY):
+    def claim_statement(self, claim_id: str):
         """Render a claim whose value is a `Statement` — a sentence its fact SELECTED.
 
         This replaces `claim_note` (Wave-2 audit finding 1). The text is not the renderer's, not
@@ -427,7 +432,7 @@ class Doc:
         """
         claim = self.registry[claim_id]
         lines = projection.expected_lines(claim, projection.PARAGRAPH)
-        self._emit(claim_id, [Paragraph(escape(lines[0]), style)], lines,
+        self._emit(claim_id, [Paragraph(escape(lines[0]), WHY)], lines,
                    projection_name=projection.PARAGRAPH)
 
     def _emit(self, claim_id: str, flowables: list, lines, *, kind: str = "prose", rows=(),
@@ -452,7 +457,7 @@ class Doc:
                         code_columns=code_columns, composed=composed))
         return claim
 
-    def claim_paragraph(self, claim_id: str, *, style=BODY, prefix: str = ""):
+    def claim_paragraph(self, claim_id: str, *, prefix: str = ""):
         """Render a claim whose value is a single string.
 
         Refuses a non-string: `escape()` would happily stringify a tuple, and the contract shipped
@@ -470,14 +475,14 @@ class Doc:
         # authors has no registry authority to be checked against.
         label = visible_text(prefix).strip()
         lines = (label, line) if label else (line,)
-        self._emit(claim_id, [Paragraph(markup, style)], lines,
+        self._emit(claim_id, [Paragraph(markup, BODY)], lines,
                    projection_name=projection.PARAGRAPH)
 
-    def claim_bullets(self, claim_id: str, *, style=BODY):
+    def claim_bullets(self, claim_id: str):
         """Render a claim whose value is a sequence of strings, one paragraph each."""
         claim = self.registry[claim_id]
         lines = projection.expected_lines(claim, projection.BULLETS)
-        self._emit(claim_id, [Paragraph("\u2013  " + escape(line), style) for line in lines],
+        self._emit(claim_id, [Paragraph("\u2013  " + escape(line), BODY) for line in lines],
                    lines, projection_name=projection.BULLETS)
 
     def _with_heading(self, claim_id: str, heading: str | None, blocks: list, lines, *,
@@ -518,7 +523,7 @@ class Doc:
                            ((visible_text(lead),) + lines) if lead else lines,
                            kind="code", projection_name=name)
 
-    def claim_prose(self, claim_id: str, segments, *, style=BODY):
+    def claim_prose(self, claim_id: str, segments):
         """Render a claim as ONE prose part composed of typed segments.
 
         `segments` is a sequence of `projection.Lit` (reviewed literal markup) and
@@ -530,12 +535,11 @@ class Doc:
         text is DERIVED here, from the claim and the template, and the release verifier derives
         it again independently.
         """
-        self.claim_mixed(claim_id, [("p", tuple(segments))], style=style)
+        self.claim_mixed(claim_id, [("p", tuple(segments))])
 
     _PART_STYLES = {"p": BODY, "why": WHY}
 
-    def claim_mixed(self, claim_id: str, parts, *, published_fields: tuple[str, ...] = (),
-                    style=None):
+    def claim_mixed(self, claim_id: str, parts, *, published_fields: tuple[str, ...] = ()):
         """Render one claim that needs several flowables — prose, then a code block, then more.
 
         `parts` is a sequence of (kind, segments) pairs where kind is "p", "why", "code"
@@ -567,7 +571,7 @@ class Doc:
             elif kind == "wrap":
                 flowables.append(Paragraph(escape(text), WRAPCODE))
             else:
-                flowables.append(Paragraph(text, style or self._PART_STYLES[kind]))
+                flowables.append(Paragraph(text, self._PART_STYLES[kind]))
         lines = []
         for kind, text in rendered:
             lines.extend(

@@ -14,6 +14,7 @@ Projections are deliberately few and dumb. A projection that took a formatting c
 the renderer back in charge of the answer.
 """
 
+import json
 import re
 from dataclasses import dataclass, fields, is_dataclass
 
@@ -318,11 +319,23 @@ def composed_lines(claim, parts) -> tuple[str, ...]:
 
 
 def serialize_composed(parts) -> str:
-    """A stable textual form of the template — what the outline digest pins. Field paths and
-    formatter names are part of the reviewed unit: re-aiming a Ref is a re-pin a human reads."""
-    return "\x1d".join(
-        kind + "\x1f" + "\x1e".join(
-            f"L:{segment.text}" if type(segment) is Lit
-            else f"R:{segment.path}:{segment.formatter}"
-            for segment in segments)
-        for kind, segments in parts)
+    """A CANONICAL, INJECTIVE form of the template — what the outline digest pins.
+
+    Re-audit-10 finding 1. The first encoding concatenated kinds and segments with unescaped
+    control characters, and `Lit` accepts every exact string — so one Lit whose text was the
+    serialized suffix of the honest template encoded identically to the whole typed tree. The
+    reviewed digest matched, the template contained no Ref at all, and the governed page printed
+    serializer material in place of the registry's retry values.
+
+    JSON with sorted-key-free fixed shapes is injective over this structure: every segment is a
+    typed array — `["L", text]` or `["R", path, formatter]` — and every part is
+    `[kind, [segments...]]`. A literal may contain any character, delimiters included; it is a
+    JSON string, so it cannot escape its position. Two distinct typed trees cannot encode
+    identically, and a test proves the old witness now digests differently.
+    """
+    return json.dumps(
+        [[kind, [["L", segment.text] if type(segment) is Lit
+                 else ["R", segment.path, segment.formatter]
+                 for segment in segments]]
+         for kind, segments in parts],
+        ensure_ascii=False, separators=(",", ":"))

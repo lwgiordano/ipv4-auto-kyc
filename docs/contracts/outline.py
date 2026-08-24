@@ -234,11 +234,11 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='heading', digest='0618c15aff85c825'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.INGEST.EXTRA_FIELDS', projection='composed',
-                        composed='95daacb8831c9894'),
+                        composed='a61c6b8ba4878c0b'),
                     BlockOutline(kind='heading', digest='90204440e7af4730'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.ACTOR.SENSITIVE', projection='composed',
-                        composed='a7b3409e7f7201d4'),
+                        composed='927e9cbaaffe2c1c'),
                     BlockOutline(kind='table', claim_id='WIRE.EVENT.TABLE', projection='table'),
                     BlockOutline(kind='heading', digest='abe0d582168011a6'),
                     BlockOutline(kind='table', claim_id='WIRE.INGEST.STATUS', projection='table'),
@@ -255,16 +255,16 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='prose', digest='2196d0acbca869f7'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.FIELDS', projection='composed',
-                        composed='df586e1a77e1e919'),
+                        composed='5c518b6ba22e9a69'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.DECISIONS', projection='composed',
-                        composed='0092542096c345e8'),
+                        composed='d9dff7f5c3360406'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.GATES', projection='composed',
-                        composed='ee39b2d21c48baf9'),
+                        composed='f2d00fc08a64610f'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELDS', projection='composed',
-                        composed='3fc2828784b5a67c'),
+                        composed='3f0c69610dbed734'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.OPTIONAL_FIELD_RULE', projection='paragraph'),
                     BlockOutline(kind='heading', digest='ead72c5bc41be710'),
@@ -291,7 +291,7 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.WAIT_BOUND', projection='paragraph'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.RETRY', projection='composed',
-                        composed='909b93ce47da69b3'),
+                        composed='db3bdddd5760f320'),
                     BlockOutline(kind='prose', claim_id='WIRE.CALLBACK.COMPLETION', projection='paragraph'),
                 ),
             ),
@@ -305,7 +305,7 @@ OUTLINES = MappingProxyType({
                         residue='44258b84c7d9f360'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.DIRECTIONS', projection='composed',
-                        composed='b81c76747dc34987'),
+                        composed='ea9c693eea4f710e'),
                     BlockOutline(kind='prose', claim_id='WIRE.SIGN.DIRECTION_FORM', projection='paragraph'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.SKEW_SECONDS', projection='paragraph',
@@ -320,12 +320,12 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='heading', digest='7b5a3ebfc10a96a0'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.COMPANION', projection='composed',
-                        composed='f86818616e8b90a3'),
+                        composed='5367f051d43435cc'),
                     BlockOutline(kind='prose', claim_id='WIRE.SIGN.COMPANION_PROOF', projection='paragraph'),
                     BlockOutline(kind='heading', digest='c71fc742ef56a692'),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.VECTOR', projection='composed',
-                        composed='b5860459324af71d'),
+                        composed='cd322569b150f62e'),
                 ),
             ),
             SectionOutline(
@@ -452,7 +452,7 @@ OUTLINES = MappingProxyType({
                         kind='prose', claim_id='OPS.CUTOVER.EXECUTION_SOURCE', projection='paragraph'),
                     BlockOutline(
                         kind='prose', claim_id='OPS.CUTOVER.PROCEDURES', projection='composed',
-                        composed='1c945c644580bc6d'),
+                        composed='7f4c1c3ecc2dc80c'),
                     BlockOutline(
                         kind='prose', claim_id='OPS.CUTOVER.OUTBOX_CEILING', projection='steps',
                         residue='1193b2813e8d6c5b'),

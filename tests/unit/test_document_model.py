@@ -1310,12 +1310,12 @@ def test_a_renderer_that_displays_something_other_than_the_claim_fails(
 
     original = render_module.Doc.claim_paragraph
 
-    def lying_claim_paragraph(self, cid, *, style=render_module.BODY, prefix=""):
+    def lying_claim_paragraph(self, cid, *, prefix=""):
         if cid != claim_id:
-            return original(self, cid, style=style, prefix=prefix)
+            return original(self, cid, prefix=prefix)
         from docs.generators.render import Block, Paragraph, escape
 
-        self._story.append(Paragraph(prefix + escape(lie), style))
+        self._story.append(Paragraph(prefix + escape(lie), render_module.BODY))
         self.rendered.append(cid)
         self._add(Block(kind="prose", claim_id=cid, lines=(lie,),
                         projection=projection.PARAGRAPH))
@@ -1542,10 +1542,10 @@ def test_a_reworded_label_fails_the_pin(monkeypatch, tmp_path):
 
     original = render_module.Doc.claim_paragraph
 
-    def relabelled(self, cid, *, style=render_module.BODY, prefix=""):
+    def relabelled(self, cid, *, prefix=""):
         if cid == "WIRE.RETENTION.WINDOW_DAYS":
             prefix = "<b>Compliance window (years): </b>"
-        return original(self, cid, style=style, prefix=prefix)
+        return original(self, cid, prefix=prefix)
 
     monkeypatch.setattr(render_module.Doc, "claim_paragraph", relabelled)
     doc = _build(contract_gen)
@@ -1566,10 +1566,11 @@ def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatc
 
     original = render_module.Doc.p
 
-    def also_draw_unrecorded(self, markup, style=render_module.BODY):
-        original(self, markup, style)
+    def also_draw_unrecorded(self, markup):
+        original(self, markup)
         # appended to the story, deliberately NOT to any block
-        self._story.append(render_module.Paragraph("Superseding addendum: zzyzx.", style))
+        self._story.append(render_module.Paragraph(
+            "Superseding addendum: zzyzx.", render_module.BODY))
         render_module.Doc.p = original  # once is enough
 
     monkeypatch.setattr(render_module.Doc, "p", also_draw_unrecorded)
@@ -1623,13 +1624,13 @@ def test_rewriting_a_binding_commitment_in_connective_prose_is_caught(monkeypatc
 
     original = render_module.Doc.claim_prose
 
-    def weakened(self, cid, segments, *, style=render_module.BODY):
+    def weakened(self, cid, segments):
         if cid == "WIRE.INGEST.EXTRA_FIELDS":
             segments = [projection.Lit(s.text.replace(
                 "never remove or repurpose one without a version bump agreed with you",
                 "may remove or repurpose one at any time"))
                 if type(s) is projection.Lit else s for s in segments]
-        return original(self, cid, segments, style=style)
+        return original(self, cid, segments)
 
     monkeypatch.setattr(render_module.Doc, "claim_prose", weakened)
     doc = _build(contract_gen)
@@ -1817,12 +1818,11 @@ def test_w8f1_renderer_authored_text_inside_a_claim_cannot_be_published(
     real = getattr(render_module.Doc, attr)
 
     if attr == "claim_paragraph":
-        def patched(self, cid, *, style=render_module.BODY, prefix=""):
-            return real(self, cid, style=style,
-                        prefix=hostile if cid == claim_id else prefix)
+        def patched(self, cid, *, prefix=""):
+            return real(self, cid, prefix=hostile if cid == claim_id else prefix)
     else:
-        def patched(self, cid, segments, *, style=render_module.BODY):
-            return real(self, cid, hostile if cid == claim_id else segments, style=style)
+        def patched(self, cid, segments):
+            return real(self, cid, hostile if cid == claim_id else segments)
 
     monkeypatch.setattr(render_module.Doc, attr, patched)
     with pytest.raises(ValueError, match=refusal):
@@ -2028,3 +2028,124 @@ def _sibling_paths(value, path):
     elif dataclasses.is_dataclass(container):
         out = [f"{prefix}.{f.name}" for f in dataclasses.fields(container)]
     return [p for p in out if p != path]
+
+
+def test_w11f1_the_composed_template_encoding_is_injective(tmp_path, monkeypatch):
+    """Re-audit-10 finding 1, the exact witness, through `publish`.
+
+    The first serializer concatenated with unescaped control characters, and `Lit` accepts every
+    exact string — so one Lit whose text was the encoded suffix of the honest RETRY template
+    serialized identically to the whole typed tree: same reviewed digest, no Ref anywhere, and the
+    governed page printed serializer material (`R:{delays}:seconds_list ...`) in place of the
+    registry's retry values. The encoding is canonical JSON of typed arrays now; a literal may
+    carry any character, delimiters included, and cannot escape its position.
+    """
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    real = render_module.Doc.claim_mixed
+
+    def collide(self, cid, parts, **kwargs):
+        if cid == "WIRE.CALLBACK.RETRY":
+            honest = tuple((kind, tuple(segments)) for kind, segments in parts)
+            serial = projection.serialize_composed(honest)
+            fake = (("p", (projection.Lit(serial),)),)
+            # the collision itself is dead: distinct trees encode distinctly
+            assert projection.serialize_composed(fake) != serial
+            parts = list(fake)
+        return real(self, cid, parts, **kwargs)
+
+    monkeypatch.setattr(render_module.Doc, "claim_mixed", collide)
+    with pytest.raises(ValueError, match="composed template changed"):
+        contract_gen.PUBLICATION.publish(
+            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+    assert not list(tmp_path.iterdir())
+
+    # injectivity at the seams the old encoding leaked through: delimiter-bearing literals,
+    # boundary ambiguity between one segment and two, and kind/text confusion
+    distinct = [
+        (("p", (projection.Lit("a\x1eb"),)),),
+        (("p", (projection.Lit("a"), projection.Lit("\x1eb"))),),
+        (("p", (projection.Lit("a"), projection.Lit("b"))),),
+        (("p", (projection.Lit("ab"),)),),
+        (("p", (projection.Lit('["p",[["L","x"]]]'),)),),
+        (("p", (projection.Lit("L:x"),)),),
+        (("p", (projection.Ref("{x}"),)),),
+        (("why", (projection.Ref("{x}"),)),),
+        (("p", (projection.Ref("{x}", "comma_list"),)),),
+    ]
+    encodings = [projection.serialize_composed(parts) for parts in distinct]
+    assert len(set(encodings)) == len(encodings), "two distinct typed trees encoded identically"
+
+
+def test_w11f2_invisible_ink_cannot_be_published(tmp_path, monkeypatch):
+    """Re-audit-10 finding 2, the exact witness, through `publish` — via the central style
+    constant, which is the door a closed role alone cannot shut.
+
+    The retry obligation rendered in white passed every lane: extraction is colour-blind, so the
+    outline, page/model, table, prose-stream and footer comparisons all saw the complete
+    schedule while a person saw nothing. The glyph gate reads the ink itself.
+    """
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    from reportlab.lib import colors as _colors
+
+    monkeypatch.setattr(render_module.BODY, "textColor", _colors.white)
+    with pytest.raises(ValueError, match="cannot see"):
+        contract_gen.PUBLICATION.publish(
+            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+    assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
+
+
+@pytest.mark.parametrize("role", ["BODY", "WHY", "CODE", "CELL", "CELLB", "ALERT", "TOKEN",
+                                  "STEP", "WRAPCODE", "H1", "H2"])
+def test_w11f2_every_governed_role_is_held_to_visible_ink(role, tmp_path, monkeypatch):
+    """Analogous coverage across every governed text role: whiten any ONE of them and the staged
+    artifact refuses. Also the other two governed properties, spot-checked through BODY below."""
+    from docs.generators import artifact
+    from reportlab.lib import colors as _colors
+
+    monkeypatch.setattr(getattr(render_module, role), "textColor", _colors.white)
+    # a role may appear in only one of the two documents (ALERT and STEP are the guide's), so
+    # whitening it must trip the gate on at least one of them
+    tripped = []
+    for generator in (contract_gen, deploy_gen):
+        doc = (generator.build(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+               if generator is contract_gen else generator.build())
+        path = str(tmp_path / f"whitened-{generator.DOCUMENT_ID}.pdf")
+        doc.render(path, revision="abc1234")
+        tripped.extend(artifact.visibility_problems(path))
+    assert tripped and any("invisible" in problem for problem in tripped), (
+        f"white {role} text passed the glyph gate in both documents")
+
+
+def test_w11f2_the_glyph_gate_holds_size_and_frame_too(tmp_path, monkeypatch):
+    """A glyph can vanish by being microscopic as well as by being white."""
+    from docs.generators import artifact
+
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    monkeypatch.setattr(render_module.BODY, "fontSize", 2)
+    monkeypatch.setattr(render_module.BODY, "leading", 3)
+    doc = deploy_gen.build()
+    path = str(tmp_path / "tiny.pdf")
+    doc.render(path, revision="abc1234")
+    found = artifact.visibility_problems(path)
+    assert found and "below" in found[0], "2pt text passed the glyph gate"
+
+
+def test_w11f2_presentation_is_closed_and_the_real_documents_are_visible(tmp_path, monkeypatch):
+    """No public rendering method accepts a style object — the role IS the method — and both real
+    documents pass the gate they are now held to."""
+    from docs.generators import artifact
+
+    for name in ("p", "why", "claim_paragraph", "claim_bullets", "claim_prose", "claim_mixed",
+                 "claim_statement", "claim_table", "claim_steps", "claim_code", "claim_alert"):
+        method = getattr(render_module.Doc, name, None)
+        if method is None:
+            continue
+        params = inspect.signature(method).parameters
+        assert "style" not in params, f"Doc.{name} accepts a caller-supplied style"
+    monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
+    for generator in (contract_gen, deploy_gen):
+        doc = (generator.build(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+               if generator is contract_gen else generator.build())
+        path = str(tmp_path / f"{generator.DOCUMENT_ID}.pdf")
+        doc.render(path, revision="abc1234")
+        assert artifact.visibility_problems(path) == []

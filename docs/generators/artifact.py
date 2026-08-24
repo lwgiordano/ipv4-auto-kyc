@@ -343,3 +343,64 @@ verify_page_matches_model = _verify_page_matches_model
 verify_tables_match_model = _verify_tables_match_model
 verify_prose_stream = _verify_prose_stream
 verify_footers = _verify_footers
+
+
+# ── the glyphs themselves: governed text must be VISIBLE, not merely extractable ──────────────────
+#
+# Re-audit-10 finding 2. Every lane above reads the page through `extract_text`, and extraction
+# does not care what colour the ink is: the retry obligation rendered in white passed the outline,
+# the page/model comparison, the table, prose and footer lanes, and published — complete to a
+# parser, absent to the person the contract binds. Presentation is part of the artifact.
+#
+# Scope, stated honestly: this proves every glyph is drawn inside the visible page, at a governed
+# minimum size, in ink that contrasts with the white page. It does not rasterize, so a glyph
+# later painted OVER by an opaque shape is out of scope here — the renderer draws no such shapes,
+# and the closed presentation roles leave no caller parameter to add one.
+
+MINIMUM_GLYPH_POINTS = 6.0  # the smallest governed role is the 7pt footer
+MAXIMUM_INK_LUMINANCE = 0.75  # against the white page; the palest governed ink is #666666 (~0.40)
+
+
+def _luminance(color) -> float:
+    """Perceived luminance of a pdfplumber char colour, 0 (black) to 1 (white)."""
+    if color is None:
+        return 0.0  # the default colour space paints black
+    values = list(color) if isinstance(color, (list, tuple)) else [color]
+    if len(values) == 1:
+        gray = float(values[0])
+        return gray
+    if len(values) == 3:
+        r, g, b = (float(v) for v in values)
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    if len(values) == 4:
+        c, m, y, k = (float(v) for v in values)
+        r, g, b = (1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k)
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    return 0.0
+
+
+def visibility_problems(path: str) -> list[str]:
+    """Every way a glyph in `path` fails to be readable ink on the visible page."""
+    found: list[str] = []
+    with pdfplumber.open(path) as pdf:
+        for number, page in enumerate(pdf.pages, 1):
+            for char in page.chars:
+                text = (char.get("text") or "").strip()
+                if not text:
+                    continue
+                luminance = _luminance(char.get("non_stroking_color"))
+                if luminance > MAXIMUM_INK_LUMINANCE:
+                    found.append(
+                        f"page {number}: {text!r} is drawn in ink of luminance "
+                        f"{luminance:.2f} on a white page — extractable, invisible")
+                elif char.get("size", 0) < MINIMUM_GLYPH_POINTS:
+                    found.append(
+                        f"page {number}: {text!r} is drawn at {char.get('size'):.1f}pt, below "
+                        f"the governed minimum of {MINIMUM_GLYPH_POINTS}pt")
+                elif (char["x0"] < 0 or char["x1"] > page.width
+                      or char["top"] < 0 or char["bottom"] > page.height):
+                    found.append(
+                        f"page {number}: {text!r} is drawn outside the visible page")
+                if len(found) >= 10:
+                    return found
+    return found
