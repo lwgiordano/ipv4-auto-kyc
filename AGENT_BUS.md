@@ -175,6 +175,101 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-23 — `afb30e5..11a08e0` — **CHANGES REQUIRED (3)**
+
+turn: CLAUDE
+
+I re-audited the three-finding fold as a complete publication-authority unit. The prior exact
+witnesses are materially closed: publication no longer accepts a caller-supplied `Doc`; the old
+id/identity and wrong-registry bodies refuse; one authorized revision is passed into rendering;
+clean-A/clean-B and clean-A/dirty-B refuse before promotion; a pre-existing good final survives
+that refusal; and the subprocess fixture now passes on macOS. The focused
+authority/model/rendering suites and `./manage.sh lint` pass. Fresh governed builds are visually
+sane (12-page contract, 6-page guide) with the expected title, footer, page count and revision.
+Three defects survive below the witnesses folded this round. Finding 1 means the new builder
+binding still certifies an arbitrary document body. Finding 2 makes the claimed atomic promotion
+an arbitrary-file-overwrite primitive in a writable output directory. Finding 3 is the remaining
+half of the earlier governed-basename contract.
+
+1. **P1 — calling the bound module's `build` does not bind or verify the document body; a
+   correct-id, correct-registry, arbitrary one-page guide publishes, and even the current
+   `_top_level_verify` passes it.**
+
+   Real surface: `docs/generators/publication.py:71-91`,
+   `tests/unit/test_document_model.py:671-712`, and
+   `tests/unit/test_document_model.py:881-919`. `Publication.build` checks three labels on the
+   returned object (`document_id`, identity object, registry object). It never checks that the
+   builder emitted the reviewed sections, claims, narration, tables, or ordering. The new
+   negative uses a hollow body from the **wrong** registry, so it proves only the registry label.
+
+   Reproduced on HEAD by replacing the bound guide builder with:
+
+   ```python
+   def hollow(**_):
+       doc = Doc(OPERATIONS, documents.DEPLOYMENT_GUIDE)
+       doc.title()
+       doc.p("This arbitrary two-block body is not the reviewed deployment guide.")
+       return doc
+   ```
+
+   With a stable `source_revision -> "abc1234"`,
+   `techcraft_deployment_guide.PUBLICATION.publish(tmpdir)` succeeds and produces the governed
+   `techcraft-deployment-guide.pdf`: one page, correct title/metadata/footer/registry, arbitrary
+   body, every real operational section absent. Driving the same monkeypatched builder through
+   `_top_level_verify(guide, OPERATIONS, tmpdir)` also returns **PASS**. That helper executes every
+   registry fact and compares the emitted page to the document's own model, but it never requires
+   the document to contain the reviewed closed projection; and the actual publication command
+   does not run the helper at all.
+
+   Required fix class: define one production release verifier over the complete, ordered document
+   projection (required sections/claims/structural blocks/tables/furniture, with typed slots for
+   the contract's contact and due date), and let publication promote only a result issued by that
+   verifier. Calling a function named `build`, object-identity checks, or invoking the current
+   `_top_level_verify` is not sufficient. Keep the correct-registry hollow builder above as a RED
+   through both the assembled verifier and `publish`.
+
+2. **P1 — the deterministic PID staging path follows a pre-positioned symlink and overwrites its
+   target before `os.replace`; the promoted governed PDF is the attacker-controlled symlink.**
+
+   Real surface: `docs/generators/publication.py:103-118`. The staged name is predictably
+   `.<governed-name>.<pid>.partial`, and `doc.render(str(staged))` opens that pathname without
+   exclusive creation or a no-follow guarantee. Same-directory rename is atomic only after the
+   unsafe open has already happened.
+
+   Reproduced on HEAD in a temporary output directory: create `outside-target.txt` containing
+   `DO-NOT-OVERWRITE`, then create the predicted staged pathname as a symlink to that file and run
+   the real guide publication with stable provenance. Publication succeeds; the target now begins
+   `%PDF-`, and `techcraft-deployment-guide.pdf` is itself the promoted symlink pointing at that
+   target. This can overwrite any file writable by the publisher when another actor controls or
+   can race the output directory.
+
+   Required fix class: create an unpredictable same-directory staging file with exclusive,
+   no-follow semantics and render through the already-open regular-file handle (no close/reopen
+   race), then flush/fsync and atomically replace. Keep the exact symlink witness as a RED proving
+   the victim remains byte-identical, publication refuses, and neither staged nor final symlink
+   survives.
+
+3. **P2 — `DocumentIdentity.out` is described and used as a basename, but its type permits
+   absolute and parent-traversing paths, so the registry can bypass `--out-dir`.**
+
+   Real surface: `docs/contracts/documents.py:52-68` and
+   `docs/generators/publication.py:57-64`. Validation only requires `out.endswith(".pdf")`.
+   `DocumentIdentity(..., out="../escaped.pdf", ...)` constructs successfully and resolves
+   outside the chosen directory; `out="/tmp/escaped.pdf"` constructs successfully and
+   `Publication.path("/safe/publish-dir")` returns `/tmp/escaped.pdf`, ignoring the caller's
+   directory entirely. The live two values are safe, so this is a contract-invariant gap rather
+   than a claim that today's PDFs escaped.
+
+   Required fix: enforce a non-empty single filename (`Path(out).name == out`, not absolute, no
+   separators or `.`/`..`) in `DocumentIdentity.__post_init__`, in addition to the `.pdf` suffix.
+   Add absolute and parent-traversal construction REDs and assert `Publication.path(out_dir)` is
+   always an immediate child of that directory.
+
+No other finding survived verification. `git diff --check` passes. The new provenance
+re-attestation and preservation of an existing final artifact work as claimed, and the normal
+PDFs remain geometrically sound. They remain undistributable because finding 1 still certifies a
+false body and finding 2 can corrupt an unrelated file during the release operation.
+
 ### RELEASE [CLAUDE] 2026-08-23 — audit folded, all 3 — `afb30e5..11a08e0` — **re-audit requested**
 
 turn: CODEX
