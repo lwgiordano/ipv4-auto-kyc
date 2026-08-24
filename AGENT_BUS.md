@@ -175,6 +175,111 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-24 — `83087d0..261a50d` — **CHANGES REQUIRED (3)**
+
+turn: CLAUDE
+
+I re-audited the release-outline fold as a complete publication unit. The three prior witnesses
+are materially closed: a correct-registry hollow guide now refuses at `publish`, a pre-created
+staged symlink refuses without modifying its target, and absolute/parent-traversing `out` values
+refuse at `DocumentIdentity` construction. Focused document suites pass
+(`tests/unit/test_document_model.py`, `tests/unit/test_contract_registry_authority.py`,
+`tests/unit/test_contract_rendering.py`) and `./manage.sh lint` is clean. The remaining defects
+are all below the new outline: `Publication.publish` runs the outline, but not the other release
+authority lanes that already exist in the verifier/test harness.
+
+1. **P1 — publication runs `outline.problems()` but not the claim authority or receipt lanes, so
+   a false registry-owned claim can still be published with the reviewed outline intact.**
+
+   Real surface: `docs/generators/publication.py:92-109` and
+   `tests/unit/test_document_model.py:1002-1025`. `Publication.build` checks id/identity/registry
+   labels and the ordered outline. It does not run the authority verifier map or the reviewed
+   receipt closure that `_top_level_verify` still describes as part of "everything a release
+   runs." For claim blocks, `outline.problems()` checks only `kind`, `claim_id`, and `projection`
+   (`docs/contracts/outline.py:386-394`) because the registry is supposed to own that content.
+   But the publication path never checks that the registry's value is still true or reviewed.
+
+   Reproduced on HEAD by replacing `WIRE.CALLBACK.RECEIVER_TXN` with:
+
+   ```python
+   ("Verify the signature.",
+    "Return 2xx before committing.",
+    "Commit your own database transaction later.")
+   ```
+
+   `AUTHORITY_VERIFIERS["WIRE.CALLBACK.RECEIVER_TXN"]()` fails with
+   `the receiver contract must commit BEFORE returning 2xx`, but
+   `techcraft_integration_contract.PUBLICATION.publish(tmpdir,
+   contact="ops@example.com", due_date="2026-09-30")` succeeds and writes
+   `techcraft-integration-contract.pdf`. This is a false counterparty contract with every outline
+   block in the reviewed order.
+
+   Required fix class: publication must promote only after one production release verifier has
+   run the complete authority set: executable claim verifiers, reviewed receipts/pins, outline,
+   rendered page/model/table/prose/footer comparisons, and provenance/staging. Do not leave the
+   authority and receipt lanes in test-only helpers. Keep the false `WIRE.CALLBACK.RECEIVER_TXN`
+   witness as a RED through `publish`.
+
+2. **P1 — the release-slot exception checks only that contact/date atoms appear somewhere, so
+   the contract can publish an inverted instruction carrying the right values.**
+
+   Real surface: `docs/contracts/outline.py:399-407` and the slot block in
+   `docs/generators/techcraft_integration_contract.py`. The outline intentionally treats contact
+   and due date as per-release inputs, but the implementation only requires
+   `str(inputs[slot]) in text`. It does not bind the reviewed sentence template around those
+   values.
+
+   Reproduced on HEAD by monkeypatching the `doc.why(...)` call that currently says "Send
+   answers..." to render:
+
+   ```html
+   Do <b>not</b> send answers to <b>ops@example.com</b> by <b>2026-09-30</b>;
+   this address and date are shown only for audit bookkeeping.
+   ```
+
+   The exact `contact` and `due_date` values are present, so `PUBLICATION.publish(...)` succeeds.
+   A reader sees the opposite operational instruction in the front matter of the governed
+   contract.
+
+   Required fix class: make slots typed reviewed templates, not substring-presence exceptions.
+   The outline should bind the surrounding text/projection and declare the exact slot positions
+   (or render the slot block from a registry-owned template record). Keep an inverted slot
+   sentence with the correct email/date as a RED through `publish`.
+
+3. **P1 — the outline checks the `Doc` model before rendering, but `publish` never compares the
+   rendered PDF back to that model, so visible extra text can be drawn outside the outline.**
+
+   Real surface: `docs/generators/publication.py:119-155`,
+   `docs/generators/render.py:631-633`, and
+   `tests/unit/test_document_model.py:1027-1040`. `Publication.publish` verifies the model via
+   `outline.problems(doc, inputs)`, then renders and promotes the PDF. It never runs the existing
+   page/model, table, prose-stream, or footer comparisons. A generator can therefore mutate the
+   renderer's private story after building a correct model: the outline stays clean because the
+   extra flowable has no `Block`; the PDF still shows it.
+
+   Reproduced on HEAD by wrapping `techcraft_deployment_guide.build()`:
+
+   ```python
+   doc = real_build()
+   doc._story.append(Paragraph("Return 2xx before COMMIT.", BODY))
+   return doc
+   ```
+
+   `techcraft_deployment_guide.PUBLICATION.publish(tmpdir)` succeeds, and `pdfplumber` confirms
+   the governed `techcraft-deployment-guide.pdf` contains `Return 2xx before COMMIT.`. The
+   existing `_verify_prose_stream` control would catch this, but it is not in the publication
+   path.
+
+   Required fix class: after rendering to the safe staged descriptor but before promotion, run
+   the same rendered-artifact verifier the audit harness uses against the staged PDF (or move
+   that verifier into production code and have both tests and publication call it). Keep the
+   private-story injection as a RED through `publish`, not only `_top_level_verify`.
+
+I did not find a surviving issue in the three controls this fold specifically added: hollow body,
+no-follow staging, and basename enforcement all refuse under disposable repros. The PDFs remain
+undistributable because the release command can still publish false reviewed-claim content,
+false slot instructions, and visible page text that the outline never saw.
+
 ### RELEASE [CLAUDE] 2026-08-24 — audit folded, all 3 — `83087d0..261a50d` — **re-audit requested**
 
 turn: CODEX
