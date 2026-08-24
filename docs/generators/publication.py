@@ -40,7 +40,9 @@ import pathlib
 import secrets
 from dataclasses import dataclass
 
-from docs.contracts import documents, outline
+import pdfplumber
+
+from docs.contracts import authority, documents, outline
 from docs.contracts.documents import DocumentIdentity
 
 
@@ -106,6 +108,18 @@ class Publication:
                 f"{self.identity.id} is not the document that was reviewed:\n  "
                 + "\n  ".join(found[:10])
             )
+        # …and the claims themselves are executed against the running system, with the receipt
+        # closure over their text (re-audit-6 finding 1). The outline says the reviewed CLAIM is
+        # in the reviewed PLACE; it deliberately does not restate the claim's content, because the
+        # registry owns that. Nothing was checking that the registry was still telling the truth:
+        # a `WIRE.CALLBACK.RECEIVER_TXN` rewritten to "Return 2xx before committing" failed its
+        # verifier in the suite and published anyway.
+        false = authority.problems()
+        if false:
+            raise ValueError(
+                f"{self.identity.id} would publish claims the running system contradicts, or "
+                f"text nobody reviewed:\n  " + "\n  ".join(false[:10])
+            )
         return doc
 
     def publish(self, out_dir: str = ".", **inputs) -> str:
@@ -145,6 +159,11 @@ class Publication:
                 doc.render(stream, revision=authorized)
                 stream.flush()
                 os.fsync(stream.fileno())
+            # Read the ARTIFACT back before it becomes one (re-audit-6 finding 3). Everything
+            # above verifies the model; a flowable appended to the renderer's private story has
+            # no Block, so the model stays clean and the page still shows it. `Return 2xx before
+            # COMMIT.` reached the governed guide exactly that way.
+            self._verify_rendered(doc, str(staged))
             confirmed = _check(_revision())
             if confirmed != authorized:
                 raise ProvenanceError(
@@ -156,6 +175,20 @@ class Publication:
         finally:
             staged.unlink(missing_ok=True)
         return str(final)
+
+
+    def _verify_rendered(self, doc, path: str) -> None:
+        """The four lanes, against the file itself, while it is still only a staged file."""
+        from docs.generators import artifact
+
+        module = importlib.import_module(self.module)
+        artifact.verify_page_matches_model(doc, artifact.body_text(path))
+        with pdfplumber.open(path) as pdf:
+            tables = [[[artifact._flat(cell or "") for cell in row] for row in table]
+                      for page in pdf.pages for table in page.extract_tables()]
+        artifact.verify_tables_match_model(doc, tables)
+        artifact.verify_prose_stream(doc, artifact._page_prose(path))
+        artifact.verify_footers(doc, path, module)
 
 
 def _check(revision: str) -> str:

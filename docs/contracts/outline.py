@@ -44,6 +44,7 @@ class BlockOutline:
     projection: str = ""
     digest: str = ""
     slots: tuple[str, ...] = ()
+    template: str = ""
 
     def __post_init__(self) -> None:
         if not self.kind:
@@ -55,6 +56,16 @@ class BlockOutline:
             )
         if self.digest and self.slots:
             raise ValueError("a block either has fixed text or fills release slots, not both")
+        if bool(self.slots) != bool(self.template):
+            raise ValueError(
+                "a slot block is a reviewed SENTENCE with holes in it, not a licence to say "
+                "anything containing the values (re-audit-6 finding 2)"
+            )
+        for slot in self.slots:
+            if "{" + slot + "}" not in self.template:
+                raise ValueError(
+                    f"the reviewed sentence has nowhere to put {slot!r}: {self.template!r}"
+                )
         if not (self.claim_id or self.digest or self.slots):
             raise ValueError(
                 f"a {self.kind!r} block with no claim, no digest and no slot fixes nothing"
@@ -100,7 +111,9 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='heading', digest='9c870aa6e5e93270'),
                     BlockOutline(kind='prose', claim_id='WIRE.INGEST.ORDERING', projection='paragraph'),
                     BlockOutline(kind='prose', digest='56480299ea6e40e9'),
-                    BlockOutline(kind='prose', slots=('contact', 'due_date')),
+                    BlockOutline(
+                        kind='prose', slots=('contact', 'due_date'),
+                        template='Send answers to the section 1 questions to {contact} by {due_date}.'),
                 ),
             ),
             SectionOutline(
@@ -398,12 +411,19 @@ def problems(doc, inputs: dict | None = None) -> list[str]:
                 continue
             if spec.slots:
                 text = "\n".join([*block.lines, *(c for r in block.rows for c in r)])
-                for slot in spec.slots:
-                    if slot not in inputs:
-                        found.append(f"{at}: this release supplied no {slot!r}")
-                    elif str(inputs[slot]) not in text:
-                        found.append(
-                            f"{at}: does not carry the {slot!r} this release was given")
+                missing = [s for s in spec.slots if s not in inputs]
+                if missing:
+                    found.append(f"{at}: this release supplied no {missing!r}")
+                    continue
+                # the REVIEWED SENTENCE with this release's values in it, and nothing else
+                # (re-audit-6 finding 2). Requiring only that the values appear SOMEWHERE let
+                # the front matter say "Do not send answers to <address> by <date>; this
+                # address and date are shown only for audit bookkeeping" and publish.
+                wanted = spec.template.format(**{s: inputs[s] for s in spec.slots})
+                if text != wanted:
+                    found.append(
+                        f"{at}: is not the reviewed sentence with this release's values in "
+                        f"it.\n      reviewed: {wanted!r}\n      rendered: {text!r}")
                 continue
             if block_digest(block) != spec.digest:
                 found.append(

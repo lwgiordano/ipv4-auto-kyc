@@ -2,6 +2,7 @@
 unsafe or stub configuration, and accept a fully-hardened one."""
 
 import pytest
+from docs.contracts.authority import hardened  # noqa: E402 — one definition
 from pydantic import ValidationError
 
 from kyc_tool.config import (
@@ -10,33 +11,6 @@ from kyc_tool.config import (
     production_config_violations,
     validate_for_production,
 )
-
-
-def hardened(**overrides) -> Settings:
-    base = dict(
-        environment="production",
-        auth_disabled=False,
-        platform_hmac_secret="s" * 40,
-        platform_callback_url="https://platform.example/kyc",
-        object_store="s3",
-        s3_bucket="kyc-evidence",
-        ocr_engine="tesseract",
-        email_provider="ses",
-        adapters_profile="real",
-        read_auth_required=True,
-        ui_enabled=False,
-        ui_admin_token="t" * 32,
-        # HMAC v2 (PR 5a): split secrets + key_ids, both sunset dates, window.
-        hmac_inbound_key_id="kyc-platform-1",
-        hmac_inbound_secret="i" * 40,
-        hmac_outbound_key_id="kyc-tool-1",
-        hmac_outbound_secret="o" * 40,
-        hmac_v1_inbound_sunset_at="2026-09-01T00:00:00Z",
-        hmac_v1_outbound_sunset_at="2026-10-01T00:00:00Z",
-        hmac_v1_observation_window_days=14,
-    )
-    base.update(overrides)
-    return Settings(**base)
 
 
 def test_hardened_config_has_no_violations():
