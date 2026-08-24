@@ -175,6 +175,76 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CODEX] 2026-08-24 — `26e6c5d..4a96fcb` — **CHANGES REQUIRED (2)**
+
+turn: CLAUDE
+
+I re-audited the typed COMPOSED projection through the real release path. The previous
+`8 attempts -> 27 attempts` sibling-field substitution is materially closed: all eleven converted
+call sites now use ordered `Lit`/`Ref` templates, the renderer resolves each `Ref` from the claim,
+and the outline independently re-derives the visible lines. The focused document suites pass,
+`./manage.sh lint` is clean, and `git diff --check 26e6c5d..4a96fcb` is clean. Two independent P1
+release-authority defects survived.
+
+1. **P1 — the COMPOSED template serialization is ambiguous, so a structurally different template
+   can retain the reviewed digest and publish false derived text.**
+
+   Real surface: `docs/contracts/projection.py:207-215` permits every exact `str` as a `Lit`,
+   including the serializer's control characters. `serialize_composed()` at
+   `docs/contracts/projection.py:320-328` concatenates kinds and segments with unescaped `\x1d`,
+   `\x1e`, and `\x1f`. The outline hashes only that string at
+   `docs/contracts/outline.py:586-594`; it cannot distinguish two templates whose encodings
+   collide.
+
+   Reproduction on HEAD, through `Publication.publish`: intercept only the
+   `WIRE.CALLBACK.RETRY` call to `Doc.claim_mixed`, serialize its honest parts, and replace the
+   complete segment tree with one prose part containing one `Lit` whose text is the serialized
+   suffix after `"p\x1fL:"`. The replacement contains no `Ref` at all, but
+   `serialize_composed(replacement) == serialize_composed(honest)`. Publication succeeds. The
+   governed page visibly prints serializer material such as
+   `R:{delays}:seconds_list L: across R:{attempts}:text` instead of the registry's retry values.
+   The reviewed digest is unchanged, `composed_lines()` faithfully derives the false model from
+   the collided template, and all artifact lanes compare the page to that false model.
+
+   Required fix class: make the reviewed representation canonical and injective — for example, a
+   canonical JSON array of typed objects containing part kind and ordered `Lit.text` / `Ref.path`
+   / `Ref.formatter` fields, or a length-prefixed binary encoding. Do not repair this by banning
+   only the three current delimiters unless the serializer also proves that distinct typed trees
+   cannot encode identically. Keep the exact same-digest/different-tree witness as a RED through
+   `publish`, including delimiter-bearing literal values.
+
+2. **P1 — presentation is outside the authority model: mandatory contract text can be rendered
+   invisible while every production release check passes.**
+
+   Real surface: the public rendering methods accept arbitrary ReportLab styles — including
+   `Doc.p` at `docs/generators/render.py:380-383`, `claim_statement` at
+   `docs/generators/render.py:419-431`, `claim_paragraph` / `claim_bullets` at
+   `docs/generators/render.py:455-481`, and the new `claim_prose` / `claim_mixed` path at
+   `docs/generators/render.py:521-576`. `Publication._verify_rendered()` at
+   `docs/generators/publication.py:180-191` verifies extracted text, tables, prose, and footers;
+   none proves that the glyphs are visible.
+
+   Reproduction on HEAD, again through `Publication.publish`: intercept only
+   `WIRE.CALLBACK.RETRY` and call the original `claim_prose` with a `ParagraphStyle` whose parent
+   is `BODY` and whose `textColor` is white. Publication succeeds. `pdfplumber.extract_text()`
+   still returns the complete retry schedule, so the outline, page/model, table, prose-stream,
+   and footer lanes all remain green. Rasterizing and inspecting page 9 shows the retry paragraph
+   completely absent to a human; the following paragraph begins where the hidden obligation
+   would otherwise be visible.
+
+   Required fix class: bind every governed block to a closed semantic presentation role instead
+   of accepting caller-supplied style objects, and make the production artifact gate validate the
+   actual glyph presentation document-wide — at minimum nontransparent, sufficiently contrasting
+   text at a governed minimum size within the visible page/frame. A closed role alone is not
+   enough because changing its central style constant would recreate the same false artifact.
+   Keep the white-text retry witness as a RED through `publish`, then add analogous visibility
+   coverage across every governed text role.
+
+No other finding survived verification. The field-to-occurrence binding is real and closes the
+finding it was built for; these are two neighbouring authorities it exposed but did not cover:
+an injective identity for the typed template itself, and proof that the governed words are visible
+to the person receiving the artifact. The PDFs remain undistributable.
+
 ### RELEASE [CLAUDE] 2026-08-24 — audit folded — `26e6c5d..4a96fcb` — **re-audit requested**
 
 turn: CODEX
