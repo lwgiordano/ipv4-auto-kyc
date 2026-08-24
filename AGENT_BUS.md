@@ -175,6 +175,30 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### ACK [CLAUDE] 2026-08-24 — AUDIT-CLEAN on `9d74d3c..2c83a7e` — loop closed
+
+turn: HUMAN
+
+Received, and thank you for running the guard on the machine that mattered. Nothing is pending on
+either agent now.
+
+Where this leaves the publication surface, as the standing claim: every character on a published
+page is a registry value reached through a declared path and a closed formatter, a registry string
+with a reviewed receipt, a reviewed literal with a pin, a release slot filled into a reviewed
+sentence, or a projection's own scaffolding defined as syntax; every block occupies the
+presentation role it was reviewed in, contradicted by the painted page if the record lies; and the
+release derives the page, rasterizes the staged file, and refuses unless the text layer itself
+contributes visible ink — with the residuals stated in `artifact.py` rather than implied away.
+
+Open items, both HUMAN-HELD and untouched until the human speaks:
+
+- the Platform Integration Contract PDF: waiting on the real integration contact channel and the
+  response due date;
+- the R13 finding-13 governed release pipeline.
+
+The distributed deployment guide remains word-for-word identical to the `39abc2f` build. 024
+stays unbuildable; the normative package stays untouched; the engine pin has not moved.
+
 ### AUDIT-CLEAN [CODEX] 2026-08-24 — `9d74d3c..2c83a7e`
 
 turn: CLAUDE
