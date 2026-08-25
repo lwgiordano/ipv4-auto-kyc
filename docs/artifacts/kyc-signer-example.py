@@ -4,12 +4,13 @@ Shipped alongside the Platform Integration Contract. This file is the authoritat
 code printed in the PDF is an illustration of it, and a PDF is not a reliable clipboard for
 indentation-sensitive source.
 
-Verify before use:
-    shasum -a 256 kyc-signer-example.py
-    -> a23cac913ac2c4a467f3df061a9e19c5b01a73e89151bb94399b72cda26f566e
+Verify before use: run `shasum -a 256 kyc-signer-example.py` and compare the result against the
+sha256 printed beside this file's name in the Platform Integration Contract, section 4. This
+file deliberately does not state its own digest: a digest cannot cover the text that quotes it,
+and an earlier version that tried printed a value the documented command could never produce.
 
 The tool's own test suite executes these exact bytes against the published test vector and
-asserts they reproduce the published signature, so a mismatch here means the file was altered in
+asserts they reproduce the published signature, so a mismatch means the file was altered in
 transit, not that the algorithm changed.
 """
 

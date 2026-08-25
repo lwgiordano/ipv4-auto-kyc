@@ -204,10 +204,16 @@ def _the_companion_file_is_the_bytes_the_document_names():
         f"{ARTIFACT_NAME} has drifted from the snippet it is generated from; regenerate it"
     )
 
-    # the digest the document prints is over the RUNNABLE BODY, and it is correct
-    body = on_disk.split('"""', 2)[2].lstrip("\n")
-    assert hashlib.sha256(body.encode()).hexdigest() == artifact_digest()
-    assert artifact_digest() in on_disk, "the file does not state its own digest"
+    # The digest the document prints must be what the DOCUMENTED COMMAND produces: sha256 over
+    # the complete file bytes, exactly as `shasum -a 256` reports it. The previous form digested
+    # the runnable body only and quoted it inside the file's own header, so a reader running the
+    # printed command got a different value and concluded the file was tampered with — a check on
+    # the parts was standing in for a check on the documented procedure.
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == artifact_digest()
+    assert artifact_digest() not in on_disk, (
+        "the file quotes its own digest again — that value cannot survive being written into "
+        "the text it covers"
+    )
 
     # and the file runs and reproduces the published vector
     namespace: dict = {}

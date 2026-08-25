@@ -27,12 +27,13 @@ Shipped alongside the Platform Integration Contract. This file is the authoritat
 code printed in the PDF is an illustration of it, and a PDF is not a reliable clipboard for
 indentation-sensitive source.
 
-Verify before use:
-    shasum -a 256 {name}
-    -> {digest}
+Verify before use: run `shasum -a 256 {name}` and compare the result against the
+sha256 printed beside this file's name in the Platform Integration Contract, section 4. This
+file deliberately does not state its own digest: a digest cannot cover the text that quotes it,
+and an earlier version that tried printed a value the documented command could never produce.
 
 The tool's own test suite executes these exact bytes against the published test vector and
-asserts they reproduce the published signature, so a mismatch here means the file was altered in
+asserts they reproduce the published signature, so a mismatch means the file was altered in
 transit, not that the algorithm changed.
 """
 
@@ -44,15 +45,21 @@ def artifact_body() -> str:
     return published_snippet() + "\n"
 
 
-def artifact_digest() -> str:
-    """SHA-256 over the runnable body. The header quotes this, so it is computed over the body
-    only — a digest cannot cover the text that states it."""
-    return hashlib.sha256(artifact_body().encode()).hexdigest()
-
-
 def artifact_text() -> str:
-    """The complete file: header, then the runnable body."""
-    return _HEADER.format(name=ARTIFACT_NAME, digest=artifact_digest()) + artifact_body()
+    """The complete file: header, then the runnable body. The header does NOT contain the
+    digest — the digest is over these exact bytes, so the contract states it and the file
+    points there."""
+    return _HEADER.format(name=ARTIFACT_NAME) + artifact_body()
+
+
+def artifact_digest() -> str:
+    """SHA-256 over the COMPLETE shipped file — exactly what `shasum -a 256` prints for it.
+
+    It was the runnable body only, quoted inside the file's own header, and the documented
+    command therefore produced a different value than the document printed: a reader following
+    the instruction concluded the file was tampered with. The digest the document states must be
+    the digest the stated command produces."""
+    return hashlib.sha256(artifact_text().encode()).hexdigest()
 
 
 def artifact_path() -> Path:

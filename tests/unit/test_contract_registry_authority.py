@@ -4357,7 +4357,7 @@ def test_the_document_identity_registry_matches_its_review_pin():
         f"  reviewed: {pinned}\n  now:      {digest}\n"
         "Read the new titles, then re-pin them in the SAME commit."
     )
-RELEASE_OUTLINE_PIN = ("74a7031170760d6f", "the contract's 8 sections and the guide's 9: ordered "
+RELEASE_OUTLINE_PIN = ("e47cf4357bd52d82", "the contract's 8 sections and the guide's 9: ordered "
                                         "blocks, claim ids and projections, narration digests, "
                                         "the reviewed contact slot sentence, every "
                                         "label, residue, and composed template the renderer "

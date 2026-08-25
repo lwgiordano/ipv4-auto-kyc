@@ -367,7 +367,7 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='heading', digest='7b5a3ebfc10a96a0', roles=('H2',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.COMPANION', projection='composed',
-                        composed='5367f051d43435cc', roles=('BODY', 'CODE')),
+                        composed='8ded7e893f69fd95', roles=('BODY', 'CODE')),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.SIGN.COMPANION_PROOF', projection='paragraph',
                         roles=('WHY',)),
