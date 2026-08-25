@@ -59,7 +59,7 @@ from docs.generators.artifact import (  # noqa: E402
 )
 from docs.generators.render import Doc
 
-from .test_contract_rendering import SAMPLE_CONTACT, SAMPLE_DUE_DATE, _build
+from .test_contract_rendering import SAMPLE_CONTACT, _build
 
 # A line short enough to occur legitimately more than once ("300", "POST", a repeated cell value).
 # Above it, a second occurrence is a duplicate nobody asked for — which is the mutation
@@ -315,7 +315,7 @@ def test_w4f3_the_binding_survives_being_run_as_a_command(tmp_path):
     ("command", "expected"),
     [(["-m", "docs.generators.techcraft_deployment_guide"], "techcraft-deployment-guide.pdf"),
      (["-m", "docs.generators.techcraft_integration_contract",
-       "--integration-contact", SAMPLE_CONTACT, "--response-due-date", SAMPLE_DUE_DATE],
+       "--integration-contact", SAMPLE_CONTACT],
       "techcraft-integration-contract.pdf")],
     ids=["guide", "contract"])
 def test_w4f234_the_documented_commands_publish_governed_artifacts(command, expected, tmp_path):
@@ -464,7 +464,7 @@ def test_w6f1_a_correct_label_hollow_body_is_not_the_reviewed_document(tmp_path,
 def test_w6f1_the_outline_is_ordered_and_total_over_both_documents():
     """Guard the guard. The outline has to accept the real documents (or it is not the reviewed
     projection) and refuse every ordinary way a body can drift (or it is theatre)."""
-    inputs = {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}
+    inputs = {"contact": SAMPLE_CONTACT}
     contract = contract_gen.build(**inputs)
     assert outline.problems(contract, inputs) == []
     assert outline.problems(deploy_gen.build()) == []
@@ -495,8 +495,8 @@ def test_w6f1_the_outline_is_ordered_and_total_over_both_documents():
     # in it — not merely a line that mentions them (re-audit-6 finding 2)
     assert any("not the reviewed sentence" in p
                for p in outline.problems(contract, {**inputs, "contact": "someone@else.example"}))
-    assert any("supplied no ['due_date']" in p
-               for p in outline.problems(contract, {"contact": SAMPLE_CONTACT}))
+    assert any("supplied no ['contact']" in p
+               for p in outline.problems(contract, {}))
 
 
 def test_w6f2_a_prepositioned_staging_symlink_cannot_be_followed_or_promoted(
@@ -624,9 +624,8 @@ def test_w2f3_the_real_release_paths_publish_governed_furniture(generator, tmp_p
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
     if generator is contract_gen:
-        out = generator.main(["--integration-contact", SAMPLE_CONTACT,
-                             "--response-due-date", SAMPLE_DUE_DATE])
-        doc = generator.build(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+        out = generator.main(["--integration-contact", SAMPLE_CONTACT])
+        doc = generator.build(contact=SAMPLE_CONTACT)
     else:
         out = generator.main([])
         doc = generator.build()
@@ -1215,7 +1214,7 @@ def test_a_duplicated_governed_paragraph_fails_the_total_stream(tmp_path):
 def test_the_release_inputs_still_reach_the_page(rendered):
     _generator, _registry, _doc, page, _tables = rendered
     if _generator is contract_gen:
-        assert SAMPLE_CONTACT in page and SAMPLE_DUE_DATE in page
+        assert SAMPLE_CONTACT in page
 
 
 def test_no_section_id_is_reused():
@@ -1359,8 +1358,8 @@ NARRATION_LABELS = {
     # ── contract ──────────────────────────────────────────────────────────────────────────────
     ("contract", "(front matter)", 0): ("b70e26fd070d110c", "Audience + scope of this document"),
     ("contract", "(front matter)", 1): ("21a2f1b76bd4de4b", "one-paragraph summary of the wire"),
-    ("contract", "(front matter)", 2): ("8fa664ad08807a49",
-                                        "where to send answers; interpolates the release inputs, "
+    ("contract", "(front matter)", 2): ("2c4ad3bf2cfb9b3a",
+                                        "where to send answers; interpolates the release contact, "
                                         "which test_the_release_inputs_still_reach_the_page "
                                         "checks separately"),
     ("contract", "asks", 0): ("c77063c9a829011c", "1.1 heading + why ordering is asked for"),
@@ -1556,7 +1555,7 @@ def test_a_reworded_label_fails_the_pin(monkeypatch, tmp_path):
 
     assert "Compliance window (years): 2555" in page, "the mutation did not reach the page"
     assert any("is framed" in problem for problem in outline.problems(
-        doc, {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}))
+        doc, {"contact": SAMPLE_CONTACT}))
 
 
 def test_the_vocabulary_check_catches_a_word_the_model_never_recorded(monkeypatch, tmp_path):
@@ -1641,7 +1640,7 @@ def test_rewriting_a_binding_commitment_in_connective_prose_is_caught(monkeypatc
         "the mutation did not land")
     assert any("composed template changed since it was reviewed" in problem
                for problem in outline.problems(
-                   doc, {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}))
+                   doc, {"contact": SAMPLE_CONTACT}))
 
 
 def test_the_connective_residue_is_stable_under_overlapping_leaf_values(rendered):
@@ -1724,7 +1723,7 @@ def test_w7f1_a_false_registry_claim_cannot_be_published(tmp_path, monkeypatch):
         assert authority.problems(), "the authority lane must see the false claim"
         with pytest.raises(ValueError, match="running system contradicts"):
             contract_gen.PUBLICATION.publish(
-                str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+                str(tmp_path), contact=SAMPLE_CONTACT)
     assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
 
 
@@ -1744,15 +1743,14 @@ def test_w7f2_a_release_slot_is_a_reviewed_sentence_not_a_licence(tmp_path, monk
 
     def inverted(self, text):
         if "Send answers" in text:
-            text = (f"Do <b>not</b> send answers to <b>{SAMPLE_CONTACT}</b> by "
-                    f"<b>{SAMPLE_DUE_DATE}</b>; this address and date are shown only for audit "
-                    "bookkeeping.")
+            text = (f"Do <b>not</b> send answers to <b>{SAMPLE_CONTACT}</b>; this address "
+                    "is shown only for audit bookkeeping.")
         return real_why(self, text)
 
     monkeypatch.setattr(render_module.Doc, "why", inverted)
     with pytest.raises(ValueError, match="not the reviewed sentence"):
         contract_gen.PUBLICATION.publish(
-            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+            str(tmp_path), contact=SAMPLE_CONTACT)
     assert not list(tmp_path.iterdir())
 
 
@@ -1828,7 +1826,7 @@ def test_w8f1_renderer_authored_text_inside_a_claim_cannot_be_published(
     monkeypatch.setattr(render_module.Doc, attr, patched)
     with pytest.raises(ValueError, match=refusal):
         contract_gen.PUBLICATION.publish(
-            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+            str(tmp_path), contact=SAMPLE_CONTACT)
     assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
 
 
@@ -1836,7 +1834,7 @@ def test_w8f1_every_renderer_authored_span_inside_a_claim_is_reviewed(rendered):
     """Closed forward: a claimed block that starts saying something new around its values is a
     finding, not a silent addition — and every label/residue the outline pins is still drawn."""
     generator, _registry, doc, _page, _tables = rendered
-    inputs = ({"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}
+    inputs = ({"contact": SAMPLE_CONTACT}
               if generator is contract_gen else {})
     assert outline.problems(doc, inputs) == []
 
@@ -1890,7 +1888,7 @@ def test_w9f1_a_short_renderer_sentence_inside_a_claim_cannot_be_published(tmp_p
     monkeypatch.setattr(render_module.Doc, "claim_bullets", with_an_extra_bullet)
     with pytest.raises(ValueError, match="nobody reviewed"):
         contract_gen.PUBLICATION.publish(
-            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+            str(tmp_path), contact=SAMPLE_CONTACT)
     assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
 
 
@@ -1941,7 +1939,7 @@ def test_w10f1_one_claim_leaf_cannot_impersonate_another(tmp_path, monkeypatch):
     monkeypatch.setattr(render_module.Doc, "claim_mixed", tampered_lines)
     with pytest.raises(ValueError, match="template does not derive"):
         contract_gen.PUBLICATION.publish(
-            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+            str(tmp_path), contact=SAMPLE_CONTACT)
     assert not list(tmp_path.iterdir())
 
     def reaimed_ref(self, cid, parts, **kwargs):
@@ -1955,7 +1953,7 @@ def test_w10f1_one_claim_leaf_cannot_impersonate_another(tmp_path, monkeypatch):
     monkeypatch.setattr(render_module.Doc, "claim_mixed", reaimed_ref)
     with pytest.raises(ValueError, match="composed template changed"):
         contract_gen.PUBLICATION.publish(
-            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+            str(tmp_path), contact=SAMPLE_CONTACT)
     assert not list(tmp_path.iterdir())
 
 
@@ -1965,7 +1963,7 @@ def test_w10f1_no_ref_in_any_composed_block_survives_a_sibling_swap(rendered):
     whenever the sibling's rendered form differs. A one-off retry check would leave the same
     class open in the other composed blocks."""
     _generator, registry, doc, _page, _tables = rendered
-    inputs = {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE}
+    inputs = {"contact": SAMPLE_CONTACT}
     swaps = checked = 0
     for section in doc.sections:
         for block in section.blocks:
@@ -2057,7 +2055,7 @@ def test_w11f1_the_composed_template_encoding_is_injective(tmp_path, monkeypatch
     monkeypatch.setattr(render_module.Doc, "claim_mixed", collide)
     with pytest.raises(ValueError, match="composed template changed"):
         contract_gen.PUBLICATION.publish(
-            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+            str(tmp_path), contact=SAMPLE_CONTACT)
     assert not list(tmp_path.iterdir())
 
     # injectivity at the seams the old encoding leaked through: delimiter-bearing literals,
@@ -2091,7 +2089,7 @@ def test_w11f2_invisible_ink_cannot_be_published(tmp_path, monkeypatch):
     monkeypatch.setattr(render_module.BODY, "textColor", _colors.white)
     with pytest.raises(ValueError, match="cannot see"):
         contract_gen.PUBLICATION.publish(
-            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+            str(tmp_path), contact=SAMPLE_CONTACT)
     assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
 
 
@@ -2108,7 +2106,7 @@ def test_w11f2_every_governed_role_is_held_to_visible_ink(role, tmp_path, monkey
     # whitening it must trip the gate on at least one of them
     tripped = []
     for generator in (contract_gen, deploy_gen):
-        doc = (generator.build(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+        doc = (generator.build(contact=SAMPLE_CONTACT)
                if generator is contract_gen else generator.build())
         path = str(tmp_path / f"whitened-{generator.DOCUMENT_ID}.pdf")
         doc.render(path, revision="abc1234")
@@ -2201,7 +2199,7 @@ def test_w11f2_presentation_is_closed_and_the_real_documents_are_visible(tmp_pat
 
     monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
     for generator in (contract_gen, deploy_gen):
-        doc = (generator.build(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+        doc = (generator.build(contact=SAMPLE_CONTACT)
                if generator is contract_gen else generator.build())
         path = str(tmp_path / f"{generator.DOCUMENT_ID}.pdf")
         doc.render(path, revision="abc1234")
@@ -2230,7 +2228,7 @@ def test_w12f1_alpha_zero_ink_cannot_be_published(tmp_path, monkeypatch):
     monkeypatch.setattr(render_module.BODY, "textColor", Color(0, 0, 0, alpha=0))
     with pytest.raises(ValueError, match="cannot see"):
         contract_gen.PUBLICATION.publish(
-            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+            str(tmp_path), contact=SAMPLE_CONTACT)
     assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
 
 
@@ -2248,7 +2246,7 @@ def test_w12f1_black_on_black_cannot_be_published(tmp_path, monkeypatch):
                    + [("BACKGROUND", (0, 0), (-1, -1), _colors.black)]))
     with pytest.raises(ValueError, match="cannot see"):
         contract_gen.PUBLICATION.publish(
-            str(tmp_path), contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+            str(tmp_path), contact=SAMPLE_CONTACT)
     assert not list(tmp_path.iterdir()), "a refused release leaves nothing behind"
 
 
@@ -2453,7 +2451,7 @@ def test_w13f2_the_real_documents_clear_the_painted_floor_with_margin(tmp_path, 
 
     monkeypatch.setattr(render_module, "source_revision", lambda: "abc1234")
     for generator in (contract_gen, deploy_gen):
-        doc = (generator.build(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+        doc = (generator.build(contact=SAMPLE_CONTACT)
                if generator is contract_gen else generator.build())
         path = str(tmp_path / f"{generator.DOCUMENT_ID}.pdf")
         doc.render(path, revision="abc1234")

@@ -33,14 +33,13 @@ from docs.generators.render import INCH, Doc
 # Per-send release inputs the contract generator requires and has no defaults for. Any valid pair
 # does for rendering; `test_release_inputs_*` covers the validation itself.
 SAMPLE_CONTACT = "kyc-integration@ipv4.global"
-SAMPLE_DUE_DATE = "2026-09-15"
 
 # Ad-hoc Docs below are FIXTURES, not published documents; they name a fixture identity that
 # lives in the same closed registry as the real ones, because identity is never a caller's to
 # invent (Wave-2 re-audit finding 3).
 TEST_DOCUMENT = TEST_FIXTURE
 _BUILD_ARGS = {
-    id(contract_gen): {"contact": SAMPLE_CONTACT, "due_date": SAMPLE_DUE_DATE},
+    id(contract_gen): {"contact": SAMPLE_CONTACT},
     id(deploy_gen): {},
 }
 
@@ -231,7 +230,7 @@ def test_a_release_build_refuses_unverifiable_provenance(tmp_path, monkeypatch):
     from docs.generators import publication, render
 
     published = contract_gen.PUBLICATION
-    inputs = dict(contact=SAMPLE_CONTACT, due_date=SAMPLE_DUE_DATE)
+    inputs = dict(contact=SAMPLE_CONTACT)
     monkeypatch.setattr(render, "source_revision", lambda: "unknown")
     with pytest.raises(publication.ProvenanceError, match="source commit"):
         published.publish(str(tmp_path), **inputs)
@@ -684,28 +683,20 @@ def test_code_on_the_page_keeps_its_indentation(tmp_path):
 )
 def test_release_inputs_refuse_an_unusable_contact(contact):
     with pytest.raises(ValueError):
-        contract_gen.validate_release_inputs(contact, SAMPLE_DUE_DATE)
+        contract_gen.validate_release_inputs(contact)
 
 
-@pytest.mark.parametrize("due", ["", "   ", "18 August", "2026-13-01", "2026/09/15", "next Friday"])
-def test_release_inputs_refuse_an_unusable_due_date(due):
-    with pytest.raises(ValueError):
-        contract_gen.validate_release_inputs(SAMPLE_CONTACT, due)
-
-
-def test_the_contract_cannot_be_generated_without_both(capsys):
+def test_the_contract_cannot_be_generated_without_a_contact(capsys):
     """argparse exits non-zero rather than emitting a document with a placeholder in it."""
-    for argv in ([], ["--integration-contact", SAMPLE_CONTACT], ["--response-due-date", SAMPLE_DUE_DATE]):
-        with pytest.raises(SystemExit) as excinfo:
-            contract_gen.main(argv)
-        assert excinfo.value.code != 0
+    with pytest.raises(SystemExit) as excinfo:
+        contract_gen.main([])
+    assert excinfo.value.code != 0
     capsys.readouterr()
 
 
-def test_the_reply_channel_and_deadline_reach_the_page(contract_text):
+def test_the_reply_channel_reaches_the_page(contract_text):
     flat = _flat(contract_text)
     assert SAMPLE_CONTACT in flat, "the document asks for answers and names no contact"
-    assert SAMPLE_DUE_DATE in flat, "the document asks for answers and names no deadline"
     for placeholder in ("fill in", "TBD", "[integration contact"):
         assert placeholder not in flat
 

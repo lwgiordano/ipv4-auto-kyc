@@ -9,7 +9,6 @@ through someone remembering to edit a sentence.
 
 import argparse
 import re
-from datetime import date
 
 from docs.contracts.companion import ARTIFACT_NAME, artifact_digest
 from docs.contracts.projection import Lit, Ref
@@ -28,16 +27,16 @@ PUBLICATION = publication_for(__name__, globals().get("__spec__"))
 DOCUMENT_ID = PUBLICATION.identity.id
 OUT = PUBLICATION.identity.out
 
-# Release inputs. These are NOT registry claims — they change per send, and nothing in the repo
-# governs them — so they are required arguments with NO defaults (re-audit `6feca36..4f23f23` F11).
-# The document asks TechCraft eleven questions and previously shipped "[integration contact - fill
-# in]" beside a hardcoded date: a document that asks for a reply and then names nowhere to send it
-# is worse than one that asks nothing, and a stale date silently becomes a deadline that has
-# already passed. A build that cannot name both must fail rather than emit a placeholder.
+# Release inputs. The contact is NOT a registry claim — it changes per send, and nothing in the
+# repo governs it — so it is a required argument with NO default (re-audit `6feca36..4f23f23`
+# F11). The document asks TechCraft eleven questions and previously shipped "[integration contact
+# - fill in]": a document that asks for a reply and then names nowhere to send it is worse than
+# one that asks nothing. A build that cannot name the contact must fail rather than emit a
+# placeholder. There is deliberately NO response deadline: answers are asked for, not dated.
 _PLACEHOLDER = re.compile(r"fill[ -]?in|\bTBD\b|\[|\]|<|>", re.IGNORECASE)
 
 
-def validate_release_inputs(contact: str, due_date: str) -> tuple[str, str]:
+def validate_release_inputs(contact: str) -> str:
     """Refuse anything a reader could not act on. Raises ValueError."""
     contact = (contact or "").strip()
     if not contact:
@@ -48,14 +47,7 @@ def validate_release_inputs(contact: str, due_date: str) -> tuple[str, str]:
         raise ValueError(
             f"--integration-contact must be an address or a URL TechCraft can reply to: {contact!r}"
         )
-    due_date = (due_date or "").strip()
-    if not due_date:
-        raise ValueError("--response-due-date is required")
-    try:
-        parsed = date.fromisoformat(due_date)
-    except ValueError as exc:
-        raise ValueError(f"--response-due-date must be ISO-8601 YYYY-MM-DD: {due_date!r}") from exc
-    return contact, parsed.isoformat()
+    return contact
 
 
 # Claims this document is REQUIRED to display. The rendering test asserts each reaches a flowable
@@ -112,8 +104,8 @@ REQUIRED_CLAIMS = (
 )
 
 
-def build(*, contact: str, due_date: str) -> Doc:
-    contact, due_date = validate_release_inputs(contact, due_date)
+def build(*, contact: str) -> Doc:
+    contact = validate_release_inputs(contact)
     doc = Doc(WIRE, DOCUMENT_ID)
     doc.title()
     doc.p(
@@ -132,7 +124,7 @@ def build(*, contact: str, due_date: str) -> Doc:
         "you dedupe on (case_id, run_id). Section 3 is the exact delivery contract."
     )
     doc.why(
-        f"Send answers to the section 1 questions to <b>{escape(contact)}</b> by <b>{escape(due_date)}</b>."
+        f"Send answers to the section 1 questions to <b>{escape(contact)}</b>."
     )
 
     # ── 1. asks ────────────────────────────────────────────────────────────────────────────────
@@ -419,15 +411,11 @@ def main(argv: list[str] | None = None) -> str:
         "--integration-contact", required=True, help="address or URL TechCraft sends the section 1 answers to"
     )
     parser.add_argument(
-        "--response-due-date", required=True, help="ISO-8601 YYYY-MM-DD date those answers are due"
-    )
-    parser.add_argument(
         "--out-dir", default=".",
         help="directory to publish into; the FILENAME is the registry's, not a caller's"
     )
     args = parser.parse_args(argv)
-    return PUBLICATION.publish(args.out_dir, contact=args.integration_contact,
-                               due_date=args.response_due_date)
+    return PUBLICATION.publish(args.out_dir, contact=args.integration_contact)
 
 
 if __name__ == "__main__":

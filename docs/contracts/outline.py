@@ -22,9 +22,9 @@ produces it or the test that reads it:
   renders and the projection it renders under;
 - for a block the registry does NOT own (narration a reader still acts on, headings), the digest
   of its exact lines, so a rewritten paragraph is a re-pin somebody reads;
-- and, for the two spans that legitimately vary per release, the SLOT they fill: the contract's
-  reply address and response deadline are release inputs, not registry values, so the outline
-  requires the block to carry the values this release was given rather than fixing its text.
+- and, for the one span that legitimately varies per release, the SLOT it fills: the contract's
+  reply address is a release input, not a registry value, so the outline requires the block to
+  carry the value this release was given rather than fixing its text.
 
 `problems()` is what a release runs. It is not a nicer `_top_level_verify`: that one asks whether
 the page matches the document, and this one asks whether the document is the one we reviewed.
@@ -223,8 +223,8 @@ OUTLINES = MappingProxyType({
                         roles=('BODY',)),
                     BlockOutline(kind='prose', digest='56480299ea6e40e9', roles=('BODY',)),
                     BlockOutline(
-                        kind='prose', slots=('contact', 'due_date'),
-                        template='Send answers to the section 1 questions to {contact} by {due_date}.',
+                        kind='prose', slots=('contact',),
+                        template='Send answers to the section 1 questions to {contact}.',
                         roles=('WHY',)),
                 ),
             ),
