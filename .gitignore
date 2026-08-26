@@ -16,3 +16,6 @@ htmlcov/
 docs/generators/*.pdf
 /techcraft-integration-contract.pdf
 /techcraft-deployment-guide.pdf
+
+# handoff packages
+dist/
