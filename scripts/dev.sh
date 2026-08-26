@@ -13,10 +13,19 @@ PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || { echo "no .venv — run ./manage.sh setup first" >&2; exit 1; }
 
 PGBIN=""
-for candidate in /usr/lib/postgresql/16/bin /usr/lib/postgresql/15/bin /usr/local/bin /usr/bin; do
-  [ -x "$candidate/initdb" ] && PGBIN="$candidate" && break
-done
-[ -n "$PGBIN" ] || { echo "postgres binaries not found" >&2; exit 1; }
+if command -v initdb >/dev/null 2>&1; then
+  PGBIN="$(dirname "$(command -v initdb)")"
+fi
+if [ -z "$PGBIN" ]; then  # not on PATH — probe the usual apt / Homebrew keg / Postgres.app homes
+  for candidate in /usr/lib/postgresql/16/bin /usr/lib/postgresql/15/bin \
+      /opt/homebrew/opt/postgresql@17/bin /opt/homebrew/opt/postgresql@16/bin \
+      /opt/homebrew/opt/postgresql@15/bin \
+      /Applications/Postgres.app/Contents/Versions/latest/bin \
+      /usr/local/bin /usr/bin; do
+    [ -x "$candidate/initdb" ] && PGBIN="$candidate" && break
+  done
+fi
+[ -n "$PGBIN" ] || { echo "postgres binaries not found (apt install postgresql, or brew install postgresql@16)" >&2; exit 1; }
 
 PGDIR="$(mktemp -d /tmp/kyc-dev-pg.XXXXXX)"
 PGPORT="${KYC_DEV_PG_PORT:-55433}"
@@ -46,6 +55,8 @@ as_pg_user "$PGBIN/createdb -h 127.0.0.1 -p $PGPORT -U kyc kyc_dev"
 export KYC_DATABASE_URL="postgresql+psycopg://kyc@127.0.0.1:$PGPORT/kyc_dev"
 export KYC_PLATFORM_CALLBACK_URL="http://127.0.0.1:$RECEIVER_PORT"
 export KYC_PLATFORM_HMAC_SECRET="${KYC_PLATFORM_HMAC_SECRET:-dev-secret}"
+# ui_enabled defaults to false in Settings; the console this stack advertises needs it on
+export KYC_UI_ENABLED="${KYC_UI_ENABLED:-true}"
 
 echo "→ migrations"
 "$ROOT/.venv/bin/alembic" upgrade head >/dev/null
