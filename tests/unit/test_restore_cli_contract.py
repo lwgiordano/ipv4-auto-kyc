@@ -15,6 +15,7 @@ import pytest
 
 from kyc_tool.config import REPO_ROOT
 from kyc_tool.ops.restore_pr7b_core_callback import build_parser
+from tests.roadmap import SOURCE_HANDOFF
 
 _LAUNCHER = "python -m kyc_tool.ops.restore_pr7b_core_callback"
 _SURFACES = (
@@ -56,6 +57,8 @@ def _documented():
     CONTENT is scanned for backtick-delimited spans (the plan quotes a runbook section inside a
     markdown fence); text outside fences is scanned the same way."""
     for rel in _SURFACES:
+        if rel.startswith(".agents/") and SOURCE_HANDOFF:
+            continue  # the plan is an internal working file; source handoffs omit it
         matches: list[str] = []
         outside: list[str] = []
         block: list[str] = []

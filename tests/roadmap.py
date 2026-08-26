@@ -26,6 +26,12 @@ from kyc_tool.config import REPO_ROOT
 
 ROADMAP = REPO_ROOT / ".agents" / "ROADMAP.md"
 
+# scripts/package_handoff.sh ships the product tree without the internal working files this
+# module parses — and without `.git`, which every checkout has. Suites that govern those
+# internal files key their skip on THIS flag, never on a governed file's own existence:
+# deleting ROADMAP.md in a checkout must FAIL its governance tests, not skip them.
+SOURCE_HANDOFF = not (REPO_ROOT / ".git").exists()
+
 
 class CRow(NamedTuple):
     """One §C data row with EVERY cell retained (re-audit `1826661..b5c7a83` finding 9 — the
