@@ -30,7 +30,7 @@ git archive --format=tar --prefix="$PKG/" HEAD | tar -x -C "$STAGE"
 (
   cd "$STAGE/$PKG"
   rm -rf AGENT_BUS.md AUDIT_FINDINGS.md AGENTS.md CLAUDE.md ai-kits \
-    .agents .claude .substrate .github scripts/handoff scripts/package_handoff.sh
+    .agents .claude .substrate .github .impeccable scripts/handoff scripts/package_handoff.sh
   rm -f START-HERE.md  # never ship a stale copy if one is ever committed
 )
 
@@ -46,7 +46,7 @@ sed -e "s/__VERSION__/$VERSION/g" -e "s/__COMMIT__/$COMMIT/g" \
   || { echo "error: deployment guide did not publish" >&2; exit 1; }
 
 # The package must never carry the internal files the list above prunes.
-leaked="$(cd "$STAGE/$PKG" && ls -d AGENT_BUS.md AGENTS.md .substrate .github 2>/dev/null || true)"
+leaked="$(cd "$STAGE/$PKG" && ls -d AGENT_BUS.md AGENTS.md .substrate .github .impeccable 2>/dev/null || true)"
 [ -z "$leaked" ] || { echo "error: internal files leaked into the package: $leaked" >&2; exit 1; }
 
 mkdir -p dist
