@@ -411,6 +411,12 @@ function rel(s){if(!s)return"—";const d=new Date(s),now=Date.now(),sec=(now-d)
   if(sec<172800)return"yesterday";return d.toLocaleDateString(undefined,{month:"short",day:"numeric"})}
 const when=s=>`<span class="when" title="${esc(fmtExact(s))}">${esc(rel(s))}</span>`;
 
+/* Remembering the last case id or search term is a convenience, never a requirement. A browser
+   set to block site data throws on the sessionStorage ACCESSOR itself, which took the whole view
+   down through the error boundary; these degrade to "forget it" instead. */
+const remember=(k,v)=>{try{sessionStorage.setItem(k,v)}catch(e){/* not storable; fine */}};
+const recall=(k,d="")=>{try{return sessionStorage.getItem(k)??d}catch(e){return d}};
+
 /* Status icons.
    These are SVG, not characters, because the brand face ships a 291-glyph latin subset: ✓ ✕ ⏳
    → and friends are ABSENT from it and would silently fall back to a system font mid-word, which
@@ -549,7 +555,11 @@ async function viewOverview(){
 
 /* ── Cases ────────────────────────────────────────────── */
 async function viewCases(){
-  const q=sessionStorage.getItem("caseq")||"";
+  // The live input is the truth while the view is mounted; the remembered term only has to
+  // survive navigating away and back. Reading storage first meant that with site data blocked
+  // the box accepted typing and searched for nothing.
+  const box=$("#q");
+  const q=box?box.value:recall("caseq");
   const{body}=await j(`/ui/api/cases?q=${encodeURIComponent(q)}`);
   const rows=body.cases.map(c=>`<tr class="click" data-id="${esc(c.id)}">
     <td><span class="strong">${esc(c.company_name||c.id)}</span><div class="sub mono">${esc(c.id)}</div></td>
@@ -571,7 +581,7 @@ async function viewCases(){
       <th class="num" title="live evidence recomputed from today's checks — not the published decision">Live evidence</th>
       <th>Status</th><th>Buy</th><th>Broker</th><th class="num">Updated</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`;
-  $("#q").addEventListener("input",e=>{sessionStorage.setItem("caseq",e.target.value);
+  $("#q").addEventListener("input",e=>{remember("caseq",e.target.value);
     clearTimeout(window.__qt);window.__qt=setTimeout(viewCases,250)});
   page.querySelectorAll("tr.click").forEach(tr=>
     tr.onclick=()=>location.hash=`#/case/${encodeURIComponent(tr.dataset.id)}`);
@@ -755,7 +765,7 @@ async function viewCase(id){
       <details open><summary>submitted_json</summary>
       <pre>${esc(JSON.stringify(c.submitted_json,null,2))}</pre></details></div></div>`;
 
-  $("#sendbtn").onclick=()=>{sessionStorage.setItem("composerCase",c.id);location.hash="#/composer"};
+  $("#sendbtn").onclick=()=>{remember("composerCase",c.id);location.hash="#/composer"};
   const fm=$("#feedmore");if(fm)fm.onclick=()=>{$("#feedhead").hidden=false;fm.parentElement.remove()};
   page.querySelectorAll("[data-complete]").forEach(b=>b.onclick=async()=>{
     const[taskId,result]=b.dataset.complete.split(":");
@@ -827,7 +837,7 @@ async function viewIntegrations(){
 async function viewFieldMap(){
   const{body:pol}=await j("/ui/api/policy");
   const{body:cl}=await j("/ui/api/cases?limit=100");
-  const selected=sessionStorage.getItem("fmCase")||cl.cases[0]?.id||"";
+  const selected=recall("fmCase")||cl.cases[0]?.id||"";
   let values={};
   if(selected){const r=await j(`/ui/api/cases/${encodeURIComponent(selected)}/full`);
     if(r.status<300)values=r.body.salesforce}
@@ -851,7 +861,7 @@ async function viewFieldMap(){
       <th>Source of truth in the tool</th></tr></thead><tbody>${rows}</tbody></table></div></div>
     <p class="sub" style="margin-top:12px">Delivery: upsert by platform case id · dedupe on (case_id, run_id) ·
       ordered per case · a Salesforce outage never blocks enforcement · fields read-only for non-integration users.</p>`;
-  $("#fmcase").onchange=e=>{sessionStorage.setItem("fmCase",e.target.value);viewFieldMap()};
+  $("#fmcase").onchange=e=>{remember("fmCase",e.target.value);viewFieldMap()};
 }
 
 /* ── Policy ───────────────────────────────────────────── */
@@ -892,7 +902,7 @@ async function viewPolicy(){
 /* ── Composer ─────────────────────────────────────────── */
 async function viewComposer(){
   const{body:t}=await j("/ui/api/event-templates");
-  const caseId=sessionStorage.getItem("composerCase")||"demo-case-001";
+  const caseId=recall("composerCase")||"demo-case-001";
   page.innerHTML=tbar("Composer","Send platform events into the tool — signed server-side, idempotency key auto-generated")+`
     <div class="split">
       <div class="card"><div class="hd"><h3>Event</h3></div><div class="bd">
@@ -925,7 +935,7 @@ async function viewComposer(){
     const r=await j("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({case_id:$("#c-case").value.trim(),event_type:$("#c-type").value,payload})});
     $("#c-out").textContent=`HTTP ${r.status}\n`+JSON.stringify(r.body,null,2);
-    sessionStorage.setItem("composerCase",$("#c-case").value.trim());
+    remember("composerCase",$("#c-case").value.trim());
     if(r.status<300)$("#c-hint").innerHTML=
       `Queued jobs: <span class="strong">${r.body.jobs_queued}</span> — open ${caseLink($("#c-case").value.trim())} to watch it process`;
   };
