@@ -71,11 +71,20 @@ def test_case_detail_decision_card_sources_the_whole_tuple_from_one_row():
 
 def test_live_bar_is_not_coloured_by_the_published_decision():
     """A neutral bar is the point: colouring live points by the published verdict merges two
-    authority eras into one visual read."""
+    authority eras into one visual read.
+
+    The neutral is asserted as a SET rather than one token. A cosmetic pass measured the old
+    --faint bar at 3.10:1 against its track in light and 2.79:1 in dark, under the 3:1 floor for
+    a meaningful graphic, and moved it to --muted (4.52:1 / 5.53:1). That is the same neutral
+    register, so the guard's subject is unchanged; pinning the exact token made a contrast fix
+    look like a semantics change. What must stay true is that the bar carries NO outcome hue --
+    neither the published verdict's nor the live score's own, since a green bar beside an amber
+    published verdict is the contradiction this screen already has too much of."""
     bar = VIEW_CASE[VIEW_CASE.index("bmeasure"):]
     bar = bar[: bar.index("btick")]
-    assert "var(--faint)" in bar
-    assert "decisionColor" not in bar and "barColor" not in bar
+    assert any(n in bar for n in ("var(--muted)", "var(--faint)", "var(--text)")), bar
+    for hue in ("decisionColor", "barColor", "green", "amber", "red", "success", "danger", "warning"):
+        assert hue not in bar, f"the live bar must not carry an outcome hue: {hue}"
 
 
 # --- the list shows both numbers, each under its own name ------------------------------------

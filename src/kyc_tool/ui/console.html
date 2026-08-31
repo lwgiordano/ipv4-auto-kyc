@@ -153,6 +153,9 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth}
 .card .hd{padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);display:flex;
       align-items:center;gap:var(--s2);flex-wrap:wrap}
 .card .hd h2,.card .hd h3{font-size:16px;line-height:24px;font-weight:700;color:var(--ink)}
+/* A heading inside a card BODY, under the card's own header. It had no rule at all and was
+   rendering at the UA default with 21.28px margins, off the spacing register entirely. */
+.sub-hd{font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-bottom:var(--s3)}
 .card .hd .hint{font-size:12px;line-height:16px;color:var(--muted);font-weight:400}
 .card .bd{padding:var(--s4)}
 .card .bd.flush{padding:0}
@@ -163,8 +166,9 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth}
 .split>*,.stack>*,.kpis>*,.gates>*,.contrib>*{min-inline-size:0}
 
 /* ── KPI scorecard row ── */
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:var(--s4);
-      margin-bottom:var(--s4)}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:var(--s4);margin-bottom:var(--s4)}
+@media(max-width:1180px){.kpis{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:720px){.kpis{grid-template-columns:repeat(2,1fr)}}
 .kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
      box-shadow:var(--e1);padding:var(--s4)}
 .kpi .lab{font-size:14px;line-height:20px;font-weight:600;color:var(--muted)}
@@ -249,8 +253,11 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .bullet .val .verdict{font-size:12px;line-height:16px;font-weight:700;margin-left:auto}
 .btrack{position:relative;height:16px;border-radius:var(--radius-inner);
   background:var(--surface-muted);overflow:visible}
-.bband{position:absolute;top:0;bottom:0;left:0;border-radius:var(--radius-inner);background:var(--border)}
-.bmeasure{position:absolute;top:5px;height:6px;left:0;border-radius:var(--radius-inner)}
+/* The threshold band is gone: its right edge sat exactly under the tick that already marks the
+   threshold, so it drew a second grey rectangle that read as another bar — and at 1.21:1 against
+   the track it was invisible anyway. Tick plus label carries the target; the bar carries the score,
+   in the semantic ink for its outcome (the "N below threshold" verdict is the non-colour cue). */
+.bmeasure{position:absolute;top:4px;height:8px;left:0;border-radius:var(--radius-inner)}
 .btick{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink)}
 .btick span{position:absolute;top:-20px;transform:translateX(-50%);font-size:12px;line-height:16px;
   color:var(--muted);white-space:nowrap}
@@ -290,7 +297,7 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 
 /* ── Activity feed (audit) ── */
 .feed{position:relative;padding-left:var(--s5);display:grid;gap:0}
-.feed::before{content:"";position:absolute;left:5px;top:var(--s2);bottom:var(--s2);width:2px;
+.feed::before{content:"";position:absolute;left:6px;top:var(--s2);bottom:var(--s2);width:2px;
   background:var(--line)}
 .fitem{position:relative;padding:var(--s2) 0;font-size:14px;line-height:20px;display:flex;
   gap:var(--s2);align-items:baseline;flex-wrap:wrap}
@@ -331,7 +338,7 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
   font-size:14px;line-height:20px}
 .kv .k{color:var(--muted)}
 /* Toast: inverse surface at the highest elevation, per the pack's toast recipe. */
-.toast{position:fixed;bottom:var(--s5);left:var(--s5);background:var(--surface-inverse);
+.toast{position:fixed;bottom:var(--s5);right:var(--s5);background:var(--surface-inverse);
   color:var(--text-inverse);border-radius:var(--r);padding:var(--s2) var(--s4);
   box-shadow:var(--e3);font-size:14px;line-height:20px;max-width:420px;z-index:500;
   display:inline-flex;align-items:center;gap:var(--s2);animation:tin var(--dur-4) var(--ease-standard)}
@@ -350,6 +357,10 @@ h2.sec{font:700 12px/16px var(--font);color:var(--muted);text-transform:uppercas
   letter-spacing:.05em;margin:var(--s6) 0 var(--s3)}
 .chips{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center}
 .chev{color:var(--muted);text-align:right}
+/* A key sits before what it decodes; the pills wrap on their own rows at narrow widths. */
+.legend{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);font-size:12px;
+  line-height:16px;color:var(--muted);margin-bottom:var(--s4)}
+.mb-4{margin-bottom:var(--s4)}
 .demo-journey{font-size:14px;line-height:20px;color:var(--muted)}
 /* An inline icon sits on the text's middle, not its baseline. */
 .demo-journey .ic,.fitem .ic,td .ic,.probe-out .ic{vertical-align:middle}
@@ -704,7 +715,7 @@ async function viewCase(id){
             <b style="color:${decisionColor}">${esc(latest.decision)}</b>
             <span class="of">score ${latest.score??"—"} · buy ${esc(latest.buy_enablement||"—")}</span>
             <span class="verdict sub">decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
-          <h4>Published decision hard gates</h4>
+          <h3 class="sub-hd">Published decision hard gates</h3>
           <div class="gates published-gates">${["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"]
             .map(g0=>g0 in gates
               ?`<div class="gate ${gates[g0]?"ok":"no"}">${gates[g0]?I.check:I.cross}${esc(g0.replace(/_/g," "))}</div>`
@@ -718,8 +729,7 @@ async function viewCase(id){
           <div class="val"><b>${live}</b><span class="of">/ ${s.threshold} required</span>
             <span class="verdict sub">${liveNote}</span></div>
           <div class="btrack">
-            <span class="bband" style="width:${Math.min(100,s.threshold/max*100)}%"></span>
-            <span class="bmeasure" style="width:${Math.min(100,live/max*100)}%;background:var(--faint)"></span>
+            <span class="bmeasure" style="width:${Math.min(100,live/max*100)}%;background:var(--muted)"></span>
             <span class="btick" style="left:${s.threshold/max*100}%"><span>${s.threshold} target</span></span>
           </div>
         </div>
@@ -803,7 +813,9 @@ async function viewIntegrations(){
         <div class="probe-out" id="probe-${esc(a.adapter_id)}"></div>`:`<span class="sub">no probe</span>`}</div>
     </div>`).join("");
   page.innerHTML=tbar("Integrations","What is wired to a real upstream, what is stubbed, and what needs credentials")+`
-    <div class="card" style="margin-bottom:16px"><div class="hd"><h2 class="iw">${I.swap}Platform and tool</h2></div>
+    <p class="legend">${pill("live")} real upstream · ${pill("stub")} fixture data ·
+      ${pill("dev")} dev implementation · ${pill("needs-config")} missing credentials · ${pill("manual")} human queue by design</p>
+    <div class="card mb-4"><div class="hd"><h2 class="iw">${I.swap}Platform and tool</h2></div>
       <div class="irow"><div class="itile">CB</div>
         <div class="meta"><div class="nm">Decision callback ${pill(p.status)}</div>
           <div class="kind">POST {PLATFORM_CALLBACK_URL}/kyc/decision · HMAC-signed · at-least-once, dedupe on (case_id, run_id)</div>
@@ -820,8 +832,7 @@ async function viewIntegrations(){
           <div class="kind mono">${esc(d.object_store.root)}</div></div></div>
     </div>
     <div class="card"><div class="hd"><h2>Evidence adapters</h2><span class="hint">catalog order · nine adapters</span></div>${rows}</div>
-    <p class="sub" style="margin-top:12px">${pill("live")} real upstream · ${pill("stub")} fixture data ·
-      ${pill("dev")} dev implementation · ${pill("needs-config")} missing credentials · ${pill("manual")} human queue by design</p>`;
+`;
   page.querySelectorAll("[data-probe]").forEach(b=>b.onclick=async()=>{
     b.disabled=true;b.textContent="Probing…";
     const{body}=await j(`/ui/api/integrations/${b.dataset.probe}/probe`,{method:"POST"});
