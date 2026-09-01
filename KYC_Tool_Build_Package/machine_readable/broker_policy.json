@@ -1,0 +1,30 @@
+{
+  "version": "2.0",
+  "matching_mode_v1": "exact_identifier_only",
+  "identifier_classes": ["legal_name", "aliases", "domains", "email_domains", "rir_org_ids", "poc_handles", "asns"],
+  "entities": [
+    { "name": "Larus", "policy": "blocked" },
+    { "name": "Brander", "policy": "blocked" },
+    { "name": "InterLIR", "policy": "blocked" },
+    { "name": "Silicon Desert", "policy": "allowed" },
+    { "name": "IP Trading", "policy": "allowed" },
+    { "name": "IPXO", "policy": "allowed" }
+  ],
+  "entity_record_fields": [
+    "name", "policy", "aliases[]", "domains[]", "email_domains[]",
+    "rir_org_ids[]", "poc_handles[]", "asns[]",
+    "effective_date", "last_reviewed_at", "notes"
+  ],
+  "behavior": {
+    "blocked_exact_match": "decision=reject; skip remaining adapters; no further enrichment spend",
+    "allowed_exact_match": "tag broker_status=allowed_broker; continue full scoring and gates",
+    "no_match": "broker_status=clear"
+  },
+  "explicitly_out_of_scope_v1": [
+    "fuzzy name matching",
+    "broker-language heuristics (e.g. 'IPv4 broker', 'IP leasing', 'LIR services')",
+    "shared-infrastructure inference (ASN/ORG-ID/POC/domain overlap)",
+    "known-broker-on-platform detection"
+  ],
+  "future": "these signals feed the manual_review_risk_flag decision when added; see decision_policy.json future_extension_not_in_v1"
+}

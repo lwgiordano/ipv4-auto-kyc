@@ -1,136 +1,99 @@
-# agent-substrate-kit
+# ipv4-auto-kyc — IPv4.Global KYC/KYB Tool
 
-A small, dependency-free kit that installs an **agent substrate** into any git
-repository: one `./manage.sh` entry point plus the wiring that lets humans,
-CI, and coding agents all drive a project the same way — and a `doctor`
-command that proves the wiring is intact.
+A platform-invoked KYC/KYB scoring engine: the IPv4.Global platform POSTs
+customer lifecycle events, the tool gathers evidence through nine adapters,
+validates it **deterministically**, records immutable supersedable checks,
+scores against a 100-point threshold with five hard gates, and returns one of
+four decisions (`approve`, `approve_buy_locked`, `manual_review_insufficient`,
+`reject`) for the platform to enforce. Salesforce is a one-way mirror owned by
+the platform.
 
-Everything is plain bash. Nothing to compile, no runtime dependencies beyond
-`git` and `bash`.
+**Full guide**: [`docs/OVERVIEW.md`](docs/OVERVIEW.md) — how it works, current
+state, roadmap, what's needed, and the integration contract, for both business
+and dev readers.
+**Normative spec**: [`KYC_Tool_Build_Package/`](KYC_Tool_Build_Package/)
+(committed unmodified; the `machine_readable/*.json` files win over prose).
+**Spec audit**: [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) — every known defect
+and its resolution; corrections live in code/fixtures tagged `AUDIT:<id>`.
 
-## Install the kit
-
-```sh
-mkdir -p ~/ai-kits
-git clone <this-repo-url> ~/ai-kits/agent-substrate-kit
-```
-
-## Quick start
-
-```sh
-cd ~/projects/my-project        # must be a git repo
-bash ~/ai-kits/agent-substrate-kit/bootstrap.sh   # standard profile, lang auto-detect
-./manage.sh setup
-./manage.sh doctor              # verify wiring
-```
-
-`bootstrap.sh` detects the project's language(s) from its manifest files,
-installs the substrate for the `standard` profile, and wires git hooks.
-`setup` prepares the toolchain (venv/deps/modules), and `doctor` verifies that
-everything the kit wired is still connected — exit code `0` means healthy.
-
-## What gets installed
-
-```
-your-project/
-├── manage.sh                    # single entry point (managed)
-├── .substrate/
-│   ├── substrate.conf           # profile, languages, kit version (managed)
-│   ├── manifest                 # what the kit owns vs. seeded (managed)
-│   ├── lib.sh                   # substrate runtime (managed)
-│   ├── checks.d/*.sh            # doctor checks — drop in your own (managed)
-│   ├── hooks/pre-commit         # soft lint hook (managed)
-│   └── state/                   # local state, git-ignored
-├── AGENTS.md                    # agent guide (seeded — yours to edit)
-├── CLAUDE.md                    # pointer to AGENTS.md (seeded)
-└── .editorconfig                # (seeded)
-```
-
-**Managed** files are refreshed every time you re-run `bootstrap.sh` (or
-`./manage.sh update`). **Seeded** files are created once and never touched
-again — they belong to the project. `--force` re-seeds them.
-
-## Profiles
-
-| Profile | Contents |
-| --- | --- |
-| `minimal` | `manage.sh` + `.substrate/` core only |
-| `standard` *(default)* | minimal + `AGENTS.md`, `CLAUDE.md`, `.editorconfig`, git-hook wiring |
-| `full` | standard + `.claude/settings.json`, `.github/workflows/substrate-ci.yml` |
+## Quick start (dev)
 
 ```sh
-bash ~/ai-kits/agent-substrate-kit/bootstrap.sh --profile full
+./manage.sh setup                    # venv + editable install
+.venv/bin/pip install -e '.[dev]'    # test/lint toolchain
+./manage.sh doctor                   # verify wiring
+./manage.sh test                     # full suite (spins an ephemeral Postgres)
+
+bash scripts/dev.sh                  # ← whole stack, one command
 ```
 
-## Language support
+`scripts/dev.sh` boots an ephemeral Postgres, migrates, and starts the API,
+a fixture-wired worker, and a fake platform callback receiver — then open the
+**ops console at <http://127.0.0.1:8080/ui>**: send events from the Composer
+(the template company *Acme Networks Ltd* walks to `approve`), watch checks /
+score / gates / runs live, complete website reviews, inspect the Salesforce
+field projection, and probe integrations. Ctrl-C tears it all down.
 
-Auto-detected from project files, override with `--lang` (comma-separated —
-monorepos can list several; the first is primary):
-
-| Language | Detected by | `setup` does |
-| --- | --- | --- |
-| `python` | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt` | create `.venv`, install deps |
-| `node` | `package.json` | `npm ci`/`npm install` (or pnpm/yarn by lockfile) |
-| `go` | `go.mod` | `go mod download` |
-| `rust` | `Cargo.toml` | `cargo fetch` |
-| `java` | `pom.xml`, `build.gradle(.kts)` | verify JDK, note build wrapper |
-| `ruby` | `Gemfile` | `bundle install` |
-| `shell` | top-level `*.sh` | nothing (recommends shellcheck) |
-| `generic` | fallback | nothing |
+Run the service manually instead (needs Postgres + env, see `.env.example`):
 
 ```sh
-bash ~/ai-kits/agent-substrate-kit/bootstrap.sh --lang go,node
+.venv/bin/alembic upgrade head
+.venv/bin/uvicorn kyc_tool.api.app:create_app --factory --port 8000
+.venv/bin/python -m kyc_tool.workers.pipeline_worker   # run orchestration
+.venv/bin/python -m kyc_tool.workers.outbox_worker     # decision callbacks + POC emails
 ```
 
-## `./manage.sh` commands
+## Architecture (one service, background workers, Postgres)
+
+```
+platform ──POST /v1/cases/{id}/events──► api/ ──TXN-1──► events + runs + jobs
+                                                            │ (pg queue, SKIP LOCKED + leases,
+                                                            │  per-case FIFO)
+        workers/pipeline_worker: QUEUED → RESOLVE_INPUTS → BROKER_GATE ─blocked→ DECIDE(reject)
+                                   → RUN_ADAPTERS (fetch outside txn, raw → object store)
+                                   → [VALIDATE → WRITE_CHECKS → SCORE → DECIDE] one commit
+                                   → PUBLISH_DECISION ──outbox──► platform callback → COMPLETE
+```
+
+- `domain/` + `validators/` + `policy/` are **pure** (enforced by
+  import-linter); adapters fetch only and never touch the DB.
+- Policy (rubric, decision rules, broker list, events, state machine) loads
+  from the spec's JSONs at startup; each file's sha256 is stamped onto every
+  run and decision for audit provenance, and tests are generated from the
+  same loader (a drift-guard pins the hashes).
+- Checks are append-only; supersession chains + a partial unique index keep
+  exactly one live check per type; the ORG-ID→POC cascade is automatic.
+- The audit log reconstructs any decision: event → adapters (with raw
+  evidence refs) → checks → score → gates → decision → callback.
+
+## Operations
 
 | Command | Purpose |
-| --- | --- |
-| `setup` | install dependencies / prepare the toolchain |
-| `doctor` | verify wiring; exit `1` if anything is broken |
-| `fmt` / `lint` / `test` | run the language-appropriate tools |
-| `info` | show substrate state |
-| `update` | re-run bootstrap from the recorded kit location |
-| `precommit` | what the pre-commit hook runs (soft lint) |
+|---|---|
+| `GET /ui` | **ops console**: cases, runs, queue health, integrations, field map, composer |
+| `GET /healthz` | liveness + policy bundle hash |
+| `GET /v1/metrics` | run/decision/queue/outbox/review-queue counters |
+| `GET /v1/review-tasks?status=open` | human queues: website review, POC email unavailable |
+| `python -m kyc_tool.workers.retention` | prune audit/evidence past retention (default 7y) |
 
-## Doctor
+The console is debug tooling in the same trust domain as the read API; its
+composer/requeue endpoints mutate. Set `KYC_UI_ENABLED=false` in production or
+front the port with network controls (runbook §console).
 
-`doctor` runs every script in `.substrate/checks.d/` and aggregates
-`PASS`/`WARN`/`FAIL` lines. Out of the box it verifies:
+See [`docs/RUNBOOK.md`](docs/RUNBOOK.md) for failure playbooks and
+[`docs/SALESFORCE_MAPPING.md`](docs/SALESFORCE_MAPPING.md) for the
+platform-team sync mapping.
 
-- the project is a git repo rooted where the substrate expects (`10-git`)
-- `substrate.conf`, the manifest, and every managed file are intact (`20-substrate`)
-- `core.hooksPath` points at `.substrate/hooks` and the hook is executable (`30-hooks`)
-- required toolchain binaries exist for each configured language (`40-toolchain`)
-- setup has been run and local state is git-ignored (`50-state`)
+## Integration status
 
-Add project-specific checks by dropping a script into `.substrate/checks.d/`
-that prints `PASS`/`WARN`/`FAIL <message>` lines.
+Stubbed behind interfaces, marked `TODO(integration)` (AUDIT_FINDINGS §C):
+platform callback URL + HMAC secret exchange, Floqer API contract, platform
+email-verification fetch, outbound email provider, production OCR engine,
+POC token link hosting (platform forwards the raw token, `AUDIT:C2`).
 
-## Git hooks
+## Repo layout
 
-The `standard` and `full` profiles set `core.hooksPath` to `.substrate/hooks`.
-The pre-commit hook runs lint in **warn-only** mode by default; export
-`SUBSTRATE_STRICT_HOOKS=1` to make lint failures block commits. If your repo
-already sets `core.hooksPath`, the kit leaves it alone (take over with
-`--force`).
-
-## Other operations
-
-```sh
-bash ~/ai-kits/agent-substrate-kit/bootstrap.sh --dry-run     # preview, write nothing
-bash ~/ai-kits/agent-substrate-kit/bootstrap.sh --uninstall   # remove managed files + hook wiring
-./manage.sh update                                            # refresh managed files from the kit
-```
-
-Uninstall keeps seeded files (`AGENTS.md`, etc.) — they belong to the project.
-
-## Kit development
-
-```sh
-bash tests/run-tests.sh    # end-to-end suite: sandboxed kit install + sample projects
-```
-
-Layout: `bootstrap.sh` (installer) · `lib/` (kit-side helpers: logging,
-language detection) · `profiles/` (feature flags per profile) · `templates/`
-(everything installed into projects) · `tests/` (e2e suite).
+`src/kyc_tool/` service · `alembic/` migrations · `tests/` (policy-driven,
+golden cases as data, integration suites per phase) ·
+`ai-kits/agent-substrate-kit/` the project-substrate kit that provisions
+`manage.sh`/`.substrate/` · `KYC_Tool_Build_Package/` the spec.

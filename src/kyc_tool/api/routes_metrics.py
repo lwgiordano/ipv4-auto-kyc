@@ -1,0 +1,208 @@
+"""Operational metrics (JSON). Prometheus exposition is a deployment TODO —
+these counters are the dashboard's source: runs, decision distribution,
+queue/outbox health (dead-letters alert!), review-queue depth, adapter latency.
+"""
+
+from fastapi import APIRouter, Request
+from sqlalchemy import text
+
+from kyc_tool.api import hmac_witness
+from kyc_tool.api.auth import diagnostics_snapshot, require_read_access
+
+router = APIRouter()
+
+
+def _grouped(session, sql: str) -> dict:
+    return {row[0]: row[1] for row in session.execute(text(sql))}
+
+
+# Module-level constant so the EXPLAIN regression test pins the plan of the EXACT statement the
+# endpoint runs — a test that EXPLAINs its own copy of the SQL proves nothing about this one.
+LIVE_OUTBOX_SQL = (
+    "SELECT status, count(*) FROM outbox WHERE status IN ('pending','dead') GROUP BY status"
+)
+
+
+@router.get("/v1/metrics")
+def metrics(request: Request) -> dict:
+    """Auth-gated HTTP metrics surface (re-audit `b39b82a..b53daf4` F4). Read auth
+    (`require_read_access` — off in dev, forced on in production) is checked BEFORE any DB access, so
+    an unauthenticated caller cannot even open a session against this business-sensitive endpoint.
+    The payload is built by `collect_metrics`, which the `/ui` overview reuses in-process."""
+    require_read_access(request.app.state.settings, request)
+    return collect_metrics(request)
+
+
+@router.get("/v1/metrics.prom")
+def metrics_prometheus(request: Request):
+    """The SAME gauges as /v1/metrics in Prometheus text exposition format (PR 10a), hand-rendered so
+    no new dependency ships. Same read-auth gate, checked before any DB access. Scalar families only —
+    the nested diagnostic blocks stay JSON-only; alert rules over these series live in docs/ALERTS.md."""
+    from fastapi.responses import PlainTextResponse
+
+    require_read_access(request.app.state.settings, request)
+    payload = collect_metrics(request)
+    lines: list[str] = []
+
+    def gauge(name: str, value, labels: dict | None = None) -> None:
+        label_s = (
+            "{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}" if labels else ""
+        )
+        lines.append(f"kyc_{name}{label_s} {float(value)}")
+
+    # runs_by_state zero-safe (re-audit `f2929f8..6a4cd87` F11): a FAILED-run alert needs the
+    # series present even when the count is zero, so absence is never ambiguous with health.
+    run_states = payload.get("runs_by_state", {})
+    for state in sorted({"FAILED", "QUEUED", "PUBLISH_DECISION", *run_states}):
+        gauge("runs", run_states.get(state, 0), {"state": state})
+    for status, count in sorted(payload.get("jobs_by_status", {}).items()):
+        gauge("jobs", count, {"status": status})
+    for status, count in sorted(payload.get("outbox_by_status", {}).items()):
+        gauge("outbox", count, {"status": status})
+    latency = payload.get("event_to_decision_seconds", {})
+    gauge("event_to_decision_seconds_avg", latency.get("avg", 0))
+    gauge("event_to_decision_seconds_p95", latency.get("p95", 0))
+    for row in payload.get("adapter_latency", []):
+        labels = {"adapter": row["adapter_id"]}
+        gauge("adapter_calls", row["calls"], labels)
+        gauge("adapter_error_rate", row["error_rate"], labels)
+        gauge("adapter_latency_p95_ms", row["p95_ms"], labels)
+    gauge("hmac_v1_accepted", payload.get("hmac", {}).get("v1_accepted", 0))
+    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
+
+
+def collect_metrics(request: Request) -> dict:
+    """Build the metrics payload. INTERNAL — performs NO auth of its own; the HTTP route above gates
+    read auth before this runs, and the `/ui` overview reuses it in-process.
+
+    NOTE (re-audit `d569a15..4938840` F2/F3/F4): the shadow-mode `automation_readiness` gauge was
+    REMOVED from this payload. It was an unreleased, non-gating diagnostic that could not satisfy a
+    consumer contract — a history-unbounded query (F2), a mixed-era population that could mask a
+    current-engine regression (F3), and three statements under READ COMMITTED that were not one
+    snapshot (F4). It is rebuilt properly in the rollout observation unit (see ROADMAP) with a single
+    versioned population/denominator per metric and a snapshot-consistent read."""
+    with request.app.state.session_factory() as session:
+        adapter_latency = [
+            {
+                "adapter_id": row.adapter_id,
+                "calls": row.calls,
+                "error_rate": float(row.error_rate or 0),
+                "avg_ms": float(row.avg_ms or 0),
+                "p95_ms": float(row.p95_ms or 0),
+            }
+            for row in session.execute(
+                text(
+                    """
+                    SELECT adapter_id,
+                           count(*) AS calls,
+                           avg((status = 'upstream_error')::int) AS error_rate,
+                           avg(latency_ms) AS avg_ms,
+                           percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_ms
+                    FROM adapter_results
+                    WHERE fetched_at > now() - interval '24 hours'
+                    GROUP BY adapter_id ORDER BY adapter_id
+                    """
+                )
+            )
+        ]
+        decision_latency = session.execute(
+            text(
+                """
+                SELECT avg(EXTRACT(EPOCH FROM (d.decided_at - e.received_at))) AS avg_s,
+                       percentile_cont(0.95) WITHIN GROUP
+                           (ORDER BY EXTRACT(EPOCH FROM (d.decided_at - e.received_at))) AS p95_s
+                FROM decisions d
+                JOIN runs r ON r.id = d.run_id
+                JOIN events e ON e.id = r.triggering_event_id
+                WHERE d.decided_at > now() - interval '24 hours'
+                """
+            )
+        ).one()
+        # PR 7b-core: decision_callback rows are never pruned — retention redacts the body past
+        # the window but keeps the row itself, because the row is the durable ordering authority
+        # a later unit (7b-activation) reconciles the platform against. So `outbox` grows without
+        # bound for the life of the system.
+        #
+        # Live statuses (pending, dead) stay EXACT: they are what an operator acts on, and they
+        # stay small. The predicate is served by migration 014's ix_outbox_live_status — 013's
+        # claim indexes are partial to status='pending' ALONE, and Postgres cannot use a
+        # pending-only partial index for an IN ('pending','dead') query, so without 014's index
+        # this exact count would seq-scan the ever-growing terminal history (re-audit 1f8412e
+        # F7). The EXPLAIN regression test pins the plan, not just the values.
+        # `outbox_by_status` and `outbox_alerting` used to each run this identical query — two
+        # round-trips for one result — so it is computed once here and shared; both keys stay
+        # published (each is part of the metrics surface).
+        #
+        # Terminal history (delivered, superseded) is NOT exactly counted. It has exactly one
+        # consumer in this repo (a test asserting the key is present) and nothing alerts on it or
+        # consumes it in the reconciliation design — it is a growth gauge, not a control signal.
+        # An exact counter would need a trigger-maintained second source of truth that every
+        # status transition anywhere in the codebase must keep honest forever, to serve a number
+        # nobody acts on. So it is instead *estimated* in bounded time from the planner's own
+        # statistics — pg_class.reltuples for the whole relation, minus the exact live count above
+        # — rather than scanned. reltuples is -1 on a relation that has never been ANALYZEd (or
+        # since its last TRUNCATE), and is in general only an estimate that can legitimately sit
+        # below the true live count, so both the raw statistic and the final subtraction are
+        # floored at 0 — the estimate can never be reported as negative. This endpoint's cost is
+        # therefore independent of how much terminal history retention has accumulated.
+        outbox_live_by_status = _grouped(session, LIVE_OUTBOX_SQL)
+        # Addressed by OID via to_regclass, not by `relname = 'outbox'`: relname ignores schema, so
+        # a same-named table in any other schema on the search path could supply the statistic for
+        # a relation this session never queries. to_regclass resolves the SAME name the ORM does,
+        # and yields NULL (no row, estimate 0) rather than raising if the table is absent.
+        outbox_reltuples = session.execute(
+            text("SELECT reltuples::bigint FROM pg_class WHERE oid = to_regclass(:relname)"),
+            {"relname": "outbox"},
+        ).scalar()
+        outbox_total_estimate = max(outbox_reltuples, 0) if outbox_reltuples is not None else 0
+        outbox_terminal_total_estimate = max(
+            outbox_total_estimate - sum(outbox_live_by_status.values()), 0
+        )
+        return {
+            "runs_by_state": _grouped(session, "SELECT state, count(*) FROM runs GROUP BY state"),
+            "decisions_by_type": _grouped(
+                session, "SELECT decision, count(*) FROM decisions GROUP BY decision"
+            ),
+            "jobs_by_status": _grouped(session, "SELECT status, count(*) FROM jobs GROUP BY status"),
+            # pre-014 histories whose decision write-order has no durable record serve NO
+            # decision tuple (decision_provenance=unresolved_legacy_order) — this counts them so
+            # the condition is observable instead of silently indistinguishable from empty gates.
+            "cases_with_unresolved_decision_order": session.execute(
+                text("SELECT count(*) FROM cases c WHERE c.latest_decision_row_id IS NULL "
+                     "AND EXISTS (SELECT 1 FROM decisions d WHERE d.case_id = c.id)")
+            ).scalar_one(),
+            "outbox_by_status": outbox_live_by_status,
+            "outbox_terminal_total_estimate": outbox_terminal_total_estimate,
+            # superseded is a governed terminal (best-effort local suppression, zero sends) — it is
+            # counted in outbox_terminal_total_estimate and EXCLUDED from the alert set below.
+            "outbox_alerting": outbox_live_by_status,
+            "review_tasks_open_by_type": _grouped(
+                session,
+                "SELECT task_type, count(*) FROM review_tasks WHERE status='open' GROUP BY task_type",
+            ),
+            "adapter_latency": adapter_latency,
+            # (Shadow-mode automation_readiness removed here — re-audit d569a15..4938840 F2/F3/F4;
+            #  rebuilt with a versioned contract in the rollout observation unit. See collect_metrics.)
+            # Latency aggregates cover a FIXED recent window (PR 10a): unbounded history made the
+            # percentiles progressively staler and the scans progressively slower as the immutable
+            # tables grow (adapter_results/decisions are never pruned). The window is declared here
+            # so a consumer can never mistake a 24h p95 for an all-time one.
+            "latency_window": "24h",
+            "event_to_decision_seconds": {
+                "avg": float(decision_latency.avg_s or 0),
+                "p95": float(decision_latency.p95_s or 0),
+            },
+            # HMAC witness (PR 5a §6). v1_accepted is the DB-backed FAIL-CLOSED witness that gates the
+            # inbound sunset — it aggregates across replicas. The v2_accepted/rejected diagnostics are
+            # PROCESS-LOCAL (re-audit `d569a15..4938840` F1), exposed under a self-describing
+            # `auth_diagnostics` block — NOT bare top-level keys — so a legacy consumer cannot read
+            # this replica's counters as a fleet total (re-audit `8aba2df..2cee937` R3-F2).
+            "hmac": {
+                "v1_accepted": session.execute(
+                    text("SELECT accepted_count FROM hmac_v1_observation WHERE id = 1")
+                ).scalar()
+                or 0,
+                "auth_diagnostics": diagnostics_snapshot(),
+                "observation": hmac_witness.observation_state(session),
+            },
+        }

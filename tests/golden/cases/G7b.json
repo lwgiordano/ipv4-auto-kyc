@@ -1,0 +1,26 @@
+{
+  "id": "G7b",
+  "description": "AUDIT:B1 - continuation of G7a: ORG-ID submitted and passes -> recalculation upgrades approve_buy_locked to approve (platform enables buying).",
+  "steps": [
+    {
+      "checks": [
+        {"type": "verified_email", "status": "pass"},
+        {"type": "website_verified", "status": "pass"},
+        {"type": "business_document_verified", "status": "pass"},
+        {"type": "official_registry_match", "status": "pass"},
+        {"type": "verified_company_email", "status": "pass"},
+        {"type": "linkedin_company_match", "status": "pass"}
+      ],
+      "expect": {"decision": "approve_buy_locked", "buy_enablement": "locked_org_id_required"}
+    },
+    {
+      "checks": [{"type": "org_id_match", "status": "pass", "detail": {"org_handle": "ORG-ACME-1"}}],
+      "expect": {
+        "decision": "approve",
+        "buy_enablement": "enabled",
+        "gates_all_pass": true,
+        "live_pass_types": ["verified_email", "website_verified", "business_document_verified", "official_registry_match", "verified_company_email", "linkedin_company_match", "org_id_match"]
+      }
+    }
+  ]
+}

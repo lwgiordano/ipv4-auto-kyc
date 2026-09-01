@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "title": "ACME NETWORKS LTD",
+      "company_number": "12345678",
+      "company_status": "active",
+      "address_snippet": "1 Main Street, London, EC1A 1AA"
+    },
+    {
+      "title": "ACME NETWORKS (HOLDINGS) LTD",
+      "company_number": "87654321",
+      "company_status": "dissolved",
+      "address_snippet": "2 Side Road, Leeds, LS1 1AA"
+    }
+  ]
+}

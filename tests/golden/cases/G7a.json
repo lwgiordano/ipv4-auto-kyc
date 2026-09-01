@@ -1,0 +1,34 @@
+{
+  "id": "G7a",
+  "description": "AUDIT:B1 - dynamic loop from G3, corrected so the arithmetic actually crosses the threshold WITHOUT ORG-ID: each event supersedes/rescores until approve_buy_locked. (The spec's G7 sequence tops out at 95.)",
+  "steps": [
+    {
+      "checks": [
+        {"type": "verified_email", "status": "pass"},
+        {"type": "website_verified", "status": "pass"}
+      ],
+      "expect": {"decision": "manual_review_insufficient"}
+    },
+    {
+      "checks": [{"type": "business_document_verified", "status": "pass"}],
+      "expect": {"decision": "manual_review_insufficient", "gates": {"legal_proof": true}}
+    },
+    {
+      "checks": [{"type": "official_registry_match", "status": "pass"}],
+      "expect": {"decision": "manual_review_insufficient", "gates": {"score_met": false}}
+    },
+    {
+      "checks": [{"type": "verified_company_email", "status": "pass"}],
+      "expect": {"decision": "manual_review_insufficient", "gates": {"control_proof": true, "score_met": false}}
+    },
+    {
+      "checks": [{"type": "linkedin_company_match", "status": "pass"}],
+      "expect": {
+        "decision": "approve_buy_locked",
+        "buy_enablement": "locked_org_id_required",
+        "gates_all_pass": true,
+        "live_pass_types": ["verified_email", "website_verified", "business_document_verified", "official_registry_match", "verified_company_email", "linkedin_company_match"]
+      }
+    }
+  ]
+}

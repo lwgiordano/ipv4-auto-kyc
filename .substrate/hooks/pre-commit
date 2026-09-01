@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# agent-substrate-kit pre-commit hook (v0.1.0).
+# Soft by default: lint issues warn but never block the commit.
+# Set SUBSTRATE_STRICT_HOOKS=1 to make lint failures block.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+if [ ! -x "$root/manage.sh" ]; then
+  echo "substrate: manage.sh missing — skipping pre-commit checks" >&2
+  exit 0
+fi
+exec "$root/manage.sh" precommit

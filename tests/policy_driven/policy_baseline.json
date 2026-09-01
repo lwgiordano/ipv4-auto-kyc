@@ -1,0 +1,30 @@
+{
+  "adapter_catalog.json": {
+    "sha256": "f4ef67b9277778e49811920990cb0c83b70b106dadf4c405a5b9ae05dfe0377e",
+    "version": null
+  },
+  "broker_policy.json": {
+    "sha256": "fcbcf019515b611a915496df8210db99c89e68667be30d416978741014ae6360",
+    "version": "2.0"
+  },
+  "decision_policy.json": {
+    "sha256": "72614f11854da72edb61f0271003b176fcb6fda3990ba5ceba6513939087ca90",
+    "version": "2.0"
+  },
+  "platform_events.json": {
+    "sha256": "aaa8cb10a03b02d70386528010b2756455d6bb4303d4f641bb933196f0261787",
+    "version": null
+  },
+  "salesforce_sync_fields.json": {
+    "sha256": "9b1f9be12696888deef574cc588963087bf83b194d92b861dd613a5a28305d0a",
+    "version": "2.0"
+  },
+  "scoring_rubric.json": {
+    "sha256": "3aebc6ed2ca24c62936617bd50df21228416319917f9a26b5b312184c8cd7438",
+    "version": "2.0"
+  },
+  "state_machine.json": {
+    "sha256": "220230adc23121a6627e5dfc01f59ff3dda65cf5d41a7a253b03642958d2594d",
+    "version": "2.0"
+  }
+}

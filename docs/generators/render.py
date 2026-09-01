@@ -1,0 +1,875 @@
+"""Shared reportlab scaffolding for the TechCraft documents.
+
+The renderers pull every authoritative value from `docs.contracts`. Prose here explains; it never
+restates a value the registry owns. `Doc.claim()` records which claim ids reached a flowable, so
+`tests/unit/test_contract_rendering.py` can prove coverage structurally as well as by extracting
+text from the built PDF.
+"""
+
+import os
+import re
+import subprocess
+from dataclasses import dataclass
+from types import MappingProxyType
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen import canvas as pdfcanvas
+from reportlab.platypus import (
+    KeepTogether,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+    XPreformatted,
+)
+
+from docs.contracts import documents, projection
+
+_styles = getSampleStyleSheet()
+H1 = ParagraphStyle("H1x", parent=_styles["Heading1"], fontSize=15, spaceBefore=16, spaceAfter=6,
+                    textColor=colors.HexColor("#1a1a2e"))
+H2 = ParagraphStyle("H2x", parent=_styles["Heading2"], fontSize=12, spaceBefore=12, spaceAfter=4,
+                    textColor=colors.HexColor("#1a1a2e"))
+BODY = ParagraphStyle("Bodyx", parent=_styles["Normal"], fontSize=9.5, leading=13, spaceAfter=5)
+WHY = ParagraphStyle("Why", parent=BODY, leftIndent=10, textColor=colors.HexColor("#444444"),
+                     fontSize=9, leading=12, splitLongWords=0)
+CODE = ParagraphStyle("Code", parent=_styles["Code"], fontSize=8, leading=10.5, leftIndent=8,
+                      spaceAfter=5, backColor=colors.HexColor("#f4f4f4"))
+# splitLongWords=0: prose in a narrow column still wraps, but a long identifier moves to the next
+# line WHOLE instead of being cut in half. A cell rendered `BLOCKE` / `D_NO_AUTHORITATIVE_MAPPING`
+# publishes a sentinel nobody can grep for.
+CELL = ParagraphStyle("Cell", parent=BODY, fontSize=8.5, leading=11, spaceAfter=0, splitLongWords=0)
+CELLB = ParagraphStyle("CellB", parent=CELL, fontName="Helvetica-Bold")
+ALERT = ParagraphStyle("Alert", parent=BODY, fontSize=10, leading=14, spaceAfter=6,
+                       textColor=colors.HexColor("#7a1010"), backColor=colors.HexColor("#fdf0f0"),
+                       borderPadding=6, leftIndent=2, rightIndent=2)
+
+_TABLE_STYLE = TableStyle([
+    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#bbbbbb")),
+    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e8f0")),
+    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+    ("TOPPADDING", (0, 0), (-1, -1), 3),
+    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+])
+
+
+TOKEN = ParagraphStyle("Token", parent=CELL, fontName="Courier", fontSize=7.6, leading=10,
+                       splitLongWords=0, wordWrap=None)
+STEP = ParagraphStyle("Step", parent=BODY, leftIndent=18, firstLineIndent=-14, spaceAfter=3)
+# Fixed-width text that MUST wrap: wordWrap="CJK" breaks between characters, which is the only way
+# a 163-byte JSON body with no spaces fits a page at all.
+WRAPCODE = ParagraphStyle("WrapCode", parent=CODE, wordWrap="CJK", splitLongWords=1)
+
+TITLE = _styles["Title"]
+
+# The CLOSED presentation roles (re-audit-11 finding 2). No public rendering method accepts a
+# style OR a role: each method draws in the one role that IS that method, through a private
+# emitter that records the same role name on the block it emits — so the reviewed outline pins
+# which visual role every block may occupy, and the artifact lane holds the painted ink to the
+# recorded role's signature. This table is the only place a role name meets a style.
+ROLE_STYLES = MappingProxyType({
+    "TITLE": TITLE, "H1": H1, "H2": H2, "BODY": BODY, "WHY": WHY, "STEP": STEP,
+    "ALERT": ALERT, "CODE": CODE, "WRAPCODE": WRAPCODE,
+})
+
+# The page furniture's one look, shared by the stamping canvas and the signature table below so
+# the two cannot drift apart.
+FOOTER_FONT_NAME = "Helvetica"
+FOOTER_FONT_SIZE = 7
+FOOTER_INK = colors.HexColor("#666666")
+
+_BOLD_VARIANT = {"Helvetica": "Helvetica-Bold", "Courier": "Courier-Bold"}
+
+
+def _painted_signature(style) -> tuple:
+    """What one role's glyphs look like on the PAGE: allowed fonts, exact size, exact ink.
+
+    The bold variant is allowed because prose markup may embolden a span (`<b>`); nothing in the
+    documents changes a glyph's size or colour within a role, so those stay exact.
+    """
+    ink = style.textColor
+    rgb = ink.rgb() if hasattr(ink, "rgb") else (float(ink),) * 3
+    return (
+        frozenset({style.fontName, _BOLD_VARIANT.get(style.fontName, style.fontName)}),
+        round(float(style.fontSize), 2),
+        tuple(round(float(v), 4) for v in rgb),
+    )
+
+
+# Every look a governed page is allowed to paint: the block roles, the three table-cell styles
+# (drawn only by `_token_cell`, `_prose_cell` and `claim_table`'s header row — no caller names
+# them either), and the footer band. `docs.generators.artifact.verify_role_ink` holds every
+# painted character to this closed set, and each prose character to ITS line's recorded role.
+ROLE_SIGNATURES = MappingProxyType({
+    **{role: _painted_signature(style) for role, style in ROLE_STYLES.items()},
+    "CELL": _painted_signature(CELL),
+    "CELLB": _painted_signature(CELLB),
+    "TOKEN": _painted_signature(TOKEN),
+    "FOOTER": (frozenset({FOOTER_FONT_NAME}), float(FOOTER_FONT_SIZE),
+               tuple(round(float(v), 4) for v in FOOTER_INK.rgb())),
+})
+
+# Usable text width: letter minus the 0.75in margins, minus CODE's left indent.
+FRAME_WIDTH = letter[0] - 2 * 0.75 * inch
+_CODE_ROOM = FRAME_WIDTH - CODE.leftIndent
+
+
+def _guard_preformatted(text: str) -> str:
+    """XPreformatted does NOT wrap and does NOT honour `<br/>`.
+
+    Both were live defects. Joining steps with `<br/>` produced one run-on line (the tag is
+    silently dropped), and that line then ran off the right edge of the page — the receiver's
+    commit-before-2xx contract, the single most important requirement in the integration document,
+    was printed unreadable. Extraction tests did not catch it because pdfplumber happily reports
+    glyphs positioned outside the page box.
+
+    So: preformatted content is line-split on real newlines and every line must fit. Anything that
+    needs to wrap belongs in `wrapcode()` or an ordinary paragraph.
+    """
+    if "<br/>" in text:
+        raise ValueError("XPreformatted ignores <br/>; join preformatted lines with a newline")
+    for line in text.split("\n"):
+        width = stringWidth(line, CODE.fontName, CODE.fontSize)
+        if width > _CODE_ROOM:
+            raise ValueError(
+                f"preformatted line needs {width:.0f}pt but the frame allows {_CODE_ROOM:.0f}pt, "
+                f"so it would run off the page: {line[:60]!r}..."
+            )
+    return text
+
+
+def source_revision() -> str:
+    """The commit these pages were rendered from, plus a dirty marker. Printed in the footer so a
+    stale PDF is distinguishable from the audited one years later.
+
+    Best-effort BY DESIGN, and that is why `Publication.publish` refuses what it returns here when
+    it degrades: swallowing every failure means a git that is missing, broken, or simply not
+    installed on the build host produces a release-looking PDF stamped "source unknown", which is
+    exactly the artifact the footer exists to make impossible (re-audit `4f23f23..97deeae`
+    finding 9)."""
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        ).stdout.strip()
+        return f"{head}{'+dirty' if dirty else ''}"
+    except Exception:  # noqa: BLE001 — provenance is best-effort; never block a render
+        return "unknown"
+
+
+def _stamped_canvas(identity, revision: str, page_sections: dict | None = None):
+    """A canvas that holds each finished page until `save()`, then stamps the footer.
+
+    The total page count is not known while a page is being drawn, so the footer cannot be
+    written by a page callback. Deferring every page to save time makes `Page N of M` honest.
+    """
+
+    class _Stamped(pdfcanvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._pending: list[dict] = []
+
+        def showPage(self):
+            self._pending.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total = len(self._pending)
+            for number, state in enumerate(self._pending, 1):
+                self.__dict__.update(state)
+                self.saveState()
+                self.setFont(FOOTER_FONT_NAME, FOOTER_FONT_SIZE)
+                self.setFillColor(FOOTER_INK)
+                section = (page_sections or {}).get(number, "")
+                self.drawString(0.75 * inch, 0.45 * inch,
+                                identity.footer_line(section, revision))
+                self.drawRightString(letter[0] - 0.75 * inch, 0.45 * inch, f"Page {number} of {total}")
+                self.restoreState()
+                super().showPage()
+            super().save()
+
+    return _Stamped
+
+
+_CELL_PADDING = 10  # LEFTPADDING + RIGHTPADDING in _TABLE_STYLE
+
+
+def _token_cell(text: str, width: float | None = None):
+    """A cell of machine identifiers that must never break mid-token. Items separate at commas,
+    each on its own line, so a reader copies `platform_account_id` whole.
+
+    RAISES when a token cannot fit the column. `wordWrap=None` with `splitLongWords=0` does not
+    wrap an over-wide token — it CLIPS it, silently. That printed `website.review_completed` as
+    `website.review_complete`, a value that 422s on arrival and reads as correct on the page. A
+    document is worse than useless when it is confidently wrong, so an unfittable token is a build
+    failure rather than a layout artefact a reviewer is expected to catch by eye.
+    """
+    items = [part.strip() for part in str(text).split(",") if part.strip()]
+    if width is not None:
+        room = width - _CELL_PADDING
+        for item in items or [str(text)]:
+            needed = stringWidth(item, TOKEN.fontName, TOKEN.fontSize)
+            if needed > room:
+                raise ValueError(
+                    f"{item!r} needs {needed:.1f}pt but its column allows {room:.1f}pt; it would "
+                    f"be clipped on the page. Widen the column or reduce the token font."
+                )
+    return Paragraph("<br/>".join(escape(i) for i in items) or escape(text), TOKEN)
+
+
+def _prose_cell(text: str, width: float):
+    """A wrapping prose cell that never cuts a word in half.
+
+    CELL sets `splitLongWords=0`, so an over-wide word is not split — it is CLIPPED instead, which
+    is the silent failure `_token_cell` already refuses. Same rule here: the longest word must fit
+    its column, or the build stops.
+    """
+    room = width - _CELL_PADDING
+    for word in str(text).split():
+        needed = stringWidth(word, CELL.fontName, CELL.fontSize)
+        if needed > room:
+            raise ValueError(
+                f"{word!r} needs {needed:.1f}pt but its column allows {room:.1f}pt; it would be "
+                f"clipped. Widen the column or rephrase around the term."
+            )
+    return Paragraph(escape(text), CELL)
+
+
+def escape(text: str) -> str:
+    """Registry values are plain text; reportlab's Paragraph parses a mini-HTML, so `>` in a
+    direction token like `platform->tool` must be escaped or it is swallowed as markup."""
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+_TAG = re.compile(r"<[^>]+>")
+
+
+def visible_text(markup: str) -> str:
+    """What a reader actually sees, given the mini-HTML we hand reportlab.
+
+    The document model records this rather than the markup, because the model exists to be
+    compared against the built page — and `<b>` never reaches the page.
+    """
+    text = str(markup).replace("<br/>", "\n")
+    text = _TAG.sub("", text)
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
+@dataclass(frozen=True)
+class Block:
+    """One addressable region of the document, and exactly what it puts on the page.
+
+    `claim_id` is None for structural blocks — headings and connective prose that carry no
+    authoritative value. `kind` decides how the block is located on the built page: prose is found
+    as a contiguous run of text, a table is read back cell by cell.
+    """
+
+    kind: str  # "heading" | "prose" | "code" | "table" | "alert"
+    claim_id: str | None
+    lines: tuple[str, ...]
+    rows: tuple[tuple[str, ...], ...] = ()  # tables only, header row first
+    # The closed presentation role that drew each line, PARALLEL to `lines` (re-audit-11
+    # finding 2). `kind` says how a block is read back; it cannot say how it LOOKS — `p` and
+    # `why` both record prose, and title/h1/h2 all record headings, so an audience paragraph
+    # promoted to a red alert panel was indistinguishable in the model. The role is recorded by
+    # the same private emitter that draws it, the outline pins the reviewed role sequence, and
+    # `artifact.verify_role_ink` holds the painted glyphs to the recorded role — so a block that
+    # records one role and paints another is contradicted by the page rather than believed.
+    roles: tuple[str, ...] = ()
+    # The named projection this block was rendered under. The rendering tests recompute the
+    # expected content from the REGISTRY through `docs.contracts.projection` using this name, so
+    # the renderer never supplies the answer it is checked against (finding 3).
+    projection: str = ""
+    row_fields: tuple[str, ...] = ()
+    # The typed template a COMPOSED block was drawn from (re-audit-9 finding 1): ordered
+    # (kind, (Lit|Ref, ...)) parts. The release verifier digests it against the reviewed
+    # outline and recomputes the visible lines from it plus the REGISTRY claim, so every
+    # field occurrence is bound to the path that supplied it rather than recovered by
+    # subtracting matching strings from the finished text.
+    composed: tuple = ()
+    # Which columns render as TOKEN cells (Wave-2 audit finding 4). `_token_cell` replaces a
+    # cell's commas with line breaks, so the extractor hands those cells back unpunctuated — a
+    # difference the page comparison must forgive THERE and nowhere else. Recording the display
+    # schema beside the content is what lets the comparison stay exact everywhere else: a prose
+    # cell that silently loses its commas is a real defect, not a rendering artifact.
+    code_columns: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if len(self.roles) != len(self.lines):
+            raise ValueError(
+                f"a block records exactly one closed presentation role per visible line: "
+                f"{len(self.lines)} lines, {len(self.roles)} roles"
+            )
+        unknown = sorted(set(self.roles) - set(ROLE_STYLES))
+        if unknown:
+            raise ValueError(
+                f"{unknown} are not presentation roles this renderer has; the closed set is "
+                f"{sorted(ROLE_STYLES)}"
+            )
+
+
+@dataclass
+class Section:
+    section_id: str
+    title: str
+    blocks: list
+
+
+# Document identity is NOT defined here and cannot be passed in (Wave-2 re-audit finding 3):
+# `Doc` takes a document ID and looks the identity up in the closed registry, so a generator has
+# no identity object to edit and the furniture verifier can consult the same registry
+# independently of whatever the generator holds.
+
+
+class Doc:
+    """A document under construction, as a typed ordered model of what it will display.
+
+    Re-audit `4f23f23..97deeae` F3. The previous version tracked a LIST OF CLAIM IDS. Counting ids
+    and searching the page globally cannot prove what a reader saw: the suite stayed green after
+    the visible meaning of a claim was removed while its id stayed recorded, after the eight
+    canonical signing lines were reversed on the page, and after a contradictory unclaimed
+    paragraph was appended beside the claim it contradicted. All three are invisible to a counter.
+
+    So the document is now a sequence of sections, each a sequence of blocks, each block carrying
+    the exact visible lines it emits. `tests/unit/test_document_model.py` compares that model to
+    the built PDF span by span, in order, once each, inside the declared section.
+    """
+
+    def __init__(self, registry, document_id: str) -> None:
+        if type(document_id) is not str:
+            raise ValueError(
+                "a Doc names its document by ID; identity comes from the closed registry in "
+                "docs/contracts/documents.py, never from an object a caller supplies"
+            )
+        self.registry = registry
+        # READ-ONLY (re-audit-4 finding 1). `document_id` was ordinary mutable state AND the
+        # only thing publication checked, while rendering used the identity cached beside it:
+        # `doc = deploy_gen.build(); doc.document_id = CONTRACT` published six pages of
+        # operational guide under the contract's governed filename, cover, footers and metadata
+        # all saying guide, and the release path accepted it. A document is what it was
+        # constructed as.
+        self._document_id = document_id
+        self.identity = documents.identity(document_id)
+        # PRIVATE on purpose (Wave 2 F6): when this was `self.story`, a caller could append a
+        # flowable directly — visible on the page, recorded in no block — and the R15 witness
+        # (`doc.story.append(Paragraph("Return 2xx before COMMIT."))`) certified because every
+        # check walked the MODEL. Every flowable now enters through a method that records its
+        # block atomically, and the total page==model prose comparison holds the other side.
+        self._story: list = []
+        self.rendered: list[str] = []
+        self.sections: list[Section] = []
+        self.placements: list[dict] = []  # filled by build(): where each flowable landed
+        self.page_sections: dict[int, str] = {}  # filled by build(): page -> section title
+        self._total_pages = 0
+        self._revision = ""
+        self._open_section("(front matter)", "")
+
+    # ---- the document model ------------------------------------------------------------------
+    def _open_section(self, section_id: str, title: str) -> None:
+        self.sections.append(Section(section_id=section_id, title=title, blocks=[]))
+
+    def section(self, section_id: str, title: str):
+        """Start a numbered section. Its heading is a structural block of the new section."""
+        if any(s.section_id == section_id for s in self.sections):
+            raise ValueError(f"duplicate section id {section_id!r}")
+        self._open_section(section_id, title)
+        heading = Paragraph(escape(title), ROLE_STYLES["H1"])
+        # Tagged so the layout pass can tell which section each PAGE belongs to and stamp it in
+        # the footer: a page that opens mid-sentence is otherwise unlocatable on its own
+        # (re-audit `4f23f23..122cc67` finding 12).
+        heading._kyc_section = title
+        self._story.append(heading)
+        self._add(Block(kind="heading", claim_id=None, lines=(title,), roles=("H1",)))
+
+    def _add(self, block) -> None:
+        self.sections[-1].blocks.append(block)
+
+    @property
+    def blocks(self) -> list:
+        return [block for section in self.sections for block in section.blocks]
+
+    @property
+    def story(self) -> tuple:
+        """A read-only view. There is deliberately no public way to add a flowable directly —
+        every flowable is appended by a method that records its Block in the same call."""
+        return tuple(self._story)
+
+    def section_of(self, claim_id: str) -> str | None:
+        for section in self.sections:
+            if any(b.claim_id == claim_id for b in section.blocks):
+                return section.section_id
+        return None
+
+    # ---- structural prose (carries no authoritative value) ----------------------------------
+    def title(self):
+        """The cover title — the identity registry's, not a caller's.
+
+        It was a second literal of the same sentence (Wave-2 audit finding 3): the page could
+        say one thing and every footer another, and neither had an owner. It now comes from the
+        same closed registry entry the footers and the PDF metadata do.
+        """
+        text = self.identity.title
+        self._story.append(Paragraph(escape(text), ROLE_STYLES["TITLE"]))
+        self._add(Block(kind="heading", claim_id=None, lines=(text,), roles=("TITLE",)))
+
+    def h1(self, text: str):
+        self._story.append(Paragraph(escape(text), ROLE_STYLES["H1"]))
+        self._add(Block(kind="heading", claim_id=None, lines=(text,), roles=("H1",)))
+
+    def h2(self, text: str):
+        self._story.append(Paragraph(escape(text), ROLE_STYLES["H2"]))
+        self._add(Block(kind="heading", claim_id=None, lines=(text,), roles=("H2",)))
+
+    def keep_last_together(self, count: int) -> None:
+        """Glue the last `count` story flowables into one KeepTogether, so a heading cannot be
+        orphaned at a page bottom while its content starts on the next (gate audit
+        `6c4f54a..91fbde3` finding 15). Packing only: the block model is untouched."""
+        if count < 2 or len(self._story) < count:
+            raise ValueError("keep_last_together needs at least a heading and its content")
+        tail = self._story[-count:]
+        del self._story[-count:]
+        self._story.append(KeepTogether(tail))
+
+    def _prose(self, markup: str, role: str):
+        """The one door structural prose leaves through: draw in the named CLOSED role, and
+        record that same name on the block, atomically.
+
+        Private on purpose (re-audit-11 finding 2). The public methods take content only — the
+        role is the method, and there is no parameter, under any spelling, that reaches a style:
+        `p(markup, _role=ALERT)` used to publish an ordinary audience paragraph as a red alert
+        panel, indistinguishable in the model because the block said only `prose`. The recorded
+        role is pinned by the reviewed outline, and `artifact.verify_role_ink` holds the painted
+        glyphs to it, so recording one role and drawing another is contradicted by the page.
+        """
+        self._story.append(Paragraph(markup, ROLE_STYLES[role]))
+        self._add(Block(kind="prose", claim_id=None, lines=(visible_text(markup),), roles=(role,)))
+
+    def p(self, markup: str):
+        """Body prose. Bold spans are allowed here, so this takes pre-escaped markup."""
+        self._prose(markup, "BODY")
+
+    def why(self, markup: str):
+        """The indented gray aside."""
+        self._prose(markup, "WHY")
+
+    def code(self, text: str):
+        """Fixed-width block whose INDENTATION is meaningful — published Python, mainly.
+
+        Uses XPreformatted, not Paragraph: Paragraph collapses leading whitespace, so published
+        Python came out unindented and would not compile when copied off the page (re-audit
+        `6feca36..4f23f23` F3). The cost is that it never wraps, so `_guard_preformatted` refuses
+        a line that would not fit. Use `wrapcode()` for fixed-width text that may wrap.
+        """
+        lines = tuple(text.split("\n"))
+        self._story.append(XPreformatted(_guard_preformatted(escape(text)), ROLE_STYLES["CODE"]))
+        self._add(Block(kind="code", claim_id=None, lines=lines,
+                        roles=("CODE",) * len(lines)))
+
+    def wrapcode(self, text: str):
+        """Fixed-width text that is allowed to wrap anywhere, including mid-token.
+
+        For the signed body: 163 bytes of JSON with no whitespace, which cannot fit a line and has
+        no break opportunity. The document tells the reader it wraps and gives them the byte count
+        and sha256 to check their transcription against.
+        """
+        self._story.append(Paragraph(escape(text), ROLE_STYLES["WRAPCODE"]))
+        self._add(Block(kind="code", claim_id=None, lines=(text,), roles=("WRAPCODE",)))
+
+    def space(self, height: float = 4):
+        self._story.append(Spacer(1, height))
+
+    # ---- claims (the registry owns the value) ------------------------------------------------
+    #
+    # Recording is ATOMIC with appending a flowable (re-audit `6feca36..4f23f23` F4). There is no
+    # public record hook: a caller could otherwise mark a claim rendered and then display nothing,
+    # display something else, or display it twice, and the coverage count would still be 1. Every
+    # method below appends first and records only on success, so `self.rendered` counts flowables
+    # that exist rather than intentions.
+    def claim_statement(self, claim_id: str):
+        """Render a claim whose value is a `Statement` — a sentence its fact SELECTED.
+
+        This replaces `claim_note` (Wave-2 audit finding 1). The text is not the renderer's, not
+        the caller's, and not even the registry author's free choice: it is
+        `alternatives[answer]`, and the claim's own verifier executes the fact. The block is a
+        VALUE block like any other, because the sentence is the claim's value now — there is no
+        "attributed but unverified" role left to carry.
+        """
+        claim = self.registry[claim_id]
+        lines = projection.expected_lines(claim, projection.PARAGRAPH)
+        self._emit(claim_id, [Paragraph(escape(lines[0]), ROLE_STYLES["WHY"])], lines,
+                   roles=("WHY",) * len(lines), projection_name=projection.PARAGRAPH)
+
+    def _emit(self, claim_id: str, flowables: list, lines, *, roles: tuple[str, ...],
+              kind: str = "prose", rows=(), projection_name: str = "",
+              row_fields: tuple[str, ...] = (), code_columns: tuple[int, ...] = (),
+              composed: tuple = ()):
+        """Append the flowables, record the claim, and record EXACTLY what went on the page.
+
+        `lines` is not decoration. Recording an id proves a call happened; recording the visible
+        lines is what lets a test find that content on the built page, in order, once, in the
+        right section (re-audit `4f23f23..97deeae` F3). `roles` names the closed presentation
+        role that drew each line, parallel to `lines` — filtered in step with them so the pairing
+        survives the blank-line drop.
+        """
+        claim = self.registry[claim_id]
+        if not flowables:
+            raise ValueError(f"{claim_id} produced no flowable")
+        kept = tuple((line, role)
+                     for line, role in zip(lines, roles, strict=True) if str(line).strip())
+        lines = tuple(line for line, _ in kept)
+        roles = tuple(role for _, role in kept)
+        if not lines and not rows:
+            raise ValueError(f"{claim_id} produced a flowable with no visible text")
+        self._story.extend(flowables)
+        self.rendered.append(claim_id)
+        self._add(Block(kind=kind, claim_id=claim_id, lines=lines, rows=tuple(rows),
+                        roles=roles, projection=projection_name, row_fields=row_fields,
+                        code_columns=code_columns, composed=composed))
+        return claim
+
+    def claim_paragraph(self, claim_id: str, *, prefix: str = ""):
+        """Render a claim whose value is a single string.
+
+        Refuses a non-string: `escape()` would happily stringify a tuple, and the contract shipped
+        `decision is one of: ('approve', 'approve_buy_locked', ...)` — Python repr, quotes and
+        parentheses included, in a document written for people implementing against it.
+        """
+        claim = self.registry[claim_id]
+        (line,) = projection.expected_lines(claim, projection.PARAGRAPH)
+        markup = prefix + escape(line)
+        # The prefix is a renderer-authored LABEL, and it was drawn on the page without being
+        # recorded — so the model under-described its own output and a label could be rewritten
+        # invisibly. "Compliance window (days): 2555" reading "(years)" is false and was green.
+        # Recording it puts the label under the same order/once/section checks as everything else;
+        # `CLAIM_LABELS` in test_document_model pins the wording, because a label the renderer
+        # authors has no registry authority to be checked against.
+        label = visible_text(prefix).strip()
+        lines = (label, line) if label else (line,)
+        self._emit(claim_id, [Paragraph(markup, ROLE_STYLES["BODY"])], lines,
+                   roles=("BODY",) * len(lines), projection_name=projection.PARAGRAPH)
+
+    def claim_bullets(self, claim_id: str):
+        """Render a claim whose value is a sequence of strings, one paragraph each."""
+        claim = self.registry[claim_id]
+        lines = projection.expected_lines(claim, projection.BULLETS)
+        self._emit(claim_id,
+                   [Paragraph("\u2013  " + escape(line), ROLE_STYLES["BODY"]) for line in lines],
+                   lines, roles=("BODY",) * len(lines), projection_name=projection.BULLETS)
+
+    def _with_heading(self, claim_id: str, heading: str | None, blocks: list, lines, *,
+                      roles: tuple[str, ...], kind: str = "prose", projection_name: str = ""):
+        if heading:
+            self._emit(claim_id,
+                       [KeepTogether([Paragraph(escape(heading), ROLE_STYLES["H2"]), *blocks])],
+                       (heading, *lines), roles=("H2", *roles), kind=kind,
+                       projection_name=projection_name)
+        else:
+            self._emit(claim_id, blocks, lines, roles=roles, kind=kind,
+                       projection_name=projection_name)
+
+    def claim_steps(self, claim_id: str, *, heading: str | None = None):
+        """Render an ORDERED claim as numbered, WRAPPING paragraphs, kept with its heading.
+
+        One paragraph per step, not one preformatted block: steps are sentences, and a preformatted
+        block runs the longest one straight off the page (see `_guard_preformatted`).
+        """
+        claim = self.registry[claim_id]
+        lines = projection.expected_lines(claim, projection.STEPS)
+        self._with_heading(claim_id, heading,
+                           [Paragraph(escape(line).replace(". ", ".  ", 1), ROLE_STYLES["STEP"])
+                            for line in lines],
+                           lines, roles=("STEP",) * len(lines),
+                           projection_name=projection.STEPS)
+
+    def claim_code(self, claim_id: str, *, heading: str | None = None, numbered: bool = False,
+                   lead: str | None = None):
+        """Render a claim whose value is a sequence of literals as a fixed-width block.
+
+        `numbered` uses the NUMBERED_CODE projection, so the numbering comes from the registry
+        rather than from an f-string in the caller (finding 3): the canonical signing block was
+        numbered by the generator, which meant the generator authored the very lines the page was
+        checked against.
+        """
+        claim = self.registry[claim_id]
+        name = projection.NUMBERED_CODE if numbered else projection.CODE
+        lines = projection.expected_lines(claim, name)
+        block = XPreformatted(_guard_preformatted("\n".join(escape(v) for v in lines)),
+                              ROLE_STYLES["CODE"])
+        flowables = [Paragraph(lead, ROLE_STYLES["BODY"]), block] if lead else [block]
+        roles = ("CODE",) * len(lines)
+        self._with_heading(claim_id, heading, flowables,
+                           ((visible_text(lead),) + lines) if lead else lines,
+                           roles=(("BODY", *roles) if lead else roles),
+                           kind="code", projection_name=name)
+
+    def claim_prose(self, claim_id: str, segments):
+        """Render a claim as ONE prose part composed of typed segments.
+
+        `segments` is a sequence of `projection.Lit` (reviewed literal markup) and
+        `projection.Ref` (a claim field path plus a closed formatter). This method used to take a
+        markup STRING the caller had interpolated claim fields into, which meant the binding
+        between a field and its occurrence was lost the moment the f-string evaluated — and
+        `WIRE.CALLBACK.RETRY` holds both attempts=8 and worst_case_minutes=27, so a rendered
+        `27 attempts` erased to the same residue as the honest text (re-audit-9 finding 1). The
+        text is DERIVED here, from the claim and the template, and the release verifier derives
+        it again independently.
+        """
+        self.claim_mixed(claim_id, [("p", tuple(segments))])
+
+    # each composed part KIND draws in exactly one closed role — the typed template reviews the
+    # kinds, so it reviews the roles with them
+    _PART_ROLES = {"p": "BODY", "why": "WHY", "code": "CODE", "atomic_code": "CODE",
+                   "wrap": "WRAPCODE"}
+
+    def claim_mixed(self, claim_id: str, parts, *, published_fields: tuple[str, ...] = ()):
+        """Render one claim that needs several flowables — prose, then a code block, then more.
+
+        `parts` is a sequence of (kind, segments) pairs where kind is "p", "why", "code"
+        (fixed-width, indentation preserved, must fit the line), "atomic_code" (the same, but
+        never split across a page), or "wrap" (fixed-width, wraps anywhere), and `segments` is a
+        tuple of `projection.Lit` / `projection.Ref`. Every part's TEXT is derived from the claim
+        and the template — this method interpolates nothing and accepts no finished string
+        (re-audit-9 finding 1).
+
+        This exists so a composite claim — the signing vector is a body, a canonical string, a
+        digest, and a runnable snippet — stays ONE atomic emit. The alternative was a public
+        record hook beside a pile of loose `p()`/`code()` calls, which is exactly the shape that
+        lets a claim count as covered while displaying something else (re-audit F4).
+        """
+        claim = self.registry[claim_id]
+        parts = tuple((kind, tuple(segments)) for kind, segments in parts)
+        rendered = [(kind, projection.composed_part_text(claim, kind, segments))
+                    for kind, segments in parts]
+        flowables = []
+        for kind, text in rendered:
+            style = ROLE_STYLES[self._PART_ROLES[kind]]
+            if kind == "code":
+                flowables.append(XPreformatted(_guard_preformatted(escape(text)), style))
+            elif kind == "atomic_code":
+                # ONE page, always. A copyable block split across pages has the page footer
+                # physically between two statements, so a contiguous copy picks up
+                # "... Page 5 of 7" and fails to compile (re-audit `4f23f23..97deeae` finding 4).
+                flowables.append(
+                    KeepTogether([XPreformatted(_guard_preformatted(escape(text)), style)]))
+            elif kind == "wrap":
+                flowables.append(Paragraph(escape(text), style))
+            else:
+                flowables.append(Paragraph(text, style))
+        lines: list[str] = []
+        roles: list[str] = []
+        for kind, text in rendered:
+            part_lines = (
+                text if kind in ("code", "atomic_code", "wrap") else visible_text(text)
+            ).split("\n")
+            lines.extend(part_lines)
+            roles.extend([self._PART_ROLES[kind]] * len(part_lines))
+        self._emit(claim_id, flowables, tuple(lines), roles=tuple(roles),
+                   projection_name=projection.COMPOSED,
+                   row_fields=published_fields, composed=parts)
+
+    def claim_alert(self, claim_id: str):
+        """A blocked claim, rendered where a reader would otherwise act on the document."""
+        claim = self.registry[claim_id]
+        lines = projection.expected_lines(claim, projection.ALERT)
+        body = "<br/>".join("\u2013  " + escape(line) for line in lines)
+        self._emit(claim_id, [Paragraph(body, ROLE_STYLES["ALERT"])], lines,
+                   roles=("ALERT",) * len(lines), kind="alert",
+                   projection_name=projection.ALERT)
+
+    def claim_table(self, claim_id: str, widths, heading: str | None = None):
+        """Render a claim's table from its registry-derived matrix — header row included.
+
+        Wave 2 F5 (`4cb2cb7` finding 5): this method used to accept caller-authored `rows=` and
+        `headers=`, which left every cell and column title the CALLER's text — reversed rows,
+        swapped Effective?/Why values, and a condition moved to its neighbour all certified,
+        because the page checks read tables back as bags of leaves. The complete ordered matrix
+        now comes from `projection.expected_matrix(claim)`, so the renderer contributes geometry
+        only: `widths` and `code_columns` cannot change a cell's text, order, or column.
+
+        Which columns render as TOKEN cells is the CLAIM's declaration, not this caller's
+        (Wave-2 re-audit finding 2). A token cell breaks only between comma-separated items and
+        never inside an identifier — `platform` / `_account_id` is one a reader copies wrong, and
+        payload extras are accepted, so the misspelling 202s while silently populating nothing
+        (re-audit `6feca36..4f23f23` F10). Because that rendering LOSES the commas, the page
+        comparison has to forgive them there; leaving the choice with the caller meant the caller
+        could declare a prose column lossy and have its punctuation loss forgiven by a check
+        reading the caller's own declaration.
+
+        Nor is the FIELD-to-column binding this caller's (re-audit-3 finding 1). `row_fields=`
+        was the last piece of a table's content still chosen here, and it was enough to publish
+        every value truly under every header truly with the two paired wrongly. The claim's
+        columns name the attributes; this method contributes widths and an optional heading.
+        """
+        claim = self.registry[claim_id]
+        code_columns = claim.token_columns
+        matrix = projection.expected_matrix(claim)
+        headers, body_rows = matrix[0], matrix[1:]
+        data = [[Paragraph(escape(h), CELLB) for h in headers]]
+        for row in body_rows:
+            data.append(
+                [
+                    _token_cell(cell, widths[index])
+                    if index in code_columns
+                    else _prose_cell(cell, widths[index])
+                    for index, cell in enumerate(row)
+                ]
+            )
+        table = Table(data, colWidths=widths, repeatRows=1)
+        table.setStyle(_TABLE_STYLE)
+        flowables = [table]
+        lines = (heading,) if heading else ()
+        if heading:
+            flowables = [KeepTogether([Paragraph(escape(heading), ROLE_STYLES["H2"]), table])]
+        self._emit(claim_id, flowables, lines, roles=("H2",) if heading else (),
+                   kind="table", rows=matrix,
+                   projection_name=projection.TABLE, row_fields=claim.row_fields,
+                   code_columns=tuple(code_columns))
+
+    def table(self, headers: tuple[str, ...], rows, widths, code_columns: tuple[int, ...] = ()):
+        """A table whose cells are already formatted from claims recorded elsewhere."""
+        data = [[Paragraph(escape(h), CELLB) for h in headers]]
+        for row in rows:
+            data.append(
+                [
+                    _token_cell(cell, widths[index])
+                    if index in code_columns
+                    else _prose_cell(cell, widths[index])
+                    for index, cell in enumerate(row)
+                ]
+            )
+        table = Table(data, colWidths=widths, repeatRows=1)
+        table.setStyle(_TABLE_STYLE)
+        self._story.append(table)
+        self._add(Block(kind="table", claim_id=None, lines=(),
+                        rows=(tuple(headers),) + tuple(tuple(str(c) for c in r) for r in rows)))
+
+    @property
+    def document_id(self) -> str:
+        return self._document_id
+
+    def render(self, destination, *, revision: str | None = None) -> str:
+        """Draw to `destination` — a path, or an ALREADY-OPEN binary stream — stamping this
+        document's identity on every page.
+
+        A release passes its own open descriptor (re-audit-5 finding 2): the publication opens
+        the staging file exclusively and without following symlinks, and reopening it here by
+        name would hand the race straight back.
+
+        This is the INTERNAL renderer — previews, tests, intermediate artifacts. It is not how a
+        document leaves the repo. Publishing goes through `docs.generators.publication`, which
+        alone decides the filename and refuses provenance a reader could not check (re-audit-3
+        findings 2-4). This used to be `build(path, *, release=False)`, and the default was the
+        whole defect: both documented `main()` commands called it without the flag, so the only
+        publication path in the repo was the one with the provenance refusal switched off. A
+        release is not a flag on a preview now; it is a different function.
+
+        There is no `title` parameter, and no identity object to pass either (Wave-2 audit
+        finding 3 and its re-audit): the title comes from the closed registry keyed by the
+        document ID, and the furniture lane checks the page against that registry rather than
+        against anything the generator holds.
+
+        A document read for years without the repo beside it needs to say which commit produced
+        it and how many pages it has, so a stale copy is distinguishable from the audited one and
+        a missing page is visible (re-audit `6feca36..4f23f23` F12, document half).
+
+        "Page N of M" needs the total, which is only known once the last page is laid out. This
+        makes ONE layout pass and defers the furniture to canvas save time. A counting pass over
+        the same story does not work: reportlab mutates flowables as it lays them out (frame
+        binding, split state), so a second build over already-rendered objects raises LayoutError.
+        """
+        # ONE provenance value per artifact (re-audit-4 finding 2). This used to read
+        # `source_revision()` itself while the publication read it separately to decide whether
+        # to allow the release at all, so the value AUTHORIZED and the value STAMPED were two
+        # different reads of a moving world: approving `aaaaaaa` and printing `bbbbbbb`, or
+        # `bbbbbbb+dirty`, needed nothing but a commit between them. A publication passes the
+        # exact value it validated; a preview, which authorizes nothing, may read it here.
+        revision = source_revision() if revision is None else revision
+        self.placements = []
+        placements = self.placements
+        page_sections: dict[int, str] = {}
+        self.page_sections = page_sections
+
+        class _Recording(SimpleDocTemplate):
+            """Records where each flowable actually landed.
+
+            Geometry read back from the PAGE cannot see two flowables drawn on the same baseline:
+            the extractor merges their glyphs into a single word, so a line-box detector reports
+            zero collisions on a visibly interleaved page (re-audit `4f23f23..122cc67` finding 11).
+            The layout engine is the only place those rectangles exist.
+            """
+
+            def afterFlowable(self, flowable):  # noqa: N802 — reportlab's spelling
+                section = getattr(flowable, "_kyc_section", None)
+                if section is not None:
+                    page_sections[self.page] = section
+                elif self.page not in page_sections and self.page > 1:
+                    # a page that opens with a continuation inherits the section it continues
+                    page_sections[self.page] = page_sections.get(self.page - 1, "")
+                frame = getattr(self, "frame", None)
+                if frame is None:
+                    return
+                height = getattr(flowable, "height", 0) or 0
+                width = getattr(flowable, "width", 0) or 0
+                placements.append({
+                    "page": self.page,
+                    "x0": frame._x1,
+                    "x1": frame._x1 + width,
+                    "bottom": frame._y,
+                    "top": frame._y + height,
+                    "what": type(flowable).__name__,
+                    "text": " ".join(str(getattr(flowable, "text", ""))[:40].split()),
+                })
+
+        template = _Recording(
+            destination,
+            pagesize=letter,
+            leftMargin=0.75 * inch,
+            rightMargin=0.75 * inch,
+            topMargin=0.7 * inch,
+            bottomMargin=0.8 * inch,
+            title=self.identity.title,
+            author="IPv4.Global",
+            subject=f"source revision {revision}",
+        )
+        template.build(self._story,
+                       canvasmaker=_stamped_canvas(self.identity, revision, page_sections))
+        self._total_pages = template.page
+        self._revision = revision
+        return destination if isinstance(destination, str) else getattr(
+            destination, "name", "")
+
+    def expected_footers(self) -> tuple[tuple[str, str], ...]:
+        """The exact (left, right) footer pair for every page, derived after the layout pass.
+
+        The furniture lane compares this to the text actually drawn in the footer band, so the
+        band carries the manifest's title, the page's own section, the stamped revision, and an
+        honest `Page N of M` — and nothing else (Wave-2 audit finding 3).
+        """
+        if not self._total_pages:
+            raise ValueError("footers are known only after build() lays the document out")
+        total = self._total_pages
+        return tuple(
+            (self.identity.footer_line(self.page_sections.get(number, ""), self._revision),
+             f"Page {number} of {total}")
+            for number in range(1, total + 1)
+        )
+
+
+INCH = inch

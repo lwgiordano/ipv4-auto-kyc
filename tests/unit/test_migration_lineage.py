@@ -1,0 +1,414 @@
+"""Migration-lineage guard (audit rounds 2 + 3 + 4).
+
+Round 1's P1 fix authored validation revision 012, which consumed the migration
+number the ROADMAP §C still reserved for the pending PR 6b — a real forward collision
+(a multiple-head Alembic graph breaks the migration CI gate and `/readyz`'s single-head
+lookup). Round 2 added a numeric guard; round 3 showed it ignored ownership; round 4
+showed it silently ignored an *unknown* State (a typo like `pendng`) — orphaning a
+revision from both ownership sets — and that the negative tests bypassed the parser.
+
+This guard reads the §C table through `tests/roadmap.py` — the shared parser, which keeps
+ordered `(unit, state, revisions)` records **without deduplication** — and fail-closes on
+any State that is not exactly `shipped`/`pending`/`—`, so `shipped ∪ pending` is a
+disjoint, exhaustive partition of the reserved revisions. The regression tests drive
+crafted Markdown through that same parser, not hand-built records, so a parser regression
+(reintroduced dedup, a shifted column) is caught too. Everything is read off disk — no
+database.
+
+This is also what licenses the OTHER §C consumer: `tests/unit/test_plan_artifact_static.py`
+derives its banned revision numbers from §C, and it is the checks here that make §C a
+truthful statement about the live Alembic chain rather than a table someone edits freely.
+"""
+
+import re
+
+import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+from kyc_tool.config import REPO_ROOT
+from tests import roadmap
+from tests.roadmap import ROADMAP, parse_records
+
+
+def _script() -> ScriptDirectory:
+    cfg = Config(str(REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    return ScriptDirectory.from_config(cfg)
+
+
+def _validate_lineage(
+    records: list[tuple[str, str, list[int]]], existing: set[int], head_num: int
+) -> None:
+    """Pure validator (raises AssertionError on any violation) so it can be exercised
+    with crafted tables, not only the live ROADMAP."""
+    # State contract, fail-closed: a row with a migration is shipped|pending; a row
+    # without one is '—'. An unrecognised State (e.g. the typo 'pendng') must NOT be
+    # silently dropped — that would orphan its revision from both ownership sets.
+    for unit, state, revs, *_rest in records:
+        if revs:
+            assert state in ("shipped", "pending"), (
+                f"{unit}: migration row has unrecognised State {state!r} (want shipped|pending)"
+            )
+        else:
+            # `future` is the reserved-unbuilt lifecycle (gate audit `6c4f54a..91fbde3` F12) —
+            # legal ONLY without a migration; `—` stays the no-migration row of any other unit.
+            assert state in ("—", "future"), (
+                f"{unit}: non-migration row has State {state!r} (want '—' or 'future')"
+            )
+
+    flat = [rev for r in records for rev in r.revisions]
+    dupes = sorted({rev for rev in flat if flat.count(rev) > 1})
+    assert not dupes, f"duplicate migration reservations in ROADMAP §C: {dupes}"
+
+    reserved = sorted(flat)  # unique now (dup check passed)
+    assert reserved, "ROADMAP §C reserves no migrations"
+    assert reserved == list(range(reserved[0], reserved[-1] + 1)), (
+        f"ROADMAP migration reservations are not contiguous: {reserved}"
+    )
+
+    shipped = {rev for r in records if r.state == "shipped" for rev in r.revisions}
+    pending = sorted(rev for r in records if r.state == "pending" for rev in r.revisions)
+    pending_set = set(pending)
+    # shipped/pending must partition every reserved revision (disjoint + exhaustive) —
+    # a second, explicit statement of the fail-closed State contract above.
+    assert shipped.isdisjoint(pending_set), (
+        f"revisions marked both shipped and pending: {sorted(shipped & pending_set)}"
+    )
+    assert shipped | pending_set == set(flat), (
+        f"revisions owned by neither shipped nor pending: {sorted(set(flat) - shipped - pending_set)}"
+    )
+
+    # every authored revision at/above the first reservation must be owned by a shipped
+    # row, and every shipped revision must be authored — equality catches an authored
+    # revision still marked pending (the round-3 ownership collision).
+    authored_reserved = {rev for rev in existing if rev >= reserved[0]}
+    assert authored_reserved == shipped, (
+        f"authored reserved revisions {sorted(authored_reserved)} != shipped-owned "
+        f"{sorted(shipped)}; a migration is authored but still marked pending (or vice versa)"
+    )
+    # no pending revision may already exist in the Alembic chain
+    collided = sorted(pending_set & existing)
+    assert not collided, f"pending ROADMAP revisions already authored: {collided}"
+    # the live head is shipped; the next migration to author is the first pending == head+1
+    assert head_num in shipped, f"live Alembic head {head_num:03d} is not a shipped reservation"
+    assert pending, "ROADMAP §C reserves no pending migration"
+    assert pending[0] == head_num + 1, (
+        f"first pending migration {pending[0]:03d} != head+1 ({head_num + 1:03d}); "
+        "renumber the ROADMAP reservations after adding a migration"
+    )
+
+
+def test_single_alembic_head():
+    heads = _script().get_heads()
+    assert len(heads) == 1, f"expected exactly one Alembic head, got {heads}"
+
+
+def test_roadmap_lineage_consistent_with_alembic():
+    script = _script()
+    existing = {int(r.revision) for r in script.walk_revisions()}
+    head_num = int(script.get_heads()[0])
+    _validate_lineage(roadmap.records(), existing, head_num)
+
+
+def test_no_reservation_shaped_row_survives_outside_section_c():
+    """Reservations are read from §C and ONLY §C — so a reservation-shaped row anywhere else is
+    an ERROR, not merely invisible. Without this, a row 'relocated' out of the table would still
+    read as reserved to a human while the parser no longer saw it (re-audit `45cc215` F7)."""
+    stray = roadmap.reservation_rows_outside_section_c(ROADMAP.read_text())
+    assert not stray, (
+        "reservation-shaped rows outside ROADMAP §C — move them into the table or delete them:\n"
+        + "\n".join(stray)
+    )
+
+
+def test_parser_rejects_a_malformed_reservation_row():
+    """A `| PR …` row with the wrong cell count is a reservation the old parser silently
+    SKIPPED — orphaning it from every ownership check. It now raises."""
+    with pytest.raises(ValueError, match="want exactly 5"):
+        parse_records(_HEADER + "| PR 2 | shipped | 008 | x |\n")
+
+
+# SHIPPED revision → the exact §C row unit that owns it. Hand-pinned deliberately and safely:
+# unlike the moving head/range values this suite derives, shipped history is FROZEN — the map
+# only ever GROWS one entry per release (the failure message says append), and pinning it is the
+# only authority that catches an owner swap between two frozen rows, which leaves every
+# number-set, lineage, and §G check green because the numbers never change
+# (re-audit `f495de8` F8: swapping 014/015's owner rows passed everything).
+_SHIPPED_OWNERS = {
+    8: "PR 2", 9: "PR 4", 10: "PR 5a", 11: "PR 6", 12: "PR 6",
+    13: "PR 7b-core", 14: "PR 7b-core repair", 15: "PR 7b-core hardening",
+    16: "PR 7b-core admission", 17: "PR 7b-core boundary",
+    18: "PR 7b-core transition authority", 19: "PR 7b-core payload repair",
+    20: "PR 7b-core redaction uniformity", 21: "PR 7b-core poison recovery",
+    22: "PR 7b-core authority invariant repair", 23: "PR 7b-core cross-table authority repair",
+}
+
+
+def test_shipped_reservations_keep_their_frozen_owners():
+    owners = {
+        rev: r.unit for r in roadmap.records() if r.state == "shipped" for rev in r.revisions
+    }
+    assert owners == _SHIPPED_OWNERS, (
+        "shipped revision→owner rows changed. Shipping a NEW migration appends exactly one "
+        "entry here (same commit as the §C State flip); any OTHER difference is frozen history "
+        f"being rewritten.\n  got: {owners}\n  pinned: {_SHIPPED_OWNERS}"
+    )
+
+
+def test_every_unit_detail_declaration_matches_its_section_c_row():
+    """Ownership, not just number-sets: §G's per-unit sections each declare their migration
+    (`Migration `NNN`` / `migration **NNN**`), and every declared number must be reserved by
+    that SAME unit's §C row(s). Swapping two pending owners in §C leaves every set-level check
+    green — identical numbers, different owners — and this is what catches it
+    (re-audit `45cc215` F7). Units whose sections declare nothing are skipped."""
+    text_ = _roadmap_text()
+    recs = roadmap.records()
+    lines = text_.splitlines()
+    headings = [(i, ln) for i, ln in enumerate(lines) if ln.startswith("### PR ")]
+    assert headings, "ROADMAP §G unit sections are gone — the ownership check has no input"
+    checked = 0
+    for idx, (i, heading) in enumerate(headings):
+        unit = heading.removeprefix("### ").split(" — ")[0].strip()
+        end = headings[idx + 1][0] if idx + 1 < len(headings) else len(lines)
+        body = "\n".join(lines[i:end])
+        declared = {int(m) for m in re.findall(r"[Mm]igration\s+\*?\*?`?(\d{3})`?\*?\*?", body)}
+        if not declared:
+            continue
+        owned = set(roadmap.unit_revisions(recs, unit))
+        assert declared <= owned, (
+            f"{unit}: §G declares migration(s) {sorted(declared - owned)} that its §C row(s) do "
+            f"not reserve (row owns {sorted(owned)}) — either the table or the section is lying"
+        )
+        checked += 1
+    assert checked >= 5, f"only {checked} unit sections declare migrations — the check went blind"
+
+
+# --- mutation resistance: crafted §C tables are driven through the REAL parser so a
+#     parser regression (dedup, shifted column) is caught too, then validated against a
+#     fixed baseline (revisions 001..012 authored, single head 012). ------------------
+
+_HEADER = (
+    "| Unit | Item(s) | State | Migration | Content |\n"
+    "|------|---------|-------|-----------|---------|\n"
+)
+_EXISTING = set(range(1, 13))  # revisions 001..012 authored
+_HEAD = 12
+
+_REAL_BODY = [
+    "| PR 2 | 2 | shipped | 008 | x |",
+    "| PR 4 | 5 | shipped | 009 | x |",
+    "| PR 5a | 6 | shipped | 010 | x |",
+    "| PR 6 | 7A | shipped | 011, 012 | x |",
+    "| PR 6b | 7B | pending | 013 | x |",
+    "| PR 7a | 9 | pending | 014 | x |",
+    "| PR 7b | 8 | pending | 015 | x |",
+    "| PR 8 | 10 | pending | 016 | x |",
+    "| PR 10 | 13 | pending | 017 | x |",
+]
+
+
+def _validate_body(body_rows: list[str]) -> None:
+    text = _HEADER + "\n".join(body_rows) + "\n"
+    _validate_lineage(parse_records(text), _EXISTING, _HEAD)
+
+
+def test_parser_and_validator_accept_real_shape():
+    _validate_body(_REAL_BODY)
+
+
+def test_validator_rejects_ownership_collision():
+    # gap-free, but PR 6 (shipped) owns only 011 and the PENDING PR 6b reserves 012 —
+    # which is already authored. The ownership equality / head-shipped checks reject it.
+    with pytest.raises(AssertionError):
+        _validate_body([
+            "| PR 2 | 2 | shipped | 008 | x |",
+            "| PR 4 | 5 | shipped | 009 | x |",
+            "| PR 5a | 6 | shipped | 010 | x |",
+            "| PR 6 | 7A | shipped | 011 | x |",
+            "| PR 6b | 7B | pending | 012 | x |",
+            "| PR 7a | 9 | pending | 013 | x |",
+            "| PR 7b | 8 | pending | 014 | x |",
+            "| PR 8 | 10 | pending | 015 | x |",
+            "| PR 10 | 13 | pending | 016 | x |",
+        ])
+
+
+def test_validator_rejects_duplicate_reservation():
+    # two pending rows book 013; the numeric RANGE stays gap-free (013..017 present),
+    # so only the pre-dedup duplicate check (through the real parser) can catch it.
+    with pytest.raises(AssertionError):
+        _validate_body([
+            "| PR 2 | 2 | shipped | 008 | x |",
+            "| PR 4 | 5 | shipped | 009 | x |",
+            "| PR 5a | 6 | shipped | 010 | x |",
+            "| PR 6 | 7A | shipped | 011, 012 | x |",
+            "| PR 6b | 7B | pending | 013 | x |",
+            "| PR 7a | 9 | pending | 013 | x |",
+            "| PR 7b | 8 | pending | 014 | x |",
+            "| PR 8 | 10 | pending | 015 | x |",
+            "| PR 10 | 13 | pending | 016, 017 | x |",
+        ])
+
+
+def test_validator_rejects_unknown_state():
+    # PR 7a's State is the typo 'pendng' while it still reserves 014 — must fail closed,
+    # not silently orphan 014 from both ownership sets (round-4 finding).
+    with pytest.raises(AssertionError):
+        _validate_body([r.replace("| pending | 014 |", "| pendng | 014 |") for r in _REAL_BODY])
+
+
+def test_validator_rejects_numeric_gap():
+    # drop PR 7a's 014 entirely, leaving 013 then 015 → non-contiguous reservation.
+    with pytest.raises(AssertionError):
+        _validate_body([r for r in _REAL_BODY if not r.startswith("| PR 7a |")])
+
+
+def test_validator_rejects_stateful_row_without_migration():
+    # a row with no migration must be State '—'; a stray 'pending' on it fails closed.
+    with pytest.raises(AssertionError):
+        _validate_body([*_REAL_BODY, "| PR 5b | 11 | pending | — | x |"])
+
+
+# --- cross-artifact migration parity (re-audit `4dfdf8a` F6) ---
+# Number continuity in the §C table alone is insufficient: the §C row said `015` while its own
+# Content cell still read `down_revision='013'`, and the activation/6b specs each carried a third
+# opinion. One revision number must mean one thing across every artifact that names it.
+
+_SPECS = REPO_ROOT / ".agents" / "superpowers" / "specs"
+
+
+def _roadmap_text() -> str:
+    return ROADMAP.read_text()
+
+
+def test_roadmap_detail_sections_chain_contiguously():
+    """Every detailed `Migration **NNN** (`down_revision='MMM'`)` section must chain M = N-1 —
+    a section claiming a down_revision that skips the repair revisions is exactly how the split
+    lineage read as consistent while bypassing 014/015."""
+    pairs = re.findall(r"Migration \*\*(\d{3})\*\* \(`down_revision='(\d{3})'`\)", _roadmap_text())
+    assert pairs, "no detailed migration sections found — the parser regressed"
+    for rev, down in pairs:
+        assert int(down) == int(rev) - 1, (
+            f"ROADMAP detail section: migration {rev} claims down_revision={down}; "
+            f"the chain is contiguous, so it must be {int(rev) - 1}"
+        )
+
+
+def test_roadmap_table_and_detail_sections_agree():
+    """A revision reserved in a §C row must appear as that unit's detailed section number too —
+    the table said 015 while the detail heading still said 014's content."""
+    text_ = _roadmap_text()
+    activation_row = re.search(r"\| PR 7b-activation \| 8 \| pending \| (\d{3}) \|", text_)
+    assert activation_row, "activation row missing from §C"
+    detail = re.search(
+        r"### PR 7b-activation[^\n]*\nMigration \*\*(\d{3})\*\*", text_
+    )
+    assert detail, "activation detail section missing"
+    assert activation_row.group(1) == detail.group(1), (
+        f"§C reserves {activation_row.group(1)} for 7b-activation but the detail section says "
+        f"{detail.group(1)}"
+    )
+    # and the row's own Content cell must not carry a contradicting down_revision
+    row_line = next(line for line in text_.splitlines() if line.startswith("| PR 7b-activation "))
+    inner = re.search(r"down_revision='(\d{3})'", row_line)
+    if inner:
+        assert int(inner.group(1)) == int(activation_row.group(1)) - 1, (
+            f"the activation ROW text says down_revision='{inner.group(1)}' but the reserved "
+            f"revision is {activation_row.group(1)} — the cell contradicts its own row"
+        )
+
+
+def test_activation_spec_agrees_with_roadmap():
+    spec = (_SPECS / "2026-07-22-pr7b-activation-platform-ordering-design.md").read_text()
+    m = re.search(r"this doc, migration `(\d{3})`, `down_revision='(\d{3})'`", spec)
+    assert m, "activation spec no longer declares its migration in the header"
+    row = re.search(r"\| PR 7b-activation \| 8 \| pending \| (\d{3}) \|", _roadmap_text())
+    assert m.group(1) == row.group(1), (
+        f"activation spec says migration {m.group(1)}; ROADMAP §C reserves {row.group(1)}"
+    )
+    assert int(m.group(2)) == int(m.group(1)) - 1
+
+
+def test_6b_spec_is_banner_superseded_not_silently_stale():
+    """The paused 6b spec self-assigned migration 013 and 'lands before 7b'. Until it is
+    re-planned, the superseding banner must be present and must name the current chain."""
+    spec = (_SPECS / "2026-07-22-pr6b-revalidation-design.md").read_text()
+    assert "PAUSED / SUPERSEDED ORDERING" in spec
+    row = re.search(r"\| PR 6b \| 7B \| pending \| (\d{3}) \|", _roadmap_text())
+    assert row, "6b row missing from §C"
+    assert f"migration `{row.group(1)}`" in spec, (
+        f"the 6b banner must name the currently reserved revision {row.group(1)}"
+    )
+
+
+_ACTIVATION_SPEC = _SPECS / "2026-07-22-pr7b-activation-platform-ordering-design.md"
+
+
+def _activation_live() -> str:
+    """The activation spec's live text (above the first revision-note heading)."""
+    text_ = _ACTIVATION_SPEC.read_text()
+    marker = re.search(r"^#{1,3}\s*Revision note", text_, re.MULTILINE)
+    return text_[: marker.start()] if marker else text_
+
+
+def test_activation_live_contract_points_at_024_not_the_frozen_022():
+    """Re-audit `8377440` F8: O3 said "expand the canonical 022 ROADMAP row" while activation is
+    024 and 022 is frozen 7b-core. No live activation-owned instruction may target 022/023 as if
+    it were this unit's row."""
+    live = _activation_live()
+    stale = [
+        f"line {i}: {ln.strip()}"
+        for i, ln in enumerate(live.splitlines(), 1)
+        if re.search(r"canonical\s+0(?:22|23)\s+ROADMAP row", ln)
+        or re.search(r"expand the\s+0(?:22|23)\b", ln, re.IGNORECASE)
+    ]
+    assert not stale, "activation live text still points work at a frozen 7b-core row\n" + "\n".join(stale)
+
+
+def test_activation_cutover_fences_every_decision_writer_not_only_publishers():
+    """Re-audit `8377440` F8 + O4: the drained cutover must stop EVERY writer that takes the
+    decisions/cases locks or emits a callback — publishers, dev_worker, pipeline, AND the API's
+    inline manual-approve — not publishers alone. A cutover that names only publishers/dev_worker
+    contradicts O4's own fence requirement."""
+    live = _activation_live()
+    cutover = re.search(r"\*\*Activation cutover:\*\*.*?(?=\n\*\*Rollback)", live, re.DOTALL)
+    assert cutover, "activation cutover paragraph not found in live text"
+    body = cutover.group(0)
+    for writer in ("pipeline", "API"):
+        assert writer in body, (
+            f"the activation cutover does not name the {writer!r} decision writer — O4 requires "
+            "every decisions/cases-lock writer stopped, not just publishers"
+        )
+
+
+# A revision-history section records what a document USED to say; everything above it is live
+# guidance. Scanning only a byte prefix let contradictions survive further down the file — the
+# activation spec's "Out of scope" section called 7b-core "not yet shipped" through three green
+# audit rounds (re-audit `cbb783b` F8). Live text is now scanned in FULL, to this boundary.
+_REVISION_HISTORY = re.compile(r"^#{1,3}\s*Revision note", re.MULTILINE)
+
+
+def _live_section(text: str) -> str:
+    """Everything before the first revision-history heading: the document's LIVE claims."""
+    marker = _REVISION_HISTORY.search(text)
+    return text[: marker.start()] if marker else text
+
+
+def test_activation_spec_status_matches_roadmap_state():
+    """Re-audit 0c46443 F7 / `cbb783b` F8: the activation spec must not describe 7b-core as
+    pending anywhere in its LIVE text while the ROADMAP marks its revisions shipped — status is
+    stated once, everywhere. Historical notes below the revision-history boundary are exempt."""
+    spec = (_SPECS / "2026-07-22-pr7b-activation-platform-ordering-design.md").read_text()
+    live = _live_section(spec)
+    for stale in ("pending/planned", "not yet shipped", "not shipped yet"):
+        hits = [
+            f"line {i}: {line.strip()}"
+            for i, line in enumerate(live.splitlines(), 1)
+            if stale in line.lower()
+        ]
+        assert not hits, (
+            f"the activation spec still describes 7b-core as {stale!r} in live text; "
+            f"ROADMAP §C says shipped\n" + "\n".join(hits)
+        )
+    assert "SHIPPED" in spec[:1200]

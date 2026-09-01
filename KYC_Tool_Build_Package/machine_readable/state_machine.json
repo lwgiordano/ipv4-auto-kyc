@@ -1,0 +1,52 @@
+{
+  "version": "2.0",
+  "run_states": [
+    "QUEUED",
+    "RESOLVE_INPUTS",
+    "BROKER_GATE",
+    "RUN_ADAPTERS",
+    "VALIDATE",
+    "WRITE_CHECKS",
+    "SCORE",
+    "DECIDE",
+    "PUBLISH_DECISION",
+    "COMPLETE",
+    "FAILED"
+  ],
+  "transitions": [
+    ["QUEUED", "RESOLVE_INPUTS"],
+    ["RESOLVE_INPUTS", "BROKER_GATE"],
+    ["BROKER_GATE", "RUN_ADAPTERS", "no blocked match"],
+    ["BROKER_GATE", "DECIDE", "exact blocked broker match: short-circuit to reject"],
+    ["RUN_ADAPTERS", "VALIDATE"],
+    ["VALIDATE", "WRITE_CHECKS"],
+    ["WRITE_CHECKS", "SCORE"],
+    ["SCORE", "DECIDE"],
+    ["DECIDE", "PUBLISH_DECISION"],
+    ["PUBLISH_DECISION", "COMPLETE"],
+    ["*", "FAILED", "retryable; dead-letter after max attempts"]
+  ],
+  "case_statuses": [
+    "registered",
+    "email_verification_pending",
+    "email_verified",
+    "enrichment_running",
+    "kyc_pending",
+    "manual_review_insufficient",
+    "account_approved",
+    "approved_manual",
+    "rejected"
+  ],
+  "buy_statuses": [
+    "not_applicable",
+    "buy_locked_org_id_required",
+    "org_id_validation_pending",
+    "org_id_failed",
+    "buy_enabled",
+    "buy_suspended"
+  ],
+  "notes": [
+    "Runs are per triggering event; single-evidence events execute a reduced adapter set but the same state sequence.",
+    "WRITE_CHECKS + SCORE + DECIDE commit in one transaction so every decision maps to an exact set of live checks."
+  ]
+}

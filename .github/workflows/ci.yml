@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  kyc-tool:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kyc
+          POSTGRES_PASSWORD: kyc
+          POSTGRES_DB: kyc_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      KYC_TEST_DATABASE_URL: postgresql+psycopg://kyc:kyc@localhost:5432/kyc_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e '.[dev]'
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Import contracts (import-linter)
+        run: lint-imports
+      - name: Tests
+        run: pytest -q -p no:warnings
+
+  substrate-kit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-kits/agent-substrate-kit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Kit end-to-end tests
+        run: bash tests/run-tests.sh
+      - name: Shellcheck kit scripts and templates
+        run: |
+          shellcheck -x bootstrap.sh lib/*.sh tests/run-tests.sh \
+            templates/manage.sh templates/substrate/lib.sh \
+            templates/substrate/checks.d/*.sh templates/substrate/hooks/pre-commit
+
+  # Wake-on-green: CI *success* is the one transition GitHub never delivers as a
+  # webhook, so a watcher must otherwise poll to learn a PR went green. This job
+  # emits that transition as a PR comment — a subscribed agent then wakes exactly
+  # once, at closure, instead of re-reading context on a timer. (CI *failure*
+  # already arrives as a native check event; new pushes re-run CI, so they're
+  # covered transitively.)
+  signal-green:
+    needs: [kyc-tool, substrate-kit]
+    # Only on same-repo PRs: fork PRs get a read-only GITHUB_TOKEN and can't comment.
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Signal all-green on the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          marker='<!-- substrate:ci-green -->'
+          # Replace any prior signal so the thread keeps a single up-to-date
+          # comment — but the replacement is a *new* comment, because an edit
+          # fires issue_comment.edited, which does not reliably wake a watcher;
+          # a freshly created comment does.
+          gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" \
+            | while read -r id; do gh api -X DELETE "repos/$REPO/issues/comments/$id" || true; done
+          printf '%s\n✅ All required checks passed for `%s`.\n' "$marker" "$SHA" \
+            | gh pr comment "$PR" --repo "$REPO" --body-file -

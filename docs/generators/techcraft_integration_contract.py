@@ -1,0 +1,422 @@
+"""Renders the TechCraft Platform Integration Contract from `docs.contracts.wire`.
+
+Run from the repo root:  python -m docs.generators.techcraft_integration_contract
+
+Prose in this file explains and warns. Every value TechCraft builds against comes from the
+registry, so a change in the code moves the document through a failing authority test rather than
+through someone remembering to edit a sentence.
+"""
+
+import argparse
+import re
+
+from docs.contracts.companion import ARTIFACT_NAME, artifact_digest
+from docs.contracts.projection import Lit, Ref
+from docs.contracts.signing_example import published_snippet
+from docs.contracts.wire import WIRE
+from docs.generators.publication import publication_for
+from docs.generators.render import INCH, Doc, escape
+
+# This module does not CHOOSE which document it is (re-audit-2 finding 2), and it does not
+# choose how the document leaves the repo either (re-audit-3 findings 2-4). The registry binds
+# generator to document; `PUBLICATION` is that binding resolved from the module's canonical
+# dotted name, so `python -m` and `import` reach the same answer, and it owns the filename and
+# the release provenance refusal. Title and output follow from the id, so there is no identity
+# text at this layer either (Wave-2 re-audit finding 3).
+PUBLICATION = publication_for(__name__, globals().get("__spec__"))
+DOCUMENT_ID = PUBLICATION.identity.id
+OUT = PUBLICATION.identity.out
+
+# Release inputs. The contact is NOT a registry claim — it changes per send, and nothing in the
+# repo governs it — so it is a required argument with NO default (re-audit `6feca36..4f23f23`
+# F11). The document asks TechCraft eleven questions and previously shipped "[integration contact
+# - fill in]": a document that asks for a reply and then names nowhere to send it is worse than
+# one that asks nothing. A build that cannot name the contact must fail rather than emit a
+# placeholder. There is deliberately NO response deadline: answers are asked for, not dated.
+_PLACEHOLDER = re.compile(r"fill[ -]?in|\bTBD\b|\[|\]|<|>", re.IGNORECASE)
+
+
+def validate_release_inputs(contact: str) -> str:
+    """Refuse anything a reader could not act on. Raises ValueError."""
+    contact = (contact or "").strip()
+    if not contact:
+        raise ValueError("--integration-contact is required")
+    if _PLACEHOLDER.search(contact):
+        raise ValueError(f"--integration-contact is still a placeholder: {contact!r}")
+    if "@" not in contact and "://" not in contact:
+        raise ValueError(
+            f"--integration-contact must be an address or a URL TechCraft can reply to: {contact!r}"
+        )
+    return contact
+
+
+# Claims this document is REQUIRED to display. The rendering test asserts each reaches a flowable
+# exactly once and appears in the extracted PDF text.
+REQUIRED_CLAIMS = (
+    "WIRE.INGEST.PATH",
+    "WIRE.INGEST.HEADERS",
+    "WIRE.INGEST.STATUS",
+    "WIRE.INGEST.EXTRA_FIELDS",
+    "WIRE.INGEST.ORDERING",
+    "WIRE.ACTOR.SENSITIVE",
+    "WIRE.EVENT.TABLE",
+    "WIRE.SIGN.CANONICAL",
+    "WIRE.SIGN.DIRECTIONS",
+    "WIRE.SIGN.SKEW_SECONDS",
+    "WIRE.SIGN.COMPANION",
+    "WIRE.SIGN.VECTOR",
+    "WIRE.SIGN.V1_SUNSET",
+    "WIRE.SIGN.ROTATION",
+    "WIRE.SIGN.ROTATION_RETIREMENT",
+    "WIRE.CALLBACK.PATH",
+    "WIRE.CALLBACK.FIELDS",
+    "WIRE.CALLBACK.OPTIONAL_FIELDS",
+    "WIRE.CALLBACK.GATES",
+    "WIRE.CALLBACK.DECISIONS",
+    "WIRE.CALLBACK.DELIVERY",
+    "WIRE.CALLBACK.VALIDATION",
+    "WIRE.CALLBACK.RECEIVER_TXN",
+    "WIRE.CALLBACK.EFFECTIVENESS",
+    "WIRE.CALLBACK.LEGEND",
+    "WIRE.CALLBACK.RELEASE",
+    "WIRE.CALLBACK.RETRY",
+    "WIRE.CALLBACK.WAIT_BOUND",
+    "WIRE.CALLBACK.COMPLETION",
+    "WIRE.ORDERING.NO_DECIDED_AT",
+    "WIRE.ORDERING.SEQUENCE_DOMAINS",
+    "WIRE.ORDERING.INTERIM",
+    "WIRE.ORDERING.BOOTSTRAP_024",
+    "WIRE.ORDERING.PENDING_INPUTS",
+    "WIRE.ORDERING.INTEGRITY_MISMATCH",
+    "WIRE.RETENTION.BY_KIND",
+    "WIRE.RETENTION.WINDOW_DAYS",
+    # the published statements — each sentence selected by an executed fact
+    "WIRE.SIGN.DIRECTION_FORM",
+    "WIRE.SIGN.COMPANION_PROOF",
+    "WIRE.CALLBACK.OPTIONAL_FIELD_RULE",
+    "WIRE.CALLBACK.VALIDATION_ORDER",
+    "WIRE.CALLBACK.ACK_CONSEQUENCE",
+    "WIRE.CALLBACK.ACK_VS_APPLY",
+    "WIRE.CALLBACK.LEGEND_CLOSURE",
+    "WIRE.CALLBACK.RELEASE_STATE",
+    "WIRE.ORDERING.ORDINAL_AUTHORITY",
+    "WIRE.ORDERING.OBLIGATION_STATE",
+)
+
+
+def build(*, contact: str) -> Doc:
+    contact = validate_release_inputs(contact)
+    doc = Doc(WIRE, DOCUMENT_ID)
+    doc.title()
+    doc.p(
+        "<b>Audience: TechCraft integration developers.</b> This covers your side of the wire: "
+        "what to POST, what callbacks to receive and verify, and what to stand up (the "
+        "/kyc/decision endpoint, the token verify page, uploads/ bucket writes). Hosting and "
+        "operating the tool is covered separately in the Staging Integration and Production "
+        "Readiness Guide."
+    )
+
+    doc.h2("How it works")
+    doc.claim_paragraph("WIRE.INGEST.ORDERING")
+    doc.p(
+        "Each automated decision enqueues one signed callback to your endpoint. Both directions "
+        "use the same HMAC-v2 scheme with separate key pairs, and delivery is at-least-once, so "
+        "you dedupe on (case_id, run_id). Section 3 is the exact delivery contract."
+    )
+    doc.why(
+        f"Send answers to the section 1 questions to <b>{escape(contact)}</b>."
+    )
+
+    # ── 1. asks ────────────────────────────────────────────────────────────────────────────────
+    doc.section("asks", "1. Answers we need from you")
+    doc.p(
+        "<b>1.1 Ordered decision delivery.</b> Today there is no wire ordering authority. The "
+        "design that fixes it is accepted but unbuilt, and we are not publishing a schema you "
+        "could implement against yet:"
+    )
+    doc.claim_paragraph("WIRE.ORDERING.BOOTSTRAP_024")
+    doc.p(
+        "What we need from you now is not code. Tell us which system holds your accepted-run "
+        "ledger, whether it distinguishes an automatic decision from a manual approval as the "
+        "currently effective source for a case, and who signs on your side. You implement once we "
+        "publish the schema."
+    )
+    doc.p(
+        "Those three answers are necessary and not sufficient. The activation unit is blocked on "
+        "decisions only your side can make, listed below with the deliverable each one blocks. "
+        "An answer is screened but cannot clear its obligation yet — the note above the table "
+        "says why — and we cannot build 024 without all of them."
+    )
+    # The PENDING alert renders BEFORE any answer row (gate finding 10): the note carries the
+    # no-reply-can-RESOLVE statement, and putting it after the table handed the reader the rows
+    # first and the truth second.
+    doc.claim_statement("WIRE.ORDERING.OBLIGATION_STATE")
+    doc.claim_table(
+        "WIRE.ORDERING.PENDING_INPUTS",
+        # the deliverable column has to fit `manual.release_requested` whole
+        [0.35 * INCH, 0.8 * INCH, 2.35 * INCH, 1.25 * INCH, 1.95 * INCH],
+    )
+    doc.p(
+        "<b>1.2 Dedupe commitment.</b> Confirm you dedupe callbacks on (case_id, run_id) and "
+        "drop a late duplicate that arrives after a newer decision."
+    )
+    doc.p(
+        "<b>1.3 Callback URL and key exchange.</b> Production and staging HTTPS base URLs (we "
+        "append /kyc/decision), plus key ids and secrets both directions. Our production boot "
+        "refuses HTTP, localhost, and any query or fragment in the base URL, so a wrong value "
+        "fails at deploy time rather than at first delivery. <b>Secrets move over an encrypted "
+        "channel</b>: a shared vault entry or an age/GPG file to a published key, never email, "
+        "chat, or ticket text."
+    )
+    doc.p(
+        "<b>1.4 Document upload path.</b> document.uploaded events carry an object_ref your "
+        "side wrote to the shared object store. Confirm the bucket, the uploads/ key "
+        "convention, and the IAM split: you write uploads/, we read them, and our staging "
+        "namespace adapter-raw/ is written and swept only by us."
+    )
+
+    # ── 2. events ──────────────────────────────────────────────────────────────────────────────
+    doc.section("events", "2. Events you send us")
+    doc.claim_paragraph("WIRE.INGEST.PATH", prefix="<b>Endpoint: </b>")
+    doc.p(
+        "The first event for a case creates it; there is no registration call. <b>No inbound "
+        "rate limit:</b> bursts queue on our side, since we throttle our own registry calls "
+        "rather than you. We return no 429 today; if a limit is ever added it will be 429 with "
+        "Retry-After, announced in advance."
+    )
+    doc.claim_table(
+        "WIRE.INGEST.HEADERS",
+        [1.35 * INCH, 1.75 * INCH, 3.6 * INCH],
+    )
+    doc.space()
+    doc.p("Envelope:")
+    doc.code(
+        '{"event_type": "kyb.run_requested", "occurred_at": "2026-08-04T12:00:00Z",\n'
+        ' "actor": {"type": "user", "id": "acct-123"}, "payload": { ... }}'
+    )
+    doc.h2("Unknown fields are not symmetric")
+    doc.claim_prose(
+        "WIRE.INGEST.EXTRA_FIELDS",
+        [Ref("{prose}"), Lit(" (envelope: <b>"), Ref("{envelope}"), Lit("</b>; payload: <b>"),
+         Ref("{payload}"),
+         Lit("</b>.) In the other direction, ignore fields we add to callbacks: we add without "
+             "notice and never remove or repurpose one without a version bump agreed with you.")],
+    )
+
+    doc.h2("Sensitive events: the reviewer-actor rule")
+    doc.claim_mixed(
+        "WIRE.ACTOR.SENSITIVE",
+        [
+            ("p", (Lit("<b>"), Ref("{events}", "comma_list"),
+                   Lit("</b> both require an actor identifying the reviewer. "), Ref("{rule}"))),
+            ("why", (Lit("<b>Trap:</b> "), Ref("{trap}"))),
+        ],
+    )
+
+    doc.claim_table(
+        "WIRE.EVENT.TABLE",
+        # column 0 fits `website.review_completed`, the longest event name, whole; the payload
+        # columns fit `platform_account_id`. _token_cell raises rather than clipping, so a name
+        # that outgrows its column fails the build instead of printing one character short.
+        [1.75 * INCH, 1.4 * INCH, 1.4 * INCH, 2.15 * INCH],
+    )
+    doc.space()
+    doc.h2("Response codes")
+    doc.claim_table("WIRE.INGEST.STATUS", [0.6 * INCH, 6.1 * INCH])
+
+    # ── 3. callbacks ───────────────────────────────────────────────────────────────────────────
+    doc.section("callbacks", "3. Callbacks we send you")
+    doc.claim_paragraph("WIRE.CALLBACK.PATH", prefix="<b>Endpoint: </b>")
+    doc.p("Content-Type application/json, signed with our outbound key.")
+    doc.claim_prose("WIRE.CALLBACK.FIELDS",
+                    [Lit("Required body fields: <b>"), Ref("", "comma_list"), Lit("</b>.")])
+    doc.claim_prose(
+        "WIRE.CALLBACK.DECISIONS",
+        [Lit("<b>decision is one of: </b>"), Ref("", "comma_list"), Lit(".")])
+    doc.claim_prose(
+        "WIRE.CALLBACK.GATES",
+        [Lit("<b>gates carries these booleans: </b>"), Ref("", "comma_list"), Lit(".")])
+    doc.claim_prose(
+        "WIRE.CALLBACK.OPTIONAL_FIELDS",
+        [Lit("Optional fields to tolerate and preserve: <b>"), Ref("", "comma_list"),
+         Lit("</b>.")],
+    )
+    # the handling rule is its own claim now, selected by an executed fact rather than carried
+    # as prose inside this sentence (Wave-2 audit finding 1)
+    doc.claim_statement("WIRE.CALLBACK.OPTIONAL_FIELD_RULE")
+
+    doc.h2("Delivery: what actually reaches you")
+    doc.claim_bullets("WIRE.CALLBACK.DELIVERY")
+
+    doc.h2("Validate before you classify")
+    doc.claim_statement("WIRE.CALLBACK.VALIDATION_ORDER")
+    doc.claim_table("WIRE.CALLBACK.VALIDATION", [3.35 * INCH, 3.6 * INCH])
+    doc.keep_last_together(3)
+
+    doc.h2("Your endpoint must commit before it answers")
+    doc.claim_steps("WIRE.CALLBACK.RECEIVER_TXN")
+    doc.claim_statement("WIRE.CALLBACK.ACK_CONSEQUENCE")
+
+    doc.h2("Recording a callback is not the same as acting on it")
+    doc.claim_statement("WIRE.CALLBACK.ACK_VS_APPLY")
+    # the outcome booleans are the machine-checkable mirror of the printed `record`/`effective`
+    # cells; both derive from the same OutcomeKind record, and a test asserts the halves agree
+    doc.claim_table(
+        "WIRE.CALLBACK.EFFECTIVENESS",
+        [0.6 * INCH, 1.85 * INCH, 1.2 * INCH, 1.15 * INCH, 2.15 * INCH],
+    )
+    # heading + note + table travel as one unit: the heading must never sit alone at a page
+    # bottom with the table starting overleaf (gate finding 15)
+    doc.keep_last_together(3)
+    doc.claim_table("WIRE.CALLBACK.LEGEND", [1.55 * INCH, 5.15 * INCH])
+    doc.claim_statement("WIRE.CALLBACK.LEGEND_CLOSURE")
+
+    doc.h2("While a release is pending (post-024 only)")
+    doc.claim_statement("WIRE.CALLBACK.RELEASE_STATE")
+    doc.claim_table(
+        "WIRE.CALLBACK.RELEASE",
+        [2.1 * INCH, 1.25 * INCH, 1.5 * INCH, 1.85 * INCH],
+    )
+
+    doc.h2("Timing")
+    doc.claim_paragraph("WIRE.CALLBACK.WAIT_BOUND")
+    doc.claim_prose(
+        "WIRE.CALLBACK.RETRY",
+        [Lit("Retry schedule: <b>"), Ref("{delays}", "seconds_list"), Lit("</b> across <b>"),
+         Ref("{attempts}"), Lit(" attempts</b>, no jitter. Backoff alone totals "),
+         Ref("{backoff_total_seconds}"), Lit("s (about "), Ref("{backoff_total_minutes}"),
+         Lit(" minutes); counting every attempt's hard wall the worst case is "),
+         Ref("{worst_case_seconds}"), Lit("s (about "), Ref("{worst_case_minutes}"),
+         Lit(" minutes). An outage longer than that exhausts the schedule and the row "
+             "dead-letters; tell us and we requeue.")],
+    )
+    doc.claim_paragraph("WIRE.CALLBACK.COMPLETION")
+
+    # ── 4. signing ─────────────────────────────────────────────────────────────────────────────
+    doc.section("signing", "4. Request signing (HMAC v2)")
+    canonical = WIRE.value("WIRE.SIGN.CANONICAL")
+    # Numbered by the REGISTRY projection, not by an f-string here: the generator numbering its
+    # own lines meant the generator authored the very content the page was checked against
+    # (re-audit `4f23f23..122cc67` finding 3).
+    doc.claim_code(
+        "WIRE.SIGN.CANONICAL",
+        numbered=True,
+        lead=f"Signature = hex HMAC-SHA256 over these {len(canonical)} lines, LF-joined, in "
+             "this order:",
+    )
+    doc.claim_prose(
+        "WIRE.SIGN.DIRECTIONS",
+        [Lit("The direction tokens are literals: <b>"), Ref("{platform_to_tool}"),
+         Lit("</b> for your calls to us and <b>"), Ref("{tool_to_platform}"),
+         Lit("</b> for ours to you. slot is the Idempotency-Key on event POSTs and empty "
+             "otherwise; path?query is the raw request target.")],
+    )
+    doc.claim_statement("WIRE.SIGN.DIRECTION_FORM")
+    doc.claim_paragraph("WIRE.SIGN.SKEW_SECONDS", prefix="<b>Skew window (seconds): </b>")
+    doc.why(
+        "v1 signed only timestamp and body, so a captured signature could replay against a "
+        "different path. v2 binds method, exact path, and the idempotency slot. Sending any "
+        "v2 header disables the v1 fallback for that request."
+    )
+    doc.claim_paragraph("WIRE.SIGN.V1_SUNSET", prefix="<b>On the v1 sunset dates: </b>")
+    doc.h2("Key rotation: the two directions are not symmetric")
+    doc.claim_bullets("WIRE.SIGN.ROTATION")
+    doc.claim_table(
+        "WIRE.SIGN.ROTATION_RETIREMENT",
+        # "Blocked step" must fit the longer gated clause wrapped; the two prose columns share
+        # the rest of the frame.
+        [0.85 * INCH, 1.45 * INCH, 2.3 * INCH, 2.1 * INCH],
+    )
+
+    doc.h2("The runnable signer is a file, not the page")
+    doc.claim_mixed("WIRE.SIGN.COMPANION", [
+        ("p", (Ref(""),)),
+        # the name and digest are the companion module's, bound to the shipped file by this
+        # claim's own verifier; here they are reviewed literals whose drift is a re-pin
+        ("code", (Lit(f"{ARTIFACT_NAME}\nsha256  {artifact_digest()}"),)),
+    ])
+    doc.claim_statement("WIRE.SIGN.COMPANION_PROOF")
+
+    doc.h2("Test vector: verify against this before writing anything else")
+    doc.claim_mixed(
+        "WIRE.SIGN.VECTOR",
+        [
+            (
+                "p",
+                (Lit("Secret <b>"), Ref("{secret}"), Lit("</b>, key id <b>"), Ref("{key_id}"),
+                 Lit("</b>, timestamp <b>"), Ref("{timestamp}"), Lit("</b>, Idempotency-Key <b>"),
+                 Ref("{slot}"), Lit("</b>, <b>"), Ref("{method}"), Lit(" "), Ref("{path_qs}"),
+                 Lit("</b>. The body is one line, <b>"), Ref("{body_bytes}"),
+                 Lit(" bytes</b>, UTF-8, no whitespace and no trailing newline. It wraps in "
+                     "print below; a newline you add changes the digest.")),
+            ),
+            ("wrap", (Ref("{body}", "utf8"),)),
+            ("p", (Lit("Canonical string:"),)),
+            ("code", (Ref("{canonical_lines}", "lines"),)),
+            ("p", (Lit("Expected X-KYC-Signature-V2:"),)),
+            ("code", (Ref("{signature}", "raw"),)),
+            (
+                "p",
+                (Lit("Reference implementation. This is the exact source our tests execute "
+                     "against the shipped signer to produce the digest above:"),),
+            ),
+            # the snippet is the signing example's published source; its truth is bound to the
+            # shipped signer by this claim's verifier, and its drift here is a template re-pin
+            ("atomic_code", (Lit(published_snippet(delimited=True)),)),
+        ],
+    )
+
+    # ── 5. ordering ────────────────────────────────────────────────────────────────────────────
+    doc.section("ordering", "5. Ordering, and one field you must not sort by")
+    doc.claim_paragraph("WIRE.ORDERING.NO_DECIDED_AT")
+    doc.h2("Two per-case ordinals, and only one of them orders decisions")
+    doc.claim_bullets("WIRE.ORDERING.SEQUENCE_DOMAINS")
+    doc.claim_statement("WIRE.ORDERING.ORDINAL_AUTHORITY")
+    doc.claim_paragraph("WIRE.ORDERING.INTERIM", prefix="<b>Until activation: </b>")
+    doc.claim_paragraph("WIRE.ORDERING.INTEGRITY_MISMATCH", prefix="<b>Note: </b>")
+
+    # ── 6. retention ───────────────────────────────────────────────────────────────────────────
+    doc.section("retention", "6. Retention")
+    doc.claim_paragraph("WIRE.RETENTION.WINDOW_DAYS", prefix="<b>Compliance window (days): </b>")
+    doc.claim_table("WIRE.RETENTION.BY_KIND", [1.5 * INCH, 5.2 * INCH])
+
+    # ── 7. checklist ───────────────────────────────────────────────────────────────────────────
+    doc.section("checklist", "7. Go-live checklist")
+    doc.table(
+        ("#", "Item", "Owner"),
+        (
+            ("1", "Callback base URLs, staging and production (HTTPS, no query or fragment)", "TechCraft"),
+            ("2", "Key ids and secrets both directions, both environments, encrypted channel", "both"),
+            ("3", "Object store bucket and IAM split (uploads/ write for you, read for us)", "both"),
+            ("4", "POC verify page URL pattern for token links", "TechCraft"),
+            ("5", "Expected event volume and burst profile", "TechCraft"),
+            ("6", "Dedupe on (case_id, run_id) confirmed in your handler", "TechCraft"),
+            ("7", "Receiver commits before returning 2xx (section 3)", "TechCraft"),
+            ("7b", "Acknowledge-versus-apply implemented: a callback arriving after a manual "
+                   "approval is recorded but not made effective (section 3)", "TechCraft"),
+            ("8", "Ordering: no sorting by decided_at; conflict path agreed (section 5)", "TechCraft"),
+            ("9", "Accepted-run ledger and signer identified for future activation (1.1)", "TechCraft"),
+            ("10", "Escalation contact for dead-letter alerts", "TechCraft"),
+            ("11", "Staging end-to-end: test vector passes, event in, callback out, verified", "both"),
+            ("12", "Sender retries on 502/503/504 and re-signs with a fresh timestamp", "both"),
+        ),
+        [0.35 * INCH, 4.85 * INCH, 1.5 * INCH],
+    )
+    return doc
+
+
+def main(argv: list[str] | None = None) -> str:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--integration-contact", required=True, help="address or URL TechCraft sends the section 1 answers to"
+    )
+    parser.add_argument(
+        "--out-dir", default=".",
+        help="directory to publish into; the FILENAME is the registry's, not a caller's"
+    )
+    args = parser.parse_args(argv)
+    return PUBLICATION.publish(args.out_dir, contact=args.integration_contact)
+
+
+if __name__ == "__main__":
+    print(main())

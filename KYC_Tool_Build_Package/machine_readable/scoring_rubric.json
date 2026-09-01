@@ -1,0 +1,88 @@
+{
+  "version": "2.0",
+  "threshold": 100,
+  "hard_gates": {
+    "score_met": "score >= 100",
+    "legal_business_proof_required": true,
+    "control_proof_required": true,
+    "broker_status_allowed": ["clear", "allowed_broker"],
+    "hard_conflict_must_be_false": true
+  },
+  "items": [
+    {
+      "check_type": "verified_company_email",
+      "points": 25,
+      "category": "control_proof",
+      "mode": "automated",
+      "source": "platform_email_verification",
+      "pass_rule": "verified inbox AND business domain (not free/disposable) AND domain matches submitted company domain"
+    },
+    {
+      "check_type": "official_registry_match",
+      "points": 25,
+      "category": "legal_business_proof",
+      "mode": "automated",
+      "source": "companies_house | gleif | state_country_registry",
+      "pass_rule": "active/current company AND exact normalized match on name + address + registration number"
+    },
+    {
+      "check_type": "org_id_match",
+      "points": 25,
+      "category": "control_proof",
+      "mode": "automated",
+      "source": "direct_rir_rdap",
+      "pass_rule": "exact handle exists AND org name matches company AND address materially matches AND no broker/rejected-entity conflict",
+      "cap": 25
+    },
+    {
+      "check_type": "poc_verified",
+      "points": 25,
+      "category": "control_proof",
+      "mode": "automated_plus_user_token",
+      "source": "rir_poc_record_plus_token",
+      "pass_rule": "POC associated with submitted ORG-ID/resource AND token sent to RIR-listed email is verified",
+      "cap": 25
+    },
+    {
+      "check_type": "business_document_verified",
+      "points": 25,
+      "category": "legal_business_proof",
+      "mode": "automated",
+      "source": "document_ocr_matching",
+      "pass_rule": "OCR-extracted name/address/number/jurisdiction match submission AND no conflict with official registry evidence"
+    },
+    {
+      "check_type": "linkedin_company_match",
+      "points": 20,
+      "category": "supporting",
+      "mode": "automated",
+      "source": "floqer_discovery_plus_deterministic_match",
+      "pass_rule": "person name AND current company AND title AND company domain all match deterministically"
+    },
+    {
+      "check_type": "website_verified",
+      "points": 10,
+      "category": "supporting",
+      "mode": "manual",
+      "source": "human_review_task",
+      "pass_rule": "reviewer confirms: domain resolves, HTTPS, genuine company content tied to applicant, not parked, no fraud indicators",
+      "notes": "No automated website adapter in v1. Points awarded only on reviewer pass."
+    },
+    {
+      "check_type": "verified_email",
+      "points": 10,
+      "category": "account_access",
+      "mode": "automated",
+      "source": "platform_email_verification",
+      "pass_rule": "any email inbox verified"
+    }
+  ],
+  "dynamic_rules": [
+    "Every evidence update creates a new check that supersedes the prior check of that type; checks are immutable.",
+    "Score is computed only from live (non-superseded) checks.",
+    "ORG-ID contributes at most 25; POC at most 25.",
+    "If ORG-ID changes, the old ORG-ID check is superseded (points removed) and any verified POC is revalidated against the new ORG-ID; if not associated, the POC check is superseded too.",
+    "If the POC handle changes, outstanding tokens expire, the old POC check is superseded, and a new token is sent to the new RIR-listed email.",
+    "manual_review_insufficient auto-clears on any recalculation that meets the threshold with all hard gates passing."
+  ]
+}

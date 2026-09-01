@@ -1,0 +1,26 @@
+# Keep the build context (and image) lean. Anything the Dockerfile COPYs must
+# NOT be listed here: pyproject.toml, alembic.ini, src/, alembic/,
+# KYC_Tool_Build_Package/.
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+*.egg-info
+
+# Not needed at runtime
+tests
+docs
+ai-kits
+.agents
+.substrate/state
+.github
+.claude
+Dockerfile
+.dockerignore
+*.md

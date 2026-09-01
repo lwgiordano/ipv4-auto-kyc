@@ -1,0 +1,18 @@
+{
+  "id": "G3",
+  "description": "Only free email verified and website pass -> insufficient score, holding state.",
+  "steps": [
+    {
+      "checks": [
+        {"type": "verified_email", "status": "pass"},
+        {"type": "website_verified", "status": "pass"}
+      ],
+      "expect": {
+        "decision": "manual_review_insufficient",
+        "gates_all_pass": false,
+        "gates": {"score_met": false, "legal_proof": false, "control_proof": false},
+        "live_pass_types": ["verified_email", "website_verified"]
+      }
+    }
+  ]
+}
