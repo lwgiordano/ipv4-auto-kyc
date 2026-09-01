@@ -634,7 +634,7 @@ def test_an_exact_int_skew_still_works():
 # "zero proven" and a valid v1 request is RETIRED. That cuts off the platform's live traffic — the
 # outage the approved availability policy exists to prevent, arrived at from the other side.
 #
-# My hostile-window tests could not have caught it: `hardened()` carries a 2026-09-01 sunset, so
+# My hostile-window tests could not have caught it: `hardened()` carries an UNARRIVED sunset, so
 # `_sunset_passed` was False and the poisoned window never reached the witness at all.
 
 PAST_SUNSET = "2020-01-01T00:00:00Z"
@@ -673,6 +673,34 @@ def test_the_sunset_really_has_passed_in_these_specimens():
 
     assert auth._sunset_passed(PAST_SUNSET, datetime.now(UTC)) is True
     assert auth._sunset_passed(hardened().hmac_v1_inbound_sunset_at, datetime.now(UTC)) is False
+
+
+@pytest.mark.parametrize("field", ["hmac_v1_inbound_sunset_at", "hmac_v1_outbound_sunset_at"])
+def test_a_specimen_sunset_cannot_quietly_age_into_the_past(field):
+    """The anti-rot guard. The test above was written against `hardened()`'s literal
+    `2026-09-01T00:00:00Z`, and on 2026-09-01 it started failing on a clean tree: the specimen
+    that had to be in the future had become the past, so the guard reported the opposite of the
+    thing it guards. Nothing about v1 retirement had changed.
+
+    A relative specimen cannot do that, and this asserts the property rather than the mechanism:
+    both sunsets must sit COMFORTABLY ahead of the clock, not merely ahead of it. A date literal
+    satisfies that on the day it is written and then decays through the margin months before it
+    fires, so this fails while there is still time to fix it — and it holds at any wall-clock
+    time, because the specimen moves with the clock instead of standing still in front of it.
+    """
+    from datetime import UTC, datetime
+
+    from kyc_tool.config import parse_sunset
+
+    MARGIN_DAYS = 180
+    sunset = parse_sunset(getattr(hardened(), field))
+    assert sunset is not None, f"{field} must be set in the production-shaped specimen"
+    ahead = (sunset - datetime.now(UTC)).days
+    assert ahead >= MARGIN_DAYS, (
+        f"{field} is only {ahead} days ahead of now, under the {MARGIN_DAYS}-day margin. A "
+        f"specimen that must be in the future cannot be a fixed date — derive it from the clock "
+        f"with docs.contracts.authority.unarrived_sunset()."
+    )
 
 
 def test_a_clean_window_still_retires_and_is_consulted(witness):

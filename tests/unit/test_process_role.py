@@ -4,6 +4,7 @@ refuse BEFORE any database/network/store creation. Every production entry point 
 same authority."""
 
 import pytest
+from docs.contracts.authority import unarrived_sunset
 
 from kyc_tool import config
 from kyc_tool.config import ProcessRole, ProductionConfigError, validate_process_role
@@ -18,8 +19,8 @@ def _hardened(**overrides):
         ui_admin_token="t" * 32,
         hmac_inbound_key_id="k-in", hmac_inbound_secret="i" * 40,
         hmac_outbound_key_id="k-out", hmac_outbound_secret="o" * 40,
-        hmac_v1_inbound_sunset_at="2030-01-01T00:00:00+00:00",
-        hmac_v1_outbound_sunset_at="2030-01-01T00:00:00+00:00",
+        hmac_v1_inbound_sunset_at=unarrived_sunset(365),
+        hmac_v1_outbound_sunset_at=unarrived_sunset(395),
         hmac_v1_observation_window_days=14,
     )
     base.update(overrides)

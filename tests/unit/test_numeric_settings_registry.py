@@ -8,6 +8,7 @@ production-only rules (exact replay window, positive leases/TTLs/retention) hold
 """
 
 import pytest
+from docs.contracts.authority import unarrived_sunset
 from pydantic import ValidationError
 
 from kyc_tool.config import (
@@ -99,8 +100,8 @@ def _hardened(**overrides):
         hmac_inbound_secret="i" * 40,
         hmac_outbound_key_id="k-out",
         hmac_outbound_secret="o" * 40,
-        hmac_v1_inbound_sunset_at="2030-01-01T00:00:00+00:00",
-        hmac_v1_outbound_sunset_at="2030-01-01T00:00:00+00:00",
+        hmac_v1_inbound_sunset_at=unarrived_sunset(365),
+        hmac_v1_outbound_sunset_at=unarrived_sunset(395),
         hmac_v1_observation_window_days=14,
     )
     base.update(overrides)

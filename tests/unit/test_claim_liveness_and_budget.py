@@ -6,6 +6,7 @@ in-process revocation boundary."""
 import time
 
 import pytest
+from docs.contracts.authority import unarrived_sunset
 
 from kyc_tool.adapters.retry import BudgetExhausted
 from kyc_tool.config import Settings, production_config_violations
@@ -97,8 +98,10 @@ def _hardened(**overrides) -> Settings:
         hmac_inbound_secret="i" * 40,
         hmac_outbound_key_id="kyc-tool-1",
         hmac_outbound_secret="o" * 40,
-        hmac_v1_inbound_sunset_at="2026-09-01T00:00:00Z",
-        hmac_v1_outbound_sunset_at="2026-10-01T00:00:00Z",
+        # relative, not a literal: a fixed future date silently becomes a past one and then
+        # describes the opposite of the specimen it was written to be
+        hmac_v1_inbound_sunset_at=unarrived_sunset(365),
+        hmac_v1_outbound_sunset_at=unarrived_sunset(395),
         hmac_v1_observation_window_days=14,
     )
     base.update(overrides)

@@ -2,6 +2,7 @@
 pipeline, requeue repairs dead letters, and the gate flag hides everything."""
 
 import pytest
+from docs.contracts.authority import unarrived_sunset
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -229,8 +230,10 @@ def prod_ui_client(settings, session_factory, policy, clean_db) -> TestClient:
             "hmac_inbound_secret": "i" * 40,
             "hmac_outbound_key_id": "kyc-tool-1",
             "hmac_outbound_secret": "o" * 40,
-            "hmac_v1_inbound_sunset_at": "2026-09-01T00:00:00Z",
-            "hmac_v1_outbound_sunset_at": "2026-10-01T00:00:00Z",
+            # relative, not a literal: a fixed future date silently becomes a past one and
+            # then describes the opposite of the specimen it was written to be
+            "hmac_v1_inbound_sunset_at": unarrived_sunset(365),
+            "hmac_v1_outbound_sunset_at": unarrived_sunset(395),
             "hmac_v1_observation_window_days": 14,
         }
     )

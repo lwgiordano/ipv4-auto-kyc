@@ -33,6 +33,7 @@ import re
 import time
 import types
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from alembic.config import Config
@@ -95,6 +96,32 @@ def raises(expected):
 
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src" / "kyc_tool"
+
+
+# Days a specimen sunset sits ahead of the clock. The inbound date leads; the outbound one
+# follows a month later, the shape of a real cutover (stop accepting v1, then stop signing it).
+_UNARRIVED_INBOUND_DAYS = 365
+_UNARRIVED_OUTBOUND_DAYS = 395
+
+
+def unarrived_sunset(days: int) -> str:
+    """A timezone-aware ISO-8601 v1 sunset that has NOT arrived, `days` ahead of now.
+
+    Relative to the clock ON PURPOSE. A specimen that must be in the future cannot be written
+    as a date literal: the literal is fixed and the future is not, so it silently becomes a
+    past date and the specimen starts describing the opposite of what it was written to
+    describe. `hardened()` carried `2026-09-01T00:00:00Z` for exactly this reason, and on
+    2026-09-01 `test_the_sunset_really_has_passed_in_these_specimens` began failing on a clean
+    tree — the guard that exists to prove the specimen's sunset has NOT passed, reporting that
+    it had. Nothing about v1 retirement changed; the fixture aged.
+
+    This is fixture-clock only. The shipped config leaves both sunsets unset and neither date
+    is a commitment — see `_v1_sunset_dates_are_unset_in_our_config` below, which holds the
+    real file against exactly that claim.
+    """
+    return (datetime.now(UTC) + timedelta(days=days)).isoformat()
+
+
 def hardened(**overrides) -> Settings:
     """A production-shaped Settings, which is a DESCRIPTION OF PRODUCTION and therefore
     authority rather than test scaffolding — several verifiers below prove what production
@@ -118,8 +145,8 @@ def hardened(**overrides) -> Settings:
         hmac_inbound_secret="i" * 40,
         hmac_outbound_key_id="kyc-tool-1",
         hmac_outbound_secret="o" * 40,
-        hmac_v1_inbound_sunset_at="2026-09-01T00:00:00Z",
-        hmac_v1_outbound_sunset_at="2026-10-01T00:00:00Z",
+        hmac_v1_inbound_sunset_at=unarrived_sunset(_UNARRIVED_INBOUND_DAYS),
+        hmac_v1_outbound_sunset_at=unarrived_sunset(_UNARRIVED_OUTBOUND_DAYS),
         hmac_v1_observation_window_days=14,
     )
     base.update(overrides)
@@ -444,7 +471,10 @@ def _rotation_retirement_is_unreachable_by_construction():
 def _v1_sunset_dates_are_unset_in_our_config():
     """The document once published 2026-09-01 / 2026-10-01 as commitments. Those dates came from
     the `hardened()` TEST FIXTURE; the shipped config leaves both unset. Assert the shipped file,
-    so republishing a fixture value fails here."""
+    so republishing a fixture value fails here.
+
+    The fixture no longer holds literals at all — `unarrived_sunset()` derives them from the
+    clock — which removes the thing that was mistaken for a commitment in the first place."""
     env = (REPO / ".env.example").read_text()
     for variable in ("KYC_HMAC_V1_INBOUND_SUNSET_AT", "KYC_HMAC_V1_OUTBOUND_SUNSET_AT"):
         line = next(line for line in env.splitlines() if line.startswith(variable + "="))
