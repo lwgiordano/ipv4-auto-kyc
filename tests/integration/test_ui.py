@@ -18,7 +18,7 @@ def test_console_page_and_gate(settings, session_factory, policy, clean_db):
     on = TestClient(create_app(settings, session_factory=session_factory, policy=policy))
     page = on.get("/ui")
     assert page.status_code == 200
-    assert "Ops Console" in page.text
+    assert "KYC Tool" in page.text
 
     off_settings = settings.model_copy(update={"ui_enabled": False})
     off = TestClient(create_app(off_settings, session_factory=session_factory, policy=policy))

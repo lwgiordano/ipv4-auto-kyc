@@ -52,17 +52,17 @@ def test_case_detail_never_reads_the_stale_projection_column():
 
 def test_case_detail_labels_live_evidence_as_not_the_decision():
     assert "current_evidence_score" in VIEW_CASE
-    assert "Live evidence — not the published decision" in VIEW_CASE
+    assert "What the evidence says today — not the decision sent" in VIEW_CASE
 
 
 def test_case_detail_decision_card_sources_the_whole_tuple_from_one_row():
     """decision, score and buy enablement all read off `latest` (the pointed row) — never off
     the case projection or the live score (re-audit `cbb783b` F6)."""
-    card = VIEW_CASE[VIEW_CASE.index("Published decision"):]
-    card = card[: card.index("Live evidence")]
+    card = VIEW_CASE[VIEW_CASE.index("Decision sent to the platform"):]
+    card = card[: card.index("What the evidence says today")]
     for expr in ("latest.decision", "latest.score", "latest.buy_enablement"):
         assert expr in card, f"the published-decision card must render {expr}"
-    assert "Published decision hard gates" in card
+    assert "The five rules" in card
     assert "published-gates" in card
     assert "gates[g0]" in card
     assert "current_score" not in card and "current_evidence_score" not in card
@@ -122,8 +122,8 @@ def test_case_detail_takes_the_hold_from_the_api():
     five gates against the threshold itself."""
     assert "d.enforcement_hold" in VIEW_CASE
     assert 'pill("held_for_approval")' in VIEW_CASE
-    card = VIEW_CASE[VIEW_CASE.index("Published decision"):]
-    card = card[: card.index("Live evidence")]
+    card = VIEW_CASE[VIEW_CASE.index("Decision sent to the platform"):]
+    card = card[: card.index("What the evidence says today")]
     assert "holdCallout(hold" in card, "the hold panel lives inside the published-decision card"
 
 
