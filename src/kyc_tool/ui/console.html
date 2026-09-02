@@ -271,7 +271,7 @@ tbody tr.click{cursor:pointer;transition:background-color var(--dur-2) var(--eas
 tbody tr.click:hover{background:var(--surface-page)}
 td .rowlink{color:var(--ink);font-weight:700}
 td .sub.mono{white-space:nowrap}
-th:first-child,td:first-child{min-width:200px}
+table.companies th:first-child,table.companies td:first-child{min-width:200px}
 td .rowlink:hover{text-decoration:underline}
 tr.hl td{background:var(--accent-soft)}
 tr.hl:focus-visible{outline-offset:-2px}
@@ -534,10 +534,10 @@ dialog.modal .banner{margin-top:var(--s3)}
 <aside>
   <div class="who-block">
     <div class="avatar" id="avatar" aria-hidden="true">?</div>
-    <label class="who" for="reviewer"><span>Reviewing as</span>
-      <input id="reviewer" placeholder="your reviewer ID" autocomplete="off"
+    <label class="who" for="reviewer"><span>Reviewer</span>
+      <input id="reviewer" placeholder="Reviewer ID" autocomplete="off"
         aria-describedby="reviewer-note"></label>
-    <span id="reviewer-note" class="who-note">goes on every answer and approval you record here</span>
+    <span id="reviewer-note" class="who-note">Recorded on every review action and approval.</span>
   </div>
   <nav id="nav">
     <a class="nav-item" href="#/overview" data-r="overview">
@@ -547,23 +547,23 @@ dialog.modal .banner{margin-top:var(--s3)}
     <a class="nav-item" href="#/cases" data-r="cases">
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 7h12M6 7v6"/></svg>
       Companies</a>
-    <div class="grp">Setup</div>
+    <div class="grp">Configuration</div>
     <a class="nav-item" href="#/integrations" data-r="integrations">
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M6 2v4M10 2v4M4 6h8v3a4 4 0 0 1-8 0zM8 13v2"/></svg>
-      Data sources</a>
+      Data Sources</a>
     <a class="nav-item" href="#/fieldmap" data-r="fieldmap">
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M2 4h5M2 8h5M2 12h5M9 4h5M9 8h5M9 12h5"/><path d="M7 4l2 4-2 4" stroke-linejoin="round"/></svg>
-      Salesforce fields</a>
+      Salesforce Fields</a>
     <a class="nav-item" href="#/policy" data-r="policy">
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M8 2l5 2v4c0 3.5-2.2 5.4-5 6-2.8-.6-5-2.5-5-6V4z" stroke-linejoin="round"/></svg>
-      The rules</a>
-    <div class="grp">Do</div>
+      Decision Rules</a>
+    <div class="grp">Actions</div>
     <a class="nav-item" href="#/composer" data-r="composer">
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M14 2L7 9M14 2l-4.5 12-2.5-5.5L2 6z" stroke-linejoin="round"/></svg>
-      Send a message</a>
+      Send Message</a>
   </nav>
   <div class="side-foot">
-    <label><input type="checkbox" id="autorefresh"> refresh every 5 seconds</label>
+    <label><input type="checkbox" id="autorefresh"> Refresh every 5 seconds</label>
   </div>
 </aside>
 <main id="main" tabindex="-1"><div class="page" id="page"><div class="loading">Loading…</div></div></main>
@@ -572,17 +572,17 @@ dialog.modal .banner{margin-top:var(--s3)}
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <dialog id="approve" class="modal" aria-labelledby="ap-title">
   <form id="ap-form">
-    <h2 id="ap-title">Approve <span id="ap-co"></span> by hand</h2>
+    <h2 id="ap-title">Approve <span id="ap-co"></span> Manually</h2>
     <div id="ap-body"></div>
-    <div class="field"><label class="flab" for="ap-who">Your reviewer ID</label>
+    <div class="field"><label class="flab" for="ap-who">Reviewer ID</label>
       <input id="ap-who" required autocomplete="off">
-      <span class="note">goes on the decision record and the audit row, exactly as typed</span></div>
-    <div class="field"><label class="flab" for="ap-why">Why</label>
+      <span class="note">Recorded on the decision and in the activity log exactly as entered.</span></div>
+    <div class="field"><label class="flab" for="ap-why">Reason</label>
       <textarea id="ap-why" required></textarea>
-      <span class="note">kept with the approval — say what you checked</span></div>
+      <span class="note">Stored with the approval. State what was verified.</span></div>
     <div class="toolbar" style="margin:0;justify-content:flex-end">
       <button type="button" id="ap-cancel">Cancel</button>
-      <button type="submit" class="primary" id="ap-go">Approve by hand</button></div>
+      <button type="submit" class="primary" id="ap-go">Approve Manually</button></div>
     <div id="ap-err" class="banner" role="alert" hidden></div>
   </form>
 </dialog>
@@ -631,7 +631,7 @@ const reviewer=()=>whoBox.value.trim();
 /* A reviewer action with nobody named is not sent: the row would carry no person. On the folded
    frame the box lives in the drawer, so the drawer opens before focus moves to it. */
 function needReviewer(){if(reviewer())return true;
-  toast(`${I.cross}<span>Type your reviewer ID in the sidebar first — the answer is kept with your name on it</span>`);
+  toast(`${I.cross}<span>Enter your reviewer ID in the sidebar first. Review actions are recorded under it.</span>`);
   openMenu();whoBox.focus();return false}
 
 /* Status icons.
@@ -672,55 +672,54 @@ const I={
    grep the logs for it. Translating is a PRESENTATION job: nothing below changes what the
    engine computes, stores, or sends on the callback. */
 const SAY={
-  decision:{approve:"Approved",approve_buy_locked:"Approved, buying locked",
-    manual_review_insufficient:"On hold",reject:"Rejected"},
-  buy:{enabled:"buying: allowed",locked_org_id_required:"buying: locked until an org ID checks out"},
-  buy_status:{not_applicable:"Buying not in play yet",
-    buy_locked_org_id_required:"Buying locked until an org ID checks out",
-    org_id_validation_pending:"Checking the org ID",org_id_failed:"Org ID did not check out",
+  decision:{approve:"Approved",approve_buy_locked:"Approved, Buying Locked",
+    manual_review_insufficient:"On Hold",reject:"Rejected"},
+  buy:{enabled:"Buying enabled",locked_org_id_required:"Buying locked pending Org ID verification"},
+  buy_status:{not_applicable:"Buying not yet applicable",
+    buy_locked_org_id_required:"Buying locked pending Org ID verification",
+    org_id_validation_pending:"Org ID verification in progress",org_id_failed:"Org ID verification failed",
     buy_enabled:"Buying enabled",buy_suspended:"Buying suspended"},
-  case_status:{registered:"Signed up",email_verification_pending:"Waiting on email confirmation",
-    email_verified:"Email confirmed",enrichment_running:"Gathering evidence",
-    kyc_pending:"Checks in progress",manual_review_insufficient:"Waiting for more evidence",
-    account_approved:"Approved",approved_manual:"Approved by a person",rejected:"Rejected"},
-  broker:{clear:"Not a broker",allowed_broker:"Known broker, allowed",blocked:"Blocked broker"},
-  check:{verified_company_email:"Company email confirmed",
-    official_registry_match:"Found in the official company register",
-    org_id_match:"Org ID matches the company",
-    poc_verified:"Contact listed on the address record confirmed",
-    business_document_verified:"Business document checks out",
-    linkedin_company_match:"Person matches the company on LinkedIn",
-    website_verified:"Website checked by a person",verified_email:"Some email confirmed"},
-  status:{pass:"Passed",fail:"Failed",needs_review:"Needs a look",missing:"Nothing yet"},
-  gate:{score_met:"Enough evidence points",legal_proof:"The company is real",
-    control_proof:"The applicant controls it",broker_ok:"Not a blocked broker",
-    no_hard_conflict:"Nothing contradicts"},
-  /* Short on purpose: ten of these sit side by side in one table cell. The long version is in
-     the Runs explainer. */
-  stage:{QUEUED:"Queued",RESOLVE_INPUTS:"Read case",BROKER_GATE:"Broker check",
-    RUN_ADAPTERS:"Call sources",VALIDATE:"Check replies",WRITE_CHECKS:"Record evidence",
-    SCORE:"Score",DECIDE:"Decide",PUBLISH_DECISION:"Publish",COMPLETE:"Done",FAILED:"Failed"},
-  task:{website:"Website review",poc_email_unavailable:"No contact email on file"},
-  category:{control_proof:"Proves control",legal_business_proof:"Proves the company is real",
+  case_status:{registered:"Registered",email_verification_pending:"Awaiting email verification",
+    email_verified:"Email verified",enrichment_running:"Collecting evidence",
+    kyc_pending:"Verification in progress",manual_review_insufficient:"Awaiting further evidence",
+    account_approved:"Approved",approved_manual:"Approved manually",rejected:"Rejected"},
+  broker:{clear:"No broker match",allowed_broker:"Allowed broker",blocked:"Blocked broker"},
+  check:{verified_company_email:"Company email verified",
+    official_registry_match:"Official registry match",
+    org_id_match:"Org ID match",
+    poc_verified:"RIR contact verified",
+    business_document_verified:"Business document verified",
+    linkedin_company_match:"LinkedIn company match",
+    website_verified:"Website reviewed",verified_email:"Email verified"},
+  status:{pass:"Passed",fail:"Failed",needs_review:"Needs review",missing:"Not yet available"},
+  gate:{score_met:"Score threshold met",legal_proof:"Legal entity verified",
+    control_proof:"Control verified",broker_ok:"No broker block",
+    no_hard_conflict:"No conflicting evidence"},
+  /* Short on purpose: ten of these sit side by side in one table cell. */
+  stage:{QUEUED:"Queued",RESOLVE_INPUTS:"Load inputs",BROKER_GATE:"Broker check",
+    RUN_ADAPTERS:"Query sources",VALIDATE:"Validate",WRITE_CHECKS:"Record evidence",
+    SCORE:"Score",DECIDE:"Decide",PUBLISH_DECISION:"Publish",COMPLETE:"Complete",FAILED:"Failed"},
+  task:{website:"Website review",poc_email_unavailable:"No contact email on record"},
+  category:{control_proof:"Control proof",legal_business_proof:"Legal entity proof",
     supporting:"Supporting",account_access:"Account access"},
-  mode:{automated:"Automatic",manual:"A person decides",
-    automated_plus_user_token:"Automatic, plus an emailed code"},
-  adapter:{broker_policy:"Blocked-broker list",email_verification:"Email confirmation",
-    companies_house:"UK company register",gleif:"Global company register",
-    floqer_company_enrichment:"Company and people lookup",rir_rdap:"Address registry records",
-    rir_poc:"Address registry contacts",document_ocr:"Document reader",
-    website_manual_review:"Website review by a person"},
-  store:{fs:"this server's disk",s3:"cloud storage"},
-  /* how each source is wired, in a sentence; the server's own note follows it */
-  wiring:{broker_policy:"Built into the tool: the blocked-broker table",
-    email_verification:"Comes with the platform's message; no outside service",
-    companies_house:"Web service: the UK company register",
-    gleif:"Web service: the global company register",
-    floqer_company_enrichment:"Web service: company and people lookup",
-    rir_rdap:"Web service: the address registries",
-    rir_poc:"Registry contact directory, plus a code sent by email",
-    document_ocr:"The evidence file store, plus a document reader",
-    website_manual_review:"A person looks at the website; nothing automatic"},
+  mode:{automated:"Automated",manual:"Manual review",
+    automated_plus_user_token:"Automated with emailed code"},
+  adapter:{broker_policy:"Blocked Broker List",email_verification:"Email Verification",
+    companies_house:"Companies House",gleif:"GLEIF LEI Register",
+    floqer_company_enrichment:"Company Enrichment",rir_rdap:"RIR Registry Records",
+    rir_poc:"RIR Contact Directory",document_ocr:"Document OCR",
+    website_manual_review:"Manual Website Review"},
+  store:{fs:"Local disk",s3:"Cloud storage (S3)"},
+  /* how each source is connected, in a sentence; the server's own note follows it */
+  wiring:{broker_policy:"Internal: blocked broker table",
+    email_verification:"Provided in the platform message; no external service",
+    companies_house:"External service: Companies House",
+    gleif:"External service: GLEIF",
+    floqer_company_enrichment:"External service: company enrichment",
+    rir_rdap:"External service: RIR registry records",
+    rir_poc:"RIR contact directory with an emailed verification code",
+    document_ocr:"Evidence store with document OCR",
+    website_manual_review:"Manual review; no automated crawler"},
 };
 /* Unknown values must still read as something: an enum added upstream shows as spaced words
    rather than vanishing. */
@@ -731,180 +730,164 @@ const say=(g,k,fb)=>SAY[g]?.[k]??fb??String(k??"").replace(/_/g," ");
    short id; tip(id) draws the trigger, the delegated handlers below place the bubble. */
 const TIPS={
   /* Overview */
-  overview:{t:"Overview",b:`<p>How the tool itself is doing: how much work is moving, how much
-    is stuck, how fast the outside services answer, and how it is set up.</p>
-    <p>Nothing here is about one company. For that, go to Companies.</p>`},
-  kpis:{t:"The six numbers",b:`<p>A quick read on the machinery.</p><dl>
-    <dt>Rounds finished</dt><dd>Rounds of checks that ran all the way through.</dd>
-    <dt>Waiting to start</dt><dd>Work queued or in progress right now.</dd>
-    <dt>Gave up</dt><dd>Background work and result deliveries that failed every retry. These
-      need a person.</dd>
-    <dt>Results not sent yet</dt><dd>Decisions waiting to reach the platform. A number that
-      keeps climbing means the sender has stalled.</dd>
-    <dt>Waiting on a person</dt><dd>Review jobs nobody has picked up.</dd>
-    <dt>Message to decision</dt><dd>How long the slowest one in twenty takes, from the platform's
-      message to the decision, end to end.</dd></dl>`},
-  decisions:{t:"Decisions so far",b:`<p>Every decision the tool has sent, counted by kind,
-    since day one.</p><dl>
-    <dt>Approved</dt><dd>Enough proof. The platform opens the account.</dd>
-    <dt>Approved, buying locked</dt><dd>The company is proven, but the address registry ID is
-      not, so buying stays off until it is.</dd>
-    <dt>On hold</dt><dd>Usually not enough proof yet, and it clears itself the moment new
-      evidence takes the case over the line. Sometimes enough proof, but this copy of the tool
-      may not approve on its own — that one waits for a named reviewer. The case page says
-      which.</dd>
-    <dt>Rejected</dt><dd>The applicant is on the blocked-broker list.</dd></dl>`},
-  latency:{t:"Outside services",b:`<p>How the outside services the tool calls are behaving:
-    how many calls, how many came back as errors, and how slow the slowest one in twenty was.</p>
-    <p>A rising error rate here usually explains cases that stop making progress.</p>`},
-  deadjobs:{t:"Jobs that gave up",b:`<p>Background work that failed every retry and stopped.
-    The case it belongs to is stuck until this is dealt with.</p>
-    <p>Read the error, fix the cause, then Try again to run it once more. Trying again without
-      fixing the cause just fails again.</p>`},
-  deadoutbox:{t:"Results that never arrived",b:`<p>Decisions the tool made but could not deliver
-    to the platform after every retry. The tool's own records are correct; the platform's are
-    behind.</p><p>Fix the delivery problem, then Try again.</p>`},
-  config:{t:"How this copy is set up",b:`<p>The settings this running tool is actually using —
-    not what a settings file says somewhere.</p><dl>
-    <dt>Rulebook</dt><dd>A fingerprint of the exact rules in force. Two installs showing the
-      same fingerprint are scoring identically.</dd>
-    <dt>Where results are sent</dt><dd>The platform address decisions are posted to.</dd>
-    <dt>Shared secret key</dt><dd>Proves messages between platform and tool are genuine.
-      Missing means anyone could post to either side.</dd></dl>`},
-  /* Cases */
-  cases:{t:"Companies",b:`<p>One row per company that has applied. The platform creates these by
-    sending a message; the tool never invents one.</p>
-    <p>Click a row for everything known about that company.</p>`},
-  caselist:{t:"Reading this table",b:`<p>Two different numbers, on purpose.</p><dl>
-    <dt>Decision points</dt><dd>The score at the moment the decision was sent. This is the
-      number the decision was made on.</dd>
-    <dt>Points now</dt><dd>What today's evidence adds up to. It can be higher than the decision
-      points if new proof arrived after the decision — a new decision follows shortly.</dd>
-    <dt>Buying</dt><dd>Whether this company may buy addresses yet.</dd>
-    <dt>Broker</dt><dd>Whether they match the blocked-broker list.</dd></dl>`},
-  /* Case detail */
-  published:{t:"The decision sent to the platform",b:`<p>The decision the platform was told, and the
-    exact numbers it was made on. Everything in this box comes from one single record, so the score,
-    the buying field and the five rules below always agree with each other.</p>
-    <p>The buying field is what this decision says about buying on its own. It is not a promise
-    the account can buy today — the decision decides that, and a held account cannot.</p>
-    <p>Held for approval means the rulebook computed an approval but this copy of the tool may
-    not approve on its own. The panel under the word says what that takes.</p>
-    <p>None of it moves when new evidence lands. The next round publishes a new one.</p>`},
-  gates:{t:"The five rules",b:`<p>All five had to be true for the tool to approve on its own.
-    Points alone are not enough.</p><dl>
-    <dt>Enough evidence points</dt><dd>The score reached the target.</dd>
-    <dt>The company is real</dt><dd>Confirmed in an official register or by a business document.</dd>
-    <dt>The applicant controls it</dt><dd>Proven by a company email, an org ID, or a confirmed
-      registry contact.</dd>
-    <dt>Not a blocked broker</dt><dd>No exact match on the blocked list.</dd>
-    <dt>Nothing contradicts</dt><dd>No two pieces of evidence disagree.</dd></dl>
-    <p>A rule marked not checked means this decision skipped it — a person approved by hand.</p>`},
-  live:{t:"Evidence right now",b:`<p>What today's evidence adds up to if it were scored this
-    second. It is a live reading, not a decision, and the platform has not been told it.</p>
-    <p>When it sits above the target but the decision sent has not caught up, a round of checks
-    is still due. The bar is deliberately grey so it is never mistaken for a decision.</p>`},
-  checks:{t:"Evidence, and what replaced it",b:`<p>Each kind of evidence, oldest first. When
-    fresher proof of the same kind arrives it replaces the old one, which stays visible but
-    faded — nothing is ever deleted.</p>
-    <p>Only the newest of each kind counts toward the score. The tags are the tool's own short
-    reasons behind a pass or a fail.</p>`},
-  runs:{t:"Rounds of checks",b:`<p>Every platform message starts one round of checks, and each
-    round walks the same ten steps. The highlighted step is where it is now.</p><dl>
-    <dt>Read case</dt><dd>Load what the platform sent.</dd>
-    <dt>Broker check</dt><dd>Match against the blocked list. A match stops the round here.</dd>
-    <dt>Call sources</dt><dd>Ask the outside registries and services.</dd>
-    <dt>Check replies, Record evidence</dt><dd>Validate what came back and write it down.</dd>
-    <dt>Score, Decide, Publish</dt><dd>Add up the points, apply the rules, tell the platform.</dd></dl>
-    <p>Partial means at least one source failed and the round went on without it.</p>`},
-  tasks:{t:"Jobs for a person",b:`<p>Things the tool cannot judge on its own and hands to a
-    human. Today that is looking at a company's website.</p>
-    <p>Pass adds ten points and the case is rescored automatically. Fail records the outcome
-    without points. Either way the answer is kept with your reviewer ID on it — the one in the
-    sidebar — so type that first.</p>`},
-  tokens:{t:"Emailed codes",b:`<p>To prove the applicant really controls an address block, the
-    tool emails a one-time code to the contact listed on the public registry record — not to
-    an address the applicant typed in.</p>
-    <p>Outstanding means sent and not used yet. Codes expire.</p>`},
-  salesforce:{t:"What Salesforce should show",b:`<p>A preview of the fields the platform is
-    expected to copy into Salesforce for this case.</p>
-    <p>Read-only. This tool never writes to Salesforce; the platform does that copying. If
-    Salesforce disagrees with this table, the platform's copy is the one that is behind.</p>`},
-  history:{t:"Every decision, in order",b:`<p>Decisions are never edited. Each new one is added,
-    so this is the full history of what was decided and when.</p>
-    <p>Decided is when the work started; Published is when the platform was told. A person's
-    name in the By hand column means someone approved it directly.</p>`},
-  activity:{t:"What happened, step by step",b:`<p>The full record of what happened, in readable
-    form, oldest at the top. Highlighted lines are the ones that changed the outcome.</p>
-    <p>Open the exact record under any line to see what was written.</p>`},
-  submitted:{t:"What the applicant sent",b:`<p>The original details from the platform, exactly
-    as received. Every check below compares against these, so a typo here explains a lot of
-    failed matches.</p>`},
-  /* Integrations */
-  integrations:{t:"Data sources",b:`<p>Where each piece of evidence actually comes from, and
-    whether it is real yet.</p>
-    <p>Anything not marked as a real service is answering from built-in test data. Useful for
-    a demo, not for a real decision.</p>`},
-  platform:{t:"Between the platform and the tool",b:`<p>The three connections that are not
-    evidence sources: how decisions get back to the platform, how code emails are sent, and
-    where raw evidence files are kept.</p>
-    <p>Results are sent at least once and signed, so the platform can prove they came from
-    here. Repeats are safe to ignore.</p>`},
-  adapters:{t:"Evidence sources",b:`<p>The nine services the tool asks for proof. Test it sends a
-    harmless test call and reports whether the service answers.</p>
-    <p>Missing credentials means the connection is written but has no key yet.</p>`},
-  /* Field map */
-  fieldmap:{t:"Salesforce fields",b:`<p>Which Salesforce field each fact lands in, and which
-    part of the tool decides it.</p>
-    <p>Pick a company to see the real values it would copy across.</p>`},
-  fieldtable:{t:"Reading this table",b:`<p>Left is the Salesforce field. Middle is what the
-    chosen case would put there right now. Right is where that value comes from.</p>
-    <p>The copying is one-way and done by the platform: the tool works out the values, the
-    platform writes them.</p>`},
-  /* Policy */
-  policy:{t:"The rules",b:`<p>The rulebook the tool actually runs, shown as it is stored.
-    Nothing on this page is a description of the rules — it is the rules.</p>
-    <p>Read-only here. Changing them is a deliberate, reviewed release.</p>`},
-  rubric:{t:"How points are earned",b:`<p>Each kind of evidence is worth a fixed number of
-    points, awarded only when its pass rule is met exactly. No partial credit, no judgement
-    call.</p>
-    <p>Only the newest evidence of each kind counts. Proving the company exists and proving the
-    applicant controls it are tracked separately, because both are required.</p>`},
-  decisionpolicy:{t:"How the decision is chosen",b:`<p>Read top to bottom and stop at the first row
-    that fits. A blocked broker is checked first, so it beats any amount of points. The middle
-    column is the rule exactly as stored; in everyday words:</p><dl>
-    <dt>Rejected</dt><dd>An exact match on the blocked-broker list. Nothing else is looked at.</dd>
-    <dt>Approved</dt><dd>Enough points, all five rules true, and the address registry ID checks out.</dd>
-    <dt>Approved, buying locked</dt><dd>The same, but the registry ID has not checked out. The
-      account opens; buying does not.</dd>
-    <dt>On hold</dt><dd>Everything else. It clears itself when new evidence takes the case over
-      the line, so it is not a queue anyone has to work.</dd></dl>
-    <p>The last column is what the platform does about it.</p>
-    <p>One exception. While this copy of the tool may not approve on its own, a case that matches
-    an Approved row is still published as On hold, and its page says Held for approval. That hold
-    is lifted by a named reviewer, not by more evidence.</p>`},
-  brokerpolicy:{t:"The blocked-broker list",b:`<p>Matching is exact: the same name, domain, org
-    ID, contact handle or network number. Nothing is guessed and nothing is fuzzy, so a
-    coincidental resemblance never rejects anyone.</p>
-    <p>Blocked rejects immediately. Allowed only tags the case.</p>`},
-  hardgates:{t:"The five rules, as stored",b:`<p>The five things that must all be true before
-    the tool approves on its own, exactly as the tool stores them.</p>
-    <p>Shown as stored because this is what the tool reads.</p>`},
-  events:{t:"Messages the tool accepts",b:`<p>The complete list of messages the platform may send.
-    Anything else is refused.</p>`},
-  /* Composer */
-  composer:{t:"Send a message",b:`<p>Send a platform message by hand, for testing. The tool signs it
-    for you and gives it a unique key so sending twice cannot double-count.</p>
-    <p>This creates real records in this database. It is a test tool, not a pretend one.</p>`},
-  composerevent:{t:"The message",b:`<p>Pick a company and a message type; the details fill in
-    with a working example you can edit.</p>
-    <p>An unknown company ID starts a new record. The background process has to be running for
-    anything to happen after you send.</p>`},
-  composerresult:{t:"What came back",b:`<p>The tool's exact reply. A code starting with 2 means it
-    was accepted; jobs queued tells you how much work it started.</p>`},
-  demo:{t:"A worked example",b:`<p>The built-in test data recognises one company by name, so
-    these three messages in order walk a company from nothing to approved.</p>
-    <p>Useful for checking the whole chain end to end after a fresh install.</p>`},
+  overview:{t:"Overview",b:`<p>System status: how much work is in progress, what has failed, how the
+    external services are responding, and how this installation is configured.</p>
+    <p>Company-level detail is under Companies.</p>`},
+  kpis:{t:"Summary",b:`<dl>
+    <dt>Completed Rounds</dt><dd>Verification rounds that ran to completion.</dd>
+    <dt>In Progress</dt><dd>Work queued or running now.</dd>
+    <dt>Failed</dt><dd>Background jobs and decision deliveries that failed after all retries.
+      These require attention.</dd>
+    <dt>Pending Delivery</dt><dd>Decisions not yet delivered to the platform. A rising number
+      indicates a stalled sender.</dd>
+    <dt>Awaiting Review</dt><dd>Manual review tasks not yet completed.</dd>
+    <dt>Time to Decision</dt><dd>95th percentile, from the platform message to the decision.</dd></dl>`},
+  decisions:{t:"Decisions to Date",b:`<p>All decisions sent to the platform, counted by outcome.</p><dl>
+    <dt>Approved</dt><dd>Sufficient evidence. The platform opens the account.</dd>
+    <dt>Approved, Buying Locked</dt><dd>The company is verified but the Org ID is not, so
+      buying remains locked until it is.</dd>
+    <dt>On Hold</dt><dd>Usually insufficient evidence; the hold clears automatically when new
+      evidence meets the threshold. Where evidence is sufficient but automatic approval is not
+      enabled, the company waits for a named reviewer. The company page states which.</dd>
+    <dt>Rejected</dt><dd>Exact match on the Blocked Broker List.</dd></dl>`},
+  latency:{t:"External Services",b:`<p>Call volume, error rate, and 95th-percentile response time
+    for each external service.</p>
+    <p>A rising error rate usually explains companies that stop progressing.</p>`},
+  deadjobs:{t:"Failed Jobs",b:`<p>Background work that failed after all retries. The related
+    company cannot progress until this is resolved.</p>
+    <p>Review the error, resolve the cause, then Retry. Retrying without resolving the cause
+    fails again.</p>`},
+  deadoutbox:{t:"Undelivered Decisions",b:`<p>Decisions that could not be delivered to the platform
+    after all retries. The console's records are correct; the platform's are behind.</p>
+    <p>Resolve the delivery issue, then Retry.</p>`},
+  config:{t:"Configuration",b:`<p>The settings in effect on this running installation.</p><dl>
+    <dt>Rules fingerprint</dt><dd>Identifies the exact rules in force. Installations with the same
+      fingerprint score identically.</dd>
+    <dt>Decision delivery URL</dt><dd>Where decisions are posted.</dd>
+    <dt>Shared secret</dt><dd>Authenticates messages between the platform and the console. If
+      not configured, messages are unauthenticated.</dd></dl>`},
+  /* Companies */
+  cases:{t:"Companies",b:`<p>One row per company that has applied. Records are created by platform
+    messages only.</p><p>Select a row to open the full record.</p>`},
+  caselist:{t:"Reading This Table",b:`<dl>
+    <dt>Decision Score</dt><dd>The score at the time the decision was sent.</dd>
+    <dt>Current Score</dt><dd>Today's evidence total. It can exceed the decision score when new
+      evidence arrived after the decision; a new decision follows.</dd>
+    <dt>Buying</dt><dd>Whether the company may purchase addresses.</dd>
+    <dt>Broker Status</dt><dd>Result of the Blocked Broker List check.</dd></dl>`},
+  /* Company page */
+  published:{t:"Decision Sent to Platform",b:`<p>The decision delivered to the platform and the values
+    it was based on. All values come from one decision record, so the score, buying status and
+    rule results are always consistent.</p>
+    <p>The buying value reflects this decision only. A held account cannot buy regardless of it.</p>
+    <p>Held for Approval means the rules returned an approval but automatic approval is not
+    enabled on this installation. The panel below the decision states what is required.</p>
+    <p>New evidence does not change this record. The next verification round produces a new
+    decision.</p>`},
+  gates:{t:"Decision Rules",b:`<p>All five must be true for an automatic approval. Points alone
+    are not sufficient.</p><dl>
+    <dt>Score threshold met</dt><dd>The score reached the required total.</dd>
+    <dt>Legal entity verified</dt><dd>Confirmed in an official registry or by a business document.</dd>
+    <dt>Control verified</dt><dd>Confirmed by a company email, an Org ID, or a verified RIR contact.</dd>
+    <dt>No broker block</dt><dd>No exact match on the Blocked Broker List.</dd>
+    <dt>No conflicting evidence</dt><dd>No two items of evidence contradict each other.</dd></dl>
+    <p>A rule marked not evaluated was bypassed by a manual approval.</p>`},
+  live:{t:"Current Evidence Score",b:`<p>Today's evidence scored now. This is a live total, not a
+    decision, and has not been sent to the platform.</p>
+    <p>If it exceeds the threshold while the sent decision has not caught up, a verification
+    round is pending. The bar is grey so it is not mistaken for a decision.</p>`},
+  checks:{t:"Evidence History",b:`<p>Each type of evidence, oldest first. Newer evidence of the
+    same type replaces the earlier entry, which remains visible but faded. Nothing is deleted.</p>
+    <p>Only the latest evidence of each type counts toward the score. Tags show the recorded
+    reasons for a pass or fail.</p>`},
+  runs:{t:"Verification Rounds",b:`<p>Each platform message starts one verification round, and
+    each round follows the same ten steps. The highlighted step is the current one.</p><dl>
+    <dt>Load inputs</dt><dd>Read the details sent by the platform.</dd>
+    <dt>Broker check</dt><dd>Match against the Blocked Broker List. A match ends the round.</dd>
+    <dt>Query sources</dt><dd>Request evidence from registries and external services.</dd>
+    <dt>Validate, Record evidence</dt><dd>Check the responses and record the results.</dd>
+    <dt>Score, Decide, Publish</dt><dd>Total the points, apply the rules, send the decision.</dd></dl>
+    <p>Partial means at least one source failed and the round continued without it.</p>`},
+  tasks:{t:"Manual Review Tasks",b:`<p>Checks that require a reviewer. Currently this is the
+    website review.</p>
+    <p>Approving the website adds ten points and re-scores the company automatically. Rejecting
+    records the result without points. Either result is recorded under the reviewer ID in the
+    sidebar, which must be entered first.</p>`},
+  tokens:{t:"Verification Codes",b:`<p>To confirm control of an address block, a one-time code is
+    emailed to the contact on the public RIR record, not to an address supplied by the
+    applicant.</p><p>Sent means the code has not yet been used. Codes expire.</p>`},
+  salesforce:{t:"Salesforce Fields",b:`<p>A preview of the fields the platform is expected to write
+    to Salesforce for this company.</p>
+    <p>Read-only. This console does not write to Salesforce. If Salesforce differs from this
+    table, the Salesforce copy is behind.</p>`},
+  history:{t:"Decision History",b:`<p>Decisions are never edited. Each new decision is appended,
+    so this is the complete history of what was decided and when.</p>
+    <p>Decided is when processing started; Delivered is when the platform was notified. A name in
+    the Manual Approver column indicates a manual approval.</p>`},
+  activity:{t:"Activity Log",b:`<p>The complete record of activity for this company, oldest first.
+    Highlighted entries changed the outcome.</p>
+    <p>Open Record under any entry to view the stored details.</p>`},
+  submitted:{t:"Submitted Details",b:`<p>The details received from the platform, exactly as
+    submitted. All checks compare against these values, so an error here explains failed
+    matches.</p>`},
+  /* Data Sources */
+  integrations:{t:"Data Sources",b:`<p>Where each item of evidence comes from and whether the
+    connection is live.</p>
+    <p>Sources not marked Live respond from built-in test data. Suitable for demonstration, not
+    for a real decision.</p>`},
+  platform:{t:"Platform Connections",b:`<p>The three connections that are not evidence sources:
+    decision delivery to the platform, verification code emails, and evidence file storage.</p>
+    <p>Decisions are delivered at least once and signed, so the platform can verify their
+    origin. Duplicates are safe to ignore.</p>`},
+  adapters:{t:"Evidence Sources",b:`<p>The nine services queried for evidence. Test Connection
+    sends a harmless request and reports whether the service responds.</p>
+    <p>Credentials Required means the connection is configured but has no key.</p>`},
+  /* Salesforce Fields */
+  fieldmap:{t:"Salesforce Fields",b:`<p>The Salesforce field each value is written to, and the
+    source of that value.</p><p>Select a company to view the values it would produce.</p>`},
+  fieldtable:{t:"Reading This Table",b:`<p>Left: the Salesforce field. Centre: the value the
+    selected company would produce now. Right: where that value comes from.</p>
+    <p>Writes are one-way and performed by the platform.</p>`},
+  /* Decision Rules */
+  policy:{t:"Decision Rules",b:`<p>The rules in force on this installation, shown as stored.
+    This page is the rule set itself, not a description of it.</p>
+    <p>Read-only. Changes are made through a reviewed release.</p>`},
+  rubric:{t:"Scoring",b:`<p>Each type of evidence carries a fixed number of points, awarded only
+    when its pass condition is met exactly. No partial credit.</p>
+    <p>Only the latest evidence of each type counts. Legal entity proof and control proof are
+    tracked separately because both are required.</p>`},
+  decisionpolicy:{t:"Decision Table",b:`<p>Rows are evaluated top to bottom and the first match
+    applies. The broker check is first, so it takes precedence over any score. The condition
+    column is the rule as stored; in summary:</p><dl>
+    <dt>Rejected</dt><dd>Exact match on the Blocked Broker List. No further evaluation.</dd>
+    <dt>Approved</dt><dd>Threshold met, all five rules true, and the Org ID verified.</dd>
+    <dt>Approved, Buying Locked</dt><dd>As above, but the Org ID is not verified. The account
+      opens; buying does not.</dd>
+    <dt>On Hold</dt><dd>All other cases. The hold clears automatically when new evidence meets
+      the threshold.</dd></dl>
+    <p>The last column is the action the platform takes.</p>
+    <p>Exception: while automatic approval is not enabled, a company matching an Approved row is
+    published as On Hold and shown as Held for Approval. That hold is lifted by a named reviewer,
+    not by further evidence.</p>`},
+  brokerpolicy:{t:"Blocked Broker List",b:`<p>Matching is exact: the same name, domain, Org ID,
+    contact handle or ASN. No approximate matching, so a similar name never causes a
+    rejection.</p><p>Blocked entries are rejected immediately. Allowed entries are flagged only.</p>`},
+  hardgates:{t:"Rule Definitions",b:`<p>The five rules exactly as stored and evaluated.</p>`},
+  events:{t:"Accepted Message Types",b:`<p>The complete list of message types the platform may
+    send. Any other type is refused.</p>`},
+  /* Send Message */
+  composer:{t:"Send Message",b:`<p>Submit a platform message manually, for testing. The console
+    signs it and assigns a unique key so a repeated send is not processed twice.</p>
+    <p>This creates real records in this database.</p>`},
+  composerevent:{t:"Message",b:`<p>Select a company and a message type. The details are pre-filled
+    with a working example that can be edited.</p>
+    <p>An unknown company ID creates a new record. The background process must be running for
+    the message to be processed.</p>`},
+  composerresult:{t:"Response",b:`<p>The exact response. A code beginning with 2 indicates the
+    message was accepted; jobs queued indicates how much work it started.</p>`},
+  demo:{t:"Example",b:`<p>The built-in test data recognises one company, so these three messages
+    in order take a company from registration to Approved.</p>
+    <p>Useful for an end-to-end check after a fresh install.</p>`},
 };
 const tip=k=>{const x=TIPS[k];return x?`<button type="button" class="tipbtn" data-tip="${esc(k)}"`
   +` aria-label="What is this? ${esc(x.t)}">${I.help}</button>`:""};
@@ -942,26 +925,26 @@ addEventListener("resize",followTip);
 /* The pill's default label is the everyday one. Where a caller passes its own label it
    wins, so the raw value is still one argument away wherever an operator needs to see it. */
 const PILL={
-  pass:["p-green",I.check,"Passed"],fail:["p-red",I.cross,"Failed"],needs_review:["p-amber",I.warn,"Needs a look"],
-  missing:["p-neutral",I.absent,"Nothing yet"],
-  approve:["p-green",I.check,"Approved"],approve_buy_locked:["p-amber",I.lock,"Approved, buying locked"],
-  manual_review_insufficient:["p-amber",I.clock,"On hold"],reject:["p-red",I.cross,"Rejected"],
+  pass:["p-green",I.check,"Passed"],fail:["p-red",I.cross,"Failed"],needs_review:["p-amber",I.warn,"Needs Review"],
+  missing:["p-neutral",I.absent,"Not Yet Available"],
+  approve:["p-green",I.check,"Approved"],approve_buy_locked:["p-amber",I.lock,"Approved, Buying Locked"],
+  manual_review_insufficient:["p-amber",I.clock,"On Hold"],reject:["p-red",I.cross,"Rejected"],
   /* Not a decision the engine can make: the published word for a computed approval the safety
-     overlay held back. The person icon is the cue — this one waits on somebody, not on evidence. */
-  held_for_approval:["p-amber",I.person,"Held for approval"],
-  live:["p-green",I.live,"Real service"],stub:["p-amber",I.stub,"Test data"],dev:["p-amber",I.stub,"Stand-in"],
-  "needs-config":["p-red",I.gear,"Missing credentials"],manual:["p-blue",I.person,"A person decides"],
-  open:["p-amber",I.clock,"Waiting"],done:["p-green",I.check,"Done"],
-  delivered:["p-green",I.check,"Delivered"],pending:["p-amber",I.clock,"Not sent yet"],
-  dead:["p-red",I.dead,"Gave up"],queued:["p-neutral",I.clock,"Queued"],running:["p-accent",I.running,"Running"],
-  integrity_drift:["p-red",I.warn,"Records disagree"],
-  clear:["p-green",I.check,"Not a broker"],allowed_broker:["p-amber",I.warn,"Known broker, allowed"],
-  blocked:["p-red",I.cross,"Blocked broker"],
+     overlay held back. The person icon is the cue: this one waits on somebody, not on evidence. */
+  held_for_approval:["p-amber",I.person,"Held for Approval"],
+  live:["p-green",I.live,"Live"],stub:["p-amber",I.stub,"Test Data"],dev:["p-amber",I.stub,"Development Stand-in"],
+  "needs-config":["p-red",I.gear,"Credentials Required"],manual:["p-blue",I.person,"Manual"],
+  open:["p-amber",I.clock,"Open"],done:["p-green",I.check,"Complete"],
+  delivered:["p-green",I.check,"Delivered"],pending:["p-amber",I.clock,"Pending"],
+  dead:["p-red",I.dead,"Failed"],queued:["p-neutral",I.clock,"Queued"],running:["p-accent",I.running,"Running"],
+  integrity_drift:["p-red",I.warn,"Record Conflict"],
+  clear:["p-green",I.check,"No Broker Match"],allowed_broker:["p-amber",I.warn,"Allowed Broker"],
+  blocked:["p-red",I.cross,"Blocked Broker"],
 };
-const PROV_PILL={unresolved_pointer_drift:["integrity_drift",undefined],unresolved_legacy_order:["missing","Order unclear (old records)"],no_decisions:["missing","No decision yet"],no_manual_decisions:["missing","Nobody approved by hand"],latest_manual_row:["manual","Approved by a person"],
+const PROV_PILL={unresolved_pointer_drift:["integrity_drift",undefined],unresolved_legacy_order:["missing","Order Unresolved (legacy records)"],no_decisions:["missing","No Decision Yet"],no_manual_decisions:["missing","No Manual Approval"],latest_manual_row:["manual","Approved Manually"],
   // every MANUAL provenance state has its own pill (re-audit `8377440` F6): a legacy-unresolved
   // manual history must NOT render identically to "no manual approval".
-  latest_manual_row_manual:["manual","Approved by a person — this is the live one"],unresolved_pointer_drift_manual:["integrity_drift","Manual approval records disagree"],unresolved_legacy_order_manual:["missing","Manual order unclear (old records)"],no_manual_decisions_manual:["p-neutral","Nobody approved by hand"]};
+  latest_manual_row_manual:["manual","Approved Manually (current decision)"],unresolved_pointer_drift_manual:["integrity_drift","Manual Approval Record Conflict"],unresolved_legacy_order_manual:["missing","Manual Approval Order Unresolved"],no_manual_decisions_manual:["p-neutral","No Manual Approval"]};
 const provPill=(p,manual)=>{const k=manual?p+"_manual":p;const[q,label]=PROV_PILL[k]||PROV_PILL[p]||["missing",p];return pill(q,label)};
 const pill=(k,label)=>{const[c,i,d]=PILL[k]||["p-neutral",I.absent,k];
   return`<span class="pill ${c}">${i}${esc(label??d)}</span>`};
@@ -996,8 +979,8 @@ async function sidebarBadge(){try{
 /* ── Overview ─────────────────────────────────────────── */
 async function viewOverview(){
   const{body:o}=await j("/ui/api/overview");
-  $("#policychip").textContent="rules "+o.policy.bundle_hash.slice(0,10)+"…";
-  $("#envchip").innerHTML=o.config.auth_disabled?pill("needs-config","Anyone can post"):pill("live","Messages are signed");
+  $("#policychip").textContent="Rules "+o.policy.bundle_hash.slice(0,10)+"…";
+  $("#envchip").innerHTML=o.config.auth_disabled?pill("needs-config","Authentication Off"):pill("live","Signed Messages");
   const m=o.metrics,g=(x,k)=>x?.[k]??0;
   const deadJ=g(m.jobs_by_status,"dead"),deadO=g(m.outbox_by_status,"dead"),dead=deadJ+deadO;
   const reviews=Object.entries(m.review_tasks_open_by_type||{});
@@ -1005,59 +988,59 @@ async function viewOverview(){
     <div class="num ${cls}">${num}</div><div class="foot">${foot}</div></div>`;
   const decisions=Object.entries(m.decisions_by_type||{}).sort((a,b)=>b[1]-a[1])
     .map(([k,v])=>`<tr><td>${pill(k)}</td><td class="num strong">${v}</td></tr>`).join("")
-    ||emptyRow(2,"No decisions yet","Send a <code>kyb.run_requested</code> from the <a href='#/composer'>Composer</a>");
+    ||emptyRow(2,"No decisions yet","Send a <code>kyb.run_requested</code> message from <a href='#/composer'>Send Message</a>.");
   const adapters=(m.adapter_latency||[]).map(a=>`<tr>
     <td><span class="strong">${esc(say("adapter",a.adapter_id))}</span>
       <div class="sub mono">${esc(a.adapter_id)}</div></td><td class="num">${a.calls}</td>
     <td class="num" ${a.error_rate>0?'style="color:var(--red)"':""}>${(a.error_rate*100).toFixed(0)}%</td>
     <td class="num">${a.p95_ms.toFixed(0)}${NBSP}ms</td></tr>`).join("")
-    ||emptyRow(4,"Nothing called yet","Outside services appear here the first time a check runs");
+    ||emptyRow(4,"No calls yet","External services appear here once a verification round runs.");
   const deadRows=(list,kind)=>list.map(d=>`<tr>
     <td class="num">${d.id}</td><td class="mono">${esc(d.kind)}</td>
     <td>${d.case_id?caseLink(d.case_id):"—"}</td><td class="num">${d.attempts}</td>
     <td class="mono" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
         title="${esc(d.last_error||"")}">${esc(d.last_error||"")}</td>
-    <td style="text-align:right"><button class="sm" data-requeue="${kind}:${d.id}">Try again</button></td></tr>`).join("");
+    <td style="text-align:right"><button class="sm" data-requeue="${kind}:${d.id}">Retry</button></td></tr>`).join("");
 
-  page.innerHTML=tbar("Overview","How the tool itself is doing — what is moving, what is stuck, and how it is set up","","overview")+`
-    ${dead?`<div class="banner">${I.dead}<span>${dead} thing${dead>1?"s":""} gave up after every retry and need${dead>1?"":"s"} a person — read the error, fix the cause, then try again below.</span></div>`:""}
-    ${sec("At a glance","kpis","tight")}
+  page.innerHTML=tbar("Overview","System status: throughput, failures, and configuration.","","overview")+`
+    ${dead?`<div class="banner">${I.dead}<span>${dead} job${dead>1?"s":""} failed after all retries and require${dead>1?"":"s"} attention. Review the error, resolve the cause, then retry below.</span></div>`:""}
+    ${sec("Summary","kpis","tight")}
     <div class="kpis">
-      ${kpi("Rounds finished",g(m.runs_by_state,"COMPLETE"),"rounds of checks that got all the way through")}
-      ${kpi("Waiting to start",g(m.jobs_by_status,"queued")+g(m.jobs_by_status,"running"),"queued or in progress")}
-      ${kpi("Gave up",dead,dead?"needs a person":"nothing stuck",dead?"bad":"")}
-      ${kpi("Results not sent yet",g(m.outbox_by_status,"pending"),"a number that keeps climbing means the sender has stalled")}
-      ${kpi("Waiting on a person",reviews.reduce((a,[,v])=>a+v,0),esc(reviews.map(([k,v])=>`${v} ${say("task",k).toLowerCase()}${v===1?"":"s"}`).join(" · "))||"nothing in the queue")}
-      ${kpi("Message to decision",(m.event_to_decision_seconds?.p95??0).toFixed(1)+"s","slowest one in twenty · target under 10s")}
+      ${kpi("Completed Rounds",g(m.runs_by_state,"COMPLETE"),"verification rounds completed")}
+      ${kpi("In Progress",g(m.jobs_by_status,"queued")+g(m.jobs_by_status,"running"),"queued or running")}
+      ${kpi("Failed",dead,dead?"requires attention":"no failures",dead?"bad":"")}
+      ${kpi("Pending Delivery",g(m.outbox_by_status,"pending"),"decisions not yet delivered to the platform")}
+      ${kpi("Awaiting Review",reviews.reduce((a,[,v])=>a+v,0),esc(reviews.map(([k,v])=>`${v} ${say("task",k).toLowerCase()}${v===1?"":"s"}`).join(" · "))||"none pending")}
+      ${kpi("Time to Decision",(m.event_to_decision_seconds?.p95??0).toFixed(1)+"s","95th percentile · target under 10s")}
     </div>
     <div class="split">
-      <div class="card"><div class="hd"><h2>Decisions so far</h2><span class="hint">since day one</span>${tip("decisions")}</div>
+      <div class="card"><div class="hd"><h2>Decisions to Date</h2><span class="hint">all time</span>${tip("decisions")}</div>
         <div class="bd flush"><table><tbody>${decisions}</tbody></table></div></div>
-      <div class="card"><div class="hd"><h2>Outside services</h2><span class="hint">how they are answering</span>${tip("latency")}</div>
+      <div class="card"><div class="hd"><h2>External Services</h2><span class="hint">response summary</span>${tip("latency")}</div>
         <div class="bd flush"><table>
-          <thead><tr><th>Service</th><th class="num">Calls</th><th class="num" title="share of calls that came back as an error">Errors</th>
-          <th class="num" title="the slowest one call in twenty">Slowest</th></tr></thead>
+          <thead><tr><th>Service</th><th class="num">Calls</th><th class="num" title="share of calls that returned an error">Error Rate</th>
+          <th class="num" title="95th percentile">Response Time</th></tr></thead>
           <tbody>${adapters}</tbody></table></div></div>
     </div>
-    ${o.dead_jobs.length?sec("Work that gave up","deadjobs")+`<div class="card"><div class="bd flush"><table>
-      <thead><tr><th class="num">ID</th><th>What it was</th><th>Company</th><th class="num">Tries</th><th>Last error</th><th></th></tr></thead>
+    ${o.dead_jobs.length?sec("Failed Jobs","deadjobs")+`<div class="card"><div class="bd flush"><table>
+      <thead><tr><th class="num">ID</th><th>Type</th><th>Company</th><th class="num">Attempts</th><th>Last Error</th><th></th></tr></thead>
       <tbody>${deadRows(o.dead_jobs,"job")}</tbody></table></div></div>`:""}
-    ${o.dead_outbox.length?sec("Results that never reached the platform","deadoutbox")+`<div class="card"><div class="bd flush"><table>
-      <thead><tr><th class="num">ID</th><th>What it was</th><th>Company</th><th class="num">Tries</th><th>Last error</th><th></th></tr></thead>
+    ${o.dead_outbox.length?sec("Undelivered Decisions","deadoutbox")+`<div class="card"><div class="bd flush"><table>
+      <thead><tr><th class="num">ID</th><th>Type</th><th>Company</th><th class="num">Attempts</th><th>Last Error</th><th></th></tr></thead>
       <tbody>${deadRows(o.dead_outbox,"outbox")}</tbody></table></div></div>`:""}
-    ${sec("How this copy is set up","config")}
+    ${sec("Configuration","config")}
     <div class="card"><div class="bd kv">
-      <span class="k">Rulebook fingerprint</span><span class="mono">${esc(o.policy.bundle_hash)}</span>
-      <span class="k">Scoring</span><span>version ${esc(o.policy.rubric_version)} · ${o.policy.threshold} points to approve</span>
-      <span class="k">Results are sent to</span><span class="mono">${esc(o.config.callback_url)}</span>
-      <span class="k">Shared secret key</span><span>${o.config.hmac_secret_set?pill("live","Set"):pill("needs-config","Missing")}</span>
-      <span class="k">Evidence files</span><span>${esc(o.config.object_store)}</span>
-      <span class="k">Rules loaded from</span><span class="mono">${esc(o.config.policy_dir)}</span>
+      <span class="k">Rules fingerprint</span><span class="mono">${esc(o.policy.bundle_hash)}</span>
+      <span class="k">Scoring</span><span>Version ${esc(o.policy.rubric_version)} · threshold ${o.policy.threshold} points</span>
+      <span class="k">Decision delivery URL</span><span class="mono">${esc(o.config.callback_url)}</span>
+      <span class="k">Shared secret</span><span>${o.config.hmac_secret_set?pill("live","Configured"):pill("needs-config","Not configured")}</span>
+      <span class="k">Evidence storage</span><span>${esc(say("store",o.config.object_store))}</span>
+      <span class="k">Rules directory</span><span class="mono">${esc(o.config.policy_dir)}</span>
     </div></div>`;
   page.querySelectorAll("[data-requeue]").forEach(b=>b.onclick=async()=>{
     const[kind,id]=b.dataset.requeue.split(":");
     const r=await j(`/ui/api/requeue/${kind}/${id}`,{method:"POST"});
-    toast(r.status<300?`${I.check}<span>Put back in the queue to try again</span>`:`${I.cross}<span>${esc(JSON.stringify(r.body.detail??r.body))}</span>`);
+    toast(r.status<300?`${I.check}<span>Queued for retry.</span>`:`${I.cross}<span>${esc(JSON.stringify(r.body.detail??r.body))}</span>`);
     route()});
 }
 
@@ -1074,23 +1057,23 @@ async function viewCases(){
     <td>${c.latest_decision?(c.enforcement_held?pill("held_for_approval"):pill(c.latest_decision)):provPill(c.decision_provenance)}</td>
     <td class="num strong">${c.decision_score??"—"}</td>
     <td class="num sub">${c.current_evidence_score}</td>
-    <td class="sub">${esc(c.enforcement_held&&c.status==="manual_review_insufficient"?"Waiting for a reviewer":say("case_status",c.status))}</td>
+    <td class="sub">${esc(c.enforcement_held&&c.status==="manual_review_insufficient"?"Awaiting reviewer":say("case_status",c.status))}</td>
     <td class="sub">${esc(say("buy_status",c.buy_status))}</td>
     <td>${pill(c.broker_status)}</td>
     <td class="num">${when(c.updated_at)}</td>
     <td class="chev" aria-hidden="true">›</td></tr>`).join("")
-    ||(q?emptyRow(9,"Nothing matches",`No company or ID contains “${esc(q)}” — <button class="sm" id="clearq">Clear the search</button>`)
-        :emptyRow(9,"No companies yet",`Send a <code>kyb.run_requested</code> from the <a href="#/composer">Composer</a> to create one`));
-  page.innerHTML=tbar("Companies","One row per company that has applied — click any row for the whole story","","cases")+`
+    ||(q?emptyRow(9,"No matches",`No company or ID contains “${esc(q)}”. <button class="sm" id="clearq">Clear Search</button>`)
+        :emptyRow(9,"No companies yet",`Send a <code>kyb.run_requested</code> message from <a href="#/composer">Send Message</a> to create one.`));
+  page.innerHTML=tbar("Companies","All companies that have applied. Select a row to open the full record.","","cases")+`
     <div class="toolbar">
       <div class="search"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="4.5"/><path d="M14 14l-3.5-3.5"/></svg>
-        <input id="q" placeholder="Search by company or ID…" value="${esc(q)}" aria-label="search companies"></div>
+        <input id="q" placeholder="Search by company or ID" value="${esc(q)}" aria-label="Search companies"></div>
       <span class="note">${body.cases.length} compan${body.cases.length===1?"y":"ies"}</span>
       ${tip("caselist")}</div>
-    <div class="card"><div class="bd flush"><table>
-      <thead><tr><th>Company</th><th>Decision</th><th class="num" title="the score the decision was made on">Decision points</th>
-      <th class="num" title="what today's evidence adds up to — this is not the decision">Points now</th>
-      <th>Where it is</th><th>Buying</th><th>Broker</th><th class="num">Last change</th><th></th></tr></thead>
+    <div class="card"><div class="bd flush"><table class="companies">
+      <thead><tr><th>Company</th><th>Decision</th><th class="num" title="score at the time of the decision">Decision Score</th>
+      <th class="num" title="current evidence total; not the decision">Current Score</th>
+      <th>Status</th><th>Buying</th><th>Broker Status</th><th class="num">Last Updated</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`;
   $("#q").addEventListener("input",e=>{remember("caseq",e.target.value);
     clearTimeout(window.__qt);window.__qt=setTimeout(viewCases,250)});
@@ -1106,20 +1089,20 @@ async function viewCases(){
 function humanizeAudit(a){
   const d=a.detail_json||{};
   switch(a.action){
-    case"event.received":return`the platform sent <b>${esc(d.event_type||"?")}</b>`;
-    case"run.created":return`started a round of checks`;
-    case"run.broker_gate":return`checked the blocked-broker list ${I.arrow} <b>${esc(say("broker",d.broker_status))}</b>${d.short_circuit?" · stopped here":""}`;
-    case"adapter.recorded":return`asked <b>${esc(say("adapter",d.adapter_id))}</b> · ${esc(d.status==="ok"?"answered":say("status",d.status))} · ${d.latency_ms??0}ms`;
+    case"event.received":return`Platform message received: <b>${esc(d.event_type||"?")}</b>`;
+    case"run.created":return`Verification round started`;
+    case"run.broker_gate":return`Blocked broker check: <b>${esc(say("broker",d.broker_status))}</b>${d.short_circuit?" · round ended":""}`;
+    case"adapter.recorded":return`Queried <b>${esc(say("adapter",d.adapter_id))}</b> · ${esc(d.status==="ok"?"responded":say("status",d.status))} · ${d.latency_ms??0}ms`;
     case"check.created":return`<b>${esc(say("check",d.check_type))}</b> ${I.arrow} ${esc(say("status",d.status))}${d.points?` · +${d.points} points`:""}`;
-    case"check.superseded":return`<b>${esc(say("check",d.check_type))}</b> replaced by fresher evidence`;
-    case"review_task.created":return`opened a job for a person \u2014 <b>${esc(say("task",d.task_type))}</b>`;
-    case"review_task.completed":return`a person answered · <b>${esc(say("status",d.result,d.result))}</b>`;
-    case"poc.token_sent":return`emailed a code to the registry contact for <b>${esc(d.poc_handle)}</b>`;
+    case"check.superseded":return`<b>${esc(say("check",d.check_type))}</b> replaced by newer evidence`;
+    case"review_task.created":return`Manual review task opened: <b>${esc(say("task",d.task_type))}</b>`;
+    case"review_task.completed":return`Manual review completed · <b>${esc(say("status",d.result,d.result))}</b>`;
+    case"poc.token_sent":return`Verification code emailed to the RIR contact for <b>${esc(d.poc_handle)}</b>`;
     case"run.decided":return d.enforcement_held
-      ?`decision: <b>Held for approval</b> · ${d.score} points · the rules said ${esc(say("decision",d.computed_decision))}, but this copy may not approve on its own`
-      :`decision: <b>${esc(say("decision",d.decision))}</b> · ${d.score} points`;
-    case"reviewer.manual_approve":return`<b>a person approved this by hand</b>`;
-    case"run.failed":return`the round of checks <b>failed</b> · ${esc((d.error||"").slice(0,80))}`;
+      ?`Decision: <b>Held for Approval</b> · ${d.score} points · rules returned ${esc(say("decision",d.computed_decision))}; automatic approval is not enabled`
+      :`Decision: <b>${esc(say("decision",d.decision))}</b> · ${d.score} points`;
+    case"reviewer.manual_approve":return`<b>Approved manually</b>`;
+    case"run.failed":return`Verification round <b>failed</b> · ${esc((d.error||"").slice(0,80))}`;
     case"run.stage":case"run.inputs_resolved":return null; // noise — keep in raw only
     default:return`${esc(a.action)}`;
   }
@@ -1135,23 +1118,23 @@ const GATE_KEYS=["score_met","legal_proof","control_proof","broker_ok","no_hard_
    screen never decides a case is held by looking at five green gates. */
 function holdCallout(hold,latest,threshold,manual){
   const over=(latest.score??0)-threshold;
-  const margin=over>0?`${over} point${over===1?"":"s"} over the target`:"exactly at the target";
+  const margin=over>0?`exceeds the threshold by ${over} point${over===1?"":"s"}`:"meets the threshold exactly";
   // A person already lifted it: the case stays approved by hand (the projection keeps that
   // status through later rounds), so this round's hold is a record, not a wait.
   if(manual)return`<div class="callout amber" role="note">${I.person}<div>
-    <b>${esc(manual.reviewer_id||"A reviewer")} approved this case by hand on
-      ${esc(fmtExact(manual.decided_at))}, and that approval stands.</b>
-    This later round computed <a href="#/policy?rule=${encodeURIComponent(hold.computed_decision)}">${esc(say("decision",hold.computed_decision))}</a>
-    as well, and the platform was told On hold instead because this copy of the tool may not
-    approve on its own. Nothing here is waiting on anyone.
+    <b>${esc(manual.reviewer_id||"A reviewer")} approved this company manually on
+      ${esc(fmtExact(manual.decided_at))}. That approval stands.</b>
+    This later round also returned <a href="#/policy?rule=${encodeURIComponent(hold.computed_decision)}">${esc(say("decision",hold.computed_decision))}</a>;
+    the platform received On Hold because automatic approval is not enabled on this
+    installation. No action is required.
   </div></div>`;
   return`<div class="callout amber" role="note">${I.person}<div>
-    <b>Every rule passed and the score is ${margin}, so the rulebook says
+    <b>All five rules passed and the score ${margin}. The decision rules return
       <a href="#/policy?rule=${encodeURIComponent(hold.computed_decision)}">${esc(say("decision",hold.computed_decision))}</a>.</b>
-    This copy of the tool may not approve on its own yet, so the platform was told On hold
-    instead. That is an exception to the rule, not a reading of it. Only a named reviewer can
-    lift it, by approving the case by hand, and the audit trail then carries their name. Letting
-    the tool approve without a person is a release decision, not something done from here.
+    Automatic approval is not enabled on this installation, so the platform received On Hold.
+    This is an exception to the rule, not a result of it. A named reviewer can lift the hold by
+    approving manually; the approval is recorded under their name. Enabling automatic approval is
+    a release decision and is not controlled from this console.
   </div></div>`}
 
 /* Approving by hand is the one action on this console that bypasses the rulebook, so it is the
@@ -1165,24 +1148,24 @@ function openApprove(d,hold){
   const g=latest.gates_json||{};
   const unmet=GATE_KEYS.filter(k=>k in g&&!g[k]);
   let now;
-  if(hold)now=`Right now the case is <b>held for approval</b>: every rule passed and the score is
-    ${latest.score} of ${s.threshold}. This is the approval the rulebook already computed and the
-    tool was not allowed to publish; approving by hand publishes it under your name.`;
-  else if(latest.decision==="reject")now=`Right now the case is <b>rejected</b>: an exact match on
-    the blocked-broker list. Approving by hand overrides that.`;
-  else if(latest.decision)now=`Right now the case is <b>${esc(say("decision",latest.decision))}</b>
-    at ${latest.score} of ${s.threshold} points${unmet.length?`, and ${unmet.length===1?"one rule is":`${unmet.length} rules are`}
-    not met: ${esc(unmet.map(k=>say("gate",k)).join(", "))}`:""}. Approving by hand skips the
+  if(hold)now=`This company is currently <b>held for approval</b>: all five rules passed with a
+    score of ${latest.score} of ${s.threshold}. The decision rules already return Approved;
+    approving manually publishes that decision under your name.`;
+  else if(latest.decision==="reject")now=`This company is currently <b>rejected</b>: exact match on
+    the Blocked Broker List. Manual approval overrides that rejection.`;
+  else if(latest.decision)now=`This company is currently <b>${esc(say("decision",latest.decision))}</b>
+    with a score of ${latest.score} of ${s.threshold}${unmet.length?`, and ${unmet.length===1?"one rule is":`${unmet.length} rules are`}
+    not met: ${esc(unmet.map(k=>say("gate",k)).join(", "))}`:""}. Manual approval bypasses the
     score and all five rules.`;
-  else now=`The tool has not sent a decision for this company yet. Approving by hand skips the
-    score and all five rules.`;
+  else now=`No decision has been sent for this company yet. Manual approval bypasses the score
+    and all five rules.`;
   $("#ap-co").textContent=c.company_name||c.id;
   $("#ap-body").innerHTML=`<p>${now}</p>
-    <p>The platform will be told the account is approved. ${orgOk
-      ?"Buying will be allowed: the org ID has checked out."
-      :"Buying stays locked until an org ID checks out — approving by hand does not change that."}
-    The decision record and the audit trail will name you as the person who approved it, with
-    your reason.</p>`;
+    <p>The platform will be notified that the account is approved. ${orgOk
+      ?"Buying will be enabled; the Org ID has been verified."
+      :"Buying remains locked pending Org ID verification; manual approval does not change that."}
+    The decision record and the activity log will name you as the approving reviewer, with your
+    reason.</p>`;
   $("#ap-who").value=reviewer();$("#ap-why").value="";$("#ap-err").hidden=true;
   dlg.dataset.case=c.id;
   // one key per opening: a double click is a replay of the same approval, never a second one
@@ -1197,7 +1180,7 @@ $("#ap-form").addEventListener("submit",async e=>{
   const go=$("#ap-go"),err=$("#ap-err");
   // `required` lets whitespace through; say so rather than doing nothing
   if(!who||!why){err.hidden=false;
-    err.innerHTML=`${I.cross}<span>Both your reviewer ID and a reason are needed — they go on the record.</span>`;
+    err.innerHTML=`${I.cross}<span>A reviewer ID and a reason are both required. They are recorded with the approval.</span>`;
     (who?$("#ap-why"):$("#ap-who")).focus();return}
   go.disabled=true;err.hidden=true;
   let r;
@@ -1207,20 +1190,20 @@ $("#ap-form").addEventListener("submit",async e=>{
   catch(ex){r={status:500,body:{detail:ex.message}}}
   go.disabled=false;
   if(r.status<300){remember("reviewer",who);whoBox.value=who;paintWho();dlg.close();
-    toast(`${I.check}<span>Approved by hand — recorded as ${esc(who)}</span>`);route();return}
+    toast(`${I.check}<span>Approved manually. Recorded as ${esc(who)}.</span>`);route();return}
   // The key was minted for this one opening, so a 409 on it can only mean the earlier attempt
   // landed (the composer stamps a new occurred_at per send, which ingest reads as key reuse).
-  if(r.status===409){dlg.close();toast(`${I.check}<span>Already recorded — nothing was approved twice</span>`);route();return}
+  if(r.status===409){dlg.close();toast(`${I.check}<span>Already recorded. No duplicate approval was created.</span>`);route();return}
   err.hidden=false;
   err.innerHTML=r.status===403
-    ?`${I.cross}<span>This copy does not accept approvals from the console. In production the approval comes from the platform, signed by the reviewer.</span>`
-    :r.status===401?`${I.cross}<span>Not allowed: this browser is not signed in as an operator.</span>`
+    ?`${I.cross}<span>This installation does not accept manual approvals from the console. In production, approvals are submitted through the platform and signed by the reviewer.</span>`
+    :r.status===401?`${I.cross}<span>Not authorised. This browser is not signed in as an operator.</span>`
     :`${I.cross}<span>${esc(errText(r.body))}</span>`;
 });
 
 async function viewCase(id){
   const{status,body:d}=await j(`/ui/api/cases/${encodeURIComponent(id)}/full`);
-  if(status===404){page.innerHTML=`<div class="empty card"><b>No company with that ID</b><code>${esc(id)}</code></div>`;return}
+  if(status===404){page.innerHTML=`<div class="empty card"><b>No company with this ID</b><code>${esc(id)}</code></div>`;return}
   const c=d.case;
   // AUTHORITY: the trigger-maintained pointer row. decisions[] is decided_at-ordered for DISPLAY
   // only — transaction-start timestamps invert against commit order, and c.latest_decision goes
@@ -1235,7 +1218,7 @@ async function viewCase(id){
   // decision, or captioning it "threshold met", made one visual read out of two different
   // authority eras (re-audit cbb783b F6). The published tuple gets its own card below.
   const liveGap=s.threshold-live;
-  const liveNote=liveGap>0?`${liveGap} points short of the target`:`past the target`;
+  const liveNote=liveGap>0?`${liveGap} points below threshold`:`threshold met`;
   const decisionColor=decision==="approve"||decision==="approve_buy_locked"?"var(--green)":
                       decision==="reject"?"var(--red)":decision?"var(--amber)":"var(--faint)";
   const sdot=st=>st==="pass"?`<span class="sdot g">${I.check}</span>`:st==="fail"?`<span class="sdot r">${I.cross}</span>`:
@@ -1257,17 +1240,17 @@ async function viewCase(id){
     return`<tr><td><span class="strong">${esc(say("check",type))}</span>
         <div class="sub mono">${esc(type)}</div></td><td>${chain}</td>
       <td class="sub">${esc(say("adapter",list.at(-1).source||""))}</td></tr>`;
-  }).join("")||emptyRow(3,"No evidence yet","Evidence arrives with platform messages — try the <a href='#/composer'>Composer</a>");
+  }).join("")||emptyRow(3,"No evidence yet","Evidence arrives with platform messages. Use <a href='#/composer'>Send Message</a> to submit one.");
 
   const runRows=d.runs.map(r=>{
     const ads=d.adapter_results.filter(a=>a.run_id===r.id).map(a=>
       `<span class="tag ${a.status==="upstream_error"?"err":""}" title="${esc(a.adapter_id)} · ${esc(a.status)}"
-        >${esc(say("adapter",a.adapter_id))} · ${esc(a.status==="ok"?"answered":a.status==="upstream_error"?"failed":"not needed")}</span>`).join(" ");
-    return`<tr><td class="mono">${esc(r.id.slice(0,8))}…${r.partial?` ${pill("needs_review","some sources failed")}`:""}</td>
+        >${esc(say("adapter",a.adapter_id))} · ${esc(a.status==="ok"?"responded":a.status==="upstream_error"?"failed":"not required")}</span>`).join(" ");
+    return`<tr><td class="mono">${esc(r.id.slice(0,8))}…${r.partial?` ${pill("needs_review","Partial")}`:""}</td>
       <td>${pipe(r.state)}${r.error?`<div class="sub" style="color:var(--red)">${esc(r.error)}</div>`:""}</td>
-      <td>${ads||`<span class="sub">nothing was called — the broker check ended it</span>`}</td>
+      <td>${ads||`<span class="sub">No sources queried; the broker check ended the round.</span>`}</td>
       <td class="num">${when(r.started_at)}</td></tr>`}).join("")
-    ||emptyRow(4,"Nothing has run yet","Every platform message starts one round of checks");
+    ||emptyRow(4,"No verification rounds yet","Each platform message starts one verification round.");
 
   const taskRows=d.review_tasks.map(t=>`<tr>
     <td class="mono">${esc(t.id.slice(0,8))}…</td>
@@ -1275,13 +1258,13 @@ async function viewCase(id){
     <td>${t.result?pill(t.result):"—"}${t.reviewer_id?` <span class="sub">by ${esc(t.reviewer_id)}</span>`:""}</td>
     <td class="sub mono" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(JSON.stringify(t.context_json))}</td>
     <td style="text-align:right;white-space:nowrap">${t.status==="open"&&t.task_type==="website"?`
-      <button class="sm good" data-complete="${esc(t.id)}:pass">${I.check}Looks genuine</button>
-      <button class="sm danger" data-complete="${esc(t.id)}:fail">${I.cross}Does not</button>`:""}</td></tr>`).join("")
-    ||emptyRow(6,"Nothing waiting on a person","A website review opens during a full round of checks");
+      <button class="sm good" data-complete="${esc(t.id)}:pass">${I.check}Approve Website</button>
+      <button class="sm danger" data-complete="${esc(t.id)}:fail">${I.cross}Reject Website</button>`:""}</td></tr>`).join("")
+    ||emptyRow(6,"No open review tasks","A website review task opens during a full verification round.");
 
   const tokenRows=d.poc_tokens.map(t=>{
-    const state=t.verified_at?pill("pass","Code used"):
-      (new Date(t.expired_at)<new Date()?pill("fail","Expired"):pill("pending","Sent, not used yet"));
+    const state=t.verified_at?pill("pass","Verified"):
+      (new Date(t.expired_at)<new Date()?pill("fail","Expired"):pill("pending","Sent"));
     return`<tr><td class="mono">${esc(t.poc_handle)}</td><td class="mono">${esc(t.rir_listed_email)}</td>
       <td>${state}</td><td class="num">${when(t.sent_at)}</td></tr>`}).join("");
 
@@ -1295,13 +1278,13 @@ async function viewCase(id){
     return`<div class="fitem ${HOT.has(a.action)?"hot":""}">
       <span class="obj">${line}</span>
       ${a.actor&&a.actor!=="system"?`<span class="who">${esc(a.actor)}</span>`:""}
-      <details><summary>exact record</summary><pre>${esc(JSON.stringify(a.detail_json,null,2))}</pre></details>
+      <details><summary>Record</summary><pre>${esc(JSON.stringify(a.detail_json,null,2))}</pre></details>
       ${when(a.at)}
     </div>`}).filter(Boolean);
   const FEED_TAIL=15;
   const feed=fitems.length===0?`<div class="empty"><b>No activity</b></div>`
     :fitems.length<=FEED_TAIL+5?fitems.join("")
-    :`<div class="feed-earlier"><button class="sm" id="feedmore">Show ${fitems.length-FEED_TAIL} earlier entries</button></div>
+    :`<div class="feed-earlier"><button class="sm" id="feedmore">Show ${fitems.length-FEED_TAIL} Earlier Entries</button></div>
       <div id="feedhead" hidden>${fitems.slice(0,-FEED_TAIL).join("")}</div>
       ${fitems.slice(-FEED_TAIL).join("")}`;
 
@@ -1310,77 +1293,77 @@ async function viewCase(id){
     ${tbar(esc(c.company_name||c.id),
       `<span class="chips">${decision?(hold?pill("held_for_approval"):pill(decision)):provPill(d.decision_provenance)}
        ${d.manual_decision_provenance&&d.manual_decision_provenance!=="no_manual_decisions"?provPill(d.manual_decision_provenance,true):""}
-       ${c.status==="approved_manual"?pill("manual","Approved by a person"):`<span class="pill p-neutral" title="${esc(c.status)}">${esc(hold&&c.status==="manual_review_insufficient"?"Waiting for a reviewer":say("case_status",c.status))}</span>`}
+       ${c.status==="approved_manual"?pill("manual","Approved Manually"):`<span class="pill p-neutral" title="${esc(c.status)}">${esc(hold&&c.status==="manual_review_insufficient"?"Awaiting reviewer":say("case_status",c.status))}</span>`}
        <span class="pill p-neutral" title="${esc(c.buy_status)}">${esc(say("buy_status",c.buy_status))}</span>${pill(c.broker_status)}</span>`,
-      `${c.status==="approved_manual"?"":`<button class="warn" id="approvebtn">${I.person}Approve by hand</button>`}
-       <button class="primary" id="sendbtn">Send a message</button>`)}
-    <div class="card"><div class="hd"><h2>Decision sent to the platform</h2>
-        <span class="hint">every number here comes from one single record</span>${tip("published")}</div>
+      `${c.status==="approved_manual"?"":`<button class="warn" id="approvebtn">${I.person}Approve Manually</button>`}
+       <button class="primary" id="sendbtn">Send Message</button>`)}
+    <div class="card"><div class="hd"><h2>Decision Sent to Platform</h2>
+        <span class="hint">all values from one decision record</span>${tip("published")}</div>
       <div class="bd">
         ${latest.decision?`<div class="bullet"><div class="val">
-            <b style="color:${decisionColor}" title="${esc(latest.decision)}${hold?` — the rules computed ${esc(hold.computed_decision)}`:""}">${hold?"Held for approval":esc(say("decision",latest.decision))}</b>
-            <span class="of">${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"buying: not recorded"))}</span>
-            <span class="verdict sub">decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
+            <b style="color:${decisionColor}" title="${esc(latest.decision)}${hold?` — the rules computed ${esc(hold.computed_decision)}`:""}">${hold?"Held for Approval":esc(say("decision",latest.decision))}</b>
+            <span class="of">${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"Buying not recorded"))}</span>
+            <span class="verdict sub">Decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
           ${hold?holdCallout(hold,latest,s.threshold,d.latest_manual_decision):""}
-          <h3 class="sub-hd">The five rules
-            <span class="gloss">— all of them had to be true for this decision</span>${tip("gates")}</h3>
+          <h3 class="sub-hd">Decision Rules
+            <span class="gloss">— all five must be true</span>${tip("gates")}</h3>
           <div class="gates published-gates">${GATE_KEYS
             .map(g0=>g0 in gates
               ?`<div class="gate ${gates[g0]?"ok":"no"}" title="${esc(g0)}">${gates[g0]?I.check:I.cross}${esc(say("gate",g0))}</div>`
-              :`<div class="gate na" title="${esc(g0)} — this decision skipped the rule, which is what happens when a person approves by hand">· ${esc(say("gate",g0))} — not checked</div>`).join("")}</div>`
-          :`<div class="sub">${d.decision_provenance==="unresolved_pointer_drift"?`<b>The records disagree.</b> This company points at a decision the safety check refuses to accept \u2014 it belongs to another company, or it is gone. Nothing may be shown as the decision until someone looks into it; the database has forbidden this state since migration 022.`:d.decision_provenance==="unresolved_legacy_order"?`No decision can be shown: these records predate the ordering fix, so which one came last is genuinely unknown. The next decision settles it.`:`This company has no decision yet.`}</div>`}
+              :`<div class="gate na" title="${esc(g0)} — bypassed by manual approval">· ${esc(say("gate",g0))} — not evaluated</div>`).join("")}</div>`
+          :`<div class="sub">${d.decision_provenance==="unresolved_pointer_drift"?`<b>Record conflict.</b> This company's decision reference points to a decision the integrity check rejects: it belongs to another company or no longer exists. No decision can be shown until this is investigated; the database has prohibited this state since migration 022.`:d.decision_provenance==="unresolved_legacy_order"?`No decision can be shown. These records predate the ordering fix, so the most recent decision cannot be determined. The next decision resolves this.`:`No decision has been sent for this company.`}</div>`}
       </div></div>
-    <div class="card"><div class="hd"><h2>What the evidence says today — not the decision sent</h2>
-        <span class="hint">what today's evidence adds up to right now · the mark is the target to approve</span>${tip("live")}</div>
+    <div class="card"><div class="hd"><h2>Current Evidence Score</h2>
+        <span class="hint">live total from today's evidence · not the decision sent to the platform</span>${tip("live")}</div>
       <div class="bd">
         <div class="bullet">
-          <div class="val"><b>${live}</b><span class="of">of ${s.threshold} points needed</span>
+          <div class="val"><b>${live}</b><span class="of">of ${s.threshold} points required</span>
             <span class="verdict sub">${liveNote}</span></div>
           <div class="btrack">
             <span class="bmeasure" style="width:${Math.min(100,live/max*100)}%;background:var(--muted)"></span>
-            <span class="btick" style="left:${s.threshold/max*100}%"><span>${s.threshold} to approve</span></span>
+            <span class="btick" style="left:${s.threshold/max*100}%"><span>Threshold ${s.threshold}</span></span>
           </div>
         </div>
         <div class="contrib">${contrib}</div>
       </div></div>
-    ${sec("Evidence, and what replaced it","checks")}
+    ${sec("Evidence History","checks")}
     <div class="card"><div class="bd flush"><table>
-      <thead><tr><th>Kind of evidence</th><th>Oldest first — faded means replaced</th><th>Came from</th></tr></thead>
+      <thead><tr><th>Evidence</th><th>History (oldest first; faded entries were replaced)</th><th>Source</th></tr></thead>
       <tbody>${chains}</tbody></table></div></div>
-    ${sec("Rounds of checks","runs")}
+    ${sec("Verification Rounds","runs")}
     <div class="card"><div class="bd flush"><table>
-      <thead><tr><th>Round</th><th>How far it got</th><th>Services asked</th><th class="num">Started</th></tr></thead>
+      <thead><tr><th>Round</th><th>Progress</th><th>Sources Queried</th><th class="num">Started</th></tr></thead>
       <tbody>${runRows}</tbody></table></div></div>
-    ${sec("Jobs for a person","tasks")}
+    ${sec("Manual Review Tasks","tasks")}
     <div class="card"><div class="bd flush"><table>
-      <thead><tr><th>Job</th><th>What to do</th><th>State</th><th>Answer</th><th>Details</th><th></th></tr></thead>
+      <thead><tr><th>Task</th><th>Type</th><th>Status</th><th>Result</th><th>Details</th><th></th></tr></thead>
       <tbody>${taskRows}</tbody></table></div></div>
-    ${tokenRows?sec("Emailed codes","tokens")+`<div class="card"><div class="bd flush"><table>
-      <thead><tr><th>Registry contact</th><th>Emailed to</th><th>State</th><th class="num">Sent</th></tr></thead>
+    ${tokenRows?sec("Verification Codes","tokens")+`<div class="card"><div class="bd flush"><table>
+      <thead><tr><th>RIR Contact</th><th>Sent To</th><th>Status</th><th class="num">Sent</th></tr></thead>
       <tbody>${tokenRows}</tbody></table></div></div>`:""}
-    ${sec("What Salesforce should show","salesforce")}
-    <div class="card"><div class="hd"><h3>Fields the platform is expected to copy across</h3>
-      <span class="hint">a preview only — this tool never writes to Salesforce</span></div>
+    ${sec("Salesforce Fields","salesforce")}
+    <div class="card"><div class="hd"><h3>Fields to be written by the platform</h3>
+      <span class="hint">preview only · this console does not write to Salesforce</span></div>
       <div class="bd flush"><table>
-      <thead><tr><th>Salesforce field</th><th>Value</th><th>Where it comes from</th></tr></thead>
+      <thead><tr><th>Salesforce Field</th><th>Value</th><th>Source</th></tr></thead>
       <tbody>${sfRows}</tbody></table></div>
       <div class="bd" style="border-top:1px solid var(--line)">
         <details><summary>
-          One row per check (${d.salesforce.KYC_Check__c.length})</summary>
+          KYC_Check__c records (${d.salesforce.KYC_Check__c.length})</summary>
         <pre>${esc(JSON.stringify(d.salesforce.KYC_Check__c,null,2))}</pre></details></div></div>
-    ${sec("Every decision, in order","history")}
+    ${sec("Decision History","history")}
     <div class="card"><div class="bd flush"><table>
-      <thead><tr><th>Decision</th><th class="num">Points</th><th>Buying</th><th>By hand</th>
-      <th class="num">Decided</th><th class="num">Platform told</th></tr></thead>
+      <thead><tr><th>Decision</th><th class="num">Score</th><th>Buying</th><th>Manual Approver</th>
+      <th class="num">Decided</th><th class="num">Delivered</th></tr></thead>
       <tbody>${d.decisions.map(x=>`<tr><td>${x.enforcement_held?pill("held_for_approval"):pill(x.decision)}</td><td class="num strong">${x.score}</td>
         <td class="sub">${esc(say("buy",x.buy_enablement))}</td><td>${x.manual?`<span class="iw">${I.person}${esc(x.reviewer_id||"")}</span>`:"—"}</td>
         <td class="num">${when(x.decided_at)}</td><td class="num">${when(x.published_at)}</td></tr>`).join("")
-        ||emptyRow(6,"No decision yet","")}</tbody></table></div></div>
-    ${sec("What happened, step by step","activity")}
+        ||emptyRow(6,"No decisions yet","")}</tbody></table></div></div>
+    ${sec("Activity Log","activity")}
     <div class="card"><div class="bd"><div class="feed">${feed}</div></div></div>
-    ${sec("What the applicant sent","submitted")}
+    ${sec("Submitted Details","submitted")}
     <div class="card"><div class="bd">
-      <details open><summary>The original details, exactly as received</summary>
+      <details open><summary>Details as received from the platform</summary>
       <pre>${esc(JSON.stringify(c.submitted_json,null,2))}</pre></details></div></div>`;
 
   $("#sendbtn").onclick=()=>{remember("composerCase",c.id);location.hash="#/composer"};
@@ -1394,13 +1377,13 @@ async function viewCase(id){
       body:JSON.stringify({case_id:c.id,event_type:"website.review_completed",
         idempotency_key:"review-task-complete-"+taskId,
         payload:{task_id:taskId,result,reviewer_id:reviewer(),reason_codes:[]}})});
-    toast(r.status<300?`${I.check}<span>Answer recorded — the case will be scored again in a moment</span>`:`${I.cross}<span>${esc(errText(r.body))}</span>`);
+    toast(r.status<300?`${I.check}<span>Review recorded. The company will be re-scored shortly.</span>`:`${I.cross}<span>${esc(errText(r.body))}</span>`);
     setTimeout(route,700)});
 }
 
 /* ── Integrations ─────────────────────────────────────── */
 /* The wiring notes arrive in the engineer's shorthand; the reader gets the sentence. */
-const todoText=t=>"Still to do: "+String(t).replace(/^TODO\([^)]*\):\s*/,"").replace(/\s*\(AUDIT:[^)]*\)/g,"");
+const todoText=t=>"Pending: "+String(t).replace(/^TODO\([^)]*\):\s*/,"").replace(/\s*\(AUDIT:[^)]*\)/g,"");
 const GLYPH={broker_policy:"BR",email_verification:"EM",companies_house:"CH",gleif:"GL",
   floqer_company_enrichment:"FL",rir_rdap:"RD",rir_poc:"PC",document_ocr:"DO",website_manual_review:"WW"};
 async function viewIntegrations(){
@@ -1417,36 +1400,36 @@ async function viewIntegrations(){
         <div class="kind">${esc(say("wiring",a.adapter_id,a.kind))} — ${esc(a.detail)}</div>
         <div class="facts">
           ${a.env.length?`<span>${envChips(a.env)}</span>`:""}
-          ${a.stats?`<span>${a.stats.calls} calls · ${(a.stats.error_rate*100).toFixed(0)}% err · p95 ${a.stats.p95_ms.toFixed(0)}ms · last ${esc(rel(a.stats.last_call_at))}</span>`
-            :`<span>never called</span>`}
+          ${a.stats?`<span>${a.stats.calls} calls · ${(a.stats.error_rate*100).toFixed(0)}% errors · p95 ${a.stats.p95_ms.toFixed(0)}ms · last ${esc(rel(a.stats.last_call_at))}</span>`
+            :`<span>Not yet called</span>`}
         </div>
         ${a.todo?`<div class="todo">${I.warn}${esc(todoText(a.todo))}</div>`:""}
       </div>
-      <div class="end">${a.probeable?`<button class="sm" data-probe="${esc(a.adapter_id)}">Test it</button>
-        <div class="probe-out" id="probe-${esc(a.adapter_id)}"></div>`:`<span class="sub">cannot be tested from here</span>`}</div>
+      <div class="end">${a.probeable?`<button class="sm" data-probe="${esc(a.adapter_id)}">Test Connection</button>
+        <div class="probe-out" id="probe-${esc(a.adapter_id)}"></div>`:`<span class="sub">Not testable from the console</span>`}</div>
     </div>`).join("");
-  page.innerHTML=tbar("Data sources","Where each piece of evidence comes from, and whether it is real yet","","integrations")+`
-    <p class="legend">${pill("live")} answers from the real service · ${pill("stub")} answers from built-in test data ·
-      ${pill("dev")} a stand-in written for development · ${pill("needs-config")} wired up but has no key yet ·
-      ${pill("manual")} a person does this, by design</p>
-    <div class="card mb-4"><div class="hd"><h2 class="iw">${I.swap}Between the platform and the tool</h2>${tip("platform")}</div>
+  page.innerHTML=tbar("Data Sources","Where each piece of evidence comes from, and whether the connection is live.","","integrations")+`
+    <p class="legend">${pill("live")} live service · ${pill("stub")} built-in test data ·
+      ${pill("dev")} development stand-in · ${pill("needs-config")} configured without credentials ·
+      ${pill("manual")} manual process</p>
+    <div class="card mb-4"><div class="hd"><h2 class="iw">${I.swap}Platform Connections</h2>${tip("platform")}</div>
       <div class="irow"><div class="itile">CB</div>
-        <div class="meta"><div class="nm">Sending decisions back ${pill(p.status)}</div>
-          <div class="kind">Posted to the platform and signed, so it can prove the message came from here.
-            Sent at least once; a repeat of the same case and round is safe to ignore.</div>
-          <div class="facts"><span>${p.callback_url_is_default_stub?`<span class="tag warn">${I.absent}still the placeholder address</span>`:`<span class="tag">${I.check}address set</span>`}
-            <span class="tag ${p.hmac_secret_set?"":"warn"}">${p.hmac_secret_set?I.check:I.absent}shared secret key</span>
-            ${p.auth_disabled?`<span class="tag err">${I.warn}anyone can post to this tool</span>`:""}</span></div>
+        <div class="meta"><div class="nm">Decision Delivery ${pill(p.status)}</div>
+          <div class="kind">Decisions are posted to the platform and signed. Delivery is at least once;
+            a repeat of the same company and round is safe to ignore.</div>
+          <div class="facts"><span>${p.callback_url_is_default_stub?`<span class="tag warn">${I.absent}Placeholder URL</span>`:`<span class="tag">${I.check}URL configured</span>`}
+            <span class="tag ${p.hmac_secret_set?"":"warn"}">${p.hmac_secret_set?I.check:I.absent}Shared secret</span>
+            ${p.auth_disabled?`<span class="tag err">${I.warn}Authentication off</span>`:""}</span></div>
           ${p.todo?`<div class="todo">${I.warn}${esc(todoText(p.todo))}</div>`:""}</div></div>
       <div class="irow"><div class="itile">${I.mail}</div>
-        <div class="meta"><div class="nm">Emailing one-time codes ${pill(d.email_sender.status)}</div>
-          <div class="kind">${esc(/LoggingEmailSender/.test(d.email_sender.detail)?"Test mode: the emails are written to the log instead of being sent":d.email_sender.detail)}</div>
+        <div class="meta"><div class="nm">Verification Emails ${pill(d.email_sender.status)}</div>
+          <div class="kind">${esc(/LoggingEmailSender/.test(d.email_sender.detail)?"Test mode: emails are written to the log and not sent.":d.email_sender.detail)}</div>
           <div class="todo">${I.warn}${esc(todoText(d.email_sender.todo))}</div></div></div>
       <div class="irow"><div class="itile">S3</div>
-        <div class="meta"><div class="nm">Where evidence files are kept ${pill("live",say("store",d.object_store.kind))}</div>
+        <div class="meta"><div class="nm">Evidence Storage ${pill("live",say("store",d.object_store.kind))}</div>
           <div class="kind mono">${esc(d.object_store.root)}</div></div></div>
     </div>
-    <div class="card"><div class="hd"><h2>Evidence sources</h2><span class="hint">nine of them, in the order the rules list them</span>${tip("adapters")}</div>${rows}</div>
+    <div class="card"><div class="hd"><h2>Evidence Sources</h2><span class="hint">nine sources, in rule order</span>${tip("adapters")}</div>${rows}</div>
 `;
   page.querySelectorAll("[data-probe]").forEach(b=>b.onclick=async()=>{
     b.disabled=true;b.textContent="Testing…";
@@ -1454,9 +1437,9 @@ async function viewIntegrations(){
     const out=$(`#probe-${CSS.escape(b.dataset.probe)}`);
     out.innerHTML=body.targets
       ?Object.entries(body.targets).map(([k,v])=>
-        `${v.reachable?I.check:I.cross} ${esc(k)} · ${esc(v.note||v.error||(v.reachable?"answered":"no answer"))} · ${v.latency_ms}ms`).join("<br>")
-      :esc(body.note==="stub/internal — nothing to probe"?"Nothing to test here":body.note||"");
-    b.disabled=false;b.textContent="Test it"});
+        `${v.reachable?I.check:I.cross} ${esc(k)} · ${esc(v.note||v.error||(v.reachable?"responded":"no response"))} · ${v.latency_ms}ms`).join("<br>")
+      :esc(body.note==="stub/internal — nothing to probe"?"No test available":body.note||"");
+    b.disabled=false;b.textContent="Test Connection"});
 }
 
 /* ── Field Map ────────────────────────────────────────── */
@@ -1469,25 +1452,26 @@ async function viewFieldMap(){
     if(r.status<300)values=r.body.salesforce}
   const rows=Object.entries(pol.field_sources).map(([field,src])=>{
     const v=values[field];
-    const shown=field==="KYC_Check__c"?(v?`${v.length} child record(s)`:""):
+    const shown=field==="KYC_Check__c"?(v?`${v.length} record${v.length===1?"":"s"}`:""):
       (v===undefined||v===null?"":String(v));
     return`<tr><td class="mono">${esc(field)}</td>
       <td>${selected?(shown===""?`<span class="sub">—</span>`:`<span class="strong">${esc(shown)}</span>`)
-        :`<span class="sub">pick a case</span>`}</td>
+        :`<span class="sub">Select a company</span>`}</td>
       <td class="sub src">${esc(src)}</td></tr>`}).join("");
-  page.innerHTML=tbar("Salesforce fields",
-    "Which Salesforce field each fact lands in, and which part of the tool decides it","","fieldmap")+`
+  page.innerHTML=tbar("Salesforce Fields",
+    "The Salesforce field each value is written to, and the source of that value.","","fieldmap")+`
     <div class="toolbar">
-      <label class="note" for="fmcase">Show real values for</label>
-      <select id="fmcase"><option value="">— no company —</option>
+      <label class="note" for="fmcase">Show values for</label>
+      <select id="fmcase"><option value="">Select a company</option>
         ${cl.cases.map(c=>`<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.company_name||c.id)} · ${esc(c.id)}</option>`).join("")}
       </select>${tip("fieldtable")}</div>
     <div class="card"><div class="bd flush"><table>
-      <thead><tr><th style="width:250px">Salesforce field</th><th style="width:250px">Value for the chosen company</th>
-      <th>Where it comes from</th></tr></thead><tbody>${rows}</tbody></table></div></div>
-    <p class="sub" style="margin-top:12px">The tool works out these values; the platform writes them.
-      Each case is written in order, and writing the same result twice is harmless. If Salesforce is
-      down, decisions still happen here — only the copy in Salesforce waits.</p>`;
+      <thead><tr><th style="width:250px">Salesforce Field</th><th style="width:250px">Value</th>
+      <th>Source</th></tr></thead><tbody>${rows}</tbody></table></div></div>
+    <p class="sub" style="margin-top:12px">This console calculates these values; the platform writes them
+      to Salesforce. Each company is written in order, and repeated writes of the same result are
+      harmless. If Salesforce is unavailable, decisions still proceed here; only the Salesforce copy
+      is delayed.</p>`;
   $("#fmcase").onchange=e=>{remember("fmCase",e.target.value);viewFieldMap()};
 }
 
@@ -1512,29 +1496,29 @@ async function viewPolicy(rule=""){
     const ids=["aliases","domains","email_domains","org_ids","poc_handles","asns"]
       .flatMap(k=>(b[k]||[]).map(v=>`<span class="tag">${esc(v)}</span>`)).join(" ");
     return`<tr><td class="strong">${esc(b.name)}</td>
-      <td>${b.policy==="blocked"?pill("blocked","Blocked — rejected on sight"):pill("clear","Allowed — only tagged")}</td>
-      <td>${ids||`<span class="sub">name only — anything else has to be added to the list directly</span>`}</td></tr>`}).join("");
-  page.innerHTML=tbar("The rules","The rules the tool actually runs — this page is the rulebook itself, not a description of it",
-      `<span class="tag" title="fingerprint of the whole rulebook">${esc(p.bundle_hash.slice(0,16))}…</span>`,"policy")+`
-    <div class="card"><div class="hd"><h2>How points are earned</h2><span class="hint">${p.threshold} points to approve · only the newest evidence of each kind counts</span>${tip("rubric")}</div>
+      <td>${b.policy==="blocked"?pill("blocked","Blocked"):pill("clear","Allowed (flagged only)")}</td>
+      <td>${ids||`<span class="sub">Name only</span>`}</td></tr>`}).join("");
+  page.innerHTML=tbar("Decision Rules","The rules in force on this installation, shown as stored.",
+      `<span class="tag" title="rules fingerprint">${esc(p.bundle_hash.slice(0,16))}…</span>`,"policy")+`
+    <div class="card"><div class="hd"><h2>Scoring</h2><span class="hint">threshold ${p.threshold} points · only the latest evidence of each type counts</span>${tip("rubric")}</div>
       <div class="bd flush"><table>
-      <thead><tr><th>Evidence</th><th class="num">Points</th><th>Proves</th><th>Who checks</th><th>What has to be true — no judgement calls</th></tr></thead>
+      <thead><tr><th>Evidence</th><th class="num">Points</th><th>Category</th><th>Method</th><th>Pass Condition</th></tr></thead>
       <tbody>${rubric}</tbody></table></div></div>
-    ${sec("How the decision is chosen — first match wins","decisionpolicy")}
+    ${sec("Decision Table (first match applies)","decisionpolicy")}
     <div class="card"><div class="bd flush"><table>
-      <thead><tr><th class="num">#</th><th>Decision</th><th>When it applies</th><th>What the platform does</th></tr></thead>
+      <thead><tr><th class="num">#</th><th>Decision</th><th>Condition</th><th>Platform Action</th></tr></thead>
       <tbody>${decisions}</tbody></table></div>
       <p class="sub" style="margin:0;padding:var(--s3) var(--s4);border-top:1px solid var(--line)">
-        A case page that reads <b>Held for approval</b> matched an Approved row and was still
-        published as On hold: this copy of the tool may not approve on its own. That hold is an
-        exception to this table, not a row in it, and only a named reviewer lifts it.</p></div>
-    ${sec("The blocked-broker list — exact matches only","brokerpolicy")}
+        A company shown as <b>Held for Approval</b> matched an Approved row but was published as
+        On Hold because automatic approval is not enabled on this installation. That hold is an
+        exception to this table and is lifted only by a named reviewer.</p></div>
+    ${sec("Blocked Broker List (exact match)","brokerpolicy")}
     <div class="card"><div class="bd flush"><table>
-      <thead><tr><th>Company</th><th>Treatment</th><th>What counts as a match — names, domains, org IDs, contacts, networks</th></tr></thead>
+      <thead><tr><th>Company</th><th>Treatment</th><th>Matching Identifiers (names, domains, Org IDs, contacts, ASNs)</th></tr></thead>
       <tbody>${brokers}</tbody></table></div></div>
-    ${sec("The five rules, as stored","hardgates")}
+    ${sec("Rule Definitions","hardgates")}
     <div class="card"><div class="bd"><pre style="margin:0">${esc(JSON.stringify(p.hard_gates,null,2))}</pre></div></div>
-    ${sec("Messages the tool accepts","events")}
+    ${sec("Accepted Message Types","events")}
     <div class="card"><div class="bd chips">${p.events.map(e=>`<span class="tag">${esc(e)}</span>`).join("")}</div></div>`;
   if(rule){const row=page.querySelector("#rule-"+CSS.escape(rule));
     if(row){row.scrollIntoView({block:"center"});row.focus({preventScroll:true})}}
@@ -1544,34 +1528,34 @@ async function viewPolicy(rule=""){
 async function viewComposer(){
   const{body:t}=await j("/ui/api/event-templates");
   const caseId=recall("composerCase")||"demo-case-001";
-  page.innerHTML=tbar("Send a message","Send a platform message by hand — the tool signs it and stops it counting twice","","composer")+`
+  page.innerHTML=tbar("Send Message","Submit a platform message manually. The console signs it and prevents duplicate processing.","","composer")+`
     <div class="split">
-      <div class="card"><div class="hd"><h2>The message</h2>${tip("composerevent")}</div><div class="bd">
-        <div class="field"><label class="flab" for="c-case">Which company</label>
+      <div class="card"><div class="hd"><h2>Message</h2>${tip("composerevent")}</div><div class="bd">
+        <div class="field"><label class="flab" for="c-case">Company</label>
           <input id="c-case" value="${esc(caseId)}">
-          <span class="note">the platform's ID for the company — an unknown one starts a new record</span></div>
-        <div class="field"><label class="flab" for="c-type">What happened</label>
+          <span class="note">Platform ID for the company. An unknown ID creates a new record.</span></div>
+        <div class="field"><label class="flab" for="c-type">Message Type</label>
           <select id="c-type">${t.event_types.map(e=>`<option ${e==="kyb.run_requested"?"selected":""}>${esc(e)}</option>`).join("")}</select></div>
         <div id="c-warn" class="callout amber" role="note" hidden>${I.person}<div>
-          <b>This approves the case by hand and skips every rule.</b> Use Approve by hand on the
-          case page instead: it asks who you are and why, and names that person on the record.
-          Sent from here, reviewer_id still has to be a real person's ID — a blank is refused.</div></div>
-        <div class="field"><label class="flab" for="c-payload">The details</label>
+          <b>This message approves the company manually and bypasses all rules.</b> Use Approve
+          Manually on the company page instead; it records the reviewer and the reason. If sent
+          from here, reviewer_id must identify a person; blank values are refused.</div></div>
+        <div class="field"><label class="flab" for="c-payload">Details</label>
           <textarea id="c-payload" spellcheck="false"></textarea>
-          <span class="note">filled in with a working example — edit it as you like</span></div>
+          <span class="note">Pre-filled with a working example. Edit as required.</span></div>
         <div class="toolbar" style="margin:0">
-          <button class="primary" id="c-send">Send it</button>
-          <span class="note">the background worker has to be running for anything to happen next</span></div>
+          <button class="primary" id="c-send">Send</button>
+          <span class="note">The background process must be running for the message to be processed.</span></div>
       </div></div>
       <div class="stack">
-        <div class="card"><div class="hd"><h2>What came back</h2>${tip("composerresult")}</div><div class="bd">
+        <div class="card"><div class="hd"><h2>Response</h2>${tip("composerresult")}</div><div class="bd">
           <pre id="c-out" style="margin:0">—</pre>
           <div class="sub" id="c-hint" style="margin-top:8px"></div></div></div>
-        <div class="card"><div class="hd"><h2>A worked example</h2>${tip("demo")}</div><div class="bd demo-journey">
-          The built-in test data recognises <span class="strong">Acme Networks Ltd</span>. These three,
-          in order: <code>kyb.run_requested</code> ${I.arrow} <code>email.verified</code> ${I.arrow}
-          <code>org_id.submitted</code> (ORG-ACME-1) take a case all the way to
-          ${pill("approve")}. Answer the website job on the case page for another 10 points.</div></div>
+        <div class="card"><div class="hd"><h2>Example</h2>${tip("demo")}</div><div class="bd demo-journey">
+          The built-in test data recognises <span class="strong">Acme Networks Ltd</span>. Sending
+          <code>kyb.run_requested</code> ${I.arrow} <code>email.verified</code> ${I.arrow}
+          <code>org_id.submitted</code> (ORG-ACME-1), in that order, takes a company to
+          ${pill("approve")}. Completing the website review on the company page adds 10 points.</div></div>
       </div>
     </div>`;
   const fill=()=>{const type=$("#c-type").value;
@@ -1580,13 +1564,13 @@ async function viewComposer(){
   $("#c-type").onchange=fill;fill();
   $("#c-send").onclick=async()=>{
     let payload;try{payload=JSON.parse($("#c-payload").value||"{}")}
-    catch(e){toast(`${I.cross}<span>The details box is not valid JSON</span>`);return}
+    catch(e){toast(`${I.cross}<span>The details are not valid JSON.</span>`);return}
     const r=await j("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({case_id:$("#c-case").value.trim(),event_type:$("#c-type").value,payload})});
     $("#c-out").textContent=`HTTP ${r.status}\n`+JSON.stringify(r.body,null,2);
     remember("composerCase",$("#c-case").value.trim());
     if(r.status<300)$("#c-hint").innerHTML=
-      `Started <span class="strong">${r.body.jobs_queued}</span> piece${r.body.jobs_queued===1?"":"s"} of work — open ${caseLink($("#c-case").value.trim())} to watch it happen`;
+      `Started <span class="strong">${r.body.jobs_queued}</span> job${r.body.jobs_queued===1?"":"s"}. Open ${caseLink($("#c-case").value.trim())} to follow progress.`;
   };
 }
 
