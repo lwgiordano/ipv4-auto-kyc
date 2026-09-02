@@ -90,6 +90,8 @@
 
 /* ── Base ── */
 *{box-sizing:border-box}
+/* hidden means hidden, even on a flex or grid panel whose own display rule would otherwise win */
+[hidden]{display:none!important}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--text);
      font:16px/24px var(--font);-webkit-font-smoothing:antialiased}
@@ -229,6 +231,9 @@ button.primary:active{background:var(--accent-pressed);border-color:var(--accent
 button.sm{padding:0 var(--s3);font-size:12px;line-height:16px}
 button.good{background:var(--green-soft);border-color:transparent;color:var(--green-ink)}
 button.danger{background:var(--red-soft);border-color:transparent;color:var(--red-ink)}
+/* Amber for the action that bypasses the rulebook: the same tint as the hold it lifts, and
+   deliberately NOT the blue primary that sends a test message. */
+button.warn{background:var(--amber-soft);border-color:transparent;color:var(--amber-ink)}
 button:disabled{opacity:.45;cursor:default;pointer-events:none}
 input,select,textarea{font:16px/24px var(--font);background:var(--surface);color:var(--ink);
   border:1px solid var(--border-input);border-radius:var(--r);padding:0 var(--s3);min-height:44px}
@@ -396,6 +401,21 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
 .callout .ic{margin-top:2px}
 .callout b{display:block;font-weight:700;margin-bottom:var(--s1)}
 .callout a{color:inherit;font-weight:700;text-decoration:underline}
+/* ── Approve by hand: the console's one dialog ──
+   A native <dialog>: modal, focus-trapped, Escape closes it, and the backdrop is the pack's
+   inverse ground at half strength. Everything inside is ordinary form furniture. */
+dialog.modal{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);
+  color:var(--text);padding:var(--s5);width:min(560px,calc(100vw - 2*var(--s4)));
+  box-shadow:var(--e3);font-size:14px;line-height:20px}
+dialog.modal::backdrop{background:rgba(29,30,33,.55)}
+dialog.modal h2{font-size:24px;line-height:32px;font-weight:800;margin-bottom:var(--s3)}
+dialog.modal p{margin:0 0 var(--s3)}
+dialog.modal textarea{min-height:88px}
+dialog.modal .banner{margin-top:var(--s3)}
+/* Who is at the keyboard. Every answer and approval recorded from this console carries it. */
+.side-foot .who{display:grid;gap:var(--s1);cursor:default;min-height:0;font-weight:600;
+  color:var(--text)}
+.side-foot .who input{min-height:36px;font-size:14px;line-height:20px;width:100%}
 /* The rulebook row a case page linked to: tinted, and focusable so the jump is announced. */
 tr.hl td{background:var(--accent-soft)}
 tr.hl:focus-visible{outline-offset:-2px}
@@ -448,12 +468,32 @@ h2.sec.tight{margin-top:0}
   <div class="side-foot">
     <span id="envchip"></span>
     <span id="policychip" class="mono"></span>
+    <label class="who"><span>Reviewing as</span>
+      <input id="reviewer" placeholder="your reviewer ID" autocomplete="off"
+        aria-describedby="reviewer-note"></label>
+    <span id="reviewer-note">goes on every answer and approval you record here</span>
     <label><input type="checkbox" id="autorefresh"> refresh every 5 seconds</label>
   </div>
 </aside>
 <main><div class="page" id="page"><div class="loading">Loading…</div></div></main>
 </div>
 <div id="tip" class="tip" role="tooltip" hidden></div>
+<dialog id="approve" class="modal" aria-labelledby="ap-title">
+  <form id="ap-form">
+    <h2 id="ap-title">Approve <span id="ap-co"></span> by hand</h2>
+    <div id="ap-body"></div>
+    <div class="field"><label class="flab" for="ap-who">Your reviewer ID</label>
+      <input id="ap-who" required autocomplete="off">
+      <span class="note">goes on the decision record and the audit row, exactly as typed</span></div>
+    <div class="field"><label class="flab" for="ap-why">Why</label>
+      <textarea id="ap-why" required></textarea>
+      <span class="note">kept with the approval — say what you checked</span></div>
+    <div class="toolbar" style="margin:0;justify-content:flex-end">
+      <button type="button" id="ap-cancel">Cancel</button>
+      <button type="submit" class="primary" id="ap-go">Approve by hand</button></div>
+    <div id="ap-err" class="banner" role="alert" hidden></div>
+  </form>
+</dialog>
 
 <script>
 "use strict";
@@ -477,6 +517,16 @@ const when=s=>`<span class="when" title="${esc(fmtExact(s))}">${esc(rel(s))}</sp
    down through the error boundary; these degrade to "forget it" instead. */
 const remember=(k,v)=>{try{sessionStorage.setItem(k,v)}catch(e){/* not storable; fine */}};
 const recall=(k,d="")=>{try{return sessionStorage.getItem(k)??d}catch(e){return d}};
+
+/* Who is acting. Remembered for the browser session; read (trimmed) by every reviewer action. */
+const whoBox=$("#reviewer");
+whoBox.value=recall("reviewer");
+whoBox.addEventListener("input",e=>remember("reviewer",e.target.value));
+const reviewer=()=>recall("reviewer").trim();
+/* A reviewer action with nobody named is not sent: the row would carry no person. */
+function needReviewer(){if(reviewer())return true;
+  toast(`${I.cross}<span>Type your reviewer ID in the sidebar first — the answer is kept with your name on it</span>`);
+  whoBox.focus();return false}
 
 /* Status icons.
    These are SVG, not characters, because the brand face ships a 291-glyph latin subset: ✓ ✕ ⏳
@@ -651,7 +701,8 @@ const TIPS={
   tasks:{t:"Jobs for a person",b:`<p>Things the tool cannot judge on its own and hands to a
     human. Today that is looking at a company's website.</p>
     <p>Pass adds ten points and the case is rescored automatically. Fail records the outcome
-    without points. Either way the answer is kept with your name on it.</p>`},
+    without points. Either way the answer is kept with your reviewer ID on it — the one in the
+    sidebar — so type that first.</p>`},
   tokens:{t:"Emailed codes",b:`<p>To prove the applicant really controls an address block, the
     tool emails a one-time code to the contact listed on the public registry record — not to
     an address the applicant typed in.</p>
@@ -955,9 +1006,18 @@ const HOT=new Set(["run.decided","reviewer.manual_approve","check.superseded","r
    Copy only: the score is the pointed row's own, the target is the rulebook's, and the hold
    itself is the server's word (enforcement_hold, from the engine's run.decided record) — the
    screen never decides a case is held by looking at five green gates. */
-function holdCallout(hold,latest,threshold){
+function holdCallout(hold,latest,threshold,manual){
   const over=(latest.score??0)-threshold;
   const margin=over>0?`${over} point${over===1?"":"s"} over the target`:"exactly at the target";
+  // A person already lifted it: the case stays approved by hand (the projection keeps that
+  // status through later rounds), so this round's hold is a record, not a wait.
+  if(manual)return`<div class="callout amber" role="note">${I.person}<div>
+    <b>${esc(manual.reviewer_id||"A reviewer")} approved this case by hand on
+      ${esc(fmtExact(manual.decided_at))}, and that approval stands.</b>
+    This later round computed <a href="#/policy?rule=${encodeURIComponent(hold.computed_decision)}">${esc(say("decision",hold.computed_decision))}</a>
+    as well, and the platform was told On hold instead because this copy of the tool may not
+    approve on its own. Nothing here is waiting on anyone.
+  </div></div>`;
   return`<div class="callout amber" role="note">${I.person}<div>
     <b>Every rule passed and the score is ${margin}, so the rulebook says
       <a href="#/policy?rule=${encodeURIComponent(hold.computed_decision)}">${esc(say("decision",hold.computed_decision))}</a>.</b>
@@ -966,6 +1026,66 @@ function holdCallout(hold,latest,threshold){
     lift it, by approving the case by hand, and the audit trail then carries their name. Letting
     the tool approve without a person is a release decision, not something done from here.
   </div></div>`}
+
+/* Approving by hand is the one action on this console that bypasses the rulebook, so it is the
+   one action that asks. The dialog names the company, says what the case is right now and what
+   approving skips, previews what the platform will be told, and will not submit without a
+   reviewer's identity and a reason: the decision record and the audit row name whoever types
+   here, and "console" is not a person. */
+function openApprove(d,hold){
+  const c=d.case,latest=d.pointer_decision||{},s=d.score,dlg=$("#approve");
+  const orgOk=s.items.some(it=>it.check_type==="org_id_match"&&it.status==="pass");
+  const g=latest.gates_json||{};
+  const unmet=["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"].filter(k=>k in g&&!g[k]);
+  let now;
+  if(hold)now=`Right now the case is <b>held for approval</b>: every rule passed and the score is
+    ${latest.score} of ${s.threshold}. This is the approval the rulebook already computed and the
+    tool was not allowed to publish; approving by hand publishes it under your name.`;
+  else if(latest.decision==="reject")now=`Right now the case is <b>rejected</b>: an exact match on
+    the blocked-broker list. Approving by hand overrides that.`;
+  else if(latest.decision)now=`Right now the case is <b>${esc(say("decision",latest.decision))}</b>
+    at ${latest.score} of ${s.threshold} points${unmet.length?`, and ${unmet.length===1?"one rule is":`${unmet.length} rules are`}
+    not met: ${esc(unmet.map(k=>say("gate",k)).join(", "))}`:""}. Approving by hand skips the
+    score and all five rules.`;
+  else now=`The tool has not published a verdict for this case yet. Approving by hand skips the
+    score and all five rules.`;
+  $("#ap-co").textContent=c.company_name||c.id;
+  $("#ap-body").innerHTML=`<p>${now}</p>
+    <p>The platform will be told the account is approved. ${orgOk
+      ?"Buying will be allowed: the org ID has checked out."
+      :"Buying stays locked until an org ID checks out — approving by hand does not change that."}
+    The decision record and the audit trail will name you as the person who approved it, with
+    your reason.</p>`;
+  $("#ap-who").value=reviewer();$("#ap-why").value="";$("#ap-err").hidden=true;
+  dlg.dataset.case=c.id;
+  // one key per opening: a double click is a replay of the same approval, never a second one
+  dlg.dataset.key=`manual-approve-${c.id}-${Date.now()}`;
+  dlg.showModal();
+  ($("#ap-who").value?$("#ap-why"):$("#ap-who")).focus();
+}
+$("#ap-cancel").onclick=()=>$("#approve").close();
+$("#ap-form").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const dlg=$("#approve"),who=$("#ap-who").value.trim(),why=$("#ap-why").value.trim();
+  if(!who||!why)return;
+  const go=$("#ap-go"),err=$("#ap-err");go.disabled=true;err.hidden=true;
+  let r;
+  try{r=await j("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({case_id:dlg.dataset.case,event_type:"reviewer.manual_approve",
+      idempotency_key:dlg.dataset.key,payload:{reviewer_id:who,note:why}})})}
+  catch(ex){r={status:500,body:{detail:ex.message}}}
+  go.disabled=false;
+  if(r.status<300){remember("reviewer",who);whoBox.value=who;dlg.close();
+    toast(`${I.check}<span>Approved by hand — recorded as ${esc(who)}</span>`);route();return}
+  // The key was minted for this one opening, so a 409 on it can only mean the earlier attempt
+  // landed (the composer stamps a new occurred_at per send, which ingest reads as key reuse).
+  if(r.status===409){dlg.close();toast(`${I.check}<span>Already recorded — nothing was approved twice</span>`);route();return}
+  err.hidden=false;
+  err.innerHTML=r.status===403
+    ?`${I.cross}<span>This copy does not accept approvals from the console. In production the approval comes from the platform, signed by the reviewer.</span>`
+    :r.status===401?`${I.cross}<span>Not allowed: this browser is not signed in as an operator.</span>`
+    :`${I.cross}<span>${esc(typeof r.body.detail==="string"?r.body.detail:r.body.error||JSON.stringify(r.body.detail??r.body))}</span>`;
+});
 
 async function viewCase(id){
   const{status,body:d}=await j(`/ui/api/cases/${encodeURIComponent(id)}/full`);
@@ -1063,7 +1183,8 @@ async function viewCase(id){
        ${d.manual_decision_provenance&&d.manual_decision_provenance!=="no_manual_decisions"?provPill(d.manual_decision_provenance,true):""}
        ${c.status==="approved_manual"?pill("manual","Approved by a person"):`<span class="pill p-neutral" title="${esc(c.status)}">${esc(hold&&c.status==="manual_review_insufficient"?"Waiting for a reviewer":say("case_status",c.status))}</span>`}
        <span class="pill p-neutral" title="${esc(c.buy_status)}">${esc(say("buy_status",c.buy_status))}</span>${pill(c.broker_status)}</span>`,
-      `<button class="primary" id="sendbtn">Send a message</button>`)}
+      `${c.status==="approved_manual"?"":`<button class="warn" id="approvebtn">${I.person}Approve by hand</button>`}
+       <button class="primary" id="sendbtn">Send a message</button>`)}
     <div class="card"><div class="hd"><h2>Published decision</h2>
         <span class="hint">the verdict the platform was told — every number here comes from one single record</span>${tip("published")}</div>
       <div class="bd">
@@ -1071,7 +1192,7 @@ async function viewCase(id){
             <b style="color:${decisionColor}" title="${esc(latest.decision)}${hold?` — the rules computed ${esc(hold.computed_decision)}`:""}">${hold?"Held for approval":esc(say("decision",latest.decision))}</b>
             <span class="of">${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"buying: not recorded"))}</span>
             <span class="verdict sub">decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
-          ${hold?holdCallout(hold,latest,s.threshold):""}
+          ${hold?holdCallout(hold,latest,s.threshold,d.latest_manual_decision):""}
           <h3 class="sub-hd">Published decision hard gates
             <span class="gloss">— the five things that all had to be true</span>${tip("gates")}</h3>
           <div class="gates published-gates">${["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"]
@@ -1134,14 +1255,16 @@ async function viewCase(id){
       <pre>${esc(JSON.stringify(c.submitted_json,null,2))}</pre></details></div></div>`;
 
   $("#sendbtn").onclick=()=>{remember("composerCase",c.id);location.hash="#/composer"};
+  const ab=$("#approvebtn");if(ab)ab.onclick=()=>openApprove(d,hold);
   const fm=$("#feedmore");if(fm)fm.onclick=()=>{$("#feedhead").hidden=false;fm.parentElement.remove()};
   page.querySelectorAll("[data-complete]").forEach(b=>b.onclick=async()=>{
+    if(!needReviewer())return;
     const[taskId,result]=b.dataset.complete.split(":");
     const r=await j(`/ui/api/send-event`,{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({case_id:c.id,event_type:"website.review_completed",
         idempotency_key:"review-task-complete-"+taskId,
-        payload:{task_id:taskId,result,reviewer_id:"ops-console",reason_codes:[]}})});
+        payload:{task_id:taskId,result,reviewer_id:reviewer(),reason_codes:[]}})});
     toast(r.status<300?`${I.check}<span>Answer recorded — the case will be scored again in a moment</span>`:`${I.cross}<span>${esc(JSON.stringify(r.body.detail))}</span>`);
     setTimeout(route,700)});
 }
@@ -1298,6 +1421,10 @@ async function viewComposer(){
           <span class="note">the platform's ID for the case — an unknown one creates a new case</span></div>
         <div class="field"><label class="flab" for="c-type">What happened</label>
           <select id="c-type">${t.event_types.map(e=>`<option ${e==="kyb.run_requested"?"selected":""}>${esc(e)}</option>`).join("")}</select></div>
+        <div id="c-warn" class="callout amber" role="note" hidden>${I.person}<div>
+          <b>This approves the case by hand and skips every rule.</b> Use Approve by hand on the
+          case page instead: it asks who you are and why, and names that person on the record.
+          Sent from here, reviewer_id still has to be a real person's ID — a blank is refused.</div></div>
         <div class="field"><label class="flab" for="c-payload">The details</label>
           <textarea id="c-payload" spellcheck="false"></textarea>
           <span class="note">filled in with a working example — edit it as you like</span></div>
@@ -1316,7 +1443,9 @@ async function viewComposer(){
           ${pill("approve")}. Answer the website job on the case page for another 10 points.</div></div>
       </div>
     </div>`;
-  const fill=()=>$("#c-payload").value=JSON.stringify(t.templates[$("#c-type").value]??{},null,2);
+  const fill=()=>{const type=$("#c-type").value;
+    $("#c-payload").value=JSON.stringify(t.templates[type]??{},null,2);
+    $("#c-warn").hidden=type!=="reviewer.manual_approve"};
   $("#c-type").onchange=fill;fill();
   $("#c-send").onclick=async()=>{
     let payload;try{payload=JSON.parse($("#c-payload").value||"{}")}

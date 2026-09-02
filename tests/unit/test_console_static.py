@@ -130,3 +130,23 @@ def test_case_detail_takes_the_hold_from_the_api():
 def test_case_list_marks_held_approvals_from_the_api_flag():
     assert "c.enforcement_held" in VIEW_CASES
     assert 'pill("held_for_approval")' in VIEW_CASES
+
+
+# --- approving by hand asks who and why, and the console never invents a reviewer -----------
+
+def test_console_never_sends_a_canned_reviewer_identity():
+    """`reviewer_id:"ops-console"` used to be hardcoded on the review-task buttons, so the
+    audit row named a program. Every reviewer action now carries the id typed in the sidebar."""
+    assert 'reviewer_id:"ops-console"' not in CONSOLE
+    assert 'reviewer_id:"console"' not in CONSOLE
+    assert "reviewer_id:reviewer()" in VIEW_CASE
+
+
+def test_approve_by_hand_goes_through_the_dialog_and_requires_who_and_why():
+    dialog = CONSOLE[CONSOLE.index('<dialog id="approve"'):]
+    dialog = dialog[: dialog.index("</dialog>")]
+    assert 'id="ap-who" required' in dialog
+    assert 'id="ap-why" required' in dialog
+    # the case renderer opens the dialog; it never posts an approval itself
+    assert "openApprove(d,hold)" in VIEW_CASE
+    assert "reviewer.manual_approve" not in VIEW_CASE

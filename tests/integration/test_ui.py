@@ -169,6 +169,76 @@ def test_event_templates_cover_all_types(client, policy):
     assert set(body["templates"]) == set(body["event_types"])
 
 
+def test_reviewer_templates_carry_no_canned_identity(client):
+    """The templates used to ship reviewer_id "console", which the ingest floor accepted as a
+    real reviewer -- so the audit row for a manual approval named a program, not a person."""
+    templates = client.get("/ui/api/event-templates").json()["templates"]
+    assert templates["reviewer.manual_approve"]["reviewer_id"] == ""
+    assert templates["website.review_completed"]["reviewer_id"] == ""
+
+
+@pytest.mark.parametrize("reviewer_id", ["", "   "])
+def test_composer_refuses_a_nameless_reviewer_action(client, reviewer_id):
+    """No silent "ops-console" substitute for a blank reviewer: the request is refused with a
+    reason that says what is missing, before any row is written."""
+    r = client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-nameless", "event_type": "reviewer.manual_approve",
+              "payload": {"reviewer_id": reviewer_id, "note": "looked fine"}},
+    )
+    assert r.status_code == 422
+    assert "reviewer_id" in r.json()["detail"]
+
+
+def test_console_manual_approve_records_the_named_reviewer(client, engine, phase3_worker):
+    """The Approve-by-hand dialog posts reviewer.manual_approve through the composer endpoint
+    with the reviewer's own id and reason. In dev/staging settings that is accepted, applied
+    inline (no run), and the decision record and audit row both name the person -- the same
+    reviewer-actor binding production enforces on the platform path."""
+    sent = client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-by-hand", "event_type": "kyb.run_requested",
+              "payload": ACME_KYB_WITH_CONTACT},
+    )
+    assert sent.status_code == 202
+    phase3_worker.run_until_idle()
+
+    r = client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-by-hand", "event_type": "reviewer.manual_approve",
+              "idempotency_key": "manual-approve-ui-by-hand-1",
+              "payload": {"reviewer_id": "jane.doe", "note": "registry entry checked by phone"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["case_status"] == "approved_manual"
+
+    full = client.get("/ui/api/cases/ui-by-hand/full").json()
+    assert full["case"]["status"] == "approved_manual"
+    assert full["pointer_decision"]["manual"] is True
+    assert full["pointer_decision"]["reviewer_id"] == "jane.doe"
+    assert full["enforcement_hold"] is None  # a manual row has no run, so nothing is held
+    approved = [a for a in full["audit"] if a["action"] == "reviewer.manual_approve"]
+    assert approved and approved[-1]["actor"] == "jane.doe"
+    assert approved[-1]["detail_json"]["note"] == "registry entry checked by phone"
+
+    # The same key again is a replay, never a second approval. The composer stamps a fresh
+    # occurred_at on every send, so the replay's envelope hash differs and ingest answers 409
+    # (key reuse) rather than 200 -- the dialog reads that 409 as "already recorded". Either
+    # way the invariant is the one that matters: exactly one manual decision row.
+    again = client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-by-hand", "event_type": "reviewer.manual_approve",
+              "idempotency_key": "manual-approve-ui-by-hand-1",
+              "payload": {"reviewer_id": "jane.doe", "note": "registry entry checked by phone"}},
+    )
+    assert again.status_code == 409
+    with engine.connect() as conn:
+        manual_rows = conn.execute(
+            text("SELECT count(*) FROM decisions WHERE case_id='ui-by-hand' AND manual")
+        ).scalar_one()
+    assert manual_rows == 1
+
+
 def test_integrations_report_classifies_stubs(client):
     body = client.get("/ui/api/integrations").json()
     by_id = {a["adapter_id"]: a for a in body["adapters"]}

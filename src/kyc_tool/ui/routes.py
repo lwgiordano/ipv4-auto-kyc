@@ -29,7 +29,9 @@ router = APIRouter()
 
 _CONSOLE_HTML = (Path(__file__).parent / "console.html").read_text()
 
-# Composer payload templates — starting points, not constraints.
+# Composer payload templates — starting points, not constraints. The two reviewer events carry
+# NO canned identity: whatever is typed into reviewer_id lands on the audit row and the decision
+# record as the person who acted, and "console" is not a person. Blank is refused by send_event.
 EVENT_TEMPLATES = {
     "kyb.run_requested": {
         "company_legal_name": "Acme Networks Ltd",
@@ -55,10 +57,10 @@ EVENT_TEMPLATES = {
     "website.review_completed": {
         "task_id": "<open task id>",
         "result": "pass",
-        "reviewer_id": "console",
+        "reviewer_id": "",
         "reason_codes": [],
     },
-    "reviewer.manual_approve": {"reviewer_id": "console", "note": "manual approval via ops console"},
+    "reviewer.manual_approve": {"reviewer_id": "", "note": ""},
     "recalculate.requested": {},
 }
 
@@ -499,7 +501,17 @@ async def send_event(request: Request) -> JSONResponse:
         )
 
     if event_type in _SENSITIVE:
-        rid = raw_payload.get("reviewer_id") or "ops-console"
+        # The actor IS the typed reviewer_id, and it must be a person. The old fallback quietly
+        # substituted "ops-console" for a blank one -- an identity the audit row would then carry
+        # for whoever bypassed the rulebook. A blank is refused here with a reason the console can
+        # show, before the ingest floor turns the same blank into a bare "invalid reviewer actor".
+        rid = str(raw_payload.get("reviewer_id") or "").strip()
+        if not rid:
+            raise HTTPException(
+                status_code=422,
+                detail="reviewer_id must name the person acting: the audit row and the "
+                "decision record carry it",
+            )
         actor = {"type": "reviewer", "id": rid}
     else:
         actor = {"type": "system", "id": "ops-console"}
