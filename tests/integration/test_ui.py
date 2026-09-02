@@ -1,6 +1,8 @@
 """Ops console: page serves, JSON endpoints, composer drives the real
 pipeline, requeue repairs dead letters, and the gate flag hides everything."""
 
+import json
+
 import pytest
 from docs.contracts.authority import unarrived_sunset
 from fastapi.testclient import TestClient
@@ -106,6 +108,50 @@ def test_composer_website_review_completed_binds_reviewer_actor(client, engine, 
     assert status == "done"
     assert reviewer_id == "rev-1"
     assert check_source == "reviewer:rev-1"  # actor-derived, same binding production enforces
+
+
+def test_case_full_reports_the_enforcement_hold_from_the_decided_record(
+    client, engine, phase3_worker
+):
+    """The decide stage's safety overlay publishes a computed approve as
+    manual_review_insufficient and writes `enforcement_held` + `computed_decision` on that run's
+    `run.decided` audit row (orchestration/pipeline.py). The console must call that what it is —
+    a held approval — and must take the fact from that record, never re-derive a verdict from
+    five green gates. The shared test settings run the real decision path, so the overlay's
+    record is written here in exactly the pipeline's shape, against the pointed run."""
+    sent = client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-held", "event_type": "kyb.run_requested",
+              "payload": ACME_KYB_WITH_CONTACT},
+    )
+    assert sent.status_code == 202
+    phase3_worker.run_until_idle()
+
+    full = client.get("/ui/api/cases/ui-held/full").json()
+    latest = full["pointer_decision"]
+    assert latest["decision"] == "manual_review_insufficient"  # genuinely short of the target
+    assert full["enforcement_hold"] is None  # an honest On hold, not a held approval
+    assert client.get("/ui/api/cases?q=ui-held").json()["cases"][0]["enforcement_held"] is False
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO audit_log (case_id, actor, action, detail_json) "
+                "VALUES ('ui-held', 'system', 'run.decided', CAST(:d AS jsonb))"
+            ),
+            {"d": json.dumps({
+                "run_id": latest["run_id"], "decision": "manual_review_insufficient",
+                "computed_decision": "approve", "enforcement_held": True,
+                "score": latest["score"], "gates": latest["gates_json"],
+            })},
+        )
+    full = client.get("/ui/api/cases/ui-held/full").json()
+    assert full["pointer_decision"]["decision"] == "manual_review_insufficient"  # unchanged
+    assert full["enforcement_hold"] == {
+        "computed_decision": "approve",
+        "published_decision": "manual_review_insufficient",
+    }
+    assert client.get("/ui/api/cases?q=ui-held").json()["cases"][0]["enforcement_held"] is True
 
 
 def test_composer_validates_payloads(client):

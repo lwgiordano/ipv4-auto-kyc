@@ -387,6 +387,18 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
   font-weight:600;margin-bottom:var(--s4)}
 .banner .ic{width:16px;height:16px}
 .banner a{color:inherit;font-weight:700;text-decoration:underline}
+/* The same tinted-panel recipe at warning severity, for a state that is not an error: the
+   enforcement hold. It sits INSIDE the published-decision card, under the word it explains. */
+.callout{display:flex;gap:var(--s3);align-items:flex-start;border-radius:var(--r);
+  padding:var(--s3) var(--s4);font-size:14px;line-height:20px;margin:var(--s3) 0 var(--s4)}
+.callout.amber{background:var(--amber-soft);color:var(--amber-ink);
+  border:1px solid color-mix(in oklab,var(--warning),var(--surface) 72%)}
+.callout .ic{margin-top:2px}
+.callout b{display:block;font-weight:700;margin-bottom:var(--s1)}
+.callout a{color:inherit;font-weight:700;text-decoration:underline}
+/* The rulebook row a case page linked to: tinted, and focusable so the jump is announced. */
+tr.hl td{background:var(--accent-soft)}
+tr.hl:focus-visible{outline-offset:-2px}
 .loading{color:var(--muted);font-size:14px;line-height:20px;padding:var(--s7);text-align:center}
 h2.sec{font:700 12px/16px var(--font);color:var(--muted);text-transform:uppercase;
   letter-spacing:.05em;margin:var(--s6) 0 var(--s3);
@@ -568,8 +580,10 @@ const TIPS={
     <dt>Approved</dt><dd>Enough proof. The platform opens the account.</dd>
     <dt>Approved, buying locked</dt><dd>The company is proven, but the address registry ID is
       not, so buying stays off until it is.</dd>
-    <dt>On hold</dt><dd>Not enough proof yet. Nobody has to do anything: it clears itself the
-      moment new evidence takes the case over the line.</dd>
+    <dt>On hold</dt><dd>Usually not enough proof yet, and it clears itself the moment new
+      evidence takes the case over the line. Sometimes enough proof, but this copy of the tool
+      may not approve on its own — that one waits for a named reviewer. The case page says
+      which.</dd>
     <dt>Rejected</dt><dd>The applicant is on the blocked-broker list.</dd></dl>`},
   latency:{t:"Upstream services",b:`<p>How the outside services the tool calls are behaving:
     how many calls, how many came back as errors, and how slow the slowest one in twenty was.</p>
@@ -605,6 +619,8 @@ const TIPS={
     the buying field and the five rules below always agree with each other.</p>
     <p>The buying field is what this verdict says about buying on its own. It is not a promise
     the account can buy today — the verdict decides that, and a held account cannot.</p>
+    <p>Held for approval means the rulebook computed an approval but this copy of the tool may
+    not approve on its own. The panel under the word says what that takes.</p>
     <p>None of it moves when new evidence lands. The next round publishes a new one.</p>`},
   gates:{t:"The five rules",b:`<p>All five had to be true for the tool to approve on its own.
     Points alone are not enough.</p><dl>
@@ -692,7 +708,10 @@ const TIPS={
       account opens; buying does not.</dd>
     <dt>On hold</dt><dd>Everything else. It clears itself when new evidence takes the case over
       the line, so it is not a queue anyone has to work.</dd></dl>
-    <p>The last column is what the platform does about it.</p>`},
+    <p>The last column is what the platform does about it.</p>
+    <p>One exception. While this copy of the tool may not approve on its own, a case that matches
+    an Approved row is still published as On hold, and its page says Held for approval. That hold
+    is lifted by a named reviewer, not by more evidence.</p>`},
   brokerpolicy:{t:"The blocked-broker list",b:`<p>Matching is exact: the same name, domain, org
     ID, contact handle or network number. Nothing is guessed and nothing is fuzzy, so a
     coincidental resemblance never rejects anyone.</p>
@@ -756,6 +775,9 @@ const PILL={
   missing:["p-neutral",I.absent,"Nothing yet"],
   approve:["p-green",I.check,"Approved"],approve_buy_locked:["p-amber",I.lock,"Approved, buying locked"],
   manual_review_insufficient:["p-amber",I.clock,"On hold"],reject:["p-red",I.cross,"Rejected"],
+  /* Not a decision the engine can make: the published word for a computed approval the safety
+     overlay held back. The person icon is the cue — this one waits on somebody, not on evidence. */
+  held_for_approval:["p-amber",I.person,"Held for approval"],
   live:["p-green",I.live,"Real service"],stub:["p-amber",I.stub,"Test data"],dev:["p-amber",I.stub,"Stand-in"],
   "needs-config":["p-red",I.gear,"Missing credentials"],manual:["p-blue",I.person,"A person decides"],
   open:["p-amber",I.clock,"Waiting"],done:["p-green",I.check,"Done"],
@@ -878,10 +900,10 @@ async function viewCases(){
   const{body}=await j(`/ui/api/cases?q=${encodeURIComponent(q)}`);
   const rows=body.cases.map(c=>`<tr class="click" data-id="${esc(c.id)}">
     <td><span class="strong">${esc(c.company_name||c.id)}</span><div class="sub mono">${esc(c.id)}</div></td>
-    <td>${c.latest_decision?pill(c.latest_decision):provPill(c.decision_provenance)}</td>
+    <td>${c.latest_decision?(c.enforcement_held?pill("held_for_approval"):pill(c.latest_decision)):provPill(c.decision_provenance)}</td>
     <td class="num strong">${c.decision_score??"—"}</td>
     <td class="num sub">${c.current_evidence_score}</td>
-    <td class="sub">${esc(say("case_status",c.status))}</td>
+    <td class="sub">${esc(c.enforcement_held&&c.status==="manual_review_insufficient"?"Waiting for a reviewer":say("case_status",c.status))}</td>
     <td class="sub">${esc(say("buy_status",c.buy_status))}</td>
     <td>${pill(c.broker_status)}</td>
     <td class="num">${when(c.updated_at)}</td>
@@ -917,7 +939,9 @@ function humanizeAudit(a){
     case"review_task.created":return`opened a job for a person \u2014 <b>${esc(say("task",d.task_type))}</b>`;
     case"review_task.completed":return`a person answered · <b>${esc(say("status",d.result,d.result))}</b>`;
     case"poc.token_sent":return`emailed a code to the registry contact for <b>${esc(d.poc_handle)}</b>`;
-    case"run.decided":return`verdict: <b>${esc(say("decision",d.decision))}</b> · ${d.score} points`;
+    case"run.decided":return d.enforcement_held
+      ?`verdict: <b>Held for approval</b> · ${d.score} points · the rules said ${esc(say("decision",d.computed_decision))}, but this copy may not approve on its own`
+      :`verdict: <b>${esc(say("decision",d.decision))}</b> · ${d.score} points`;
     case"reviewer.manual_approve":return`<b>a person approved this by hand</b>`;
     case"run.failed":return`the round of checks <b>failed</b> · ${esc((d.error||"").slice(0,80))}`;
     case"run.stage":case"run.inputs_resolved":return null; // noise — keep in raw only
@@ -925,6 +949,23 @@ function humanizeAudit(a){
   }
 }
 const HOT=new Set(["run.decided","reviewer.manual_approve","check.superseded","run.failed"]);
+
+/* The enforcement hold, said plainly. The word above this panel is what the platform was told;
+   the panel says why that word is not the one the rulebook computed, and who can change it.
+   Copy only: the score is the pointed row's own, the target is the rulebook's, and the hold
+   itself is the server's word (enforcement_hold, from the engine's run.decided record) — the
+   screen never decides a case is held by looking at five green gates. */
+function holdCallout(hold,latest,threshold){
+  const over=(latest.score??0)-threshold;
+  const margin=over>0?`${over} point${over===1?"":"s"} over the target`:"exactly at the target";
+  return`<div class="callout amber" role="note">${I.person}<div>
+    <b>Every rule passed and the score is ${margin}, so the rulebook says
+      <a href="#/policy?rule=${encodeURIComponent(hold.computed_decision)}">${esc(say("decision",hold.computed_decision))}</a>.</b>
+    This copy of the tool may not approve on its own yet, so the platform was told On hold
+    instead. That is an exception to the rule, not a reading of it. Only a named reviewer can
+    lift it, by approving the case by hand, and the audit trail then carries their name. Letting
+    the tool approve without a person is a release decision, not something done from here.
+  </div></div>`}
 
 async function viewCase(id){
   const{status,body:d}=await j(`/ui/api/cases/${encodeURIComponent(id)}/full`);
@@ -936,6 +977,11 @@ async function viewCase(id){
   const latest=d.pointer_decision||{},gates=latest.gates_json||{};
   const s=d.score,live=s.current_evidence_score,max=Math.max(s.threshold*1.3,live+10);
   const decision=latest.decision??null;
+  // The hold comes from the API (the engine's own run.decided record), never from the gates:
+  // the screen shows the verdict, it does not compute one.
+  const hold=d.enforcement_hold||null;
+  const heldRuns=new Set(d.audit.filter(a=>a.action==="run.decided"&&a.detail_json?.enforcement_held)
+    .map(a=>a.detail_json.run_id));
   // The bar is LIVE EVIDENCE and is styled neutrally on purpose: colouring it by the published
   // decision, or captioning it "threshold met", made one visual read out of two different
   // authority eras (re-audit cbb783b F6). The published tuple gets its own card below.
@@ -1013,18 +1059,19 @@ async function viewCase(id){
   page.innerHTML=`
     <div class="crumb"><a href="#/cases">Cases</a> / <span class="mono">${esc(c.id)}</span></div>
     ${tbar(esc(c.company_name||c.id),
-      `<span class="chips">${decision?pill(decision):provPill(d.decision_provenance)}
+      `<span class="chips">${decision?(hold?pill("held_for_approval"):pill(decision)):provPill(d.decision_provenance)}
        ${d.manual_decision_provenance&&d.manual_decision_provenance!=="no_manual_decisions"?provPill(d.manual_decision_provenance,true):""}
-       ${c.status==="approved_manual"?pill("manual","Approved by a person"):`<span class="pill p-neutral" title="${esc(c.status)}">${esc(say("case_status",c.status))}</span>`}
+       ${c.status==="approved_manual"?pill("manual","Approved by a person"):`<span class="pill p-neutral" title="${esc(c.status)}">${esc(hold&&c.status==="manual_review_insufficient"?"Waiting for a reviewer":say("case_status",c.status))}</span>`}
        <span class="pill p-neutral" title="${esc(c.buy_status)}">${esc(say("buy_status",c.buy_status))}</span>${pill(c.broker_status)}</span>`,
       `<button class="primary" id="sendbtn">Send a message</button>`)}
     <div class="card"><div class="hd"><h2>Published decision</h2>
         <span class="hint">the verdict the platform was told — every number here comes from one single record</span>${tip("published")}</div>
       <div class="bd">
         ${latest.decision?`<div class="bullet"><div class="val">
-            <b style="color:${decisionColor}" title="${esc(latest.decision)}">${esc(say("decision",latest.decision))}</b>
+            <b style="color:${decisionColor}" title="${esc(latest.decision)}${hold?` — the rules computed ${esc(hold.computed_decision)}`:""}">${hold?"Held for approval":esc(say("decision",latest.decision))}</b>
             <span class="of">${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"buying: not recorded"))}</span>
             <span class="verdict sub">decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
+          ${hold?holdCallout(hold,latest,s.threshold):""}
           <h3 class="sub-hd">Published decision hard gates
             <span class="gloss">— the five things that all had to be true</span>${tip("gates")}</h3>
           <div class="gates published-gates">${["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"]
@@ -1075,7 +1122,7 @@ async function viewCase(id){
     <div class="card"><div class="bd flush"><table>
       <thead><tr><th>Verdict</th><th class="num">Points</th><th>Buying</th><th>By hand</th>
       <th class="num">Decided</th><th class="num">Platform told</th></tr></thead>
-      <tbody>${d.decisions.map(x=>`<tr><td>${pill(x.decision)}</td><td class="num strong">${x.score}</td>
+      <tbody>${d.decisions.map(x=>`<tr><td>${heldRuns.has(x.run_id)?pill("held_for_approval"):pill(x.decision)}</td><td class="num strong">${x.score}</td>
         <td class="sub">${esc(say("buy",x.buy_enablement))}</td><td>${x.manual?`<span class="iw">${I.person}${esc(x.reviewer_id||"")}</span>`:"—"}</td>
         <td class="num">${when(x.decided_at)}</td><td class="num">${when(x.published_at)}</td></tr>`).join("")
         ||emptyRow(6,"No verdict yet","")}</tbody></table></div></div>
@@ -1191,7 +1238,7 @@ async function viewFieldMap(){
 }
 
 /* ── Policy ───────────────────────────────────────────── */
-async function viewPolicy(){
+async function viewPolicy(rule=""){
   const{body:p}=await j("/ui/api/policy");
   const rubric=p.rubric.map(r=>`<tr>
     <td><span class="strong">${esc(say("check",r.check_type))}</span>
@@ -1203,7 +1250,9 @@ async function viewPolicy(){
      compliance condition in prose on screen would let the screen drift from the bundle and assert
      something the engine does not do. The plain reading lives in this section's explainer, where
      it is clearly a reading and not the authority. */
-  const decisions=p.decisions.map(d0=>`<tr><td class="num">${d0.priority}</td><td>${pill(d0.decision)}</td>
+  // Every row is addressable (#/policy?rule=<decision>) so a case page can point at the exact
+  // rule that produced its verdict; the pointed row is tinted and takes focus.
+  const decisions=p.decisions.map(d0=>`<tr id="rule-${esc(d0.decision)}"${d0.decision===rule?' class="hl" tabindex="-1"':""}><td class="num">${d0.priority}</td><td>${pill(d0.decision)}</td>
     <td class="sub mono">${esc(d0.condition)}</td><td class="sub">${esc(String(d0.platform_enforcement).replace(/_/g," "))}</td></tr>`).join("");
   const brokers=p.broker_entities.map(b=>{
     const ids=["aliases","domains","email_domains","org_ids","poc_handles","asns"]
@@ -1220,7 +1269,11 @@ async function viewPolicy(){
     ${sec("How the verdict is chosen — first match wins","decisionpolicy")}
     <div class="card"><div class="bd flush"><table>
       <thead><tr><th class="num">#</th><th>Verdict</th><th>When it applies</th><th>What the platform does</th></tr></thead>
-      <tbody>${decisions}</tbody></table></div></div>
+      <tbody>${decisions}</tbody></table></div>
+      <p class="sub" style="margin:0;padding:var(--s3) var(--s4);border-top:1px solid var(--line)">
+        A case page that reads <b>Held for approval</b> matched an Approved row and was still
+        published as On hold: this copy of the tool may not approve on its own. That hold is an
+        exception to this table, not a row in it, and only a named reviewer lifts it.</p></div>
     ${sec("The blocked-broker list — exact matches only","brokerpolicy")}
     <div class="card"><div class="bd flush"><table>
       <thead><tr><th>Company</th><th>Treatment</th><th>What counts as a match — names, domains, org IDs, contacts, networks</th></tr></thead>
@@ -1229,6 +1282,8 @@ async function viewPolicy(){
     <div class="card"><div class="bd"><pre style="margin:0">${esc(JSON.stringify(p.hard_gates,null,2))}</pre></div></div>
     ${sec("Messages the tool accepts","events")}
     <div class="card"><div class="bd chips">${p.events.map(e=>`<span class="tag">${esc(e)}</span>`).join("")}</div></div>`;
+  if(rule){const row=page.querySelector("#rule-"+CSS.escape(rule));
+    if(row){row.scrollIntoView({block:"center"});row.focus({preventScroll:true})}}
 }
 
 /* ── Composer ─────────────────────────────────────────── */
@@ -1282,7 +1337,7 @@ const routes=[
   [/^#\/case\/(.+)$/,m=>viewCase(decodeURIComponent(m[1])),"cases"],
   [/^#\/integrations$/,()=>viewIntegrations(),"integrations"],
   [/^#\/fieldmap$/,()=>viewFieldMap(),"fieldmap"],
-  [/^#\/policy$/,()=>viewPolicy(),"policy"],
+  [/^#\/policy(?:\?rule=([^&]*))?$/,m=>viewPolicy(m[1]?decodeURIComponent(m[1]):""),"policy"],
   [/^#\/composer$/,()=>viewComposer(),"composer"],
 ];
 async function route(){

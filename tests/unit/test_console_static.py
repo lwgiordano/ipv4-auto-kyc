@@ -111,3 +111,22 @@ def test_case_detail_renders_the_manual_provenance_not_only_drift():
     drift case — otherwise `unresolved_legacy_order` is invisible (looks like no manual approval)."""
     assert 'd.manual_decision_provenance!=="no_manual_decisions"' in VIEW_CASE
     assert "provPill(d.manual_decision_provenance,true)" in VIEW_CASE
+
+
+# --- the enforcement hold is the server's word, never inferred from green gates ---------------
+
+def test_case_detail_takes_the_hold_from_the_api():
+    """A computed approval the safety overlay held back is reported by the API
+    (`enforcement_hold`, read from the engine's own run.decided record). The renderer shows that
+    word inside the published-decision card; it never decides a case is held by testing the
+    five gates against the threshold itself."""
+    assert "d.enforcement_hold" in VIEW_CASE
+    assert 'pill("held_for_approval")' in VIEW_CASE
+    card = VIEW_CASE[VIEW_CASE.index("Published decision"):]
+    card = card[: card.index("Live evidence")]
+    assert "holdCallout(hold" in card, "the hold panel lives inside the published-decision card"
+
+
+def test_case_list_marks_held_approvals_from_the_api_flag():
+    assert "c.enforcement_held" in VIEW_CASES
+    assert 'pill("held_for_approval")' in VIEW_CASES

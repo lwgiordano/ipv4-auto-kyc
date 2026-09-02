@@ -138,7 +138,11 @@ def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(
                d.decision AS latest_decision, d.score AS decision_score, c.updated_at,
                c.latest_decision_row_id IS NOT NULL AS pointer_set,
                d.id IS NOT NULL AS pointer_resolved,
-               EXISTS (SELECT 1 FROM decisions dd WHERE dd.case_id = c.id) AS has_decisions
+               EXISTS (SELECT 1 FROM decisions dd WHERE dd.case_id = c.id) AS has_decisions,
+               COALESCE((SELECT (a.detail_json->>'enforcement_held')::boolean FROM audit_log a
+                         WHERE a.case_id = c.id AND a.action = 'run.decided'
+                           AND a.detail_json->>'run_id' = d.run_id
+                         ORDER BY a.id DESC LIMIT 1), false) AS enforcement_held
         FROM cases c
         LEFT JOIN decisions d ON d.id = c.latest_decision_row_id AND d.case_id = c.id
         {where}
@@ -151,6 +155,11 @@ def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(
         params["q"] = f"%{q}%"
     with request.app.state.session_factory() as session:
         cases = _rows(session.execute(text(sql.format(where=where)), params))
+    # `enforcement_held` is the engine's own word for the pointed verdict: the decide stage
+    # records it on that run's `run.decided` audit row when a computed approval was published
+    # as manual_review_insufficient by the safety overlay. Read from there, never inferred from
+    # five green gates — the console must not compute a verdict the engine did not.
+    #
     # Classified through the shared taxonomy, so a NULL verdict cell is never ambiguous between
     # "no decisions", "unresolved legacy order" and "pointer drift" — the last one is an
     # integrity condition the console must surface, not render as an ordinary blank.
@@ -275,6 +284,26 @@ def case_full(case_id: str, request: Request) -> dict:
             ).scalar_one()),
             manual=True,
         )
+        # The enforcement hold for the pointed verdict, read from the decide stage's own
+        # `run.decided` audit record (it carries `enforcement_held` and the `computed_decision`
+        # the rulebook produced). The pointed decision row stores only what was PUBLISHED, so
+        # this is the one place the "held approval" is written down — and the console renders
+        # it from here rather than deducing it from the gates, which would be the screen
+        # computing a verdict. None means the pointed verdict was not held (or there is none).
+        enforcement_hold = None
+        if pointer_decision is not None and pointer_decision.get("run_id"):
+            decided = session.execute(
+                text(
+                    "SELECT detail_json FROM audit_log WHERE case_id=:id AND action='run.decided' "
+                    "AND detail_json->>'run_id' = :run ORDER BY id DESC LIMIT 1"
+                ),
+                {"id": case_id, "run": pointer_decision["run_id"]},
+            ).scalar_one_or_none()
+            if decided and decided.get("enforcement_held"):
+                enforcement_hold = {
+                    "computed_decision": decided.get("computed_decision"),
+                    "published_decision": pointer_decision["decision"],
+                }
         tasks = _rows(
             session.execute(
                 text(
@@ -369,6 +398,8 @@ def case_full(case_id: str, request: Request) -> dict:
             # legacy multi-manual history — the projection treats both as unresolved)
             "latest_manual_decision": latest_manual_decision,
             "manual_decision_provenance": manual_decision_provenance,
+            # the safety overlay's hold on the pointed verdict, or None (see above)
+            "enforcement_hold": enforcement_hold,
             "review_tasks": tasks,
             "poc_tokens": tokens,
             "audit": list(reversed(audit)),
