@@ -146,8 +146,42 @@ nav{padding:var(--s1) var(--s2);flex:1}
      font-size:12px;line-height:16px;color:var(--muted);display:grid;gap:var(--s2)}
 .side-foot label{display:flex;align-items:center;gap:var(--s2);cursor:pointer;min-height:44px}
 .side-foot input[type=checkbox]{width:20px;height:20px;margin:0;accent-color:var(--accent);flex:none}
+.menubtn{display:none;margin-left:auto;padding:0 var(--s3)}
 main{flex:1;overflow-y:auto;scroll-behavior:smooth}
 .page{max-width:1160px;margin:0 auto;padding:var(--s5) var(--s6) var(--s8)}
+
+/* ── Below 1024px the frame folds ──
+   The sidebar was a fixed 240px at every width, so at 390px it took 62% of the screen and the
+   case page became a 150px column scrolled sideways -- while page-level overflow measured clean,
+   because main had quietly grown its own horizontal scroll. Now the side nav becomes a top bar
+   with a Menu button that drops the nav and the footer open; main hands scrolling back to the
+   document; and anything genuinely wide (a table, a raw record) scrolls inside its own card,
+   so a sideways scroll is a deliberate affordance on one element rather than the whole page. */
+@media(max-width:1023px){
+  .shell{flex-direction:column;height:auto;min-height:100vh}
+  aside{width:auto;flex-direction:row;flex-wrap:wrap;align-items:center;border-right:0;
+    border-bottom:1px solid var(--line);overflow:visible;position:sticky;top:0;z-index:20}
+  .brand{flex:1;padding:var(--s3) var(--s4)}
+  .menubtn{display:inline-flex}
+  nav,.side-foot{display:none;width:100%}
+  /* flex:none, not the desktop flex:1 -- the nav must drop under the brand row, not share it */
+  nav{flex:none;padding:0 var(--s2) var(--s2);border-top:1px solid var(--line)}
+  .grp{padding-top:var(--s2)}
+  aside.open nav{display:block}
+  aside.open .side-foot{display:grid}
+  main{overflow:visible}
+  .page{padding:var(--s4) var(--s4) var(--s7)}
+}
+@media(max-width:720px){
+  .page{padding:var(--s3) var(--s3) var(--s7)}
+  .search,.search input{width:100%}
+  .bullet .val{flex-wrap:wrap}
+  .kv{grid-template-columns:1fr;gap:var(--s1) 0}
+  .kv .k{margin-top:var(--s2)}
+  .irow{flex-wrap:wrap}
+  .irow .end{margin-left:0;width:100%;justify-items:start}
+  .probe-out{text-align:left}
+}
 
 /* ── Page title bar ── */
 .tbar{display:flex;align-items:flex-start;gap:var(--s4);margin-bottom:var(--s5);flex-wrap:wrap}
@@ -170,7 +204,7 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth}
 .sub-hd{font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-bottom:var(--s3)}
 .card .hd .hint{font-size:12px;line-height:16px;color:var(--muted);font-weight:400}
 .card .bd{padding:var(--s4)}
-.card .bd.flush{padding:0}
+.card .bd.flush{padding:0;overflow-x:auto}
 .stack{display:grid;gap:var(--s4)}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:var(--s4);align-items:start}
 @media(max-width:980px){.split{grid-template-columns:1fr}}
@@ -356,10 +390,12 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:var(--s2) var(--s5);
   font-size:14px;line-height:20px}
 .kv .k{color:var(--muted)}
+.kv span{min-width:0;overflow-wrap:anywhere}
 /* Toast: inverse surface at the highest elevation, per the pack's toast recipe. */
 .toast{position:fixed;bottom:var(--s5);right:var(--s5);background:var(--surface-inverse);
   color:var(--text-inverse);border-radius:var(--r);padding:var(--s2) var(--s4);
-  box-shadow:var(--e3);font-size:14px;line-height:20px;max-width:420px;z-index:500;
+  box-shadow:var(--e3);font-size:14px;line-height:20px;z-index:500;
+  max-width:min(420px,calc(100vw - 2*var(--s5)));
   display:inline-flex;align-items:center;gap:var(--s2);animation:tin var(--dur-4) var(--ease-standard)}
 .toast .ic{width:16px;height:16px}
 @keyframes tin{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
@@ -455,6 +491,7 @@ h2.sec.tight{margin-top:0}
   <div class="brand">
     <div class="mark">K</div>
     <div><div class="t">KYC Tool</div><div class="s">Ops Console</div></div>
+    <button type="button" class="menubtn" id="menubtn" aria-controls="nav" aria-expanded="false">Menu</button>
   </div>
   <nav id="nav">
     <a class="nav-item" href="#/overview" data-r="overview">
@@ -1509,7 +1546,7 @@ async function route(){
       // inside it. Not on first load (nothing to move from) and not on the refresh tick (that
       // would yank a person out of whatever they were reading or typing). A renderer that has
       // already placed focus itself -- the policy row a case linked to -- keeps it.
-      if(navigated){navigated=false;main.scrollTop=0;
+      if(navigated){navigated=false;main.scrollTop=0;window.scrollTo(0,0);closeMenu();
         if(!page.contains(document.activeElement)){const t=page.querySelector("h1");
           if(t){t.tabIndex=-1;t.focus({preventScroll:true})}}}
       sidebarBadge();
@@ -1519,6 +1556,11 @@ async function route(){
   location.hash="#/overview";
 }
 window.addEventListener("hashchange",()=>{navigated=true;route()});
+// The folded frame's drawer. Open and closed are the aside's class and the button's state, both.
+const menuBtn=$("#menubtn"),sideBar=$("aside");
+function closeMenu(){sideBar.classList.remove("open");menuBtn.setAttribute("aria-expanded","false")}
+menuBtn.addEventListener("click",()=>{const open=sideBar.classList.toggle("open");
+  menuBtn.setAttribute("aria-expanded",String(open))});
 // The skip link must not change the hash (the router would read that as a route), so it moves
 // focus itself: to the scrolling main, whose first tab stop is the page title.
 $("#skip").addEventListener("click",e=>{e.preventDefault();main.focus()});

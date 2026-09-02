@@ -169,3 +169,12 @@ def test_router_marks_the_current_page_and_moves_focus_on_navigation():
     router = CONSOLE[CONSOLE.index("async function route()"):]
     assert 'setAttribute("aria-current","page")' in router
     assert "if(navigated)" in router and 't.focus({preventScroll:true})' in router
+
+
+# --- the frame folds below 1024px, and wide content scrolls inside its own card --------------
+
+def test_frame_folds_and_tables_scroll_in_their_cards():
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    assert "@media(max-width:1023px)" in css
+    assert ".card .bd.flush{padding:0;overflow-x:auto}" in css
+    assert '<button type="button" class="menubtn" id="menubtn" aria-controls="nav"' in CONSOLE
