@@ -150,3 +150,22 @@ def test_approve_by_hand_goes_through_the_dialog_and_requires_who_and_why():
     # the case renderer opens the dialog; it never posts an approval itself
     assert "openApprove(d,hold)" in VIEW_CASE
     assert "reviewer.manual_approve" not in VIEW_CASE
+
+
+# --- the keyboard reaches the primary action, and a navigation is announced -------------------
+
+def test_case_rows_carry_a_real_link():
+    """Rows used to be click-only <tr>s: opening a case, the console's primary action, was
+    mouse-only and could not be middle-clicked into a tab."""
+    assert '<a href="#/case/${encodeURIComponent(c.id)}"' in VIEW_CASES
+
+
+def test_shell_has_a_skip_link_and_a_focusable_main():
+    assert '<a class="skip" href="#main"' in CONSOLE
+    assert '<main id="main" tabindex="-1">' in CONSOLE
+
+
+def test_router_marks_the_current_page_and_moves_focus_on_navigation():
+    router = CONSOLE[CONSOLE.index("async function route()"):]
+    assert 'setAttribute("aria-current","page")' in router
+    assert "if(navigated)" in router and 't.focus({preventScroll:true})' in router

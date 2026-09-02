@@ -111,6 +111,15 @@ a:hover{text-decoration:underline}
 .arr{color:var(--muted);display:inline-flex;align-items:center;vertical-align:middle}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
+/* ── Skip link: the first tab stop on every page, visible only while it has focus ── */
+.skip{position:absolute;left:var(--s2);top:var(--s2);z-index:700;background:var(--surface);
+  color:var(--accent-ink);border:1px solid var(--accent);border-radius:var(--r);
+  padding:var(--s2) var(--s4);font:600 14px/20px var(--font);
+  transform:translateY(calc(-100% - var(--s4)))}
+.skip:focus{transform:none;text-decoration:none}
+/* The page title takes focus after a navigation so the new page is announced and the tab order
+   starts inside it; the ring belongs on things a person can act on, not on the title. */
+main:focus,h1[tabindex]:focus{outline:none}
 /* ── App shell: sidebar + independently scrolling main ── */
 .shell{display:flex;height:100vh}
 aside{width:var(--frame-side-nav);flex:none;background:var(--surface);
@@ -208,6 +217,10 @@ tbody tr:last-child td{border-bottom:none}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 td .strong{color:var(--ink);font-weight:700}
 tbody tr.click{cursor:pointer;transition:background-color var(--dur-2) var(--ease-standard)}
+/* A real link on the company name: focusable, middle-clickable, and the row's own click is
+   the convenience layered on top of it rather than the only way in. */
+td .rowlink{color:var(--ink);font-weight:700}
+td .rowlink:hover{text-decoration:underline}
 tbody tr.click:hover{background:var(--surface-muted)}
 .sub{font-size:12px;line-height:16px;color:var(--muted);margin-top:2px}
 .empty{padding:var(--s6) var(--s4);text-align:center;color:var(--muted);font-size:14px;line-height:20px}
@@ -436,6 +449,7 @@ h2.sec.tight{margin-top:0}
 </style>
 </head>
 <body>
+<a class="skip" href="#main" id="skip">Skip to content</a>
 <div class="shell">
 <aside>
   <div class="brand">
@@ -444,25 +458,25 @@ h2.sec.tight{margin-top:0}
   </div>
   <nav id="nav">
     <a class="nav-item" href="#/overview" data-r="overview">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><rect x="2" y="2" width="5" height="7" rx="1"/><rect x="9" y="2" width="5" height="4" rx="1"/><rect x="9" y="8" width="5" height="6" rx="1"/><rect x="2" y="11" width="5" height="3" rx="1"/></svg>
+      <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><rect x="2" y="2" width="5" height="7" rx="1"/><rect x="9" y="2" width="5" height="4" rx="1"/><rect x="9" y="8" width="5" height="6" rx="1"/><rect x="2" y="11" width="5" height="3" rx="1"/></svg>
       Overview<span class="count" id="deadbadge" hidden></span></a>
     <div class="grp">Investigate</div>
     <a class="nav-item" href="#/cases" data-r="cases">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 7h12M6 7v6"/></svg>
+      <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 7h12M6 7v6"/></svg>
       Cases</a>
     <div class="grp">Wiring</div>
     <a class="nav-item" href="#/integrations" data-r="integrations">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M6 2v4M10 2v4M4 6h8v3a4 4 0 0 1-8 0zM8 13v2"/></svg>
+      <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M6 2v4M10 2v4M4 6h8v3a4 4 0 0 1-8 0zM8 13v2"/></svg>
       Integrations</a>
     <a class="nav-item" href="#/fieldmap" data-r="fieldmap">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M2 4h5M2 8h5M2 12h5M9 4h5M9 8h5M9 12h5"/><path d="M7 4l2 4-2 4" stroke-linejoin="round"/></svg>
+      <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M2 4h5M2 8h5M2 12h5M9 4h5M9 8h5M9 12h5"/><path d="M7 4l2 4-2 4" stroke-linejoin="round"/></svg>
       Field Map</a>
     <a class="nav-item" href="#/policy" data-r="policy">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M8 2l5 2v4c0 3.5-2.2 5.4-5 6-2.8-.6-5-2.5-5-6V4z" stroke-linejoin="round"/></svg>
+      <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M8 2l5 2v4c0 3.5-2.2 5.4-5 6-2.8-.6-5-2.5-5-6V4z" stroke-linejoin="round"/></svg>
       Policy</a>
     <div class="grp">Act</div>
     <a class="nav-item" href="#/composer" data-r="composer">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M14 2L7 9M14 2l-4.5 12-2.5-5.5L2 6z" stroke-linejoin="round"/></svg>
+      <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M14 2L7 9M14 2l-4.5 12-2.5-5.5L2 6z" stroke-linejoin="round"/></svg>
       Composer</a>
   </nav>
   <div class="side-foot">
@@ -475,7 +489,7 @@ h2.sec.tight{margin-top:0}
     <label><input type="checkbox" id="autorefresh"> refresh every 5 seconds</label>
   </div>
 </aside>
-<main><div class="page" id="page"><div class="loading">Loading…</div></div></main>
+<main id="main" tabindex="-1"><div class="page" id="page"><div class="loading">Loading…</div></div></main>
 </div>
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <dialog id="approve" class="modal" aria-labelledby="ap-title">
@@ -503,8 +517,11 @@ const NBSP=" ";
 async function j(url,opts){const r=await fetch(url,opts);const body=await r.json().catch(()=>({}));
   if(!r.ok&&r.status>=500)throw new Error(`${r.status}: ${JSON.stringify(body).slice(0,300)}`);
   return{status:r.status,body}}
+/* A failure interrupts (alert); everything else waits its turn (status). The cross icon leads
+   every failure message in this file, so it is the cue. */
 function toast(msg,ms=5000){const t=document.createElement("div");t.className="toast";
-  t.setAttribute("role","status");t.innerHTML=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),ms)}
+  t.setAttribute("role",msg.startsWith(I.cross)?"alert":"status");t.innerHTML=msg;
+  document.body.appendChild(t);setTimeout(()=>t.remove(),ms)}
 const fmtExact=s=>s?new Date(s).toLocaleString(undefined,{hour12:false}):"—";
 function rel(s){if(!s)return"—";const d=new Date(s),now=Date.now(),sec=(now-d)/1e3;
   if(sec<50)return"just now";if(sec<3600)return`${Math.round(sec/60)}m ago`;
@@ -950,7 +967,7 @@ async function viewCases(){
   const q=box?box.value:recall("caseq");
   const{body}=await j(`/ui/api/cases?q=${encodeURIComponent(q)}`);
   const rows=body.cases.map(c=>`<tr class="click" data-id="${esc(c.id)}">
-    <td><span class="strong">${esc(c.company_name||c.id)}</span><div class="sub mono">${esc(c.id)}</div></td>
+    <td><a href="#/case/${encodeURIComponent(c.id)}" class="rowlink">${esc(c.company_name||c.id)}</a><div class="sub mono">${esc(c.id)}</div></td>
     <td>${c.latest_decision?(c.enforcement_held?pill("held_for_approval"):pill(c.latest_decision)):provPill(c.decision_provenance)}</td>
     <td class="num strong">${c.decision_score??"—"}</td>
     <td class="num sub">${c.current_evidence_score}</td>
@@ -959,10 +976,11 @@ async function viewCases(){
     <td>${pill(c.broker_status)}</td>
     <td class="num">${when(c.updated_at)}</td>
     <td class="chev" aria-hidden="true">›</td></tr>`).join("")
-    ||emptyRow(9,"No companies yet",`Send a <code>kyb.run_requested</code> from the <a href="#/composer">Composer</a> to create one`);
+    ||(q?emptyRow(9,"Nothing matches",`No company or ID contains “${esc(q)}” — <button class="sm" id="clearq">Clear the search</button>`)
+        :emptyRow(9,"No companies yet",`Send a <code>kyb.run_requested</code> from the <a href="#/composer">Composer</a> to create one`));
   page.innerHTML=tbar("Cases","One row per company that has applied — click any row for the whole story","","cases")+`
     <div class="toolbar">
-      <div class="search"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="4.5"/><path d="M14 14l-3.5-3.5"/></svg>
+      <div class="search"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="4.5"/><path d="M14 14l-3.5-3.5"/></svg>
         <input id="q" placeholder="Search by company or ID…" value="${esc(q)}" aria-label="search cases"></div>
       <span class="note">${body.cases.length} compan${body.cases.length===1?"y":"ies"}</span>
       ${tip("caselist")}</div>
@@ -973,6 +991,7 @@ async function viewCases(){
       <tbody>${rows}</tbody></table></div></div>`;
   $("#q").addEventListener("input",e=>{remember("caseq",e.target.value);
     clearTimeout(window.__qt);window.__qt=setTimeout(viewCases,250)});
+  const cq=$("#clearq");if(cq)cq.onclick=()=>{$("#q").value="";remember("caseq","");viewCases()};
   page.querySelectorAll("tr.click").forEach(tr=>
     tr.onclick=()=>location.hash=`#/case/${encodeURIComponent(tr.dataset.id)}`);
 }
@@ -1385,7 +1404,7 @@ async function viewPolicy(rule=""){
       <td>${ids||`<span class="sub">name only — anything else has to be added to the list directly</span>`}</td></tr>`}).join("");
   page.innerHTML=tbar("Policy","The rules the engine actually runs — this page is the rulebook, not a description of it",
       `<span class="tag" title="fingerprint of the whole rulebook">${esc(p.bundle_hash.slice(0,16))}…</span>`,"policy")+`
-    <div class="card"><div class="hd"><h3>How points are earned</h3><span class="hint">${p.threshold} points to approve · only the newest evidence of each kind counts</span>${tip("rubric")}</div>
+    <div class="card"><div class="hd"><h2>How points are earned</h2><span class="hint">${p.threshold} points to approve · only the newest evidence of each kind counts</span>${tip("rubric")}</div>
       <div class="bd flush"><table>
       <thead><tr><th>Evidence</th><th class="num">Points</th><th>Proves</th><th>Who checks</th><th>What has to be true — no judgement calls</th></tr></thead>
       <tbody>${rubric}</tbody></table></div></div>
@@ -1415,7 +1434,7 @@ async function viewComposer(){
   const caseId=recall("composerCase")||"demo-case-001";
   page.innerHTML=tbar("Composer","Send a platform message by hand — the tool signs it and stops it counting twice","","composer")+`
     <div class="split">
-      <div class="card"><div class="hd"><h3>The message</h3>${tip("composerevent")}</div><div class="bd">
+      <div class="card"><div class="hd"><h2>The message</h2>${tip("composerevent")}</div><div class="bd">
         <div class="field"><label class="flab" for="c-case">Which company</label>
           <input id="c-case" value="${esc(caseId)}">
           <span class="note">the platform's ID for the case — an unknown one creates a new case</span></div>
@@ -1433,10 +1452,10 @@ async function viewComposer(){
           <span class="note">the background worker has to be running for anything to happen next</span></div>
       </div></div>
       <div class="stack">
-        <div class="card"><div class="hd"><h3>What came back</h3>${tip("composerresult")}</div><div class="bd">
+        <div class="card"><div class="hd"><h2>What came back</h2>${tip("composerresult")}</div><div class="bd">
           <pre id="c-out" style="margin:0">—</pre>
           <div class="sub" id="c-hint" style="margin-top:8px"></div></div></div>
-        <div class="card"><div class="hd"><h3>A worked example</h3>${tip("demo")}</div><div class="bd demo-journey">
+        <div class="card"><div class="hd"><h2>A worked example</h2>${tip("demo")}</div><div class="bd demo-journey">
           The built-in test data recognises <span class="strong">Acme Networks Ltd</span>. These three,
           in order: <code>kyb.run_requested</code> ${I.arrow} <code>email.verified</code> ${I.arrow}
           <code>org_id.submitted</code> (ORG-ACME-1) take a case all the way to
@@ -1469,6 +1488,8 @@ const routes=[
   [/^#\/policy(?:\?rule=([^&]*))?$/,m=>viewPolicy(m[1]?decodeURIComponent(m[1]):""),"policy"],
   [/^#\/composer$/,()=>viewComposer(),"composer"],
 ];
+const main=$("#main");
+let navigated=false;   // set by a hash change; cleared once the new page has taken focus
 async function route(){
   // a re-render (navigation, or the 5s refresh) throws away the button the bubble is anchored to
   hideTip();
@@ -1476,18 +1497,31 @@ async function route(){
   for(const[re,fn,nav]of routes){
     const m=h.match(re);
     if(m){
-      document.querySelectorAll(".nav-item").forEach(a=>
-        a.classList.toggle("active",a.dataset.r===nav));
+      document.querySelectorAll(".nav-item").forEach(a=>{
+        const here=a.dataset.r===nav;a.classList.toggle("active",here);
+        // the tint is one cue; "current page" is the one a screen reader gets
+        if(here)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current")});
       try{await fn(m)}catch(e){page.innerHTML=
         `<div class="card"><div class="empty"><b>This page did not load</b>${esc(e.message)}<br><br>
         <button class="sm" onclick="route()">Try again</button></div></div>`}
+      // On a navigation the old page's scroll position and focus are both stale: start the new
+      // page at the top and put focus on its title, so it is announced and the tab order starts
+      // inside it. Not on first load (nothing to move from) and not on the refresh tick (that
+      // would yank a person out of whatever they were reading or typing). A renderer that has
+      // already placed focus itself -- the policy row a case linked to -- keeps it.
+      if(navigated){navigated=false;main.scrollTop=0;
+        if(!page.contains(document.activeElement)){const t=page.querySelector("h1");
+          if(t){t.tabIndex=-1;t.focus({preventScroll:true})}}}
       sidebarBadge();
       return;
     }
   }
   location.hash="#/overview";
 }
-window.addEventListener("hashchange",route);
+window.addEventListener("hashchange",()=>{navigated=true;route()});
+// The skip link must not change the hash (the router would read that as a route), so it moves
+// focus itself: to the scrolling main, whose first tab stop is the page title.
+$("#skip").addEventListener("click",e=>{e.preventDefault();main.focus()});
 $("#autorefresh").addEventListener("change",e=>{
   clearInterval(refreshTimer);
   if(e.target.checked)refreshTimer=setInterval(route,5000)});
