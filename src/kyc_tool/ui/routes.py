@@ -79,6 +79,21 @@ def _json_safe(value):
     return value
 
 
+def _held_sql(d: str) -> str:
+    """The engine's own word for whether a decision row's positive verdict was held back by the
+    safety overlay: the decide stage writes `enforcement_held` on that run's `run.decided` audit
+    row (orchestration/pipeline.py) when a computed approval was published as
+    manual_review_insufficient. `d` is the decisions alias to correlate on. Read from there,
+    never inferred from five green gates -- the console must not compute a verdict the engine
+    did not. A manual row (run_id NULL) correlates with nothing and reads false."""
+    return (
+        "COALESCE((SELECT (a.detail_json->>'enforcement_held')::boolean FROM audit_log a"
+        f" WHERE a.case_id = {d}.case_id AND a.action = 'run.decided'"
+        f" AND a.detail_json->>'run_id' = {d}.run_id"
+        " ORDER BY a.id DESC LIMIT 1), false)"
+    )
+
+
 @router.get("/ui", include_in_schema=False)
 def console() -> HTMLResponse:
     return HTMLResponse(_CONSOLE_HTML)
@@ -141,10 +156,7 @@ def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(
                c.latest_decision_row_id IS NOT NULL AS pointer_set,
                d.id IS NOT NULL AS pointer_resolved,
                EXISTS (SELECT 1 FROM decisions dd WHERE dd.case_id = c.id) AS has_decisions,
-               COALESCE((SELECT (a.detail_json->>'enforcement_held')::boolean FROM audit_log a
-                         WHERE a.case_id = c.id AND a.action = 'run.decided'
-                           AND a.detail_json->>'run_id' = d.run_id
-                         ORDER BY a.id DESC LIMIT 1), false) AS enforcement_held
+               {held} AS enforcement_held
         FROM cases c
         LEFT JOIN decisions d ON d.id = c.latest_decision_row_id AND d.case_id = c.id
         {where}
@@ -156,11 +168,10 @@ def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(
         where = "WHERE c.id ILIKE :q OR c.company_name ILIKE :q"
         params["q"] = f"%{q}%"
     with request.app.state.session_factory() as session:
-        cases = _rows(session.execute(text(sql.format(where=where)), params))
-    # `enforcement_held` is the engine's own word for the pointed verdict: the decide stage
-    # records it on that run's `run.decided` audit row when a computed approval was published
-    # as manual_review_insufficient by the safety overlay. Read from there, never inferred from
-    # five green gates — the console must not compute a verdict the engine did not.
+        cases = _rows(
+            session.execute(text(sql.format(where=where, held=_held_sql("d"))), params)
+        )
+    # `enforcement_held` is the engine's own word for the pointed verdict (see _held_sql).
     #
     # Classified through the shared taxonomy, so a NULL verdict cell is never ambiguous between
     # "no decisions", "unresolved legacy order" and "pointer drift" — the last one is an
@@ -221,12 +232,15 @@ def case_full(case_id: str, request: Request) -> dict:
         )
         # DISPLAY order only — decided_at is transaction-start time and can invert against the
         # lock-serialized commit order, so this list must never select the authoritative row.
+        # Each row carries the engine's own hold flag (_held_sql), so the history table never
+        # has to derive it from the audit feed below, which is a 200-row window.
         decisions = _rows(
             session.execute(
                 text(
-                    "SELECT id, run_id, decision, score, gates_json, buy_enablement, manual, "
-                    "reviewer_id, decided_at, published_at FROM decisions "
-                    "WHERE case_id=:id ORDER BY decided_at DESC LIMIT 25"
+                    "SELECT d.id, d.run_id, d.decision, d.score, d.gates_json, d.buy_enablement, "
+                    "d.manual, d.reviewer_id, d.decided_at, d.published_at, "
+                    f"{_held_sql('d')} AS enforcement_held FROM decisions d "
+                    "WHERE d.case_id=:id ORDER BY d.decided_at DESC LIMIT 25"
                 ),
                 {"id": case_id},
             )

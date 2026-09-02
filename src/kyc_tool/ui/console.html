@@ -554,6 +554,9 @@ const NBSP=" ";
 async function j(url,opts){const r=await fetch(url,opts);const body=await r.json().catch(()=>({}));
   if(!r.ok&&r.status>=500)throw new Error(`${r.status}: ${JSON.stringify(body).slice(0,300)}`);
   return{status:r.status,body}}
+/* One reading of a refused request: FastAPI's `detail` (a string, or pydantic's error list) or
+   the ingest floor's `error` -- never the word "undefined". */
+const errText=b=>typeof b?.detail==="string"?b.detail:b?.error||JSON.stringify(b?.detail??b);
 /* A failure interrupts (alert); everything else waits its turn (status). The cross icon leads
    every failure message in this file, so it is the cue. */
 function toast(msg,ms=5000){const t=document.createElement("div");t.className="toast";
@@ -572,15 +575,17 @@ const when=s=>`<span class="when" title="${esc(fmtExact(s))}">${esc(rel(s))}</sp
 const remember=(k,v)=>{try{sessionStorage.setItem(k,v)}catch(e){/* not storable; fine */}};
 const recall=(k,d="")=>{try{return sessionStorage.getItem(k)??d}catch(e){return d}};
 
-/* Who is acting. Remembered for the browser session; read (trimmed) by every reviewer action. */
+/* Who is acting. The box is the source of truth and is read (trimmed) by every reviewer action;
+   session storage only remembers it, and may be unavailable. */
 const whoBox=$("#reviewer");
 whoBox.value=recall("reviewer");
 whoBox.addEventListener("input",e=>remember("reviewer",e.target.value));
-const reviewer=()=>recall("reviewer").trim();
-/* A reviewer action with nobody named is not sent: the row would carry no person. */
+const reviewer=()=>whoBox.value.trim();
+/* A reviewer action with nobody named is not sent: the row would carry no person. On the folded
+   frame the box lives in the drawer, so the drawer opens before focus moves to it. */
 function needReviewer(){if(reviewer())return true;
   toast(`${I.cross}<span>Type your reviewer ID in the sidebar first — the answer is kept with your name on it</span>`);
-  whoBox.focus();return false}
+  openMenu();whoBox.focus();return false}
 
 /* Status icons.
    These are SVG, not characters, because the brand face ships a 291-glyph latin subset: ✓ ✕ ⏳
@@ -1029,8 +1034,11 @@ async function viewCases(){
   $("#q").addEventListener("input",e=>{remember("caseq",e.target.value);
     clearTimeout(window.__qt);window.__qt=setTimeout(viewCases,250)});
   const cq=$("#clearq");if(cq)cq.onclick=()=>{$("#q").value="";remember("caseq","");viewCases()};
+  // The row's click is a convenience layered over the link, never a second navigation: a click
+  // on the link itself, or one with a modifier (new tab, new window), is the browser's to handle.
   page.querySelectorAll("tr.click").forEach(tr=>
-    tr.onclick=()=>location.hash=`#/case/${encodeURIComponent(tr.dataset.id)}`);
+    tr.onclick=e=>{if(e.target.closest("a")||e.ctrlKey||e.metaKey||e.shiftKey)return;
+      location.hash=`#/case/${encodeURIComponent(tr.dataset.id)}`});
 }
 
 /* ── Case detail ──────────────────────────────────────── */
@@ -1056,6 +1064,8 @@ function humanizeAudit(a){
   }
 }
 const HOT=new Set(["run.decided","reviewer.manual_approve","check.superseded","run.failed"]);
+/* The five hard gates, in the order the published-decision card and the approve dialog list them. */
+const GATE_KEYS=["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"];
 
 /* The enforcement hold, said plainly. The word above this panel is what the platform was told;
    the panel says why that word is not the one the rulebook computed, and who can change it.
@@ -1092,7 +1102,7 @@ function openApprove(d,hold){
   const c=d.case,latest=d.pointer_decision||{},s=d.score,dlg=$("#approve");
   const orgOk=s.items.some(it=>it.check_type==="org_id_match"&&it.status==="pass");
   const g=latest.gates_json||{};
-  const unmet=["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"].filter(k=>k in g&&!g[k]);
+  const unmet=GATE_KEYS.filter(k=>k in g&&!g[k]);
   let now;
   if(hold)now=`Right now the case is <b>held for approval</b>: every rule passed and the score is
     ${latest.score} of ${s.threshold}. This is the approval the rulebook already computed and the
@@ -1123,8 +1133,12 @@ $("#ap-cancel").onclick=()=>$("#approve").close();
 $("#ap-form").addEventListener("submit",async e=>{
   e.preventDefault();
   const dlg=$("#approve"),who=$("#ap-who").value.trim(),why=$("#ap-why").value.trim();
-  if(!who||!why)return;
-  const go=$("#ap-go"),err=$("#ap-err");go.disabled=true;err.hidden=true;
+  const go=$("#ap-go"),err=$("#ap-err");
+  // `required` lets whitespace through; say so rather than doing nothing
+  if(!who||!why){err.hidden=false;
+    err.innerHTML=`${I.cross}<span>Both your reviewer ID and a reason are needed — they go on the record.</span>`;
+    (who?$("#ap-why"):$("#ap-who")).focus();return}
+  go.disabled=true;err.hidden=true;
   let r;
   try{r=await j("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({case_id:dlg.dataset.case,event_type:"reviewer.manual_approve",
@@ -1140,7 +1154,7 @@ $("#ap-form").addEventListener("submit",async e=>{
   err.innerHTML=r.status===403
     ?`${I.cross}<span>This copy does not accept approvals from the console. In production the approval comes from the platform, signed by the reviewer.</span>`
     :r.status===401?`${I.cross}<span>Not allowed: this browser is not signed in as an operator.</span>`
-    :`${I.cross}<span>${esc(typeof r.body.detail==="string"?r.body.detail:r.body.error||JSON.stringify(r.body.detail??r.body))}</span>`;
+    :`${I.cross}<span>${esc(errText(r.body))}</span>`;
 });
 
 async function viewCase(id){
@@ -1156,8 +1170,6 @@ async function viewCase(id){
   // The hold comes from the API (the engine's own run.decided record), never from the gates:
   // the screen shows the verdict, it does not compute one.
   const hold=d.enforcement_hold||null;
-  const heldRuns=new Set(d.audit.filter(a=>a.action==="run.decided"&&a.detail_json?.enforcement_held)
-    .map(a=>a.detail_json.run_id));
   // The bar is LIVE EVIDENCE and is styled neutrally on purpose: colouring it by the published
   // decision, or captioning it "threshold met", made one visual read out of two different
   // authority eras (re-audit cbb783b F6). The published tuple gets its own card below.
@@ -1251,7 +1263,7 @@ async function viewCase(id){
           ${hold?holdCallout(hold,latest,s.threshold,d.latest_manual_decision):""}
           <h3 class="sub-hd">Published decision hard gates
             <span class="gloss">— the five things that all had to be true</span>${tip("gates")}</h3>
-          <div class="gates published-gates">${["score_met","legal_proof","control_proof","broker_ok","no_hard_conflict"]
+          <div class="gates published-gates">${GATE_KEYS
             .map(g0=>g0 in gates
               ?`<div class="gate ${gates[g0]?"ok":"no"}" title="${esc(g0)}">${gates[g0]?I.check:I.cross}${esc(say("gate",g0))}</div>`
               :`<div class="gate na" title="${esc(g0)} — this verdict skipped the rule, which is what happens when a person approves by hand">· ${esc(say("gate",g0))} — not checked</div>`).join("")}</div>`
@@ -1299,7 +1311,7 @@ async function viewCase(id){
     <div class="card"><div class="bd flush"><table>
       <thead><tr><th>Verdict</th><th class="num">Points</th><th>Buying</th><th>By hand</th>
       <th class="num">Decided</th><th class="num">Platform told</th></tr></thead>
-      <tbody>${d.decisions.map(x=>`<tr><td>${heldRuns.has(x.run_id)?pill("held_for_approval"):pill(x.decision)}</td><td class="num strong">${x.score}</td>
+      <tbody>${d.decisions.map(x=>`<tr><td>${x.enforcement_held?pill("held_for_approval"):pill(x.decision)}</td><td class="num strong">${x.score}</td>
         <td class="sub">${esc(say("buy",x.buy_enablement))}</td><td>${x.manual?`<span class="iw">${I.person}${esc(x.reviewer_id||"")}</span>`:"—"}</td>
         <td class="num">${when(x.decided_at)}</td><td class="num">${when(x.published_at)}</td></tr>`).join("")
         ||emptyRow(6,"No verdict yet","")}</tbody></table></div></div>
@@ -1321,7 +1333,7 @@ async function viewCase(id){
       body:JSON.stringify({case_id:c.id,event_type:"website.review_completed",
         idempotency_key:"review-task-complete-"+taskId,
         payload:{task_id:taskId,result,reviewer_id:reviewer(),reason_codes:[]}})});
-    toast(r.status<300?`${I.check}<span>Answer recorded — the case will be scored again in a moment</span>`:`${I.cross}<span>${esc(JSON.stringify(r.body.detail))}</span>`);
+    toast(r.status<300?`${I.check}<span>Answer recorded — the case will be scored again in a moment</span>`:`${I.cross}<span>${esc(errText(r.body))}</span>`);
     setTimeout(route,700)});
 }
 
@@ -1545,10 +1557,11 @@ async function route(){
       // page at the top and put focus on its title, so it is announced and the tab order starts
       // inside it. Not on first load (nothing to move from) and not on the refresh tick (that
       // would yank a person out of whatever they were reading or typing). A renderer that has
-      // already placed focus itself -- the policy row a case linked to -- keeps it.
-      if(navigated){navigated=false;main.scrollTop=0;window.scrollTo(0,0);closeMenu();
-        if(!page.contains(document.activeElement)){const t=page.querySelector("h1");
-          if(t){t.tabIndex=-1;t.focus({preventScroll:true})}}}
+      // already placed focus itself -- the policy row a case linked to -- keeps it, and keeps
+      // the scroll position it chose for it.
+      if(navigated){navigated=false;closeMenu();
+        if(!page.contains(document.activeElement)){main.scrollTop=0;window.scrollTo(0,0);
+          const t=page.querySelector("h1");if(t){t.tabIndex=-1;t.focus({preventScroll:true})}}}
       sidebarBadge();
       return;
     }
@@ -1559,6 +1572,7 @@ window.addEventListener("hashchange",()=>{navigated=true;route()});
 // The folded frame's drawer. Open and closed are the aside's class and the button's state, both.
 const menuBtn=$("#menubtn"),sideBar=$("aside");
 function closeMenu(){sideBar.classList.remove("open");menuBtn.setAttribute("aria-expanded","false")}
+function openMenu(){sideBar.classList.add("open");menuBtn.setAttribute("aria-expanded","true")}
 menuBtn.addEventListener("click",()=>{const open=sideBar.classList.toggle("open");
   menuBtn.setAttribute("aria-expanded",String(open))});
 // The skip link must not change the hash (the router would read that as a route), so it moves
