@@ -49,6 +49,11 @@
   --r:4px; --pill:16px; --radius-inner:4px;
   --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:64px;
   /* the marketplace's three elevations: card, raised control, floating panel */
+  /* The edge a clipping table paints. It is the ONLY thing satisfying rule 11 for up to
+     545px of hidden columns, and at rgba(0,0,0,.12) it measured 1.30:1 in light and 1.05:1
+     in dark -- two units of blue. Strong enough to clear 3:1 against its own card, and
+     inverted in dark, where a black scrim on a navy card is nothing. */
+  --scrim:rgba(0,0,0,.42);
   --e1:0 2px 1px -1px rgba(0,0,0,.2),0 1px 1px 0 rgba(0,0,0,.14),0 1px 3px 0 rgba(0,0,0,.12);
   --e2:0 3px 1px -2px rgba(0,0,0,.2),0 2px 2px 0 rgba(0,0,0,.14),0 1px 5px 0 rgba(0,0,0,.12);
   --e3:0 5px 5px -3px rgba(0,0,0,.2),0 8px 10px 1px rgba(0,0,0,.14),0 3px 14px 2px rgba(0,0,0,.12);
@@ -96,6 +101,7 @@
   /* words printed in a status colour on the page itself (a verdict, a bad count, a to-do line)
      take the chip GROUND's hue at reading strength, since the chip ink is too dark for navy */
   --green:#a9d3b5; --amber:#f0b98a; --red:#ff8a6b; --blue:#8cc6dd;
+  --scrim:rgba(255,255,255,.38);
   --e1:0 2px 1px -1px rgba(0,0,0,.5),0 1px 1px 0 rgba(0,0,0,.4),0 1px 3px 0 rgba(0,0,0,.4);
   --e2:0 3px 1px -2px rgba(0,0,0,.5),0 2px 2px 0 rgba(0,0,0,.4),0 1px 5px 0 rgba(0,0,0,.4);
   --e3:0 5px 5px -3px rgba(0,0,0,.6),0 8px 10px 1px rgba(0,0,0,.5),0 3px 14px 2px rgba(0,0,0,.5);
@@ -110,7 +116,8 @@
     --accent-text:#79adff; --accent-soft:#16325a; --accent-ink:#cfe0ff;
     --danger-text:#ff8a6b;
     --green:#a9d3b5; --amber:#f0b98a; --red:#ff8a6b; --blue:#8cc6dd;
-    --e1:0 2px 1px -1px rgba(0,0,0,.5),0 1px 1px 0 rgba(0,0,0,.4),0 1px 3px 0 rgba(0,0,0,.4);
+    --scrim:rgba(255,255,255,.38);
+  --e1:0 2px 1px -1px rgba(0,0,0,.5),0 1px 1px 0 rgba(0,0,0,.4),0 1px 3px 0 rgba(0,0,0,.4);
     --e2:0 3px 1px -2px rgba(0,0,0,.5),0 2px 2px 0 rgba(0,0,0,.4),0 1px 5px 0 rgba(0,0,0,.4);
     --e3:0 5px 5px -3px rgba(0,0,0,.6),0 8px 10px 1px rgba(0,0,0,.5),0 3px 14px 2px rgba(0,0,0,.5);
     color-scheme:dark;
@@ -268,8 +275,8 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
 .card .bd.flush{padding:0;overflow-x:auto;
   background:linear-gradient(90deg,var(--surface) 30%,transparent) left/40px 100% no-repeat local,
              linear-gradient(90deg,transparent,var(--surface) 70%) right/40px 100% no-repeat local,
-             radial-gradient(farthest-side at 0 50%,rgba(0,0,0,.12),transparent) left/10px 100% no-repeat scroll,
-             radial-gradient(farthest-side at 100% 50%,rgba(0,0,0,.12),transparent) right/10px 100% no-repeat scroll,
+             radial-gradient(farthest-side at 0 50%,var(--scrim),transparent) left/10px 100% no-repeat scroll,
+             radial-gradient(farthest-side at 100% 50%,var(--scrim),transparent) right/10px 100% no-repeat scroll,
              var(--surface)}
 .stack{display:grid;gap:var(--s4)}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:var(--s4);align-items:start}
@@ -382,7 +389,13 @@ button.warn{background:var(--amber-soft);border-color:transparent;color:var(--am
   box-shadow:var(--e2)}
 button.warn:active{box-shadow:none}
 button.warn:hover{background:color-mix(in oklab,var(--amber-soft),black 6%)}
-button:disabled{opacity:.45;cursor:default;pointer-events:none}
+/* Rule 9, in the place the pattern was first written. `opacity:.45` on the peach commit button
+   rendered its label at 2.08:1 for the whole duration of the POST -- a worse ratio than the
+   "not evaluated" state the rule was written about, on the control that commits an irreversible
+   approval. Three separate fixes to rule 9 removed an opacity from a component and none of them
+   re-read the base rule. */
+button:disabled{background:var(--surface-muted);color:var(--muted);border-color:var(--border);
+  box-shadow:none;cursor:default;pointer-events:none}
 input,select,textarea{font:var(--t-body);background:var(--surface);color:var(--ink);
   border:1px solid var(--border-input);border-radius:var(--r);padding:0 var(--s3);min-height:40px}
 input:hover,select:hover,textarea:hover{border-color:var(--text)}
@@ -435,7 +448,12 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
    the 36px --row-h it was supposed to obey. */
 .crow{display:flex;align-items:center;gap:var(--s2);padding:var(--s1) 0;
   border-bottom:1px solid var(--line);font:var(--t-body);min-height:var(--row-h)}
-.crow:nth-last-child(-n+2){border-bottom:none}
+/* Was `:nth-last-child(-n+2)`, which counted DOM position and stopped being the last visual
+   row the moment `.contrib` moved to column flow: the left column kept all four rules and the
+   right column lost its last two. Every row is ruled now; the card's own padding ends the list. */
+/* No exception. `:nth-last-child(-n+2)` counted DOM position and `:last-child` only spares the
+   right column's final row, so either way the two columns ended differently. Uniform beats
+   clever: all eight are ruled, and the card's own padding closes the list. */
 .crow .nm{color:var(--text)}
 .crow .pts{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink)}
 .crow .pts.zero{color:var(--muted);font-weight:400}
@@ -446,6 +464,20 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .sdot.r{background:var(--red-soft);color:var(--red-ink)}
 .sdot.a{background:var(--amber-soft);color:var(--amber-ink)}
 .sdot.n{background:var(--surface-muted);color:var(--muted)}
+
+/* ── Company details: who is being approved ── */
+/* This block exists because the page did not contain the company. Nine sections described what
+   the engine did, and the legal name, registration number, jurisdiction, address, director and
+   RIR handle -- the identity a reviewer is being asked to vouch for -- were a raw JSON dump at
+   the bottom of a 4200px page. Named column counts, not auto-fit (rule 20). */
+.idgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--s4) var(--s5)}
+@media(max-width:1180px){.idgrid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:720px){.idgrid{grid-template-columns:1fr}}
+.idf{display:grid;gap:var(--s1);min-inline-size:0}
+.idf .k{font:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);
+  color:var(--muted)}
+.idf .v{font:var(--t-strong);color:var(--ink);overflow-wrap:anywhere}
+.idf .v .sub{display:block}
 
 /* ── The five rules as a strip ── */
 /* Five, named. `auto-fit` cannot express five — it expresses "as many as fit", and between
@@ -490,9 +522,13 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .pipe .st.cur{background:var(--accent)}
 .pipe .st.fail{background:var(--red)}
 .pipe-lab{font:var(--t-meta);color:var(--muted)}
-.pipe-lab.done{color:var(--green-ink)}
+/* --green / --red, not --green-ink / --red-ink. The ink tokens hold one dark value in BOTH
+   themes -- they exist to sit on a pastel *-soft ground -- so on the dark card this label
+   measured 1.25:1 and the failed variant 1.59:1. These are the same tokens the segments above
+   already use. (--accent-ink IS overridden per theme, which is why `.cur` never failed.) */
+.pipe-lab.done{color:var(--green)}
 .pipe-lab.cur{color:var(--accent-ink)}
-.pipe-lab.fail{color:var(--red-ink)}
+.pipe-lab.fail{color:var(--red)}
 
 /* A replaced check. This was `opacity:.55` — the mechanism rule 9 forbids, surviving three
    audits because no seeded state renders a superseded check. Retired evidence keeps its shape
@@ -579,7 +615,9 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
 .tip p{margin:0 0 var(--s2)}
 .tip p:last-child{margin-bottom:0}
 .tip dl{display:grid;gap:var(--s1);margin:var(--s2) 0 0}
-.tip dt{font-family:var(--mono);font-size:12px;line-height:16px;font-weight:700;
+/* These are the five rule names in English, not machine values -- the same strings the gate
+   strip renders at --t-body 200px away. They were mono 12/16/700, a tuple in no token. */
+.tip dt{font:var(--t-strong);
   overflow-wrap:anywhere}
 .tip dd{margin:0 0 var(--s2)}
 .tip dd:last-child{margin-bottom:0}
@@ -629,7 +667,10 @@ h2.sec.tight{margin-top:0}
 .demo-journey>.ic,.fitem .obj .ic,.probe-out>.ic{vertical-align:middle;position:relative;top:-1.5px}
 
 /* ── Approve by hand: the console's one dialog ── */
-dialog.modal{border:0;border-radius:var(--r);background:var(--surface);
+/* The backdrop was tuned in light only. `rgba(0,22,45,.72)` over the dark page ground
+   composites to almost exactly the dark card, so the dialog measured 1.18:1 against the page it
+   had taken over (7.5:1 in light). An edge at the control token settles it in both. */
+dialog.modal{border:1px solid var(--border-input);border-radius:var(--r);background:var(--surface);
   color:var(--text);padding:var(--s5);width:min(560px,calc(100vw - 2*var(--s4)));
   box-shadow:var(--e3);font:var(--t-body)}
 /* .55 left the peach callout and the gate strip fully legible behind the dialog, so the modal did
@@ -639,9 +680,15 @@ dialog.modal::backdrop{background:rgba(0,22,45,.72)}
    backdrop, so the modal never took the top of the hierarchy it was interrupting. */
 dialog.modal h2{font:var(--t-title);margin-bottom:var(--s3)}
 dialog.modal p{margin:0 0 var(--s3)}
-.req{color:var(--red);font-weight:700}
+/* Colour only. `font-weight:700` on the 12px `p.note` produced 12/16/700, a tenth tuple; inside
+   a 14px `.flab` the same class was legal, which is how it survived. */
+.req{color:var(--red)}
 dialog.modal textarea{min-height:88px}
 dialog.modal .banner{margin-top:var(--s3)}
+/* The only coloured control in this dialog is the one that commits. Cancel was the accent-blue
+   outlined button -- the system's affirmative colour -- sitting beside a peach confirm. */
+#ap-cancel{border-color:var(--border-input);color:var(--text)}
+#ap-cancel:hover{background:var(--surface-muted)}
 </style>
 </head>
 <body>
@@ -734,7 +781,11 @@ dialog.modal .banner{margin-top:var(--s3)}
 </div>
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <dialog id="approve" class="modal" aria-labelledby="ap-title">
-  <form id="ap-form">
+  <!-- `novalidate`: with `required` alone the browser's own bubble fires first, lands on the
+       field's hint text and vanishes on the next click, so the written message below -- and its
+       role="alert" live region -- only ever reached whitespace-only input. The fields keep
+       `required` for the accessibility tree; the form does its own checking. -->
+  <form id="ap-form" novalidate>
     <h2 id="ap-title">Approve <span id="ap-co"></span> Manually</h2>
     <div id="ap-body"></div>
     <div class="field"><label class="flab" for="ap-who">Reviewer ID <span class="req">*</span></label>
@@ -743,12 +794,13 @@ dialog.modal .banner{margin-top:var(--s3)}
     <div class="field"><label class="flab" for="ap-why">Reason <span class="req">*</span></label>
       <textarea id="ap-why" required aria-describedby="ap-why-note"></textarea>
       <span class="note" id="ap-why-note">Stored with the approval. State what was verified.</span></div>
-    <p class="note"><span class="req">*</span> Both fields are required. A manual approval is
-      appended to the record permanently and cannot be withdrawn.</p>
+    <p class="note"><span class="req">*</span> Both fields are required.</p>
+    <div class="callout amber" id="ap-warn" role="note"><div><b>This cannot be undone.</b> A manual
+      approval is appended to the record permanently and cannot be withdrawn.</div></div>
+    <div id="ap-err" class="banner" role="alert" hidden></div>
     <div class="toolbar" style="margin:0;justify-content:flex-end">
       <button type="button" id="ap-cancel">Cancel</button>
       <button type="submit" class="warn" id="ap-go">Approve Manually</button></div>
-    <div id="ap-err" class="banner" role="alert" hidden></div>
   </form>
 </dialog>
 
@@ -866,9 +918,14 @@ const SAY={
     linkedin_company_match:"LinkedIn company match",
     website_verified:"Website reviewed",verified_email:"Email verified"},
   status:{pass:"Passed",fail:"Failed",needs_review:"Needs Review",missing:"Not Yet Available"},
-  gate:{score_met:"Score threshold met",legal_proof:"Legal entity verified",
-    control_proof:"Control verified",broker_ok:"No broker block",
-    no_hard_conflict:"No conflicting evidence"},
+  /* Subjects, not verdicts. These labels used to assert an outcome, so a failed rule printed
+     "Score threshold met / NOT MET" -- the label and the result contradicting each other on two
+     lines. "No conflicting evidence / NOT MET" was worse: a double negative that means the
+     opposite of what it looks like. Two of these names are the console's own vocabulary already
+     (SAY.category calls them "Legal entity proof" and "Control proof"). */
+  gate:{score_met:"Score threshold",legal_proof:"Legal entity proof",
+    control_proof:"Control proof",broker_ok:"Broker screening",
+    no_hard_conflict:"Evidence consistency"},
   /* Short on purpose: ten of these sit side by side in one table cell. */
   stage:{QUEUED:"Queued",RESOLVE_INPUTS:"Load inputs",BROKER_GATE:"Broker check",
     RUN_ADAPTERS:"Query sources",VALIDATE:"Validate",WRITE_CHECKS:"Record evidence",
@@ -1001,6 +1058,10 @@ const TIPS={
   activity:{t:"Activity Log",b:`<p>The complete record of activity for this company, oldest first.
     Highlighted entries changed the outcome.</p>
     <p>Open Record under any entry to view the stored details.</p>`},
+  identity:{t:"Company Details",b:`<p>The company as the platform described it. Every check on
+    this page compares evidence against these values, so an error here explains a failed rule
+    faster than anything else on the screen. The verbatim payload is at the foot of the page
+    under Submitted Details.</p>`},
   submitted:{t:"Submitted Details",b:`<p>The details received from the platform, exactly as
     submitted. All checks compare against these values, so an error here explains failed
     matches.</p>`},
@@ -1132,6 +1193,12 @@ const BUY_PILL={not_applicable:["p-neutral",I.absent],buy_locked_org_id_required
   buy_enabled:["p-green",I.check],buy_suspended:["p-red",I.lock]};
 const statePill=(map,group,v,label)=>{const[c,i]=map[v]||["p-neutral",I.absent];
   return`<span class="pill ${c}" title="${esc(v??"")}">${i}${esc(label??say(group,v))}</span>`};
+/* Case statuses that add nothing to a decision already on screen. Keyed by decision, because
+   one decision can settle into more than one status. */
+const SAME_AS_DECISION={approve:["approve","approved_manual","account_approved"],
+  approve_buy_locked:["approve_buy_locked","approved_manual"],
+  reject:["reject","rejected"],
+  manual_review_insufficient:["manual_review_insufficient"]};
 const casePill=(c,held)=>statePill(CASE_PILL,"case_status",c.status,
   held&&c.status==="manual_review_insufficient"?"Awaiting Reviewer":undefined);
 const provPill=(p,manual)=>{const k=manual?p+"_manual":p;const[q,label]=PROV_PILL[k]||PROV_PILL[p]||["missing",p];return pill(q,label)};
@@ -1297,7 +1364,9 @@ function humanizeAudit(a){
     case"run.decided":return d.enforcement_held
       ?`Decision: <b>Held for Approval</b> · ${d.score} points · rules returned ${esc(say("decision",d.computed_decision))}; automatic approval is not enabled`
       :`Decision: <b>${esc(say("decision",d.decision))}</b> · ${d.score} points`;
-    case"reviewer.manual_approve":return`<b>Approved manually</b>`;
+    /* The reason is required, is the justification for bypassing every rule, and used to be
+       dropped here -- the console asked for it and then never showed it back. */
+    case"reviewer.manual_approve":return`<b>Approved manually</b>${d.note?` · ${esc(d.note)}`:""}`;
     case"run.failed":return`Verification round <b>failed</b> · ${esc((d.error||"").slice(0,80))}`;
     case"run.stage":case"run.inputs_resolved":return null; // noise — keep in raw only
     default:return`${esc(a.action)}`;
@@ -1397,6 +1466,37 @@ $("#ap-form").addEventListener("submit",async e=>{
     :`${I.cross}<span>${esc(errText(r.body))}</span>`;
 });
 
+/* The identity a reviewer is being asked to vouch for. `submitted_json` is merged from every
+   platform message on the case, so any field may be absent; only what was actually submitted is
+   printed, and the verbatim payload stays at the foot of the page for whoever needs it exactly
+   as received. A website is linked only when it is http(s) -- never a scheme the payload chose. */
+function identityFields(c){
+  const p=c.submitted_json||{},row=[];
+  const add=(k,v,sub)=>{if(v!==null&&v!==undefined&&String(v).trim()!=="")row.push([k,String(v),sub||""])};
+  add("Legal name",p.company_legal_name||c.company_name);
+  add("Registration number",p.registration_number);
+  add("Jurisdiction",p.jurisdiction||c.jurisdiction);
+  if(p.org_id&&p.org_id.org_handle)
+    add("RIR Org ID",p.org_id.org_handle,(p.org_id.rir||"").toUpperCase());
+  add("Registered address",p.address);
+  if(p.contact&&p.contact.name)add("Contact",p.contact.name,p.contact.title);
+  add("Account email",p.email&&p.email.email);
+  add("Website",p.website);
+  return row}
+
+function identityCard(c){
+  const rows=identityFields(c);
+  if(!rows.length)return`<div class="card"><div class="hd"><h2>Company Details</h2>${tip("identity")}</div>
+    <div class="bd"><div class="empty"><b>No details submitted yet</b>The platform has not sent this company's particulars.</div></div></div>`;
+  const cell=([k,v,sub])=>{
+    const link=k==="Website"&&/^https?:\/\//i.test(v);
+    const val=link?`<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v)}</a>`:esc(v);
+    return`<div class="idf"><span class="k">${esc(k)}</span><span class="v">${val}${
+      sub?`<span class="sub">${esc(sub)}</span>`:""}</span></div>`};
+  return`<div class="card"><div class="hd"><h2>Company Details</h2>
+      <span class="hint">as submitted by the platform</span>${tip("identity")}</div>
+    <div class="bd"><div class="idgrid">${rows.map(cell).join("")}</div></div></div>`}
+
 async function viewCase(id){
   const{status,body:d}=await j(`/ui/api/cases/${encodeURIComponent(id)}/full`);
   if(status===404){document.title="KYC Tool · Console";
@@ -1423,8 +1523,11 @@ async function viewCase(id){
   // The dot is decoration: the row's real status is the .vh text beside it. The two glyph states
   // that are TEXT rather than an svg ("!" and "·") get read out otherwise, so the row announced
   // "·Not Yet Available: Company email verified".
+  // All four states are a 16px drawn glyph. Two of them were text -- a 3.23px middot and an
+  // exclamation mark -- which is §9 finding 40 again, in the component 350px below the one it
+  // was fixed in.
   const sdot=st=>st==="pass"?`<span class="sdot g" aria-hidden="true">${I.check}</span>`:st==="fail"?`<span class="sdot r" aria-hidden="true">${I.cross}</span>`:
-    st==="needs_review"?`<span class="sdot a" aria-hidden="true">!</span>`:`<span class="sdot n" aria-hidden="true">·</span>`;
+    st==="needs_review"?`<span class="sdot a" aria-hidden="true">${I.warn}</span>`:`<span class="sdot n" aria-hidden="true">${I.absent}</span>`;
   const contrib=s.items.map(it=>`<div class="crow">${sdot(it.status)}<span class="vh">${esc(say("status",it.status))}: </span>
       <span class="nm" title="${esc(it.check_type)}"
         ${it.status==="missing"?'style="color:var(--muted)"':""}>${esc(say("check",it.check_type))}</span>
@@ -1448,14 +1551,14 @@ async function viewCase(id){
     const ads=d.adapter_results.filter(a=>a.run_id===r.id).map(a=>
       `<span class="tag ${a.status==="upstream_error"?"err":""}" title="${esc(a.adapter_id)} · ${esc(a.status)}"
         >${esc(say("adapter",a.adapter_id))} · ${esc(a.status==="ok"?"responded":a.status==="upstream_error"?"failed":"not required")}</span>`).join("");
-    return`<tr><td class="mono">${esc(r.id.slice(0,8))}…${r.partial?` ${pill("needs_review","Partial")}`:""}</td>
+    return`<tr><td class="mono" title="${esc(r.id)}">${esc(r.id.slice(0,8))}…${r.partial?` ${pill("needs_review","Partial")}`:""}</td>
       <td>${pipe(r.state)}${r.error?`<div class="sub" style="color:var(--red)">${esc(r.error)}</div>`:""}</td>
       <td>${ads?`<div class="chiprow">${ads}</div>`:`<span class="sub">No sources queried; the broker check ended the round.</span>`}</td>
       <td class="num">${when(r.started_at)}</td></tr>`}).join("")
     ||emptyRow(4,"No verification rounds yet","Each platform message starts one verification round.");
 
   const taskRows=d.review_tasks.map(t=>`<tr>
-    <td class="mono">${esc(t.id.slice(0,8))}…</td>
+    <td class="mono" title="${esc(t.id)}">${esc(t.id.slice(0,8))}…</td>
     <td title="${esc(t.task_type)}">${esc(say("task",t.task_type))}</td><td>${pill(t.status)}</td>
     <td>${t.result?pill(t.result):"—"}${t.reviewer_id?` <span class="sub">by ${esc(t.reviewer_id)}</span>`:""}</td>
     <td class="sub mono" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
@@ -1494,7 +1597,14 @@ async function viewCase(id){
   page.innerHTML=`
     <div class="crumb"><a href="#/cases">Companies</a> / <span class="mono">${esc(c.id)}</span></div>
     ${tbar(esc(c.company_name||c.id),
-      `<span class="chips">${decision?(hold?pill("held_for_approval"):pill(decision)):provPill(d.decision_provenance)}
+      `<span class="chips">${
+       // One chip per fact. When the case status is a MORE SPECIFIC form of the decision --
+       // "Approved Manually" against "Approved" -- the status is the one worth keeping, and the
+       // decision chip is the one that goes. When they are the same fact, the decision stays.
+       // Comparing raw enums was not enough: "approve" never equals "approved_manual".
+       decision?(hold?pill("held_for_approval")
+         :(SAME_AS_DECISION[decision]||[]).includes(c.status)&&c.status!==decision?"":pill(decision))
+        :provPill(d.decision_provenance)}
        ${d.manual_decision_provenance&&d.manual_decision_provenance!=="no_manual_decisions"
          // A case whose STATUS is already "Approved Manually" and whose live decision row is the
          // manual one is one fact, and the header printed it as two adjacent chips. The
@@ -1502,33 +1612,32 @@ async function viewCase(id){
          // unresolved order, or a manual decision on a case not marked manually approved.
          &&!(d.manual_decision_provenance==="latest_manual_row"&&c.status==="approved_manual")
          ?provPill(d.manual_decision_provenance,true):""}
-       ${decision&&c.status===decision?""
-         // The first chip is the decision that went to the platform; this one is where the case
-         // stands now. When they are the same enum they were still printed as two chips under two
-         // different names ("On Hold" beside "Awaiting Further Evidence"), which reads as two
-         // facts. It only earns its place when it says something the decision does not.
-         :casePill(c,hold)}
+       ${decision&&c.status===decision?"":casePill(c,hold)}
        ${statePill(BUY_PILL,"buy_status",c.buy_status)}${pill(c.broker_status)}</span>`,
       `${c.status==="approved_manual"?"":`<button class="warn" id="approvebtn">${I.person}Approve Manually</button>`}
        <button id="sendbtn">Send Message</button>`)}
+    ${identityCard(c)}
     <div class="card"><div class="hd"><h2>Decision Sent to Platform</h2>
         <span class="hint">all values from one decision record</span>${tip("published")}</div>
       <div class="bd">
         ${latest.decision?`<div class="bullet"><div class="val">
             <b style="color:${decisionColor}" title="${esc(latest.decision)}${hold?` — the rules computed ${esc(hold.computed_decision)}`:""}">${hold?"Held for Approval":esc(say("decision",latest.decision))}</b>
-            <span class="of">${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"Buying not recorded"))} (this decision)</span>
+            <span class="of">${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"Buying not recorded"))} (this decision)</span>${
+              latest.manual&&latest.reviewer_id?`<span class="of">Approved by <b class="strong">${esc(latest.reviewer_id)}</b></span>`:""}
             <span class="verdict sub">Decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
           ${hold?holdCallout(hold,latest,s.threshold,d.latest_manual_decision):""}
           <h3 class="sub-hd">Decision Rules
             <span class="gloss">— all five must be true</span>${tip("gates")}</h3>
           <div class="gates published-gates">${GATE_KEYS
             .map(g0=>g0 in gates
+              // The space between the two spans is load-bearing: without it the cell's accessible
+              // name ran together as "Score threshold metMet".
               ?`<div class="gate ${gates[g0]?"ok":"no"}" title="${esc(g0)}">${gates[g0]?I.check:I.cross}<span
-                  class="g-s">${esc(say("gate",g0))}</span><span class="g-r">${gates[g0]?"Met":"Not met"}</span></div>`
+                  class="g-s">${esc(say("gate",g0))}</span> <span class="g-r">${gates[g0]?"Pass":"Fail"}</span></div>`
               // The bypassed cell gets the drawn 16px glyph the other two carry. Its marker was
               // a 2.89px text middot, which shifted its label origin 12.11px in the same slot.
               :`<div class="gate na" title="${esc(g0)} — bypassed by manual approval">${I.absent}<span
-                  class="g-s">${esc(say("gate",g0))}</span><span class="g-r">Not evaluated</span></div>`).join("")}</div>`
+                  class="g-s">${esc(say("gate",g0))}</span> <span class="g-r">Not evaluated</span></div>`).join("")}</div>`
           :`<div class="sub">${d.decision_provenance==="unresolved_pointer_drift"?`<b>Record conflict.</b> This company's decision reference points to a decision the integrity check rejects: it belongs to another company or no longer exists. No decision can be shown until this is investigated; the database has prohibited this state since migration 022.`:d.decision_provenance==="unresolved_legacy_order"?`No decision can be shown. These records predate the ordering fix, so the most recent decision cannot be determined. The next decision resolves this.`:`No decision has been sent for this company.`}</div>`}
       </div></div>
     <div class="card"><div class="hd"><h2>Current Evidence Score</h2>
@@ -1841,6 +1950,8 @@ menuBtn.addEventListener("click",()=>{const open=sideBar.classList.toggle("open"
   menuBtn.setAttribute("aria-expanded",String(open))});
 // The skip link must not change the hash (the router would read that as a route), so it moves
 // focus itself: to the scrolling main, whose first tab stop is the page title.
+/* The dialog is static markup, so its one icon cannot be interpolated at write time. */
+$("#ap-warn").insertAdjacentHTML("afterbegin",I.person);
 $("#skip").addEventListener("click",e=>{e.preventDefault();main.focus()});
 $("#autorefresh").addEventListener("change",e=>{
   clearInterval(refreshTimer);

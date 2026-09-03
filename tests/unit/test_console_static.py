@@ -27,6 +27,14 @@ def _function_body(name: str) -> str:
     return "\n".join(re.sub(r"//.*$", "", line) for line in body.splitlines())
 
 
+def _live_css() -> str:
+    """The stylesheet with its comments stripped. A comment RECORDING a correction names the
+    expression it removed -- it is the fix, not a reassertion of it -- exactly as
+    `_function_body` strips `//` lines for the same reason."""
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    return re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+
+
 VIEW_CASE = _function_body("viewCase")
 VIEW_CASES = _function_body("viewCases")
 
@@ -191,9 +199,11 @@ def test_decision_rules_say_their_own_result_in_text():
     stopped the em-dash clause wrapping two cells of one strip to different heights."""
     card = VIEW_CASE[VIEW_CASE.index("published-gates"):]
     card = card[: card.index("Current Evidence Score")]
-    for word in ('class="g-r">${gates[g0]?"Met":"Not met"}', 'class="g-r">Not evaluated'):
+    for word in ('class="g-r">${gates[g0]?"Pass":"Fail"}', 'class="g-r">Not evaluated'):
         assert word in card, f"the gate must print its own result: {word}"
     assert 'class="g-s">' in card, "and the subject must be its own element"
+    # Without the space the cell's accessible name ran together as "Score threshold metMet".
+    assert re.search(r'</span> <span\s+class="g-r"', card), "a separator between subject and result"
     assert ".vh{position:absolute" in CONSOLE, "the visually-hidden utility backing it is gone"
 
 
@@ -246,9 +256,7 @@ def test_a_run_of_chips_is_spaced_by_gap_not_by_a_space():
 def test_no_state_is_encoded_in_an_opacity():
     """Rule 9. `style="opacity:.55"` marked superseded evidence and survived three audits because
     no seeded state renders a replaced check."""
-    # Comments RECORDING the fix name the banned expression; they are the fix, not a reassertion
-    # of it (same reason `_function_body` strips `//` lines).
-    live = re.sub(r"/\*.*?\*/", "", CONSOLE, flags=re.DOTALL)
+    live = _live_css()
     assert "opacity:.55" not in live and "opacity: .55" not in live
     css = CONSOLE[: CONSOLE.index("</style>")]
     assert re.search(r"^\.was\{color:var\(--muted\)\}", css, re.MULTILINE)
@@ -342,3 +350,108 @@ def test_one_raised_button_per_screen():
 
 def test_each_case_tab_is_named_for_its_company():
     assert "document.title=`${c.company_name||c.id} · KYC Tool`" in VIEW_CASE
+
+
+# --- the company is on the company page ------------------------------------------------------
+
+def test_the_case_page_prints_the_company_it_is_asking_about():
+    """Nine sections described what the engine did; the legal name, registration number,
+    jurisdiction, address, director and RIR handle were a raw JSON dump at the foot of a 4200px
+    page. The reviewer is being asked to vouch for that identity."""
+    assert "function identityFields(c)" in CONSOLE
+    assert "${identityCard(c)}" in VIEW_CASE
+    for field in ("Legal name", "Registration number", "Jurisdiction", "Registered address",
+                  "RIR Org ID", "Contact", "Website"):
+        assert f'"{field}"' in CONSOLE, f"the identity block must name {field}"
+    # the verbatim payload stays where an auditor expects it
+    assert "Submitted Details" in VIEW_CASE
+
+
+def test_the_identity_block_never_links_a_scheme_the_payload_chose():
+    fn = CONSOLE[CONSOLE.index("function identityCard(c)"):]
+    fn = fn[: fn.index("\n\nasync function")]
+    assert "/^https?:" in fn, "a website is linked only when it is http(s)"
+    assert 'rel="noopener noreferrer"' in fn
+
+
+def test_the_five_rules_name_a_subject_not_a_verdict():
+    """"Score threshold met / NOT MET" is the label and the result contradicting each other, and
+    "No conflicting evidence / NOT MET" is a double negative that means the opposite."""
+    say = CONSOLE[CONSOLE.index("  gate:{"):]
+    say = say[: say.index("},") + 1]
+    for banned in ("met\"", "verified\"", "No broker block", "No conflicting evidence"):
+        assert banned not in say, f"a gate label still asserts an outcome: {banned}"
+    for subject in ("Score threshold", "Legal entity proof", "Control proof",
+                    "Broker screening", "Evidence consistency"):
+        assert subject in say
+
+
+# --- the states outside `.page` are measured too ---------------------------------------------
+
+def test_no_control_encodes_disabled_in_an_opacity():
+    """Rule 9, in the place the pattern was written first: the peach commit button rendered its
+    label at 2.08:1 for the whole duration of the POST."""
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    rule = re.search(r"^button:disabled\{([^}]*)\}", css, re.MULTILINE)
+    assert rule, "button:disabled is gone"
+    assert "opacity" not in rule.group(1)
+    assert "background:var(--surface-muted)" in rule.group(1)
+
+
+def test_the_dialog_shows_its_own_error_above_the_button_that_caused_it():
+    """With `required` alone the browser's bubble preempts the submit handler, so the written
+    message and its live region only ever fired for whitespace-only input."""
+    dialog = CONSOLE[CONSOLE.index('<dialog id="approve"'):]
+    dialog = dialog[: dialog.index("</dialog>")]
+    assert '<form id="ap-form" novalidate>' in dialog
+    assert 'id="ap-who" required' in dialog and 'id="ap-why" required' in dialog
+    assert dialog.index('id="ap-err"') < dialog.index('id="ap-go"'), \
+        "the error belongs above the action row, not after it"
+
+
+def test_the_modal_and_the_clip_cue_exist_in_both_themes():
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    modal = re.search(r"^dialog\.modal\{([^}]*)\}", css, re.MULTILINE)
+    assert modal and "border:1px solid var(--border-input)" in modal.group(1)
+    # the scroll shadow is a token, so it can invert: a black scrim on a navy card is nothing
+    assert css.count("--scrim:") == 3, "one scrim per theme block"
+    flush = re.search(r"^\.card \.bd\.flush\{(.*?)\}", _live_css(), re.MULTILINE | re.DOTALL)
+    assert flush, ".bd.flush is gone"
+    assert flush.group(1).count("var(--scrim)") == 2, "both end shadows take the token"
+    assert "rgba(" not in flush.group(1), "no literal scrim: it cannot invert per theme"
+
+
+def test_the_reviewers_reason_and_name_reach_the_screen():
+    """The reason is required, is the justification for bypassing every rule, and was dropped."""
+    assert 'case"reviewer.manual_approve":return`<b>Approved manually</b>${d.note?' in CONSOLE
+    assert "latest.manual&&latest.reviewer_id" in VIEW_CASE
+
+
+def test_one_header_chip_per_fact():
+    """Raw enum equality never fired on the state it was written for: "approve" is not
+    "approved_manual", so an approved-by-hand company printed both."""
+    assert "const SAME_AS_DECISION=" in CONSOLE
+    assert '(SAME_AS_DECISION[decision]||[]).includes(c.status)&&c.status!==decision' in VIEW_CASE
+    assert 'decision&&c.status===decision?"":casePill(c,hold)' in VIEW_CASE
+
+
+def test_every_evidence_row_carries_the_same_rule():
+    """`:nth-last-child(-n+2)` counted DOM position and stopped meaning "the last visual row" the
+    moment `.contrib` moved to column flow."""
+    css = _live_css()
+    assert "nth-last-child(-n+2)" not in css
+    assert not re.search(r"^\.crow:last-child\{", css, re.MULTILINE)
+
+
+def test_every_status_marker_is_a_drawn_glyph():
+    """`.sdot.n` was a 3.23px text middot and `.sdot.a` an exclamation mark, against the 16px box
+    every sibling carries."""
+    dots = VIEW_CASE[VIEW_CASE.index("const sdot="):]
+    dots = dots[: dots.index("\n  const contrib")]
+    assert "${I.absent}" in dots and "${I.warn}" in dots
+    assert ">·<" not in dots and ">!<" not in dots
+
+
+def test_a_truncated_identifier_keeps_its_full_value():
+    for cell in ('<td class="mono" title="${esc(r.id)}">', '<td class="mono" title="${esc(t.id)}">'):
+        assert cell in VIEW_CASE

@@ -97,7 +97,7 @@ accidentally different by a few px of radius.
 | `.pill` | 24px, fully rounded (16px) | `--t-chip` | pastel, by status | **always** | a status a person acts on |
 | `.tag` | 20px, square (4px), **outlined** | `--t-meta` mono | none, unless severity | rarely | a machine value quoted verbatim |
 | `.pipe .st` | 20px, square, **joined** | `--t-meta` | track greys | never | one step in a fixed ten-step track |
-| `.gate` | 60px grid cell, square, **two rows** | subject `--t-body`, result `--t-label` | pastel, by result | always | one row of a five-item checklist |
+| `.gate` | 66px grid cell, square, **two rows** | subject `--t-body`, result `--t-label` | pastel, by result | always | one row of a five-item checklist |
 
 **The rule that matters: anything a reviewer reads as a status is a `.pill`, in every context** —
 the list cell, the company header, the decision table, the legend, the task result. No exceptions.
@@ -276,7 +276,54 @@ also a false positive, disproved by re-measuring.
 
 ---
 
-## 10. Rules to hold
+## 10. Type, purpose, and the surface the recipe was not measuring
+
+A fourth critique, scoped to type consistency and to whether each block earns its place on the
+screen a reviewer uses to approve a company. Scored 24/40 against §9's 28 — not a regression but a
+wider net: this run scored the dialog, the tooltips, the disabled state, the dark theme and the
+purpose of each section, where §9 scored `.page` at rest.
+
+**The finding is about this document, not the page.** §12 says to measure "the computed type
+tuples on `.page *`". The approval dialog and the explainer bubbles are both mounted **outside**
+`.page`. All three off-ladder tuples and two of the three worst contrast failures lived in exactly
+that region. Three audits measured a smaller surface than the reviewer uses, and the detector pass
+reproduced the blind spot one level down by measuring with the dialog closed and no tooltip open.
+
+### Defects the previous commit wrote
+
+| # | Found | Why it broke | Fixed by |
+|---|---|---|---|
+| 46 | `.pipe-lab.done` at **1.25:1** in dark; `.fail` 1.59:1, latent | The meter's fill took `--green` (overridden per theme) and its label took `--green-ink` (one dark value in BOTH themes — the ink tokens exist to sit on a pastel `*-soft` ground). Light was 12.28:1, which is why the screenshots passed. `.cur` never failed because `--accent-ink` *is* overridden. | `color:var(--green)` / `var(--red)` — the tokens the segments above already use. |
+| 47 | `.contrib`'s right column lost its last two dividers | `:nth-last-child(-n+2)` counts DOM position, and the same commit moved `.contrib` to `grid-auto-flow:column`. `:last-child` was no better — it spares one column's final row and not the other's. | No exception. All eight rows are ruled; the card's padding closes the list. |
+| 48 | §9 finding 39's "uniform 66px in every state at every width" | A 25-width sweep found **86px from 1420 to 1181** — a band containing 1280 and 1366 — where one to four of the five subjects wrap. §9 measured 1440/1100/1024/768/390 and stepped over it. | The shorter subject names in finding 50 fit the 1181–1440 columns, so the strip holds 66px across the band. |
+| 49 | §8 finding 27's chip suppression never fired on the state it was written for | The test was `c.status===decision` — raw enum equality, and `"approve"` never equals `"approved_manual"`. | `SAME_AS_DECISION`, keyed by decision. When the status is a *more specific* form of the decision the status wins and the decision chip goes; when they are the same fact the decision stays. Measured: three chips on every state, each saying something different. |
+
+### The page
+
+| # | Found | Why it wasn't working | Fixed by |
+|---|---|---|---|
+| 50 | The five rules asserted an outcome in their labels, so a failed rule printed "Score threshold met / NOT MET" | The label and the result contradicting each other on two lines. "No conflicting evidence / NOT MET" was worse — a double negative meaning the opposite of what it looks like. §9 finding 39 named this sentence, moved the result to its own row, and left the subject: half the fix. The accessible name also ran together as `"Score threshold metMet"`. | Subjects, not verdicts: Score threshold · Legal entity proof · Control proof · Broker screening · Evidence consistency, with Pass / Fail / Not evaluated. Two of the five names were already the console's own vocabulary. A literal space now separates the two spans. |
+| 51 | **The page a reviewer opens to approve a company did not contain the company.** | Legal name, registration number, jurisdiction, address, director, RIR handle — the identity being vouched for — was a raw JSON dump inside a `<details>` at the foot of a 4200px page. The first 1000px was the engine's working. All three demo companies share a name and nothing visible told them apart. | A Company Details card, first, above the decision. Named column counts (rule 20), only the fields actually submitted, a website linked only when it is `http(s)`. The verbatim payload stays at the foot for whoever needs it exactly as received. |
+| 52 | The commit button rendered at **2.08:1** for the whole duration of the POST | `button:disabled{opacity:.45}` — rule 9's own failure mode, at a worse ratio than the state the rule was written about, on the control that commits an irreversible approval. Findings 16, 25 and 45 each removed an opacity from a *component*; none re-read the base rule where the pattern was written first. | A declared ground and ink: 4.70:1 light, 6.29:1 dark, opacity 1. (Measured through the button's own `background-color` transition — an immediate read catches the old value mid-fade.) |
+| 53 | The dialog's designed error was unreachable | With `required` alone the browser's validation bubble preempts the submit handler, lands on the field's hint text and vanishes on the next click — so the written message and its `role="alert"` live region only ever fired for whitespace-only input. And `#ap-err` was the form's **last** child, so the error rendered below the button that caused it. | `novalidate` on the form (the fields keep `required` for the accessibility tree); `#ap-err` moved above the action row. |
+| 54 | The reviewer's reason was required, load-bearing, and never displayed | `humanizeAudit` returned `Approved manually` and dropped `detail_json.note`. The approver's name was absent from the decision card too. | The reason is appended to the feed line; the decision card prints "Approved by ⟨name⟩" when the pointed row is manual. |
+| 55 | The clip cue measured **1.30:1 light / 1.05:1 dark** while 251–545px of table was hidden | Two units of blue, and it is the only thing satisfying rule 11. A black scrim on a navy card is nothing. | A `--scrim` token per theme — dark inverts it to white — strong enough to clear 3:1 against its own card. |
+| 56 | The modal had no boundary in dark: **1.18:1** | `rgba(0,22,45,.72)` composites to almost exactly the dark page ground. §8 finding 19 tuned the backdrop in light only (7.5:1). | `border:1px solid var(--border-input)` on the dialog. |
+| 57 | Three off-ladder tuples, all outside `.page` | `.tip dt` printed five English phrases in mono 12/16/700 from a raw triple; `.req` set `font-weight:700` onto a 12px `p.note`; `.banner` was a raw 14/20/600. | `--t-strong` on the tip term, colour-only on `.req`, and the banner tokenised. Measured after: **eight tuples on the page and five in the dialog, every one a token.** |
+| 58 | `.sdot.n` was a **3.23px** text middot and `.sdot.a` an exclamation mark | Against the 16px box every sibling carries — §9 finding 40 again, in the component 350px below the one it was fixed in. | `I.absent` and `I.warn`. |
+| 59 | Round and task ids were cut to 8 characters with no `title` | Rule 12; finding 33 fixed this class for the Details cell and left these. An auditor could not match a console row to a log line. | `title` with the full id on both. |
+| 60 | Cancel was the only accent-coloured control in the dialog | Colour convention made Cancel read as the affirmative, beside a peach confirm. | Neutral outline; the only coloured control is the one that commits. |
+| 61 | The irreversibility warning was the smallest, lightest text in the dialog | Computed-identical to the field hint beside it — two sentences of completely different consequence in one treatment. | The page's own tinted callout, in the same peach as the action it describes. |
+
+**Still open, and deliberately not fixed here:** there is no Reject, so the record cannot
+distinguish "nobody looked" from "somebody looked and declined"; the five tables still size their
+columns by content mass rather than by role (first-column edges spread 256.5px and move 54.2px
+with the data); and `--t-subhd` and `--t-strong` are byte-identical declarations, so rank C has no
+render of its own.
+
+---
+
+## 11. Rules to hold
 
 1. Anything a reviewer reads as a status is a `.pill` — every table, header, list and legend.
    Running prose is the one exemption: a status named inside a sentence stays a word.
@@ -311,8 +358,17 @@ also a false positive, disproved by re-measuring.
     choosing a layout you did not.
 23. A token is what RENDERS, not what is named. `font:var(--t-label)` without the case and tracking
     that token carries elsewhere is a second tuple, and counting by name will not catch it.
+24. Measure the whole surface, not `.page`. The dialog, the tooltips and every `::backdrop` are
+    mounted outside it, and that is where three audits' worth of defects were hiding.
+25. Measure the STATES, not the resting page: disabled, in-flight, empty, error, bypassed — and
+    both themes. A `*-ink` token holds one value in both themes; only its `*-soft` partner and the
+    reading-strength aliases flip.
+26. A label names its subject, never its outcome. The result is a separate word, and the two are
+    separated by something a screen reader can hear.
+27. Read a transitioned property after the transition. `getComputedStyle` immediately after a
+    state change returns the value being animated away from.
 
-## 11. Verifying a change
+## 12. Verifying a change
 
 ```bash
 bash scripts/dev.sh                    # stack + console on :8080/ui
@@ -322,6 +378,11 @@ bash scripts/dev.sh                    # stack + console on :8080/ui
 
 Then look at it: seven routes, light and dark, at 1440 and 390. Check the document does not scroll
 sideways at 1440 / 1024 / 768 / 390, and that the type inventory has not grown.
+
+Measure the whole surface, not `.page`: open the approval dialog and at least one explainer
+bubble before you count type tuples, because both are mounted outside it and that is where three
+audits' worth of defects were hiding (§10). Toggle a control to `disabled` and read it after its
+transition settles. Do all of it in both themes.
 
 Then **measure it**, on more than the state you were looking at. The case page has five seeded
 states (`demo-acme-1`, `-2`, `-3`, `demo-northwind`, `demo-ipxo`) and they do not exercise the
