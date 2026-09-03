@@ -180,3 +180,106 @@ def test_frame_folds_and_tables_scroll_in_their_cards():
     # the scroll box paints its own end-of-content shadows, so a clipped table is never silent
     assert "no-repeat scroll" in css
     assert '<button type="button" class="menubtn" id="menubtn" aria-controls="nav"' in CONSOLE
+
+
+# --- the result reaches a reader who cannot see colour ----------------------------------------
+
+def test_decision_rules_say_their_own_result_in_text():
+    """The five gate cells name the SUBJECT ("Score threshold met") in both states and carried the
+    outcome in the icon and the ground. Read aloud, a passed rule and a failed rule were the same
+    sentence. The result is now text: hidden on a met rule, printed on a failed one."""
+    card = VIEW_CASE[VIEW_CASE.index("published-gates"):]
+    card = card[: card.index("Current Evidence Score")]
+    assert '<span class="vh"> — met</span>' in card
+    assert "— not met" in card
+    assert ".vh{position:absolute" in CONSOLE, "the visually-hidden utility backing it is gone"
+
+
+def test_evidence_rows_carry_their_status_as_text_and_hide_the_dot():
+    """`.crow`'s status was a coloured dot whose `·` and `!` are TEXT, so the row announced
+    '·Not Yet Available: Company email verified' — punctuation as content, and no status word."""
+    assert 'sdot(it.status)}<span class="vh">${esc(say("status",it.status))}' in VIEW_CASE
+    dots = VIEW_CASE[VIEW_CASE.index("const sdot="):]
+    dots = dots[: dots.index("\n  const contrib")]
+    assert dots.count('aria-hidden="true"') == 4, "every status dot is decoration"
+
+
+# --- a rule written for one component may not reach another ----------------------------------
+
+def test_the_inline_optical_correction_never_reaches_a_flex_centred_icon():
+    """`td .ic` matched every icon inside a .pill/.iw/button.sm in a table cell. Those parents are
+    inline-flex with align-items:center, where vertical-align is inert and the icon is already
+    centred, so the -1.5px correction displaced 12 icons to fix 4."""
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    rule = re.search(r"^([^\n]*)\{vertical-align:middle;position:relative;top:-1\.5px\}",
+                     css, re.MULTILINE)
+    assert rule, "the inline optical correction is gone"
+    assert "td .ic" not in rule.group(1), rule.group(1)
+
+
+def test_the_sidebar_uppercase_is_scoped_to_the_sidebar():
+    """Unscoped, `.who` also matched `.fitem .who` — the activity feed's actor, whose own rule sets
+    `font` but not case or tracking — so a reviewer id printed J.OKONJO in no token."""
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    assert ".who-block .who{" in css
+    assert not re.search(r"^\.who\{", css, re.MULTILINE)
+
+
+def test_the_bypassed_gate_has_a_ground_of_its_own():
+    """Fixed twice now: first from opacity .55 (~2.9:1 ink), then from a ground byte-identical to
+    the card behind it, which left a 1.51:1 dashed edge as the only thing that made it a cell."""
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    na = re.search(r"^\.gate\.na\{([^}]*)\}", css, re.MULTILINE)
+    assert na, ".gate.na is gone"
+    assert "background:var(--surface-muted)" in na.group(1)
+    assert "var(--border-input)" in na.group(1), "the edge must take the 3:1 control token"
+    assert "opacity" not in na.group(1)
+
+
+# --- the header says each thing once ----------------------------------------------------------
+
+def test_the_header_drops_a_chip_that_repeats_the_decision():
+    """"On Hold" beside "Awaiting Further Evidence" is one enum under two vocabularies."""
+    assert "decision&&c.status===decision" in VIEW_CASE
+    assert 'd.manual_decision_provenance==="latest_manual_row"&&c.status==="approved_manual"' in VIEW_CASE
+
+
+def test_every_pill_carries_its_raw_enum():
+    """Rule 12 was held by the callers that happened to pass a label, not by the component."""
+    fn = CONSOLE[CONSOLE.index("const pill=(k,label)=>"):]
+    fn = fn[: fn.index("\n\n")]
+    assert 'title="${esc(k)}"' in fn
+
+
+def test_the_decision_history_prints_absolute_time():
+    """It is read months later, when "5h ago" means nothing and four rounds say the same thing."""
+    hist = VIEW_CASE[VIEW_CASE.index("Decision History"):] if "Decision History" in VIEW_CASE \
+        else VIEW_CASE[VIEW_CASE.index("d.decisions.map"):]
+    hist = hist[: hist.index("Activity Log")]
+    assert "exact(x.decided_at)" in hist and "exact(x.published_at)" in hist
+    assert "when(x.decided_at)" not in hist
+
+
+def test_only_a_missing_value_renders_as_a_dash():
+    """"—" means NOT SET. It must not also mean "set to false" for every field but one — the table
+    used to special-case `Hard_Conflict__c` by name."""
+    rows = VIEW_CASE[VIEW_CASE.index("const sfRows="):]
+    rows = rows[: rows.index("const fitems=")]
+    assert "v===null||v===undefined" in rows
+    assert "Hard_Conflict__c" not in rows
+
+
+def test_one_raised_button_per_screen():
+    """Approving by hand is this screen's primary action; sending a test message is a utility. The
+    elevation used to say the opposite."""
+    assert '<button id="sendbtn">' in VIEW_CASE
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    warn = re.search(r"^button\.warn\{([^}]*)\}", css, re.MULTILINE)
+    assert warn and "box-shadow:var(--e2)" in warn.group(1)
+    dialog = CONSOLE[CONSOLE.index('<dialog id="approve"'):]
+    dialog = dialog[: dialog.index("</dialog>")]
+    assert 'class="warn" id="ap-go"' in dialog, "the confirm keeps the trigger's colour"
+
+
+def test_each_case_tab_is_named_for_its_company():
+    assert "document.title=`${c.company_name||c.id} · KYC Tool`" in VIEW_CASE
