@@ -176,5 +176,7 @@ def test_router_marks_the_current_page_and_moves_focus_on_navigation():
 def test_frame_folds_and_tables_scroll_in_their_cards():
     css = CONSOLE[: CONSOLE.index("</style>")]
     assert "@media(max-width:1023px)" in css
-    assert ".card .bd.flush{padding:0;overflow-x:auto}" in css
+    assert ".card .bd.flush{padding:0;overflow-x:auto;" in css
+    # the scroll box paints its own end-of-content shadows, so a clipped table is never silent
+    assert "no-repeat scroll" in css
     assert '<button type="button" class="menubtn" id="menubtn" aria-controls="nav"' in CONSOLE

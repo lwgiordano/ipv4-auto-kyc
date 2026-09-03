@@ -56,6 +56,21 @@
   --dur-1:90ms; --dur-2:150ms; --dur-3:200ms; --dur-4:250ms;
   --ease-standard:cubic-bezier(.4,0,.2,1);
   --frame-side-nav:300px; --bar-h:72px; --row-h:36px;
+  /* ── Type ladder ──
+     Six roles, not twenty. Size carries RANK and nothing else, so a reader can tell where they
+     are from size alone: page > card title > sub-head > body > chip > label/meta. One
+     line-height per size (a 14px body line and a 14px table cell must share a baseline), and one
+     tracking value for every uppercase run, so labels sitting near each other match in colour. */
+  --t-page:700 22px/28px var(--font);      /* page title, and the two display numbers */
+  --t-title:700 16px/24px var(--font);     /* card title — rank B */
+  --t-subhd:700 14px/20px var(--font);     /* heading inside a card body — rank C */
+  --t-body:400 14px/20px var(--font);      /* body, table cells, list rows */
+  --t-strong:700 14px/20px var(--font);    /* the same body line, emphasised */
+  --t-chip:600 13px/18px var(--font);      /* status pills only */
+  --t-label:600 12px/16px var(--font);     /* uppercase labels — rank A, th, kpi label */
+  --t-meta:400 12px/16px var(--font);      /* muted secondary, raw identifiers, hints */
+  --track-caps:.05em;                      /* every uppercase run, no exceptions */
+  --card-gap:var(--s4);                    /* the one gap between two stacked cards */
   /* The marketplace face is Proxima Nova, a licensed font: it is used where the machine has it
      and never shipped from here. Mulish, embedded above, is the fallback everywhere else. */
   --font:"Proxima Nova",'Mulish',system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -108,9 +123,11 @@
 [hidden]{display:none!important}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--text);
-     font:14px/21px var(--font);-webkit-font-smoothing:antialiased}
+     font:var(--t-body);-webkit-font-smoothing:antialiased}
 h1,h2,h3{font-family:var(--font);color:var(--ink);text-wrap:balance;margin:0}
-p{text-wrap:pretty}
+/* The UA margin is 1em of the element's OWN size, so a 12px <p> and a 14px <p> indent by
+   different amounts. Spacing is the layout's job; every margin below is declared. */
+p{margin:0;text-wrap:pretty}
 /* Numerals that get COMPARED render tabular, table-wide. */
 table{font-variant-numeric:tabular-nums}
 code,.mono{font-family:var(--mono);font-size:12px;line-height:16px}
@@ -126,7 +143,7 @@ a:hover{text-decoration:underline}
 /* ── Skip link: the first tab stop on every page, visible only while it has focus ── */
 .skip{position:absolute;left:var(--s2);top:var(--s2);z-index:700;background:var(--surface);
   color:var(--accent-ink);border:1px solid var(--accent);border-radius:var(--r);
-  padding:var(--s2) var(--s4);font:600 14px/20px var(--font);
+  padding:var(--s2) var(--s4);font:var(--t-strong);
   transform:translateY(calc(-100% - var(--s4)))}
 .skip:focus{transform:none;text-decoration:none}
 main:focus,h1[tabindex]:focus{outline:none}
@@ -137,10 +154,11 @@ main:focus,h1[tabindex]:focus{outline:none}
   display:flex;align-items:center;gap:var(--s5);padding:0 var(--s6);box-shadow:var(--e-bar);
   position:relative;z-index:30}
 .topbar .logo{height:28px;width:auto;flex:none;display:block}
-.topbar .tool{font:600 15px/22px var(--font);text-transform:uppercase;letter-spacing:.02em;
+.topbar .tool{font:var(--t-strong);text-transform:uppercase;letter-spacing:var(--track-caps);
   color:var(--bar-text);padding-left:var(--s5);border-left:1px solid rgba(255,255,255,.28);
   white-space:nowrap}
 .topbar .tool b{color:var(--bar-accent);font-weight:700}
+.topbar .mono{font:var(--t-meta);font-family:var(--mono)}
 .topbar-end{margin-left:auto;display:flex;align-items:center;gap:var(--s3);min-width:0}
 .topbar .mono{color:var(--bar-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .menubtn{display:none;color:var(--bar-text);border-color:rgba(255,255,255,.6);background:transparent;
@@ -153,27 +171,30 @@ aside{width:var(--frame-side-nav);flex:none;background:var(--surface);
 .who-block{display:grid;grid-template-columns:40px 1fr;gap:var(--s2) var(--s3);align-items:center;
   padding:var(--s4) var(--s4) var(--s3);border-bottom:1px solid var(--line)}
 .avatar{width:40px;height:40px;border-radius:9999px;background:var(--accent);color:var(--on-accent);
-  display:grid;place-items:center;font:600 16px/1 var(--font);letter-spacing:.02em;grid-row:span 2;
+  display:grid;place-items:center;font:var(--t-strong);letter-spacing:var(--track-caps);grid-row:span 2;
   align-self:start}
-.who{display:grid;gap:2px;font:600 12px/16px var(--font);color:var(--muted);cursor:default;min-height:0}
-.who input{min-height:36px;font:600 15px/22px var(--font);color:var(--ink);width:100%;padding:0 var(--s2)}
-.who-note{font-size:12px;line-height:16px;color:var(--muted);grid-column:2}
+.who{display:grid;gap:var(--s1);font:var(--t-label);text-transform:uppercase;
+  letter-spacing:var(--track-caps);color:var(--muted);cursor:default;min-height:0}
+.who input{min-height:36px;font:var(--t-strong);color:var(--ink);width:100%;padding:0 var(--s2)}
+.who-note{font:var(--t-meta);color:var(--muted);grid-column:2}
 nav{padding:var(--s2) 0;flex:1}
 /* Group headers read as the marketplace's collapsible sections: same size as the items, bold,
    and no uppercase; items sit one step in with their icon. */
-.grp{font:600 14px/20px var(--font);color:var(--text);padding:var(--s3) var(--s4) var(--s1)}
+.grp{font:var(--t-strong);color:var(--text);padding:var(--s3) var(--s4) var(--s1)}
 .nav-item{display:flex;align-items:center;gap:var(--s3);padding:0 var(--s4) 0 var(--s5);
      border-left:3px solid transparent;color:var(--text);font:600 14px/20px var(--font);
      min-height:40px;transition:background-color var(--dur-2) var(--ease-standard)}
 .nav-item:hover{background:rgba(0,0,0,.04);text-decoration:none}
-.nav-item svg{width:18px;height:18px;flex:none;color:var(--text)}
+/* Every icon is drawn in a 16-unit box at 1.25 stroke, so scaling the box scales the stroke. A
+   larger icon is re-thinned to hold one apparent weight across the console. */
+.nav-item svg{width:18px;height:18px;flex:none;color:var(--text);stroke-width:1.11}
 /* "You are here" carries three redundant cues, as the marketplace does: tint, ink and the rule. */
 .nav-item.active{background:var(--accent-soft);color:var(--accent-text);border-left-color:var(--accent)}
 .nav-item.active svg{color:inherit}
-.nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);font:600 12px/16px var(--font);
+.nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);font:var(--t-label);
      border-radius:var(--pill);padding:2px var(--s2);min-width:22px;text-align:center}
 .side-foot{padding:var(--s3) var(--s4);border-top:1px solid var(--line);
-     font-size:12px;line-height:16px;color:var(--muted);display:grid;gap:var(--s2)}
+     font:var(--t-meta);color:var(--muted);display:grid;gap:var(--s2)}
 .side-foot label{display:flex;align-items:center;gap:var(--s2);cursor:pointer;min-height:40px}
 .side-foot input[type=checkbox]{width:18px;height:18px;margin:0;accent-color:var(--accent);flex:none}
 main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
@@ -209,23 +230,34 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
 
 /* ── Page title bar ── */
 .tbar{display:flex;align-items:flex-start;gap:var(--s4);margin-bottom:var(--s5);flex-wrap:wrap}
-.tbar h1{font-size:22px;line-height:28px;font-weight:700;color:var(--ink);
+.tbar h1{font:var(--t-page);color:var(--ink);
   display:flex;align-items:center;gap:var(--s2)}
-.tbar .desc{font-size:14px;line-height:21px;color:var(--muted);margin-top:var(--s1)}
+.tbar .desc{font:var(--t-body);color:var(--muted);margin-top:var(--s1)}
 .tbar .actions{margin-left:auto;display:flex;gap:var(--s2);align-items:center}
-.crumb{font-size:13px;line-height:20px;color:var(--muted);margin-bottom:var(--s1)}
+.crumb{font:var(--t-meta);color:var(--muted);margin-bottom:var(--s1)}
 .crumb a{color:var(--muted)}
 .crumb a:hover{color:var(--accent-text)}
 
 /* ── Cards & sections: the marketplace's paper ── */
 .card{background:var(--surface);border-radius:var(--r);box-shadow:var(--e1)}
+/* Two stacked cards are two records and must read as two objects. They used to touch, separated
+   only by their own shadow, which merged "the decision the platform got" with "what the evidence
+   says now" into one slab — the exact distinction the page exists to draw. */
+.card+.card{margin-top:var(--card-gap)}
 .card .hd{padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);display:flex;
       align-items:center;gap:var(--s2);flex-wrap:wrap}
-.card .hd h2,.card .hd h3{font-size:16px;line-height:24px;font-weight:700;color:var(--ink)}
-.sub-hd{font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-bottom:var(--s3)}
-.card .hd .hint{font-size:12px;line-height:16px;color:var(--muted);font-weight:400}
+.card .hd h2,.card .hd h3{font:var(--t-title);color:var(--ink)}
+.sub-hd{font:var(--t-subhd);color:var(--ink);margin-bottom:var(--s3)}
+.card .hd .hint{font:var(--t-meta);color:var(--muted)}
 .card .bd{padding:var(--s4)}
-.card .bd.flush{padding:0;overflow-x:auto}
+/* A table that continues past the card edge says so: the shadows are painted on the scroll box
+   and travel with the content, so a cue is present exactly while there is more to see. */
+.card .bd.flush{padding:0;overflow-x:auto;
+  background:linear-gradient(90deg,var(--surface) 30%,transparent) left/40px 100% no-repeat local,
+             linear-gradient(90deg,transparent,var(--surface) 70%) right/40px 100% no-repeat local,
+             radial-gradient(farthest-side at 0 50%,rgba(0,0,0,.12),transparent) left/10px 100% no-repeat scroll,
+             radial-gradient(farthest-side at 100% 50%,rgba(0,0,0,.12),transparent) right/10px 100% no-repeat scroll,
+             var(--surface)}
 .stack{display:grid;gap:var(--s4)}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:var(--s4);align-items:start}
 @media(max-width:980px){.split{grid-template-columns:1fr}}
@@ -235,31 +267,46 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
 .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:var(--s4);margin-bottom:var(--s4)}
 @media(max-width:1180px){.kpis{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:720px){.kpis{grid-template-columns:repeat(2,1fr)}}
-.kpi{background:var(--surface);border-radius:var(--r);box-shadow:var(--e1);padding:var(--s4)}
-.kpi .lab{font:600 12px/16px var(--font);text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
-.kpi .num{font-size:22px;line-height:28px;font-weight:700;color:var(--ink);
+/* A tile is a column so the six numbers share a baseline and the six footnotes share a bottom
+   edge. The label reserves two lines: without it, one wrapped label pushed its own number 16px
+   below the other five, breaking the alignment of the first thing anyone sees on this page. */
+.kpi{background:var(--surface);border-radius:var(--r);box-shadow:var(--e1);padding:var(--s4);
+     display:flex;flex-direction:column}
+.kpi .lab{font:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);
+     color:var(--muted);min-height:32px}
+.kpi .num{font:var(--t-page);color:var(--ink);
      margin-top:var(--s1);font-variant-numeric:tabular-nums}
 .kpi .num.bad{color:var(--red)} .kpi .num.ok{color:var(--green)}
-.kpi .foot{font-size:12px;line-height:16px;color:var(--muted);margin-top:var(--s1)}
+.kpi .foot{font:var(--t-meta);color:var(--muted);margin-top:auto;padding-top:var(--s1)}
 
 /* ── Status chips: the registry chips, sentence-cased for sentences ── */
+/* ── Four chip families, one job each ──
+   The console has four kinds of "true" and they must look deliberately different, not
+   accidentally different by a few px of radius:
+     .pill      a STATUS a person acts on — fully rounded, tinted, always an icon.
+     .tag       MACHINE DATA quoted verbatim — square, mono, outlined, tinted only for severity.
+     .pipe .st  one STEP in a fixed ten-step track — square, joined, never free-floating.
+     .gate      one row of a five-item CHECKLIST — a grid cell, not a chip.
+   Anything a reviewer reads as a status is a .pill, in every context, with no exceptions. */
 .pill{display:inline-flex;align-items:center;gap:var(--s1);padding:2px var(--s3);min-height:24px;
-      border-radius:var(--pill);font:600 13px/18px var(--font);white-space:nowrap}
+      border-radius:var(--pill);font:var(--t-chip);white-space:nowrap}
 .p-green{background:var(--green-soft);color:var(--green-ink)}
 .p-amber{background:var(--amber-soft);color:var(--amber-ink)}
 .p-red{background:var(--red-soft);color:var(--red-ink)}
 .p-blue{background:var(--blue-soft);color:var(--blue-ink)}
 .p-accent{background:var(--accent-soft);color:var(--accent-ink)}
 .p-neutral{background:var(--surface-muted);color:var(--text)}
-.tag{display:inline-flex;align-items:center;gap:var(--s1);background:var(--surface-muted);
-     color:var(--text);border-radius:var(--radius-inner);padding:2px var(--s2);
-     font-size:12px;line-height:16px;font-family:var(--mono)}
-.tag.warn{background:var(--amber-soft);color:var(--amber-ink)}
-.tag.err{background:var(--red-soft);color:var(--red-ink)}
+/* Outlined rather than filled: a tag quotes a machine value, and a filled pastel ground made it
+   read as a status the reader was meant to act on. */
+.tag{display:inline-flex;align-items:center;gap:var(--s1);background:transparent;
+     color:var(--text);border:1px solid var(--line-strong);border-radius:var(--radius-inner);
+     padding:1px var(--s2);font:var(--t-meta);font-family:var(--mono)}
+.tag.warn{background:var(--amber-soft);color:var(--amber-ink);border-color:transparent}
+.tag.err{background:var(--red-soft);color:var(--red-ink);border-color:transparent}
 
 /* ── Tables ── */
-table{width:100%;border-collapse:collapse;font-size:14px;line-height:20px}
-th{font:600 12px/16px var(--font);text-transform:uppercase;letter-spacing:.05em;
+table{width:100%;border-collapse:collapse;font:var(--t-body)}
+th{font:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);
    color:var(--muted);background:var(--surface);text-align:left;
    padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);white-space:nowrap}
 td{padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);vertical-align:top;
@@ -271,17 +318,23 @@ tbody tr.click{cursor:pointer;transition:background-color var(--dur-2) var(--eas
 tbody tr.click:hover{background:var(--surface-page)}
 td .rowlink{color:var(--ink);font-weight:700}
 td .sub.mono{white-space:nowrap}
-table.companies th:first-child,table.companies td:first-child{min-width:200px}
+/* The list holds eight columns of which four are nowrap status pills, so its width is set by its
+   content. These three trims are what let it fit a 1440 viewport with real data; past that the
+   scroll shadows on .bd.flush say there is more, rather than hiding it silently. */
+table.companies th:first-child,table.companies td:first-child{min-width:176px}
+table.companies td.chev,table.companies th:last-child{padding-left:0}
 td .rowlink:hover{text-decoration:underline}
 tr.hl td{background:var(--accent-soft)}
 tr.hl:focus-visible{outline-offset:-2px}
-.sub{font-size:12px;line-height:16px;color:var(--muted);margin-top:2px}
-.empty{padding:var(--s6) var(--s4);text-align:center;color:var(--muted);font-size:14px;line-height:21px}
-.empty b{color:var(--ink);font-weight:700;display:block;margin-bottom:var(--s1);font-size:16px;line-height:24px}
+.sub{font:var(--t-meta);color:var(--muted)}
+/* margin only where it can apply: it is inert on a <td class="sub"> and was declared on 59 of them */
+div.sub,p.sub{margin-top:2px}
+.empty{padding:var(--s6) var(--s4);text-align:center;color:var(--muted);font:var(--t-body)}
+.empty b{color:var(--ink);font:var(--t-title);display:block;margin-bottom:var(--s1)}
 
 /* ── Buttons & inputs: the marketplace's outlined control, one filled primary per screen ──
    The visual box is 40px; the pointer box on the small round helpers stays 44px (see .tipbtn). */
-button{font:600 13px/20px var(--font);text-transform:uppercase;letter-spacing:.03em;
+button{font:var(--t-chip);text-transform:uppercase;letter-spacing:var(--track-caps);
   padding:0 var(--s4);min-height:40px;border-radius:var(--r);border:1px solid var(--accent);
   background:var(--surface);color:var(--accent-text);cursor:pointer;display:inline-flex;
   align-items:center;justify-content:center;gap:var(--s2);
@@ -291,7 +344,8 @@ button:hover{background:var(--accent-soft)}
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);box-shadow:var(--e2)}
 button.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
 button.primary:active{background:var(--accent-pressed);border-color:var(--accent-pressed);box-shadow:none}
-button.sm{padding:0 var(--s3);font-size:12px;line-height:16px;min-height:32px}
+button.sm{padding:0 var(--s3);font:var(--t-label);text-transform:uppercase;
+  letter-spacing:var(--track-caps);min-height:32px}
 button.good{background:var(--green-soft);border-color:transparent;color:var(--green-ink)}
 button.good:hover{background:color-mix(in oklab,var(--green-soft),black 6%)}
 button.danger{background:var(--red-soft);border-color:transparent;color:var(--red-ink)}
@@ -301,7 +355,7 @@ button.danger:hover{background:color-mix(in oklab,var(--red-soft),black 6%)}
 button.warn{background:var(--amber-soft);border-color:transparent;color:var(--amber-ink)}
 button.warn:hover{background:color-mix(in oklab,var(--amber-soft),black 6%)}
 button:disabled{opacity:.45;cursor:default;pointer-events:none}
-input,select,textarea{font:14px/21px var(--font);background:var(--surface);color:var(--ink);
+input,select,textarea{font:var(--t-body);background:var(--surface);color:var(--ink);
   border:1px solid var(--border-input);border-radius:var(--r);padding:0 var(--s3);min-height:40px}
 input:hover,select:hover,textarea:hover{border-color:var(--text)}
 input:focus-visible,select:focus-visible,textarea:focus-visible{border-color:var(--accent);outline-offset:0}
@@ -312,34 +366,38 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
   pointer-events:none}
 .search input{padding-left:var(--s7);width:280px}
 .field{display:grid;gap:var(--s2);margin-bottom:var(--s4)}
-.field .flab{font:600 14px/20px var(--font);color:var(--ink)}
+.flab{font:var(--t-strong);color:var(--ink)}
 .toolbar{display:flex;gap:var(--s2);align-items:center;margin-bottom:var(--s4);flex-wrap:wrap}
-.toolbar .note{font-size:12px;line-height:16px;color:var(--muted)}
+/* Global, not toolbar-scoped: four of its seven uses sat inside .field and fell through to body
+   type, which made the approval dialog's guidance indistinguishable from its narration. */
+.note{font:var(--t-meta);color:var(--muted)}
 
 /* ── Score bar (score vs target) ── */
 .bullet{display:grid;gap:var(--s2)}
 .bullet .val{display:flex;align-items:baseline;gap:var(--s2)}
-.bullet .val b{font-size:22px;line-height:28px;font-weight:700;
+.bullet .val b{font:var(--t-page);
   color:var(--ink);font-variant-numeric:tabular-nums}
-.bullet .val .of{font-size:14px;line-height:21px;color:var(--muted)}
-.bullet .val .verdict{font-size:12px;line-height:16px;font-weight:700;margin-left:auto}
+.bullet .val .of{font:var(--t-body);color:var(--muted)}
+.bullet .val .verdict{font:var(--t-label);margin-left:auto}
 .btrack{position:relative;height:16px;border-radius:var(--radius-inner);
   background:var(--surface-muted);overflow:visible}
 /* The bar is plain grey on purpose: it is a live reading, never a verdict. Tick plus label carry
    the target. */
 .bmeasure{position:absolute;top:4px;height:8px;left:0;border-radius:var(--radius-inner)}
 .btick{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink)}
-.btick span{position:absolute;top:-20px;transform:translateX(-50%);font-size:12px;line-height:16px;
+.btick span{position:absolute;top:-20px;transform:translateX(-50%);font:var(--t-meta);
   color:var(--muted);white-space:nowrap}
 .contrib{display:grid;grid-template-columns:1fr 1fr;gap:0 var(--s6);margin-top:var(--s4)}
 @media(max-width:820px){.contrib{grid-template-columns:1fr}}
-.crow{display:flex;align-items:center;gap:var(--s2);padding:var(--s2) 0;
-  border-bottom:1px solid var(--line);font-size:14px;line-height:20px;min-height:var(--row-h)}
+/* 4px, not 8: the 24px status dot plus 8+8 padding plus the rule made a 41px row that overrode
+   the 36px --row-h it was supposed to obey. */
+.crow{display:flex;align-items:center;gap:var(--s2);padding:var(--s1) 0;
+  border-bottom:1px solid var(--line);font:var(--t-body);min-height:var(--row-h)}
 .crow:nth-last-child(-n+2){border-bottom:none}
 .crow .nm{color:var(--text)}
 .crow .pts{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink)}
 .crow .pts.zero{color:var(--muted);font-weight:400}
-.crow .cap{font-size:12px;line-height:16px;color:var(--muted);font-variant-numeric:tabular-nums;
+.crow .cap{font:var(--t-meta);color:var(--muted);font-variant-numeric:tabular-nums;
   width:44px;text-align:right}
 .sdot{width:24px;height:24px;border-radius:9999px;display:inline-grid;place-items:center;flex:none}
 .sdot.g{background:var(--green-soft);color:var(--green-ink)}
@@ -350,15 +408,22 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 /* ── The five rules as a strip ── */
 .gates{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:var(--s2)}
 .gate{display:flex;align-items:center;gap:var(--s2);border-radius:var(--r);
-  padding:var(--s3);font:600 12px/16px var(--font);min-height:44px}
+  padding:var(--s3);font:var(--t-label);min-height:44px}
 .gate.ok{background:var(--green-soft);color:var(--green-ink)}
 .gate.no{background:var(--red-soft);color:var(--red-ink)}
-.gate.na{opacity:.55}
+/* "Not evaluated" is the state an auditor most needs to see — it means a person bypassed this
+   rule. At opacity .55 it computed to ~2.9:1, the faintest thing on the page. It is now a
+   full-strength muted cell with a dashed edge: quieter than a result, still legible. */
+.gate.na{background:var(--surface);border:1px dashed var(--line-strong);color:var(--muted)}
 
 /* ── Run steps ── */
-.pipe{display:flex;align-items:center;gap:var(--s1);flex-wrap:wrap;font-size:12px;line-height:16px}
-.pipe .st{padding:2px var(--s2);border-radius:var(--radius-inner);color:var(--muted);
-  background:var(--surface-muted)}
+.pipe{display:flex;align-items:center;gap:0;flex-wrap:wrap;font:var(--t-meta)}
+/* Joined, not free-floating: steps butt against each other so the track reads as one object and
+   cannot be mistaken for a row of independent status chips. */
+.pipe .st{padding:2px var(--s2);color:var(--muted);
+  background:var(--surface-muted);border-right:1px solid var(--surface)}
+.pipe .st:first-child{border-radius:var(--radius-inner) 0 0 var(--radius-inner)}
+.pipe .st:last-child{border-radius:0 var(--radius-inner) var(--radius-inner) 0;border-right:0}
 .pipe .st.done{color:var(--green-ink);background:var(--green-soft)}
 .pipe .st.cur{color:var(--accent-ink);background:var(--accent-soft);font-weight:700}
 .pipe .st.fail{color:var(--red-ink);background:var(--red-soft);font-weight:700}
@@ -368,21 +433,21 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .feed{position:relative;padding-left:var(--s5);display:grid;gap:0}
 .feed::before{content:"";position:absolute;left:6px;top:var(--s2);bottom:var(--s2);width:2px;
   background:var(--line)}
-.fitem{position:relative;padding:var(--s2) 0;font-size:14px;line-height:20px;display:flex;
+.fitem{position:relative;padding:var(--s2) 0;font:var(--t-body);display:flex;
   gap:var(--s2);align-items:baseline;flex-wrap:wrap}
 .fitem::before{content:"";position:absolute;left:-23px;top:14px;width:8px;height:8px;
   border-radius:9999px;background:var(--border-strong);border:2px solid var(--surface)}
 .fitem.hot::before{background:var(--accent)}
 .when{white-space:nowrap}
-.fitem .when{margin-left:auto;font-size:12px;line-height:16px;color:var(--muted)}
-.fitem .who{color:var(--ink);font-weight:700;display:inline;font-size:14px}
+.fitem .when{margin-left:auto;font:var(--t-meta);color:var(--muted)}
+.fitem .who{color:var(--ink);font:var(--t-strong);display:inline}
 .fitem .obj{color:var(--muted)}
-.fitem details{font-size:12px;line-height:16px}
+.fitem details{font:var(--t-meta)}
 .fitem details[open]{width:100%;order:10}
-summary{color:var(--muted);cursor:pointer;font-size:12px;line-height:16px;min-height:24px}
+summary{color:var(--muted);cursor:pointer;font:var(--t-meta);min-height:24px}
 .feed-earlier{margin:0 0 var(--s2) calc(-1 * var(--s5))}
 pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:var(--r);
-  padding:var(--s3);overflow:auto;font-family:var(--mono);font-size:12px;line-height:16px;
+  padding:var(--s3);overflow:auto;font:var(--t-meta);font-family:var(--mono);
   max-height:320px;margin:var(--s2) 0 0}
 
 /* ── Source rows ── */
@@ -390,17 +455,20 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
   border-bottom:1px solid var(--line)}
 .irow:last-child{border-bottom:none}
 .itile{width:36px;height:36px;border-radius:var(--r);background:var(--accent-soft);
-  color:var(--accent-ink);display:grid;place-items:center;font-weight:700;font-size:12px;flex:none}
-.itile .ic{width:20px;height:20px}
+  color:var(--accent-ink);display:grid;place-items:center;font:var(--t-label);flex:none}
+.itile .ic{width:20px;height:20px;stroke-width:1}
 .irow .meta{min-width:0;flex:1}
-.irow .nm{font-size:14px;line-height:20px;font-weight:700;color:var(--ink);display:flex;
+.irow .nm{font:var(--t-strong);color:var(--ink);display:flex;
   gap:var(--s2);align-items:center;flex-wrap:wrap}
-.irow .kind{font-size:14px;line-height:20px;color:var(--muted);margin-top:2px}
-.irow .facts{font-size:12px;line-height:16px;color:var(--muted);margin-top:var(--s2);
+.irow .kind{font:var(--t-body);color:var(--muted);margin-top:2px}
+.irow .facts{font:var(--t-meta);color:var(--muted);margin-top:var(--s2);
   display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center}
-.irow .todo{font-size:12px;line-height:16px;color:var(--amber);margin-top:var(--s2)}
+/* Was inline flow, so the warning glyph sat 3.5px above its label's centre and touched the first
+   letter with a 0px gap. Flex gives it both the gap and the alignment. */
+.irow .todo{font:var(--t-meta);color:var(--amber);margin-top:var(--s2);
+  display:flex;align-items:flex-start;gap:var(--s1)}
 .irow .end{margin-left:auto;display:grid;gap:var(--s2);justify-items:end;flex:none}
-.probe-out{font-size:12px;line-height:16px;color:var(--muted);font-family:var(--mono);text-align:right}
+.probe-out{font:var(--t-meta);color:var(--muted);font-family:var(--mono);text-align:right}
 
 /* ── Settings grid, toast, panels ── */
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:var(--s2) var(--s5);
@@ -410,7 +478,7 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
 /* Toast: the bar's navy at the top elevation. */
 .toast{position:fixed;bottom:var(--s5);right:var(--s5);background:var(--surface-inverse);
   color:var(--text-inverse);border-radius:var(--r);padding:var(--s2) var(--s4);
-  box-shadow:var(--e3);font-size:14px;line-height:20px;z-index:500;
+  box-shadow:var(--e3);font:var(--t-body);z-index:500;
   max-width:min(420px,calc(100vw - 2*var(--s5)));
   display:inline-flex;align-items:center;gap:var(--s2);animation:tin var(--dur-4) var(--ease-standard)}
 .toast .ic{width:16px;height:16px}
@@ -431,9 +499,9 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
   transform:translate(-50%,-50%)}
 .tip{position:fixed;z-index:600;max-width:300px;background:var(--surface-inverse);
   color:var(--text-inverse);border-radius:var(--r);padding:var(--s3) var(--s4);
-  box-shadow:var(--e3);font:400 12px/16px var(--font);pointer-events:none;
+  box-shadow:var(--e3);font:var(--t-meta);pointer-events:none;
   animation:tipin var(--dur-1) var(--ease-standard)}
-.tip b{display:block;font-weight:700;font-size:14px;line-height:20px;margin-bottom:var(--s2)}
+.tip b{display:block;font:var(--t-strong);margin-bottom:var(--s2)}
 .tip p{margin:0 0 var(--s2)}
 .tip p:last-child{margin-bottom:0}
 .tip dl{display:grid;gap:var(--s1);margin:var(--s2) 0 0}
@@ -442,7 +510,7 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
 .tip dd{margin:0 0 var(--s2)}
 .tip dd:last-child{margin-bottom:0}
 @keyframes tipin{from{opacity:0}to{opacity:1}}
-.gloss{font-weight:400;font-size:12px;line-height:16px;color:var(--muted)}
+.gloss{font:var(--t-meta);color:var(--muted)}
 .card .hd .tipbtn{margin-left:auto}
 .toolbar .tipbtn{margin-left:var(--s2)}
 /* Status panels are TINTED PAPER in the chip colours, never a coloured spine. */
@@ -452,31 +520,43 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
 .banner .ic{width:16px;height:16px}
 .banner a{color:inherit;font-weight:700;text-decoration:underline}
 .callout{display:flex;gap:var(--s3);align-items:flex-start;border-radius:var(--r);
-  padding:var(--s3) var(--s4);font-size:14px;line-height:21px;margin:var(--s3) 0 var(--s4)}
+  padding:var(--s3) var(--s4);font:var(--t-body);margin:var(--s3) 0 var(--s4)}
 .callout.amber{background:var(--amber-soft);color:var(--amber-ink)}
 .callout .ic{margin-top:2px}
-.callout b{display:block;font-weight:700;margin-bottom:var(--s1)}
+.callout b{display:block;font:var(--t-strong);color:inherit;margin-bottom:var(--s1)}
 .callout a{color:inherit;font-weight:700;text-decoration:underline}
 .loading{color:var(--muted);font-size:14px;line-height:20px;padding:var(--s7);text-align:center}
-h2.sec{font:600 12px/16px var(--font);color:var(--muted);text-transform:uppercase;
-  letter-spacing:.05em;margin:var(--s6) 0 var(--s3);
+/* RANK A: names a group of cards. Its 32/12 lead-in is the only asymmetric heading margin in the
+   file, and it is deliberate — the space belongs above the label, with the group it opens. */
+h2.sec{font:var(--t-label);color:var(--muted);text-transform:uppercase;
+  letter-spacing:var(--track-caps);margin:var(--s6) 0 var(--s3);
   display:flex;align-items:center;gap:var(--s2)}
 h2.sec.tight{margin-top:0}
 .chips{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center}
 .chev{color:var(--muted);text-align:right}
-.legend{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);font-size:12px;
-  line-height:16px;color:var(--muted);margin-bottom:var(--s4)}
+/* A key, not a sentence: each pill and its gloss are one unit, and the units are separated by
+   space alone. The literal middots doubled up with the flex gap and stranded one at every wrap. */
+.legend{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s5);font:var(--t-meta);
+  color:var(--muted);margin-bottom:var(--s4)}
+.legend .item{display:inline-flex;align-items:center;gap:var(--s2)}
 .mb-4{margin-bottom:var(--s4)}
-.demo-journey{font-size:14px;line-height:21px;color:var(--muted)}
-.demo-journey .ic,.fitem .ic,td .ic,.probe-out .ic{vertical-align:middle}
+.demo-journey{font:var(--t-body);color:var(--muted)}
+/* `vertical-align:middle` aligns to baseline + half the x-height, not the centre of the line box,
+   so a 16px icon on 14/20 text lands 1.5px low. This is the optical correction for that. */
+.demo-journey .ic,.fitem .ic,td .ic,.probe-out .ic{vertical-align:middle;position:relative;top:-1.5px}
 
 /* ── Approve by hand: the console's one dialog ── */
 dialog.modal{border:0;border-radius:var(--r);background:var(--surface);
   color:var(--text);padding:var(--s5);width:min(560px,calc(100vw - 2*var(--s4)));
-  box-shadow:var(--e3);font-size:14px;line-height:21px}
-dialog.modal::backdrop{background:rgba(0,30,60,.55)}
-dialog.modal h2{font-size:22px;line-height:28px;font-weight:700;margin-bottom:var(--s3)}
+  box-shadow:var(--e3);font:var(--t-body)}
+/* .55 left the peach callout and the gate strip fully legible behind the dialog, so the modal did
+   not isolate the decision it was asking about. */
+dialog.modal::backdrop{background:rgba(0,22,45,.72)}
+/* The dialog's title is rank B, not rank A: at 22px it matched the page h1 showing through the
+   backdrop, so the modal never took the top of the hierarchy it was interrupting. */
+dialog.modal h2{font:var(--t-title);margin-bottom:var(--s3)}
 dialog.modal p{margin:0 0 var(--s3)}
+.req{color:var(--red);font-weight:700}
 dialog.modal textarea{min-height:88px}
 dialog.modal .banner{margin-top:var(--s3)}
 </style>
@@ -574,12 +654,14 @@ dialog.modal .banner{margin-top:var(--s3)}
   <form id="ap-form">
     <h2 id="ap-title">Approve <span id="ap-co"></span> Manually</h2>
     <div id="ap-body"></div>
-    <div class="field"><label class="flab" for="ap-who">Reviewer ID</label>
-      <input id="ap-who" required autocomplete="off">
-      <span class="note">Recorded on the decision and in the activity log exactly as entered.</span></div>
-    <div class="field"><label class="flab" for="ap-why">Reason</label>
-      <textarea id="ap-why" required></textarea>
-      <span class="note">Stored with the approval. State what was verified.</span></div>
+    <div class="field"><label class="flab" for="ap-who">Reviewer ID <span class="req">*</span></label>
+      <input id="ap-who" required autocomplete="off" aria-describedby="ap-who-note">
+      <span class="note" id="ap-who-note">Recorded on the decision and in the activity log exactly as entered.</span></div>
+    <div class="field"><label class="flab" for="ap-why">Reason <span class="req">*</span></label>
+      <textarea id="ap-why" required aria-describedby="ap-why-note"></textarea>
+      <span class="note" id="ap-why-note">Stored with the approval. State what was verified.</span></div>
+    <p class="note"><span class="req">*</span> Both fields are required. A manual approval is
+      appended to the record permanently and cannot be withdrawn.</p>
     <div class="toolbar" style="margin:0;justify-content:flex-end">
       <button type="button" id="ap-cancel">Cancel</button>
       <button type="submit" class="primary" id="ap-go">Approve Manually</button></div>
@@ -675,15 +757,20 @@ const SAY={
   decision:{approve:"Approved",approve_buy_locked:"Approved, Buying Locked",
     manual_review_insufficient:"On Hold",reject:"Rejected"},
   buy:{enabled:"Buying enabled",locked_org_id_required:"Buying locked pending Org ID verification"},
-  buy_status:{not_applicable:"Buying not yet applicable",
-    buy_locked_org_id_required:"Buying locked pending Org ID verification",
-    org_id_validation_pending:"Org ID verification in progress",org_id_failed:"Org ID verification failed",
-    buy_enabled:"Buying enabled",buy_suspended:"Buying suspended"},
-  case_status:{registered:"Registered",email_verification_pending:"Awaiting email verification",
-    email_verified:"Email verified",enrichment_running:"Collecting evidence",
-    kyc_pending:"Verification in progress",manual_review_insufficient:"Awaiting further evidence",
-    account_approved:"Approved",approved_manual:"Approved manually",rejected:"Rejected"},
-  broker:{clear:"No broker match",allowed_broker:"Allowed broker",blocked:"Blocked broker"},
+  buy_status:{not_applicable:"Buying Not Yet Applicable",
+    buy_locked_org_id_required:"Buying Locked Pending Org ID",
+    org_id_validation_pending:"Org ID Verification In Progress",org_id_failed:"Org ID Verification Failed",
+    buy_enabled:"Buying Enabled",buy_suspended:"Buying Suspended"},
+  /* The same six states, in a table column already headed "Buying". The long form is for the
+     company page, where the chip stands alone and has to name its own subject. */
+  buy_status_short:{not_applicable:"Not Applicable",buy_locked_org_id_required:"Locked",
+    org_id_validation_pending:"Verifying",org_id_failed:"Failed",
+    buy_enabled:"Enabled",buy_suspended:"Suspended"},
+  case_status:{registered:"Registered",email_verification_pending:"Awaiting Email Verification",
+    email_verified:"Email Verified",enrichment_running:"Collecting Evidence",
+    kyc_pending:"Verification In Progress",manual_review_insufficient:"Awaiting Further Evidence",
+    account_approved:"Approved",approved_manual:"Approved Manually",rejected:"Rejected"},
+  broker:{clear:"No Broker Match",allowed_broker:"Allowed Broker",blocked:"Blocked Broker"},
   check:{verified_company_email:"Company email verified",
     official_registry_match:"Official registry match",
     org_id_match:"Org ID match",
@@ -691,7 +778,7 @@ const SAY={
     business_document_verified:"Business document verified",
     linkedin_company_match:"LinkedIn company match",
     website_verified:"Website reviewed",verified_email:"Email verified"},
-  status:{pass:"Passed",fail:"Failed",needs_review:"Needs review",missing:"Not yet available"},
+  status:{pass:"Passed",fail:"Failed",needs_review:"Needs Review",missing:"Not Yet Available"},
   gate:{score_met:"Score threshold met",legal_proof:"Legal entity verified",
     control_proof:"Control verified",broker_ok:"No broker block",
     no_hard_conflict:"No conflicting evidence"},
@@ -702,7 +789,7 @@ const SAY={
   task:{website:"Website review",poc_email_unavailable:"No contact email on record"},
   category:{control_proof:"Control proof",legal_business_proof:"Legal entity proof",
     supporting:"Supporting",account_access:"Account access"},
-  mode:{automated:"Automated",manual:"Manual review",
+  mode:{automated:"Automated",manual:"Manual Review",
     automated_plus_user_token:"Automated with emailed code"},
   adapter:{broker_policy:"Blocked Broker List",email_verification:"Email Verification",
     companies_house:"Companies House",gleif:"GLEIF LEI Register",
@@ -945,6 +1032,21 @@ const PROV_PILL={unresolved_pointer_drift:["integrity_drift",undefined],unresolv
   // every MANUAL provenance state has its own pill (re-audit `8377440` F6): a legacy-unresolved
   // manual history must NOT render identically to "no manual approval".
   latest_manual_row_manual:["manual","Approved Manually (current decision)"],unresolved_pointer_drift_manual:["integrity_drift","Manual Approval Record Conflict"],unresolved_legacy_order_manual:["missing","Manual Approval Order Unresolved"],no_manual_decisions_manual:["p-neutral","No Manual Approval"]};
+/* Status → chip, for the two projections that carry their own vocabulary. The list cell, the
+   company header and the decision table all render a status through one of these, so the same
+   value never appears as a pill on one screen and as bare text on another. The raw enum stays on
+   the title for whoever is matching this against a log line. */
+const CASE_PILL={registered:["p-neutral",I.clock],email_verification_pending:["p-amber",I.clock],
+  email_verified:["p-neutral",I.check],enrichment_running:["p-accent",I.running],
+  kyc_pending:["p-accent",I.running],manual_review_insufficient:["p-amber",I.clock],
+  account_approved:["p-green",I.check],approved_manual:["p-blue",I.person],rejected:["p-red",I.cross]};
+const BUY_PILL={not_applicable:["p-neutral",I.absent],buy_locked_org_id_required:["p-amber",I.lock],
+  org_id_validation_pending:["p-accent",I.running],org_id_failed:["p-red",I.cross],
+  buy_enabled:["p-green",I.check],buy_suspended:["p-red",I.lock]};
+const statePill=(map,group,v,label)=>{const[c,i]=map[v]||["p-neutral",I.absent];
+  return`<span class="pill ${c}" title="${esc(v??"")}">${i}${esc(label??say(group,v))}</span>`};
+const casePill=(c,held)=>statePill(CASE_PILL,"case_status",c.status,
+  held&&c.status==="manual_review_insufficient"?"Awaiting Reviewer":undefined);
 const provPill=(p,manual)=>{const k=manual?p+"_manual":p;const[q,label]=PROV_PILL[k]||PROV_PILL[p]||["missing",p];return pill(q,label)};
 const pill=(k,label)=>{const[c,i,d]=PILL[k]||["p-neutral",I.absent,k];
   return`<span class="pill ${c}">${i}${esc(label??d)}</span>`};
@@ -957,7 +1059,7 @@ function pipe(state){if(state==="FAILED")return`<span class="pipe">`
   const i=RUN_STATES.indexOf(state);
   return`<span class="pipe">`+RUN_STATES.map((s,k)=>
     `<span class="st ${k<i?"done":k===i?"cur":""}" title="${esc(s)}">${esc(say("stage",s))}</span>`
-  ).join(`<span class="arr" aria-hidden="true">›</span>`)+`</span>`}
+  ).join("")+`</span>`}
 
 const page=$("#page");
 let refreshTimer=null;
@@ -1055,15 +1157,15 @@ async function viewCases(){
   const rows=body.cases.map(c=>`<tr class="click" data-id="${esc(c.id)}">
     <td><a href="#/case/${encodeURIComponent(c.id)}" class="rowlink">${esc(c.company_name||c.id)}</a><div class="sub mono">${esc(c.id)}</div></td>
     <td>${c.latest_decision?(c.enforcement_held?pill("held_for_approval"):pill(c.latest_decision)):provPill(c.decision_provenance)}</td>
-    <td class="num strong">${c.decision_score??"—"}</td>
-    <td class="num sub">${c.current_evidence_score}</td>
-    <td class="sub">${esc(c.enforcement_held&&c.status==="manual_review_insufficient"?"Awaiting reviewer":say("case_status",c.status))}</td>
-    <td class="sub">${esc(say("buy_status",c.buy_status))}</td>
+    <td class="num"><span class="strong">${c.decision_score??"—"}</span>${
+      c.decision_score!==c.current_evidence_score?`<div class="sub">now ${c.current_evidence_score}</div>`:""}</td>
+    <td>${casePill(c,c.enforcement_held)}</td>
+    <td>${statePill(BUY_PILL,"buy_status_short",c.buy_status)}</td>
     <td>${pill(c.broker_status)}</td>
     <td class="num">${when(c.updated_at)}</td>
     <td class="chev" aria-hidden="true">›</td></tr>`).join("")
-    ||(q?emptyRow(9,"No matches",`No company or ID contains “${esc(q)}”. <button class="sm" id="clearq">Clear Search</button>`)
-        :emptyRow(9,"No companies yet",`Send a <code>kyb.run_requested</code> message from <a href="#/composer">Send Message</a> to create one.`));
+    ||(q?emptyRow(8,"No matches",`No company or ID contains “${esc(q)}”. <button class="sm" id="clearq">Clear Search</button>`)
+        :emptyRow(8,"No companies yet",`Send a <code>kyb.run_requested</code> message from <a href="#/composer">Send Message</a> to create one.`));
   page.innerHTML=tbar("Companies","All companies that have applied. Select a row to open the full record.","","cases")+`
     <div class="toolbar">
       <div class="search"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="4.5"/><path d="M14 14l-3.5-3.5"/></svg>
@@ -1071,9 +1173,9 @@ async function viewCases(){
       <span class="note">${body.cases.length} compan${body.cases.length===1?"y":"ies"}</span>
       ${tip("caselist")}</div>
     <div class="card"><div class="bd flush"><table class="companies">
-      <thead><tr><th>Company</th><th>Decision</th><th class="num" title="score at the time of the decision">Decision Score</th>
-      <th class="num" title="current evidence total; not the decision">Current Score</th>
-      <th>Status</th><th>Buying</th><th>Broker Status</th><th class="num">Last Updated</th><th></th></tr></thead>
+      <thead><tr><th>Company</th><th>Decision</th>
+      <th class="num" title="score at the time of the decision, with today's evidence total below it when the two differ">Score</th>
+      <th>Status</th><th>Buying</th><th>Broker Status</th><th class="num">Updated</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`;
   $("#q").addEventListener("input",e=>{remember("caseq",e.target.value);
     clearTimeout(window.__qt);window.__qt=setTimeout(viewCases,250)});
@@ -1293,8 +1395,8 @@ async function viewCase(id){
     ${tbar(esc(c.company_name||c.id),
       `<span class="chips">${decision?(hold?pill("held_for_approval"):pill(decision)):provPill(d.decision_provenance)}
        ${d.manual_decision_provenance&&d.manual_decision_provenance!=="no_manual_decisions"?provPill(d.manual_decision_provenance,true):""}
-       ${c.status==="approved_manual"?pill("manual","Approved Manually"):`<span class="pill p-neutral" title="${esc(c.status)}">${esc(hold&&c.status==="manual_review_insufficient"?"Awaiting reviewer":say("case_status",c.status))}</span>`}
-       <span class="pill p-neutral" title="${esc(c.buy_status)}">${esc(say("buy_status",c.buy_status))}</span>${pill(c.broker_status)}</span>`,
+       ${casePill(c,hold)}
+       ${statePill(BUY_PILL,"buy_status",c.buy_status)}${pill(c.broker_status)}</span>`,
       `${c.status==="approved_manual"?"":`<button class="warn" id="approvebtn">${I.person}Approve Manually</button>`}
        <button class="primary" id="sendbtn">Send Message</button>`)}
     <div class="card"><div class="hd"><h2>Decision Sent to Platform</h2>
@@ -1302,7 +1404,7 @@ async function viewCase(id){
       <div class="bd">
         ${latest.decision?`<div class="bullet"><div class="val">
             <b style="color:${decisionColor}" title="${esc(latest.decision)}${hold?` — the rules computed ${esc(hold.computed_decision)}`:""}">${hold?"Held for Approval":esc(say("decision",latest.decision))}</b>
-            <span class="of">${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"Buying not recorded"))}</span>
+            <span class="of">${latest.score??"—"} points · this decision: ${esc(say("buy",latest.buy_enablement,"buying not recorded").toLowerCase())}</span>
             <span class="verdict sub">Decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
           ${hold?holdCallout(hold,latest,s.threshold,d.latest_manual_decision):""}
           <h3 class="sub-hd">Decision Rules
@@ -1342,8 +1444,8 @@ async function viewCase(id){
       <thead><tr><th>RIR Contact</th><th>Sent To</th><th>Status</th><th class="num">Sent</th></tr></thead>
       <tbody>${tokenRows}</tbody></table></div></div>`:""}
     ${sec("Salesforce Fields","salesforce")}
-    <div class="card"><div class="hd"><h3>Fields to be written by the platform</h3>
-      <span class="hint">preview only · this console does not write to Salesforce</span></div>
+    <div class="card"><div class="hd">
+      <span class="hint">the values the platform is expected to write · this console does not write to Salesforce</span></div>
       <div class="bd flush"><table>
       <thead><tr><th>Salesforce Field</th><th>Value</th><th>Source</th></tr></thead>
       <tbody>${sfRows}</tbody></table></div>
@@ -1409,9 +1511,9 @@ async function viewIntegrations(){
         <div class="probe-out" id="probe-${esc(a.adapter_id)}"></div>`:`<span class="sub">Not testable from the console</span>`}</div>
     </div>`).join("");
   page.innerHTML=tbar("Data Sources","Where each piece of evidence comes from, and whether the connection is live.","","integrations")+`
-    <p class="legend">${pill("live")} live service · ${pill("stub")} built-in test data ·
-      ${pill("dev")} development stand-in · ${pill("needs-config")} configured without credentials ·
-      ${pill("manual")} manual process</p>
+    <p class="legend">${[[pill("live"),"live service"],[pill("stub"),"built-in test data"],
+      [pill("dev"),"development stand-in"],[pill("needs-config"),"configured without credentials"],
+      [pill("manual"),"manual process"]].map(([c,t])=>`<span class="item">${c}${t}</span>`).join("")}</p>
     <div class="card mb-4"><div class="hd"><h2 class="iw">${I.swap}Platform Connections</h2>${tip("platform")}</div>
       <div class="irow"><div class="itile">CB</div>
         <div class="meta"><div class="nm">Decision Delivery ${pill(p.status)}</div>
@@ -1461,7 +1563,7 @@ async function viewFieldMap(){
   page.innerHTML=tbar("Salesforce Fields",
     "The Salesforce field each value is written to, and the source of that value.","","fieldmap")+`
     <div class="toolbar">
-      <label class="note" for="fmcase">Show values for</label>
+      <label class="flab" for="fmcase">Show values for</label>
       <select id="fmcase"><option value="">Select a company</option>
         ${cl.cases.map(c=>`<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.company_name||c.id)} · ${esc(c.id)}</option>`).join("")}
       </select>${tip("fieldtable")}</div>
@@ -1482,7 +1584,7 @@ async function viewPolicy(rule=""){
     <td><span class="strong">${esc(say("check",r.check_type))}</span>
       <div class="sub mono">${esc(r.check_type)}</div></td><td class="num strong">+${r.points}</td>
     <td class="sub">${esc(say("category",r.category))}</td>
-    <td>${r.mode==="manual"?pill("manual"):`<span class="sub">${esc(say("mode",r.mode))}</span>`}</td>
+    <td>${r.mode==="manual"?pill("manual","Manual Review"):pill("p-neutral",say("mode",r.mode))}</td>
     <td class="sub">${esc(r.pass_rule)}</td></tr>`).join("");
   /* The condition is shown verbatim, in the mono register, because it IS the rule: restating a
      compliance condition in prose on screen would let the screen drift from the bundle and assert
