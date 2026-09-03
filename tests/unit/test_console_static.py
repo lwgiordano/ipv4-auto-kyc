@@ -185,14 +185,73 @@ def test_frame_folds_and_tables_scroll_in_their_cards():
 # --- the result reaches a reader who cannot see colour ----------------------------------------
 
 def test_decision_rules_say_their_own_result_in_text():
-    """The five gate cells name the SUBJECT ("Score threshold met") in both states and carried the
-    outcome in the icon and the ground. Read aloud, a passed rule and a failed rule were the same
-    sentence. The result is now text: hidden on a met rule, printed on a failed one."""
+    """The five gate cells name the SUBJECT ("Score threshold met") and carried the outcome in the
+    icon and the ground, so read aloud a passed rule and a failed rule were the same sentence.
+    The result is now a word of its own, on its own row, in all three states -- which is also what
+    stopped the em-dash clause wrapping two cells of one strip to different heights."""
     card = VIEW_CASE[VIEW_CASE.index("published-gates"):]
     card = card[: card.index("Current Evidence Score")]
-    assert '<span class="vh"> — met</span>' in card
-    assert "— not met" in card
+    for word in ('class="g-r">${gates[g0]?"Met":"Not met"}', 'class="g-r">Not evaluated'):
+        assert word in card, f"the gate must print its own result: {word}"
+    assert 'class="g-s">' in card, "and the subject must be its own element"
     assert ".vh{position:absolute" in CONSOLE, "the visually-hidden utility backing it is gone"
+
+
+def test_the_five_rule_strip_names_its_own_column_count():
+    """`repeat(auto-fit,minmax(140px,1fr))` cannot express five -- it expresses "as many as fit",
+    and between 1024 and 1130px that is four, so a five-item checklist printed 4 + 1."""
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    gates = re.search(r"^\.gates\{([^}]*)\}", css, re.MULTILINE)
+    assert gates and "repeat(5,1fr)" in gates.group(1)
+    assert "auto-fit" not in gates.group(1)
+
+
+def test_the_bypassed_gate_carries_a_drawn_glyph():
+    """Its marker was a 2.89px text middot against the 16px box every sibling carries, which put
+    its label origin 12.11px off in the same grid slot."""
+    card = VIEW_CASE[VIEW_CASE.index("published-gates"):]
+    card = card[: card.index("Current Evidence Score")]
+    na = card[card.index('class="gate na"'):]
+    assert "${I.absent}" in na[:200], "the bypassed cell must use the drawn glyph"
+    assert 'aria-hidden="true">·<' not in na
+
+
+def test_the_run_track_cannot_wrap():
+    """Ten labelled steps in a 267px column wrapped to four rows with a 0.00px row gap and 103.7px
+    of rag -- a row of free-floating slabs, which is what the joined form exists to prevent."""
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    pipe = re.search(r"^\.pipe\{([^}]*)\}", css, re.MULTILINE)
+    assert pipe, ".pipe is gone"
+    assert "flex-wrap" not in pipe.group(1), "the track must never wrap"
+    fn = CONSOLE[CONSOLE.index("function pipe(state)"):]
+    fn = fn[: fn.index("\n\n")]
+    assert "pipe-lab" in fn, "the step a reviewer acts on is named in words"
+    assert 'title="${esc(s)}"' in fn, "each segment keeps the engine's own state name"
+
+
+def test_a_run_of_chips_is_spaced_by_gap_not_by_a_space():
+    """Chips joined with `" "` are spaced by the rendered width of a space: 3.66px across and
+    1.00px on wrap. Anisotropic, so no value on the scale can produce it."""
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    assert re.search(r"^\.chips,\.chiprow\{[^}]*gap:var\(--s2\)", css, re.MULTILINE)
+    for run in ('<span class="tag ${ch.status==="fail"?"err":"warn"}">${esc(r)}</span>`).join("")',
+                '</span>`).join("");'):
+        assert run in CONSOLE
+    # the three runs that used to be joined by a space now sit in a real container
+    assert '<div class="chiprow haspill">${chain}</div>' in VIEW_CASE
+    assert '<div class="chiprow">${ads}</div>' in VIEW_CASE
+    assert '<div class="chiprow end">' in VIEW_CASE
+
+
+def test_no_state_is_encoded_in_an_opacity():
+    """Rule 9. `style="opacity:.55"` marked superseded evidence and survived three audits because
+    no seeded state renders a replaced check."""
+    # Comments RECORDING the fix name the banned expression; they are the fix, not a reassertion
+    # of it (same reason `_function_body` strips `//` lines).
+    live = re.sub(r"/\*.*?\*/", "", CONSOLE, flags=re.DOTALL)
+    assert "opacity:.55" not in live and "opacity: .55" not in live
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    assert re.search(r"^\.was\{color:var\(--muted\)\}", css, re.MULTILINE)
 
 
 def test_evidence_rows_carry_their_status_as_text_and_hide_the_dot():

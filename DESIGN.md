@@ -97,7 +97,7 @@ accidentally different by a few px of radius.
 | `.pill` | 24px, fully rounded (16px) | `--t-chip` | pastel, by status | **always** | a status a person acts on |
 | `.tag` | 20px, square (4px), **outlined** | `--t-meta` mono | none, unless severity | rarely | a machine value quoted verbatim |
 | `.pipe .st` | 20px, square, **joined** | `--t-meta` | track greys | never | one step in a fixed ten-step track |
-| `.gate` | 44px grid cell, square | `--t-label` | pastel, by result | always | one row of a five-item checklist |
+| `.gate` | 60px grid cell, square, **two rows** | subject `--t-body`, result `--t-label` | pastel, by result | always | one row of a five-item checklist |
 
 **The rule that matters: anything a reviewer reads as a status is a `.pill`, in every context** —
 the list cell, the company header, the decision table, the legend, the task result. No exceptions.
@@ -235,7 +235,48 @@ pinned by the brief — and not on this page at all.
 
 ---
 
-## 9. Rules to hold
+## 9. The geometry pass
+
+A third critique, scoped by the brief to alignment, box geometry, cramping and overlap, measured on
+three live states at 1440/1100/1024/768/390 in both themes. Scored 28/40.
+
+**The structure measured clean and the components did not.** 18 top-level blocks with 0.00px edge
+deltas across 24 runs; 17 adjacent gaps all on the scale with no same-role divergence; zero document
+overflow; zero real overlaps; no contrast failure in either theme. What was broken was four
+components' internal geometry — and every one of them was a **layout default**, not a token choice.
+§7 and §8 were both looking at tokens, which is why this class survived them.
+
+| # | Found | Why it wasn't working | Fixed by |
+|---|---|---|---|
+| 36 | The ten-step round track wrapped to **4 rows at 1440** (7 at 1100, 9 at 1024) in a 266.8px column, **row gap 0.00px**, right edges ragged by 103.7px. Only steps 1 and 10 carried a radius, so every wrap point showed a hard square edge with a 1px border hanging in space. | §4 defines the track as "joined… never free-floating," precisely so it cannot read as a row of independent chips. Wrapped, that is exactly what it was, on every case and every round. | The track keeps its job as an 8px ten-segment meter that cannot wrap, and the step a reviewer acts on is named underneath it in words ("Decide · step 8 of 10"). The ten state names stay on the segments' own titles. |
+| 37 | `.gates{repeat(auto-fit,minmax(140px,1fr))}` rendered **4 + 1 orphan** from ~1024 to ~1130px, with 485px of dead ground beside the orphan. | The copy one line above says "all five must be true." `auto-fit` cannot express five; it expresses "as many as fit", and the one width it lands on there is four. | `repeat(5,1fr)` above 1180px, `repeat(1,1fr)` below. The count is named, not inferred. |
+| 38 | Tag runs and the approve/reject button pair were spaced **3.66px across and 1.00px on wrap** — the rendered width of a space at 14px, from `.join(" ")`. Every `gap`-spaced sibling on the page measured exactly 8.00. | Anisotropic, so no value on the scale can produce it. §3 says layout does the spacing. The same component was spaced three ways in one file (one call site already used `.join("")` → 0px). Two 32px commit buttons of opposite consequence 3.66px apart is also a mis-tap. | One `.chiprow` container at `gap:var(--s2)`, and the joins emptied. Six runs moved onto it. |
+| 39 | `.gate` measured **44 / 56 / 58 / 74px** across states, differing by 12px and 16px **within a single five-item strip**. | The "— met" / "— not met" suffixes from finding 23 wrap the label, and `min-height:44px` has no counterpart. The em-dash clause was also not a sentence anyone would say: "Score threshold met — not met". | Two declared rows: subject on top at `--t-body`, result underneath at the whole `--t-label`. Uniform 66px in every state at every width, and the result reads. |
+| 40 | `.gate.na`'s marker was a **2.89px** text middot against the **16.00px** box every sibling carries, shifting its label origin **12.11px** in the same grid slot. It also carried a 1px border no sibling had. | §5: every icon is a 16px box, alignment is flex's job. This state had now been wrong three times. | The drawn `I.absent` glyph, and a transparent 1px border on the base `.gate` so all three variants share one content box. |
+| 41 | A pill in a table cell started its glyph **3px below** every other cell in its row (Decision History row 1: pill 2916.00, everything else 2912–2913). | `td{vertical-align:top}`: a 14/20 line box starts at +1, a pill — an 18px line centred in a 24px box — at +3. §2's stated reason for one line-height per size is that a body line and a table cell share a baseline. This is the table read months later. | `td>.pill{top:-3px}` for bare cells; `td>.chiprow.haspill{margin-top:-3px}` for a chip run, so the pill and its points move as one group. Measured after: **1px spread** across the row. |
+| 42 | The score bar's empty channel measured **1.13:1** light / 1.17:1 dark against the card. | §6's floor for a meaningful graphic is 3:1. Past the fill there was nothing to say where the scale ends, so "45" had no denominator on screen. | An inset ring at the 3:1 control token, which draws the edge without changing the 16px box the fill and the tick are positioned against. |
+| 43 | A **ninth type tuple**: all 22 `.gate` cells rendered `12/16/600/normal/none`, while `--t-label` renders elsewhere as uppercase + `.05em` on 98 elements. | `.gate{font:var(--t-label)}` sets the shorthand and inherits neither case nor tracking — **rule 14's failure mode, on the component §4 assigns that token to.** §8 finding 32's claim of "eight tuples, all tokens" was wrong; it counted by token name, not by rendered tuple. | The subject moved to `--t-body` (which also fixes the rank inversion below), the result to the whole `--t-label`. Measured after: **eight tuples, every one a token.** |
+| 44 | The Evidence History header was a **51-character uppercase sentence**: "History (oldest first; faded entries were replaced)". Caught by the detector, missed by both eyes. | The token was applied correctly; the string was prose. Uppercase is for labels. | The `th` reads "History"; the sentence became a `.gloss` on the section heading — which then needed `text-transform:none` of its own, or it inherited the heading's caps and became a tenth tuple. |
+| 45 | `opacity:.55` on superseded evidence, at `console.html:1363`. | Rule 9, surviving three audits because **no seeded state renders a replaced check**. | A `.was` class: retired evidence keeps its shape and loses its hue, its chip going to the neutral ground. |
+
+Also fixed, all measured: the feed dot sat **2.00px** below its line (`top:14px` → `12px`); the title-to-chips
+gap was **4.00px**, clearance on cap height alone, now 8; `.bullet .val` wraps at every width, not only
+below 720; `.contrib` flows by column so the DOM order matches the two bordered lists the eye reads
+down; the Salesforce card lost the title-less 41px header band its six siblings do not have; and
+`.bmeasure`'s colour moved out of an inline `style` into CSS.
+
+**Detector verdicts.** Six of seven findings were false positives, each disproved by measurement:
+`ai-color-palette` is the marketplace wordmark in the top bar, outside `.page` entirely;
+four `cramped-padding` hits are the flush cards, whose real 16px inset comes from cell padding, and a
+button whose room comes from `min-height`; `line-length` measures 62–75 chars against an 80 floor;
+`em-dash-overuse` counts 15, of which 5 are `.vh` accessibility text and 9 the null-value marker.
+Two were real: `flat-type-hierarchy` (three of four adjacent steps under 1.25) and `all-caps-body`
+(finding 44). A seventh claim — that hash-only navigation between cases does not re-render — was
+also a false positive, disproved by re-measuring.
+
+---
+
+## 10. Rules to hold
 
 1. Anything a reviewer reads as a status is a `.pill` — every table, header, list and legend.
    Running prose is the one exemption: a status named inside a sentence stays a word.
@@ -262,8 +303,16 @@ pinned by the brief — and not on this page at all.
     differs from the chip it derives from.
 19. Measure the page after applying a rule from this file. Three of the defects in §8 were
     written by the pass that wrote §7.
+20. A fixed-cardinality set names its column count. `auto-fit` expresses "as many as fit", never
+    "five" — and the width where it lands on four is a width people use.
+21. A run of siblings is spaced by `gap` on a real container, never by a space in a template
+    string. A space is a font metric: 3.66px across, 1.00px down, on no scale in either axis.
+22. A component that cannot fit its column changes form; it does not wrap. Wrapping is the browser
+    choosing a layout you did not.
+23. A token is what RENDERS, not what is named. `font:var(--t-label)` without the case and tracking
+    that token carries elsewhere is a second tuple, and counting by name will not catch it.
 
-## 10. Verifying a change
+## 11. Verifying a change
 
 ```bash
 bash scripts/dev.sh                    # stack + console on :8080/ui
