@@ -1,0 +1,110 @@
+#!/bin/bash
+# KYC Console (Live) — the real stack, with the UI kept current.
+#
+# It runs scripts/dev.sh (ephemeral Postgres, migrations, the dev worker, the fake platform
+# receiver, the API), puts scripts/devproxy.py in front so the console is read from disk on every
+# request, and opens a window on it. Then it keeps pulling this branch: a UI change repaints the
+# open window in a couple of seconds without touching the database, and a change to the engine
+# restarts the stack.
+#
+# Everything you do here is real. Send Message runs the pipeline, Approve Manually writes a
+# decision under your name. The database is temporary and goes away when you quit.
+set -uo pipefail
+
+BRANCH="claude/project-setup-standing-rules-5w1fwh"
+STATE="$HOME/Library/Application Support/KYC Console"
+mkdir -p "$STATE"
+LOG="$STATE/live.log"
+exec > >(tee "$LOG") 2>&1
+
+say() { osascript -e "display dialog \"$1\" buttons {\"OK\"} default button 1 with title \"KYC Console (Live)\"" >/dev/null 2>&1; }
+valid() { [ -n "${1:-}" ] && [ -f "$1/scripts/dev.sh" ] && [ -f "$1/scripts/devproxy.py" ]; }
+freeport() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+
+# The bundle ships inside the repo, so its own location is the first guess.
+REPO=""; here="$(cd "$(dirname "$0")" && pwd)"
+while [ "$here" != "/" ]; do valid "$here" && { REPO="$here"; break; }; here="$(dirname "$here")"; done
+[ -n "$REPO" ] || REPO="$(cat "$STATE/repo-path" 2>/dev/null || true)"
+valid "$REPO" || REPO="$(find "$HOME" -maxdepth 6 -type d -name ipv4-auto-kyc 2>/dev/null | head -1)"
+if ! valid "$REPO"; then
+  say "I could not find your ipv4-auto-kyc checkout.\n\nClone it, then open this from tools/ inside it."
+  exit 1
+fi
+printf '%s' "$REPO" > "$STATE/repo-path"
+cd "$REPO" || exit 1
+
+# dev.sh already probes for the venv and for postgres, across apt, Homebrew and Postgres.app,
+# and says what is missing. Duplicating that probe here got it wrong; its message is surfaced
+# instead, in a dialog, since nobody sees stdout when this is launched from Finder.
+
+if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+  git fetch --quiet origin "$BRANCH" 2>/dev/null
+  git checkout --quiet "$BRANCH" 2>/dev/null || echo "staying on $(git rev-parse --abbrev-ref HEAD)"
+else
+  echo "working tree is dirty — running it as-is, not switching branches"
+fi
+
+API_PORT="$(freeport)"; RCV_PORT="$(freeport)"; PG_PORT="$(freeport)"; UI_PORT="$(freeport)"
+URL="http://127.0.0.1:$UI_PORT/ui"
+pytree() { find src -name '*.py' -type f -exec shasum {} + 2>/dev/null | shasum | cut -d' ' -f1; }
+
+DEV_PID=""; PROXY_PID=""
+stop_stack() { [ -n "$DEV_PID" ] && kill "$DEV_PID" 2>/dev/null; DEV_PID=""; sleep 3; }
+trap 'stop_stack; [ -n "$PROXY_PID" ] && kill $PROXY_PID 2>/dev/null' EXIT INT TERM
+
+start_stack() {
+  echo "starting the stack (api $API_PORT, receiver $RCV_PORT, postgres $PG_PORT)…"
+  KYC_DEV_API_PORT="$API_PORT" KYC_DEV_RECEIVER_PORT="$RCV_PORT" KYC_DEV_PG_PORT="$PG_PORT" \
+    bash scripts/dev.sh &
+  DEV_PID=$!
+  for _ in $(seq 1 120); do
+    curl -sf -o /dev/null "http://127.0.0.1:$API_PORT/ui" && return 0
+    sleep 1
+  done
+  return 1
+}
+
+if ! start_stack; then
+  say "The stack did not start.\n\n$(tail -n 6 "$LOG" | tr -d '"')\n\nFull log:\n$LOG"
+  exit 1
+fi
+
+# An empty Companies list is correct but not much to look at; walk one company through.
+EMPTY="$(curl -s "http://127.0.0.1:$API_PORT/ui/api/cases" | grep -c 'demo-case-001' || true)"
+SEED=""; [ "$EMPTY" = "0" ] && SEED="--seed"
+
+python3 scripts/devproxy.py --api "http://127.0.0.1:$API_PORT" --port "$UI_PORT" $SEED &
+PROXY_PID=$!
+for _ in $(seq 1 40); do curl -sf -o /dev/null "$URL" && break; sleep 0.25; done
+
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+EDGE="/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+BRAVE="/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+if   [ -x "$CHROME" ]; then "$CHROME" --app="$URL" --window-size=1440,960 >/dev/null 2>&1 &
+elif [ -x "$EDGE"   ]; then "$EDGE"   --app="$URL" --window-size=1440,960 >/dev/null 2>&1 &
+elif [ -x "$BRAVE"  ]; then "$BRAVE"  --app="$URL" --window-size=1440,960 >/dev/null 2>&1 &
+else open "$URL"; fi
+
+echo "console on $URL"
+echo "quit this app (Cmd-Q from the Dock) to stop everything and drop the temporary database"
+
+PY_WAS="$(pytree)"
+while true; do
+  sleep 20
+  [ -n "$(git status --porcelain 2>/dev/null)" ] || git pull --ff-only --quiet 2>/dev/null
+  PY_NOW="$(pytree)"
+  if [ "$PY_NOW" != "$PY_WAS" ]; then
+    echo "the engine changed — restarting the stack (the temporary database resets)"
+    PY_WAS="$PY_NOW"
+    stop_stack
+    start_stack || { say "The stack did not come back up.\n\n$(tail -n 6 "$LOG" | tr -d '"')"; exit 1; }
+    curl -s "http://127.0.0.1:$API_PORT/ui/api/cases" | grep -q 'demo-case-001' \
+      || python3 - "$API_PORT" <<'SEEDPY'
+import sys, urllib.request
+sys.path.insert(0, "scripts")
+import devproxy
+devproxy.seed(f"http://127.0.0.1:{sys.argv[1]}")
+SEEDPY
+  fi
+  # A UI-only change needs nothing: the proxy reads console.html per request and the page notices.
+done
