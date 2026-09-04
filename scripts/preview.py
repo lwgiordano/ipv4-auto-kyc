@@ -76,6 +76,37 @@ if(!location.hash)location.hash=%(landing)s;
 """
 
 
+# A preview and the real stack render the same screens, which is how someone ends up pressing
+# Send Message here and wondering why nothing sent. So the window says which one it is, in the
+# title the Dock reads and in the sidebar. Spliced in here, never in console.html: the deployed
+# console carries neither.
+MARK = """<style>
+  /* In the sidebar footer, in the flow. A fixed corner badge sits on top of the refresh
+     control that already lives there. */
+  .runmark{display:flex;align-items:center;gap:var(--s2);
+    font:var(--t-label);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  .runmark b{color:var(--text)}
+</style>
+<script>
+(function(){
+  var TAG="Preview", LINE="<b>Preview<\/b> sample data, nothing sends";
+  /* The router retitles the page per company, so the tag is reapplied on every set rather than
+     written once into <title>. It goes first because the Dock and the window frame truncate
+     from the right. */
+  var t=Object.getOwnPropertyDescriptor(Document.prototype,"title");
+  Object.defineProperty(document,"title",{configurable:true,
+    get:function(){return t.get.call(document)},
+    set:function(v){v=String(v);t.set.call(document,v.indexOf(TAG+" \u00b7 ")===0?v:TAG+" \u00b7 "+v)}});
+  document.title=document.title;
+  function place(){var f=document.querySelector(".side-foot");
+    if(!f||f.querySelector(".runmark"))return !!f;
+    var el=document.createElement("div");el.className="runmark";el.setAttribute("role","note");
+    el.innerHTML=LINE;f.appendChild(el);return true}
+  if(!place())document.addEventListener("DOMContentLoaded",place);
+})();
+</script>
+"""
+
 def build(landing: str = LANDING) -> tuple[str, str]:
     """The console, with the shim spliced in at the top of its own script block."""
     src = CONSOLE.read_text(encoding="utf-8")
@@ -87,7 +118,8 @@ def build(landing: str = LANDING) -> tuple[str, str]:
         "landing": json.dumps(landing),
     }
     at = src.index("<script>", src.index("</style>")) + len("<script>")
-    return src[:at] + shim + src[at:], build_id
+    page = src[:at] + shim + src[at:]
+    return page.replace("</body>", MARK + "</body>", 1), build_id
 
 
 def _git_pull() -> str | None:

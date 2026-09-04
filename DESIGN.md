@@ -367,6 +367,13 @@ render of its own.
     separated by something a screen reader can hear.
 27. Read a transitioned property after the transition. `getComputedStyle` immediately after a
     state change returns the value being animated away from.
+28. Anything written into the markup is only a default if code rewrites it later. The router sets
+    `document.title` per company, so a `<title>` spliced into the source is gone by the time the
+    window has one. Take over the setter, or measure `document.title` after the first route and
+    find out.
+29. A fixed corner is somebody's corner. Bottom-left is the sidebar footer and the refresh
+    control in it; bottom-right is the toast. A badge that floats over either is a control you
+    have hidden. Put it in the flow of the thing it belongs to.
 
 ## 12. Verifying a change
 

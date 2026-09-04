@@ -1,21 +1,25 @@
 #!/bin/bash
-# KYC Console — opens the ops console on sample data and keeps it current.
+# KYC Preview — the console's screens on sample data, and nothing behind them.
+#
+# Nothing here talks to a database or an API, so no button that writes will work: the page answers
+# its own requests from a captured fixture and refuses to send. To actually run the thing --
+# Send Message, Approve Manually, a real decision written to a real row -- open KYC Full Stack.app.
 #
 # It finds your checkout, pulls the branch, builds the console into a local page, serves it, and
 # opens a window on it. It keeps pulling in the background, so a push upstream repaints the window
-# a few seconds later without you touching anything. Nothing here talks to a database or an API:
-# the page answers its own requests from a captured fixture, and refuses to send anything.
+# a few seconds later without you touching anything.
 set -uo pipefail
 
 # Follows the branch you have checked out; set KYC_CONSOLE_BRANCH to pin one instead.
 BRANCH="${KYC_CONSOLE_BRANCH:-}"
+# Shared with KYC Full Stack.app on purpose: whichever you opened first already found the checkout.
 STATE="$HOME/Library/Application Support/KYC Console"
 mkdir -p "$STATE"
 REPO_FILE="$STATE/repo-path"
-LOG="$STATE/last-run.log"
+LOG="$STATE/preview.log"
 exec > >(tee "$LOG") 2>&1
 
-say() { osascript -e "display dialog \"$1\" buttons {\"OK\"} default button 1 with title \"KYC Console\"" >/dev/null 2>&1; }
+say() { osascript -e "display dialog \"$1\" buttons {\"OK\"} default button 1 with title \"KYC Preview\"" >/dev/null 2>&1; }
 
 valid() { [ -n "${1:-}" ] && [ -f "$1/scripts/preview.py" ] && [ -f "$1/src/kyc_tool/ui/console.html" ]; }
 

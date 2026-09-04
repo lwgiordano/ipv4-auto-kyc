@@ -50,6 +50,36 @@ RELOADER = """
 </script>
 """
 
+# The preview and this render the same screens. Each window says which one it is, in the title
+# the Dock reads and in the sidebar, so nobody presses Send Message in the one that cannot send.
+# Spliced in here, never in console.html: the deployed console carries neither.
+MARK = """<style>
+  /* In the sidebar footer, in the flow. A fixed corner badge sits on top of the refresh
+     control that already lives there. */
+  .runmark{display:flex;align-items:center;gap:var(--s2);
+    font:var(--t-label);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  .runmark b{color:var(--text)}
+</style>
+<script>
+(function(){
+  var TAG="Full stack", LINE="<b>Full stack<\/b> temporary database";
+  /* The router retitles the page per company, so the tag is reapplied on every set rather than
+     written once into <title>. It goes first because the Dock and the window frame truncate
+     from the right. */
+  var t=Object.getOwnPropertyDescriptor(Document.prototype,"title");
+  Object.defineProperty(document,"title",{configurable:true,
+    get:function(){return t.get.call(document)},
+    set:function(v){v=String(v);t.set.call(document,v.indexOf(TAG+" \u00b7 ")===0?v:TAG+" \u00b7 "+v)}});
+  document.title=document.title;
+  function place(){var f=document.querySelector(".side-foot");
+    if(!f||f.querySelector(".runmark"))return !!f;
+    var el=document.createElement("div");el.className="runmark";el.setAttribute("role","note");
+    el.innerHTML=LINE;f.appendChild(el);return true}
+  if(!place())document.addEventListener("DOMContentLoaded",place);
+})();
+</script>
+"""
+
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
               "te", "trailers", "transfer-encoding", "upgrade", "content-encoding",
               "content-length"}
@@ -59,7 +89,7 @@ def console_html() -> tuple[bytes, str]:
     src = CONSOLE.read_text(encoding="utf-8")
     build = hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
     at = src.rindex("</body>")
-    page = src[:at] + (RELOADER % {"build": json.dumps(build)}) + src[at:]
+    page = src[:at] + MARK + (RELOADER % {"build": json.dumps(build)}) + src[at:]
     return page.encode("utf-8"), build
 
 

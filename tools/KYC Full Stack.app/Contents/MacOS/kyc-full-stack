@@ -1,5 +1,8 @@
 #!/bin/bash
-# KYC Console (Live) — the real stack, with the UI kept current.
+# KYC Full Stack — the whole application on your machine, with the UI kept current.
+#
+# This is the one that actually runs. Its companion, KYC Preview.app, only draws the screens on
+# a captured sample and cannot send anything; if buttons here do nothing, you opened that one.
 #
 # It runs scripts/dev.sh (ephemeral Postgres, migrations, the dev worker, the fake platform
 # receiver, the API), puts scripts/devproxy.py in front so the console is read from disk on every
@@ -16,12 +19,13 @@ set -uo pipefail
 # between pulls; 20 is frequent enough that a push here is on screen before you look up.
 BRANCH="${KYC_CONSOLE_BRANCH:-}"
 INTERVAL="${KYC_CONSOLE_INTERVAL:-20}"
+# Shared with KYC Preview.app on purpose: whichever you opened first already found the checkout.
 STATE="$HOME/Library/Application Support/KYC Console"
 mkdir -p "$STATE"
-LOG="$STATE/live.log"
+LOG="$STATE/full-stack.log"
 exec > >(tee "$LOG") 2>&1
 
-say() { osascript -e "display dialog \"$1\" buttons {\"OK\"} default button 1 with title \"KYC Console (Live)\"" >/dev/null 2>&1; }
+say() { osascript -e "display dialog \"$1\" buttons {\"OK\"} default button 1 with title \"KYC Full Stack\"" >/dev/null 2>&1; }
 valid() { [ -n "${1:-}" ] && [ -f "$1/scripts/dev.sh" ] && [ -f "$1/scripts/devproxy.py" ]; }
 freeport() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
 
