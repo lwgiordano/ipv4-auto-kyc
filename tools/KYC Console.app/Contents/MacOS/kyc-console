@@ -7,7 +7,8 @@
 # the page answers its own requests from a captured fixture, and refuses to send anything.
 set -uo pipefail
 
-BRANCH="claude/project-setup-standing-rules-5w1fwh"
+# Follows the branch you have checked out; set KYC_CONSOLE_BRANCH to pin one instead.
+BRANCH="${KYC_CONSOLE_BRANCH:-}"
 STATE="$HOME/Library/Application Support/KYC Console"
 mkdir -p "$STATE"
 REPO_FILE="$STATE/repo-path"
@@ -50,13 +51,11 @@ if [ -z "$PY" ]; then
   exit 1
 fi
 
-# Make sure we are on the branch the preview is built from, without touching your work.
-if [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then
-  echo "working tree is dirty — previewing it as-is, not switching branches"
-elif [ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)" != "$BRANCH" ]; then
+if [ -n "$BRANCH" ] && [ -z "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then
   git -C "$REPO" fetch --quiet origin "$BRANCH" 2>/dev/null
-  git -C "$REPO" checkout --quiet "$BRANCH" 2>/dev/null || echo "could not switch to $BRANCH — previewing the current branch"
+  git -C "$REPO" checkout --quiet "$BRANCH" 2>/dev/null || echo "could not switch to $BRANCH"
 fi
+echo "following $(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)"
 
 PORT="$("$PY" -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
 URL="http://127.0.0.1:$PORT/"

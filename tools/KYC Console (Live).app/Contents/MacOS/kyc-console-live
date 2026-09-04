@@ -11,7 +11,11 @@
 # decision under your name. The database is temporary and goes away when you quit.
 set -uo pipefail
 
-BRANCH="claude/project-setup-standing-rules-5w1fwh"
+# Follows the branch you have checked out. Set KYC_CONSOLE_BRANCH to pin one instead -- useful
+# when someone else is pushing to a branch you are not on. KYC_CONSOLE_INTERVAL is the seconds
+# between pulls; 20 is frequent enough that a push here is on screen before you look up.
+BRANCH="${KYC_CONSOLE_BRANCH:-}"
+INTERVAL="${KYC_CONSOLE_INTERVAL:-20}"
 STATE="$HOME/Library/Application Support/KYC Console"
 mkdir -p "$STATE"
 LOG="$STATE/live.log"
@@ -37,11 +41,15 @@ cd "$REPO" || exit 1
 # and says what is missing. Duplicating that probe here got it wrong; its message is surfaced
 # instead, in a dialog, since nobody sees stdout when this is launched from Finder.
 
-if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+if [ -n "$BRANCH" ] && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
   git fetch --quiet origin "$BRANCH" 2>/dev/null
-  git checkout --quiet "$BRANCH" 2>/dev/null || echo "staying on $(git rev-parse --abbrev-ref HEAD)"
+  git checkout --quiet "$BRANCH" 2>/dev/null || echo "could not switch to $BRANCH"
+fi
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+if git rev-parse --abbrev-ref "@{u}" >/dev/null 2>&1; then
+  echo "following $BRANCH — pulling every ${INTERVAL}s"
 else
-  echo "working tree is dirty — running it as-is, not switching branches"
+  echo "following $BRANCH, which has no upstream — nothing will be pulled"
 fi
 
 API_PORT="$(freeport)"; RCV_PORT="$(freeport)"; PG_PORT="$(freeport)"; UI_PORT="$(freeport)"
@@ -90,7 +98,9 @@ echo "quit this app (Cmd-Q from the Dock) to stop everything and drop the tempor
 
 PY_WAS="$(pytree)"
 while true; do
-  sleep 20
+  sleep "$INTERVAL"
+  # Whatever branch you are on, from whoever pushed to it. A dirty tree is left alone: your edits
+  # are already live, and a pull on top of them is not this app's decision to make.
   [ -n "$(git status --porcelain 2>/dev/null)" ] || git pull --ff-only --quiet 2>/dev/null
   PY_NOW="$(pytree)"
   if [ "$PY_NOW" != "$PY_WAS" ]; then
