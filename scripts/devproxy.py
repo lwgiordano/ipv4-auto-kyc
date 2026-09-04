@@ -53,7 +53,9 @@ RELOADER = """
 # The preview and this render the same screens. Each window says which one it is, in the title
 # the Dock reads and in the sidebar, so nobody presses Send Message in the one that cannot send.
 # Spliced in here, never in console.html: the deployed console carries neither.
-MARK = """<style>
+# A raw string: the JS needs <\/b> so the literal cannot close the <script> around it,
+# and \/ is not a Python escape -- unraw, it is a SyntaxWarning on every import.
+MARK = r"""<style>
   /* In the sidebar footer, in the flow. A fixed corner badge sits on top of the refresh
      control that already lives there. */
   .runmark{display:flex;align-items:center;gap:var(--s2);

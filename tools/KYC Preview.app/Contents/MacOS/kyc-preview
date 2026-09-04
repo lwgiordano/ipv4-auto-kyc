@@ -10,6 +10,18 @@
 # a few seconds later without you touching anything.
 set -uo pipefail
 
+# Finder starts a process with no terminal and a minimal PATH, so anything that goes wrong has
+# nowhere to appear -- which is how double-clicking this looked like nothing happening at all,
+# while the identical script run from a shell worked first time. Rather than guess at which of
+# the two differences did it, hand the script to Terminal and let the run be visible: the same
+# window, the same output, and Ctrl-C or closing it stops everything exactly as before.
+if [ ! -t 1 ]; then
+  open -a Terminal "$0"
+  exit 0
+fi
+# Homebrew and /usr/local are not on a non-login PATH, and Postgres usually lives in one of them.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 # Follows the branch you have checked out; set KYC_CONSOLE_BRANCH to pin one instead.
 BRANCH="${KYC_CONSOLE_BRANCH:-}"
 # Shared with KYC Full Stack.app on purpose: whichever you opened first already found the checkout.

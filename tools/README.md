@@ -67,18 +67,20 @@ Two environment variables, on either app:
 - `KYC_CONSOLE_BRANCH` pins a branch instead of following the one you have checked out.
 - `KYC_CONSOLE_INTERVAL` sets the seconds between pulls (default 20).
 
-### When it doesn't work
+### It opens a Terminal window, on purpose
 
-Every failure ends in a dialog naming the cause, with the last ten lines of the log and a button
-that opens it. If you get no dialog at all, the app is not what ran — check that
-`tools/KYC Full Stack.app` exists in your checkout, which means checking the branch.
+Double-clicking either app opens Terminal and runs it there. Finder starts a process with no
+terminal attached, so anything that went wrong had nowhere to appear and the app looked like it
+did nothing at all — while the same script run from a shell worked first time. The window is the
+run: it shows the stack coming up, every callback as it lands, and any error in full. Ctrl-C, or
+closing the window, stops everything and drops the temporary database.
 
-Logs are at `~/Library/Application Support/KYC Console/` — `full-stack.log` and `preview.log`.
-The same run, from a terminal, prints the same thing without the dialogs:
+Failures also raise a dialog naming the cause, with the last ten lines of the log and a button
+that opens it. Logs are at `~/Library/Application Support/KYC Console/` — `full-stack.log` and
+`preview.log`.
 
-```
-bash "tools/KYC Full Stack.app/Contents/MacOS/kyc-full-stack"
-```
+If nothing happens at all, the app is not what ran: check that `tools/KYC Full Stack.app` is in
+your checkout, which means checking the branch.
 
 ## The same, from a terminal
 
