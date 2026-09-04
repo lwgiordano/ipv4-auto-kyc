@@ -1,0 +1,84 @@
+#!/bin/bash
+# KYC Console — opens the ops console on sample data and keeps it current.
+#
+# It finds your checkout, pulls the branch, builds the console into a local page, serves it, and
+# opens a window on it. It keeps pulling in the background, so a push upstream repaints the window
+# a few seconds later without you touching anything. Nothing here talks to a database or an API:
+# the page answers its own requests from a captured fixture, and refuses to send anything.
+set -uo pipefail
+
+BRANCH="claude/project-setup-standing-rules-5w1fwh"
+STATE="$HOME/Library/Application Support/KYC Console"
+mkdir -p "$STATE"
+REPO_FILE="$STATE/repo-path"
+LOG="$STATE/last-run.log"
+exec > >(tee "$LOG") 2>&1
+
+say() { osascript -e "display dialog \"$1\" buttons {\"OK\"} default button 1 with title \"KYC Console\"" >/dev/null 2>&1; }
+
+valid() { [ -n "${1:-}" ] && [ -f "$1/scripts/preview.py" ] && [ -f "$1/src/kyc_tool/ui/console.html" ]; }
+
+# This bundle ships inside the repo, so the first and best guess is its own location: walk up
+# from the executable until a checkout appears. A copy dragged to /Applications falls through to
+# the remembered path, then a search, then asking.
+REPO=""
+here="$(cd "$(dirname "$0")" && pwd)"
+while [ "$here" != "/" ]; do
+  if valid "$here"; then REPO="$here"; break; fi
+  here="$(dirname "$here")"
+done
+if ! valid "$REPO" && [ -f "$REPO_FILE" ]; then REPO="$(cat "$REPO_FILE")"; fi
+if ! valid "$REPO"; then
+  REPO="$(find "$HOME" -maxdepth 6 -type d -name ipv4-auto-kyc -not -path '*/node_modules/*' 2>/dev/null | head -1)"
+fi
+if ! valid "$REPO"; then
+  PICK="$(osascript -e 'try
+    set f to choose folder with prompt "Where is your ipv4-auto-kyc checkout?"
+    POSIX path of f
+  end try' 2>/dev/null)"
+  REPO="${PICK%/}"
+fi
+if ! valid "$REPO"; then
+  say "I could not find your ipv4-auto-kyc checkout.\n\nClone it first:\n\ngit clone https://github.com/lwgiordano/ipv4-auto-kyc.git\n\nthen open this app again and point it at that folder."
+  exit 1
+fi
+printf '%s' "$REPO" > "$REPO_FILE"
+
+PY="$(command -v python3 || true)"
+if [ -z "$PY" ]; then
+  say "This needs python3, which macOS installs with the Command Line Tools.\n\nRun this in Terminal, then open the app again:\n\nxcode-select --install"
+  exit 1
+fi
+
+# Make sure we are on the branch the preview is built from, without touching your work.
+if [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then
+  echo "working tree is dirty — previewing it as-is, not switching branches"
+elif [ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)" != "$BRANCH" ]; then
+  git -C "$REPO" fetch --quiet origin "$BRANCH" 2>/dev/null
+  git -C "$REPO" checkout --quiet "$BRANCH" 2>/dev/null || echo "could not switch to $BRANCH — previewing the current branch"
+fi
+
+PORT="$("$PY" -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+URL="http://127.0.0.1:$PORT/"
+
+"$PY" "$REPO/scripts/preview.py" --port "$PORT" --no-open --interval 20 &
+SERVER=$!
+trap 'kill $SERVER 2>/dev/null' EXIT INT TERM
+
+for _ in $(seq 1 40); do
+  curl -sf -o /dev/null "$URL" && break
+  sleep 0.25
+done
+
+# A dedicated window, so it reads as an app rather than one more tab. Any of the three will do.
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+EDGE="/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+BRAVE="/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+if   [ -x "$CHROME" ]; then "$CHROME" --app="$URL" --window-size=1440,960 >/dev/null 2>&1 &
+elif [ -x "$EDGE"   ]; then "$EDGE"   --app="$URL" --window-size=1440,960 >/dev/null 2>&1 &
+elif [ -x "$BRAVE"  ]; then "$BRAVE"  --app="$URL" --window-size=1440,960 >/dev/null 2>&1 &
+else open "$URL"; fi
+
+echo "serving $URL from $REPO"
+echo "quit this app (Cmd-Q from the Dock) to stop it"
+wait $SERVER
