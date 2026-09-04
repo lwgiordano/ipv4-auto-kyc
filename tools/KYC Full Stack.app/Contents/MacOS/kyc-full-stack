@@ -12,6 +12,10 @@
 #
 # Everything you do here is real. Send Message runs the pipeline, Approve Manually writes a
 # decision under your name. The database is temporary and goes away when you quit.
+#
+# First run on a machine that has never built this project needs two things: the project's Python
+# environment, which this app offers to build for you, and a Postgres it can start, which it
+# cannot install for you. Nothing here is silent -- every way this can fail ends in a dialog.
 set -uo pipefail
 
 # Follows the branch you have checked out. Set KYC_CONSOLE_BRANCH to pin one instead -- useful
@@ -25,7 +29,41 @@ mkdir -p "$STATE"
 LOG="$STATE/full-stack.log"
 exec > >(tee "$LOG") 2>&1
 
-say() { osascript -e "display dialog \"$1\" buttons {\"OK\"} default button 1 with title \"KYC Full Stack\"" >/dev/null 2>&1; }
+TITLE="KYC Full Stack"
+
+# An AppleScript string literal, from arbitrary text. The earlier version of this interpolated a
+# log tail straight into -e "...", so the one dialog that mattered -- the stack did not start --
+# was the one that could not be displayed: a real newline ends the literal, and the failure was
+# swallowed by the 2>/dev/null on the end. Escape the two characters AppleScript cares about,
+# then fold real newlines into the two-character escape it reads as a newline.
+aesc() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
+    | awk '{ if (NR>1) printf "\\n"; printf "%s", $0 }'
+}
+
+say() {  # one OK button
+  osascript >/dev/null 2>&1 <<OSA
+display dialog "$(aesc "$1")" buttons {"OK"} default button 1 with title "$TITLE" with icon caution
+OSA
+}
+
+# Same, plus a way to look at the log, since a failure people cannot read is a failure twice.
+say_log() {
+  local pick
+  pick="$(osascript 2>/dev/null <<OSA
+button returned of (display dialog "$(aesc "$1")" buttons {"Open log", "OK"} default button 2 with title "$TITLE" with icon stop)
+OSA
+)"
+  [ "$pick" = "Open log" ] && open -e "$LOG"
+  return 0
+}
+
+ask() {  # $1 prompt, $2 affirmative button; prints the button that was pressed
+  osascript 2>/dev/null <<OSA
+button returned of (display dialog "$(aesc "$1")" buttons {"Cancel", "$2"} default button 2 with title "$TITLE")
+OSA
+}
+
 valid() { [ -n "${1:-}" ] && [ -f "$1/scripts/dev.sh" ] && [ -f "$1/scripts/devproxy.py" ]; }
 freeport() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
 
@@ -35,15 +73,22 @@ while [ "$here" != "/" ]; do valid "$here" && { REPO="$here"; break; }; here="$(
 [ -n "$REPO" ] || REPO="$(cat "$STATE/repo-path" 2>/dev/null || true)"
 valid "$REPO" || REPO="$(find "$HOME" -maxdepth 6 -type d -name ipv4-auto-kyc 2>/dev/null | head -1)"
 if ! valid "$REPO"; then
-  say "I could not find your ipv4-auto-kyc checkout.\n\nClone it, then open this from tools/ inside it."
+  say "I could not find your ipv4-auto-kyc checkout.
+
+Clone it, then open this app from the tools folder inside it."
   exit 1
 fi
 printf '%s' "$REPO" > "$STATE/repo-path"
 cd "$REPO" || exit 1
 
-# dev.sh already probes for the venv and for postgres, across apt, Homebrew and Postgres.app,
-# and says what is missing. Duplicating that probe here got it wrong; its message is surfaced
-# instead, in a dialog, since nobody sees stdout when this is launched from Finder.
+if ! command -v python3 >/dev/null 2>&1; then
+  say "This needs python3, which macOS installs with the Command Line Tools.
+
+Run this in Terminal, then open the app again:
+
+    xcode-select --install"
+  exit 1
+fi
 
 if [ -n "$BRANCH" ] && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
   git fetch --quiet origin "$BRANCH" 2>/dev/null
@@ -54,6 +99,36 @@ if git rev-parse --abbrev-ref "@{u}" >/dev/null 2>&1; then
   echo "following $BRANCH — pulling every ${INTERVAL}s"
 else
   echo "following $BRANCH, which has no upstream — nothing will be pulled"
+fi
+
+# The one prerequisite this app can supply. Its location is defined by this repo, so a file test
+# is the whole check -- no probing for someone else's tooling, which is how the last version of
+# this got Postgres wrong. Postgres itself is left to dev.sh, which already knows where to look
+# across apt, Homebrew and Postgres.app and says so in its own words; a failure there now reaches
+# you in about a second rather than after two minutes of nothing.
+if [ ! -x "$REPO/.venv/bin/python" ]; then
+  if [ "$(ask "The stack needs this project's Python environment, and this checkout does not have one yet.
+
+I can build it now by running ./manage.sh setup. It downloads the dependencies, so it needs a network, and it takes a few minutes the first time. After that, opening this app just works." "Build it")" != "Build it" ]; then
+    exit 1
+  fi
+  echo "building .venv — ./manage.sh setup"
+  if ! bash ./manage.sh setup; then
+    say_log "Building the Python environment did not finish.
+
+$(tail -n 10 "$LOG")
+
+Full log: $LOG"
+    exit 1
+  fi
+  if [ ! -x "$REPO/.venv/bin/python" ]; then
+    say_log "Setup finished but did not leave a .venv, so the stack has nothing to run.
+
+$(tail -n 10 "$LOG")
+
+Full log: $LOG"
+    exit 1
+  fi
 fi
 
 API_PORT="$(freeport)"; RCV_PORT="$(freeport)"; PG_PORT="$(freeport)"; UI_PORT="$(freeport)"
@@ -71,13 +146,21 @@ start_stack() {
   DEV_PID=$!
   for _ in $(seq 1 120); do
     curl -sf -o /dev/null "http://127.0.0.1:$API_PORT/ui" && return 0
+    # dev.sh has stopped. Missing Postgres, a port taken, a migration that will not apply -- it
+    # said which on its way out, and waiting the rest of the two minutes only delays reading it.
+    if ! kill -0 "$DEV_PID" 2>/dev/null; then DEV_PID=""; return 1; fi
     sleep 1
   done
+  echo "the API did not answer within two minutes"
   return 1
 }
 
 if ! start_stack; then
-  say "The stack did not start.\n\n$(tail -n 6 "$LOG" | tr -d '"')\n\nFull log:\n$LOG"
+  say_log "The stack did not start.
+
+$(tail -n 10 "$LOG")
+
+Full log: $LOG"
   exit 1
 fi
 
@@ -88,6 +171,14 @@ SEED=""; [ "$EMPTY" = "0" ] && SEED="--seed"
 python3 scripts/devproxy.py --api "http://127.0.0.1:$API_PORT" --port "$UI_PORT" $SEED &
 PROXY_PID=$!
 for _ in $(seq 1 40); do curl -sf -o /dev/null "$URL" && break; sleep 0.25; done
+if ! curl -sf -o /dev/null "$URL"; then
+  say_log "The stack came up, but the console proxy in front of it did not.
+
+$(tail -n 10 "$LOG")
+
+Full log: $LOG"
+  exit 1
+fi
 
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 EDGE="/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
@@ -111,10 +202,14 @@ while true; do
     echo "the engine changed — restarting the stack (the temporary database resets)"
     PY_WAS="$PY_NOW"
     stop_stack
-    start_stack || { say "The stack did not come back up.\n\n$(tail -n 6 "$LOG" | tr -d '"')"; exit 1; }
+    start_stack || { say_log "The stack did not come back up after an engine change.
+
+$(tail -n 10 "$LOG")
+
+Full log: $LOG"; exit 1; }
     curl -s "http://127.0.0.1:$API_PORT/ui/api/cases" | grep -q 'demo-case-001' \
       || python3 - "$API_PORT" <<'SEEDPY'
-import sys, urllib.request
+import sys
 sys.path.insert(0, "scripts")
 import devproxy
 devproxy.seed(f"http://127.0.0.1:{sys.argv[1]}")

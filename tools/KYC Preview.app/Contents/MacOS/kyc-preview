@@ -19,7 +19,19 @@ REPO_FILE="$STATE/repo-path"
 LOG="$STATE/preview.log"
 exec > >(tee "$LOG") 2>&1
 
-say() { osascript -e "display dialog \"$1\" buttons {\"OK\"} default button 1 with title \"KYC Preview\"" >/dev/null 2>&1; }
+# An AppleScript string literal, from arbitrary text: escape the two characters it cares about,
+# then fold real newlines into the two-character escape it reads as a newline. Interpolating raw
+# text into -e "..." breaks the literal and the dialog silently never appears.
+aesc() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
+    | awk '{ if (NR>1) printf "\\n"; printf "%s", $0 }'
+}
+
+say() {
+  osascript >/dev/null 2>&1 <<OSA
+display dialog "$(aesc "$1")" buttons {"OK"} default button 1 with title "KYC Preview" with icon caution
+OSA
+}
 
 valid() { [ -n "${1:-}" ] && [ -f "$1/scripts/preview.py" ] && [ -f "$1/src/kyc_tool/ui/console.html" ]; }
 
@@ -44,14 +56,24 @@ if ! valid "$REPO"; then
   REPO="${PICK%/}"
 fi
 if ! valid "$REPO"; then
-  say "I could not find your ipv4-auto-kyc checkout.\n\nClone it first:\n\ngit clone https://github.com/lwgiordano/ipv4-auto-kyc.git\n\nthen open this app again and point it at that folder."
+  say "I could not find your ipv4-auto-kyc checkout.
+
+Clone it first:
+
+    git clone https://github.com/lwgiordano/ipv4-auto-kyc.git
+
+then open this app again and point it at that folder."
   exit 1
 fi
 printf '%s' "$REPO" > "$REPO_FILE"
 
 PY="$(command -v python3 || true)"
 if [ -z "$PY" ]; then
-  say "This needs python3, which macOS installs with the Command Line Tools.\n\nRun this in Terminal, then open the app again:\n\nxcode-select --install"
+  say "This needs python3, which macOS installs with the Command Line Tools.
+
+Run this in Terminal, then open the app again:
+
+    xcode-select --install"
   exit 1
 fi
 

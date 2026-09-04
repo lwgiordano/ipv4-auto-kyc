@@ -33,9 +33,13 @@ Same two places: the window is titled `Preview · …`, and the sidebar footer s
 
 ```
 cd ~/ipv4-auto-kyc
+git checkout claude/project-setup-standing-rules-5w1fwh
 git pull
 open "tools/KYC Full Stack.app"
 ```
+
+The `git checkout` matters. These apps live on that branch, so a `git pull` on any other branch
+brings nothing and the tools folder stays as it was.
 
 The bundles ship inside the repo, so each one finds the checkout by walking up from itself. Drag
 a copy to /Applications if you prefer and it will remember where the repo was; move the repo and
@@ -44,15 +48,37 @@ it searches your home folder, then asks.
 macOS will refuse an unsigned app downloaded from the internet. These arrive by `git clone`, not
 by download, so Gatekeeper leaves them alone. If it does complain, right-click → Open once.
 
-Full Stack needs `python3` and a Postgres it can start; `scripts/dev.sh` looks for one across
-apt, Homebrew and Postgres.app and tells you what is missing. Preview needs only `python3`.
+### What the first run needs
+
+Preview needs `python3` and nothing else.
+
+Full Stack runs the real application, so it needs what the application needs:
+
+- **`python3`** — `xcode-select --install` if you don't have it.
+- **The project's Python environment.** If `.venv/` is not in your checkout, the app offers to
+  build it by running `./manage.sh setup`. Say yes once; it downloads dependencies, takes a few
+  minutes, and after that opening the app just works.
+- **Postgres binaries** (`initdb`, `pg_ctl`) — `brew install postgresql@16`, or Postgres.app.
+  The app does not install this for you. It does not need a running server or a database you
+  have made: it starts its own on a spare port and deletes it when you quit.
 
 Two environment variables, on either app:
 
 - `KYC_CONSOLE_BRANCH` pins a branch instead of following the one you have checked out.
 - `KYC_CONSOLE_INTERVAL` sets the seconds between pulls (default 20).
 
-Logs go to `~/Library/Application Support/KYC Console/` — `full-stack.log` and `preview.log`.
+### When it doesn't work
+
+Every failure ends in a dialog naming the cause, with the last ten lines of the log and a button
+that opens it. If you get no dialog at all, the app is not what ran — check that
+`tools/KYC Full Stack.app` exists in your checkout, which means checking the branch.
+
+Logs are at `~/Library/Application Support/KYC Console/` — `full-stack.log` and `preview.log`.
+The same run, from a terminal, prints the same thing without the dialogs:
+
+```
+bash "tools/KYC Full Stack.app/Contents/MacOS/kyc-full-stack"
+```
 
 ## The same, from a terminal
 
