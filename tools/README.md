@@ -10,10 +10,10 @@ pipeline for real. Approve Manually writes a decision, under your name, to a row
 look at. The database is created when you open the app and thrown away when you quit, so you can
 break whatever you like.
 
-It keeps itself current. Every 20 seconds it pulls the branch you have checked out. A change to
-the console repaints the open window a couple of seconds later without disturbing the database;
-a change to the engine restarts the stack. Leave it open while someone is pushing and you watch
-the thing change under you.
+It keeps itself current. It pulls on startup, and every 20 seconds after. A change to the console
+repaints the open window a couple of seconds later without disturbing the database; a change to
+the engine restarts the stack; a change to the launcher restarts the launcher. Leave it open while
+someone is pushing and you watch the thing change under you.
 
 You can tell it apart without reading anything twice: the window is titled `Full stack · …`,
 and the sidebar footer says **Full stack — temporary database**.
@@ -31,15 +31,19 @@ Same two places: the window is titled `Preview · …`, and the sidebar footer s
 
 ## Running them
 
-```
-cd ~/ipv4-auto-kyc
-git checkout claude/project-setup-standing-rules-5w1fwh
-git pull
-open "tools/KYC Full Stack.app"
-```
+Double-click **KYC Full Stack.app**. That is the whole procedure.
 
-The `git checkout` matters. These apps live on that branch, so a `git pull` on any other branch
-brings nothing and the tools folder stays as it was.
+It pulls before it starts anything, so what you get is what was last pushed, and it keeps pulling
+every 20 seconds while it runs. If the pull replaces the launcher itself, it restarts into the new
+one rather than carrying on as the old one. A checkout with local changes is left alone — your
+edits are not the app's to discard, and it says so instead of pulling over them.
+
+The one thing it cannot do for you is switch to a branch it isn't on. These apps live on
+`claude/project-setup-standing-rules-5w1fwh`; if `tools/` doesn't contain them, that is why:
+
+```
+cd ~/ipv4-auto-kyc && git checkout claude/project-setup-standing-rules-5w1fwh
+```
 
 The bundles ship inside the repo, so each one finds the checkout by walking up from itself. Drag
 a copy to /Applications if you prefer and it will remember where the repo was; move the repo and

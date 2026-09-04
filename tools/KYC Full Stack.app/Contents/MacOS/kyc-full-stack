@@ -23,12 +23,28 @@ set -uo pipefail
 # while the identical script run from a shell worked first time. Rather than guess at which of
 # the two differences did it, hand the script to Terminal and let the run be visible: the same
 # window, the same output, and Ctrl-C or closing it stops everything exactly as before.
-if [ ! -t 1 ]; then
+# The flag matters as much as the test: by the time this script re-execs itself after a pull,
+# stdout is the pipe to tee, so -t 1 is false and an unguarded check would open a second window.
+if [ ! -t 1 ] && [ -z "${KYC_CONSOLE_TTY:-}" ]; then
   open -a Terminal "$0"
   exit 0
 fi
+export KYC_CONSOLE_TTY=1
 # Homebrew and /usr/local are not on a non-login PATH, and Postgres usually lives in one of them.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# Bash reads a script off disk as it runs, so a pull that rewrites this file mid-run leaves it
+# executing whatever now sits at the byte offset it had reached. This app pulls -- at startup and
+# every ${INTERVAL}s after -- so that is not hypothetical. Run from a copy and the checkout is
+# free to change underneath.
+if [ -z "${KYC_CONSOLE_SELF:-}" ]; then
+  KYC_CONSOLE_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  export KYC_CONSOLE_SELF
+  copy="$(mktemp "${TMPDIR:-/tmp}/kyc-full-stack.XXXXXX")" || exit 1
+  cat "$0" > "$copy" && chmod +x "$copy" || exit 1
+  exec bash "$copy"
+fi
+SELF="$KYC_CONSOLE_SELF"   # the bundle on disk; "$0" is this run's throwaway copy
 
 # Follows the branch you have checked out. Set KYC_CONSOLE_BRANCH to pin one instead -- useful
 # when someone else is pushing to a branch you are not on. KYC_CONSOLE_INTERVAL is the seconds
@@ -39,7 +55,9 @@ INTERVAL="${KYC_CONSOLE_INTERVAL:-20}"
 STATE="$HOME/Library/Application Support/KYC Console"
 mkdir -p "$STATE"
 LOG="$STATE/full-stack.log"
-exec > >(tee "$LOG") 2>&1
+# Append, so the lines from before a self-restart are still there to read.
+[ -n "${KYC_CONSOLE_RESTARTS:-}" ] || : > "$LOG"
+exec > >(tee -a "$LOG") 2>&1
 
 TITLE="KYC Full Stack"
 
@@ -80,7 +98,7 @@ valid() { [ -n "${1:-}" ] && [ -f "$1/scripts/dev.sh" ] && [ -f "$1/scripts/devp
 freeport() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
 
 # The bundle ships inside the repo, so its own location is the first guess.
-REPO=""; here="$(cd "$(dirname "$0")" && pwd)"
+REPO=""; here="$(cd "$(dirname "$SELF")" && pwd)"
 while [ "$here" != "/" ]; do valid "$here" && { REPO="$here"; break; }; here="$(dirname "$here")"; done
 [ -n "$REPO" ] || REPO="$(cat "$STATE/repo-path" 2>/dev/null || true)"
 valid "$REPO" || REPO="$(find "$HOME" -maxdepth 6 -type d -name ipv4-auto-kyc 2>/dev/null | head -1)"
@@ -102,15 +120,45 @@ Run this in Terminal, then open the app again:
   exit 1
 fi
 
+# Pull first, then run what was pulled. The loop at the bottom keeps pulling, but that only helps
+# once you are already running: the first launch used to start whatever you happened to have on
+# disk. A dirty tree is left alone -- your own edits are not this app's to discard.
+export GIT_TERMINAL_PROMPT=0  # a credential prompt here would just hang
 if [ -n "$BRANCH" ] && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
   git fetch --quiet origin "$BRANCH" 2>/dev/null
   git checkout --quiet "$BRANCH" 2>/dev/null || echo "could not switch to $BRANCH"
 fi
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
-if git rev-parse --abbrev-ref "@{u}" >/dev/null 2>&1; then
-  echo "following $BRANCH — pulling every ${INTERVAL}s"
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "on $BRANCH with local changes — nothing will be pulled over them"
+elif ! git rev-parse --abbrev-ref "@{u}" >/dev/null 2>&1; then
+  echo "on $BRANCH, which has no upstream — nothing will be pulled"
 else
-  echo "following $BRANCH, which has no upstream — nothing will be pulled"
+  was="$(git rev-parse HEAD)"
+  if git pull --ff-only --quiet 2>/dev/null; then
+    now="$(git rev-parse HEAD)"
+    if [ "$was" = "$now" ]; then
+      echo "on $BRANCH — already current"
+    else
+      echo "pulled $BRANCH: ${was:0:7} → ${now:0:7}"
+      git --no-pager log --oneline "$was..$now" | sed 's/^/  /'
+      # That pull may have replaced this launcher, in which case the one running is the old one.
+      # Start the new one instead. The counter stops a bad push turning this into a loop.
+      if ! cmp -s "$SELF" "$0"; then
+        if [ "${KYC_CONSOLE_RESTARTS:-0}" -lt 2 ]; then
+          echo "the launcher itself changed — starting the new one"
+          export KYC_CONSOLE_RESTARTS=$(( ${KYC_CONSOLE_RESTARTS:-0} + 1 ))
+          unset KYC_CONSOLE_SELF
+          rm -f "$0"
+          exec bash "$SELF"
+        fi
+        echo "the launcher changed again — carrying on with this one"
+      fi
+    fi
+  else
+    echo "could not pull $BRANCH (offline, or it needs a merge) — running what you have"
+  fi
+  echo "pulling every ${INTERVAL}s from here on"
 fi
 
 # The one prerequisite this app can supply. Its location is defined by this repo, so a file test
@@ -149,7 +197,7 @@ pytree() { find src -name '*.py' -type f -exec shasum {} + 2>/dev/null | shasum 
 
 DEV_PID=""; PROXY_PID=""
 stop_stack() { [ -n "$DEV_PID" ] && kill "$DEV_PID" 2>/dev/null; DEV_PID=""; sleep 3; }
-trap 'stop_stack; [ -n "$PROXY_PID" ] && kill $PROXY_PID 2>/dev/null' EXIT INT TERM
+trap 'stop_stack; [ -n "$PROXY_PID" ] && kill $PROXY_PID 2>/dev/null; rm -f "$0"' EXIT INT TERM
 
 start_stack() {
   echo "starting the stack (api $API_PORT, receiver $RCV_PORT, postgres $PG_PORT)…"
