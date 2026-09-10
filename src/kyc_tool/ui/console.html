@@ -49,6 +49,7 @@ window.KYCTheme=(()=>{const valid=new Set(["system","light","dark"]);
   --accent:#0062ff; --accent-text:#0062ff; --accent-soft:#f0f5ff; --accent-ink:#0044b2;
   --on-accent:#ffffff; --accent-focus-ring:#0062ff;
   --accent-hover:#0052d9; --accent-pressed:#0044b2;
+  --nav-hover:#e9eef3; --nav-focus:#dce9ff; --nav-active:var(--accent-soft);
   --success:#53966c; --warning:#c8891e; --danger:#e65832; --danger-text:#b03d1f; --info:#2ab7e9;
   /* Status chips are the marketplace's own registry chips: a pastel ground and a dark ink of the
      same hue. Sage for good, peach for caution, the error hue softened for bad, the registry blue
@@ -108,6 +109,7 @@ window.KYCTheme=(()=>{const valid=new Set(["system","light","dark"]);
   --text-inverse:#0c1826;
   --border:#2c4661; --border-strong:#3d5873; --border-input:#8a97a5;
   --accent-text:#79adff; --accent-soft:#16325a; --accent-ink:#cfe0ff;
+  --nav-hover:#203750; --nav-focus:#294968; --nav-active:var(--accent-soft);
   --danger-text:#ff8a6b;
   /* words printed in a status colour on the page itself (a verdict, a bad count, a to-do line)
      take the chip GROUND's hue at reading strength, since the chip ink is too dark for navy */
@@ -125,6 +127,7 @@ window.KYCTheme=(()=>{const valid=new Set(["system","light","dark"]);
     --text-inverse:#0c1826;
     --border:#2c4661; --border-strong:#3d5873; --border-input:#8a97a5;
     --accent-text:#79adff; --accent-soft:#16325a; --accent-ink:#cfe0ff;
+    --nav-hover:#203750; --nav-focus:#294968; --nav-active:var(--accent-soft);
     --danger-text:#ff8a6b;
     --green:#a9d3b5; --amber:#f0b98a; --red:#ff8a6b; --blue:#8cc6dd;
     --scrim:rgba(255,255,255,.38);
@@ -212,12 +215,13 @@ nav{padding:var(--s2) 0;flex:1}
 .nav-item{display:flex;align-items:center;gap:var(--s3);padding:0 var(--s4) 0 var(--s5);
      border-left:3px solid transparent;color:var(--text);font:600 14px/20px var(--font);
      min-height:40px;transition:background-color var(--dur-2) var(--ease-standard)}
-.nav-item:hover{background:rgba(0,0,0,.04);text-decoration:none}
+.nav-item:hover:not(.active){background:var(--nav-hover);text-decoration:none}
+.nav-item:focus-visible:not(.active){background:var(--nav-focus)}
 /* Every icon is drawn in a 16-unit box at 1.25 stroke, so scaling the box scales the stroke. A
    larger icon is re-thinned to hold one apparent weight across the console. */
 .nav-item svg{width:18px;height:18px;flex:none;color:var(--text);stroke-width:1.11}
 /* "You are here" carries three redundant cues, as the marketplace does: tint, ink and the rule. */
-.nav-item.active{background:var(--accent-soft);color:var(--accent-text);border-left-color:var(--accent)}
+.nav-item.active{background:var(--nav-active);color:var(--accent-text);border-left-color:var(--accent)}
 .nav-item.active svg{color:inherit}
 .nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);font:var(--t-label);
      border-radius:var(--pill);padding:2px var(--s2);min-width:22px;text-align:center}
@@ -225,11 +229,14 @@ nav{padding:var(--s2) 0;flex:1}
      font:var(--t-meta);color:var(--muted);display:grid;gap:var(--s2)}
 .side-foot label{display:flex;align-items:center;gap:var(--s2);cursor:pointer;min-height:40px}
 .side-foot input[type=checkbox]{width:18px;height:18px;margin:0;accent-color:var(--accent);flex:none}
-.options-form fieldset{border:0;padding:0;margin:0;display:grid;gap:var(--s1)}
-.options-form legend{padding:0 0 var(--s2);font:var(--t-strong);color:var(--text)}
+.options-form fieldset{border:0;padding:0;margin:0;display:grid;gap:0}
+.options-form legend{padding:0;font:var(--t-strong);color:var(--text)}
+.theme-options{display:grid;gap:0;margin-top:var(--s3)}
 .options-form label{min-height:40px;display:flex;align-items:center;gap:var(--s2);cursor:pointer}
 .options-form input{width:18px;height:18px;margin:0;accent-color:var(--accent)}
-.options-hint{min-height:16px;margin:var(--s2) 0 0;color:var(--danger-text);font:var(--t-meta)}
+.options-footer{margin-top:var(--s5);padding-top:var(--s3);border-top:1px solid var(--line);
+  display:grid;gap:var(--s2)}
+.options-hint{min-height:16px;color:var(--danger-text);font:var(--t-meta)}
 main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
 .page{max-width:1160px;margin:0 auto;padding:var(--s5) var(--s6) var(--s8)}
 
@@ -263,14 +270,13 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
 
 /* ── Page title bar ── */
 .tbar{display:flex;align-items:flex-start;gap:var(--s4);margin-bottom:var(--s5);flex-wrap:wrap}
-.tbar .heading{min-width:0}
+.tbar .heading{min-width:0;display:grid;gap:var(--s3)}
 .tbar h1{font:var(--t-page);color:var(--ink);
   display:flex;align-items:center;gap:var(--s2)}
-/* 8, not 4: on the case page this row holds 24px status chips under a 22px title, and 4px was
-   clearance on cap height alone — a descender in a company name would have touched them. */
-.tbar .desc{font:var(--t-body);color:var(--muted);margin-top:var(--s2)}
-.tbar .legend{margin-top:var(--s3);margin-bottom:0}
-.tbar .actions{margin-left:auto;display:flex;gap:var(--s2);align-items:center}
+/* A full 12px rhythm keeps descriptions and optional legends visibly attached but distinct. */
+.tbar .desc{font:var(--t-body);color:var(--muted)}
+.tbar .legend{margin:0}
+.tbar .actions{margin-left:auto;display:flex;gap:var(--s2);align-items:center;max-width:100%}
 .crumb{font:var(--t-meta);color:var(--muted);margin-bottom:var(--s1)}
 .crumb a{color:var(--muted)}
 .crumb a:hover{color:var(--accent-text)}
@@ -287,9 +293,14 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
 /* Own margin on both sides. Without the top margin the decision word and this heading touched at
    0px on every state that renders no hold callout — i.e. everywhere except the two cases anyone
    demos, where the callout's own margin happened to cover it. */
-.sub-hd{font:var(--t-subhd);color:var(--ink);margin:var(--s5) 0 var(--s3)}
+.subsection{display:grid;gap:var(--s3);margin-top:var(--s5)}
+.sub-hd{font:var(--t-subhd);color:var(--ink);margin:0}
 .card .hd .hint{font:var(--t-meta);color:var(--muted)}
 .card .bd{padding:var(--s4)}
+/* The bordered header ends the heading region; the following content container owns the clear
+   12px lane below it. Flush tables already provide that lane with their own cell padding. */
+.card>.hd+.bd:not(.flush){padding-top:var(--s3)}
+.card>.hd+.irow{padding-top:var(--s3)}
 /* A table that continues past the card edge says so: the shadows are painted on the scroll box
    and travel with the content, so a cue is present exactly while there is more to see. */
 .card .bd.flush{padding:0;overflow-x:auto;
@@ -342,15 +353,6 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
 .tag{display:inline-flex;align-items:center;gap:var(--s1);background:transparent;
      color:var(--text);border:1px solid var(--border-input);border-radius:var(--radius-inner);
      padding:0 var(--s2);min-height:20px;font:var(--t-meta);font-family:var(--mono)}
-/* `td{vertical-align:top}` starts a 14/20 line box's glyph at +1 and a pill's — an 18px line
-   centred in a 24px box — at +3, so a pill cell printed 3px below every other cell in its row.
-   Direct children only: a pill inside an `.iw` is already centred against its sibling. */
-td>.pill{position:relative;top:-3px}
-/* A chip run whose tallest member is a 24px pill sets a flex line 3px below the cell's text
-   line, so the whole group needs the same correction — as a group, so the pill and the points
-   beside it stay together. Only rows that carry a pill: a tag-only run sets a 20px line and is
-   already within a pixel. */
-td>.chiprow.haspill{margin-top:-3px}
 .tag.warn{background:var(--amber-soft);color:var(--amber-ink);border-color:transparent}
 .tag.err{background:var(--red-soft);color:var(--red-ink);border-color:transparent}
 
@@ -359,7 +361,7 @@ table{width:100%;border-collapse:collapse;font:var(--t-body)}
 th{font:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);
    color:var(--muted);background:var(--surface);text-align:left;
    padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);white-space:nowrap}
-td{padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);vertical-align:top;
+td{padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);vertical-align:middle;
    color:var(--text)}
 tbody tr:last-child td{border-bottom:none}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
@@ -422,6 +424,10 @@ input:hover,select:hover,textarea:hover{border-color:var(--text)}
 input:focus-visible,select:focus-visible,textarea:focus-visible{border-color:var(--accent);outline-offset:0}
 textarea{min-height:180px;padding:var(--s3);width:100%;
   font-family:var(--mono);font-size:12px;line-height:16px}
+.select-wrap{position:relative;display:inline-flex;max-width:100%;min-width:0}
+.select-wrap select{appearance:none;padding-right:var(--s7);max-width:100%}
+.select-wrap>.ic{position:absolute;right:var(--s3);top:50%;transform:translateY(-50%);
+  color:var(--muted);pointer-events:none}
 .search{position:relative;display:inline-flex;align-items:center}
 .search svg{position:absolute;left:var(--s3);width:16px;height:16px;color:var(--muted);
   pointer-events:none}
@@ -453,6 +459,7 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
   box-shadow:inset 0 0 0 1px var(--border-input)}
 /* The bar is plain grey on purpose: it is a live reading, never a verdict. Tick plus label carry
    the target. */
+.bscale{position:absolute;inset:0 var(--s1)}
 .bmeasure{position:absolute;top:4px;height:8px;left:0;border-radius:var(--radius-inner);
   background:var(--muted)}
 .btick{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink)}
@@ -674,9 +681,23 @@ h2.sec.tight{margin-top:0}
 .chev{color:var(--muted);text-align:right}
 /* A key, not a sentence: each pill and its gloss are one unit, and the units are separated by
    space alone. The literal middots doubled up with the flex gap and stranded one at every wrap. */
-.legend{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s5);font:var(--t-meta);
+.legend{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--s3) var(--s5);
+  align-items:start;font:var(--t-meta);
   color:var(--muted);margin-bottom:var(--s4)}
-.legend .item{display:inline-flex;align-items:center;gap:var(--s2)}
+.legend .item{display:grid;align-content:start;justify-items:start;gap:var(--s1);min-width:0}
+.legend-copy{overflow-wrap:anywhere}
+@media(max-width:900px){.legend{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){.legend{grid-template-columns:1fr}}
+.policy-hash{display:grid;gap:var(--s1);min-width:0;max-width:100%}
+.policy-hash-label{font:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);
+  color:var(--muted)}
+.policy-hash-row{display:flex;align-items:center;gap:var(--s2);min-width:0;max-width:100%}
+.policy-hash-row code{overflow-wrap:anywhere;color:var(--ink)}
+.policy-hash-status{font:var(--t-meta);color:var(--muted);min-height:16px}
+@media(max-width:720px){
+  .tbar .actions{width:100%;margin-left:0}
+  .policy-hash-row{align-items:flex-start}
+}
 .mb-4{margin-bottom:var(--s4)}
 .demo-journey{font:var(--t-body);color:var(--muted)}
 /* `vertical-align:middle` aligns to baseline + half the x-height, not the centre of the line box,
@@ -756,7 +777,6 @@ dialog.modal .banner{margin-top:var(--s3)}
   <span class="tool"><b>KYC</b> Tool</span>
   <div class="topbar-end">
     <span id="envchip"></span>
-    <span id="policychip" class="mono"></span>
     <button type="button" class="menubtn" id="menubtn" aria-controls="nav" aria-expanded="false">Menu</button>
   </div>
 </header>
@@ -767,7 +787,7 @@ dialog.modal .banner{margin-top:var(--s3)}
     <label class="who" for="reviewer">Reviewer</label>
     <input id="reviewer" placeholder="Reviewer ID" autocomplete="off"
       aria-describedby="reviewer-note">
-    <span id="reviewer-note" class="who-note">Recorded on every review action and approval.</span>
+    <span id="reviewer-note" class="who-note">Recorded on every review action.</span>
   </div>
   <nav id="nav">
     <a class="nav-item" href="#/overview" data-r="overview">
@@ -903,6 +923,7 @@ const I={
   mail:ic(`<rect x="2.4" y="4" width="11.2" height="8" rx="1.3"/><path d="M2.8 4.9L8 8.7l5.2-3.8"/>`),
   absent:ic(`<circle cx="8" cy="8" r="4.6" stroke-dasharray="2.4 2"/>`),
   arrow:ic(`<path d="M2.6 8h10M9.2 4.6L12.6 8l-3.4 3.4"/>`),
+  down:ic(`<path d="M4.2 6.2L8 10l3.8-3.8"/>`),
   swap:ic(`<path d="M2.6 5.8h10.8M10.8 3.2l2.6 2.6-2.6 2.6M13.4 10.2H2.6M5.2 7.6L2.6 10.2l2.6 2.6"/>`),
   help:ic(`<circle cx="8" cy="8" r="6"/><path d="M6.3 6.2a1.8 1.8 0 1 1 2.4 2.1c-.5.2-.7.6-.7 1.1"/>`
     +`<path d="M8 11.7h.01"/>`),
@@ -1259,6 +1280,9 @@ async function sidebarBadge(){try{
   // Use the UI's own endpoint, NOT the platform-HMAC-gated /v1/metrics: the console sends no
   // signature, so polling /v1/metrics under read-auth wrote a "rejected" row per poll (re-audit F1).
   const{body:o}=await j("/ui/api/overview");
+  $("#envchip").innerHTML=o.config.auth_disabled
+    ?pill("needs-config","Message authentication: Off")
+    :pill("live","Message authentication: On");
   const m=o.metrics||{};
   const dead=(m.jobs_by_status?.dead??0)+(m.outbox_by_status?.dead??0);
   const b=$("#deadbadge");b.hidden=!dead;b.textContent=dead;
@@ -1267,8 +1291,6 @@ async function sidebarBadge(){try{
 /* ── Overview ─────────────────────────────────────────── */
 async function viewOverview(){
   const{body:o}=await j("/ui/api/overview");
-  $("#policychip").textContent="Rules "+o.policy.bundle_hash.slice(0,10)+"…";
-  $("#envchip").innerHTML=o.config.auth_disabled?pill("needs-config","Authentication Off"):pill("live","Signed Messages");
   const m=o.metrics,g=(x,k)=>x?.[k]??0;
   const deadJ=g(m.jobs_by_status,"dead"),deadO=g(m.outbox_by_status,"dead"),dead=deadJ+deadO;
   const reviews=Object.entries(m.review_tasks_open_by_type||{});
@@ -1658,7 +1680,7 @@ async function viewCase(id){
               latest.manual&&latest.reviewer_id?`<span class="of">Approved by <b class="strong">${esc(latest.reviewer_id)}</b></span>`:""}
             <span class="verdict sub">Decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
           ${hold?holdCallout(hold,latest,s.threshold,d.latest_manual_decision):""}
-          <h3 class="sub-hd">Decision Rules
+          <div class="subsection"><h3 class="sub-hd">Decision Rules
             <span class="gloss">— all five must be true</span>${tip("gates")}</h3>
           <div class="gates published-gates">${GATE_KEYS
             .map(g0=>g0 in gates
@@ -1669,7 +1691,7 @@ async function viewCase(id){
               // The bypassed cell gets the drawn 16px glyph the other two carry. Its marker was
               // a 2.89px text middot, which shifted its label origin 12.11px in the same slot.
               :`<div class="gate na" title="${esc(g0)} — bypassed by manual approval">${I.absent}<span
-                  class="g-s">${esc(say("gate",g0))}</span> <span class="g-r">Not evaluated</span></div>`).join("")}</div>`
+                  class="g-s">${esc(say("gate",g0))}</span> <span class="g-r">Not evaluated</span></div>`).join("")}</div></div>`
           :`<div class="sub">${d.decision_provenance==="unresolved_pointer_drift"?`<b>Record conflict.</b> This company's decision reference points to a decision the integrity check rejects: it belongs to another company or no longer exists. No decision can be shown until this is investigated; the database has prohibited this state since migration 022.`:d.decision_provenance==="unresolved_legacy_order"?`No decision can be shown. These records predate the ordering fix, so the most recent decision cannot be determined. The next decision resolves this.`:`No decision has been sent for this company.`}</div>`}
       </div></div>
     <div class="card"><div class="hd"><h2>Current Evidence Score</h2>
@@ -1679,8 +1701,8 @@ async function viewCase(id){
           <div class="val"><b>${live}</b><span class="of">of ${s.threshold} points required</span>
             <span class="verdict sub">${liveNote}</span></div>
           <div class="btrack">
-            <span class="bmeasure" style="width:${Math.min(100,live/max*100)}%;background:var(--muted)"></span>
-            <span class="btick" style="left:${s.threshold/max*100}%"><span>Threshold ${s.threshold}</span></span>
+            <span class="bscale"><span class="bmeasure" style="width:${Math.min(100,live/max*100)}%;background:var(--muted)"></span>
+              <span class="btick" style="left:${s.threshold/max*100}%"><span>Threshold ${s.threshold}</span></span></span>
           </div>
         </div>
         <div class="contrib" style="--rows:${Math.ceil(s.items.length/2)}">${contrib}</div>
@@ -1768,7 +1790,7 @@ async function viewIntegrations(){
     </div>`).join("");
   const legend=[[pill("live"),"live service"],[pill("stub"),"built-in test data"],
       [pill("dev"),"development stand-in"],[pill("needs-config"),"configured without credentials"],
-      [pill("manual"),"manual process"]].map(([c,t])=>`<span class="item">${c}${t}</span>`).join("");
+      [pill("manual"),"manual process"]].map(([c,t])=>`<span class="item">${c}<span class="legend-copy">${t}</span></span>`).join("");
   page.innerHTML=tbar("Data Sources","Where each piece of evidence comes from, and whether the connection is live.","","integrations",legend)+`
     <div class="card mb-4"><div class="hd"><h2 class="iw">${I.swap}Platform Connections</h2>${tip("platform")}</div>
       <div class="irow"><div class="itile">CB</div>
@@ -1820,9 +1842,9 @@ async function viewFieldMap(){
     "The Salesforce field each value is written to, and the source of that value.","","fieldmap")+`
     <div class="toolbar">
       <label class="flab" for="fmcase">Show values for</label>
-      <select id="fmcase"><option value="">Select a company</option>
+      <span class="select-wrap"><select id="fmcase"><option value="">Select a company</option>
         ${cl.cases.map(c=>`<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.company_name||c.id)} · ${esc(c.id)}</option>`).join("")}
-      </select>${tip("fieldtable")}</div>
+      </select>${I.down}</span>${tip("fieldtable")}</div>
     <div class="card"><div class="bd flush"><table>
       <thead><tr><th style="width:250px">Salesforce Field</th><th style="width:250px">Value</th>
       <th>Source</th></tr></thead><tbody>${rows}</tbody></table></div></div>
@@ -1857,7 +1879,10 @@ async function viewPolicy(rule=""){
       <td>${b.policy==="blocked"?pill("blocked","Blocked"):pill("clear","Allowed (flagged only)")}</td>
       <td>${ids?`<div class="chiprow">${ids}</div>`:`<span class="sub">Name only</span>`}</td></tr>`}).join("");
   page.innerHTML=tbar("Decision Rules","The rules in force on this installation, shown as stored.",
-      `<span class="tag" title="rules fingerprint">${esc(p.bundle_hash.slice(0,16))}…</span>`,"policy")+`
+      `<div class="policy-hash"><span class="policy-hash-label">Rules fingerprint</span>
+        <div class="policy-hash-row"><code id="rules-hash">${esc(p.bundle_hash)}</code>
+          <button type="button" class="sm" id="copy-rules-hash" aria-label="Copy rules fingerprint">Copy</button></div>
+        <span class="policy-hash-status" id="rules-hash-status" role="status"></span></div>`,"policy")+`
     <div class="card"><div class="hd"><h2>Scoring</h2><span class="hint">threshold ${p.threshold} points · only the latest evidence of each type counts</span>${tip("rubric")}</div>
       <div class="bd flush"><table>
       <thead><tr><th>Evidence</th><th class="num">Points</th><th>Category</th><th>Method</th><th>Pass Condition</th></tr></thead>
@@ -1880,6 +1905,13 @@ async function viewPolicy(rule=""){
     <div class="card"><div class="bd chips">${p.events.map(e=>`<span class="tag">${esc(e)}</span>`).join("")}</div></div>`;
   if(rule){const row=page.querySelector("#rule-"+CSS.escape(rule));
     if(row){row.scrollIntoView({block:"center"});row.focus({preventScroll:true})}}
+  $("#copy-rules-hash").onclick=async()=>{
+    const status=$("#rules-hash-status");
+    try{await navigator.clipboard.writeText(p.bundle_hash);status.textContent="Rules fingerprint copied."}
+    catch(e){const range=document.createRange();range.selectNodeContents($("#rules-hash"));
+      const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+      status.textContent="Copy failed. The full fingerprint is selected; copy it manually."}
+  };
 }
 
 /* ── Options ──────────────────────────────────────────── */
@@ -1889,13 +1921,13 @@ function viewOptions(){
   if(page.querySelector(".options-form")){syncTheme(KYCTheme.current);return}
   page.innerHTML=tbar("Options","Browser-local preferences for this console.")+`
     <div class="card"><div class="hd"><h2>Appearance</h2></div><div class="bd">
-      <form class="options-form"><fieldset><legend>Theme</legend>
+      <form class="options-form"><fieldset><legend>Theme</legend><div class="theme-options">
         <label><input type="radio" name="theme" value="system"> System</label>
         <label><input type="radio" name="theme" value="light"> Light</label>
-        <label><input type="radio" name="theme" value="dark"> Dark</label>
+        <label><input type="radio" name="theme" value="dark"> Dark</label></div>
       </fieldset>
-      <p class="sub">Saved only in this browser. System follows your operating system setting.</p>
-      <p class="options-hint" id="options-hint" role="status"></p></form>
+      <div class="options-footer"><p class="sub">Saved only in this browser. System follows your operating system setting.</p>
+        <p class="options-hint" id="options-hint" role="status"></p></div></form>
     </div></div>`;
   syncTheme(KYCTheme.current);
   page.querySelector(".options-form").addEventListener("change",event=>{
@@ -1908,14 +1940,14 @@ function viewOptions(){
 async function viewComposer(){
   const{body:t}=await j("/ui/api/event-templates");
   const caseId=recall("composerCase")||"demo-case-001";
-  page.innerHTML=tbar("Send Message","Submit a platform message manually. The console signs it and prevents duplicate processing.","","composer")+`
+  page.innerHTML=tbar("Send Message","Submit a platform message manually for test and operations use.","","composer")+`
     <div class="split">
       <div class="card"><div class="hd"><h2>Message</h2>${tip("composerevent")}</div><div class="bd">
         <div class="field"><label class="flab" for="c-case">Company</label>
           <input id="c-case" value="${esc(caseId)}">
           <span class="note">Platform ID for the company. An unknown ID creates a new record.</span></div>
         <div class="field"><label class="flab" for="c-type">Message Type</label>
-          <select id="c-type">${t.event_types.map(e=>`<option ${e==="kyb.run_requested"?"selected":""}>${esc(e)}</option>`).join("")}</select></div>
+          <span class="select-wrap"><select id="c-type">${t.event_types.map(e=>`<option ${e==="kyb.run_requested"?"selected":""}>${esc(e)}</option>`).join("")}</select>${I.down}</span></div>
         <div id="c-warn" class="callout amber" role="note" hidden>${I.person}<div>
           <b>This message approves the company manually and bypasses all rules.</b> Use Approve
           Manually on the company page instead; it records the reviewer and the reason. If sent
