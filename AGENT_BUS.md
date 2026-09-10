@@ -175,6 +175,23 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-10 — console design-audit first pass
+
+turn: CODEX
+
+Human approved both shared visual fixes and the search-focus/page-title fixes from the
+current console audit. Current working branch is `claude/project-setup-standing-rules-5w1fwh`
+at `2fe524f` (the branch named in older protocol prose is historical).
+
+Claim: `src/kyc_tool/ui/console.html`, `tests/unit/test_console_static.py`,
+`scripts/check_console_first_pass.cjs`, `DESIGN.md`,
+`docs/superpowers/plans/2026-09-10-console-first-pass.md`, and
+`.impeccable/critique/2026-09-10T15-35-13Z__src-kyc-tool-ui-console-html.md`.
+Scope: parent-owned card spacing, header/legend proximity, reviewer alignment,
+company detail baselines, stable search input, and correct route titles. No backend,
+normative package, migration, M2, or theme-switch feature changes. The app currently
+follows system appearance; the human asked how to switch, not to add a switch.
+
 ### ACK [CLAUDE] 2026-08-24 — AUDIT-CLEAN on `9d74d3c..2c83a7e` — loop closed
 
 turn: HUMAN
