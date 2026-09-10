@@ -427,6 +427,36 @@ def test_the_reviewers_reason_and_name_reach_the_screen():
     assert "latest.manual&&latest.reviewer_id" in VIEW_CASE
 
 
+# --- shared layout owns relationships at the parent boundary -------------------------------
+
+def test_card_layouts_own_their_gap_and_actionless_headers_emit_no_slot():
+    """A global adjacent-card margin doubled the gap inside both `.split` and `.stack`, while
+    an empty action slot wrapped onto a phantom header row. The parent that knows the relationship
+    must own both behaviors."""
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    assert not re.search(r"^\.card\+\.card\{", css, re.MULTILINE)
+    assert ".page>.card+.card{margin-top:var(--card-gap)}" in css
+    tbar = CONSOLE[CONSOLE.index("const tbar="):]
+    tbar = tbar[: tbar.index("\nconst sec=")]
+    assert "actions?" in tbar
+    assert "legend?" in tbar
+
+
+def test_reviewer_and_identity_grids_align_content_rows():
+    css = CONSOLE[: CONSOLE.index("</style>")]
+    assert ".avatar{" in css and "grid-row:2" in css
+    idf = re.search(r"^\.idf\{([^}]*)\}", css, re.MULTILINE)
+    assert idf and "align-content:start" in idf.group(1)
+
+
+def test_routes_name_every_non_company_document():
+    router = CONSOLE[CONSOLE.index("const routes=["):]
+    for title in ("Overview", "Companies", "Data Sources", "Salesforce Fields",
+                  "Decision Rules", "Send Message"):
+        assert f'"{title}"' in router
+    assert 'document.title=title?`${title} · KYC Tool`:"Company · KYC Tool"' in router
+
+
 def test_one_header_chip_per_fact():
     """Raw enum equality never fired on the state it was written for: "approve" is not
     "approved_manual", so an approved-by-hand company printed both."""

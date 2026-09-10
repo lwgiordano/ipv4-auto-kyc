@@ -180,18 +180,20 @@ main:focus,h1[tabindex]:focus{outline:none}
 aside{width:var(--frame-side-nav);flex:none;background:var(--surface);
       border-right:1px solid var(--line);display:flex;flex-direction:column;overflow-y:auto}
 /* Who is at the keyboard, where the marketplace shows who is signed in. */
-.who-block{display:grid;grid-template-columns:40px 1fr;gap:var(--s2) var(--s3);align-items:center;
+.who-block{display:grid;grid-template-columns:40px 1fr;grid-template-rows:auto 36px auto;
+  gap:var(--s1) var(--s3);align-items:center;
   padding:var(--s4) var(--s4) var(--s3);border-bottom:1px solid var(--line)}
 .avatar{width:40px;height:40px;border-radius:9999px;background:var(--accent);color:var(--on-accent);
-  display:grid;place-items:center;font:var(--t-strong);letter-spacing:var(--track-caps);grid-row:span 2;
-  align-self:start}
+  display:grid;place-items:center;font:var(--t-strong);letter-spacing:var(--track-caps);
+  grid-column:1;grid-row:2;align-self:center}
 /* Scoped to the sidebar block. Unscoped, this also matched `.fitem .who` in the activity feed,
    whose own rule sets `font` but not case or tracking — so a reviewer's id rendered J.OKONJO in a
    14/20/700-uppercase style that exists nowhere in the ladder. */
-.who-block .who{display:grid;gap:var(--s1);font:var(--t-label);text-transform:uppercase;
+.who-block .who{grid-column:2;grid-row:1;font:var(--t-label);text-transform:uppercase;
   letter-spacing:var(--track-caps);color:var(--muted);cursor:default;min-height:0}
-.who-block .who input{min-height:36px;font:var(--t-strong);color:var(--ink);width:100%;padding:0 var(--s2)}
-.who-note{font:var(--t-meta);color:var(--muted);grid-column:2}
+.who-block>input{grid-column:2;grid-row:2;min-height:36px;font:var(--t-strong);color:var(--ink);
+  width:100%;padding:0 var(--s2)}
+.who-note{font:var(--t-meta);color:var(--muted);grid-column:2;grid-row:3}
 nav{padding:var(--s2) 0;flex:1}
 /* Group headers read as the marketplace's collapsible sections: same size as the items, bold,
    and no uppercase; items sit one step in with their icon. */
@@ -245,11 +247,13 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
 
 /* ── Page title bar ── */
 .tbar{display:flex;align-items:flex-start;gap:var(--s4);margin-bottom:var(--s5);flex-wrap:wrap}
+.tbar .heading{min-width:0}
 .tbar h1{font:var(--t-page);color:var(--ink);
   display:flex;align-items:center;gap:var(--s2)}
 /* 8, not 4: on the case page this row holds 24px status chips under a 22px title, and 4px was
    clearance on cap height alone — a descender in a company name would have touched them. */
 .tbar .desc{font:var(--t-body);color:var(--muted);margin-top:var(--s2)}
+.tbar .legend{margin-top:var(--s3);margin-bottom:0}
 .tbar .actions{margin-left:auto;display:flex;gap:var(--s2);align-items:center}
 .crumb{font:var(--t-meta);color:var(--muted);margin-bottom:var(--s1)}
 .crumb a{color:var(--muted)}
@@ -260,7 +264,7 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
 /* Two stacked cards are two records and must read as two objects. They used to touch, separated
    only by their own shadow, which merged "the decision the platform got" with "what the evidence
    says now" into one slab — the exact distinction the page exists to draw. */
-.card+.card{margin-top:var(--card-gap)}
+.page>.card+.card{margin-top:var(--card-gap)}
 .card .hd{padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);display:flex;
       align-items:center;gap:var(--s2);flex-wrap:wrap}
 .card .hd h2,.card .hd h3{font:var(--t-title);color:var(--ink)}
@@ -473,7 +477,7 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .idgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--s4) var(--s5)}
 @media(max-width:1180px){.idgrid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:720px){.idgrid{grid-template-columns:1fr}}
-.idf{display:grid;gap:var(--s1);min-inline-size:0}
+.idf{display:grid;gap:var(--s1);min-inline-size:0;align-content:start}
 .idf .k{font:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);
   color:var(--muted)}
 .idf .v{font:var(--t-strong);color:var(--ink);overflow-wrap:anywhere}
@@ -744,9 +748,9 @@ dialog.modal .banner{margin-top:var(--s3)}
 <aside>
   <div class="who-block">
     <div class="avatar" id="avatar" aria-hidden="true">?</div>
-    <label class="who" for="reviewer"><span>Reviewer</span>
-      <input id="reviewer" placeholder="Reviewer ID" autocomplete="off"
-        aria-describedby="reviewer-note"></label>
+    <label class="who" for="reviewer">Reviewer</label>
+    <input id="reviewer" placeholder="Reviewer ID" autocomplete="off"
+      aria-describedby="reviewer-note">
     <span id="reviewer-note" class="who-note">Recorded on every review action and approval.</span>
   </div>
   <nav id="nav">
@@ -1223,9 +1227,11 @@ function pipe(state){
 
 const page=$("#page");
 let refreshTimer=null;
+let caseSearchRequest=0,caseSearchTimer=null;
 const caseLink=id=>`<a href="#/case/${encodeURIComponent(id)}" class="mono">${esc(id)}</a>`;
-const tbar=(title,desc,actions="",tk="")=>`<div class="tbar"><div><h1>${title}${tip(tk)}</h1>
-  <div class="desc">${desc}</div></div><div class="actions">${actions}</div></div>`;
+const tbar=(title,desc,actions="",tk="",legend="")=>`<div class="tbar"><div class="heading"><h1>${title}${tip(tk)}</h1>
+  <div class="desc">${desc}</div>${legend?`<div class="legend">${legend}</div>`:""}</div>${
+  actions?`<div class="actions">${actions}</div>`:""}</div>`;
 const sec=(title,tk="",cls="",gloss="")=>`<h2 class="sec ${cls}">${title}${
   gloss?`<span class="gloss">${gloss}</span>`:""}${tip(tk)}</h2>`;
 const emptyRow=(cols,head,body)=>`<tr><td colspan="${cols}"><div class="empty"><b>${head}</b>${body}</div></td></tr>`;
@@ -1312,9 +1318,27 @@ async function viewCases(){
   // The live input is the truth while the view is mounted; the remembered term only has to
   // survive navigating away and back. Reading storage first meant that with site data blocked
   // the box accepted typing and searched for nothing.
-  const box=$("#q");
-  const q=box?box.value:recall("caseq");
+  let box=$("#q");
+  if(page.dataset.route!=="#/cases"||!box){
+    const remembered=recall("caseq");
+    page.innerHTML=tbar("Companies","All companies that have applied. Select a row to open the full record.","","cases")+`
+      <div class="toolbar">
+        <div class="search"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="4.5"/><path d="M14 14l-3.5-3.5"/></svg>
+          <input id="q" placeholder="Search by company or ID" value="${esc(remembered)}" aria-label="Search companies"></div>
+        <span class="note" id="case-count"></span>${tip("caselist")}</div>
+      <div class="card"><div class="bd flush"><table class="companies">
+        <thead><tr><th>Company</th><th>Decision</th>
+        <th class="num" title="score at the time of the decision, with today's evidence total below it when the two differ">Score</th>
+        <th>Status</th><th>Buying</th><th>Broker Status</th><th class="num">Updated</th><th></th></tr></thead>
+        <tbody id="case-rows"></tbody></table></div></div>`;
+    box=$("#q");
+    box.addEventListener("input",e=>{remember("caseq",e.target.value);
+      clearTimeout(caseSearchTimer);caseSearchTimer=setTimeout(()=>viewCases(),250)});
+  }
+  const q=box.value;
+  const requestId=++caseSearchRequest;
   const{body}=await j(`/ui/api/cases?q=${encodeURIComponent(q)}`);
+  if(requestId!==caseSearchRequest||page.dataset.route!=="#/cases"||box!==$("#q"))return;
   const rows=body.cases.map(c=>`<tr class="click" data-id="${esc(c.id)}">
     <td><a href="#/case/${encodeURIComponent(c.id)}" class="rowlink">${esc(c.company_name||c.id)}</a><div class="sub mono">${esc(c.id)}</div></td>
     <td>${c.latest_decision?(c.enforcement_held?pill("held_for_approval"):pill(c.latest_decision)):provPill(c.decision_provenance)}</td>
@@ -1327,20 +1351,9 @@ async function viewCases(){
     <td class="chev" aria-hidden="true">›</td></tr>`).join("")
     ||(q?emptyRow(8,"No matches",`No company or ID contains “${esc(q)}”. <button class="sm" id="clearq">Clear Search</button>`)
         :emptyRow(8,"No companies yet",`Send a <code>kyb.run_requested</code> message from <a href="#/composer">Send Message</a> to create one.`));
-  page.innerHTML=tbar("Companies","All companies that have applied. Select a row to open the full record.","","cases")+`
-    <div class="toolbar">
-      <div class="search"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="4.5"/><path d="M14 14l-3.5-3.5"/></svg>
-        <input id="q" placeholder="Search by company or ID" value="${esc(q)}" aria-label="Search companies"></div>
-      <span class="note">${body.cases.length} compan${body.cases.length===1?"y":"ies"}</span>
-      ${tip("caselist")}</div>
-    <div class="card"><div class="bd flush"><table class="companies">
-      <thead><tr><th>Company</th><th>Decision</th>
-      <th class="num" title="score at the time of the decision, with today's evidence total below it when the two differ">Score</th>
-      <th>Status</th><th>Buying</th><th>Broker Status</th><th class="num">Updated</th><th></th></tr></thead>
-      <tbody>${rows}</tbody></table></div></div>`;
-  $("#q").addEventListener("input",e=>{remember("caseq",e.target.value);
-    clearTimeout(window.__qt);window.__qt=setTimeout(viewCases,250)});
-  const cq=$("#clearq");if(cq)cq.onclick=()=>{$("#q").value="";remember("caseq","");viewCases()};
+  $("#case-rows").innerHTML=rows;
+  $("#case-count").textContent=`${body.cases.length} compan${body.cases.length===1?"y":"ies"}`;
+  const cq=$("#clearq");if(cq)cq.onclick=()=>{box.value="";remember("caseq","");box.focus();viewCases()};
   // The row's click is a convenience layered over the link, never a second navigation: a click
   // on the link itself, or one with a modifier (new tab, new window), is the browser's to handle.
   page.querySelectorAll("tr.click").forEach(tr=>
@@ -1734,10 +1747,10 @@ async function viewIntegrations(){
       <div class="end">${a.probeable?`<button class="sm" data-probe="${esc(a.adapter_id)}">Test Connection</button>
         <div class="probe-out" id="probe-${esc(a.adapter_id)}"></div>`:`<span class="sub">Not testable from the console</span>`}</div>
     </div>`).join("");
-  page.innerHTML=tbar("Data Sources","Where each piece of evidence comes from, and whether the connection is live.","","integrations")+`
-    <p class="legend">${[[pill("live"),"live service"],[pill("stub"),"built-in test data"],
+  const legend=[[pill("live"),"live service"],[pill("stub"),"built-in test data"],
       [pill("dev"),"development stand-in"],[pill("needs-config"),"configured without credentials"],
-      [pill("manual"),"manual process"]].map(([c,t])=>`<span class="item">${c}${t}</span>`).join("")}</p>
+      [pill("manual"),"manual process"]].map(([c,t])=>`<span class="item">${c}${t}</span>`).join("");
+  page.innerHTML=tbar("Data Sources","Where each piece of evidence comes from, and whether the connection is live.","","integrations",legend)+`
     <div class="card mb-4"><div class="hd"><h2 class="iw">${I.swap}Platform Connections</h2>${tip("platform")}</div>
       <div class="irow"><div class="itile">CB</div>
         <div class="meta"><div class="nm">Decision Delivery ${pill(p.status)}</div>
@@ -1902,13 +1915,13 @@ async function viewComposer(){
 
 /* ── Router ───────────────────────────────────────────── */
 const routes=[
-  [/^#\/overview$/,()=>viewOverview(),"overview"],
-  [/^#\/cases$/,()=>viewCases(),"cases"],
-  [/^#\/case\/(.+)$/,m=>viewCase(decodeURIComponent(m[1])),"cases"],
-  [/^#\/integrations$/,()=>viewIntegrations(),"integrations"],
-  [/^#\/fieldmap$/,()=>viewFieldMap(),"fieldmap"],
-  [/^#\/policy(?:\?rule=([^&]*))?$/,m=>viewPolicy(m[1]?decodeURIComponent(m[1]):""),"policy"],
-  [/^#\/composer$/,()=>viewComposer(),"composer"],
+  [/^#\/overview$/,()=>viewOverview(),"overview","Overview"],
+  [/^#\/cases$/,()=>viewCases(),"cases","Companies"],
+  [/^#\/case\/(.+)$/,m=>viewCase(decodeURIComponent(m[1])),"cases",null],
+  [/^#\/integrations$/,()=>viewIntegrations(),"integrations","Data Sources"],
+  [/^#\/fieldmap$/,()=>viewFieldMap(),"fieldmap","Salesforce Fields"],
+  [/^#\/policy(?:\?rule=([^&]*))?$/,m=>viewPolicy(m[1]?decodeURIComponent(m[1]):""),"policy","Decision Rules"],
+  [/^#\/composer$/,()=>viewComposer(),"composer","Send Message"],
 ];
 const main=$("#main");
 let navigated=false;   // set by a hash change; cleared once the new page has taken focus
@@ -1916,9 +1929,12 @@ async function route(){
   // a re-render (navigation, or the 5s refresh) throws away the button the bubble is anchored to
   hideTip();
   const h=location.hash||"#/overview";
-  for(const[re,fn,nav]of routes){
+  clearTimeout(caseSearchTimer);caseSearchRequest++;
+  page.dataset.route=h;
+  for(const[re,fn,nav,title]of routes){
     const m=h.match(re);
     if(m){
+      document.title=title?`${title} · KYC Tool`:"Company · KYC Tool";
       document.querySelectorAll(".nav-item").forEach(a=>{
         const here=a.dataset.r===nav;a.classList.toggle("active",here);
         // the tint is one cue; "current page" is the one a screen reader gets

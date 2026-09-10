@@ -73,7 +73,7 @@ Being on the scale is not enough — the *same role takes the same value everywh
 | Role | Value |
 |---|---|
 | Page gutter | 24/32 desktop, 12 below 720 |
-| Card → card | `--card-gap` (16px), via `.card + .card` |
+| Card → card | `--card-gap` (16px), owned by `.split`/`.stack` gaps or scoped `.page > .card + .card` |
 | Section label → its group | 32 above / 12 below |
 | Card header | 12 / 16 |
 | Card body | 16 |
@@ -375,7 +375,29 @@ render of its own.
     control in it; bottom-right is the toast. A badge that floats over either is a control you
     have hidden. Put it in the flow of the thing it belongs to.
 
-## 12. Verifying a change
+## 12. Console first-pass layout contract
+
+The shared header owns title, description, optional legend and optional actions. Its internal
+intervals are 8px from title to description and 12px from description to legend; the header as a
+whole owns 24px before page content. An absent slot emits no element, because an empty flex child
+can wrap and create visible space.
+
+Layout parents own card rhythm. `.split` and `.stack` use one 16px gap and their children carry no
+adjacent-card margin; only direct block-flow card siblings under `.page` retain the 16px margin.
+The reviewer grid names three rows and centers its avatar on the input row. Identity fields use
+content-sized tracks so an optional subline cannot move a neighboring primary value.
+
+The reusable lesson is to test the relationship at the boundary that owns it. Two individually
+valid 16px rules still make a wrong 32px gap, and a correctly sized element can align to the wrong
+row. Browser checks therefore measure sibling edges, row centers and header intervals at 390,
+768, 1024 and 1440px rather than inferring correctness from token use.
+
+Companies keeps its toolbar and search input mounted while only the result count and rows change.
+The live input is authoritative; request sequencing and node identity prevent delayed results from
+overwriting a newer query or route. Every route owns its document title, while the company view
+retains its company-specific title and the development proxy may continue to prepend its marker.
+
+## 13. Verifying a change
 
 ```bash
 bash scripts/dev.sh                    # stack + console on :8080/ui
