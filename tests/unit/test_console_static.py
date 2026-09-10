@@ -35,6 +35,15 @@ def _live_css() -> str:
     return re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
 
 
+def _sync_function_body(name: str) -> str:
+    """Source for a top-level synchronous helper, bounded by the next top-level function."""
+    start = re.search(rf"^function {name}\(", CONSOLE, re.MULTILINE)
+    assert start, f"helper {name}() not found"
+    rest = CONSOLE[start.end():]
+    end = re.search(r"^(?:async )?function ", rest, re.MULTILINE)
+    return rest[: end.start()] if end else rest
+
+
 VIEW_CASE = _function_body("viewCase")
 VIEW_CASES = _function_body("viewCases")
 
@@ -501,3 +510,43 @@ def test_every_status_marker_is_a_drawn_glyph():
 def test_a_truncated_identifier_keeps_its_full_value():
     for cell in ('<td class="mono" title="${esc(r.id)}">', '<td class="mono" title="${esc(t.id)}">'):
         assert cell in VIEW_CASE
+
+
+# --- browser-local configuration previews ---------------------------------------------------
+
+def test_preview_storage_writes_one_versioned_cloned_record():
+    """Dropping the base or storing the mutable form object would make stale drafts look current."""
+    body = _sync_function_body("writePreview")
+    assert "localStorage.setItem" in body
+    assert "{version:1,base,value:clone(value)}" in body
+    assert "fetch(" not in body and " j(" not in body
+
+
+def test_each_preview_base_tracks_its_live_authority():
+    """Points follow the bundle; mappings follow field/source pairs; brokers follow the DB list."""
+    policy = _function_body("viewPolicy")
+    mapping_base = CONSOLE[CONSOLE.index("const mapBase="):CONSOLE.index("const BROKER_LISTS=")]
+    broker_base = CONSOLE[CONSOLE.index("const brokerBase="):CONSOLE.index("function readPreview")]
+    assert "p.bundle_hash" in _sync_function_body("mountPointsEditor")
+    assert "Object.entries(p.field_sources).sort" in mapping_base
+    assert "p.broker_entities" in broker_base and ".sort(" in broker_base
+    assert "mountPointsEditor(p);mountBrokerEditor(p)" in policy
+
+
+def test_preview_mounts_cannot_call_a_server_write():
+    """The form handlers may write localStorage, but never cross the HTTP mutation boundary."""
+    for name in ("mountPointsEditor", "mountBrokerEditor"):
+        body = _sync_function_body(name)
+        assert "fetch(" not in body and "j(" not in body
+        assert 'method:"POST"' not in body and 'method:"PUT"' not in body
+
+
+def test_async_preview_surfaces_check_the_shared_render_generation_before_mounting():
+    """A delayed old route must not replace a newer editor after navigation."""
+    for name in ("viewOverview", "viewFieldMap", "viewPolicy"):
+        body = _function_body(name)
+        guard = body.index("generation!==renderGeneration")
+        mount = body.index("page.innerHTML")
+        assert guard < mount, f"{name} mounts before its stale-render guard"
+    route = _function_body("route")
+    assert "const generation=++renderGeneration" in route

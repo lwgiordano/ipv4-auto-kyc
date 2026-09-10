@@ -439,6 +439,46 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
    type, which made the approval dialog's guidance indistinguishable from its narration. */
 .note{font:var(--t-meta);color:var(--muted)}
 
+/* ── Browser-local configuration previews ── */
+.preview-note{display:flex;gap:var(--s2);align-items:flex-start;margin:0 0 var(--s4);
+  padding:var(--s3);background:var(--surface-muted);border:1px solid var(--border-input);
+  border-radius:var(--r);color:var(--text);font:var(--t-body)}
+.preview-note .ic{flex:none;color:var(--accent-text)}
+.preview-actions{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.preview-actions .preview-status{flex:1;min-width:min(260px,100%)}
+.preview-status{font:var(--t-meta);color:var(--muted)}
+.preview-status.err,.entry-error{color:var(--red)}
+.preview-status.ok{color:var(--green)}
+.preview-table input{width:100%;min-width:110px}
+.preview-table .live-value{display:block;margin-top:var(--s1);font:var(--t-meta);color:var(--muted)}
+.preview-table td{vertical-align:top}
+.broker-tools{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap;margin-bottom:var(--s3)}
+.broker-tools .search{flex:1;min-width:min(240px,100%)}
+.broker-tools .search input{width:100%}
+.broker-entry{padding:var(--s4);border-top:1px solid var(--line);background:var(--surface-muted)}
+.broker-entry fieldset{border:1px solid var(--line);border-radius:var(--r);padding:var(--s3);margin:0 0 var(--s3)}
+.broker-entry legend{padding:0 var(--s2);font:var(--t-strong);color:var(--ink)}
+.broker-entry .group-hint{display:block;margin:-4px 0 var(--s3);font:var(--t-meta);color:var(--muted)}
+.broker-entry-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s3)}
+.broker-entry-grid .field{margin:0}
+.broker-entry-grid .wide{grid-column:1/-1}
+.broker-entry textarea{min-height:88px}
+.broker-identifiers{display:flex;gap:var(--s1);flex-wrap:wrap;margin-top:var(--s1)}
+.broker-row-actions{display:flex;gap:var(--s1);justify-content:flex-end;flex-wrap:wrap}
+.broker-overlap{margin:var(--s3) 0 0;padding:var(--s3);border:1px solid var(--amber);
+  border-radius:var(--r);background:var(--amber-soft);color:var(--amber-ink);font:var(--t-meta)}
+.latest-controls{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap;padding:var(--s3) var(--s4);
+  border-bottom:1px solid var(--line)}
+.latest-decisions details{padding:var(--s3) var(--s4);border-bottom:1px solid var(--line)}
+.latest-decisions details:last-child{border-bottom:0}
+.latest-decisions summary{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;color:var(--ink)}
+.latest-decisions summary .when{margin-left:auto}
+.latest-detail{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--s3);
+  padding:var(--s3) 0 0}
+.latest-detail .k{display:block;font:var(--t-label);text-transform:uppercase;
+  letter-spacing:var(--track-caps);color:var(--muted);margin-bottom:var(--s1)}
+@media(max-width:720px){.broker-entry-grid,.latest-detail{grid-template-columns:1fr}}
+
 /* ── Score bar (score vs target) ── */
 .bullet{display:grid;gap:var(--s2)}
 .bullet .val{display:flex;align-items:baseline;gap:var(--s2);flex-wrap:wrap}
@@ -880,6 +920,90 @@ const exact=s=>`<span class="when">${esc(fmtExact(s))}<div class="sub">${esc(rel
 const remember=(k,v)=>{try{sessionStorage.setItem(k,v)}catch(e){/* not storable; fine */}};
 const recall=(k,d="")=>{try{return sessionStorage.getItem(k)??d}catch(e){return d}};
 
+const PREVIEW_PREFIX="kyc-preview-v1:";
+const previewKey=kind=>PREVIEW_PREFIX+kind;
+const clone=value=>JSON.parse(JSON.stringify(value));
+const canonical=value=>{
+  if(Array.isArray(value))return`[${value.map(canonical).join(",")}]`;
+  if(value&&typeof value==="object")return`{${Object.keys(value).sort().map(k=>
+    `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+  return JSON.stringify(value);
+};
+const mapBase=p=>canonical(Object.entries(p.field_sources).sort(([a],[b])=>a.localeCompare(b)));
+const BROKER_LISTS=["aliases","domains","email_domains","org_ids","poc_handles","asns"];
+const cleanBroker=(broker,index=0)=>({
+  id:String(broker.id||`live-${index}`),name:String(broker.name??""),
+  policy:broker.policy==="blocked"?"blocked":"allowed",
+  ...Object.fromEntries(BROKER_LISTS.map(k=>[k,Array.isArray(broker[k])?broker[k].map(String):[]])),
+  notes:String(broker.notes??""),
+});
+const brokerBase=p=>canonical((p.broker_entities||[]).map((b,i)=>cleanBroker(b,i))
+  .map(({id,...b})=>b).sort((a,b)=>a.name.localeCompare(b.name)));
+function readPreview(kind,base,validate){
+  let raw;
+  try{raw=localStorage.getItem(previewKey(kind))}
+  catch(e){return{state:"blocked",message:"Browser storage is unavailable. You can still edit, but this preview cannot be reloaded."}}
+  if(raw===null)return{state:"live"};
+  let record;
+  try{record=JSON.parse(raw)}catch(e){return{state:"invalid",message:"This saved preview cannot be used because its stored data is malformed."}}
+  if(!record||record.version!==1||typeof record.base!=="string"||!record.value||typeof record.value!=="object")
+    return{state:"invalid",message:"This saved preview cannot be used because its stored schema is invalid."};
+  if(record.base!==base)return{state:"stale",message:"The live rules changed after this preview was saved. Reset to Live before editing again."};
+  const error=validate(record.value);
+  if(error)return{state:"invalid",message:`This saved preview cannot be used: ${error}`};
+  return{state:"saved",value:clone(record.value),message:"Saved preview loaded from this browser."};
+}
+function writePreview(kind,base,value){
+  try{localStorage.setItem(previewKey(kind),JSON.stringify({version:1,base,value:clone(value)}));return true}
+  catch(e){return false}
+}
+function removePreview(kind){try{localStorage.removeItem(previewKey(kind));return true}catch(e){return false}}
+const setPreviewStatus=(el,message,kind="")=>{el.textContent=message;el.className=`preview-status ${kind}`.trim()};
+function validatePoints(value,rubric){
+  if(!value||typeof value!=="object"||Array.isArray(value))return"Points must be an object.";
+  const checks=rubric.map(r=>r.check_type);
+  if(Object.keys(value).length!==checks.length||checks.some(k=>!Object.hasOwn(value,k)))return"The point list does not match the live rubric.";
+  for(const check of checks)if(!Number.isInteger(value[check])||value[check]<0||value[check]>1000)
+    return`${say("check",check)} must be a whole number from 0 to 1000.`;
+  return"";
+}
+function validateMappings(value,fields){
+  if(!value||typeof value!=="object"||Array.isArray(value))return"Mappings must be an object.";
+  if(Object.keys(value).length!==fields.length||fields.some(k=>!Object.hasOwn(value,k)))return"The mapping list does not match the live fields.";
+  const names=[];
+  for(const field of fields){const name=value[field];
+    if(typeof name!=="string"||!/^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(name))
+      return"Destination names must be 1–80 ASCII letters, digits, or underscores and start with a letter.";
+    names.push(name.toLowerCase())}
+  if(new Set(names).size!==names.length)return"Destination names must be unique.";
+  return"";
+}
+const brokerNameKey=name=>String(name).trim().replace(/\s+/g," ").toLowerCase();
+function validateBrokers(value){
+  if(!value||!Array.isArray(value.brokers))return"The broker preview must contain a broker list.";
+  if(value.brokers.length>200)return"A preview can contain at most 200 brokers.";
+  const names=new Set(),ids=new Set();
+  for(const broker of value.brokers){
+    if(!broker||typeof broker!=="object"||typeof broker.id!=="string"||!broker.id||ids.has(broker.id))return"Every broker must have a unique local preview ID.";
+    ids.add(broker.id);
+    if(typeof broker.name!=="string"||broker.name.trim().length<1||broker.name.trim().length>200)return"Broker names must be 1–200 characters.";
+    const name=brokerNameKey(broker.name);if(names.has(name))return`A broker named ${broker.name.trim()} already exists.`;names.add(name);
+    if(!["allowed","blocked"].includes(broker.policy))return"Broker policy must be exactly allowed or blocked.";
+    for(const key of BROKER_LISTS){if(!Array.isArray(broker[key])||broker[key].length>100)return`${key} must contain at most 100 entries.`;
+      const values=[];for(const item of broker[key]){if(typeof item!=="string"||!item.trim()||item.trim().length>256)return`${key} entries must be nonempty and at most 256 characters.`;values.push(item.trim().toLowerCase())}
+      if(new Set(values).size!==values.length)return`${key} contains a duplicate.`}
+    if(typeof broker.notes!=="string"||broker.notes.length>2000)return"Notes must be at most 2000 characters.";
+  }
+  return"";
+}
+function brokerOverlaps(brokers){
+  const seen=new Map(),found=[];
+  brokers.forEach(b=>BROKER_LISTS.forEach(key=>(b[key]||[]).forEach(raw=>{
+    const value=raw.trim().toLowerCase(),prior=seen.get(value);
+    if(prior&&prior.id!==b.id)found.push({value:raw,one:prior,two:b});else seen.set(value,b)})));
+  return found;
+}
+
 /* Who is acting. The box is the source of truth and is read (trimmed) by every reviewer action;
    session storage only remembers it, and may be unavailable. */
 const whoBox=$("#reviewer");
@@ -1148,7 +1272,7 @@ const TIPS={
     <p>Exception: while automatic approval is not enabled, a company matching an Approved row is
     published as On Hold and shown as Held for Approval. That hold is lifted by a named reviewer,
     not by further evidence.</p>`},
-  brokerpolicy:{t:"Blocked Broker List",b:`<p>Matching is exact: the same name, domain, Org ID,
+  brokerpolicy:{t:"Broker Rules",b:`<p>Matching is exact: the same name, domain, Org ID,
     contact handle or ASN. No approximate matching, so a similar name never causes a
     rejection.</p><p>Blocked entries are rejected immediately. Allowed entries are flagged only.</p>`},
   hardgates:{t:"Rule Definitions",b:`<p>The five rules exactly as stored and evaluated.</p>`},
@@ -1220,7 +1344,7 @@ const PILL={
   clear:["p-green",I.check,"No Broker Match"],allowed_broker:["p-amber",I.warn,"Allowed Broker"],
   blocked:["p-red",I.cross,"Blocked Broker"],
 };
-const PROV_PILL={unresolved_pointer_drift:["integrity_drift",undefined],unresolved_legacy_order:["missing","Order Unresolved (legacy records)"],no_decisions:["missing","No Decision Yet"],no_manual_decisions:["missing","No Manual Approval"],latest_manual_row:["manual","Approved Manually"],
+const PROV_PILL={latest_decision_row:["live","Authoritative decision row"],unresolved_pointer_drift:["integrity_drift",undefined],unresolved_legacy_order:["missing","Order Unresolved (legacy records)"],no_decisions:["missing","No Decision Yet"],no_manual_decisions:["missing","No Manual Approval"],latest_manual_row:["manual","Approved Manually"],
   // every MANUAL provenance state has its own pill (re-audit `8377440` F6): a legacy-unresolved
   // manual history must NOT render identically to "no manual approval".
   latest_manual_row_manual:["manual","Manual Approval on Record"],unresolved_pointer_drift_manual:["integrity_drift","Manual Approval Record Conflict"],unresolved_legacy_order_manual:["missing","Manual Approval Order Unresolved"],no_manual_decisions_manual:["p-neutral","No Manual Approval"]};
@@ -1267,6 +1391,7 @@ function pipe(state){
 
 const page=$("#page");
 let refreshTimer=null;
+let renderGeneration=0;
 let caseSearchRequest=0,caseSearchTimer=null;
 const caseLink=id=>`<a href="#/case/${encodeURIComponent(id)}" class="mono">${esc(id)}</a>`;
 const tbar=(title,desc,actions="",tk="",legend="")=>`<div class="tbar"><div class="heading"><h1>${title}${tip(tk)}</h1>
@@ -1290,15 +1415,30 @@ async function sidebarBadge(){try{
 
 /* ── Overview ─────────────────────────────────────────── */
 async function viewOverview(){
-  const{body:o}=await j("/ui/api/overview");
+  const generation=renderGeneration;
+  const[{body:o},{body:caseList}]=await Promise.all([j("/ui/api/overview"),j("/ui/api/cases?limit=100")]);
+  if(generation!==renderGeneration)return;
   const m=o.metrics,g=(x,k)=>x?.[k]??0;
   const deadJ=g(m.jobs_by_status,"dead"),deadO=g(m.outbox_by_status,"dead"),dead=deadJ+deadO;
   const reviews=Object.entries(m.review_tasks_open_by_type||{});
   const kpi=(lab,num,foot,cls="")=>`<div class="kpi"><div class="lab">${lab}</div>
     <div class="num ${cls}">${num}</div><div class="foot">${foot}</div></div>`;
-  const decisions=Object.entries(m.decisions_by_type||{}).sort((a,b)=>b[1]-a[1])
-    .map(([k,v])=>`<tr><td>${pill(k)}</td><td class="num strong">${v}</td></tr>`).join("")
-    ||emptyRow(2,"No decisions yet","Send a <code>kyb.run_requested</code> message from <a href='#/composer'>Send Message</a>.");
+  const decisionEntries=Object.entries(m.decisions_by_type||{}).sort((a,b)=>b[1]-a[1]);
+  const decisionTotal=decisionEntries.reduce((sum,[,count])=>sum+count,0);
+  const decisions=decisionEntries.map(([k,v])=>`<tr><td>${pill(k)}</td><td class="num strong">${v}</td>
+    <td class="num" data-decision-share>${decisionTotal?`${(v/decisionTotal*100).toFixed(1)}%`:"—"}</td></tr>`).join("")
+    ||emptyRow(3,"No decisions yet","No all-time decision records are available yet.");
+  const latestCases=Array.isArray(caseList.cases)?caseList.cases:[];
+  const latestRow=c=>{const hasDecision=c.decision_provenance==="latest_decision_row"&&c.latest_decision;
+    const held=hasDecision&&c.latest_decision==="approve"&&c.enforcement_held;
+    const decision=hasDecision?pill(held?"held_for_approval":c.latest_decision):provPill(c.decision_provenance||"no_decisions");
+    return`<details data-latest-decision="${esc(hasDecision?c.latest_decision:"none")}"><summary>
+      <span class="strong">${esc(c.company_name||c.id)}</span>${decision}${exact(c.updated_at)}</summary>
+      <div class="latest-detail"><div><span class="k">Company</span>${caseLink(c.id)}</div>
+        <div><span class="k">Latest decision</span>${decision}</div>
+        <div><span class="k">Pointer status</span>${provPill(c.decision_provenance||"no_decisions")}</div>
+        <div><span class="k">Score</span><span class="strong">${c.decision_score??"—"}</span></div>
+        <div><span class="k">Company updated</span>${exact(c.updated_at)}</div></div></details>`};
   const adapters=(m.adapter_latency||[]).map(a=>`<tr>
     <td><span class="strong">${esc(say("adapter",a.adapter_id))}</span>
       <div class="sub mono">${esc(a.adapter_id)}</div></td><td class="num">${a.calls}</td>
@@ -1324,14 +1464,23 @@ async function viewOverview(){
       ${kpi("Time to Decision",(m.event_to_decision_seconds?.p95??0).toFixed(1)+"s","95th percentile · target under 10s")}
     </div>
     <div class="split">
-      <div class="card"><div class="hd"><h2>Decisions to Date</h2><span class="hint">all time</span>${tip("decisions")}</div>
-        <div class="bd flush"><table><tbody>${decisions}</tbody></table></div></div>
+      <div class="card" id="decision-distribution"><div class="hd"><h2>Decisions to Date</h2>
+        <span class="hint">${decisionTotal} all-time decision record${decisionTotal===1?"":"s"}</span>${tip("decisions")}</div>
+        <div class="bd flush"><table><thead><tr><th>Decision</th><th class="num">Count</th><th class="num">Share</th></tr></thead>
+          <tbody>${decisions}</tbody></table></div></div>
       <div class="card"><div class="hd"><h2>External Services</h2><span class="hint">response summary</span>${tip("latency")}</div>
         <div class="bd flush"><table>
           <thead><tr><th>Service</th><th class="num">Calls</th><th class="num" title="share of calls that returned an error">Error Rate</th>
           <th class="num" title="95th percentile">Response Time</th></tr></thead>
           <tbody>${adapters}</tbody></table></div></div>
     </div>
+    ${sec("Latest decisions by company","","","up to 100 most recently updated companies")}
+    <div class="card"><div class="latest-controls"><label class="flab" for="latest-decision-filter">Decision</label>
+      <span class="select-wrap"><select id="latest-decision-filter" aria-label="Latest company decision filter"><option value="all">All</option>
+        ${decisionEntries.map(([decision])=>`<option value="${esc(decision)}">${esc(say("decision",decision))}</option>`).join("")}
+        <option value="none">No authoritative decision</option></select>${I.down}</span></div>
+      <div class="latest-decisions" id="latest-company-decisions">${latestCases.length?latestCases.map(latestRow).join(""):
+        `<div class="empty"><b>No recently updated companies</b>Companies appear here after they apply.</div>`}</div></div>
     ${o.dead_jobs.length?sec("Failed Jobs","deadjobs")+`<div class="card"><div class="bd flush"><table>
       <thead><tr><th class="num">ID</th><th>Type</th><th>Company</th><th class="num">Attempts</th><th>Last Error</th><th></th></tr></thead>
       <tbody>${deadRows(o.dead_jobs,"job")}</tbody></table></div></div>`:""}
@@ -1347,6 +1496,11 @@ async function viewOverview(){
       <span class="k">Evidence storage</span><span>${esc(say("store",o.config.object_store))}</span>
       <span class="k">Rules directory</span><span class="mono">${esc(o.config.policy_dir)}</span>
     </div></div>`;
+  const latestPanel=$("#latest-company-decisions"),latestFilter=$("#latest-decision-filter");
+  latestFilter.onchange=()=>{const value=latestFilter.value;let shown=0;
+    latestPanel.querySelectorAll("details").forEach(row=>{row.hidden=value!=="all"&&row.dataset.latestDecision!==value;if(!row.hidden)shown++});
+    latestPanel.querySelector(".filtered-empty")?.remove();
+    if(!shown&&latestCases.length)latestPanel.insertAdjacentHTML("beforeend",`<div class="empty filtered-empty"><b>No matching companies</b>Choose another decision filter.</div>`)};
   page.querySelectorAll("[data-requeue]").forEach(b=>b.onclick=async()=>{
     const[kind,id]=b.dataset.requeue.split(":");
     const r=await j(`/ui/api/requeue/${kind}/${id}`,{method:"POST"});
@@ -1552,7 +1706,9 @@ function identityCard(c){
     <div class="bd"><div class="idgrid">${rows.map(cell).join("")}</div></div></div>`}
 
 async function viewCase(id){
+  const generation=renderGeneration;
   const{status,body:d}=await j(`/ui/api/cases/${encodeURIComponent(id)}/full`);
+  if(generation!==renderGeneration)return;
   if(status===404){document.title="KYC Tool · Console";
     page.innerHTML=`<div class="empty card"><b>No company with this ID</b><code>${esc(id)}</code></div>`;return}
   const c=d.case;
@@ -1767,7 +1923,9 @@ const todoText=t=>"Pending: "+String(t).replace(/^TODO\([^)]*\):\s*/,"").replace
 const GLYPH={broker_policy:"BR",email_verification:"EM",companies_house:"CH",gleif:"GL",
   floqer_company_enrichment:"FL",rir_rdap:"RD",rir_poc:"PC",document_ocr:"DO",website_manual_review:"WW"};
 async function viewIntegrations(){
+  const generation=renderGeneration;
   const{body:d}=await j("/ui/api/integrations");
+  if(generation!==renderGeneration)return;
   const p=d.platform_callback;
   const envChips=list=>`<div class="chiprow">`+list.map(e=>
     `<span class="tag ${e.present?"":"warn"}">${e.present?I.check:I.absent}${esc(e.note)}</span>`).join("")+`</div>`;
@@ -1823,47 +1981,133 @@ async function viewIntegrations(){
 }
 
 /* ── Field Map ────────────────────────────────────────── */
-async function viewFieldMap(){
-  const{body:pol}=await j("/ui/api/policy");
-  const{body:cl}=await j("/ui/api/cases?limit=100");
-  const selected=recall("fmCase")||cl.cases[0]?.id||"";
+async function viewFieldMap(force=false){
+  if(!force&&page.dataset.route==="#/fieldmap"&&page.querySelector(".mapping-editor-mounted"))return;
+  const generation=renderGeneration;
+  const[{body:pol},{body:cl}]=await Promise.all([j("/ui/api/policy"),j("/ui/api/cases?limit=100")]);
+  let selected=recall("fmCase")||cl.cases[0]?.id||"";
   let values={};
   if(selected){const r=await j(`/ui/api/cases/${encodeURIComponent(selected)}/full`);
     if(r.status<300)values=r.body.salesforce}
-  const rows=Object.entries(pol.field_sources).map(([field,src])=>{
-    const v=values[field];
-    const shown=field==="KYC_Check__c"?(v?`${v.length} record${v.length===1?"":"s"}`:""):
-      (v===undefined||v===null?"":String(v));
-    return`<tr><td class="mono">${esc(field)}</td>
-      <td>${selected?(shown===""?`<span class="sub">—</span>`:`<span class="strong">${esc(shown)}</span>`)
-        :`<span class="sub">Select a company</span>`}</td>
-      <td class="sub src">${esc(src)}</td></tr>`}).join("");
+  if(generation!==renderGeneration)return;
+  const fields=Object.keys(pol.field_sources),live=Object.fromEntries(fields.map(field=>[field,field]));
+  const base=mapBase(pol),saved=readPreview("salesforce",base,value=>validateMappings(value,fields));
+  let working=saved.state==="saved"?clone(saved.value):clone(live),editing=false;
   page.innerHTML=tbar("Salesforce Fields",
     "The Salesforce field each value is written to, and the source of that value.","","fieldmap")+`
-    <div class="toolbar">
-      <label class="flab" for="fmcase">Show values for</label>
+    <div class="toolbar"><label class="flab" for="fmcase">Show values for</label>
       <span class="select-wrap"><select id="fmcase"><option value="">Select a company</option>
         ${cl.cases.map(c=>`<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.company_name||c.id)} · ${esc(c.id)}</option>`).join("")}
       </select>${I.down}</span>${tip("fieldtable")}</div>
-    <div class="card"><div class="bd flush"><table>
-      <thead><tr><th style="width:250px">Salesforce Field</th><th style="width:250px">Value</th>
-      <th>Source</th></tr></thead><tbody>${rows}</tbody></table></div></div>
+    <div class="preview-note">${I.warn}<span><b>Preview only</b> — saved in this browser; live rules are unchanged.
+      Destination names only: values and source projections remain read-only.</span></div>
+    <div class="card mapping-editor-mounted" id="mapping-editor"><div class="hd"><h2>Field Mappings</h2>
+      <div class="preview-actions"><button type="button" class="sm" id="edit-mappings">Edit Mappings</button>
+        <button type="button" class="sm" id="save-mappings" hidden>Save Preview</button>
+        <button type="button" class="sm" id="reset-mappings">Reset to Live</button></div></div>
+      <div class="bd flush"><table class="preview-table"><thead><tr><th style="width:250px">Salesforce Field</th>
+        <th style="width:250px">Value</th><th>Source</th></tr></thead><tbody></tbody></table></div>
+      <div class="bd"><p class="preview-status" id="mapping-status" role="status"></p></div></div>
     <p class="sub" style="margin-top:12px">This console calculates these values; the platform writes them
       to Salesforce. Each company is written in order, and repeated writes of the same result are
       harmless. If Salesforce is unavailable, decisions still proceed here; only the Salesforce copy
       is delayed.</p>`;
-  $("#fmcase").onchange=e=>{remember("fmCase",e.target.value);viewFieldMap()};
+  const tbody=$("#mapping-editor tbody"),status=$("#mapping-status"),edit=$("#edit-mappings"),save=$("#save-mappings"),reset=$("#reset-mappings");
+  setPreviewStatus(status,saved.message||"Showing live destination names. No preview is saved.",saved.state==="invalid"||saved.state==="stale"?"err":"");
+  const draw=()=>{tbody.innerHTML=fields.map(field=>{const src=pol.field_sources[field],v=values[field];
+      const shown=field==="KYC_Check__c"?(Array.isArray(v)?`${v.length} record${v.length===1?"":"s"}`:""):(v===undefined||v===null?"":String(v));
+      const destination=working[field];return`<tr><td>${editing?`<input data-source-field="${esc(field)}" aria-label="Destination for ${esc(field)}" value="${esc(destination)}">`:
+          `<span class="mono strong">${esc(destination)}</span>`}${destination!==field?`<span class="live-value">Original: <span class="mono">${esc(field)}</span></span>`:""}</td>
+        <td data-map-value>${selected?(shown===""?`<span class="sub">—</span>`:`<span class="strong">${esc(shown)}</span>`):`<span class="sub">Select a company</span>`}</td>
+        <td class="sub src">${esc(src)}</td></tr>`}).join("");edit.hidden=editing;save.hidden=!editing};
+  edit.onclick=()=>{editing=true;draw();tbody.querySelector("input")?.focus();setPreviewStatus(status,"Unsaved mapping edits.")};
+  save.onclick=()=>{const candidate={};tbody.querySelectorAll("input[data-source-field]").forEach(input=>candidate[input.dataset.sourceField]=input.value);
+    const error=validateMappings(candidate,fields);if(error){setPreviewStatus(status,error,"err");return}
+    if(!writePreview("salesforce",base,candidate)){setPreviewStatus(status,"This preview could not be saved. Browser storage may be blocked; your current form remains editable.","err");return}
+    working=clone(candidate);editing=false;draw();setPreviewStatus(status,"Preview saved in this browser. Live Salesforce mappings are unchanged.","ok")};
+  reset.onclick=()=>{if(reset.textContent!=="Confirm Reset"){reset.textContent="Confirm Reset";setPreviewStatus(status,"Confirm reset to discard this browser-local mapping preview.");return}
+    if(!removePreview("salesforce")){setPreviewStatus(status,"This preview could not be removed. Browser storage may be blocked; your current form remains usable.","err");return}
+    working=clone(live);editing=false;reset.textContent="Reset to Live";draw();setPreviewStatus(status,"Reset to live destination names. Live rules were not changed.","ok")};
+  draw();
+  let selectionRequest=0;const caseSelect=$("#fmcase");
+  caseSelect.onchange=async e=>{if(editing)tbody.querySelectorAll("input[data-source-field]").forEach(input=>working[input.dataset.sourceField]=input.value);
+    selected=e.target.value;remember("fmCase",selected);const request=++selectionRequest;let next={};
+    if(selected){const r=await j(`/ui/api/cases/${encodeURIComponent(selected)}/full`);if(r.status<300)next=r.body.salesforce}
+    if(request!==selectionRequest||page.dataset.route!=="#/fieldmap"||caseSelect!==$("#fmcase"))return;
+    values=next;draw();if(editing)setPreviewStatus(status,"Unsaved mapping edits. Company values refreshed from the original live fields.")};
+}
+
+function mountPointsEditor(p){
+  const live=Object.fromEntries(p.rubric.map(r=>[r.check_type,r.points])),base=p.bundle_hash;
+  const saved=readPreview("points",base,value=>validatePoints(value,p.rubric));
+  let working=saved.state==="saved"?clone(saved.value):clone(live),editing=false;
+  const body=$("#points-editor tbody"),status=$("#points-status"),edit=$("#edit-points"),save=$("#save-points"),reset=$("#reset-points");
+  setPreviewStatus(status,saved.message||"Showing live point values. No preview is saved.",saved.state==="invalid"||saved.state==="stale"?"err":"");
+  const draw=()=>{body.innerHTML=p.rubric.map(r=>`<tr data-check-row="${esc(r.check_type)}">
+      <td><span class="strong">${esc(say("check",r.check_type))}</span><div class="sub mono">${esc(r.check_type)}</div></td>
+      <td class="num strong">${editing?`<input type="number" min="0" max="1000" step="1" data-check="${esc(r.check_type)}" aria-label="Points for ${esc(say("check",r.check_type))}" value="${working[r.check_type]}">`:
+        `+${working[r.check_type]}${working[r.check_type]!==r.points?`<span class="live-value">Live +${r.points}</span>`:""}`}</td>
+      <td class="sub">${esc(say("category",r.category))}</td><td>${r.mode==="manual"?pill("manual","Manual Review"):pill("p-neutral",say("mode",r.mode))}</td>
+      <td class="sub">${esc(r.pass_rule)}</td></tr>`).join("");edit.hidden=editing;save.hidden=!editing};
+  edit.onclick=()=>{editing=true;draw();body.querySelector("input")?.focus();setPreviewStatus(status,"Unsaved point edits. Live scoring is unchanged.")};
+  save.onclick=()=>{const candidate={};body.querySelectorAll("input[data-check]").forEach(input=>candidate[input.dataset.check]=input.value===""?NaN:Number(input.value));
+    const error=validatePoints(candidate,p.rubric);if(error){setPreviewStatus(status,error,"err");return}
+    if(!writePreview("points",base,candidate)){setPreviewStatus(status,"This preview could not be saved. Browser storage may be blocked; your current form remains editable.","err");return}
+    working=clone(candidate);editing=false;draw();setPreviewStatus(status,"Preview saved in this browser. Live scoring is unchanged.","ok")};
+  reset.onclick=()=>{if(reset.textContent!=="Confirm Reset"){reset.textContent="Confirm Reset";setPreviewStatus(status,"Confirm reset to discard this browser-local point preview.");return}
+    if(!removePreview("points")){setPreviewStatus(status,"This preview could not be removed. Browser storage may be blocked; your current form remains usable.","err");return}
+    working=clone(live);editing=false;reset.textContent="Reset to Live";draw();setPreviewStatus(status,"Reset to live points. Live scoring was not changed.","ok")};
+  draw();
+}
+
+function mountBrokerEditor(p){
+  const live=(p.broker_entities||[]).map((b,i)=>cleanBroker(b,i)),base=brokerBase(p);
+  const saved=readPreview("brokers",base,validateBrokers);
+  let working=saved.state==="saved"?clone(saved.value.brokers):clone(live),search="",filter="all",editingBroker=null;
+  const body=$("#broker-editor tbody"),status=$("#broker-status"),slot=$("#broker-entry-slot"),overlapBox=$("#broker-overlap"),searchBox=$("#broker-search"),filterBox=$("#broker-filter");
+  setPreviewStatus(status,saved.message||"Showing the live broker list. No preview is saved.",saved.state==="invalid"||saved.state==="stale"?"err":"");
+  const haystack=b=>[b.name,...BROKER_LISTS.flatMap(k=>b[k]||[])].join(" ").toLowerCase();
+  const draw=()=>{searchBox.value=search;filterBox.value=filter;
+    const shown=working.filter(b=>(filter==="all"||b.policy===filter)&&haystack(b).includes(search.toLowerCase()));
+    body.innerHTML=shown.map(b=>{const identifiers=BROKER_LISTS.flatMap(k=>b[k].map(v=>`<span class="tag" title="${esc(k)}">${esc(v)}</span>`)).join("");
+      return`<tr data-broker-row="${esc(b.id)}"><td class="strong">${esc(b.name)}</td><td>${b.policy==="blocked"?pill("blocked","Blocked"):pill("clear","Allowed (flagged only)")}</td>
+        <td>${identifiers?`<div class="broker-identifiers">${identifiers}</div>`:`<span class="sub">Name only</span>`}${b.notes?`<div class="sub">${esc(b.notes)}</div>`:""}</td>
+        <td><div class="broker-row-actions"><button type="button" class="sm" data-edit-broker="${esc(b.id)}">Edit</button><button type="button" class="sm danger" data-remove-broker="${esc(b.id)}">Remove</button></div></td></tr>`}).join("")||emptyRow(4,"No matching brokers","Change the search or policy filter.");
+    const overlaps=brokerOverlaps(working);overlapBox.innerHTML=overlaps.length?`<div class="broker-overlap">${I.warn}<b>Identifier overlap:</b> ${esc(overlaps.map(x=>`${x.value} (${x.one.name} / ${x.two.name})`).join("; "))}. If policies differ, the blocked match takes precedence.</div>`:"";
+    body.querySelectorAll("[data-edit-broker]").forEach(button=>button.onclick=()=>openEntry(button.dataset.editBroker));
+    body.querySelectorAll("[data-remove-broker]").forEach(button=>button.onclick=()=>{if(button.textContent!=="Confirm Remove"){button.textContent="Confirm Remove";setPreviewStatus(status,"Confirm removal. This changes only the unsaved browser preview.");return}
+      working=working.filter(b=>b.id!==button.dataset.removeBroker);setPreviewStatus(status,"Broker removed from the unsaved preview. Save Preview to keep this draft.");draw()})};
+  const openEntry=id=>{editingBroker=id?working.find(b=>b.id===id):null;const b=editingBroker||cleanBroker({id:`local-${Date.now()}-${Math.random().toString(16).slice(2)}`,name:"",policy:"allowed"});
+    const labels={aliases:"Aliases",domains:"Domains",email_domains:"Email domains",org_ids:"Org IDs",poc_handles:"POC handles",asns:"ASNs"};
+    slot.innerHTML=`<form class="broker-entry" id="broker-entry-form" novalidate>
+      <fieldset><legend>Name and policy</legend><span class="group-hint">The display name and exact allowed or blocked treatment.</span><div class="broker-entry-grid">
+        <div class="field"><label class="flab" for="broker-name">Name</label><input id="broker-name" value="${esc(b.name)}"></div>
+        <div class="field"><label class="flab" for="broker-policy">Policy</label><span class="select-wrap"><select id="broker-policy"><option value="allowed" ${b.policy==="allowed"?"selected":""}>Allowed</option><option value="blocked" ${b.policy==="blocked"?"selected":""}>Blocked</option></select>${I.down}</span></div></div></fieldset>
+      <fieldset><legend>Matching identifiers</legend><span class="group-hint">Exact identifiers only. Enter one value per line, up to 100 in each list.</span><div class="broker-entry-grid">
+        ${BROKER_LISTS.map(key=>`<div class="field"><label class="flab" for="broker-${key}">${labels[key]}</label><textarea id="broker-${key}" data-broker-list="${key}">${esc(b[key].join("\n"))}</textarea></div>`).join("")}</div></fieldset>
+      <fieldset><legend>Preview notes</legend><span class="group-hint">Browser-local context only; notes are not sent to the server.</span><div class="field"><label class="flab" for="broker-notes">Notes</label><textarea id="broker-notes" maxlength="2000">${esc(b.notes)}</textarea></div></fieldset>
+      <p class="entry-error" id="broker-entry-error" role="alert"></p><div class="preview-actions"><button type="submit" class="sm">Apply Entry</button><button type="button" class="sm" id="cancel-broker-entry">Cancel</button></div></form>`;
+    const form=$("#broker-entry-form");form.onsubmit=event=>{event.preventDefault();const candidate=cleanBroker({id:b.id,name:$("#broker-name").value.trim(),policy:$("#broker-policy").value,
+        notes:$("#broker-notes").value,...Object.fromEntries([...form.querySelectorAll("[data-broker-list]")].map(input=>[input.dataset.brokerList,input.value.split(/[\n,]/).map(v=>v.trim()).filter(Boolean)]))});
+      const next=editingBroker?working.map(item=>item.id===candidate.id?candidate:item):[...working,candidate],error=validateBrokers({brokers:next});
+      if(error){$("#broker-entry-error").textContent=error;return}working=next;slot.innerHTML="";editingBroker=null;setPreviewStatus(status,"Unsaved broker edits. Live enforcement is unchanged.");draw()};
+    $("#cancel-broker-entry").onclick=()=>{slot.innerHTML="";editingBroker=null};$("#broker-name").focus()};
+  searchBox.oninput=()=>{search=searchBox.value;draw()};filterBox.onchange=()=>{filter=filterBox.value;draw()};
+  $("#add-broker").onclick=()=>openEntry(null);$("#save-brokers").onclick=()=>{const error=validateBrokers({brokers:working});if(error){setPreviewStatus(status,error,"err");return}
+    if(!writePreview("brokers",base,{brokers:working})){setPreviewStatus(status,"This preview could not be saved. Browser storage may be blocked; your current form remains usable.","err");return}
+    setPreviewStatus(status,"Preview saved in this browser. Live broker enforcement is unchanged.","ok")};
+  $("#reset-brokers").onclick=event=>{const button=event.currentTarget;if(button.textContent!=="Confirm Reset"){button.textContent="Confirm Reset";setPreviewStatus(status,"Confirm reset to discard this browser-local broker preview.");return}
+    if(!removePreview("brokers")){setPreviewStatus(status,"This preview could not be removed. Browser storage may be blocked; your current form remains usable.","err");return}
+    working=clone(live);slot.innerHTML="";button.textContent="Reset to Live";setPreviewStatus(status,"Reset to the live broker list. Live enforcement was not changed.","ok");draw()};
+  draw();
 }
 
 /* ── Policy ───────────────────────────────────────────── */
 async function viewPolicy(rule=""){
+  if(!rule&&page.dataset.route==="#/policy"&&page.querySelector(".policy-preview-mounted"))return;
+  const generation=renderGeneration;
   const{body:p}=await j("/ui/api/policy");
-  const rubric=p.rubric.map(r=>`<tr>
-    <td><span class="strong">${esc(say("check",r.check_type))}</span>
-      <div class="sub mono">${esc(r.check_type)}</div></td><td class="num strong">+${r.points}</td>
-    <td class="sub">${esc(say("category",r.category))}</td>
-    <td>${r.mode==="manual"?pill("manual","Manual Review"):pill("p-neutral",say("mode",r.mode))}</td>
-    <td class="sub">${esc(r.pass_rule)}</td></tr>`).join("");
+  if(generation!==renderGeneration)return;
   /* The condition is shown verbatim, in the mono register, because it IS the rule: restating a
      compliance condition in prose on screen would let the screen drift from the bundle and assert
      something the engine does not do. The plain reading lives in this section's explainer, where
@@ -1872,21 +2116,20 @@ async function viewPolicy(rule=""){
   // rule that produced its verdict; the pointed row is tinted and takes focus.
   const decisions=p.decisions.map(d0=>`<tr id="rule-${esc(d0.decision)}"${d0.decision===rule?' class="hl" tabindex="-1"':""}><td class="num">${d0.priority}</td><td>${pill(d0.decision)}</td>
     <td class="sub mono">${esc(d0.condition)}</td><td class="sub">${esc(String(d0.platform_enforcement).replace(/_/g," "))}</td></tr>`).join("");
-  const brokers=p.broker_entities.map(b=>{
-    const ids=["aliases","domains","email_domains","org_ids","poc_handles","asns"]
-      .flatMap(k=>(b[k]||[]).map(v=>`<span class="tag">${esc(v)}</span>`)).join("");
-    return`<tr><td class="strong">${esc(b.name)}</td>
-      <td>${b.policy==="blocked"?pill("blocked","Blocked"):pill("clear","Allowed (flagged only)")}</td>
-      <td>${ids?`<div class="chiprow">${ids}</div>`:`<span class="sub">Name only</span>`}</td></tr>`}).join("");
   page.innerHTML=tbar("Decision Rules","The rules in force on this installation, shown as stored.",
       `<div class="policy-hash"><span class="policy-hash-label">Rules fingerprint</span>
         <div class="policy-hash-row"><code id="rules-hash">${esc(p.bundle_hash)}</code>
           <button type="button" class="sm" id="copy-rules-hash" aria-label="Copy rules fingerprint">Copy</button></div>
         <span class="policy-hash-status" id="rules-hash-status" role="status"></span></div>`,"policy")+`
-    <div class="card"><div class="hd"><h2>Scoring</h2><span class="hint">threshold ${p.threshold} points · only the latest evidence of each type counts</span>${tip("rubric")}</div>
-      <div class="bd flush"><table>
+    <div class="preview-note">${I.warn}<span><b>Preview only</b> — saved in this browser; live rules are unchanged.
+      These drafts never change scoring, gates, decisions, or broker enforcement.</span></div>
+    <div class="card policy-preview-mounted" id="points-editor"><div class="hd"><h2>Scoring</h2>
+      <span class="hint" id="points-bound">threshold ${p.threshold} points · points are whole numbers from 0 to 1000</span>${tip("rubric")}
+      <div class="preview-actions"><button type="button" class="sm" id="edit-points">Edit Points</button>
+        <button type="button" class="sm" id="save-points" hidden>Save Preview</button><button type="button" class="sm" id="reset-points">Reset to Live</button></div></div>
+      <div class="bd flush"><table class="preview-table">
       <thead><tr><th>Evidence</th><th class="num">Points</th><th>Category</th><th>Method</th><th>Pass Condition</th></tr></thead>
-      <tbody>${rubric}</tbody></table></div></div>
+      <tbody></tbody></table></div><div class="bd"><p class="preview-status" id="points-status" role="status"></p></div></div>
     ${sec("Decision Table (first match applies)","decisionpolicy")}
     <div class="card"><div class="bd flush"><table>
       <thead><tr><th class="num">#</th><th>Decision</th><th>Condition</th><th>Platform Action</th></tr></thead>
@@ -1895,14 +2138,22 @@ async function viewPolicy(rule=""){
         A company shown as <b>Held for Approval</b> matched an Approved row but was published as
         On Hold because automatic approval is not enabled on this installation. That hold is an
         exception to this table and is lifted only by a named reviewer.</p></div>
-    ${sec("Blocked Broker List (exact match)","brokerpolicy")}
-    <div class="card"><div class="bd flush"><table>
-      <thead><tr><th>Company</th><th>Treatment</th><th>Matching Identifiers (names, domains, Org IDs, contacts, ASNs)</th></tr></thead>
-      <tbody>${brokers}</tbody></table></div></div>
+    ${sec("Broker Rules","brokerpolicy")}
+    <p class="sub">Allowed brokers still need to pass the other checks. A blocked match takes precedence.
+      Server notes are not available from this API; blank live notes do not claim that the server has none.</p>
+    <div class="card" id="broker-editor"><div class="hd"><h2>Broker Preview</h2><div class="preview-actions">
+      <button type="button" class="sm" id="add-broker">Add Broker</button><button type="button" class="sm" id="save-brokers">Save Preview</button>
+      <button type="button" class="sm" id="reset-brokers">Reset to Live</button></div></div>
+      <div class="bd"><div class="broker-tools"><label class="search">${I.search}<input id="broker-search" placeholder="Search brokers" aria-label="Search brokers"></label>
+        <span class="select-wrap"><select id="broker-filter" aria-label="Broker policy filter"><option value="all">All</option><option value="allowed">Allowed</option>
+          <option value="blocked">Blocked</option></select>${I.down}</span></div><div id="broker-overlap"></div></div>
+      <div class="bd flush"><table class="preview-table"><thead><tr><th>Company</th><th>Treatment</th><th>Matching identifiers and notes</th><th></th></tr></thead><tbody></tbody></table></div>
+      <div id="broker-entry-slot"></div><div class="bd"><p class="preview-status" id="broker-status" role="status"></p></div></div>
     ${sec("Rule Definitions","hardgates")}
     <div class="card"><div class="bd"><pre style="margin:0">${esc(JSON.stringify(p.hard_gates,null,2))}</pre></div></div>
     ${sec("Accepted Message Types","events")}
     <div class="card"><div class="bd chips">${p.events.map(e=>`<span class="tag">${esc(e)}</span>`).join("")}</div></div>`;
+  mountPointsEditor(p);mountBrokerEditor(p);
   if(rule){const row=page.querySelector("#rule-"+CSS.escape(rule));
     if(row){row.scrollIntoView({block:"center"});row.focus({preventScroll:true})}}
   $("#copy-rules-hash").onclick=async()=>{
@@ -1938,7 +2189,9 @@ function viewOptions(){
 
 /* ── Composer ─────────────────────────────────────────── */
 async function viewComposer(){
+  const generation=renderGeneration;
   const{body:t}=await j("/ui/api/event-templates");
+  if(generation!==renderGeneration)return;
   const caseId=recall("composerCase")||"demo-case-001";
   page.innerHTML=tbar("Send Message","Submit a platform message manually for test and operations use.","","composer")+`
     <div class="split">
@@ -2000,6 +2253,7 @@ const routes=[
 const main=$("#main");
 let navigated=false;   // set by a hash change; cleared once the new page has taken focus
 async function route(){
+  const generation=++renderGeneration;
   // a re-render (navigation, or the 5s refresh) throws away the button the bubble is anchored to
   hideTip();
   const h=location.hash||"#/overview";
@@ -2013,7 +2267,7 @@ async function route(){
         const here=a.dataset.r===nav;a.classList.toggle("active",here);
         // the tint is one cue; "current page" is the one a screen reader gets
         if(here)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current")});
-      try{await fn(m)}catch(e){page.innerHTML=
+      try{await fn(m)}catch(e){if(generation!==renderGeneration)return;page.innerHTML=
         `<div class="card"><div class="empty"><b>This page did not load</b>${esc(e.message)}<br><br>
         <button class="sm" onclick="route()">Try again</button></div></div>`}
       // On a navigation the old page's scroll position and focus are both stale: start the new
