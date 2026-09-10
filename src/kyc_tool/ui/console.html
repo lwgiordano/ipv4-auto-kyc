@@ -2014,11 +2014,14 @@ async function viewFieldMap(force=false){
       is delayed.</p>`;
   const tbody=$("#mapping-editor tbody"),status=$("#mapping-status"),edit=$("#edit-mappings"),save=$("#save-mappings"),reset=$("#reset-mappings");
   setPreviewStatus(status,saved.message||"Showing live destination names. No preview is saved.",saved.state==="invalid"||saved.state==="stale"?"err":"");
-  const draw=()=>{tbody.innerHTML=fields.map(field=>{const src=pol.field_sources[field],v=values[field];
-      const shown=field==="KYC_Check__c"?(Array.isArray(v)?`${v.length} record${v.length===1?"":"s"}`:""):(v===undefined||v===null?"":String(v));
-      const destination=working[field];return`<tr><td>${editing?`<input data-source-field="${esc(field)}" aria-label="Destination for ${esc(field)}" value="${esc(destination)}">`:
+  const valueMarkup=field=>{const v=values[field],shown=field==="KYC_Check__c"?(Array.isArray(v)?`${v.length} record${v.length===1?"":"s"}`:""):(v===undefined||v===null?"":String(v));
+    return selected?(shown===""?`<span class="sub">—</span>`:`<span class="strong">${esc(shown)}</span>`):`<span class="sub">Select a company</span>`};
+  const drawValues=state=>fields.forEach(field=>{const cell=tbody.querySelector(`[data-source-row="${CSS.escape(field)}"] [data-map-value]`);if(!cell)return;
+    cell.innerHTML=state==="loading"?`<span class="sub">Loading selected company…</span>`:state==="error"?`<span class="sub">Values could not load. Choose the company again to retry.</span>`:valueMarkup(field)});
+  const draw=()=>{tbody.innerHTML=fields.map(field=>{const src=pol.field_sources[field];
+      const destination=working[field];return`<tr data-source-row="${esc(field)}"><td>${editing?`<input data-source-field="${esc(field)}" aria-label="Destination for ${esc(field)}" value="${esc(destination)}">`:
           `<span class="mono strong">${esc(destination)}</span>`}${destination!==field?`<span class="live-value">Original: <span class="mono">${esc(field)}</span></span>`:""}</td>
-        <td data-map-value>${selected?(shown===""?`<span class="sub">—</span>`:`<span class="strong">${esc(shown)}</span>`):`<span class="sub">Select a company</span>`}</td>
+        <td data-map-value>${valueMarkup(field)}</td>
         <td class="sub src">${esc(src)}</td></tr>`}).join("");edit.hidden=editing;save.hidden=!editing};
   edit.onclick=()=>{editing=true;draw();tbody.querySelector("input")?.focus();setPreviewStatus(status,"Unsaved mapping edits.")};
   save.onclick=()=>{const candidate={};tbody.querySelectorAll("input[data-source-field]").forEach(input=>candidate[input.dataset.sourceField]=input.value);
@@ -2031,10 +2034,12 @@ async function viewFieldMap(force=false){
   draw();
   let selectionRequest=0;const caseSelect=$("#fmcase");
   caseSelect.onchange=async e=>{if(editing)tbody.querySelectorAll("input[data-source-field]").forEach(input=>working[input.dataset.sourceField]=input.value);
-    selected=e.target.value;remember("fmCase",selected);const request=++selectionRequest;let next={};
-    if(selected){const r=await j(`/ui/api/cases/${encodeURIComponent(selected)}/full`);if(r.status<300)next=r.body.salesforce}
-    if(request!==selectionRequest||page.dataset.route!=="#/fieldmap"||caseSelect!==$("#fmcase"))return;
-    values=next;draw();if(editing)setPreviewStatus(status,"Unsaved mapping edits. Company values refreshed from the original live fields.")};
+    selected=e.target.value;remember("fmCase",selected);const request=++selectionRequest;
+    const current=()=>request===selectionRequest&&page.dataset.route==="#/fieldmap"&&caseSelect===$("#fmcase")&&tbody.isConnected;
+    drawValues("loading");setPreviewStatus(status,editing?"Unsaved mapping edits. Loading selected company values…":"Loading selected company values…");
+    try{let next={};if(selected){const r=await j(`/ui/api/cases/${encodeURIComponent(selected)}/full`);if(r.status>=300)throw new Error(`HTTP ${r.status}`);next=r.body.salesforce||{}}
+      if(!current())return;values=next;drawValues();setPreviewStatus(status,editing?"Unsaved mapping edits. Company values refreshed from the original live fields.":"Company values refreshed from the original live fields.")}
+    catch(error){if(!current())return;drawValues("error");setPreviewStatus(status,"Values could not load for the selected company. Choose it again to retry; destination edits were kept.","err")}};
 }
 
 function mountPointsEditor(p){
@@ -2104,7 +2109,13 @@ function mountBrokerEditor(p){
 
 /* ── Policy ───────────────────────────────────────────── */
 async function viewPolicy(rule=""){
-  if(!rule&&page.dataset.route==="#/policy"&&page.querySelector(".policy-preview-mounted"))return;
+  if(page.querySelector(".policy-preview-mounted")){
+    const previous=page.dataset.policyRule||"";
+    if(previous!==rule){page.querySelectorAll("[id^=rule-].hl").forEach(row=>{row.classList.remove("hl");row.removeAttribute("tabindex")});
+      page.dataset.policyRule=rule;const row=rule?page.querySelector("#rule-"+CSS.escape(rule)):null;
+      if(row){row.classList.add("hl");row.tabIndex=-1;row.scrollIntoView({block:"center"});row.focus({preventScroll:true})}}
+    return;
+  }
   const generation=renderGeneration;
   const{body:p}=await j("/ui/api/policy");
   if(generation!==renderGeneration)return;
@@ -2153,7 +2164,7 @@ async function viewPolicy(rule=""){
     <div class="card"><div class="bd"><pre style="margin:0">${esc(JSON.stringify(p.hard_gates,null,2))}</pre></div></div>
     ${sec("Accepted Message Types","events")}
     <div class="card"><div class="bd chips">${p.events.map(e=>`<span class="tag">${esc(e)}</span>`).join("")}</div></div>`;
-  mountPointsEditor(p);mountBrokerEditor(p);
+  page.dataset.policyRule=rule;mountPointsEditor(p);mountBrokerEditor(p);
   if(rule){const row=page.querySelector("#rule-"+CSS.escape(rule));
     if(row){row.scrollIntoView({block:"center"});row.focus({preventScroll:true})}}
   $("#copy-rules-hash").onclick=async()=>{

@@ -550,3 +550,25 @@ def test_async_preview_surfaces_check_the_shared_render_generation_before_mounti
         assert guard < mount, f"{name} mounts before its stale-render guard"
     route = _function_body("route")
     assert "const generation=++renderGeneration" in route
+
+
+def test_mounted_policy_preservation_applies_to_plain_and_rule_deep_links():
+    """Restricting the early return to a falsy rule recreates deep-linked editors on refresh."""
+    body = _function_body("viewPolicy")
+    mounted = body[: body.index("const generation=renderGeneration")]
+    assert 'page.querySelector(".policy-preview-mounted")' in mounted
+    assert "!rule" not in mounted
+    assert "page.dataset.policyRule" in mounted and "classList.add(\"hl\")" in mounted
+
+
+def test_company_switch_updates_value_cells_without_rebuilding_destination_inputs():
+    """Inputs edited during the GET survive because completion touches only original-field cells."""
+    body = _function_body("viewFieldMap")
+    handler = body[body.index("caseSelect.onchange="):]
+    handler = handler[: handler.index("\n}\n\nfunction mountPointsEditor")]
+    assert 'drawValues("loading")' in handler and 'drawValues("error")' in handler
+    assert "draw();" not in handler
+    for fence in ("request===selectionRequest", 'page.dataset.route==="#/fieldmap"',
+                  'caseSelect===$("#fmcase")', "tbody.isConnected"):
+        assert fence in handler
+    assert "if(!current())return" in handler

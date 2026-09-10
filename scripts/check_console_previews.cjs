@@ -8,6 +8,7 @@ const previewKeys = {
   salesforce: "kyc-preview-v1:salesforce",
   brokers: "kyc-preview-v1:brokers",
 };
+function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
 async function launch() {
   try { return await chromium.launch({ headless: true }); }
@@ -163,6 +164,48 @@ async function clearPreviews(page) {
       assert.match(await page.locator("#mapping-status").textContent(), /unsaved/i);
     });
 
+    await check("mapping company fetch changes only value cells while edits continue", async () => {
+      await ready(page, "#/fieldmap", "Salesforce Fields", "#mapping-editor");
+      await page.reload(); await page.getByRole("button", { name: "Edit Mappings" }).waitFor();
+      await page.getByRole("button", { name: "Edit Mappings" }).click();
+      const input = page.locator("#mapping-editor input[data-source-field]").first();
+      await input.fill("Before_Fetch__c");
+      await input.evaluate(el => { window.__mappingInputDuringFetch = el; });
+      const choices = page.locator("#fmcase option:not([value=''])");
+      const current = await page.locator("#fmcase").inputValue();
+      const target = await choices.evaluateAll((options, current) => options.find(option => option.value !== current)?.value, current);
+      const seen = deferred(), release = deferred();
+      const pattern = `**/ui/api/cases/${target}/full`;
+      await page.route(pattern, async route => { seen.resolve(); await release.promise; await route.continue(); });
+      await page.locator("#fmcase").selectOption(target);
+      await seen.promise;
+      assert.equal(await page.locator("[data-map-value]").first().getByText(/loading selected company/i).count(), 1);
+      await input.fill("During_Fetch__c"); await input.focus();
+      const completed = page.waitForResponse(response => response.url().includes(`/ui/api/cases/${target}/full`) && response.status() === 200);
+      release.resolve(); await completed;
+      await page.waitForFunction(() => !document.querySelector("[data-map-value]")?.textContent.includes("Loading"));
+      assert.equal(await input.inputValue(), "During_Fetch__c");
+      assert.equal(await input.evaluate(el => window.__mappingInputDuringFetch === el), true);
+      assert.equal(await input.evaluate(el => document.activeElement === el), true);
+      await page.unroute(pattern);
+    });
+
+    await check("mapping value-fetch failure is attributed without replacing destination inputs", async () => {
+      const input = page.locator("#mapping-editor input[data-source-field]").first();
+      await input.evaluate(el => { window.__mappingInputOnError = el; });
+      const choices = page.locator("#fmcase option:not([value=''])");
+      const current = await page.locator("#fmcase").inputValue();
+      const target = await choices.evaluateAll((options, current) => options.find(option => option.value !== current)?.value, current);
+      const pattern = `**/ui/api/cases/${target}/full`;
+      await page.route(pattern, route => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "offline" }) }));
+      await page.locator("#fmcase").selectOption(target);
+      await page.locator("#mapping-status").getByText(/values could not load/i).waitFor();
+      assert.match(await page.locator("[data-map-value]").first().textContent(), /could not load/i);
+      assert.equal(await input.inputValue(), "During_Fetch__c");
+      assert.equal(await input.evaluate(el => window.__mappingInputOnError === el), true);
+      await page.unroute(pattern);
+    });
+
     await ready(page, "#/policy", "Decision Rules", "#broker-editor");
     await check("broker explainer names the mixed-policy list accurately", async () => {
       await page.locator('[data-tip="brokerpolicy"]').click();
@@ -259,17 +302,34 @@ async function clearPreviews(page) {
       await page.getByLabel("Refresh every 5 seconds").uncheck();
     });
 
+    await check("deep-linked policy auto-refresh preserves edits and rule navigation still updates", async () => {
+      await ready(page, "#/policy?rule=approve", "Decision Rules", "#points-editor");
+      await page.reload(); await page.getByRole("button", { name: "Edit Points" }).waitFor();
+      await page.getByRole("button", { name: "Edit Points" }).click();
+      const first = page.locator("#points-editor input[data-check]").first();
+      await first.fill("778");
+      await page.getByLabel("Refresh every 5 seconds").check(); await first.focus();
+      await page.waitForTimeout(5250);
+      assert.equal(await first.inputValue(), "778");
+      assert.equal(await first.evaluate(el => document.activeElement === el), true);
+      await page.getByLabel("Refresh every 5 seconds").uncheck();
+      await page.evaluate(() => { location.hash = "#/policy?rule=reject"; });
+      await page.waitForFunction(() => document.querySelector("#rule-reject")?.classList.contains("hl"));
+      assert.equal(await first.inputValue(), "778");
+      assert.equal(await page.locator("#rule-approve.hl").count(), 0);
+    });
+
     await check("an older async route cannot overwrite the newer route", async () => {
       let release;
       const wait = new Promise(resolve => { release = resolve; });
       const race = await browser.newContext();
       await race.route("**/ui/api/policy", async route => { await wait; await route.continue(); });
       const racePage = await race.newPage(); racePage.setDefaultTimeout(8000);
-      const old = racePage.goto(`${baseUrl}#/policy`);
+      const old = racePage.goto(`${baseUrl}#/policy`).catch(error => error);
       await racePage.waitForTimeout(100);
       await racePage.evaluate(() => { location.hash = "#/overview"; });
       await racePage.getByRole("heading", { name: "Overview", level: 1 }).waitFor();
-      release(); await old.catch(() => {}); await racePage.waitForTimeout(200);
+      release(); await old; await racePage.waitForTimeout(200);
       assert.equal((await racePage.locator("#page h1").textContent()).trim(), "Overview");
       await race.close();
     });
