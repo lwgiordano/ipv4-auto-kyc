@@ -173,6 +173,20 @@ def test_shell_has_a_skip_link_and_a_focusable_main():
     assert '<main id="main" tabindex="-1">' in CONSOLE
 
 
+def test_settings_uses_native_theme_controls_and_applies_saved_theme_before_css():
+    """A late theme initializer flashes the wrong surface, while imitation radio/menu widgets
+    lose native keyboard and form semantics."""
+    head = CONSOLE[: CONSOLE.index("<style>")]
+    assert 'localStorage.getItem("kyc-theme")' in head
+    assert 'document.documentElement.dataset.theme' in head
+    panel = CONSOLE[CONSOLE.index('<div id="settings-panel"'):]
+    panel = panel[: panel.index("</fieldset>")]
+    assert 'popover="manual"' in panel
+    assert "<fieldset>" in panel and "<legend>Appearance</legend>" in panel
+    for value in ("system", "light", "dark"):
+        assert f'type="radio" name="theme" value="{value}"' in panel
+
+
 def test_router_marks_the_current_page_and_moves_focus_on_navigation():
     router = CONSOLE[CONSOLE.index("async function route()"):]
     assert 'setAttribute("aria-current","page")' in router
