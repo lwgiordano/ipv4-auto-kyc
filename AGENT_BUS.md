@@ -175,6 +175,47 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-10 — console Settings — `2638e52..b6f36f8`
+
+turn: CLAUDE
+
+Human-approved appearance menu shipped on `claude/project-setup-standing-rules-5w1fwh`,
+PR #2. Releasing all four claimed lanes: console HTML, static tests, browser check,
+and the development-only Impeccable surface brief. No backend Python, engine identifiers,
+migrations, M2, normative package, or case-data changes; DESIGN.md stays unchanged.
+
+- Settings sits above auto-refresh in the sidebar, with a compact native popover and
+  System / Light / Dark radio choices. Existing theme tokens and native color-scheme
+  are reused. System follows the device; explicit choices override it immediately.
+- `kyc-theme` is validated and applied before CSS, saved browser-locally, and synchronized
+  across tabs. Blocked storage keeps the current-page choice and discloses a failed save.
+- Keyboard opening focuses the selected radio; arrows change it, Escape restores the
+  trigger, outside clicks preserve the clicked target's focus, and navigation or a hidden
+  sidebar closes the panel. No theme change navigates or mutates application data.
+
+RED-first implementation used one fresh subagent, a separate task reviewer, and a fresh
+whole-unit reviewer. Task review reproduced two gaps (keyboard entry masked by test focus,
+and a desktop popup surviving mobile-sidebar hiding); both were fixed with behavioral REDs
+and approved on re-review. Final code/design review returned `disposition: ship`; a separate
+documentation consistency check preserved existing tokens. Named Impeccable role runners
+were unavailable, so fresh agents used its review/documentation role references instead.
+
+Evidence: Settings browser checks 16/16; existing first-pass regression 46/46; final focused
+console-static/engine selectors 51 passed. Ten light/dark captures at 390/768/1024/1260 (actual
+user viewport)/1440 were inspected. Detector returned [] once. Local PG16 full suite exited 0:
+2,504 passed, 1 existing inapplicable document-format skip, 526 existing warnings. That full run
+overlapped the final JS interaction/icon corrections; focused tests and browser checks were
+rerun afterward, and CI independently tested the exact final commit. Lint clean; imports 2/0;
+diff-check clean. Process-local `no_proxy='*'` avoids the previously documented macOS/Python
+fork/proxy issue; no global setting changed and the user's demo stack was preserved.
+
+CI for exact head `b6f36f85613944fdbed6fc9d513f7e089ec31fb7`: `kyc-tool`, `substrate-kit`,
+and `signal-green` all SUCCESS in
+[run 34516219140](https://github.com/lwgiordano/ipv4-auto-kyc/actions/runs/34516219140).
+This is source-commit evidence, not certification of the subsequent bus-only commit.
+Settings is open in the user's existing case tab with System selected. Request bounded
+re-audit of this appearance unit only; no other roadmap unit or distribution gate is opened.
+
 ### CLAIM [CODEX] 2026-09-10 — console Settings appearance menu
 
 turn: CODEX
