@@ -173,18 +173,20 @@ def test_shell_has_a_skip_link_and_a_focusable_main():
     assert '<main id="main" tabindex="-1">' in CONSOLE
 
 
-def test_settings_uses_native_theme_controls_and_applies_saved_theme_before_css():
-    """A late theme initializer flashes the wrong surface, while imitation radio/menu widgets
-    lose native keyboard and form semantics."""
+def test_options_page_uses_native_theme_controls_and_applies_saved_theme_before_css():
+    """The preference belongs on a routed page, while the native radios retain keyboard and
+    form semantics and the early initializer prevents a theme flash."""
     head = CONSOLE[: CONSOLE.index("<style>")]
     assert 'localStorage.getItem("kyc-theme")' in head
     assert 'document.documentElement.dataset.theme' in head
-    panel = CONSOLE[CONSOLE.index('<div id="settings-panel"'):]
-    panel = panel[: panel.index("</fieldset>")]
-    assert 'popover="manual"' in panel
-    assert "<fieldset>" in panel and "<legend>Appearance</legend>" in panel
+    assert 'href="#/options" data-r="options"' in CONSOLE
+    assert 'id="settings-panel"' not in CONSOLE
+    options = CONSOLE[CONSOLE.index("function viewOptions()") :]
+    options = options[: options.index("\nfunction ", 1)]
+    assert "<h2>Appearance</h2>" in options
+    assert "<fieldset>" in options and "<legend>Theme</legend>" in options
     for value in ("system", "light", "dark"):
-        assert f'type="radio" name="theme" value="{value}"' in panel
+        assert f'type="radio" name="theme" value="{value}"' in options
 
 
 def test_router_marks_the_current_page_and_moves_focus_on_navigation():
@@ -466,7 +468,7 @@ def test_reviewer_and_identity_grids_align_content_rows():
 def test_routes_name_every_non_company_document():
     router = CONSOLE[CONSOLE.index("const routes=["):]
     for title in ("Overview", "Companies", "Data Sources", "Salesforce Fields",
-                  "Decision Rules", "Send Message"):
+                  "Decision Rules", "Options", "Send Message"):
         assert f'"{title}"' in router
     assert 'document.title=title?`${title} · KYC Tool`:"Company · KYC Tool"' in router
 

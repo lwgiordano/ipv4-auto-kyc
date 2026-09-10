@@ -56,6 +56,7 @@ async function openHash(page, hash) {
     "#/integrations": "Data Sources",
     "#/fieldmap": "Salesforce Fields",
     "#/policy": "Decision Rules",
+    "#/options": "Options",
     "#/composer": "Send Message",
   };
   await page.evaluate(next => { location.hash = next; }, hash);
@@ -250,6 +251,7 @@ async function openHash(page, hash) {
       ["#/integrations", "Data Sources · KYC Tool"],
       ["#/fieldmap", "Salesforce Fields · KYC Tool"],
       ["#/policy", "Decision Rules · KYC Tool"],
+      ["#/options", "Options · KYC Tool"],
       ["#/composer", "Send Message · KYC Tool"],
     ];
     for (const [hash, title] of expectedTitles) {

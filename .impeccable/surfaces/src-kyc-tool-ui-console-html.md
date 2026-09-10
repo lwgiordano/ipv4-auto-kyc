@@ -5,7 +5,7 @@ primary_target: "src/kyc_tool/ui/console.html"
 related_targets: []
 ---
 
-# Console appearance settings
+# Console Options page
 
 Scope: bounded addition inside the established console. Mode: Operate. Audience: reviewers
 working in different ambient light; appearance is their browser-local preference, not a service
@@ -13,17 +13,17 @@ configuration. Existing DESIGN.md and all earlier page contracts remain authorit
 
 ## Direction contract
 
-THESIS: make appearance discoverable in the console while leaving the active review in place.
+THESIS: make browser-local preferences discoverable as Configuration → Options, a normal page.
 
 OWN-WORLD: inherit the marketplace navy, current light/dark tokens, Mulish fallback, compact
 4px controls and currentColor line icons. No palette or typography replacement.
 
-STORY: open Settings, choose System / Light / Dark, see the result immediately; reload without
+STORY: open Options under Configuration, choose System / Light / Dark, see the result immediately; reload without
 losing the choice. System follows the browser's operating-system preference.
 
-FIRST VIEWPORT: a labelled Settings control sits in the sidebar footer above refresh. A compact
-non-modal panel opens beside it, with Appearance and three labelled choices; mobile uses the
-existing Menu drawer and keeps the panel within the screen.
+FIRST VIEWPORT: Options is the page title, with an Appearance section and three labelled
+choices. The sidebar entry sits under Configuration and uses a geometrically centered cog.
+There is no footer Settings control or appearance popup. Mobile uses the existing Menu drawer.
 
 FORM: local extension of the approved sidebar grammar; no concept tournament or seed applies.
 Selected state is visible and keyboard reachable; unavailable storage is disclosed without

@@ -7,7 +7,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230072ce'/%3E%3Ctext x='16' y='22' font-family='Mulish,system-ui,sans-serif' font-size='17' font-weight='800' fill='white' text-anchor='middle'%3EK%3C/text%3E%3C/svg%3E">
 <script>
 /* Apply the saved preference before CSS is parsed. The same small controller is reused by the
-   settings panel below; blocked site storage degrades to an in-page preference. */
+   Options page below; blocked site storage degrades to an in-page preference. */
 window.KYCTheme=(()=>{const valid=new Set(["system","light","dark"]);
   const clean=value=>valid.has(value)?value:"system";
   const apply=value=>{value=clean(value);if(value==="system")document.documentElement.removeAttribute("data-theme");
@@ -225,22 +225,11 @@ nav{padding:var(--s2) 0;flex:1}
      font:var(--t-meta);color:var(--muted);display:grid;gap:var(--s2)}
 .side-foot label{display:flex;align-items:center;gap:var(--s2);cursor:pointer;min-height:40px}
 .side-foot input[type=checkbox]{width:18px;height:18px;margin:0;accent-color:var(--accent);flex:none}
-.settings-button{width:100%;min-height:40px;padding:0 var(--s2);display:flex;align-items:center;
-  gap:var(--s2);color:var(--text);background:transparent;border-color:transparent;text-align:left}
-.settings-button:hover{background:var(--surface-muted);border-color:transparent}
-.settings-button svg{width:16px;height:16px;flex:none}
-.settings-value{margin-left:auto;color:var(--muted);font:var(--t-meta)}
-.settings-panel{position:fixed;inset:auto;margin:0;width:min(248px,calc(100vw - var(--s4)));
-  padding:var(--s3);border:1px solid var(--border-input);border-radius:var(--r);background:var(--surface);
-  color:var(--text);box-shadow:var(--e3);font:var(--t-body)}
-.settings-panel fieldset{border:0;padding:0;margin:0;display:grid;gap:var(--s1)}
-.settings-panel legend{padding:0 var(--s2) var(--s1);font:var(--t-label);color:var(--muted);
-  text-transform:uppercase;letter-spacing:var(--track-caps)}
-.settings-panel label{min-height:40px;padding:0 var(--s2);border-radius:var(--r);display:flex;
-  align-items:center;gap:var(--s2);cursor:pointer}
-.settings-panel label:hover{background:var(--surface-muted)}
-.settings-panel input{width:18px;height:18px;margin:0;accent-color:var(--accent)}
-.settings-hint{min-height:16px;padding:var(--s1) var(--s2) 0;color:var(--danger-text);font:var(--t-meta)}
+.options-form fieldset{border:0;padding:0;margin:0;display:grid;gap:var(--s1)}
+.options-form legend{padding:0 0 var(--s2);font:var(--t-strong);color:var(--text)}
+.options-form label{min-height:40px;display:flex;align-items:center;gap:var(--s2);cursor:pointer}
+.options-form input{width:18px;height:18px;margin:0;accent-color:var(--accent)}
+.options-hint{min-height:16px;margin:var(--s2) 0 0;color:var(--danger-text);font:var(--t-meta)}
 main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
 .page{max-width:1160px;margin:0 auto;padding:var(--s5) var(--s6) var(--s8)}
 
@@ -798,16 +787,15 @@ dialog.modal .banner{margin-top:var(--s3)}
     <a class="nav-item" href="#/policy" data-r="policy">
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M8 2l5 2v4c0 3.5-2.2 5.4-5 6-2.8-.6-5-2.5-5-6V4z" stroke-linejoin="round"/></svg>
       Decision Rules</a>
+    <a class="nav-item" href="#/options" data-r="options">
+      <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"><path d="M6.5 1.5h3l.35 1.6 1.1.45 1.35-.85 2 2-.85 1.35.45 1.1 1.6.35v1l-1.6.35-.45 1.1.85 1.35-2 2-1.35-.85-1.1.45-.35 1.6h-3l-.35-1.6-1.1-.45-1.35.85-2-2 .85-1.35-.45-1.1-1.6-.35v-1l1.6-.35.45-1.1-.85-1.35 2-2 1.35.85 1.1-.45z"/><circle cx="8" cy="8" r="2.1"/></svg>
+      Options</a>
     <div class="grp">Actions</div>
     <a class="nav-item" href="#/composer" data-r="composer">
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M14 2L7 9M14 2l-4.5 12-2.5-5.5L2 6z" stroke-linejoin="round"/></svg>
       Send Message</a>
   </nav>
   <div class="side-foot">
-    <button type="button" class="settings-button" id="settings-button" aria-controls="settings-panel" aria-expanded="false">
-      <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"><path d="M6.5 1.5h3l.35 1.45 1.05.6 1.45-.45 1.5 2.6-1.1 1v1.2l1.1 1-1.5 2.6-1.45-.45-1.05.6-.35 1.45h-3l-.35-1.45-1.05-.6-1.45.45-1.5-2.6 1.1-1V6.7l-1.1-1 1.5-2.6 1.45.45 1.05-.6z"/><circle cx="8" cy="8" r="2.1"/></svg>
-      <span>Settings</span><span class="settings-value" id="settings-value">System</span>
-    </button>
     <label><input type="checkbox" id="autorefresh"> Refresh every 5 seconds</label>
   </div>
 </aside>
@@ -815,14 +803,6 @@ dialog.modal .banner{margin-top:var(--s3)}
 </div>
 </div>
 <div id="tip" class="tip" role="tooltip" hidden></div>
-<div id="settings-panel" class="settings-panel" popover="manual">
-  <fieldset><legend>Appearance</legend>
-    <label><input type="radio" name="theme" value="system"> System</label>
-    <label><input type="radio" name="theme" value="light"> Light</label>
-    <label><input type="radio" name="theme" value="dark"> Dark</label>
-  </fieldset>
-  <p class="settings-hint" id="settings-hint" role="status"></p>
-</div>
 <dialog id="approve" class="modal" aria-labelledby="ap-title">
   <!-- `novalidate`: with `required` alone the browser's own bubble fires first, lands on the
        field's hint text and vanishes on the next click, so the written message below -- and its
@@ -916,7 +896,7 @@ const I={
   dead:ic(`<path d="M5.4 2.4h5.2l3 3v5.2l-3 3H5.4l-3-3V5.4z"/><path d="M6.2 6.2l3.6 3.6M9.8 6.2l-3.6 3.6"/>`),
   live:ic(`<circle cx="8" cy="8" r="3.4" fill="currentColor" stroke="none"/>`),
   stub:ic(`<circle cx="8" cy="8" r="3.4" stroke-dasharray="2.4 2"/>`),
-  gear:ic(`<path d="M6.5 1.5h3l.35 1.45 1.05.6 1.45-.45 1.5 2.6-1.1 1v1.2l1.1 1-1.5 2.6-1.45-.45-1.05.6-.35 1.45h-3l-.35-1.45-1.05-.6-1.45.45-1.5-2.6 1.1-1V6.7l-1.1-1 1.5-2.6 1.45.45 1.05-.6z"/>`
+  gear:ic(`<path d="M6.5 1.5h3l.35 1.6 1.1.45 1.35-.85 2 2-.85 1.35.45 1.1 1.6.35v1l-1.6.35-.45 1.1.85 1.35-2 2-1.35-.85-1.1.45-.35 1.6h-3l-.35-1.6-1.1-.45-1.35.85-2-2 .85-1.35-.45-1.1-1.6-.35v-1l1.6-.35.45-1.1-.85-1.35 2-2 1.35.85 1.1-.45z"/>`
     +`<circle cx="8" cy="8" r="2.1"/>`),
   running:ic(`<path d="M5.6 3.7l6.6 4.3-6.6 4.3z"/>`),
   warn:ic(`<path d="M8 2.6l6 10.8H2z"/><path d="M8 6.6v2.8M8 11.5h.01"/>`),
@@ -1902,6 +1882,28 @@ async function viewPolicy(rule=""){
     if(row){row.scrollIntoView({block:"center"});row.focus({preventScroll:true})}}
 }
 
+/* ── Options ──────────────────────────────────────────── */
+function viewOptions(){
+  // The refresh timer revisits the active route. Keep this local form mounted so a person does
+  // not lose radio focus while choosing a theme.
+  if(page.querySelector(".options-form")){syncTheme(KYCTheme.current);return}
+  page.innerHTML=tbar("Options","Browser-local preferences for this console.")+`
+    <div class="card"><div class="hd"><h2>Appearance</h2></div><div class="bd">
+      <form class="options-form"><fieldset><legend>Theme</legend>
+        <label><input type="radio" name="theme" value="system"> System</label>
+        <label><input type="radio" name="theme" value="light"> Light</label>
+        <label><input type="radio" name="theme" value="dark"> Dark</label>
+      </fieldset>
+      <p class="sub">Saved only in this browser. System follows your operating system setting.</p>
+      <p class="options-hint" id="options-hint" role="status"></p></form>
+    </div></div>`;
+  syncTheme(KYCTheme.current);
+  page.querySelector(".options-form").addEventListener("change",event=>{
+    if(event.target.name!=="theme")return;
+    syncTheme(event.target.value);const saved=KYCTheme.save(event.target.value);
+    $("#options-hint").textContent=saved?"":"This preference could not be saved in this browser."});
+}
+
 /* ── Composer ─────────────────────────────────────────── */
 async function viewComposer(){
   const{body:t}=await j("/ui/api/event-templates");
@@ -1960,6 +1962,7 @@ const routes=[
   [/^#\/integrations$/,()=>viewIntegrations(),"integrations","Data Sources"],
   [/^#\/fieldmap$/,()=>viewFieldMap(),"fieldmap","Salesforce Fields"],
   [/^#\/policy(?:\?rule=([^&]*))?$/,m=>viewPolicy(m[1]?decodeURIComponent(m[1]):""),"policy","Decision Rules"],
+  [/^#\/options$/,()=>viewOptions(),"options","Options"],
   [/^#\/composer$/,()=>viewComposer(),"composer","Send Message"],
 ];
 const main=$("#main");
@@ -1996,42 +1999,17 @@ async function route(){
   }
   location.hash="#/overview";
 }
-window.addEventListener("hashchange",()=>{navigated=true;closeSettings();route()});
+window.addEventListener("hashchange",()=>{navigated=true;route()});
 // The folded frame's drawer. Open and closed are the aside's class and the button's state, both.
 const menuBtn=$("#menubtn"),sideBar=$("aside");
-function closeMenu(){closeSettings();sideBar.classList.remove("open");menuBtn.setAttribute("aria-expanded","false")}
+function closeMenu(){sideBar.classList.remove("open");menuBtn.setAttribute("aria-expanded","false")}
 function openMenu(){sideBar.classList.add("open");menuBtn.setAttribute("aria-expanded","true")}
 menuBtn.addEventListener("click",()=>{const open=sideBar.classList.toggle("open");
-  menuBtn.setAttribute("aria-expanded",String(open));if(!open)closeSettings()});
-// Appearance is a compact form, not an application menu. The native popover puts it in the top
-// layer; this positioning only keeps that panel beside its trigger and inside the viewport.
-const settingsButton=$("#settings-button"),settingsPanel=$("#settings-panel");
-const themeNames={system:"System",light:"Light",dark:"Dark"};
+  menuBtn.setAttribute("aria-expanded",String(open))});
 function syncTheme(value){value=KYCTheme.clean(value);KYCTheme.current=value;
-  settingsButton.querySelector("#settings-value").textContent=themeNames[value];
-  const radio=settingsPanel.querySelector(`[name=theme][value=${value}]`);if(radio)radio.checked=true}
-function placeSettings(){if(!settingsPanel.matches(":popover-open"))return;
-  const trigger=settingsButton.getBoundingClientRect(),panel=settingsPanel.getBoundingClientRect(),gutter=8;
-  const left=Math.max(gutter,Math.min(trigger.left,innerWidth-panel.width-gutter));
-  const below=trigger.bottom+8,top=below+panel.height<=innerHeight-gutter?below:
-    Math.max(gutter,trigger.top-panel.height-8);settingsPanel.style.left=`${left}px`;settingsPanel.style.top=`${top}px`}
-function closeSettings(restore=false){if(!settingsPanel.matches(":popover-open"))return;
-  settingsPanel.hidePopover();settingsButton.setAttribute("aria-expanded","false");if(restore)settingsButton.focus()}
-function openSettings(){syncTheme(KYCTheme.current);settingsPanel.showPopover();
-  settingsButton.setAttribute("aria-expanded","true");placeSettings();
-  settingsPanel.querySelector("[name=theme]:checked").focus()}
-settingsButton.addEventListener("click",()=>settingsPanel.matches(":popover-open")?closeSettings():openSettings());
-settingsPanel.addEventListener("change",event=>{if(event.target.name!=="theme")return;
-  syncTheme(event.target.value);const saved=KYCTheme.save(event.target.value);
-  $("#settings-hint").textContent=saved?"":"This preference could not be saved in this browser."});
-document.addEventListener("keydown",event=>{if(event.key==="Escape"&&settingsPanel.matches(":popover-open")){
-  event.preventDefault();closeSettings(true)}});
-document.addEventListener("pointerdown",event=>{if(settingsPanel.matches(":popover-open")&&
-  !settingsPanel.contains(event.target)&&!settingsButton.contains(event.target))closeSettings()});
-addEventListener("resize",()=>{if(settingsPanel.matches(":popover-open")&&
-  settingsButton.getClientRects().length===0)closeSettings();else placeSettings()});
+  const radio=page.querySelector(`[name=theme][value=${value}]`);if(radio)radio.checked=true}
 addEventListener("storage",event=>{if(event.key!=="kyc-theme")return;syncTheme(event.newValue);
-  $("#settings-hint").textContent=""});
+  const hint=$("#options-hint");if(hint)hint.textContent=""});
 syncTheme(KYCTheme.current);
 // The skip link must not change the hash (the router would read that as a route), so it moves
 // focus itself: to the scrolling main, whose first tab stop is the page title.
