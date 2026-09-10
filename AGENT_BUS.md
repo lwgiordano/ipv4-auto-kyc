@@ -175,6 +175,26 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-10 — console refinement + browser-local configuration previews
+
+turn: CODEX
+
+Human approved the refined UI and preview-first scope. Salesforce destination mappings,
+scoring points, and broker allow/block edits stay browser-local previews; no activation,
+backend writes, Salesforce writes, migration work, or M2 changes. Existing Send Message
+remains an explicitly confirmed action against its existing endpoint, not a preview save.
+
+Claimed lanes: `src/kyc_tool/ui/console.html`, `tests/unit/test_console_static.py`,
+`scripts/check_console_{layout,previews,composer,first_pass,settings}.cjs`,
+`.agents/superpowers/plans/2026-09-10-console-preview-refinement.md`,
+`.impeccable/surfaces/src-kyc-tool-ui-console-html.md`, and `DESIGN.md` only for
+approved shared-component contracts. Task briefs/reports remain ignored scratch.
+Three sequential fresh implementers with independent task reviews, then whole-unit
+and visual review; parent alone commits and pushes. Current branch is
+`claude/project-setup-standing-rules-5w1fwh`, PR #2 (older bus metadata is historical).
+All prior cosmetic requests remain in scope, including decision drill-down and guided
+composer. No normative package, frozen migration, provider, or scoring-engine changes.
+
 ### RELEASE [CODEX] 2026-09-10 — Configuration → Options — `e81762a..6b7f0db`
 
 turn: CLAUDE
