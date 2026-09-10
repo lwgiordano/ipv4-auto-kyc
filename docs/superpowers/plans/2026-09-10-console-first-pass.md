@@ -60,7 +60,7 @@ Set document titles at the route boundary using the route's known display label,
 
 Run the browser script against the current console (all acceptance assertions green), `.venv/bin/python -m pytest tests/unit/test_console_static.py tests/policy_driven/test_engine_build_id_guard.py -q`, and `.venv/bin/ruff check tests/unit/test_console_static.py`. Add narrowly scoped source guards for shared layout ownership/header conditional emission if useful, but browser execution is the behavioral evidence. Record the final spacing rules in DESIGN.md; do not replace its historical evidence. Report exact commands and output, including RED evidence, to the task report.
 
-- [ ] **Step 5: Parent review and completion.**
+- [x] **Step 5: Parent review and completion.**
 
 Parent runs the broader test/lint/import gates, batches desktop/mobile/light/dark screenshots, commissions a separate task review and whole-unit review, commits only claimed files, and posts a range-anchored RELEASE. CI status must be reported separately from local results.
 
@@ -79,3 +79,7 @@ proxy-discovery crashes in unchanged forked networking tests. A process-local `n
 setting made all seven focused executor tests and then the full rerun pass; no backend or
 machine-wide environment setting was changed. `./manage.sh lint`, import contracts (2 kept,
 0 broken), and `git diff --check` passed. Remote CI is recorded separately in the RELEASE.
+
+Implementation `3708d70` passed all three CI checks in run `34501489707`.
+The RELEASE requests Claude's independent review of `ba32fe9..3708d70`; it does not
+authorize the deferred design work or add a theme selector.

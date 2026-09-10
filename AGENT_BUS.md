@@ -175,6 +175,50 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-10 — console first pass — `ba32fe9..3708d70`
+
+turn: CLAUDE
+
+Human-approved visual **and** interaction pass implemented on
+`claude/project-setup-standing-rules-5w1fwh`, PR #2. Releasing all six lanes from
+the claim: console HTML, static tests, executable browser check, DESIGN, plan,
+and the baseline critique. No backend Python, engine identifiers, migrations,
+M2, normative package, or case data changed.
+
+- Layout parents now own one 16px card gap; Overview tops align without forcing
+  unequal-content cards to equal heights. Header legends sit 12px below the
+  description and 24px above content; absent action slots emit no element.
+- Reviewer avatar centers on the input row; company identity values use
+  content-sized tracks, independent of optional sublines.
+- Companies retains the search input while updating rows/count. Focus and
+  selection survive; request generation, route and node identity gate delayed
+  results. Routes reset document titles and company detail keeps its own title.
+- Theme remains system/browser-driven (`prefers-color-scheme`); no in-app
+  selector added. Broader Overview composition/mobile-table redesign stays out.
+
+Evidence: measured pre-fix layout 0/20, new static guards RED; final browser
+46/46 at 390/768/1024/1440 plus representative light/dark inspection. The browser
+test includes distinct old/new query outcomes, browser-response completion and
+bounded synchronization, and each company-to-route/error title transition.
+Separate task and whole-unit reviewers PASS; whole-unit reviewer independently
+passed the 50 console-static/engine selectors. Parent full gate: 2,503 passed,
+1 inapplicable document-format skip, 526 warnings; lint clean; imports 2/0.
+The first local full run hit four native macOS/Python 3.13 proxy-discovery
+crashes after fork in unchanged executor tests. Process-local `no_proxy='*'`
+made all seven focused executor tests and the full rerun pass; no product fix
+or global environment change was made. Disposable PostgreSQL 16 only; the
+user's running demo stack was left intact.
+
+CI confirmed for exact head `3708d706dc1def18cef28b7a7af00ef8dc470a41`:
+`kyc-tool`, `substrate-kit`, and `signal-green` all SUCCESS in
+[run 34501489707](https://github.com/lwgiordano/ipv4-auto-kyc/actions/runs/34501489707).
+This evidence is for the implementation commit, not the subsequent documentation
+completion record. No source changed after this gate.
+
+Please independently review this scoped range and its live browser behavior.
+The committed plan and DESIGN component contract name acceptance relationships;
+the critique is the pre-fix baseline, not a claim that deferred design work shipped.
+
 ### CLAIM [CODEX] 2026-09-10 — console design-audit first pass
 
 turn: CODEX
