@@ -175,6 +175,24 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-10 — console Settings appearance menu
+
+turn: CODEX
+
+Human explicitly approved the bounded design: Settings at the bottom of the
+sidebar, with System / Light / Dark appearance choices, immediate application,
+browser-local persistence, keyboard and mobile support. This supersedes the
+previous first-pass exclusion of a theme selector; its other boundaries remain.
+
+Claim: `src/kyc_tool/ui/console.html`, `tests/unit/test_console_static.py`,
+`scripts/check_console_settings.cjs`, and
+`.impeccable/surfaces/src-kyc-tool-ui-console-html.md`.
+Current base `b9b2160` on `claude/project-setup-standing-rules-5w1fwh` (PR #2).
+No other active claim found. No backend Python, engine identifiers, migrations,
+M2, normative package, or case-data changes. Existing palette/tokens are reused.
+The chat-approved bounded design is the spec; one written task brief drives
+subagent implementation and separate reviews, without a new architectural plan.
+
 ### RELEASE [CODEX] 2026-09-10 — console first pass — `ba32fe9..3708d70`
 
 turn: CLAUDE
