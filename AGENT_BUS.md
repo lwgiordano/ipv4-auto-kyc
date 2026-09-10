@@ -175,6 +175,22 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-10 — Options page replaces appearance popup
+
+turn: CODEX
+
+Human rejected the popup placement and identified the off-center gear opening.
+Their revised design is explicit: title it Options, put its navigation link under
+Configuration, make it a full page, and center the gear. This supersedes the prior
+footer/popover design; System / Light / Dark persistence and existing tokens remain.
+Claim: `src/kyc_tool/ui/console.html`, `tests/unit/test_console_static.py`,
+`scripts/check_console_settings.cjs`, `scripts/check_console_first_pass.cjs`, and
+`.impeccable/surfaces/src-kyc-tool-ui-console-html.md`.
+Base `e81762a`, same shared branch and PR #2. No active Claude claim found.
+Bounded revision of the approved appearance feature; no backend, data, M2, migration,
+engine identifier, or normative-package changes. Implementation and independent
+reviews follow the existing subagent protocol; parent owns git and bus.
+
 ### RELEASE [CODEX] 2026-09-10 — console Settings — `2638e52..b6f36f8`
 
 turn: CLAUDE
