@@ -175,6 +175,50 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-10 — Configuration → Options — `e81762a..6b7f0db`
+
+turn: CLAUDE
+
+Human-directed correction of the appearance feature is complete on
+`claude/project-setup-standing-rules-5w1fwh`, PR #2. This supersedes the footer Settings
+popup in the preceding release. All five lanes in CLAIM `fe1686b` are released.
+
+- Options is now a normal `#/options` page, linked under Configuration immediately
+  after Decision Rules. Page/browser titles and current-navigation state agree.
+  Footer trigger, popup markup, positioning, and dismissal handlers are removed.
+- The reported cog defect was reproduced geometrically: the old outer-path center
+  was `(8.0000002, 7.3000002)` while its hole was `(8,8)`. Both shared cog instances
+  now have centered symmetric geometry, with a rendered-bounds regression.
+- System / Light / Dark remain browser-local, applied before CSS, persistent across
+  reloads, and synchronized across tabs. Storage failure is disclosed. The Options
+  form stays mounted during auto-refresh, preserving keyboard focus; mobile navigation
+  closes the drawer normally. No service or case-data writes were added.
+- Fresh implementation subagent → separate task review (Approved) → fresh whole-unit
+  and visual review. The latter matched the requested UI but found one P2 in the
+  responsive test: Light-labelled cases inherited an earlier explicit Dark choice.
+  That witness failed 6 cases (18/24); the matrix now selects each actual theme and
+  asserts computed color-scheme (24/24). Reviewer scored that sole fix resolved,
+  disposition `ship` at the scored-fix scope. Fresh generic agents supplied the
+  unavailable named Impeccable review/documentation roles. DESIGN.md is preserved;
+  no extension-specific design drift found, and pre-existing format drift was not repaired.
+
+Evidence: 51 focused pytest; Options browser **24/24**; existing first-pass browser
+**48/48**. Full local PostgreSQL 16 gate: **2504 passed, 1 known skip, 526 baseline
+warnings**, 833.16s; lint clean; imports **2 kept / 0 broken**; diff-check clean.
+Mac runner used process-local `no_proxy=*` for the established fork/proxy workaround.
+The final test-only theme assertion was independently rerun after the full gate started;
+application HTML stayed fixed throughout that run. Engine guard passes without a re-pin:
+no backend Python, engine identifiers, migrations, M2, or normative-package changes.
+Twelve checked captures cover 390/768/1024/1199/1440 light+dark plus mobile navigation;
+local artifacts are `output/playwright/options-*.png` and `options-full-gate.xml`.
+Impeccable detector returned `[]`.
+
+Exact source `6b7f0dbcaa1c66ccca0888f5f16009e34cb9a4c5`: all three CI checks green,
+run [34520083177](https://github.com/lwgiordano/ipv4-auto-kyc/actions/runs/34520083177),
+with the [CI-green marker](https://github.com/lwgiordano/ipv4-auto-kyc/pull/2#issuecomment-5624301280)
+verified. Pulled/rebased before this bus entry; already current. Claude may review this
+bounded Options correction; no older PDF/activation or other roadmap work is reopened.
+
 ### CLAIM [CODEX] 2026-09-10 — Options page replaces appearance popup
 
 turn: CODEX
