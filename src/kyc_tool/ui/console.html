@@ -1332,15 +1332,16 @@ const TIPS={
   /* Send Message */
   composer:{t:"Send Message",b:`<p>Build and review one platform message before confirming it.
     A confirmed message creates real records in this database.</p>
-    <p>A retry of the same reviewed content reuses its unique key.</p>`},
+    <p>The unique key stays with the reviewed message. If the outcome is unknown, verify the
+    company record instead of submitting that message again.</p>`},
   composerevent:{t:"Message",b:`<p>Choose an existing company, enter an existing ID beyond the
     bounded list, or explicitly create a new company ID. Then choose an action and complete its
     labelled fields.</p><p>Advanced JSON remains available for accepted fields that the guide does
     not name. Review shows the exact message that Confirm Send will submit.</p>`},
   composerresult:{t:"Response",b:`<p>Accepted means the message was queued for processing, not
-    completed. A replay response means the server recognised an earlier message with the same
-    unique key.</p><p>Returned event and verification-round IDs are shown when available. The raw
-    response stays available below for diagnosis.</p>`},
+    completed. A client or server failure can leave the outcome unknown; verify the company record
+    before taking another action.</p><p>Returned event and verification-round IDs are shown when
+    available. The raw response stays available below for diagnosis.</p>`},
   demo:{t:"Demo fixture",b:`<p>These are illustrative values for the built-in demonstration
     company. They create real records when sent.</p><p>The three messages request review, verify
     email, and submit an Org ID. They do not guarantee approval; safety and evidence rules still
@@ -2283,7 +2284,7 @@ const COMPOSER_GUIDES={
 };
 const composerSession={initialized:false,eventType:"kyb.run_requested",caseMode:"existing",selectedCase:"",
   existingId:"",newId:"",drafts:{},raws:{},templates:{},review:null,result:null,inFlight:null,
-  successful:false,keys:new Map(),requestedCase:"",existingIdOutOfList:false};
+  successful:false,keys:new Map(),blocked:new Map(),requestedCase:"",existingIdOutOfList:false};
 const composerFreshTemplate=(type,templates)=>{const value=clone(templates[type]??{});
   if(type==="email.verified"||type==="poc.token_verified")value.verified_at=new Date().toISOString();
   if((type==="website.review_completed"||type==="reviewer.manual_approve")&&!value.reviewer_id&&reviewer())
@@ -2350,14 +2351,18 @@ function composerPaintWarning(root){const guide=COMPOSER_GUIDES[composerSession.
 }
 function composerResponseCopy(result){
   if(!result)return'<span class="sub">No message sent in this session.</span>';
-  if(!result.ok)return`<div class="callout red"><div><b>Message not sent.</b> ${esc(result.message)} Check the details and retry; your inputs are unchanged.</div></div>`;
-  const status=String(result.body?.status||"");
-  const replay=result.status===200&&/replay|duplicate|already/i.test(status);
-  const lead=replay?"Replay response: the server recognised this message's unique key."
-    :result.status===202?"Accepted and queued for processing. This does not mean verification is complete."
-    :`Accepted by the server (HTTP ${result.status}).`;
+  const verify=result.snapshot?.case_id?` Open ${caseLink(result.snapshot.case_id)} to verify the company record.`:"";
   const ids=[["Event",result.body?.event_id],["Verification round",result.body?.run_id]].filter(([,v])=>v);
-  return`<div class="callout"><div><b>${esc(lead)}</b>${ids.length?`<div class="sub">${ids.map(([k,v])=>`${k}: <code>${esc(v)}</code>`).join(" · ")}</div>`:""}</div></div>`;
+  const idLine=ids.length?`<div class="sub">${ids.map(([k,v])=>`${k}: <code>${esc(v)}</code>`).join(" · ")}</div>`:"";
+  if(result.kind==="unknown")return`<div class="callout amber"><div><b>Outcome unknown.</b> The request may have been committed even though no usable response reached this page. Do not submit this reviewed message again.${verify}${idLine}</div></div>`;
+  if(result.kind==="conflict")return`<div class="callout amber"><div><b>Attempt rejected (HTTP 409).</b> The unique key conflicts with an existing event, so this page will not generate another key or resubmit it.${verify}${idLine}</div></div>`;
+  if(result.kind==="refused")return`<div class="callout red"><div><b>Attempt rejected (HTTP ${result.status}).</b> ${esc(result.message)} Correct the details, then review the edited message again.${idLine}</div></div>`;
+  let lead;
+  if(result.status===202&&result.body?.status==="queued")lead="Accepted and queued for processing. This does not mean verification is complete.";
+  else if(result.status===200&&result.body?.recorded===true)lead="Manual action recorded. This response does not establish whether this call created the record or returned an existing result.";
+  else if(result.status===200&&result.body?.status==="queued")lead="Stored queued response received. The message was accepted when this response was recorded; verification may still be running.";
+  else lead=`Accepted by the server (HTTP ${result.status}). Check the company record for the resulting state.`;
+  return`<div class="callout"><div><b>${esc(lead)}</b>${idLine}</div></div>`;
 }
 function composerPaint(root){
   if(!root?.isConnected)return;
@@ -2368,10 +2373,13 @@ function composerPaint(root){
     root.querySelector("#c-review-company").textContent=s.case_id;
     root.querySelector("#c-review-action").textContent=COMPOSER_GUIDES[s.event_type]?.name||s.event_type;
     root.querySelector("#c-review-event").textContent=s.event_type;
+    root.querySelector("#c-review-key").textContent=s.idempotency_key;
     root.querySelector("#c-review-payload").textContent=JSON.stringify(s.payload,null,2)}
   root.querySelectorAll("#composer-form input,#composer-form select,#composer-form textarea,#composer-form button").forEach(el=>el.disabled=sending);
-  button.textContent=sending?"Sending…":composerSession.successful?"Sent":composerSession.review?(composerSession.result&&!composerSession.result.ok?"Retry Send":"Confirm Send"):"Review Message";
-  button.disabled=sending||composerSession.successful;
+  const identity=composerSession.review?canonical({case_id:composerSession.review.case_id,event_type:composerSession.review.event_type,payload:composerSession.review.payload}):"";
+  const blocked=identity&&composerSession.blocked.has(identity);
+  button.textContent=sending?"Sending…":composerSession.successful?"Sent":blocked?"Confirmation blocked":composerSession.result&&!composerSession.result.ok?"Edit Details to Review Again":composerSession.review?"Confirm Send":"Review Message";
+  button.disabled=sending||composerSession.successful||!!blocked||!!(composerSession.result&&!composerSession.result.ok);
   const status=root.querySelector("#c-status");
   status.innerHTML=sending?`<div class="callout"><div><b>Sending the reviewed message…</b> Keep this page open or return here to see the attributed response.</div></div>`:composerResponseCopy(composerSession.result);
   const raw=root.querySelector("#c-raw"),pre=root.querySelector("#c-out");
@@ -2401,17 +2409,26 @@ function composerValidate(root){
 function composerReview(root){const envelope=composerValidate(root);if(!envelope)return;
   const identity=canonical(envelope);let key=composerSession.keys.get(identity);
   if(!key){key="console-"+(crypto.randomUUID?.()||Math.random().toString(16).slice(2));composerSession.keys.set(identity,key)}
-  composerSession.review=composerFreeze({...clone(envelope),idempotency_key:key});composerSession.result=null;
+  const blocked=composerSession.blocked.get(identity);
+  composerSession.review=blocked?.snapshot||composerFreeze({...clone(envelope),idempotency_key:key});
+  composerSession.result=blocked?.result||null;
   composerPaint(root);root.querySelector("#c-review-summary").scrollIntoView({block:"nearest"});
 }
 async function composerSend(root){
   if(composerSession.inFlight||composerSession.successful||!composerSession.review)return;
   const snapshot=clone(composerSession.review);composerSession.inFlight={snapshot};composerSession.result=null;composerPaint(root);
   let result;
-  try{const r=await j("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(snapshot)});
-    result={ok:r.status>=200&&r.status<300,status:r.status,body:r.body,message:r.status>=300?errText(r.body):""}}
-  catch(error){result={ok:false,status:null,body:{detail:error.message},message:error.message}}
+  try{const response=await fetch("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(snapshot)});
+    const body=await response.json().catch(()=>({})),status=response.status;
+    const kind=status>=500?"unknown":status===409?"conflict":status===403||status===422?"refused":status>=200&&status<300?"accepted":"refused";
+    result={ok:kind==="accepted",kind,status,body,message:kind==="refused"?errText(body):"",snapshot}}
+  catch(error){result={ok:false,kind:"unknown",status:null,body:{detail:error.message},message:error.message,snapshot}}
   composerSession.inFlight=null;composerSession.result=result;composerSession.successful=result.ok;
+  if(result.kind==="unknown"||result.kind==="conflict"){
+    const identity=canonical({case_id:snapshot.case_id,event_type:snapshot.event_type,payload:snapshot.payload});
+    const frozen=composerFreeze(clone(snapshot));composerSession.review=frozen;
+    result.snapshot=frozen;composerSession.blocked.set(identity,{snapshot:frozen,result});
+  }
   const current=page.dataset.route==="#/composer"?page.querySelector("[data-composer]"):null;
   if(current)composerPaint(current);
 }
@@ -2470,7 +2487,8 @@ async function viewComposer(){
             <span class="field-error" id="c-json-error" role="alert"></span></details>
           <section class="composer-review" id="c-review-summary" hidden aria-labelledby="c-review-title"><h3 id="c-review-title">Review message</h3>
             <dl class="review-grid"><dt>Company ID</dt><dd id="c-review-company"></dd><dt>Action</dt><dd id="c-review-action"></dd>
-              <dt>Technical event</dt><dd><code id="c-review-event"></code></dd></dl><pre class="review-payload" id="c-review-payload"></pre></section>
+              <dt>Technical event</dt><dd><code id="c-review-event"></code></dd><dt>Unique key</dt><dd><code id="c-review-key"></code></dd></dl>
+            <pre class="review-payload" id="c-review-payload"></pre></section>
           <div class="toolbar composer-actions"><button type="button" id="c-reset">Reset example</button><button type="button" class="primary" id="c-send">Review Message</button></div>
         </form></div></div>
       <div class="stack">

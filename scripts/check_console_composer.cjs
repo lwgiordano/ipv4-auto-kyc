@@ -4,7 +4,7 @@ const { chromium } = require("playwright");
 const baseUrl = process.argv[2] || "http://127.0.0.1:55717/ui";
 const results = [];
 const posts = [];
-let reply = { status: 202, body: { status: "accepted", event_id: "evt-test", run_id: "run-test" } };
+let reply = { status: 202, body: { status: "queued", run_id: "run-test" } };
 let deferReply = null;
 
 async function launch() {
@@ -136,6 +136,7 @@ const cases = [
       const body = request.postDataJSON(); posts.push(body);
       for (const page of context.pages()) await page.evaluate(() => { window.__composerPostCount = (window.__composerPostCount || 0) + 1; });
       if (deferReply) await deferReply;
+      if (reply.abort) return route.abort(reply.abort);
       await route.fulfill({ status: reply.status, contentType: "application/json", body: JSON.stringify(reply.body) });
     });
     const page = await context.newPage(); page.setDefaultTimeout(9000);
@@ -174,7 +175,7 @@ const cases = [
           if (label === "RIR" || label === "Result") await field.selectOption(value);
           else await field.fill(value);
         }
-        await review(page); reply = { status: 202, body: { status: "accepted", event_id: `evt-${posts.length}`, run_id: `run-${posts.length}` } };
+        await review(page); reply = { status: 202, body: { status: "queued", run_id: `run-${posts.length}` } };
         const sent = await confirm(page);
         assert.equal(sent.event_type, eventType);
         assert.deepEqual(sent.payload, expected);
@@ -274,40 +275,103 @@ const cases = [
       assert.equal(await page.locator("#c-send").isDisabled(), true);
     });
 
-    await check("retry key uses semantic payload identity and changed content gets a new key", async () => {
+    await check("ambiguous 503 retains semantic identity and blocks blind resubmission", async () => {
       await choose(page, "kyb.run_requested");
       const advancedInput = await advanced(page);
       await advancedInput.fill('{"company_legal_name":"Retry Co","contact":{"name":"A","title":"B"}}'); await advancedInput.blur();
       await review(page); reply = { status: 503, body: { detail: "temporary failure" } }; await confirm(page);
-      const first = posts.at(-1).idempotency_key;
-      await page.getByRole("button", { name: "Retry Send" }).click();
-      await page.locator("#c-review-summary:not([hidden])").waitFor();
+      const first = posts.at(-1).idempotency_key, sentCount = posts.length;
+      assert.match(await page.locator("#c-status").textContent(), /outcome unknown/i);
+      assert.doesNotMatch(await page.locator("#c-status").textContent(), /message not sent|retry/i);
+      assert.equal(await page.locator("#c-status a").getAttribute("href"),
+        `#/case/${encodeURIComponent(posts.at(-1).case_id)}`);
+      assert.equal(await page.getByRole("button", { name: /confirmation blocked/i }).isDisabled(), true);
       await advancedInput.fill('{"contact":{"title":"B","name":"A"},"company_legal_name":"Retry Co"}'); await advancedInput.blur();
-      await review(page); reply = { status: 202, body: { status: "accepted" } }; await confirm(page);
-      assert.equal(posts.at(-1).idempotency_key, first);
-      await page.getByLabel("Company legal name", { exact: true }).fill("Changed Co"); await review(page); await confirm(page);
-      assert.notEqual(posts.at(-1).idempotency_key, first);
+      await review(page);
+      assert.equal(await page.locator("#c-review-key").textContent(), first);
+      assert.equal(await page.getByRole("button", { name: /confirmation blocked/i }).isDisabled(), true);
+      assert.equal(posts.length, sentCount);
+      await page.locator('[data-r="overview"]').click(); await page.getByRole("heading", { name: "Overview", level: 1 }).waitFor();
+      await page.locator('[data-r="composer"]').click(); await page.locator("#composer-form").waitFor();
+      assert.equal(await page.getByRole("button", { name: /confirmation blocked/i }).isDisabled(), true);
+      await page.getByLabel("Company legal name", { exact: true }).fill("Changed Co"); await review(page);
+      assert.notEqual(await page.locator("#c-review-key").textContent(), first);
+      assert.equal(await page.getByRole("button", { name: "Confirm Send" }).isEnabled(), true);
     });
 
-    await check("accepted, replay, and error copy is scoped and raw response is collapsed", async () => {
-      assert.match(await page.locator("#c-status").textContent(), /accepted|queued/i);
+    await check("202 and actual 200 stored response shapes use conservative acceptance copy", async () => {
+      reply = { status: 202, body: { status: "queued", run_id: "run-new", jobs_queued: 99 } }; await confirm(page);
+      assert.match(await page.locator("#c-status").textContent(), /accepted.*queued|queued.*processing/i);
+      assert.match(await page.locator("#c-status").textContent(), /run-new/);
+      assert.match(await page.locator("#c-status").textContent(), /does not mean verification is complete/i);
       assert.doesNotMatch(await page.locator("#c-status").textContent(), /jobs started|jobs_queued/i);
       await choose(page, "recalculate.requested"); await review(page);
-      reply = { status: 200, body: { status: "replayed", event_id: "evt-replay", run_id: "run-replay", jobs_queued: 99 } };
+      reply = { status: 200, body: { status: "queued", run_id: "run-stored", jobs_queued: 99 } };
       await confirm(page);
-      assert.match(await page.locator("#c-status").textContent(), /replay/i);
-      assert.match(await page.locator("#c-status").textContent(), /evt-replay|run-replay/);
+      assert.match(await page.locator("#c-status").textContent(), /stored.*queued|queued.*stored/i);
+      assert.match(await page.locator("#c-status").textContent(), /run-stored/);
+      assert.doesNotMatch(await page.locator("#c-status").textContent(), /status.*replayed/i);
       assert.doesNotMatch(await page.locator("#c-status").textContent(), /99 jobs|jobs started/i);
       assert.equal(await page.locator("#c-raw").evaluate(el => el.open), false);
-      await choose(page, "recalculate.requested"); await review(page);
+    });
+
+    await check("actual manual 200 shape reports recording without inventing replay status", async () => {
+      await choose(page, "reviewer.manual_approve");
+      await page.getByLabel("Reviewer ID", { exact: true }).fill("reviewer-safety"); await review(page);
+      reply = { status: 200, body: { case_id: "manual-case", case_status: "approved_manual",
+        buy_status: "buy_enabled", recorded: true } };
+      await confirm(page);
+      assert.match(await page.locator("#c-status").textContent(), /manual action recorded/i);
+      assert.match(await page.locator("#c-status").textContent(), /does not establish|whether this call/i);
+      assert.doesNotMatch(await page.locator("#c-status").textContent(), /replay response/i);
+    });
+
+    await check("403 and 422 are explicit editable refusals without a retry invitation", async () => {
+      await choose(page, "website.review_completed"); await review(page);
+      reply = { status: 403, body: { detail: "composer cannot submit reviewer events in production" } }; await confirm(page);
+      assert.match(await page.locator("#c-status").textContent(), /attempt rejected.*403/i);
+      assert.doesNotMatch(await page.locator("#c-status").textContent(), /outcome unknown|retry send/i);
+      assert.equal(await page.locator("#c-send").isDisabled(), true);
+      await page.getByLabel("Task ID", { exact: true }).fill("task-corrected"); await review(page);
       reply = { status: 422, body: { detail: "payload refused" } }; await confirm(page);
-      assert.match(await page.locator("#c-status").textContent(), /payload refused|not sent/i);
-      assert.equal(await page.getByRole("button", { name: "Retry Send" }).count(), 1);
+      assert.match(await page.locator("#c-status").textContent(), /attempt rejected.*422/i);
+      assert.match(await page.locator("#c-status").textContent(), /payload refused/);
+      assert.doesNotMatch(await page.locator("#c-status").textContent(), /retry send/i);
+      assert.equal(await page.locator("#c-send").isDisabled(), true);
+    });
+
+    await check("409 identifies the existing event and blocks key evasion", async () => {
+      await choose(page, "recalculate.requested"); await review(page);
+      const conflictKey = await page.locator("#c-review-key").textContent();
+      reply = { status: 409, body: { error: "idempotency key reuse with different payload", event_id: "evt-existing" } };
+      const before = posts.length; await confirm(page);
+      assert.match(await page.locator("#c-status").textContent(), /attempt rejected.*409/i);
+      assert.match(await page.locator("#c-status").textContent(), /evt-existing/);
+      assert.match(await page.locator("#c-status").textContent(), /verify/i);
+      assert.equal(await page.getByRole("button", { name: /confirmation blocked/i }).isDisabled(), true);
+      assert.equal(await page.locator("#c-review-key").textContent(), conflictKey);
+      assert.equal(posts.length, before + 1);
+    });
+
+    await check("network abort after capture is unknown and never invites blind retry", async () => {
+      await choose(page, "org_id.submitted"); await page.getByLabel("Org handle", { exact: true }).fill("ORG-NETWORK-ABORT"); await review(page);
+      reply = { abort: "connectionreset" }; const before = posts.length; await confirm(page);
+      assert.equal(posts.length, before + 1);
+      assert.match(await page.locator("#c-status").textContent(), /outcome unknown/i);
+      assert.doesNotMatch(await page.locator("#c-status").textContent(), /message not sent|retry send/i);
+      assert.match(await page.locator("#c-status").textContent(), /verify/i);
+      assert.equal(await page.getByRole("button", { name: /confirmation blocked/i }).isDisabled(), true);
+    });
+
+    await check("raw refusal response remains collapsed", async () => {
+      await choose(page, "document.uploaded"); await review(page);
+      reply = { status: 422, body: { detail: "payload refused" } }; await confirm(page);
+      assert.equal(await page.locator("#c-raw").evaluate(el => el.open), false);
     });
 
     await check("pending send survives navigation and cannot be duplicated", async () => {
-      await choose(page, "recalculate.requested"); await review(page);
-      let release; deferReply = new Promise(resolve => { release = resolve; }); reply = { status: 202, body: { status: "accepted", event_id: "evt-late" } };
+      await choose(page, "poc.submitted"); await page.getByLabel("POC handle", { exact: true }).fill("POC-LATE"); await review(page);
+      let release; deferReply = new Promise(resolve => { release = resolve; }); reply = { status: 202, body: { status: "queued", run_id: "run-late" } };
       const before = posts.length; await page.getByRole("button", { name: "Confirm Send" }).click();
       await page.waitForFunction(n => window.__composerPostCount >= n, before + 1);
       assert.equal(await page.locator("#composer-form :is(input,select,textarea,button):not([disabled])").count(), 0);
@@ -316,7 +380,7 @@ const cases = [
       assert.match(await page.locator("#c-status").textContent(), /sending/i);
       assert.equal(await page.locator("#c-send").isDisabled(), true);
       release(); deferReply = null;
-      await page.waitForFunction(() => document.querySelector("#c-status")?.textContent.includes("evt-late"));
+      await page.waitForFunction(() => document.querySelector("#c-status")?.textContent.includes("run-late"));
       assert.equal(posts.length, before + 1);
     });
 
