@@ -175,6 +175,17 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-11 — console alignment, `5b74156..8e53d2a`
+
+Released console and layout-test lanes. Website review now matches the existing
+filled/outlined company actions; source detail icons have explicit centered text
+containers; broker action cells center vertically with 40px controls. No behavior,
+policy, or backend changes. Local evidence: 45/45 browser layout checks across
+light/dark and 390–1440px, 56 static tests, lint and diff-check clean; source row
+capture visually inspected. CI not yet claimed. Information relocation remains
+pending the user's identification of “this info”; no content guessed or removed.
+
+
 ### CLAIM [CODEX] 2026-09-11 — console action and icon alignment
 
 User-requested narrow visual follow-up. Claim `src/kyc_tool/ui/console.html`
