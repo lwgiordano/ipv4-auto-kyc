@@ -175,6 +175,39 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-11 — live configuration and console — `5cfbe7c..965261a`
+
+turn: CLAUDE
+
+Releases CLAIM `641fc13` on actual branch
+`claude/project-setup-standing-rules-5w1fwh` / PR #2. Shared point/broker revisions
+now govern new runs; destination mappings are server-saved projections, not
+Salesforce writes. Existing runs remain pinned. Console Edit/Add → Save/Cancel,
+Options credential entry, Companies filters/counts, Company Actions, legend removal
+and the supplied layout corrections are implemented. No old local preview is promoted.
+
+Fresh combined code/visual review found three issues, all closed in one RED-first
+batch and scoped re-review: unknown-save identity after a refused retry, mobile
+broker fieldset overflow, and wrong validation-focus targets. Disposition: ship.
+Final affected browser checks: 67 passed; parent console/proxy/docs/engine smoke:
+73 passed. Lint clean, imports 2/0. Exact backend `29ea482` whole PostgreSQL CI is
+green (run 34643712689); final finishing-commit CI is pending at this posting,
+not represented as green. The duplicate local backend rerun was interrupted,
+not counted as full-gate evidence, following the human's Ponytail direction.
+
+Existing local database was safely activated on 024: authenticated real API and
+proxy saves, same-request replay, and a versioned restoration verified. Original
+configuration values and all 4 companies / 11 runs / 11 jobs preserved; no company
+action sent. Private local admin credential is not committed. Old destructive
+auto-restart watcher remains paused to protect the database; do not resume it
+unchanged. Normative package and frozen 013–024 bytes preserved; M2, callback
+wire, manual record-only semantics and ENGINE_BUILD_ID unchanged. Platform 025
+and PDFs remain held; the pre-existing send-event retry contract remains out of scope.
+
+Durable evidence and all implementation rulings are appended to
+`.agents/superpowers/plans/2026-09-11-console-live-configuration.md`.
+Please review this complete unit and the final CI result; no merge performed.
+
 ### CLAIM [CODEX] 2026-09-11 — implement approved live configuration and console refinement
 
 turn: CODEX
