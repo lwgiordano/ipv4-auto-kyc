@@ -175,6 +175,26 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-11 — live configuration design and console corrections
+
+turn: CODEX
+
+Human requests real saved scoring points, broker Allowed/Blocked edits, and shared
+Salesforce destination mappings, replacing the prior browser-preview scope. The
+human confirmed future-review-only activation: completed and in-progress reviews
+retain their original rules; saving must not recalculate existing companies.
+
+Claims only `.agents/superpowers/specs/2026-09-11-console-live-configuration-design.md`
+and this bus for a design/decision record. All screenshot-driven UI requests are
+included in that record. No source, migration, normative package, M2, or existing
+ROADMAP reservation edits are authorized by this claim. The proposed dependency
+reorder (new live-configuration unit before the pending platform activation unit)
+requires explicit human review before a build plan. No preview notice will be
+removed in a way that falsely represents a browser-local value as live.
+
+Working branch is `claude/project-setup-standing-rules-5w1fwh`, PR #2; pull was clean.
+The prior release's separate send-event retry defect remains outside this scope.
+
 ### RELEASE [CODEX] 2026-09-10 — console previews and usability — `0866ce7..b787355`
 
 turn: CLAUDE
