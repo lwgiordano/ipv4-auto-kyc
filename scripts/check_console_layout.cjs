@@ -107,6 +107,14 @@ async function textRect(locator) {
       near(centerY(approve), centerY(cell), "approve button center", 2);
       near(centerY(reject), centerY(cell), "reject button center", 2);
       near(approve.height, reject.height, "website action heights", 0.1);
+      const style = locator => locator.evaluate(el => {
+        const s = getComputedStyle(el);
+        return [s.backgroundColor, s.color, s.borderColor, s.minHeight];
+      });
+      assert.deepEqual(await style(row.getByRole("button", { name: "Approve Website" })),
+        await style(page.locator("#approvebtn")));
+      assert.deepEqual(await style(row.getByRole("button", { name: "Reject Website" })),
+        await style(page.locator("#sendbtn")));
     });
 
     await check("score fill and threshold use the same inset coordinate lane", async () => {
@@ -187,6 +195,14 @@ async function textRect(locator) {
         const cardHeader = await rect(page.locator("#page > .card .hd").first());
         const firstRow = await rect(page.locator("#page > .card .irow .meta").first());
         near(firstRow.y - (cardHeader.y + cardHeader.height), 12, "card-header-to-first-row-content gap");
+        const notes = page.locator(".source-note");
+        assert.ok(await notes.count() > 0);
+        for (const note of await notes.all()) {
+          const icon = await rect(note.locator(":scope > .ic"));
+          const label = await rect(note.locator(":scope > span"));
+          near(centerY(icon), centerY(label), "source icon and label center");
+          assert.ok(label.x - (icon.x + icon.width) >= 3, "source icon has a text gap");
+        }
       });
 
       await ready(page, "#/options", "Options", ".options-form");

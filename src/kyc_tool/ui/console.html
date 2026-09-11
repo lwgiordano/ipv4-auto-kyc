@@ -528,7 +528,9 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .broker-entry-grid .wide{grid-column:1/-1}
 .broker-entry textarea{min-height:88px}
 .broker-identifiers{display:flex;gap:var(--s1);flex-wrap:wrap;margin-top:var(--s1)}
-.broker-row-actions{display:flex;gap:var(--s1);justify-content:flex-end;flex-wrap:wrap}
+.broker-row-actions{display:flex;gap:var(--s2);align-items:center;justify-content:flex-end;flex-wrap:wrap}
+.broker-row-actions button{min-height:40px;white-space:nowrap}
+#broker-editor .preview-table td{vertical-align:middle}
 .broker-overlap{margin:var(--s3) 0 0;padding:var(--s3);border:1px solid var(--amber);
   border-radius:var(--r);background:var(--amber-soft);color:var(--amber-ink);font:var(--t-meta)}
 .latest-controls{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap;padding:var(--s3) var(--s4);
@@ -704,10 +706,10 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
 .irow .kind{font:var(--t-body);color:var(--muted);margin-top:2px}
 .irow .facts{font:var(--t-meta);color:var(--muted);margin-top:var(--s2);
   display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center}
-/* Was inline flow, so the warning glyph sat 3.5px above its label's centre and touched the first
-   letter with a 0px gap. Flex gives it both the gap and the alignment. */
+.source-note{display:inline-flex;align-items:center;gap:var(--s1);min-width:0}
+.source-note>span{min-width:0;overflow-wrap:anywhere}
 .irow .todo{font:var(--t-meta);color:var(--amber);margin-top:var(--s2);
-  display:flex;align-items:flex-start;gap:var(--s1)}
+  display:flex;align-items:center;gap:var(--s1)}
 .irow .end{margin-left:auto;display:grid;gap:var(--s2);justify-items:end;flex:none}
 .probe-out{font:var(--t-meta);color:var(--muted);font-family:var(--mono);text-align:right}
 
@@ -1868,8 +1870,8 @@ async function viewCase(id){
     <td class="sub mono" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
         title="${esc(JSON.stringify(t.context_json,null,2))}">${esc(JSON.stringify(t.context_json))}</td>
     <td>${t.status==="open"&&t.task_type==="website"?`<div class="chiprow end">
-      <button class="sm good" data-complete="${esc(t.id)}:pass">${I.check}Approve Website</button>
-      <button class="sm danger" data-complete="${esc(t.id)}:fail">${I.cross}Reject Website</button></div>`:""}</td></tr>`).join("")
+      <button class="warn" data-complete="${esc(t.id)}:pass">${I.check}Approve Website</button>
+      <button data-complete="${esc(t.id)}:fail">${I.cross}Reject Website</button></div>`:""}</td></tr>`).join("")
     ||emptyRow(6,"No open review tasks","A website review task opens during a full verification round.");
 
   const tokenRows=d.poc_tokens.map(t=>{
@@ -2023,7 +2025,7 @@ async function viewIntegrations(){
   if(generation!==renderGeneration)return;
   const p=d.platform_callback;
   const envChips=list=>`<div class="chiprow">`+list.map(e=>
-    `<span class="sub">${e.present?I.check:I.absent}${esc(e.note)}</span>`).join("")+`</div>`;
+    `<span class="sub source-note">${e.present?I.check:I.absent}<span>${esc(e.note)}</span></span>`).join("")+`</div>`;
   const rows=d.adapters.map(a=>`
     <div class="irow">
       <div class="itile">${GLYPH[a.adapter_id]||"·"}</div>
@@ -2036,7 +2038,7 @@ async function viewIntegrations(){
           ${a.stats?`<span>${a.stats.calls} calls · ${(a.stats.error_rate*100).toFixed(0)}% errors · p95 ${a.stats.p95_ms.toFixed(0)}ms · last ${esc(rel(a.stats.last_call_at))}</span>`
             :`<span>Not yet called</span>`}
         </div>
-        ${a.todo?`<div class="todo">${I.warn}${esc(todoText(a.todo))}</div>`:""}
+        ${a.todo?`<div class="todo source-note">${I.warn}<span>${esc(todoText(a.todo))}</span></div>`:""}
       </div>
       <div class="end">${a.probeable?`<button class="sm" data-probe="${esc(a.adapter_id)}">Test Connection</button>
         <div class="probe-out" id="probe-${esc(a.adapter_id)}"></div>`:`<span class="sub">Not testable from the console</span>`}</div>
