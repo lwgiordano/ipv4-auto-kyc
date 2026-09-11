@@ -2284,7 +2284,7 @@ const COMPOSER_GUIDES={
 };
 const composerSession={initialized:false,eventType:"kyb.run_requested",caseMode:"existing",selectedCase:"",
   existingId:"",newId:"",drafts:{},raws:{},templates:{},review:null,result:null,inFlight:null,
-  successful:false,keys:new Map(),blocked:new Map(),requestedCase:"",existingIdOutOfList:false};
+  successful:false,attempted:false,keys:new Map(),blocked:new Map(),requestedCase:"",existingIdOutOfList:false};
 const composerFreshTemplate=(type,templates)=>{const value=clone(templates[type]??{});
   if(type==="email.verified"||type==="poc.token_verified")value.verified_at=new Date().toISOString();
   if((type==="website.review_completed"||type==="reviewer.manual_approve")&&!value.reviewer_id&&reviewer())
@@ -2350,7 +2350,7 @@ function composerPaintWarning(root){const guide=COMPOSER_GUIDES[composerSession.
   warn.querySelector("div").innerHTML=`<b>Sensitive action.</b> ${esc(guide.sensitive)}${context}`;
 }
 function composerResponseCopy(result){
-  if(!result)return'<span class="sub">No message sent in this session.</span>';
+  if(!result)return`<span class="sub">${composerSession.attempted?`No response for the current draft.${composerSession.blocked.size?" Earlier unresolved attempts remain below.":""}`:"No message sent in this session."}</span>`;
   const verify=result.snapshot?.case_id?` Open ${caseLink(result.snapshot.case_id)} to verify the company record.`:"";
   const ids=[["Event",result.body?.event_id],["Verification round",result.body?.run_id]].filter(([,v])=>v);
   const idLine=ids.length?`<div class="sub">${ids.map(([k,v])=>`${k}: <code>${esc(v)}</code>`).join(" · ")}</div>`:"";
@@ -2363,6 +2363,9 @@ function composerResponseCopy(result){
   else if(result.status===200&&result.body?.status==="queued")lead="Stored queued response received. The message was accepted when this response was recorded; verification may still be running.";
   else lead=`Accepted by the server (HTTP ${result.status}). Check the company record for the resulting state.`;
   return`<div class="callout"><div><b>${esc(lead)}</b>${idLine}</div></div>`;
+}
+function composerRawResponse(result){
+  return`HTTP ${result.status??"network error"}\n${result.rawText??JSON.stringify(result.body??{detail:result.message},null,2)}`;
 }
 function composerPaint(root){
   if(!root?.isConnected)return;
@@ -2384,7 +2387,11 @@ function composerPaint(root){
   status.innerHTML=sending?`<div class="callout"><div><b>Sending the reviewed message…</b> Keep this page open or return here to see the attributed response.</div></div>`:composerResponseCopy(composerSession.result);
   const raw=root.querySelector("#c-raw"),pre=root.querySelector("#c-out");
   raw.hidden=!composerSession.result;raw.open=false;
-  pre.textContent=composerSession.result?`HTTP ${composerSession.result.status??"network error"}\n${JSON.stringify(composerSession.result.body??{detail:composerSession.result.message},null,2)}`:"";
+  pre.textContent=composerSession.result?composerRawResponse(composerSession.result):"";
+  const earlier=[...composerSession.blocked.values()].filter(entry=>entry.snapshot.idempotency_key!==composerSession.result?.snapshot?.idempotency_key);
+  const prior=root.querySelector("#c-prior");prior.hidden=!earlier.length;
+  prior.innerHTML=earlier.length?`<h3>Earlier attempts to verify</h3>${earlier.map(({snapshot,result})=>
+    `${composerResponseCopy(result)}<details class="composer-raw"><summary>Reviewed request and raw response</summary><pre>${esc(JSON.stringify(snapshot,null,2))}\n\n${esc(composerRawResponse(result))}</pre></details>`).join("")}`:"";
 }
 function composerParseAdvanced(root,showError=true){
   const input=root.querySelector("#c-payload"),error=root.querySelector("#c-json-error");let value;
@@ -2416,12 +2423,13 @@ function composerReview(root){const envelope=composerValidate(root);if(!envelope
 }
 async function composerSend(root){
   if(composerSession.inFlight||composerSession.successful||!composerSession.review)return;
-  const snapshot=clone(composerSession.review);composerSession.inFlight={snapshot};composerSession.result=null;composerPaint(root);
+  const snapshot=clone(composerSession.review);composerSession.inFlight={snapshot};composerSession.result=null;composerSession.attempted=true;composerPaint(root);
   let result;
   try{const response=await fetch("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(snapshot)});
-    const body=await response.json().catch(()=>({})),status=response.status;
+    const rawText=await response.text(),status=response.status;let body;
+    try{body=JSON.parse(rawText)}catch{body={detail:rawText}}
     const kind=status>=500?"unknown":status===409?"conflict":status===403||status===422?"refused":status>=200&&status<300?"accepted":"refused";
-    result={ok:kind==="accepted",kind,status,body,message:kind==="refused"?errText(body):"",snapshot}}
+    result={ok:kind==="accepted",kind,status,body,rawText,message:kind==="refused"?errText(body):"",snapshot}}
   catch(error){result={ok:false,kind:"unknown",status:null,body:{detail:error.message},message:error.message,snapshot}}
   composerSession.inFlight=null;composerSession.result=result;composerSession.successful=result.ok;
   if(result.kind==="unknown"||result.kind==="conflict"){
@@ -2494,7 +2502,8 @@ async function viewComposer(){
       <div class="stack">
         <div class="card"><div class="hd"><h2>Response</h2>${tip("composerresult")}</div><div class="bd">
           <div class="composer-status" id="c-status" role="status"><span class="sub">No message sent in this session.</span></div>
-          <details class="composer-raw" id="c-raw" hidden><summary>Raw response</summary><pre id="c-out"></pre></details></div></div>
+          <details class="composer-raw" id="c-raw" hidden><summary>Raw response</summary><pre id="c-out"></pre></details>
+          <section class="composer-review" id="c-prior" hidden aria-label="Earlier attempts to verify"></section></div></div>
         <div class="card" id="c-demo"><div class="hd"><h2>Demo fixture</h2>${tip("demo")}</div><div class="bd demo-journey">
           <p class="sub">Illustrative values for the built-in demo. Each send creates real records; safety holds and evidence rules still apply, so this sequence does not guarantee approval.</p>
           <div class="demo-step"><span class="step-number">1</span><div><b>Request company review</b><code>kyb.run_requested</code><div class="sub">Acme Networks Ltd · GB · acme.example</div></div></div>

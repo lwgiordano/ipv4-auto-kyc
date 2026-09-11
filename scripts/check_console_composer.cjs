@@ -137,7 +137,8 @@ const cases = [
       for (const page of context.pages()) await page.evaluate(() => { window.__composerPostCount = (window.__composerPostCount || 0) + 1; });
       if (deferReply) await deferReply;
       if (reply.abort) return route.abort(reply.abort);
-      await route.fulfill({ status: reply.status, contentType: "application/json", body: JSON.stringify(reply.body) });
+      await route.fulfill({ status: reply.status, contentType: reply.raw === undefined ? "application/json" : "text/plain",
+        body: reply.raw === undefined ? JSON.stringify(reply.body) : reply.raw });
     });
     const page = await context.newPage(); page.setDefaultTimeout(9000);
     await page.addInitScript(() => { window.__composerPostCount = 0; });
@@ -313,6 +314,34 @@ const cases = [
       assert.doesNotMatch(await page.locator("#c-status").textContent(), /status.*replayed/i);
       assert.doesNotMatch(await page.locator("#c-status").textContent(), /99 jobs|jobs started/i);
       assert.equal(await page.locator("#c-raw").evaluate(el => el.open), false);
+    });
+
+    await check("unresolved earlier outcome stays attributable after editing and a later successful send", async () => {
+      const earlier = posts.find(post => post.payload.company_legal_name === "Retry Co");
+      const unresolved = page.locator("#c-prior");
+      assert.match(await unresolved.textContent(), /outcome unknown/i);
+      assert.match(await unresolved.textContent(), /temporary failure/);
+      assert.match(await unresolved.textContent(), new RegExp(earlier.idempotency_key));
+      assert.equal(await unresolved.locator("a").first().getAttribute("href"), `#/case/${encodeURIComponent(earlier.case_id)}`);
+      await choose(page, "kyb.run_requested");
+      await page.getByLabel("Company legal name", { exact: true }).fill("Another draft");
+      assert.doesNotMatch(await page.locator("#c-status").textContent(), /no message sent in this session/i);
+      assert.match(await unresolved.textContent(), /outcome unknown/i);
+      await review(page);
+      assert.match(await unresolved.textContent(), /temporary failure/);
+    });
+
+    await check("non-JSON ambiguous response keeps exact raw evidence without rendering markup", async () => {
+      await choose(page, "kyb.run_requested");
+      await page.getByLabel("Company legal name", { exact: true }).fill("Raw failure draft");
+      await review(page);
+      reply = { status: 503, raw: "upstream unavailable: <img src=x onerror=alert(1)> request outcome could not be read" };
+      await confirm(page);
+      assert.equal(await page.locator("#c-out").textContent(), `HTTP 503\n${reply.raw}`);
+      assert.equal(await page.locator("#c-out img").count(), 0);
+      await page.getByLabel("Company legal name", { exact: true }).fill("Next draft");
+      assert.match(await page.locator("#c-prior").textContent(), /upstream unavailable/);
+      assert.equal(await page.locator("#c-prior img").count(), 0);
     });
 
     await check("actual manual 200 shape reports recording without inventing replay status", async () => {
