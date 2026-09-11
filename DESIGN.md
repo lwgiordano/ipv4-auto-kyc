@@ -374,23 +374,72 @@ render of its own.
 29. A fixed corner is somebody's corner. Bottom-left is the sidebar footer and the refresh
     control in it; bottom-right is the toast. A badge that floats over either is a control you
     have hidden. Put it in the flow of the thing it belongs to.
+30. A browser-local preview never reads as a live configuration change. Keep its boundary notice,
+    live source values, save state and reset action visible; a failed storage write is not a save.
+31. A native select's drawn chevron belongs inside the select's own border, not merely inside a
+    wider wrapper. Measure both boxes and reserve text space before the icon.
 
 ## 12. Console first-pass layout contract
 
 The shared header owns title, description, optional legend and optional actions. Its internal
-intervals are 8px from title to description and 12px from description to legend; the header as a
+intervals are 12px from title to description and 12px from description to legend; the header as a
 whole owns 24px before page content. An absent slot emits no element, because an empty flex child
 can wrap and create visible space.
 
 Layout parents own card rhythm. `.split` and `.stack` use one 16px gap and their children carry no
 adjacent-card margin; only direct block-flow card siblings under `.page` retain the 16px margin.
+Subsections own a 12px heading-to-content gap. Card headers keep their divider; the following
+non-flush body or integration row owns 12px top padding. Flush tables get that clearance from
+their cells, without another spacer.
+
 The reviewer grid names three rows and centers its avatar on the input row. Identity fields use
-content-sized tracks so an optional subline cannot move a neighboring primary value.
+content-sized tracks so an optional subline cannot move a neighboring primary value. The reviewer
+helper reads "Recorded on every review action."
+
+Legends are groups, each with a pill above a separate description and a 4px internal gap. The grid
+uses 12px between rows and 24px between columns: five columns above 1319px, three through 1319px,
+two through 900px and one through 520px. Descriptions may wrap; pills must fit their own tracks.
+
+Native selects fill their wrappers. The drawn chevron has a 12px right inset and ignores pointer
+events; the select reserves 48px on the right for text clearance. Regular inputs, selects and
+buttons share a 40px minimum height; compact table buttons keep their 32px variant.
+
+Table cells use middle alignment with 12px vertical and 16px horizontal padding. Pills and chip
+rows no longer carry the historical negative offsets recorded in §9. Preview-editor cells are
+the scoped exception: they remain top-aligned with their live-value sublines. Salesforce mapping
+inputs reserve a 230px minimum width; a narrow table scrolls inside its card instead of squeezing
+the destination name. The score fill and threshold tick share one inner scale inset 4px from each
+end of the track, so their percentages use the same width.
+
+Options keeps System / Light / Dark in its Appearance form. Its browser-local helper and storage
+error status sit in a separate footer, 24px below the choices with a divider and 12px top padding.
+Navigation uses theme tokens for distinct active, hover and keyboard-focus states. The global
+header's "Message authentication: On/Off" describes configuration, not service health or delivery;
+the full labelled rules fingerprint and Copy control belong on Decision Rules, not global chrome.
+
+Configuration editors begin with "Preview only — saved in this browser; live rules are unchanged."
+Points edit evidence weights, not threshold or gates. Mapping edits change destination names,
+not displayed company values or sources. Broker entry Apply/Cancel is separate from Save Preview;
+Save is disabled while an entry is open. Each editor exposes unsaved, saved and error messages,
+plus a confirmed Reset to Live. Saved previews are validated against their source identity before
+loading: the bundle hash for points, the field/source set for mappings, and the sorted live broker
+list for brokers. A stale or malformed saved preview is not overlaid on live data. These controls
+use browser storage, never publish server configuration, and do not imply an audit record.
+
+The message composer leads with company, action and the relevant labelled fields. The technical
+event stays beside the action; Advanced JSON is optional. Its two-column workspace stacks through
+1260px so support panels do not compress the primary form. Action and field grids become one
+column through 720px; the response and numbered demo fixture remain separate panels. The review
+summary repeats company ID, action, technical event, unique key and exact payload before Confirm
+Send. Drafts stay in page memory, not browser storage, and survive timed refresh and event changes.
+Sending is an explicit server operation, unlike configuration previews. Response copy must not
+turn acceptance into completed verification or treat a stored response as proof of a new action.
 
 The reusable lesson is to test the relationship at the boundary that owns it. Two individually
 valid 16px rules still make a wrong 32px gap, and a correctly sized element can align to the wrong
-row. Browser checks therefore measure sibling edges, row centers and header intervals at 390,
-768, 1024 and 1440px rather than inferring correctness from token use.
+row. Browser checks measure sibling edges, row centers, native select borders and header intervals,
+including the 1147px user viewport and both sides of the legend's 1319/1320px boundary, rather than
+inferring correctness from token use.
 
 Companies keeps its toolbar and search input mounted while only the result count and rows change.
 The live input is authoritative; request sequencing and node identity prevent delayed results from
@@ -405,8 +454,23 @@ bash scripts/dev.sh                    # stack + console on :8080/ui
 .venv/bin/python -m pytest tests/unit/test_console_static.py tests/integration/test_ui.py
 ```
 
-Then look at it: seven routes, light and dark, at 1440 and 390. Check the document does not scroll
-sideways at 1440 / 1024 / 768 / 390, and that the type inventory has not grown.
+With Playwright available to Node, run the focused browser checks against the isolated local
+console. The URL argument overrides their default `http://127.0.0.1:55717/ui`:
+
+```bash
+node scripts/check_console_layout.cjs http://127.0.0.1:55717/ui
+node scripts/check_console_previews.cjs http://127.0.0.1:55717/ui
+node scripts/check_console_composer.cjs http://127.0.0.1:55717/ui
+```
+
+These are explicit local verification commands, not a claim that browser checks run in CI.
+Preview interactions must produce no non-GET API requests. Composer checks intercept send-event
+requests; verification must not send real messages.
+
+Then look at every route, including Options and the editor/review states, in light and dark at
+1440 and 390. Check the document does not scroll sideways at 1440 / 1147 / 1024 / 768 / 390,
+and that the type inventory has not grown. Check contained table scrolling separately from document
+overflow, including whether editable destination names are readable inside their inputs.
 
 Measure the whole surface, not `.page`: open the approval dialog and at least one explainer
 bubble before you count type tuples, because both are mounted outside it and that is where three
@@ -417,7 +481,8 @@ Then **measure it**, on more than the state you were looking at. The case page h
 states (`demo-acme-1`, `-2`, `-3`, `demo-northwind`, `demo-ipxo`) and they do not exercise the
 same branches: the enforcement-hold callout, the bypassed-gate cells and the manual-provenance
 chip each appear on two of the five. A collision that is invisible on the state you demo is
-still shipped. What to read off the DOM: the computed type tuples on `.page *` (they must stay
-within the eight tokens), `getComputedStyle().top` on every `.ic` inside a flex parent (0px),
+still shipped. What to read off the DOM: the computed type tuples across the visible console,
+open dialog and explainer (they must stay within the declared tokens), `getComputedStyle().top`
+on every in-flow `.ic` inside a flex parent (0px; exclude the positioned select chevron),
 the accessible text of `.gate` and `.crow` with `aria-hidden` subtrees excluded, and the gap
 between each pair of adjacent blocks.

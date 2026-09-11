@@ -10,6 +10,21 @@
 
 **Spec:** The approved design is recorded below, incorporating the user's "okay go" after preview-first was recommended for all configuration editors. This is the implementation authority; no separate live-activation subsystem is approved.
 
+## Execution disposition — 2026-09-10
+
+Tasks 1 and 2 are implemented and independently reviewed. Task 3's guided form,
+immutable review/send, company retention, and conservative outcome handling are implemented.
+The original robust retry/replay requirement below is **not complete**: the unchanged console
+endpoint creates a fresh `occurred_at` on each attempt, while ingestion hashes that timestamp.
+A committed request whose response is lost can therefore return 409 on retry rather than replay.
+A backend fix requires the user's separate scope approval; no backend change was authorized here.
+The safe UI interim behavior blocks blind resubmission of an ambiguous message, retains its
+identity, and directs the operator to verify the company record. It does not certify retry safety
+across browser sessions or repair the backend contract. The unchecked retry items remain open.
+
+Whole-unit W1/W2 and visual F1–F4 were fixed in `d32a340`; both scoped re-reviews passed.
+The visual confirmation is closed: one fix batch and one confirmation capture, no further polish.
+
 ## Global Constraints
 
 - Preserve DESIGN.md's incumbent typography, flat palette, spacing tokens and icon family, including both themes.
@@ -39,7 +54,7 @@ Composer: choose existing company or explicitly create new company ID; select pl
 
 **Interfaces:** Existing tbar(), pill(), viewOptions(), viewOverview(), route(), sidebarBadge(). Keep these names and backend response shapes. Produce shared row/legend/select/header styling used unchanged by Tasks 2–3.
 
-- [ ] Write RED browser checks against the reported defects, based on actual element bounds and computed styles. Example core assertion:
+- [x] Write RED browser checks against the reported defects, based on actual element bounds and computed styles. Example core assertion:
   ```js
   const row = await page.locator('[data-complete]').first().evaluate(e => {
     const tr=e.closest('tr'), box=tr.getBoundingClientRect();
@@ -49,10 +64,10 @@ Composer: choose existing company or explicitly create new company ID; select pl
   });
   assert.ok(row.every(offset => offset < 2));
   ```
-- [ ] Run node scripts/check_console_layout.cjs and record expected RED causes. Use the existing read-only fixture case demo-case-00131; never click its actions.
-- [ ] Implement the exact shared-layout/header design above. Score geometry pattern: an inset .bscale inner element owns BOTH bmeasure and btick; percentages remain relative to the same inner width. Options note gets a separate footer class. Prefer theme tokens for hover, not hardcoded black. Legend grid owns item tracks. Main header gets no raw hash. Metadata initialization must be route-independent.
-- [ ] Run browser matrix 390/768/1199/1440 light+dark and current static pins; assert empty/no data states remain usable, no document overflow, no non-GET API writes. Update superseded layout assertions rather than retaining opposite contracts.
-- [ ] Write report with RED/GREEN commands and results, changed files, concerns. Parent reviews and commits.
+- [x] Run node scripts/check_console_layout.cjs and record expected RED causes. Use the existing read-only fixture case demo-case-00131; never click its actions.
+- [x] Implement the exact shared-layout/header design above. Score geometry pattern: an inset .bscale inner element owns BOTH bmeasure and btick; percentages remain relative to the same inner width. Options note gets a separate footer class. Prefer theme tokens for hover, not hardcoded black. Legend grid owns item tracks. Main header gets no raw hash. Metadata initialization must be route-independent.
+- [x] Run browser matrix 390/768/1199/1440 light+dark and current static pins; assert empty/no data states remain usable, no document overflow, no non-GET API writes. Update superseded layout assertions rather than retaining opposite contracts.
+- [x] Write report with RED/GREEN commands and results, changed files, concerns. Parent reviews and commits.
 
 ### Task 2: Configuration previews and decision details
 
@@ -60,16 +75,16 @@ Composer: choose existing company or explicitly create new company ID; select pl
 
 **Interfaces:** Consume shared styling, tbar(), j(), esc(), recall()/remember() patterns. Use independent storage prefix kyc-preview-v1 and explicit records {version:1, base:string, value:object}. Do not reuse live objects as mutable draft state. Task 3 must not depend on preview helpers.
 
-- [ ] Write RED browser tests: edit one point then reload; edit a Salesforce destination; add/edit/remove a broker with all identifier fields; assert zero writes and unchanged GET policy. Exercise malformed/stale storage, blocked storage, blank/duplicate destination, negative/nonintegral points, hostile HTML text, unsaved refresh focus, reset and duplicate broker names.
+- [x] Write RED browser tests: edit one point then reload; edit a Salesforce destination; add/edit/remove a broker with all identifier fields; assert zero writes and unchanged GET policy. Exercise malformed/stale storage, blocked storage, blank/duplicate destination, negative/nonintegral points, hostile HTML text, unsaved refresh focus, reset and duplicate broker names.
   ```js
   const writes=[]; page.on('request',r=>{if(r.method()!=='GET'&&r.url().includes('/ui/api/'))writes.push(r.url());});
   // Interact with each actual editor, save, reload and inspect its displayed draft.
   assert.deepEqual(writes,[]);
   ```
-- [ ] Run RED, then implement guarded browser draft helpers and inline editors. Validation: points integers 0–1000 (disclose maximum); Salesforce field names 1–80 ASCII letters/digits/underscore, starting letter, distinct; broker names 1–200 chars, canonical case/space duplicates rejected, policy exact allowed/blocked, identifier entries trimmed nonempty <=256 chars and each list <=100 entries, notes <=2000 chars, broker list <=200 entries. Reject duplicate canonical identifiers within a list; warn on cross-broker matches, explain blocked precedence. Validate restored data identically. A save should update its baseline draft only after storage succeeds.
-- [ ] Preserve drafts across refresh without replacing focused controls. Catch all storage get/set/remove errors and give recovery. Reset to Live requires clear acknowledgement or undo for local draft loss. Fingerprints/base comparisons use canonical live data, not editable copies. Display a stale preview notice with Reset to Live when source changes.
-- [ ] Add count/share to historical overview distribution and labelled expandable latest-company details from GET /ui/api/cases?limit=100. Label case.updated_at "Company updated", not decision time. Filter rows by decision with empty state and company links; never call a bounded latest-company list all historical decision records.
-- [ ] Run browser suite plus static pins; write report with RED/GREEN evidence. Parent reviews and commits.
+- [x] Run RED, then implement guarded browser draft helpers and inline editors. Validation: points integers 0–1000 (disclose maximum); Salesforce field names 1–80 ASCII letters/digits/underscore, starting letter, distinct; broker names 1–200 chars, canonical case/space duplicates rejected, policy exact allowed/blocked, identifier entries trimmed nonempty <=256 chars and each list <=100 entries, notes <=2000 chars, broker list <=200 entries. Reject duplicate canonical identifiers within a list; warn on cross-broker matches, explain blocked precedence. Validate restored data identically. A save should update its baseline draft only after storage succeeds.
+- [x] Preserve drafts across refresh without replacing focused controls. Catch all storage get/set/remove errors and give recovery. Reset to Live requires clear acknowledgement or undo for local draft loss. Fingerprints/base comparisons use canonical live data, not editable copies. Display a stale preview notice with Reset to Live when source changes.
+- [x] Add count/share to historical overview distribution and labelled expandable latest-company details from GET /ui/api/cases?limit=100. Label case.updated_at "Company updated", not decision time. Filter rows by decision with empty state and company links; never call a bounded latest-company list all historical decision records.
+- [x] Run browser suite plus static pins; write report with RED/GREEN evidence. Parent reviews and commits.
 
 ### Task 3: Guided Send Message
 
@@ -87,13 +102,13 @@ Composer: choose existing company or explicitly create new company ID; select pl
   assert.equal(submitted[0].payload.company_legal_name,'Example Limited');
   assert.doesNotMatch(await page.locator('#page').innerText(),/Started 42/);
   ```
-- [ ] Run RED. Implement guided form using existing payload models as authority; keep all accepted enum names visible beside friendly labels. Native inputs/selects, nested field grouping; required/optional hints, inline validation linked to fields. Store drafts only in memory (not company PII in localStorage). Switching event restores its draft; explicit reset loads template. No auto sends or automatic fixture walkthrough.
+- [x] Run RED. Implement guided form using existing payload models as authority; keep all accepted enum names visible beside friendly labels. Native inputs/selects, nested field grouping; required/optional hints, inline validation linked to fields. Store drafts only in memory (not company PII in localStorage). Switching event restores its draft; explicit reset loads template. No auto sends or automatic fixture walkthrough.
 - [ ] Implement review panel, Edit action, Confirm Send, in-flight disable, retry key discipline and honest response summary with expandable raw details. Keep form mounted under auto-refresh and ignore stale GET responses. Confirmation is inline rather than a popup.
-- [ ] Replace Example prose with ordered fixture steps and clear demo/safety-hold note. Run browser suite, static pins and earlier task suites; report RED/GREEN evidence. Parent reviews and commits.
+- [x] Replace Example prose with ordered fixture steps and clear demo/safety-hold note. Run browser suite, static pins and earlier task suites; report RED/GREEN evidence. Parent reviews and commits.
 
 ## Final verification and handoff
 
-- [ ] Parent inspects one batch of screenshots across changed routes at desktop/tablet/mobile, both themes and user width. One batch of fixes, one confirmation capture.
+- [x] Parent inspects one batch of screenshots across changed routes at desktop/tablet/mobile, both themes and user width. One batch of fixes, one confirmation capture.
 - [ ] Fresh whole-unit review and independent visual finish review with original screenshots and acceptance list. Documentation compares incumbent DESIGN.md; only approved spacing/legend/table changes are recorded.
 - [ ] All focused scripts, pytest static/engine guard, full ./manage.sh test with local PostgreSQL 16, ./manage.sh lint and lint-imports; git diff --check. Source HTML does not alter the Python engine hash.
 - [ ] Parent commits exact lane files, pushes, verifies exact source CI, then RELEASE on bus anchored to source range; no unrelated untracked artifacts staged.
