@@ -195,8 +195,8 @@ class DecisionCallback(BaseModel):
 
 
 # The wire's ordering generation. `unsequenced` means the callback carries NO platform ordering
-# key; it becomes `sequenced` only when migration 024 ships and `decision_sequence` joins the
-# authoritative model. Declared here, beside the model, so the pending-024 gate has one authority
+# key; it becomes `sequenced` only when migration 025 ships and `decision_sequence` joins the
+# authoritative model. Declared here, beside the model, so the pending-025 gate has one authority
 # to interrogate instead of two declarations that can drift (re-audit Wave 0 gate finding 6).
 
 

@@ -1517,7 +1517,7 @@ def _admission_checks(settings: Settings, role: ProcessRole) -> ProcessRole:
     # definitions are internally consistent but mutually different (old (8,8) next to new (12,12)
     # both boot). The independent authority — a DB CAS cutover record + orchestrator-inventory
     # receipt every publisher must match before claiming — needs a table and is reserved into
-    # migration 028 (PR 10b); the drained STOP/ATTEST-ZERO procedure remains the operative control
+    # migration 029 (PR 10b); the drained STOP/ATTEST-ZERO procedure remains the operative control
     # until then.
     attested = settings.outbox_max_attempts_attested
     if (

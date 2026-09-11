@@ -82,9 +82,11 @@ def create_app(
     # in the secure production configuration, where the optional /ui console is disabled.
     app.include_router(ops_router)
     if settings.ui_enabled:
+        from kyc_tool.ui.configuration_routes import router as configuration_router
         from kyc_tool.ui.routes import router as ui_router  # deferred: reads console.html
 
         app.include_router(ui_router)
+        app.include_router(configuration_router)
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -154,6 +156,23 @@ def create_app(
             ready = ready and pinnable
         except Exception as exc:  # noqa: BLE001 — any failure means not-ready
             checks["policy_bundle"] = {"ok": False, "bundle_hash": bundle_hash, "error": str(exc)[:200]}
+            ready = False
+
+        try:
+            from kyc_tool.configuration import repo as configuration_repo
+
+            with app.state.session_factory() as session:
+                active = configuration_repo.get_active(session)
+            valid = active is None or settings.enforce_bundle_pinning is True
+            checks["configuration"] = {
+                "ok": valid,
+                "active": active is not None,
+                "revision": str(active.revision) if active else None,
+                "pinning_enabled": settings.enforce_bundle_pinning is True,
+            }
+            ready = ready and valid
+        except Exception:  # noqa: BLE001 — corruption and unavailable authority are not-ready
+            checks["configuration"] = {"ok": False, "error": "Configuration authority unavailable."}
             ready = False
 
         return JSONResponse(

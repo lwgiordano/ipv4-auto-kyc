@@ -68,6 +68,7 @@ def project_salesforce_fields(
     poc_token_outstanding: bool,
     latest_decision: dict | None,
     latest_manual_decision: dict | None = None,
+    mappings: dict[str, str] | None = None,
 ) -> dict:
     live = _live(checks)
     submitted = case.get("submitted_json") or {}
@@ -147,7 +148,7 @@ def project_salesforce_fields(
         else (latest_decision if (latest_decision or {}).get("manual") else None)
     )
 
-    return {
+    fields = {
         "KYC_Status__c": KYC_STATUS_MAP.get(case.get("status", "")),
         # the POINTED decision's score — what was actually decided — never the live recomputed
         # case score, which can drift after the decision; None when the pointer is unresolved
@@ -167,9 +168,7 @@ def project_salesforce_fields(
         # approval) both project NULL. The old default fabricated `False` — a definite "no
         # hard conflict" — out of the gate never having been evaluated (re-audit `45cc215`
         # F9). NULLABLE refines `salesforce_sync_fields.json`'s `boolean` (package frozen).
-        "Hard_Conflict__c": (
-            not gates["no_hard_conflict"] if "no_hard_conflict" in gates else None
-        ),
+        "Hard_Conflict__c": (not gates["no_hard_conflict"] if "no_hard_conflict" in gates else None),
         "Review_Reason_Codes__c": "; ".join(reason_codes) if reason_codes else None,
         "Manual_Approved_By__c": (manual or {}).get("reviewer_id"),
         "Manual_Approved_At__c": (manual or {}).get("decided_at"),
@@ -187,6 +186,7 @@ def project_salesforce_fields(
             for c in checks
         ],
     }
+    return {mappings[key] if mappings is not None else key: value for key, value in fields.items()}
 
 
 # Static "source of truth" notes per field, for the Field Map view (mirrors the

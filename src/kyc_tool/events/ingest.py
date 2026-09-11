@@ -22,7 +22,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from kyc_tool.checkstore import repo as checkstore
-from kyc_tool.config import get_settings
+from kyc_tool.config import Settings, get_settings
+from kyc_tool.configuration import repo as configuration_repo
+from kyc_tool.configuration.models import ConfigurationUnavailable
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Case, DecisionRow, Event, ReviewTask, Run
@@ -130,7 +132,9 @@ def ingest_event(
     case_id: str,
     idempotency_key: str,
     envelope: dict,
+    settings: Settings | None = None,
 ) -> IngestOutcome:
+    settings = settings if settings is not None else get_settings()
     digest = payload_hash(envelope)  # from the ORIGINAL envelope — before scrubbing
     event_type = envelope["event_type"]
     payload = _scrub_secrets(event_type, envelope.get("payload") or {})
@@ -138,6 +142,13 @@ def ingest_event(
 
     try:
         with uow(session_factory) as session:
+            # This SELECT is also the cutover fence when no active row exists.
+            # Keep its relation/shared-pointer lock until ALL admission writes commit.
+            configuration = configuration_repo.get_active(session, lock=True)
+            if configuration is not None:
+                if settings.enforce_bundle_pinning is not True:
+                    raise ConfigurationUnavailable("live configuration requires per-run pinning")
+                policy = configuration.bundle
             # lazy case creation (AUDIT:C1)
             session.execute(pg_insert(Case).values(id=case_id).on_conflict_do_nothing(index_elements=["id"]))
             # Lock the case BEFORE allocating a sequence — this serializes concurrent
@@ -218,6 +229,7 @@ def ingest_event(
                 case_id=case_id,
                 triggering_event_id=event.id,
                 policy_bundle_hash=policy.bundle_hash,
+                configuration_revision=configuration.revision if configuration else None,
                 input_snapshot_json=dict(new_snapshot),  # freeze the run's inputs
             )
             session.add(run)
@@ -228,7 +240,7 @@ def ingest_event(
                 "run_transition",
                 {"run_id": run.id},
                 case_id=case_id,
-                max_attempts=get_settings().job_max_attempts,
+                max_attempts=settings.job_max_attempts,
             )
             audit(session, "run.created", case_id=case_id, run_id=run.id, event_id=event.id)
 
@@ -237,6 +249,14 @@ def ingest_event(
             return IngestOutcome(202, body)
     except _FloorReject as fr:
         return fr.outcome
+    except ConfigurationUnavailable:
+        return IngestOutcome(
+            503,
+            {
+                "error": "configuration_unavailable",
+                "detail": "Configuration authority unavailable; retry safely.",
+            },
+        )
 
 
 def _handle_manual_approve(

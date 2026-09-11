@@ -47,5 +47,6 @@ async def post_event(
         case_id=case_id,
         idempotency_key=idempotency_key,
         envelope=envelope_dict,
+        settings=request.app.state.settings,
     )
     return JSONResponse(status_code=outcome.status_code, content=outcome.body)
