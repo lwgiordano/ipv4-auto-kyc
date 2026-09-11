@@ -7,8 +7,8 @@
 > `016` witness admission, `017` authority boundary, `018` transition authority,
 > `019` payload repair, `020` redaction uniformity, `021` poison recovery, `022`
 > authority-invariant repair, `023` cross-table authority repair (all shipped),
-> `024` 7b-activation (pending).
-> **PR 6b is now migration `025` (`down_revision='024'`)
+> `025` 7b-activation (pending).
+> **PR 6b is now migration `026` (`down_revision='025'`)
 > and builds AFTER activation** — its coordinator consumes activation's convergence contract
 > (greatest per-case platform-acknowledged sequence), and activation itself carries three OPEN
 > blockers recorded as O1/O2/O3 in the activation spec (rev 13) that must be resolved before this
@@ -82,7 +82,7 @@ decoder / replay-binding edits.
   lock**, never a caller-supplied event payload.
 - **`engine_activation_epoch`** (append-only *pair* history, distinct from PR 6's immutable
   `bundle_pinning_epoch`): `id` PK, `engine_build_id`, `validator_build_id`, `activated_at`.
-- Forward-only-after-use downgrade. Lineage guard: PR 6b = `025`, `pending` until replanned.
+- Forward-only-after-use downgrade. Lineage guard: PR 6b = `026`, `pending` until replanned.
 
 ### 3. Identifiers + flags + readiness (F5)
 
@@ -215,7 +215,7 @@ batch-authoritative coordinator + internal `recalculate.requested` + interim per
 serialization pending PR 7b, closure provenance + the new reason code, pair activation +
 delivery convergence, drained cutover). **PR 10 → ADR-007** in ROADMAP §I **and** the PR 10
 detailed section (done); ROADMAP guard extended to assert both agree. `DEPLOYMENT.md` §10,
-`RUNBOOK.md`, ROADMAP PR 6b → `pending`/`025` until this unit is replanned, `AUDIT_FINDINGS` (internal event + closure
+`RUNBOOK.md`, ROADMAP PR 6b → `pending`/`026` until this unit is replanned, `AUDIT_FINDINGS` (internal event + closure
 reason).
 
 ## Invariants

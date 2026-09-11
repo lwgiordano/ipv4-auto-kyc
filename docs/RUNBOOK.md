@@ -37,10 +37,10 @@
 > `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY`,
 > `MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`) — walking below them would restore
 > search-path-vulnerable or under-validated authority functions, so once `018` is on the schema
-> the ONLY rollback is redeploying the prior reviewed **023-compatible** image against it.
-> `023` itself is validation-only and its downgrade is a no-op, so a walk started from the head
-> does not stop there — it reaches `022` and refuses with that sentinel, one revision lower than
-> the command names. Do not apply `018` or anything above it in production until that bridge
+> the ONLY rollback is redeploying the prior reviewed **024-compatible** image against it.
+> `024` first refuses if any configuration history exists. With unused configuration additions,
+> its downgrade removes only those additions; `023` is validation-only and its downgrade is a
+> no-op, so the walk reaches `022` and refuses there. Do not apply `018` or anything above it in production until that bridge
 > image has been reviewed and staged; this preproduction branch otherwise rolls forward. Below
 > `018` the walk still preflights with stable sentinels, in execution order
 > (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -52,7 +52,7 @@
 > terminal `callback_wire_sha256`, or a `superseded` row exists — immutable
 > delivery evidence is never destroyed because local status looks terminal;
 > for a pending/dead callback the attempt row is the only proof bytes were
-> staged. On refusal, KEEP or redeploy the reviewed **023-compatible** image — an older
+> staged. On refusal, KEEP or redeploy the reviewed **024-compatible** image — an older
 > publisher lacks the receipt/terminal contract and must not run against preserved evidence;
 > a pre-7b image is permitted only after the entire walk reaches 012.
 
@@ -70,7 +70,7 @@
 > pause event submission, stop and attest the API writers AND the pipeline workers (as well as
 > publishers/retention), then re-run. Unlike the live-claim preflight, this one is **not
 > machine-checked** — `022` and `023` are published and cannot be amended to add one; the
-> machine-checked fence ships with `024` (activation blocker O4).
+> machine-checked fence ships with `025` (activation blocker O4).
 
 ### Migration refusal sentinels
 
@@ -81,7 +81,7 @@ names the offending rows or objects and a remediation — but published migratio
 frozen, so a frozen message can lag this document: **where the message and this runbook
 disagree, the runbook wins.** Concretely, `022`'s forward-only refusal still names the
 compatible image for the revision it froze at (`022`); the image to keep is always the one
-compatible with the **live head** — `023`-compatible today, kept current in this document
+compatible with the **live head** — `024`-compatible today, kept current in this document
 by a head-derived test that a frozen migration message cannot satisfy.
 
 `tests/unit/test_plan_artifact_static.py` fails if a migration raises a sentinel this
@@ -110,7 +110,9 @@ table omits, so a new refusal cannot ship undocumented.
 | `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
 | `MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
 | `MIGRATION_021_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
-| `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional — the highest refusal on the chain, so this is the sentinel a walk from the head actually hits (`023`'s downgrade is a validation-only no-op) |
+| `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional — reached from head only when 024 has no configuration history; 023's downgrade is a validation-only no-op |
+| `MIGRATION_024_CONFIGURATION_DOWNGRADE_REFUSED` | downgrade: any configuration revision, request, active pointer, or versioned run exists; restore a prior configuration through a new reviewed section save, never delete its history |
+| `MIGRATION_024_CONFIGURATION_DOWNGRADE_BUSY` | downgrade: a configuration-authority lock is busy; acquisition uses NOWAIT so it cannot deadlock a concurrent writer. Quiesce writers before retrying; existing configuration history still requires roll-forward recovery |
 
 > **`enforce_bundle_pinning` (PR 6) is a drained, not rolling, flag flip.**
 > Off (default), every worker scores under its own process-loaded policy
@@ -300,7 +302,7 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
     suspended AND the 0.3 attestation holds.
 0.5 On failure, ABORT here — before stopping service (no outage begun). Recovery is restore-or-block:
     restore from authoritative backup the EXACT callback row, OR remain on 012 in
-    `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`024`) is
+    `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`025`) is
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
     THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE — a pre-window maintenance stop, not the
@@ -448,7 +450,7 @@ R4. **With `018` or anything above it installed there is no schema-downgrade pat
       (`MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`), or the attempt table under a bare `013`
       stamp (`MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`).
 R5. ROLLBACK OUTCOME A — downgrade REFUSED (any sentinel above): the DB stays on the
-    witness-authority schema, so KEEP or redeploy the reviewed **`023`-COMPATIBLE image** digest —
+    witness-authority schema, so KEEP or redeploy the reviewed **`024`-COMPATIBLE image** digest —
     an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
     evidence; PROHIBIT the pre-7b image outright. Rollback after first witness use is a
     FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is

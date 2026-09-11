@@ -11,7 +11,7 @@ complete (PR 5b shipped: review-record binding). Item 7A complete (PR 6
 shipped: per-run policy bundle pinning + `engine_build_id`) — but M2 stays a
 HARD STOP (see §D). **PR 7b (item 8) was split into PR 7b-core (SHIPPED as `013`-`023`:
 stream separation + local decision ordering + the witness repair/authority/admission/boundary/
-transition-authority/repair revisions — see §C) and PR 7b-activation (`024`, the platform-authoritative cutover —
+transition-authority/repair revisions — see §C) and PR 7b-activation (`025`, the platform-authoritative cutover —
 the next pending unit once 7b-core reaches AUDIT-CLEAN).**
 Both are ahead of PR 6b, which consumes the callback-ordering guarantee its
 revalidation coordinator rests on (Codex PR-6b rev-5 F3); 7b-core is shipped,
@@ -87,13 +87,14 @@ deleting, or rewriting one is a located failure, not an edit.
 | PR 7b-core poison recovery | 8 | shipped | 021 | `020`'s new arm asserted a STATE, not a TRANSITION, so it fired on the CLAIM of an already-unsendable row — and the claim has no exception handler and takes the `min(id)` head, so that exit stopped EVERY case and BOTH streams (`019`'s same seed degraded for ~21 min and self-healed). The arm is now a transition rule: a scrubbed body may not BECOME sendable, but an already-poisoned row stays claimable so it can fail, dead-letter and drain itself. The invariant is maintained at INSERT for BOTH kinds (poc_email had no INSERT guard at all); the upgrade REFUSES with `MIGRATION_021_PREFLIGHT_UNSENDABLE_PENDING_ROWS` naming the ids rather than silently arming the outage; and `kyc_set_latest_decision_row` — created unpinned by `014` and missed by `020`'s "complete code surface" — is recreated with a pinned `search_path`; **forward-only** |
 | PR 7b-core authority invariant repair | 8 | shipped | 022 | validates the exact 021 authority surface by trigger definition and origin-enable mode (not name-only or replica-only); repairs and enforces terminal POC-token redaction in the terminal transition; makes `outbox.created_at` immutable in every status; adds DB guards that `cases.latest_manual_decision_row_id` references a same-case manual decision and `decisions.manual` is immutable; **forward-only** |
 | PR 7b-core cross-table authority repair | 8 | shipped | 023 | validates the exact cross-table authority constraints and data that 022 did not cover: `fk_outbox_decision_triple`, `fk_cases_latest_decision`, `fk_cases_latest_manual_decision`, their unique targets, and same-case pointer/outbox rows; read surfaces fetch pointer rows by `id+case_id`; validation-only downgrade |
-| PR 7b-activation | 8 | pending | 024 | wire `decision_sequence` emission + `integrity_mismatch`; platform high-water bootstrap (candidate manifest + signed response envelope); `outbox_ordering_activation` phase machine + immutable `BYTEA` artifacts; four CAS CLIs + activation cutover (`down_revision='023'`, forward-only-after-use) |
+| PR Console Configuration | approved extension | shipped | 024 | immutable full configuration revisions and request outcomes; explicit active pointer; nullable run configuration/bundle pins and broker match provenance; no activation seed; downgrade refuses any recorded configuration history |
+| PR 7b-activation | 8 | pending | 025 | wire `decision_sequence` emission + `integrity_mismatch`; platform high-water bootstrap (candidate manifest + signed response envelope); `outbox_ordering_activation` phase machine + immutable `BYTEA` artifacts; four CAS CLIs + activation cutover (`down_revision='024'`, forward-only-after-use) |
 | PR 7b-inputs | — | future | — | platform answer artifacts (reserved by audit fold `4c3015a..cccd5f7` F11, NOT built): versioned, approved/signed answer-artifact schema and its verifying authority for the O1-O4 obligations behind WIRE.ORDERING.PENDING_INPUTS. Until it ships, `resolution_problems` in docs/contracts/wire.py refuses every artifact — the acceptors are content screens, and screening is not resolution. Shipping it must register the verifying authority in kyc_tool.capabilities, replace ANSWER_ARTIFACT_SCHEMA, and rewrite the gate in the same change |
-| PR 6b | 7B | pending | 025 | revalidation / rollout staging |
-| PR 7a | 9 | pending | 026 | `jobs.lease_token` |
-| PR 8 | 10 | pending | 027 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
+| PR 6b | 7B | pending | 026 | revalidation / rollout staging |
+| PR 7a | 9 | pending | 027 | `jobs.lease_token` |
+| PR 8 | 10 | pending | 028 | `adapter_results.{source_sha256,source_size,source_content_type,source_version_id,evidence_ref}` |
 | PR 9a/b/c | 12 | — | — | contract + adapter-output validation + real providers |
-| PR 10 | 13 | pending | 028 | broker full-list snapshots, `runs.{matched_broker_entity_id,matched_identifier_class,broker_snapshot_revision}` |
+| PR 10 | 13 | pending | 029 | attempts/max_attempts CHECKs and cutover-attestation CAS record; broker snapshot and per-run match provenance now owned by PR Console Configuration |
 
 ---
 
@@ -317,7 +318,7 @@ common** single-replica revert; the **send-before-stamp** and **cross-replica** 
 7b-activation (documented residual risk). `decision_sequence` is **internal** (not on the wire).
 Legacy backfill orders by `outbox.id` (under-lock serialization), **not** `decided_at` (txn-start);
 a missing legacy callback is **restore-from-backup or `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012**
-(user-confirmed 2026-07-23; no pre-013 reconciliation unit; 7b-activation/`024` is downstream). A **step-0 pre-window
+(user-confirmed 2026-07-23; no pre-013 reconciliation unit; 7b-activation/`025` is downstream). A **step-0 pre-window
 `verify_pr7b_core_backfill` diagnostic** (schema-012-compatible, `SHARE`-locked) runs with retention
 **terminated + zero-running attested** before any outage. Drained migration cutover (shipped
 `requeue_interrupted_jobs`; **no** pre-013 outbox reset — the claim columns don't exist yet; a
@@ -338,8 +339,16 @@ the byte-identical RUNBOOK/DEPLOYMENT cutover section (pinned by
 against a real head DB (`tests/integration/test_rollback_command.py`, head/sentinel DERIVED,
 never transcribed).
 
+### PR Console Configuration — Shared live configuration (approved 2026-09-11)
+Migration **024** (`down_revision='023'`) owns immutable configuration revisions,
+request idempotency outcomes, the explicit active pointer, and nullable run pins.
+Broker full-list snapshots and per-run match provenance move here from PR 10.
+Schema installation seeds no active configuration; legacy runs remain unversioned.
+Downgrade refuses after any revision, request, active pointer, or versioned run.
+Platform activation, its wire field, and M2 remain unbuilt/fail-closed.
+
 ### PR 7b-activation — Platform-authoritative decision ordering (item 8, part 2)
-Migration **024** (`down_revision='023'`): `outbox.failure_class`; the `outbox_ordering_activation`
+Migration **025** (`down_revision='024'`): `outbox.failure_class`; the `outbox_ordering_activation`
 phase singleton (`legacy→bootstrap_in_progress→bootstrapped→active`, ordered timestamps, 64-hex
 digests, no reverse transition) with kind-typed FKs to an **immutable `BYTEA`
 `outbox_ordering_bootstrap_artifacts`** table (UPDATE/DELETE-refusing trigger). Puts
@@ -356,13 +365,13 @@ CAS CLIs (`export_outbox_ordering_manifest`, `begin_outbox_ordering_bootstrap`,
 `phase=active` with flag off). Supplies the ordering guarantee 6b's coordinator callbacks consume; 6b
 may build on 7b-core's primitive but not activate until `phase='active'` (ADR-008).
 
-> **REQUIRED BEFORE ANY 024 PLAN/CODE — activation process-role matrix (re-audit `d569a15..4938840`
-> F13).** "publishers to zero" is incomplete: author ONE machine-parsed matrix (revision=024,
-> parent=023, owner, and the explicit stopped/running state + order for EVERY writer role —
+> **REQUIRED BEFORE ANY 025 PLAN/CODE — activation process-role matrix (re-audit `d569a15..4938840`
+> F13).** "publishers to zero" is incomplete: author ONE machine-parsed matrix (revision=025,
+> parent=024, owner, and the explicit stopped/running state + order for EVERY writer role —
 > API, pipeline, outbox publisher, dev-worker — plus retention, target image and flag state) and have
 > the ROADMAP/spec/plan all consume it. A guard must fail on a removed/aliased/duplicated/negated role,
 > a role left running, or a wrong revision/owner — token-presence ("keep pipeline and API online") is
-> not a contract. Deferred to 024 authoring (024 does not yet exist); recorded here so it gates that
+> not a contract. Deferred to 025 authoring (025 does not yet exist); recorded here so it gates that
 > unit.
 
 ### PR 7b-inputs — Platform answer artifacts — FUTURE, reserved unbuilt (audit fold `4c3015a..cccd5f7` F11)
@@ -371,7 +380,7 @@ designed: a versioned answer-artifact schema (owner, approval, signature, and pe
 typed payloads — principal→key binding verified against a real key registry, negotiated
 finite maxima with units, a closed recovery-mechanism vocabulary, a governed release-id
 allocator registry, and the one exact canonical process-role matrix the blockquote under
-PR 7b-activation defers to 024 authoring) plus the authority that validates and signs it.
+PR 7b-activation defers to 025 authoring) plus the authority that validates and signs it.
 Until it ships, the acceptors on `WIRE.ORDERING.PENDING_INPUTS` are content SCREENS only and
 `resolution_problems` refuses every artifact. Shipping it MUST register the
 verifying authority in `kyc_tool.capabilities`, replace `ANSWER_ARTIFACT_SCHEMA`, and rewrite
@@ -379,7 +388,7 @@ verifying authority in `kyc_tool.capabilities`, replace `ANSWER_ARTIFACT_SCHEMA`
 branch and the claim's verifier enforce exactly that. No migration; none reserved.
 
 ### PR 6b — Revalidation (item 7B) — PENDING, required for M4
-Migration **025** (`down_revision='024'`). Revalidate immutable evidence under the run's pinned
+Migration **026** (`down_revision='025'`). Revalidate immutable evidence under the run's pinned
 bundle+engine, write **superseding** checks; a tightened pass rule marks prior PASSes stale until
 revalidated; block rollout activation until successors exist. Consumes PR 7b-activation's exact
 convergence contract (greatest per-case sequence platform-acknowledged, incl. `dead` as a hard
@@ -387,18 +396,18 @@ blocker); rev 6 must separately prove a superseded coordinator's higher delivere
 the target validator pair (7b ordering ≠ freshness).
 
 ### PR 7a — Queue lease fencing (item 9)
-Migration **026** (`down_revision='025'`): `jobs.lease_token`. Every transition gated on
+Migration **027** (`down_revision='026'`): `jobs.lease_token`. Every transition gated on
 `(id, locked_by, lease_token, status='running')`; heartbeat ≤ lease/3; cadence
 reaper fails the run in the **same txn**; fenced complete inside the decide txn
 (stale worker rolls back the decision). The interim nonce's transaction-HELD
 authority (`assert_live` FOR UPDATE, R9 fold) must be preserved, not merely
-renamed. Migration 026 also carries the per-case single-runner DB backstop
+renamed. Migration 027 also carries the per-case single-runner DB backstop
 (re-audit `750630c..ca85355` R10-F1): partial unique index
 `jobs(case_id) WHERE status='running'` (NULL case_id exempt), so no future code
 path — recovery included — can put two same-case jobs in `running` again.
 
 ### PR 8 — Object-store containment + immutable evidence (item 10)
-Migration 027. Structured `ObjectRef{key, sha256, size?, content_type?, version_id?}`
+Migration 028. Structured `ObjectRef{key, sha256, size?, content_type?, version_id?}`
 (**no bucket field**); separate input vs evidence buckets; `_safe_path` containment
 (reject traversal/absolute/symlink/foreign-bucket); streamed byte cap; verify digest;
 copy source doc to a content-addressed immutable evidence key **before** OCR is
@@ -433,7 +442,7 @@ its proof land in the same change.
 shipped the non-migration core** — `adapters/retry.py` wired into the httpx adapters, bounded+declared
 24h metrics windows, `/v1/metrics.prom` + `docs/ALERTS.md`, RUNBOOK raw-requeue-SQL repair (+
 governance test), base-image digest pin + `requirements.lock` constraints, durable `core.hooksPath`.
-**10b keeps** the reserved migration 028 (broker snapshots + the audit-promised
+**10b keeps** the reserved migration 029 (the audit-promised
 `outbox.attempts>=0` / `jobs.attempts>=0` / `jobs.max_attempts>=1` CHECKs + the cutover-attestation
 CAS record — re-audit `3db5f13..a7df17b` F6: a DB record of (setting, reviewed target, epoch) with
 an orchestrator-inventory receipt that every publisher compares its live value/image against before
@@ -450,10 +459,9 @@ unification** — one transitive gateway type that HTTP, object-store, OCR, and 
 calls all accept (today the governed helper + `authorize_external_io()` + bounded store reads cover
 every known call site, enforced by the static transport guard, but the authority is per-call-site
 convention rather than a single injected capability).
-Migration 028: broker **full-list immutable snapshots** `(revision, sha256,
-json_bytes, author, timestamp)` — NOT per-entity versioning (6 entities; snapshots
-reproduce matches AND non-matches, simpler); run records matched entity + snapshot
-revision. `adapters/retry.py` (transient classification + Retry-After — job-layer
+Migration 029 retains the CHECKs and cutover-attestation CAS record above. Broker
+full-list snapshots and per-run match provenance are owned by PR Console Configuration.
+`adapters/retry.py` (transient classification + Retry-After — job-layer
 backoff already exists); `recalculate.requested` runs the broker gate (record
 `AUDIT:<id>` + ADR-007 — spec limits recalc to "no adapter calls", but the gate is a
 local lookup); new `evidence.refresh_requested` in a **local extension contract**;

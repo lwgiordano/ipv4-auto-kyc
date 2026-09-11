@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     Text,
@@ -126,6 +127,9 @@ class Run(Base):
     state: Mapped[str] = mapped_column(Text, default="QUEUED")
     partial: Mapped[bool] = mapped_column(Boolean, default=False)
     policy_bundle_hash: Mapped[str | None] = mapped_column(Text)
+    configuration_revision: Mapped[int | None] = mapped_column(BigInteger)
+    matched_broker_entity_id: Mapped[str | None] = mapped_column(Text)
+    matched_identifier_class: Mapped[str | None] = mapped_column(Text)
     # PR 6 (migration 011): which engine build resolved/scored this run. Paired
     # with policy_bundle_hash above for full pinning provenance.
     engine_build_id: Mapped[str | None] = mapped_column(Text)
@@ -135,7 +139,27 @@ class Run(Base):
 
     # PR 7b-core (migration 013): named composite target for fk_decisions_run_case —
     # decisions(run_id, case_id) must cite a run under its OWN case.
-    __table_args__ = (UniqueConstraint("id", "case_id", name="uq_runs_id_case_id"),)
+    __table_args__ = (
+        UniqueConstraint("id", "case_id", name="uq_runs_id_case_id"),
+        ForeignKeyConstraint(
+            ["configuration_revision", "policy_bundle_hash"],
+            ["configuration_revisions.id", "configuration_revisions.policy_bundle_hash"],
+            name="fk_runs_configuration_bundle",
+        ),
+        CheckConstraint(
+            "configuration_revision IS NULL OR "
+            "(configuration_revision > 0 AND policy_bundle_hash IS NOT NULL)",
+            name="ck_runs_configuration_pin",
+        ),
+        CheckConstraint(
+            "(matched_broker_entity_id IS NULL AND matched_identifier_class IS NULL) OR "
+            "(configuration_revision IS NOT NULL AND matched_broker_entity_id IS NOT NULL "
+            "AND btrim(matched_broker_entity_id) <> '' AND matched_identifier_class IS NOT NULL "
+            "AND matched_identifier_class IN ('legal_name','domains','email_domains',"
+            "'rir_org_ids','poc_handles','asns'))",
+            name="ck_runs_configuration_match",
+        ),
+    )
 
 
 class Job(Base):
@@ -489,3 +513,66 @@ class BundlePinningEpochRow(Base):
     activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     bundle_hash: Mapped[str] = mapped_column(ForeignKey("policy_bundles.bundle_hash"))
     engine_build_id: Mapped[str] = mapped_column(Text)
+
+
+class ConfigurationRevision(Base):
+    """Immutable complete configuration snapshot. IDs become decimal strings in HTTP."""
+
+    __tablename__ = "configuration_revisions"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    schema_version: Mapped[int] = mapped_column(Integer, server_default=text("1"), default=1)
+    parent_revision: Mapped[int | None] = mapped_column(ForeignKey("configuration_revisions.id"))
+    policy_bundle_hash: Mapped[str] = mapped_column(ForeignKey("policy_bundles.bundle_hash"))
+    brokers_json: Mapped[list] = mapped_column(JSONB)
+    mappings_json: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    created_by: Mapped[str] = mapped_column(Text)
+    change_kind: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("id", "policy_bundle_hash", name="uq_configuration_revision_bundle"),
+        CheckConstraint("id > 0", name="ck_configuration_revision_id"),
+        CheckConstraint("schema_version = 1", name="ck_configuration_schema_version"),
+        CheckConstraint("parent_revision IS NULL OR (parent_revision > 0 AND parent_revision < id)",
+                        name="ck_configuration_parent"),
+        CheckConstraint("policy_bundle_hash ~ '^[0-9a-f]{64}$'", name="ck_configuration_bundle_hash"),
+        CheckConstraint("jsonb_typeof(brokers_json) = 'array'", name="ck_configuration_brokers_array"),
+        CheckConstraint("jsonb_typeof(mappings_json) = 'object'", name="ck_configuration_mappings_object"),
+        CheckConstraint("btrim(created_by) <> ''", name="ck_configuration_created_by"),
+        CheckConstraint("change_kind IN ('baseline','points','brokers','mappings')",
+                        name="ck_configuration_change_kind"),
+        CheckConstraint("(change_kind = 'baseline') = (parent_revision IS NULL)",
+                        name="ck_configuration_baseline_parent"),
+    )
+
+
+class ConfigurationState(Base):
+    """Only mutable configuration authority; absent until explicit activation."""
+
+    __tablename__ = "configuration_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, server_default=text("1"), default=1)
+    active_revision: Mapped[int] = mapped_column(ForeignKey("configuration_revisions.id"))
+
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_configuration_state_singleton"),
+        CheckConstraint("active_revision > 0", name="ck_configuration_active_revision"),
+    )
+
+
+class ConfigurationRequest(Base):
+    """Immutable, transactionally recorded save outcome for identical retries."""
+
+    __tablename__ = "configuration_requests"
+
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    request_digest: Mapped[str] = mapped_column(Text)
+    result_revision: Mapped[int] = mapped_column(ForeignKey("configuration_revisions.id"))
+    changed: Mapped[bool] = mapped_column(Boolean)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+    __table_args__ = (
+        CheckConstraint("request_digest ~ '^[0-9a-f]{64}$'", name="ck_configuration_request_digest"),
+        CheckConstraint("result_revision > 0", name="ck_configuration_request_revision"),
+    )

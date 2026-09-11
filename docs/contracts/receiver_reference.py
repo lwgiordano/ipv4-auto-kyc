@@ -32,7 +32,7 @@ from docs.contracts import predicates
 from docs.contracts.wire import (
     INTERIM,
     KNOWN_SOURCES,
-    POST_024,
+    POST_025,
     RECEIVER_TRANSITIONS,
     RELEASE_TRANSITIONS,
     SOURCE_MANUAL,
@@ -121,7 +121,7 @@ class LedgerState:
 
     seen_run_ids: frozenset[str] = frozenset()
     current_source: str | None = None  # "manual", "automatic", "manual_release_pending", or None
-    high_water: int | None = None  # post-024 only; a mark over decision_sequence
+    high_water: int | None = None  # post-025 only; a mark over decision_sequence
     current_manual_event_id: str | None = None  # the manual event currently in force, if any
     release: PendingRelease | None = None  # set exactly when current_source is release-pending
     release_history: tuple[ReleaseTerminal, ...] = ()  # durable terminal release records
@@ -138,16 +138,16 @@ class Callback:
     which is ordinary: an event admitted first can decide second, so their ordinals invert.
     Ordering by `event_sequence` therefore suppresses the LATER decision as stale.
 
-    The release fields are the 024 release binding: 'Ordinary callbacks carry every release field
+    The release fields are the 025 release binding: 'Ordinary callbacks carry every release field
     NULL; release callbacks carry them all non-NULL and equal.' Anything in between is an
     integrity mismatch, held before classification — for EVERY source, not only pending.
     """
 
     case_id: str
     run_id: str
-    decision_sequence: int | None = None  # the ordering authority; arrives with 024
+    decision_sequence: int | None = None  # the ordering authority; arrives with 025
     event_sequence: int | None = None  # ingest provenance; NEVER an ordering authority
-    release_id: str | None = None  # release binding; arrives with 024
+    release_id: str | None = None  # release binding; arrives with 025
     manual_event_id: str | None = None  # the manual event the release was opened against
 
 
@@ -336,15 +336,15 @@ def decide(state: LedgerState, callback: Callback, *, phase: str, now: int | Non
 
     Validation runs FIRST, for every path. A bound callback then routes: a replay of a terminal
     release answers from durable history; a pending case dispatches to the release table
-    (post-024 only — the protocol arrives with the activation unit); a bound callback naming a
+    (post-025 only — the protocol arrives with the activation unit); a bound callback naming a
     release this ledger has no record of holds.
     """
-    if phase not in (INTERIM, POST_024):
+    if phase not in (INTERIM, POST_025):
         raise ValueError(f"unknown phase {phase!r}")
     _validate(state, callback)
     bound = callback.release_id is not None
     if bound:
-        if phase != POST_024:
+        if phase != POST_025:
             raise ReleaseIntegrityError(
                 "release bindings arrive with the activation unit; a bound callback before it "
                 "is an impossible state — hold"
@@ -370,7 +370,7 @@ def decide(state: LedgerState, callback: Callback, *, phase: str, now: int | Non
                 "no pending release and no terminal record of it — hold"
             )
     if state.current_source == SOURCE_RELEASE_PENDING:
-        if phase != POST_024:
+        if phase != POST_025:
             raise UnknownSourceError(
                 "manual_release_pending cannot exist before the activation unit; hold the case"
             )

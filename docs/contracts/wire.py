@@ -227,7 +227,7 @@ class Transition:
     PUBLISHED_FIELDS: ClassVar[tuple[str, ...]] = (
         "phase", "condition", "record", "effective", "why")
 
-    phase: str  # "interim" (today) or "post-024" (after ordered delivery is activated)
+    phase: str  # "interim" (today) or "post-025" (after ordered delivery is activated)
     when: predicates.When
     outcome: str  # id into OUTCOME_KINDS — effects and visible cells, one closed record
     reason: str  # id into REASON_TEXTS — the Why cell
@@ -257,7 +257,7 @@ class Transition:
 
 
 INTERIM = "interim"
-POST_024 = "post-024"
+POST_025 = "post-025"
 
 @dataclass(frozen=True)
 class TransitionSemantic:
@@ -272,7 +272,7 @@ class TransitionSemantic:
     edit anywhere on the surface is a re-pin — the act of review — never a quiet row edit."""
 
     table: str  # "base" | "release"
-    phase: str | None  # base rows carry interim/post-024; release rows are post-024 by construction
+    phase: str | None  # base rows carry interim/post-025; release rows are post-025 by construction
     when: object
     outcome: str
     reason: str
@@ -304,26 +304,26 @@ TRANSITION_SEMANTICS: dict[str, TransitionSemantic] = {
                         sequence=predicates.ANY_SEQUENCE),
         "record_hold_review", "no_ordering_authority"),
     "post.duplicate": TransitionSemantic(
-        "base", POST_024,
+        "base", POST_025,
         predicates.When(duplicate=frozenset({predicates.DUP}),
                         source=predicates.ANY_SOURCE,
                         sequence=predicates.ANY_SEQUENCE),
         "ack_duplicate", "post_duplicates"),
     "post.fresh_unordered": TransitionSemantic(
-        "base", POST_024,
+        "base", POST_025,
         predicates.When(duplicate=frozenset({predicates.FRESH}),
                         source=predicates.ANY_SOURCE,
                         sequence=frozenset({predicates.SEQ_ABSENT,
                                             predicates.SEQ_NOT_ABOVE})),
         "record_unordered", "superseded_or_unordered"),
     "post.fresh_manual_above": TransitionSemantic(
-        "base", POST_024,
+        "base", POST_025,
         predicates.When(duplicate=frozenset({predicates.FRESH}),
                         source=frozenset({predicates.SRC_MANUAL}),
                         sequence=frozenset({predicates.SEQ_ABOVE})),
         "record_advance", "mark_moves_manual"),
     "post.apply_ordered": TransitionSemantic(
-        "base", POST_024,
+        "base", POST_025,
         predicates.When(duplicate=frozenset({predicates.FRESH}),
                         source=frozenset({predicates.SRC_NONE,
                                           predicates.SRC_AUTOMATIC}),
@@ -532,13 +532,13 @@ def _specimen_partial_binding():
     from docs.contracts import receiver_reference as receiver
     return (receiver.LedgerState(current_source="automatic"),
             receiver.Callback(case_id="c", run_id="r", release_id="R1"),
-            {"phase": POST_024})
+            {"phase": POST_025})
 
 
 def _specimen_unknown_source():
     from docs.contracts import receiver_reference as receiver
     return (receiver.LedgerState(current_source="a-source-nobody-defined"),
-            receiver.Callback(case_id="c", run_id="r"), {"phase": POST_024})
+            receiver.Callback(case_id="c", run_id="r"), {"phase": POST_025})
 
 
 def _specimen_release_disagreement():
@@ -548,7 +548,7 @@ def _specimen_release_disagreement():
                 release=receiver.PendingRelease(release_id="R1",
                                                 requested_manual_event_id="M1",
                                                 deadline=1000)),
-            receiver.Callback(case_id="c", run_id="r"), {"phase": POST_024})
+            receiver.Callback(case_id="c", run_id="r"), {"phase": POST_025})
 
 
 def _specimen_forged_deadline():
@@ -560,7 +560,7 @@ def _specimen_forged_deadline():
                                  current_manual_event_id="M1", release=release),
             receiver.Callback(case_id="c", run_id="r", release_id="R1",
                               manual_event_id="M1"),
-            {"phase": POST_024, "now": 0})
+            {"phase": POST_025, "now": 0})
 
 
 def _specimen_conflicting_history():
@@ -574,7 +574,7 @@ def _specimen_conflicting_history():
                     receiver.ReleaseTerminal(release_id="R9",
                                              requested_manual_event_id="M9",
                                              terminal="expired"))),
-            receiver.Callback(case_id="c", run_id="r"), {"phase": POST_024})
+            receiver.Callback(case_id="c", run_id="r"), {"phase": POST_025})
 
 
 def _specimen_replay_wrong_manual():
@@ -587,7 +587,7 @@ def _specimen_replay_wrong_manual():
                                              terminal="completed"),)),
             receiver.Callback(case_id="c", run_id="r", release_id="R9",
                               manual_event_id="M-WRONG"),
-            {"phase": POST_024, "now": 500})
+            {"phase": POST_025, "now": 500})
 
 
 RECEIVER_VALIDATION_RULES: tuple[ValidationRule, ...] = (
@@ -657,11 +657,11 @@ def receiver_surface_projection() -> str:
     }
     return json.dumps(surface, sort_keys=True)
 
-# ── what 024 still needs from the platform, keyed to the live obligations ─────────────────────────
+# ── what 025 still needs from the platform, keyed to the live obligations ─────────────────────────
 #
 # Re-audit `4f23f23..97deeae` finding 10. The document asked for three things: where the accepted
 # ledger lives, whether it distinguishes automatic from manual, and who signs. TechCraft could
-# answer all three and 024 would remain non-buildable, because the live O1-O4 contract also needs
+# answer all three and 025 would remain non-buildable, because the live O1-O4 contract also needs
 # decisions only the platform can make. Asking the wrong questions politely is still not asking.
 #
 # Keyed to the obligation ids in
@@ -671,13 +671,13 @@ def receiver_surface_projection() -> str:
 
 @dataclass(frozen=True)
 class PendingInput:
-    """One decision 024 cannot be built without.
+    """One decision 025 cannot be built without.
 
     `accept` is what makes this an acceptance contract rather than a questionnaire (re-audit
     `4f23f23..122cc67` finding 10). `answer_type` is free text describing the SHAPE of an answer;
     it cannot tell a usable answer from an unusable one. A v1 HMAC version, a local process clock,
     a per-case release id, a writer-role list missing the inline manual approve — each looks like
-    a complete answer and each leaves 024 unsafe. `accept` SCREENS those out.
+    a complete answer and each leaves 025 unsafe. `accept` SCREENS those out.
 
     Passing the screen resolves nothing (audit `4c3015a..cccd5f7` finding 11). A screen judges the
     CONTENT of a candidate answer; resolving the obligation requires a versioned answer ARTIFACT —
@@ -830,7 +830,7 @@ def _accept_writer_matrix(answer: dict) -> list[str]:
     if not isinstance(accounting, dict):
         problems.append(
             "no per-process accounting: every process role we run must be declared a decision "
-            "writer or a non-writer for the 024 window; a role the matrix never mentions is "
+            "writer or a non-writer for the 025 window; a role the matrix never mentions is "
             "where an unfenced writer hides")
     else:
         names = {str(name) for name in accounting}
@@ -861,7 +861,7 @@ def _accept_writer_matrix(answer: dict) -> list[str]:
     return problems
 
 
-PENDING_024_INPUTS: tuple[PendingInput, ...] = (
+PENDING_025_INPUTS: tuple[PendingInput, ...] = (
     PendingInput(
         obligation="O1",
         owner="TechCraft",
@@ -941,7 +941,7 @@ PENDING_024_INPUTS: tuple[PendingInput, ...] = (
     PendingInput(
         obligation="O4",
         owner="both",
-        question="Agree the complete WRITER-ROLE MATRIX for the 024 window: which processes on "
+        question="Agree the complete WRITER-ROLE MATRIX for the 025 window: which processes on "
                  "each side write decisions — with an explicit writer-or-not stance for EVERY "
                  "process role we run (api, pipeline_worker, outbox_worker, retention, "
                  "dev_worker), because a role the matrix never mentions is where an unfenced "
@@ -1908,8 +1908,8 @@ WIRE = Registry(
                 "triggered a run. It is on the wire today. It is NEVER an ordering authority for "
                 "decisions, and you must not sort or dedupe decisions by it.",
                 "decision_sequence is the CALLBACK-ORDER AUTHORITY. It is allocated per case when "
-                "the decision is made, and it goes on the wire with the activation unit (024). "
-                "The post-024 high-water mark in section 3 is a high-water mark over "
+                "the decision is made, and it goes on the wire with the activation unit (025). "
+                "The post-025 high-water mark in section 3 is a high-water mark over "
                 "decision_sequence and nothing else.",
                 "They differ whenever work completes out of admission order, which is normal: an "
                 "event admitted first can decide second. Order them by event_sequence and the "
@@ -1921,7 +1921,7 @@ WIRE = Registry(
         ),
         Claim(
             id="WIRE.ORDERING.PENDING_INPUTS",
-            value=PENDING_024_INPUTS,
+            value=PENDING_025_INPUTS,
             columns=(Column("#", PROSE, "obligation"), Column("Owner", PROSE, "owner"),
                      Column("What we need to know", PROSE, "question"),
                      Column("Answer shape", PROSE, "answer_type"),
@@ -1934,7 +1934,7 @@ WIRE = Registry(
             state=ClaimState.PENDING,
         ),
         Claim(
-            id="WIRE.ORDERING.BOOTSTRAP_024",
+            id="WIRE.ORDERING.BOOTSTRAP_025",
             value="Ordered delivery needs a signed bootstrap of per-case high-water marks from "
                   "your accepted-run ledger, because your ledger is the authority on what you "
                   "actually applied. The design is accepted but NOT BUILT, and its schema is not "
@@ -1945,7 +1945,7 @@ WIRE = Registry(
                   "manual-current cases; exact two-sided coverage so both sides can prove "
                   "convergence; request and response digests; and a freshly signed response "
                   "envelope. We will publish the schema when the activation unit is built.",
-            authority=".agents/ROADMAP.md PR 7b-activation (migration 024, pending)",
+            authority=".agents/ROADMAP.md PR 7b-activation (migration 025, pending)",
             state=ClaimState.PENDING,
         ),
         Claim(
@@ -2076,11 +2076,11 @@ WIRE = Registry(
         ),
         Claim(
             id="WIRE.CALLBACK.RELEASE_STATE",
-            value=statement("release_protocol_state", "post_024_only", {
+            value=statement("release_protocol_state", "post_025_only", {
                 # the replay rule is itself a typed record (RELEASE_REPLAY_RULE), so this
                 # alternative composes two derivations rather than restating either
-                "post_024_only":
-                    "POST-024 ONLY: the release protocol arrives with the activation unit, so "
+                "post_025_only":
+                    "POST-025 ONLY: the release protocol arrives with the activation unit, so "
                     "this table is the accepted design, not a wire you can exercise today. "
                     "While a release is pending, MANUAL REMAINS EFFECTIVE. Exactly one row "
                     "completes the release; a new manual approval cancels the pending release "
@@ -2090,7 +2090,7 @@ WIRE = Registry(
                     "The release protocol is live today, so this table describes a wire you can exercise "
                     "now.",
             }),
-            authority=".agents/ROADMAP.md PR 7b-activation (024 pending; no code path emits a release state)",
+            authority=".agents/ROADMAP.md PR 7b-activation (025 pending; no code path emits a release state)",
         ),
         Claim(
             id="WIRE.ORDERING.ORDINAL_AUTHORITY",
@@ -2109,7 +2109,7 @@ WIRE = Registry(
             id="WIRE.ORDERING.OBLIGATION_STATE",
             value=statement("obligation_resolution", "unresolvable", {
                 "unresolvable":
-                    "These are the decisions 024 cannot be built without, and every one of them is the "
+                    "These are the decisions 025 cannot be built without, and every one of them is the "
                     "platform's to make. Answering the three questions in section 1.1 alone leaves the "
                     "unit blocked. And no reply can RESOLVE an obligation yet: resolution requires a "
                     "versioned, approved and signed answer artifact, and that schema and its verifying "

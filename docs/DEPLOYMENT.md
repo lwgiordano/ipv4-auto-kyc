@@ -153,13 +153,13 @@ three things: does it include a **migration**, any **new env vars**, and any
   pending/dead callback, the attempt row is the ONLY record that bytes were
   staged), and a local terminal status is never a reason to destroy the record
   of what the platform accepted. On refusal, KEEP or redeploy the reviewed
-  **023-compatible** image — an older publisher lacks the receipt/terminal
+  **024-compatible** image — an older publisher lacks the receipt/terminal
   contract and must not run against preserved evidence. Rollback after first
   witness use is a flag/image rollback on that compatible schema, never a
   schema downgrade; a pre-7b image is permitted only after the entire walk
   reaches 012 — which is only possible on a schema that never reached `018`. Once
   `018` through `022` ARE installed, the supported rollback is redeploying the prior
-  reviewed `023`-compatible image against the schema it is already on; the schema
+  reviewed `024`-compatible image against the schema it is already on; the schema
   does not move. Do not apply `018` or anything above it in production until that
   bridge image has been reviewed and
   staged; on this preproduction branch, the safe recovery path is roll-forward.
@@ -476,7 +476,7 @@ migration 010 established in ADR-003).
     suspended AND the 0.3 attestation holds.
 0.5 On failure, ABORT here — before stopping service (no outage begun). Recovery is restore-or-block:
     restore from authoritative backup the EXACT callback row, OR remain on 012 in
-    `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`024`) is
+    `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`025`) is
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
     THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE — a pre-window maintenance stop, not the
@@ -624,7 +624,7 @@ R4. **With `018` or anything above it installed there is no schema-downgrade pat
       (`MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`), or the attempt table under a bare `013`
       stamp (`MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`).
 R5. ROLLBACK OUTCOME A — downgrade REFUSED (any sentinel above): the DB stays on the
-    witness-authority schema, so KEEP or redeploy the reviewed **`023`-COMPATIBLE image** digest —
+    witness-authority schema, so KEEP or redeploy the reviewed **`024`-COMPATIBLE image** digest —
     an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
     evidence; PROHIBIT the pre-7b image outright. Rollback after first witness use is a
     FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is

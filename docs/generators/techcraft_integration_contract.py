@@ -85,7 +85,7 @@ REQUIRED_CLAIMS = (
     "WIRE.ORDERING.NO_DECIDED_AT",
     "WIRE.ORDERING.SEQUENCE_DOMAINS",
     "WIRE.ORDERING.INTERIM",
-    "WIRE.ORDERING.BOOTSTRAP_024",
+    "WIRE.ORDERING.BOOTSTRAP_025",
     "WIRE.ORDERING.PENDING_INPUTS",
     "WIRE.ORDERING.INTEGRITY_MISMATCH",
     "WIRE.RETENTION.BY_KIND",
@@ -134,7 +134,7 @@ def build(*, contact: str) -> Doc:
         "design that fixes it is accepted but unbuilt, and we are not publishing a schema you "
         "could implement against yet:"
     )
-    doc.claim_paragraph("WIRE.ORDERING.BOOTSTRAP_024")
+    doc.claim_paragraph("WIRE.ORDERING.BOOTSTRAP_025")
     doc.p(
         "What we need from you now is not code. Tell us which system holds your accepted-run "
         "ledger, whether it distinguishes an automatic decision from a manual approval as the "
@@ -145,7 +145,7 @@ def build(*, contact: str) -> Doc:
         "Those three answers are necessary and not sufficient. The activation unit is blocked on "
         "decisions only your side can make, listed below with the deliverable each one blocks. "
         "An answer is screened but cannot clear its obligation yet — the note above the table "
-        "says why — and we cannot build 024 without all of them."
+        "says why — and we cannot build 025 without all of them."
     )
     # The PENDING alert renders BEFORE any answer row (gate finding 10): the note carries the
     # no-reply-can-RESOLVE statement, and putting it after the table handed the reader the rows
@@ -271,7 +271,7 @@ def build(*, contact: str) -> Doc:
     doc.claim_table("WIRE.CALLBACK.LEGEND", [1.55 * INCH, 5.15 * INCH])
     doc.claim_statement("WIRE.CALLBACK.LEGEND_CLOSURE")
 
-    doc.h2("While a release is pending (post-024 only)")
+    doc.h2("While a release is pending (post-025 only)")
     doc.claim_statement("WIRE.CALLBACK.RELEASE_STATE")
     doc.claim_table(
         "WIRE.CALLBACK.RELEASE",
