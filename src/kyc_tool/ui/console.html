@@ -438,6 +438,54 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 /* Global, not toolbar-scoped: four of its seven uses sat inside .field and fell through to body
    type, which made the approval dialog's guidance indistinguishable from its narration. */
 .note{font:var(--t-meta);color:var(--muted)}
+.composer-form{display:grid;gap:var(--s5)}
+.composer-form fieldset{border:0;padding:0;margin:0;display:grid;gap:var(--s3)}
+.composer-form legend{padding:0;font:var(--t-strong);color:var(--ink)}
+.composer-company-modes{display:grid;gap:var(--s2)}
+.composer-company-modes>label{display:flex;align-items:center;gap:var(--s2);min-height:32px}
+.composer-company-modes input[type=radio]{width:18px;height:18px;min-height:18px;margin:0;accent-color:var(--accent)}
+.composer-company-control{display:grid;gap:var(--s2);padding-left:26px}
+.composer-company-control .select-wrap,.composer-company-control input{width:100%}
+.composer-company-control select{width:100%}
+.composer-action{display:grid;grid-template-columns:minmax(0,1fr) minmax(180px,.8fr);gap:var(--s4)}
+.composer-action .field{margin:0}
+.technical-event{align-self:end;min-height:40px;padding:var(--s2) var(--s3);border-radius:var(--r);
+  background:var(--surface-muted);display:grid;align-content:center;gap:2px}
+.technical-event .note{margin:0}
+.technical-event code{overflow-wrap:anywhere;color:var(--ink)}
+.composer-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 var(--s4)}
+.composer-fields .field{min-width:0}
+.composer-fields input,.composer-fields .select-wrap,.composer-fields select{width:100%}
+.field-mark{font:var(--t-meta);color:var(--muted);font-weight:400;margin-left:var(--s1)}
+.field-error{min-height:16px;font:var(--t-meta);color:var(--danger-text)}
+.field-error:empty{display:none}
+.composer-advanced{border-top:1px solid var(--line);padding-top:var(--s3)}
+.composer-advanced summary{cursor:pointer;color:var(--accent-text);font:var(--t-strong);min-height:32px;
+  display:flex;align-items:center;width:max-content;max-width:100%}
+.composer-advanced textarea{margin-top:var(--s2)}
+.composer-actions{border-top:1px solid var(--line);padding-top:var(--s3);margin:0}
+.composer-review{display:grid;gap:var(--s3)}
+.review-grid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:var(--s2) var(--s4);margin:0}
+.review-grid dt{font:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted)}
+.review-grid dd{margin:0;min-width:0;overflow-wrap:anywhere;color:var(--ink)}
+.review-payload{max-height:260px;overflow:auto;margin:0}
+.composer-status{display:grid;gap:var(--s2);min-height:32px}
+.composer-status .callout{margin:0}
+.composer-raw summary{cursor:pointer;color:var(--accent-text);font:var(--t-strong);min-height:32px;
+  display:flex;align-items:center;width:max-content;max-width:100%}
+.composer-raw pre{margin:var(--s2) 0 0;max-height:280px;overflow:auto}
+.demo-journey{display:grid;gap:var(--s3)}
+.demo-step{display:grid;grid-template-columns:24px minmax(0,1fr);gap:var(--s2);align-items:start}
+.demo-step .step-number{width:24px;height:24px;border-radius:var(--pill);background:var(--accent-soft);
+  color:var(--accent-ink);display:grid;place-items:center;font:var(--t-chip);font-variant-numeric:tabular-nums}
+.demo-step b{display:block;color:var(--ink);margin-bottom:2px}
+.demo-step code{overflow-wrap:anywhere}
+@media(max-width:720px){
+  .composer-action,.composer-fields{grid-template-columns:1fr}
+  .composer-company-control{padding-left:0}
+  .review-grid{grid-template-columns:1fr;gap:var(--s1)}
+  .review-grid dd{margin-bottom:var(--s2)}
+}
 
 /* ── Browser-local configuration previews ── */
 .preview-note{display:flex;gap:var(--s2);align-items:flex-start;margin:0 0 var(--s4);
@@ -1279,18 +1327,21 @@ const TIPS={
   events:{t:"Accepted Message Types",b:`<p>The complete list of message types the platform may
     send. Any other type is refused.</p>`},
   /* Send Message */
-  composer:{t:"Send Message",b:`<p>Submit a platform message manually, for testing. The console
-    signs it and assigns a unique key so a repeated send is not processed twice.</p>
-    <p>This creates real records in this database.</p>`},
-  composerevent:{t:"Message",b:`<p>Select a company and a message type. The details are pre-filled
-    with a working example that can be edited.</p>
-    <p>An unknown company ID creates a new record. The background process must be running for
-    the message to be processed.</p>`},
-  composerresult:{t:"Response",b:`<p>The exact response. A code beginning with 2 indicates the
-    message was accepted; jobs queued indicates how much work it started.</p>`},
-  demo:{t:"Example",b:`<p>The built-in test data recognises one company, so these three messages
-    in order take a company from registration to Approved.</p>
-    <p>Useful for an end-to-end check after a fresh install.</p>`},
+  composer:{t:"Send Message",b:`<p>Build and review one platform message before confirming it.
+    A confirmed message creates real records in this database.</p>
+    <p>A retry of the same reviewed content reuses its unique key.</p>`},
+  composerevent:{t:"Message",b:`<p>Choose an existing company, enter an existing ID beyond the
+    bounded list, or explicitly create a new company ID. Then choose an action and complete its
+    labelled fields.</p><p>Advanced JSON remains available for accepted fields that the guide does
+    not name. Review shows the exact message that Confirm Send will submit.</p>`},
+  composerresult:{t:"Response",b:`<p>Accepted means the message was queued for processing, not
+    completed. A replay response means the server recognised an earlier message with the same
+    unique key.</p><p>Returned event and verification-round IDs are shown when available. The raw
+    response stays available below for diagnosis.</p>`},
+  demo:{t:"Demo fixture",b:`<p>These are illustrative values for the built-in demonstration
+    company. They create real records when sent.</p><p>The three messages request review, verify
+    email, and submit an Org ID. They do not guarantee approval; safety and evidence rules still
+    apply.</p>`},
 };
 const tip=k=>{const x=TIPS[k];return x?`<button type="button" class="tipbtn" data-tip="${esc(k)}"`
   +` aria-label="What is this? ${esc(x.t)}">${I.help}</button>`:""};
@@ -1902,7 +1953,8 @@ async function viewCase(id){
       <details open><summary>Details as received from the platform</summary>
       <pre>${esc(JSON.stringify(c.submitted_json,null,2))}</pre></details></div></div>`;
 
-  $("#sendbtn").onclick=()=>{remember("composerCase",c.id);location.hash="#/composer"};
+  $("#sendbtn").onclick=()=>{composerSession.requestedCase=c.id;
+    composerSession.caseMode="existing";composerSession.selectedCase=c.id;location.hash="#/composer"};
   const ab=$("#approvebtn");if(ab)ab.onclick=()=>openApprove(d,hold);
   const fm=$("#feedmore");if(fm)fm.onclick=()=>{$("#feedhead").hidden=false;fm.parentElement.remove()};
   page.querySelectorAll("[data-complete]").forEach(b=>b.onclick=async()=>{
@@ -2200,55 +2252,255 @@ function viewOptions(){
 }
 
 /* ── Composer ─────────────────────────────────────────── */
+const COMPOSER_GUIDES={
+  "kyb.run_requested":{name:"Request company review",purpose:"Start or refresh company verification.",fields:[
+    ["company_legal_name","Company legal name",true],["address","Address",false],
+    ["registration_number","Registration number",false],["jurisdiction","Jurisdiction",false],
+    ["website","Website",false],["contact.name","Contact name",false],
+    ["contact.title","Contact title",false],["platform_account_id","Platform account ID",false]]},
+  "email.verified":{name:"Record verified email",purpose:"Record a company email and domain that the platform verified.",fields:[
+    ["email","Email",true],["domain","Domain",true],["verified_at","Verified at",true,"timestamp"]]},
+  "org_id.submitted":{name:"Submit organisation ID",purpose:"Submit a registry organisation handle for verification.",fields:[
+    ["rir","RIR",true,"rir"],["org_handle","Org handle",true]]},
+  "poc.submitted":{name:"Submit registry contact",purpose:"Submit a public RIR contact and its related identifiers.",fields:[
+    ["rir","RIR",true,"rir"],["poc_handle","POC handle",true],["org_handle","Org handle",false],
+    ["resource","Resource",false]]},
+  "poc.token_verified":{name:"Verify contact token",purpose:"Confirm the one-time token sent to the public registry contact.",fields:[
+    ["token_id","Token ID",true],["verified_at","Verified at",true,"timestamp"],["token","Token",true,"secret"]]},
+  "document.uploaded":{name:"Record document reference",purpose:"Submit a reference to a document already stored by the platform.",fields:[
+    ["object_ref","Object reference",true],["doc_type","Document type",true]]},
+  "website.review_completed":{name:"Complete website review",purpose:"Record the named reviewer's result for an existing website task.",sensitive:"This reviewer action affects evidence. Use the company page when the task is known so you can inspect its context before sending.",fields:[
+    ["task_id","Task ID",true],["result","Result",true,"result"],["reviewer_id","Reviewer ID",true],
+    ["reason_codes","Reason codes",false,"list"]]},
+  "reviewer.manual_approve":{name:"Approve manually",purpose:"Append a named reviewer's approval outside the scoring rules.",sensitive:"This bypasses all decision rules. Prefer Approve Manually on the company page, where the reviewer and reason are shown with the case. Never use a shared or invented reviewer ID.",fields:[
+    ["reviewer_id","Reviewer ID",true],["note","Note",false]]},
+  "recalculate.requested":{name:"Recalculate decision",purpose:"Run verification again using the evidence already recorded for this company.",fields:[]},
+};
+const composerSession={initialized:false,eventType:"kyb.run_requested",caseMode:"existing",selectedCase:"",
+  existingId:"",newId:"",drafts:{},raws:{},templates:{},review:null,result:null,inFlight:null,
+  successful:false,keys:new Map(),requestedCase:""};
+const composerFreshTemplate=(type,templates)=>{const value=clone(templates[type]??{});
+  if(type==="email.verified"||type==="poc.token_verified")value.verified_at=new Date().toISOString();
+  if((type==="website.review_completed"||type==="reviewer.manual_approve")&&!value.reviewer_id&&reviewer())
+    value.reviewer_id=reviewer();
+  return value};
+const composerFreeze=value=>{if(value&&typeof value==="object"&&!Object.isFrozen(value)){
+  Object.freeze(value);Object.values(value).forEach(composerFreeze)}return value};
+const composerFieldId=path=>"c-"+path.replaceAll(".","-").replaceAll("_","-");
+const composerRead=(value,path)=>path.split(".").reduce((at,key)=>at?.[key],value);
+function composerWrite(value,path,next,remove=false){
+  const parts=path.split("."),leaf=parts.pop();let at=value;
+  for(const part of parts){if(!at[part]||typeof at[part]!=="object"||Array.isArray(at[part]))at[part]={};at=at[part]}
+  if(remove)delete at[leaf];else at[leaf]=next;
+}
+const composerOption=(value,label,current)=>`<option value="${esc(value)}" ${value===current?"selected":""}>${esc(label)}</option>`;
+function composerField(field,payload){
+  const[path,label,required,kind]=field,id=composerFieldId(path),described=`${id}-note ${id}-error`;
+  const raw=composerRead(payload,path),value=kind==="list"&&Array.isArray(raw)?raw.join(", "):raw??"";
+  let control;
+  if(kind==="rir")control=`<span class="select-wrap"><select id="${id}" data-composer-path="${path}" aria-label="${esc(label)}" ${required?"required":""} aria-describedby="${described}">${["arin","ripe","apnic","lacnic","afrinic"].map(v=>composerOption(v,v.toUpperCase(),String(value))).join("")}</select>${I.down}</span>`;
+  else if(kind==="result")control=`<span class="select-wrap"><select id="${id}" data-composer-path="${path}" aria-label="${esc(label)}" ${required?"required":""} aria-describedby="${described}">${composerOption("pass","Pass",String(value))}${composerOption("fail","Fail",String(value))}</select>${I.down}</span>`;
+  else control=`<input id="${id}" data-composer-path="${path}" value="${esc(value)}" aria-label="${esc(label)}" ${required?"required":""}
+    ${kind==="secret"?'type="password" autocomplete="off"':""} aria-describedby="${described}">`;
+  const note=kind==="timestamp"?"ISO timestamp, for example 2026-09-10T12:00:00Z."
+    :kind==="list"?"Comma-separated values.":kind==="secret"?"Kept only in this page's memory; never saved in browser storage."
+    :path==="object_ref"?"A stored-object reference, not a file upload.":"";
+  return`<div class="field"><label class="flab" for="${id}">${esc(label)}<span class="field-mark">${required?"Required":"Optional"}</span></label>
+    ${control}<span class="note" id="${id}-note">${esc(note)}</span><span class="field-error" id="${id}-error" role="alert"></span></div>`;
+}
+function composerGuidedMarkup(type,payload){const guide=COMPOSER_GUIDES[type];
+  if(!guide)return`<div class="callout amber" role="alert">${I.warn}<div><b>This message type has no guided form.</b> Use Advanced JSON only and verify its contract before review.</div></div>`;
+  if(!guide.fields.length)return`<p class="sub">This action needs no payload fields. Advanced JSON must remain an object.</p>`;
+  return`<div class="composer-fields">${guide.fields.map(field=>composerField(field,payload)).join("")}</div>`}
+function composerCompanyId(root){const mode=composerSession.caseMode;
+  if(mode==="existing")return root.querySelector("#c-case-list")?.value.trim()||"";
+  if(mode==="existing-id")return root.querySelector("#c-case-existing-id")?.value.trim()||"";
+  return root.querySelector("#c-case-new-id")?.value.trim()||"";
+}
+function composerCompanyControls(root){
+  root.querySelectorAll("[data-company-control]").forEach(el=>el.hidden=el.dataset.companyControl!==composerSession.caseMode);
+}
+function composerSyncRaw(root){
+  const type=composerSession.eventType,raw=JSON.stringify(composerSession.drafts[type],null,2);
+  composerSession.raws[type]=raw;root.querySelector("#c-payload").value=raw;
+}
+function composerInvalidate(root){
+  composerSession.review=null;composerSession.result=null;composerSession.successful=false;
+  composerPaint(root);
+}
+function composerDrawFields(root){
+  const type=composerSession.eventType,guide=COMPOSER_GUIDES[type];
+  root.querySelector("#c-guided").innerHTML=composerGuidedMarkup(type,composerSession.drafts[type]);
+  root.querySelector("#c-technical").innerHTML=`<span class="note">Technical event</span><code>${esc(type)}</code>`;
+  root.querySelector("#c-action-purpose").textContent=guide?.purpose||"Advanced-only message type.";
+  const warn=root.querySelector("#c-warn");warn.hidden=!guide?.sensitive;
+  if(guide?.sensitive)composerPaintWarning(root);
+}
+function composerPaintWarning(root){const guide=COMPOSER_GUIDES[composerSession.eventType],warn=root.querySelector("#c-warn");
+  if(!guide?.sensitive)return;
+  const company=composerCompanyId(root),context=composerSession.caseMode!=="new"&&company
+    ?` Open ${caseLink(company)} to inspect the company context.`
+    :" Choose an existing company before using a task-bound reviewer action.";
+  warn.querySelector("div").innerHTML=`<b>Sensitive action.</b> ${esc(guide.sensitive)}${context}`;
+}
+function composerResponseCopy(result){
+  if(!result)return'<span class="sub">No message sent in this session.</span>';
+  if(!result.ok)return`<div class="callout red"><div><b>Message not sent.</b> ${esc(result.message)} Check the details and retry; your inputs are unchanged.</div></div>`;
+  const status=String(result.body?.status||"");
+  const replay=result.status===200&&/replay|duplicate|already/i.test(status);
+  const lead=replay?"Replay response: the server recognised this message's unique key."
+    :result.status===202?"Accepted and queued for processing. This does not mean verification is complete."
+    :`Accepted by the server (HTTP ${result.status}).`;
+  const ids=[["Event",result.body?.event_id],["Verification round",result.body?.run_id]].filter(([,v])=>v);
+  return`<div class="callout"><div><b>${esc(lead)}</b>${ids.length?`<div class="sub">${ids.map(([k,v])=>`${k}: <code>${esc(v)}</code>`).join(" · ")}</div>`:""}</div></div>`;
+}
+function composerPaint(root){
+  if(!root?.isConnected)return;
+  composerPaintWarning(root);
+  const sending=!!composerSession.inFlight,review=root.querySelector("#c-review-summary"),button=root.querySelector("#c-send");
+  review.hidden=!composerSession.review;
+  if(composerSession.review){const s=composerSession.review;
+    root.querySelector("#c-review-company").textContent=s.case_id;
+    root.querySelector("#c-review-action").textContent=COMPOSER_GUIDES[s.event_type]?.name||s.event_type;
+    root.querySelector("#c-review-event").textContent=s.event_type;
+    root.querySelector("#c-review-payload").textContent=JSON.stringify(s.payload,null,2)}
+  root.querySelectorAll("#composer-form input,#composer-form select,#composer-form textarea,#composer-form button").forEach(el=>el.disabled=sending);
+  button.textContent=sending?"Sending…":composerSession.successful?"Sent":composerSession.review?(composerSession.result&&!composerSession.result.ok?"Retry Send":"Confirm Send"):"Review Message";
+  button.disabled=sending||composerSession.successful;
+  const status=root.querySelector("#c-status");
+  status.innerHTML=sending?`<div class="callout"><div><b>Sending the reviewed message…</b> Keep this page open or return here to see the attributed response.</div></div>`:composerResponseCopy(composerSession.result);
+  const raw=root.querySelector("#c-raw"),pre=root.querySelector("#c-out");
+  raw.hidden=!composerSession.result;raw.open=false;
+  pre.textContent=composerSession.result?`HTTP ${composerSession.result.status??"network error"}\n${JSON.stringify(composerSession.result.body??{detail:composerSession.result.message},null,2)}`:"";
+}
+function composerParseAdvanced(root,showError=true){
+  const input=root.querySelector("#c-payload"),error=root.querySelector("#c-json-error");let value;
+  try{value=JSON.parse(input.value)}catch(e){if(showError)error.textContent="Enter valid JSON before review.";return false}
+  if(!value||typeof value!=="object"||Array.isArray(value)){if(showError)error.textContent="Payload must have an object at its root, not an array or null.";return false}
+  error.textContent="";composerSession.drafts[composerSession.eventType]=clone(value);
+  composerSession.raws[composerSession.eventType]=input.value;return true;
+}
+function composerValidate(root){
+  let ok=composerParseAdvanced(root,true);const guide=COMPOSER_GUIDES[composerSession.eventType];
+  for(const field of guide?.fields||[]){const[path,label,required,kind]=field,id=composerFieldId(path),input=root.querySelector("#"+id),error=root.querySelector("#"+id+"-error");
+    error.textContent="";const value=composerRead(composerSession.drafts[composerSession.eventType],path);
+    if(required&&(value===undefined||value===null||String(value).trim()==="")){error.textContent=`${label} is required.`;ok=false}
+    else if(kind==="timestamp"&&value&&(!/^\d{4}-\d{2}-\d{2}T/.test(String(value))||Number.isNaN(Date.parse(value)))){error.textContent=`${label} must be a valid ISO timestamp.`;ok=false}
+    if(!input.checkValidity())ok=false;
+  }
+  const company=composerCompanyId(root),companyError=root.querySelector("#c-company-error");companyError.textContent="";
+  if(!company){companyError.textContent=composerSession.caseMode==="new"?"Enter the new company ID explicitly.":"Choose or enter an existing company ID.";ok=false}
+  if(!ok){root.querySelector(".field-error:not(:empty)")?.scrollIntoView({block:"center"});return null}
+  return{case_id:company,event_type:composerSession.eventType,payload:clone(composerSession.drafts[composerSession.eventType])};
+}
+function composerReview(root){const envelope=composerValidate(root);if(!envelope)return;
+  const identity=canonical(envelope);let key=composerSession.keys.get(identity);
+  if(!key){key="console-"+(crypto.randomUUID?.()||Math.random().toString(16).slice(2));composerSession.keys.set(identity,key)}
+  composerSession.review=composerFreeze({...clone(envelope),idempotency_key:key});composerSession.result=null;
+  composerPaint(root);root.querySelector("#c-review-summary").scrollIntoView({block:"nearest"});
+}
+async function composerSend(root){
+  if(composerSession.inFlight||composerSession.successful||!composerSession.review)return;
+  const snapshot=clone(composerSession.review);composerSession.inFlight={snapshot};composerSession.result=null;composerPaint(root);
+  let result;
+  try{const r=await j("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(snapshot)});
+    result={ok:r.status>=200&&r.status<300,status:r.status,body:r.body,message:r.status>=300?errText(r.body):""}}
+  catch(error){result={ok:false,status:null,body:{detail:error.message},message:error.message}}
+  composerSession.inFlight=null;composerSession.result=result;composerSession.successful=result.ok;
+  const current=page.dataset.route==="#/composer"?page.querySelector("[data-composer]"):null;
+  if(current)composerPaint(current);
+}
 async function viewComposer(){
+  if(page.querySelector("[data-composer]")){composerPaint(page.querySelector("[data-composer]"));return}
   const generation=renderGeneration;
-  const{body:t}=await j("/ui/api/event-templates");
+  const[{body:t},{body:caseList}]=await Promise.all([j("/ui/api/event-templates"),j("/ui/api/cases?limit=100")]);
   if(generation!==renderGeneration)return;
-  const caseId=recall("composerCase")||"demo-case-001";
-  page.innerHTML=tbar("Send Message","Submit a platform message manually for test and operations use.","","composer")+`
-    <div class="split">
+  const cases=Array.isArray(caseList.cases)?caseList.cases:[];
+  composerSession.templates=t.templates||{};
+  if(!composerSession.initialized){composerSession.initialized=true;
+    for(const type of t.event_types){composerSession.drafts[type]=composerFreshTemplate(type,composerSession.templates);
+      composerSession.raws[type]=JSON.stringify(composerSession.drafts[type],null,2)}
+    const requested=composerSession.requestedCase;
+    if(requested&&cases.some(c=>c.id===requested)){composerSession.selectedCase=requested;composerSession.caseMode="existing"}
+    else if(requested){composerSession.existingId=requested;composerSession.caseMode="existing-id"}
+    else if(cases.length)composerSession.selectedCase=cases[0].id;
+    else composerSession.caseMode="new";
+  }
+  if(composerSession.caseMode==="existing"&&!cases.some(c=>c.id===composerSession.selectedCase))composerSession.selectedCase=cases[0]?.id||"";
+  const actionOptions=t.event_types.map(type=>{const guide=COMPOSER_GUIDES[type];
+    return composerOption(type,guide?guide.name:`Advanced only — ${type}`,composerSession.eventType)}).join("");
+  const caseOptions=cases.map(c=>composerOption(c.id,`${c.company_name||"Unnamed company"} — ${c.id}`,composerSession.selectedCase)).join("");
+  page.innerHTML=tbar("Send Message","Choose a company and action, complete the details, then review the exact message before confirming.","","composer")+`
+    <div class="split" data-composer>
       <div class="card"><div class="hd"><h2>Message</h2>${tip("composerevent")}</div><div class="bd">
-        <div class="field"><label class="flab" for="c-case">Company</label>
-          <input id="c-case" value="${esc(caseId)}">
-          <span class="note">Platform ID for the company. An unknown ID creates a new record.</span></div>
-        <div class="field"><label class="flab" for="c-type">Message Type</label>
-          <span class="select-wrap"><select id="c-type">${t.event_types.map(e=>`<option ${e==="kyb.run_requested"?"selected":""}>${esc(e)}</option>`).join("")}</select>${I.down}</span></div>
-        <div id="c-warn" class="callout amber" role="note" hidden>${I.person}<div>
-          <b>This message approves the company manually and bypasses all rules.</b> Use Approve
-          Manually on the company page instead; it records the reviewer and the reason. If sent
-          from here, reviewer_id must identify a person; blank values are refused.</div></div>
-        <div class="field"><label class="flab" for="c-payload">Details</label>
-          <textarea id="c-payload" spellcheck="false"></textarea>
-          <span class="note">Pre-filled with a working example. Edit as required.</span></div>
-        <div class="toolbar" style="margin:0">
-          <button class="primary" id="c-send">Send</button>
-          <span class="note">The background process must be running for the message to be processed.</span></div>
-      </div></div>
+        <form id="composer-form" class="composer-form">
+          <fieldset><legend>Company</legend><div class="composer-company-modes">
+            <label><input type="radio" name="c-company-mode" value="existing" ${composerSession.caseMode==="existing"?"checked":""}> Existing company from this list</label>
+            <div class="composer-company-control" data-company-control="existing"><label class="flab" for="c-case-list">Existing company <span class="field-mark">Up to 100 recent companies</span></label>
+              <span class="select-wrap"><select id="c-case-list">${caseOptions||'<option value="">No companies available</option>'}</select>${I.down}</span></div>
+            <label><input type="radio" name="c-company-mode" value="existing-id" ${composerSession.caseMode==="existing-id"?"checked":""}> Use an existing company ID beyond this list</label>
+            <div class="composer-company-control" data-company-control="existing-id"><label class="flab" for="c-case-existing-id">Existing company ID beyond this list</label><input id="c-case-existing-id" value="${esc(composerSession.existingId)}">
+              <span class="note">The console cannot verify this ID from the bounded list. Sending uses it as entered.</span></div>
+            <label><input type="radio" name="c-company-mode" value="new" ${composerSession.caseMode==="new"?"checked":""}> New company with ID</label>
+            <div class="composer-company-control" data-company-control="new"><label class="flab" for="c-case-new-id">New company ID</label><input id="c-case-new-id" value="${esc(composerSession.newId)}">
+              <span class="note">Explicitly creates a company record if this ID is not already present.</span></div>
+          </div><span class="note" id="c-company-note">The selector shows up to 100 companies returned by the service; use the existing-ID option for a company beyond this list.</span>
+          <span class="field-error" id="c-company-error" role="alert"></span></fieldset>
+          <div class="composer-action"><div class="field"><label class="flab" for="c-type">Action</label>
+            <span class="select-wrap"><select id="c-type">${actionOptions}</select>${I.down}</span><span class="note" id="c-action-purpose"></span></div>
+            <div class="technical-event" id="c-technical"></div></div>
+          <div id="c-warn" class="callout amber" role="note" hidden>${I.person}<div></div></div>
+          <div id="c-guided"></div>
+          <details class="composer-advanced"><summary>Advanced JSON</summary>
+            <label class="flab" for="c-payload">Advanced JSON payload</label>
+            <textarea id="c-payload" spellcheck="false" aria-describedby="c-json-note c-json-error">${esc(composerSession.raws[composerSession.eventType])}</textarea>
+            <span class="note" id="c-json-note">Object payload only. Accepted extra fields are preserved when guided fields change.</span>
+            <span class="field-error" id="c-json-error" role="alert"></span></details>
+          <section class="composer-review" id="c-review-summary" hidden aria-labelledby="c-review-title"><h3 id="c-review-title">Review message</h3>
+            <dl class="review-grid"><dt>Company ID</dt><dd id="c-review-company"></dd><dt>Action</dt><dd id="c-review-action"></dd>
+              <dt>Technical event</dt><dd><code id="c-review-event"></code></dd></dl><pre class="review-payload" id="c-review-payload"></pre></section>
+          <div class="toolbar composer-actions"><button type="button" id="c-reset">Reset example</button><button type="button" class="primary" id="c-send">Review Message</button></div>
+        </form></div></div>
       <div class="stack">
         <div class="card"><div class="hd"><h2>Response</h2>${tip("composerresult")}</div><div class="bd">
-          <pre id="c-out" style="margin:0">—</pre>
-          <div class="sub" id="c-hint" style="margin-top:8px"></div></div></div>
-        <div class="card"><div class="hd"><h2>Example</h2>${tip("demo")}</div><div class="bd demo-journey">
-          The built-in test data recognises <span class="strong">Acme Networks Ltd</span>. Sending
-          <code>kyb.run_requested</code> ${I.arrow} <code>email.verified</code> ${I.arrow}
-          <code>org_id.submitted</code> (ORG-ACME-1), in that order, takes a company to
-          ${pill("approve")}. Completing the website review on the company page adds 10 points.</div></div>
+          <div class="composer-status" id="c-status" role="status"><span class="sub">No message sent in this session.</span></div>
+          <details class="composer-raw" id="c-raw" hidden><summary>Raw response</summary><pre id="c-out"></pre></details></div></div>
+        <div class="card" id="c-demo"><div class="hd"><h2>Demo fixture</h2>${tip("demo")}</div><div class="bd demo-journey">
+          <p class="sub">Illustrative values for the built-in demo. Each send creates real records; safety holds and evidence rules still apply, so this sequence does not guarantee approval.</p>
+          <div class="demo-step"><span class="step-number">1</span><div><b>Request company review</b><code>kyb.run_requested</code><div class="sub">Acme Networks Ltd · GB · acme.example</div></div></div>
+          <div class="demo-step"><span class="step-number">2</span><div><b>Verify company email</b><code>email.verified</code><div class="sub">ops@acme.example · current verification time</div></div></div>
+          <div class="demo-step"><span class="step-number">3</span><div><b>Submit organisation ID</b><code>org_id.submitted</code><div class="sub">ARIN · ORG-ACME-1</div></div></div>
+        </div></div>
       </div>
     </div>`;
-  const fill=()=>{const type=$("#c-type").value;
-    $("#c-payload").value=JSON.stringify(t.templates[type]??{},null,2);
-    $("#c-warn").hidden=type!=="reviewer.manual_approve"};
-  $("#c-type").onchange=fill;fill();
-  $("#c-send").onclick=async()=>{
-    let payload;try{payload=JSON.parse($("#c-payload").value||"{}")}
-    catch(e){toast(`${I.cross}<span>The details are not valid JSON.</span>`);return}
-    const r=await j("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({case_id:$("#c-case").value.trim(),event_type:$("#c-type").value,payload})});
-    $("#c-out").textContent=`HTTP ${r.status}\n`+JSON.stringify(r.body,null,2);
-    remember("composerCase",$("#c-case").value.trim());
-    if(r.status<300)$("#c-hint").innerHTML=
-      `Started <span class="strong">${r.body.jobs_queued}</span> job${r.body.jobs_queued===1?"":"s"}. Open ${caseLink($("#c-case").value.trim())} to follow progress.`;
-  };
+  const root=page.querySelector("[data-composer]");composerCompanyControls(root);composerDrawFields(root);composerPaint(root);
+  root.addEventListener("change",event=>{
+    if(event.target.name==="c-company-mode"){composerSession.caseMode=event.target.value;composerCompanyControls(root);composerInvalidate(root);return}
+    if(event.target.id==="c-type"){composerSession.eventType=event.target.value;
+      if(!composerSession.drafts[composerSession.eventType])composerSession.drafts[composerSession.eventType]=composerFreshTemplate(composerSession.eventType,composerSession.templates);
+      if(!composerSession.raws[composerSession.eventType])composerSession.raws[composerSession.eventType]=JSON.stringify(composerSession.drafts[composerSession.eventType],null,2);
+      root.querySelector("#c-payload").value=composerSession.raws[composerSession.eventType];composerDrawFields(root);composerInvalidate(root);return}
+    if(event.target.id==="c-case-list")composerSession.selectedCase=event.target.value;
+    if(event.target.matches("[data-composer-path]"))event.target.dispatchEvent(new Event("input",{bubbles:true}));
+  });
+  root.addEventListener("input",event=>{
+    if(event.target.id==="c-case-existing-id")composerSession.existingId=event.target.value;
+    if(event.target.id==="c-case-new-id")composerSession.newId=event.target.value;
+    if(event.target.id==="c-case-list")composerSession.selectedCase=event.target.value;
+    if(event.target.matches("[data-composer-path]")){const path=event.target.dataset.composerPath,guide=COMPOSER_GUIDES[composerSession.eventType];
+      const rawWasValid=composerParseAdvanced(root,false);
+      const kind=guide.fields.find(field=>field[0]===path)?.[3],raw=event.target.value.trim();
+      const value=kind==="list"?raw.split(",").map(v=>v.trim()).filter(Boolean):event.target.value;
+      composerWrite(composerSession.drafts[composerSession.eventType],path,value,!raw&&!["result","rir"].includes(kind));
+      if(rawWasValid)composerSyncRaw(root)}
+    if(event.target.id==="c-payload"){composerSession.raws[composerSession.eventType]=event.target.value;composerParseAdvanced(root,false)}
+    composerInvalidate(root);
+  });
+  root.querySelector("#c-payload").addEventListener("blur",()=>{if(composerParseAdvanced(root,false))composerDrawFields(root)});
+  root.querySelector("#c-reset").onclick=()=>{const type=composerSession.eventType;
+    composerSession.drafts[type]=composerFreshTemplate(type,composerSession.templates);composerSession.raws[type]=JSON.stringify(composerSession.drafts[type],null,2);
+    root.querySelector("#c-payload").value=composerSession.raws[type];composerDrawFields(root);composerInvalidate(root)};
+  root.querySelector("#c-send").onclick=()=>composerSession.review?composerSend(root):composerReview(root);
 }
 
 /* ── Router ───────────────────────────────────────────── */
