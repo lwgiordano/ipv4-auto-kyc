@@ -2278,7 +2278,7 @@ const COMPOSER_GUIDES={
 };
 const composerSession={initialized:false,eventType:"kyb.run_requested",caseMode:"existing",selectedCase:"",
   existingId:"",newId:"",drafts:{},raws:{},templates:{},review:null,result:null,inFlight:null,
-  successful:false,keys:new Map(),requestedCase:""};
+  successful:false,keys:new Map(),requestedCase:"",existingIdOutOfList:false};
 const composerFreshTemplate=(type,templates)=>{const value=clone(templates[type]??{});
   if(type==="email.verified"||type==="poc.token_verified")value.verified_at=new Date().toISOString();
   if((type==="website.review_completed"||type==="reviewer.manual_approve")&&!value.reviewer_id&&reviewer())
@@ -2426,10 +2426,17 @@ async function viewComposer(){
     else if(cases.length)composerSession.selectedCase=cases[0].id;
     else composerSession.caseMode="new";
   }
-  if(composerSession.caseMode==="existing"&&!cases.some(c=>c.id===composerSession.selectedCase))composerSession.selectedCase=cases[0]?.id||"";
+  if(composerSession.caseMode==="existing"&&composerSession.selectedCase&&
+      !cases.some(c=>c.id===composerSession.selectedCase)){
+    composerSession.existingId=composerSession.selectedCase;composerSession.caseMode="existing-id";
+    composerSession.existingIdOutOfList=true;
+  }
   const actionOptions=t.event_types.map(type=>{const guide=COMPOSER_GUIDES[type];
     return composerOption(type,guide?guide.name:`Advanced only — ${type}`,composerSession.eventType)}).join("");
   const caseOptions=cases.map(c=>composerOption(c.id,`${c.company_name||"Unnamed company"} — ${c.id}`,composerSession.selectedCase)).join("");
+  const existingIdNote=composerSession.existingIdOutOfList
+    ?"This retained company ID is not in the current top-100 list. The console has not substituted another company."
+    :"The console cannot verify this ID from the bounded list. Sending uses it as entered.";
   page.innerHTML=tbar("Send Message","Choose a company and action, complete the details, then review the exact message before confirming.","","composer")+`
     <div class="split" data-composer>
       <div class="card"><div class="hd"><h2>Message</h2>${tip("composerevent")}</div><div class="bd">
@@ -2440,7 +2447,7 @@ async function viewComposer(){
               <span class="select-wrap"><select id="c-case-list">${caseOptions||'<option value="">No companies available</option>'}</select>${I.down}</span></div>
             <label><input type="radio" name="c-company-mode" value="existing-id" ${composerSession.caseMode==="existing-id"?"checked":""}> Use an existing company ID beyond this list</label>
             <div class="composer-company-control" data-company-control="existing-id"><label class="flab" for="c-case-existing-id">Existing company ID beyond this list</label><input id="c-case-existing-id" value="${esc(composerSession.existingId)}">
-              <span class="note">The console cannot verify this ID from the bounded list. Sending uses it as entered.</span></div>
+              <span class="note">${esc(existingIdNote)}</span></div>
             <label><input type="radio" name="c-company-mode" value="new" ${composerSession.caseMode==="new"?"checked":""}> New company with ID</label>
             <div class="composer-company-control" data-company-control="new"><label class="flab" for="c-case-new-id">New company ID</label><input id="c-case-new-id" value="${esc(composerSession.newId)}">
               <span class="note">Explicitly creates a company record if this ID is not already present.</span></div>
@@ -2475,7 +2482,9 @@ async function viewComposer(){
     </div>`;
   const root=page.querySelector("[data-composer]");composerCompanyControls(root);composerDrawFields(root);composerPaint(root);
   root.addEventListener("change",event=>{
-    if(event.target.name==="c-company-mode"){composerSession.caseMode=event.target.value;composerCompanyControls(root);composerInvalidate(root);return}
+    if(event.target.name==="c-company-mode"){composerSession.caseMode=event.target.value;composerSession.existingIdOutOfList=false;
+      if(event.target.value==="existing")composerSession.selectedCase=root.querySelector("#c-case-list").value;
+      composerCompanyControls(root);composerInvalidate(root);return}
     if(event.target.id==="c-type"){composerSession.eventType=event.target.value;
       if(!composerSession.drafts[composerSession.eventType])composerSession.drafts[composerSession.eventType]=composerFreshTemplate(composerSession.eventType,composerSession.templates);
       if(!composerSession.raws[composerSession.eventType])composerSession.raws[composerSession.eventType]=JSON.stringify(composerSession.drafts[composerSession.eventType],null,2);
@@ -2484,7 +2493,7 @@ async function viewComposer(){
     if(event.target.matches("[data-composer-path]"))event.target.dispatchEvent(new Event("input",{bubbles:true}));
   });
   root.addEventListener("input",event=>{
-    if(event.target.id==="c-case-existing-id")composerSession.existingId=event.target.value;
+    if(event.target.id==="c-case-existing-id"){composerSession.existingId=event.target.value;composerSession.existingIdOutOfList=false}
     if(event.target.id==="c-case-new-id")composerSession.newId=event.target.value;
     if(event.target.id==="c-case-list")composerSession.selectedCase=event.target.value;
     if(event.target.matches("[data-composer-path]")){const path=event.target.dataset.composerPath,guide=COMPOSER_GUIDES[composerSession.eventType];

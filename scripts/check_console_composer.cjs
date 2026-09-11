@@ -85,6 +85,41 @@ const cases = [
   let browser;
   try {
     browser = await launch();
+    const disappearing = await browser.newContext();
+    let casesRequest = 0;
+    await disappearing.route("**/ui/api/send-event", route => route.fulfill({
+      status: 500, contentType: "application/json", body: JSON.stringify({ detail: "test forbids sends" }),
+    }));
+    await disappearing.route("**/ui/api/cases?limit=100", route => {
+      casesRequest += 1;
+      const company = casesRequest === 1
+        ? { id: "case-beta", company_name: "Beta Networks", jurisdiction: "US", status: "registered",
+          buy_status: "not_applicable", broker_status: "clear", current_evidence_score: 0,
+          latest_decision: null, decision_score: null, updated_at: "2026-09-10T12:00:00Z",
+          enforcement_held: false, decision_provenance: "no_decisions" }
+        : { id: "case-gamma", company_name: "Gamma Networks", jurisdiction: "GB", status: "registered",
+          buy_status: "not_applicable", broker_status: "clear", current_evidence_score: 0,
+          latest_decision: null, decision_score: null, updated_at: "2026-09-10T12:01:00Z",
+          enforcement_held: false, decision_provenance: "no_decisions" };
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ cases: [company] }) });
+    });
+    const disappearingPage = await disappearing.newPage(); disappearingPage.setDefaultTimeout(9000);
+    await ready(disappearingPage);
+    await check("a listed company that leaves the refreshed top-100 is retained without retargeting", async () => {
+      await disappearingPage.locator("#c-case-list").selectOption("case-beta");
+      await disappearingPage.locator('[data-r="overview"]').click();
+      await disappearingPage.getByRole("heading", { name: "Overview", level: 1 }).waitFor();
+      await disappearingPage.locator('[data-r="composer"]').click();
+      await disappearingPage.locator("#composer-form").waitFor();
+      assert.equal(await disappearingPage.getByLabel("Use an existing company ID beyond this list").isChecked(), true);
+      assert.equal(await disappearingPage.getByLabel("Existing company ID beyond this list", { exact: true }).inputValue(), "case-beta");
+      assert.match(await disappearingPage.locator('[data-company-control="existing-id"] .note').textContent(), /not in the current .*list|no longer in/i);
+      await disappearingPage.getByRole("button", { name: "Review Message" }).click();
+      assert.equal(await disappearingPage.locator("#c-review-company").textContent(), "case-beta",
+        "the replacement list entry must not become the message target");
+    });
+    await disappearing.close();
+
     const context = await browser.newContext({ colorScheme: "light" });
     await context.route("**/ui/api/send-event", async route => {
       const request = route.request();
