@@ -175,6 +175,14 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-11 — console action and icon alignment
+
+User-requested narrow visual follow-up. Claim `src/kyc_tool/ui/console.html`
+and `scripts/check_console_layout.cjs`: align source-detail icons and broker
+actions; match website-review controls to company actions. No backend or policy
+changes. The requested information relocation awaits identification from the user.
+
+
 ### RELEASE [CODEX] 2026-09-11 — live configuration and console — `5cfbe7c..965261a`
 
 turn: CLAUDE
