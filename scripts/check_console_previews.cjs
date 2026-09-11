@@ -180,18 +180,43 @@ async function clearPreviews(page) {
       await page.locator("#fmcase").selectOption(target);
       await seen.promise;
       assert.equal(await page.locator("[data-map-value]").first().getByText(/loading selected company/i).count(), 1);
-      await input.fill("During_Fetch__c"); await input.focus();
+      await input.fill("During_Fetch__c");
+      await page.getByRole("button", { name: "Save Preview" }).click();
+      assert.match(await page.locator("[data-map-value]").first().textContent(), /loading selected company/i);
+      await page.getByRole("button", { name: "Edit Mappings" }).click();
+      assert.match(await page.locator("[data-map-value]").first().textContent(), /loading selected company/i);
+      const currentInput = page.locator("#mapping-editor input[data-source-field]").first();
+      await currentInput.fill("During_Fetch_After_Draw__c"); await currentInput.focus();
+      await currentInput.evaluate(el => { window.__mappingInputDuringFetch = el; });
       const completed = page.waitForResponse(response => response.url().includes(`/ui/api/cases/${target}/full`) && response.status() === 200);
       release.resolve(); await completed;
       await page.waitForFunction(() => !document.querySelector("[data-map-value]")?.textContent.includes("Loading"));
-      assert.equal(await input.inputValue(), "During_Fetch__c");
-      assert.equal(await input.evaluate(el => window.__mappingInputDuringFetch === el), true);
-      assert.equal(await input.evaluate(el => document.activeElement === el), true);
+      assert.equal(await currentInput.inputValue(), "During_Fetch_After_Draw__c");
+      assert.equal(await currentInput.evaluate(el => window.__mappingInputDuringFetch === el), true);
+      assert.equal(await currentInput.evaluate(el => document.activeElement === el), true);
+      await page.unroute(pattern);
+    });
+
+    await check("mapping reset keeps the selected company loading state truthful", async () => {
+      const choices = page.locator("#fmcase option:not([value=''])");
+      const current = await page.locator("#fmcase").inputValue();
+      const target = await choices.evaluateAll((options, current) => options.find(option => option.value !== current)?.value, current);
+      const seen = deferred(), release = deferred(); const pattern = `**/ui/api/cases/${target}/full`;
+      await page.route(pattern, async route => { seen.resolve(); await release.promise; await route.continue(); });
+      await page.locator("#fmcase").selectOption(target); await seen.promise;
+      await page.getByRole("button", { name: "Reset to Live" }).click();
+      await page.getByRole("button", { name: "Confirm Reset" }).click();
+      assert.match(await page.locator("[data-map-value]").first().textContent(), /loading selected company/i);
+      const completed = page.waitForResponse(response => response.url().includes(`/ui/api/cases/${target}/full`) && response.status() === 200);
+      release.resolve(); await completed;
+      await page.waitForFunction(() => !document.querySelector("[data-map-value]")?.textContent.includes("Loading"));
       await page.unroute(pattern);
     });
 
     await check("mapping value-fetch failure is attributed without replacing destination inputs", async () => {
+      await page.getByRole("button", { name: "Edit Mappings" }).click();
       const input = page.locator("#mapping-editor input[data-source-field]").first();
+      await input.fill("Error_State_Draft__c");
       await input.evaluate(el => { window.__mappingInputOnError = el; });
       const choices = page.locator("#fmcase option:not([value=''])");
       const current = await page.locator("#fmcase").inputValue();
@@ -201,8 +226,13 @@ async function clearPreviews(page) {
       await page.locator("#fmcase").selectOption(target);
       await page.locator("#mapping-status").getByText(/values could not load/i).waitFor();
       assert.match(await page.locator("[data-map-value]").first().textContent(), /could not load/i);
-      assert.equal(await input.inputValue(), "During_Fetch__c");
+      assert.equal(await input.inputValue(), "Error_State_Draft__c");
       assert.equal(await input.evaluate(el => window.__mappingInputOnError === el), true);
+      await page.getByRole("button", { name: "Save Preview" }).click();
+      assert.match(await page.locator("[data-map-value]").first().textContent(), /could not load/i);
+      await page.getByRole("button", { name: "Edit Mappings" }).click();
+      assert.match(await page.locator("[data-map-value]").first().textContent(), /could not load/i);
+      assert.equal(await page.locator("#mapping-editor input[data-source-field]").first().inputValue(), "Error_State_Draft__c");
       await page.unroute(pattern);
     });
 

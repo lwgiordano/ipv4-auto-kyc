@@ -566,9 +566,20 @@ def test_company_switch_updates_value_cells_without_rebuilding_destination_input
     body = _function_body("viewFieldMap")
     handler = body[body.index("caseSelect.onchange="):]
     handler = handler[: handler.index("\n}\n\nfunction mountPointsEditor")]
-    assert 'drawValues("loading")' in handler and 'drawValues("error")' in handler
+    assert 'valueState=selected?"loading":"empty"' in handler
+    assert 'valueState="error";drawValues()' in handler
     assert "draw();" not in handler
     for fence in ("request===selectionRequest", 'page.dataset.route==="#/fieldmap"',
                   'caseSelect===$("#fmcase")', "tbody.isConnected"):
         assert fence in handler
     assert "if(!current())return" in handler
+
+
+def test_every_mapping_redraw_uses_the_selected_company_value_state():
+    """Save, reset, and edit redraws must not reveal retained values during loading or error."""
+    body = _function_body("viewFieldMap")
+    value_markup = body[body.index("const valueMarkup="):body.index("const drawValues=")]
+    draw = body[body.index("const draw=()=>"):body.index("edit.onclick=")]
+    assert 'valueState==="loading"' in value_markup
+    assert 'valueState==="error"' in value_markup
+    assert "valueMarkup(field)" in draw
