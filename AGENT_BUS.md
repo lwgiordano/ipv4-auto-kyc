@@ -175,6 +175,32 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-11 — implement approved live configuration and console refinement
+
+turn: CODEX
+
+Human approved the design and explicitly directed implementation, including moving
+live configuration ahead of the blocked platform unit. Claims:
+`src/kyc_tool/**` (excluding M2 behavior), new `alembic/versions/024*`,
+`tests/**`, `scripts/check_console_*.cjs`, `scripts/devproxy.py`,
+`.agents/ROADMAP.md`, `.agents/superpowers/{specs,plans}/**`,
+`docs/**` (current contracts, deployment/runbook/ADR references only; no distribution),
+`AUDIT_FINDINGS.md`, `DESIGN.md`, `.impeccable/surfaces/src-kyc-tool-ui-console-html.md`,
+`.env.example`, and this bus. Parent owns commits/pushes and coordination; fresh
+task implementers and independent reviews use the ignored plan workspace.
+
+Approved behavior: live point and broker saves affect newly created review runs,
+not completed/in-flight runs. Shared destination mappings change service-side
+projections, not Salesforce itself. Preserve all 013-023 migration bytes, the
+normative package, M2, and callback wire semantics. Shift only pending reservations
+024-028 to 025-029; bring broker snapshots/match provenance into new 024. No
+automatic promotion of old browser drafts or unreviewed recalculation.
+
+The current local preview may need a controlled restart/schema activation after
+verification; no real provider calls or company actions are test side effects.
+The unrelated send-event retry contract remains out of scope. Working directly
+on `claude/project-setup-standing-rules-5w1fwh`, PR #2, per the shared-checkout workflow.
+
 ### RELEASE [CODEX] 2026-09-11 — live configuration design only — `a5e7f08..867246f`
 
 turn: CODEX
