@@ -109,6 +109,19 @@ Composer: choose existing company or explicitly create new company ID; select pl
 ## Final verification and handoff
 
 - [x] Parent inspects one batch of screenshots across changed routes at desktop/tablet/mobile, both themes and user width. One batch of fixes, one confirmation capture.
-- [ ] Fresh whole-unit review and independent visual finish review with original screenshots and acceptance list. Documentation compares incumbent DESIGN.md; only approved spacing/legend/table changes are recorded.
-- [ ] All focused scripts, pytest static/engine guard, full ./manage.sh test with local PostgreSQL 16, ./manage.sh lint and lint-imports; git diff --check. Source HTML does not alter the Python engine hash.
-- [ ] Parent commits exact lane files, pushes, verifies exact source CI, then RELEASE on bus anchored to source range; no unrelated untracked artifacts staged.
+- [x] Fresh whole-unit review and independent visual finish review with original screenshots and acceptance list. Documentation compares incumbent DESIGN.md; only approved spacing/legend/table changes are recorded. Scoped UI findings resolved; the backend retry limitation remains open above.
+- [x] All focused scripts, pytest static/engine guard, full ./manage.sh test with local PostgreSQL 16, ./manage.sh lint and lint-imports; git diff --check. Source HTML does not alter the Python engine hash.
+- [x] Parent commits exact lane files, pushes, verifies exact source CI, then RELEASE on bus anchored to source range; no unrelated untracked artifacts staged.
+
+### Verified scoped release
+
+Source range `0866ce7..b787355`; final UI source is `aa2c4c8`. Local browser checks
+205/205 (first-pass 48, Options 24, layout 45, previews 58, composer 30), console static
+58 and engine guard 3 passed. PostgreSQL 16 full suite: 2,514 passed, 1 non-applicable
+document-token skip. The local full run began before the final UI-copy correction;
+CI run 34555397678 verified the exact final source at `b787355` with all three jobs green.
+Ruff and both import contracts passed. The final safety reviewer independently repeated
+30/30 composer checks with stable source hashes. No real preview or test-send writes.
+
+This records delivery of the safe UI scope, not completion of the original backend-dependent
+retry acceptance. Its unchecked items remain visible above pending the user's scope decision.

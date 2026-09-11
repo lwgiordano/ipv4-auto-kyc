@@ -175,6 +175,64 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-10 — console previews and usability — `0866ce7..b787355`
+
+turn: CLAUDE
+
+Human-approved UI work on `claude/project-setup-standing-rules-5w1fwh`, PR #2.
+Releases every lane in CLAIM `d5c23bb`. This is a scoped UI release, **not** an
+AUDIT-CLEAN claim for the original Task 3 robust-retry requirement below.
+
+- Decision Rules has browser-local evidence-point editing and an Allowed/Blocked
+  broker editor with search/filter, add/edit/remove, identifiers and notes. Salesforce
+  Fields edits destination names only; original value/source projections remain read-only.
+  Independent versioned previews are source-bound, validated on load/save, and expose
+  unsaved/saved/stale/storage-error states plus Reset to Live. An unapplied broker form
+  cannot be covered by Save Preview. Tests observed zero non-GET preview API requests.
+- Shared 12px heading spacing, lower Options helper, exact reviewer copy, inset score
+  geometry, centered table actions, native-select chevrons, responsive legend groups and
+  dark navigation states address the supplied screenshots. Header authentication is
+  explicitly configuration, not health; full labelled rules fingerprint is on Decision Rules.
+- Overview separates all-time decision counts/shares from a bounded latest-company list,
+  honors the authoritative safety-hold flag, and labels case time as Company updated.
+- Send Message provides relevant fields for all nine events, optional Advanced JSON,
+  memory-only drafts, explicit company modes and immutable review/confirm. A selected
+  company falling outside the recent list is retained, not replaced with another company.
+  Actual 200/202 response shapes are used in tests; every send-event POST was intercepted.
+  Ambiguous responses and 409 retain the reviewed key and block blind same-identity resend.
+  Earlier unresolved attempts remain visible through edits and later sends; raw non-JSON
+  failures are preserved as text, never rendered HTML.
+
+Independent task reviews, whole-unit W1/W2 re-review and bounded visual F1-F4 confirmation
+completed. The final safety re-review found and verified two additional UI corrections
+in `aa2c4c8` (retained prior uncertainty and exact raw error text); 30/30 passed with stable
+source hashes. Visual disposition was `ship` for the four scored fixes, not API certification.
+The source writes were sequential; parent alone committed/pushed. An old implementer could
+not be resumed due to an agent-thread limit, so parent applied those last two scoped fixes
+RED-first and sent them back to the independent reviewer.
+
+Verification:
+
+- Browser checks: first-pass 48/48, Options 24/24, layout 45/45, previews 58/58,
+  composer 30/30 — 205/205. Light/dark and mobile/tablet/desktop/user-width coverage.
+- Console static 58 and engine guard 3 passed; ruff clean; import contracts 2 kept/0 broken.
+- Local PostgreSQL 16: 2,514 passed, 1 known non-applicable document-token skip, 526 warnings,
+  561.58s. That run began before the last UI-copy correction; exact final-source CI below
+  is the final whole-suite authority. No backend Python, engine hash, M2, migration or
+  normative-package changes. No screenshots/unrelated untracked files committed.
+- Exact source CI: all three jobs passed on `b787355`, run 34555397678; the
+  `substrate:ci-green` comment confirms the exact SHA on PR #2. Browser scripts are
+  explicit local checks, not falsely claimed as CI jobs.
+
+**Explicitly OPEN — backend scope decision:** `/ui/api/send-event` supplies fresh
+`occurred_at` on each attempt, while ingest hashes the envelope. A committed request whose
+response is lost can therefore conflict on retry instead of replaying. The user has not
+answered the separate request to expand into backend code. No backend fix is claimed;
+the interim UI requires company-record verification rather than blind retry, and its
+in-memory guard is not a cross-browser/session guarantee. The approved plan retains the
+unchecked robust-retry requirement. Do not activate previews or expand this backend scope
+without human direction. Review the scoped range above; carry this known limitation honestly.
+
 ### CLAIM [CODEX] 2026-09-10 — console refinement + browser-local configuration previews
 
 turn: CODEX
