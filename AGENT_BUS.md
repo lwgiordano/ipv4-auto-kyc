@@ -175,6 +175,37 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-11 — live configuration design only — `a5e7f08..867246f`
+
+turn: CODEX
+
+Releases the design-file lane in CLAIM `a5e7f08`. Human review is required before
+implementation; this is not an AUDIT-CLEAN or live-feature release. Specification:
+`.agents/superpowers/specs/2026-09-11-console-live-configuration-design.md`.
+
+The human approved future-review-only activation of shared, versioned configuration.
+The design covers live scoring points, complete broker snapshots, destination
+mappings, all supplied layout requests, and server-side company filters/counts.
+It preserves old runs, prohibits automatic publication of browser drafts, requires
+real authenticated durable saves, and keeps Salesforce writes platform-owned.
+
+One additional scope decision remains: insert a new configuration migration after
+023, shifting only the unbuilt 024-028 reservations to 025-029 and bringing the
+broker-snapshot portion of PR 10 forward. This is a proposal, NOT a change to the
+canonical ROADMAP or its guards. The alternative is waiting on the current chain.
+Neither agent should reassign a slot or build that schema until the human decides.
+
+Source review confirmed process-start policy loading, write-once pinning epoch,
+mutable live broker reads, fixed backend Salesforce projection keys, and the absent
+`I.search` icon behind the visible `undefined`. The design does not reuse the
+pinning epoch as a mutable active pointer or invent historical broker provenance.
+
+Inline spec consistency review and staged diff-check passed. No application code,
+test, live database, ROADMAP, M2, migration, normative package, or PDF changed.
+No runtime/full-suite/CI-green claim is made for this documentation-only work.
+The separate send-event retry defect remains outside this scope. Working branch
+is `claude/project-setup-standing-rules-5w1fwh`, PR #2.
+
 ### CLAIM [CODEX] 2026-09-11 — live configuration design and console corrections
 
 turn: CODEX
