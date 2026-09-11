@@ -57,7 +57,7 @@ async function openHash(page, hash) {
     "#/fieldmap": "Salesforce Fields",
     "#/policy": "Decision Rules",
     "#/options": "Options",
-    "#/composer": "Send Message",
+    "#/composer": "Company Actions",
   };
   await page.evaluate(next => { location.hash = next; }, hash);
   await page.waitForFunction(({ next, heading }) => location.hash === next &&
@@ -128,13 +128,11 @@ async function openHash(page, hash) {
       });
 
       await openHash(page, "#/integrations");
-      await check(`${width}px legend is 12px below its description`, async () => {
-        const description = await rect(page.locator(".tbar .desc"));
-        const legend = await rect(page.locator(".tbar .legend"));
-        near(legend.y - (description.y + description.height), 12, "description-to-legend gap");
+      await check(`${width}px standalone legend is absent`, async () => {
+        assert.equal(await page.locator(".tbar .legend").count(),0);
       });
       await check(`${width}px header group is 24px above content`, async () => {
-        const legend = await rect(page.locator(".tbar .legend"));
+        const legend = await rect(page.locator(".tbar .desc"));
         const content = await rect(page.locator("#page > .card").first());
         near(content.y - (legend.y + legend.height), 24, "header-to-content gap");
       });
@@ -209,7 +207,7 @@ async function openHash(page, hash) {
     await bounded(staleRace.newResponseCompleted.promise, "new query response");
     await page.waitForFunction(expected =>
       document.querySelector("#q")?.value === expected &&
-      document.querySelector("#case-count")?.textContent === "0 companies" &&
+      document.querySelector("#case-count")?.textContent === "0 matching companies" &&
       document.querySelector("#case-rows")?.textContent.includes("No matches"), newQuery);
     const oldBrowserResponsePromise = page.waitForResponse(response =>
       new URL(response.url()).searchParams.get("q") === staleRace.oldQuery);
@@ -222,7 +220,7 @@ async function openHash(page, hash) {
       assert.ok(staleRace.oldRowCount > 0, "the delayed real response must contain company rows");
       assert.equal(staleRace.newRowCount, 0, "the newer real response must differ from the delayed response");
       assert.equal(await page.locator("#q").inputValue(), newQuery);
-      assert.equal(await page.locator("#case-count").textContent(), "0 companies");
+      assert.equal(await page.locator("#case-count").textContent(), "0 matching companies");
       assert.ok((await page.locator("#case-rows").textContent()).includes("No matches"));
       assert.equal(await page.locator("table.companies a.rowlink").count(), 0);
     });
@@ -252,7 +250,7 @@ async function openHash(page, hash) {
       ["#/fieldmap", "Salesforce Fields · KYC Tool"],
       ["#/policy", "Decision Rules · KYC Tool"],
       ["#/options", "Options · KYC Tool"],
-      ["#/composer", "Send Message · KYC Tool"],
+      ["#/composer", "Company Actions · KYC Tool"],
     ];
     for (const [hash, title] of expectedTitles) {
       await page.evaluate(next => { location.hash = next; }, companyHash);
@@ -271,7 +269,7 @@ async function openHash(page, hash) {
       await page.reload();
       await page.locator("#page h1").waitFor();
       await check(`${colorScheme} theme renders the console`, async () => {
-        assert.equal(await page.locator("#page h1").textContent(), "Send Message");
+        assert.equal(await page.locator("#page h1").textContent(), "Company Actions");
         assert.notEqual(await page.locator("body").evaluate(el => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
       });
     }

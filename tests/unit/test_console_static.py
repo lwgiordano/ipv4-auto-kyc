@@ -464,7 +464,7 @@ def test_card_layouts_own_their_gap_and_actionless_headers_emit_no_slot():
     tbar = CONSOLE[CONSOLE.index("const tbar="):]
     tbar = tbar[: tbar.index("\nconst sec=")]
     assert "actions?" in tbar
-    assert "legend?" in tbar
+    assert "legend?" not in tbar
 
 
 def test_reviewer_and_identity_grids_align_content_rows():
@@ -477,7 +477,7 @@ def test_reviewer_and_identity_grids_align_content_rows():
 def test_routes_name_every_non_company_document():
     router = CONSOLE[CONSOLE.index("const routes=["):]
     for title in ("Overview", "Companies", "Data Sources", "Salesforce Fields",
-                  "Decision Rules", "Options", "Send Message"):
+                  "Decision Rules", "Options", "Company Actions"):
         assert f'"{title}"' in router
     assert 'document.title=title?`${title} · KYC Tool`:"Company · KYC Tool"' in router
 
@@ -514,31 +514,13 @@ def test_a_truncated_identifier_keeps_its_full_value():
 
 # --- browser-local configuration previews ---------------------------------------------------
 
-def test_preview_storage_writes_one_versioned_cloned_record():
-    """Dropping the base or storing the mutable form object would make stale drafts look current."""
-    body = _sync_function_body("writePreview")
-    assert "localStorage.setItem" in body
-    assert "{version:1,base,value:clone(value)}" in body
-    assert "fetch(" not in body and " j(" not in body
-
-
-def test_each_preview_base_tracks_its_live_authority():
-    """Points follow the bundle; mappings follow field/source pairs; brokers follow the DB list."""
-    policy = _function_body("viewPolicy")
-    mapping_base = CONSOLE[CONSOLE.index("const mapBase="):CONSOLE.index("const BROKER_LISTS=")]
-    broker_base = CONSOLE[CONSOLE.index("const brokerBase="):CONSOLE.index("function readPreview")]
-    assert "p.bundle_hash" in _sync_function_body("mountPointsEditor")
-    assert "Object.entries(p.field_sources).sort" in mapping_base
-    assert "p.broker_entities" in broker_base and ".sort(" in broker_base
-    assert "mountPointsEditor(p);mountBrokerEditor(p)" in policy
-
-
-def test_preview_mounts_cannot_call_a_server_write():
-    """The form handlers may write localStorage, but never cross the HTTP mutation boundary."""
-    for name in ("mountPointsEditor", "mountBrokerEditor"):
-        body = _sync_function_body(name)
-        assert "fetch(" not in body and "j(" not in body
-        assert 'method:"POST"' not in body and 'method:"PUT"' not in body
+def test_configuration_saves_use_dedicated_transport_and_never_browser_storage():
+    """Behavior is exercised by check_console_live_configuration.cjs."""
+    body = _function_body("saveConfiguration")
+    assert '"/ui/api/configuration/"+kind' in body
+    assert 'method:"PUT"' in body
+    assert "localStorage" not in body and "sessionStorage" not in body
+    assert "s.request=JSON.stringify" in body
 
 
 def test_async_preview_surfaces_check_the_shared_render_generation_before_mounting():
@@ -564,8 +546,7 @@ def test_mounted_policy_preservation_applies_to_plain_and_rule_deep_links():
 def test_company_switch_updates_value_cells_without_rebuilding_destination_inputs():
     """Inputs edited during the GET survive because completion touches only original-field cells."""
     body = _function_body("viewFieldMap")
-    handler = body[body.index("caseSelect.onchange="):]
-    handler = handler[: handler.index("\n}\n\nfunction mountPointsEditor")]
+    handler = body[body.index("const loadValues=async"):body.index("const afterSave=")]
     assert 'valueState=selected?"loading":"empty"' in handler
     assert 'valueState="error";drawValues()' in handler
     assert "draw();" not in handler
@@ -579,7 +560,7 @@ def test_every_mapping_redraw_uses_the_selected_company_value_state():
     """Save, reset, and edit redraws must not reveal retained values during loading or error."""
     body = _function_body("viewFieldMap")
     value_markup = body[body.index("const valueMarkup="):body.index("const drawValues=")]
-    draw = body[body.index("const draw=()=>"):body.index("edit.onclick=")]
+    draw = body[body.index("const paint="):body.index("const loadValues=")]
     assert 'valueState==="loading"' in value_markup
     assert 'valueState==="error"' in value_markup
     assert "valueMarkup(field)" in draw
@@ -593,15 +574,10 @@ def test_overview_hold_label_uses_the_authoritative_flag_for_every_published_dec
     assert 'data-latest-decision="${esc(hasDecision?c.latest_decision:"none")}"' in body
 
 
-def test_broker_save_is_blocked_while_an_entry_form_is_unapplied():
+def test_broker_save_commits_the_reviewed_entry_directly():
     body = _sync_function_body("mountBrokerEditor")
-    assert 'save=$("#save-brokers")' in body
-    open_entry = body[body.index("const openEntry="):body.index("searchBox.oninput=")]
-    assert "save.disabled=true" in open_entry
-    assert open_entry.count("save.disabled=false") >= 2  # Apply Entry and Cancel recovery.
-    save_handler = body[body.index("save.onclick="):body.index('$("#reset-brokers").onclick=')]
-    assert 'slot.querySelector("#broker-entry-form")' in save_handler
-    assert "Apply Entry or Cancel" in save_handler
+    assert 'saveConfiguration("brokers",s,next,paint)' in body
+    assert "Apply Entry" not in body
 
 
 def test_final_preview_layout_contracts_are_scoped_and_responsive():

@@ -79,7 +79,7 @@ async function textRect(locator) {
       const h1 = await rect(page.locator(".tbar h1"));
       const desc = await rect(page.locator(".tbar .desc"));
       near(desc.y - (h1.y + h1.height), 12, "title-to-description gap");
-      const cardHeader = await rect(page.locator(".card > .hd"));
+      const cardHeader = await rect(page.locator(".card > .hd").first());
       const form = await rect(page.locator(".card > .bd > .options-form"));
       near(form.y - (cardHeader.y + cardHeader.height), 12, "card-header-to-form gap");
       const legend = await rect(page.locator(".options-form legend"));
@@ -180,48 +180,13 @@ async function textRect(locator) {
       await page.setViewportSize({ width, height: 1000 });
       await ready(page, "#/options", "Options", ".options-form");
       await page.getByLabel(theme === "light" ? "Light" : "Dark", { exact: true }).check();
-      await ready(page, "#/integrations", "Data Sources", ".tbar .legend");
-      await check(`${width}px ${theme} legend uses ordered responsive tracks without overflow`, async () => {
+      await ready(page, "#/integrations", "Data Sources", ".irow");
+      await check(`${width}px ${theme} source hierarchy fits without status legends`, async () => {
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        assert.equal(await page.locator(".tbar .legend").count(), 0);
         const cardHeader = await rect(page.locator("#page > .card .hd").first());
         const firstRow = await rect(page.locator("#page > .card .irow .meta").first());
-        near(firstRow.y - (cardHeader.y + cardHeader.height), 12,
-          "card-header-to-first-row-content gap");
-        const items = page.locator(".tbar .legend .item");
-        assert.equal(await items.count(), 5);
-        const boxes = await items.evaluateAll(nodes => nodes.map(node => {
-          const r = node.getBoundingClientRect();
-          const p = node.querySelector(".pill").getBoundingClientRect();
-          const c = node.querySelector(".legend-copy").getBoundingClientRect();
-          return {
-            x: Math.round(r.x), y: Math.round(r.y), width: r.width, right: r.right,
-            pill: { x: p.x, right: p.right }, copy: { x: c.x, right: c.right },
-          };
-        }));
-        const columns = new Set(boxes.map(box => box.x)).size;
-        assert.equal(columns, width <= 520 ? 1 : width <= 900 ? 2 : width <= 1319 ? 3 : 5);
-        for (let index = 1; index < boxes.length; index += 1) {
-          assert.ok(boxes[index].y >= boxes[index - 1].y,
-            `legend order regressed at item ${index + 1}`);
-        }
-        for (const [index, box] of boxes.entries()) {
-          assert.ok(box.pill.x >= box.x - 1 && box.pill.right <= box.right + 1,
-            `legend pill ${index + 1} stays inside its group`);
-          assert.ok(box.copy.x >= box.x - 1 && box.copy.right <= box.right + 1,
-            `legend copy ${index + 1} stays inside its group`);
-        }
-        for (let left = 0; left < boxes.length; left += 1) {
-          for (let right = left + 1; right < boxes.length; right += 1) {
-            if (boxes[left].y !== boxes[right].y) continue;
-            assert.ok(boxes[right].pill.x - boxes[left].pill.right >= 12,
-              `legend pills ${left + 1} and ${right + 1} keep a visible gap`);
-          }
-        }
-        for (const item of await items.all()) {
-          const pill = await rect(item.locator(".pill"));
-          const copy = await rect(item.locator(".legend-copy"));
-          assert.ok(copy.y >= pill.y + pill.height + 3, "legend explanation sits below its pill");
-        }
+        near(firstRow.y - (cardHeader.y + cardHeader.height), 12, "card-header-to-first-row-content gap");
       });
 
       await ready(page, "#/options", "Options", ".options-form");
@@ -250,7 +215,7 @@ async function textRect(locator) {
 
     const metadata = await browser.newContext();
     const metadataPage = await metadata.newPage(); metadataPage.setDefaultTimeout(7000);
-    await ready(metadataPage, "#/composer", "Send Message", "#c-send");
+    await ready(metadataPage, "#/composer", "Company Actions", "#c-send");
     await check("direct route initializes accurately scoped global metadata", async () => {
       await metadataPage.locator("#envchip .pill").waitFor();
       assert.equal((await metadataPage.locator("#envchip").textContent()).trim(), "Message authentication: On");

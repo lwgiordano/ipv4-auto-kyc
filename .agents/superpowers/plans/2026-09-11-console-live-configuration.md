@@ -201,3 +201,85 @@ sequentially. Task1/Task5 may both touch current operator contracts, sequentiall
 Task4 edits the console once; browser checks run only after it is stable. Task5
 reviews the complete range, not only its documentation diff. Every spec section
 has a task above; no task changes the M2 switch or publishes a different callback.
+
+## Implementation record — 2026-09-11
+
+The original checklist above is the approved plan. Tasks 1–5 are implemented; the
+bus RELEASE anchors the final source range. Backend commits: a891e09, 98d5332,
+29ea482. The final UI/operator changes reuse existing components and add no
+runtime dependency.
+
+### Verification and review
+
+- Exact backend 29ea482 CI succeeded on PostgreSQL, including lint/imports:
+  https://github.com/lwgiordano/ipv4-auto-kyc/actions/runs/34643712689 .
+- Final affected browser checks: 67 passed (live configuration 14, async 8, layout 45).
+  Composer 30, settings 24 and first-pass 48 passed before the final narrow correction.
+- Final parent smoke: 73 passed (console static, real-loopback proxy, cutover parity,
+  engine pin). Ruff clean; import contracts 2 kept/0 broken; frozen migrations 013–024
+  and normative package unchanged after 024 publication. ENGINE_BUILD_ID unchanged.
+- Fresh complete-unit code/visual review inspected all 20 current captures and found
+  three defects: request identity lost after an unauthorized uncertain-save retry;
+  mobile broker fieldset overflow; validation focused the first rather than invalid
+  control. One RED-first correction batch closed all three. Scoped independent
+  re-review disposition: ship, with no demonstrated new breakage. The four affected
+  phone images were recaptured in both themes; page width 390 equals viewport 390.
+- Fresh documentation review accepted the ordinary DESIGN/surface update without
+  format migration, new sidecars, or weakened recovery claims.
+- A duplicate local backend rerun was deliberately interrupted after 339 passed;
+  it is not whole-suite completion evidence. Existing exact-source CI plus the
+  finished UI/proxy checks replace that duplicate work under the user's Ponytail
+  direction. Final finishing-commit CI status is recorded on the bus.
+
+### Local activation and retained boundaries
+
+The existing database was backed up and migrated 023→024 with stopped application
+writers. Read-only preflight reported no blockers; explicit activation created
+revision 1. Actual API requests proved authenticated point change, same-request
+replay, restoration through a new revision, mapping/broker no-op saves, and
+unauthenticated refusal. An actual browser-Origin request through the local proxy
+also saved successfully. Final setup revision 3 retains the original configured
+values; 4 companies, 11 runs and 11 jobs were preserved. No company action was sent.
+
+The local app uses a generated private operator credential entered through Options;
+the browser retains it only in page memory. API/worker/proxy were replaced without
+recreating PostgreSQL. The old destructive auto-restart watcher remains paused:
+do not resume it unchanged or use its restart to preserve this temporary database.
+A data-preserving operational restart is separate from launching a fresh ephemeral
+demo. Local credential contents are neither embedded nor committed.
+
+Point/broker edits apply to new review runs; old runs retain their version.
+Destination-name saves change service projections, not Salesforce records.
+Positive enforcement, callback wire behavior and manual record-only semantics remain
+unchanged. Platform activation 025 and PDFs remain held. The pre-existing send-event
+retry/replay backend contract and existing dependency warnings are not declared fixed.
+
+### Rulings I made
+
+1. operate in the existing shared checkout — required by project bus workflow and current live UI; no new worktree. Cost if wrong: changes share the branch, mitigated by exclusive claims and parent-only commits.
+
+2. shipped script execution permissions prevent task-brief/review-package helper use — extract equivalent files with apply_patch from the exact plan/diff instead of altering installed plugin permissions. Cost if wrong: extraction must be checked for complete task/global text.
+
+3. accept valid nonblank broker IDs as opaque strings, including surrounding whitespace, while normalizing only matchable identifiers. Cost if wrong: display/copy must preserve an unusual ID rather than prettifying it; avoids silently severing legacy identity.
+
+4. omit the planned new disposable browser-server helper unless an existing route proves insufficient; reuse actual backend TestClient/PostgreSQL proofs, one existing-pattern browser integration runner, and final authenticated local round-trip. Why: user requested shortest working implementation; redundant fixture infrastructure delays visible changes. Cost if wrong: fewer duplicate end-to-end environments; final live round-trip remains required before claiming activation.
+
+5. ambiguous save recovery uses explicit operator-triggered identical-request retries, one request in flight and a bounded network timeout, without an arbitrary permanent three-click cap. GET matching values never proves receipt; retain request identity and warn before leaving. Cost if wrong: an operator can make repeated manual attempts, but each is separately bounded and server-idempotent; avoids stranding a recoverable save after a cosmetic retry count.
+
+6. when Salesforce projected values and editor configuration report different mapping revisions, withhold the mismatched values and offer refresh while preserving draft/focus. Cost if wrong: a concurrent unrelated configuration save can temporarily hide values even if names are unchanged; no values are silently paired with the wrong destination.
+
+7. Companies Approved includes sticky approved_manual when its same-case manual pointer resolves, even when a later automatic verdict is held; Buying locked is an overlapping subset of effective approved with current buying lock. New excludes set-but-invalid decision pointers even with no decision rows, because that state is integrity drift. Why: preserve _project_case/manual and shared provenance authority rather than classify from a single newest verdict. Cost if wrong: filter categories are intentionally not a disjoint partition; UI help must distinguish approval from buying capability.
+
+8. add a compact Operator access credential form to Options as necessary live-editor plumbing; current console has no bearer entry or forwarding. Memory-only current-page token, same-origin console mutations only, no browser persistence or embedded secret. Cost if wrong: operators must re-enter after reload; avoids making new live saves unauthenticated or breaking existing protected console actions after a token is configured.
+
+9. Task1 downgrade may fail fast with a stable busy sentinel on lock contention instead of waiting into a lock cycle; this satisfies bounded fail-closed maintenance and avoids expanding every application writer into a new advisory protocol. Cost if wrong: operator retries a busy maintenance step instead of waiting automatically; no history is deleted.
+
+10. refusal inventory excludes only bare Python re-raises (Raise.exc is None), which propagate an existing error instead of authoring a refusal. Constructed exceptions inside except blocks still count and receive a regression. Cost if wrong: inherited errors are not independently listed at every propagation point; their original authored raises remain governed.
+
+11. task1 new migration is reviewed from a complete staged diff before the first source commit. This prevents the frozen-on-publication discipline from forcing a repair migration for findings that can be fixed before publishing. Review package includes all new files and base 2323f49; review remains read-only.
+
+12. absent active pointer with recorded configuration history is corruption/unavailable, not pre-activation legacy mode; Task2 handles it and Task3 includes readiness checks explicitly required by spec section7 but omitted from the plan's bullets. JSON configuration writes reject duplicate keys before model validation. Cost if wrong: stricter refusal requires repair instead of permissive fallback; preserves the approved no-fabricated-history contract.
+
+Follow-through on ruling 2: the final committed-backend review package could use the
+shipped helper via bash with an explicit output path; the uncommitted finishing
+diff was captured separately without truncation. No installed permissions changed.

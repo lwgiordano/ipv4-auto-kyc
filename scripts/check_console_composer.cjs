@@ -30,7 +30,7 @@ function near(actual, expected, message, tolerance = 1) {
 async function ready(page) {
   await page.goto(`${baseUrl}#/composer`);
   await page.waitForFunction(() => location.hash === "#/composer" &&
-    document.querySelector("#page h1")?.textContent.trim() === "Send Message");
+    document.querySelector("#page h1")?.textContent.trim() === "Company Actions");
   await page.locator("#composer-form").waitFor();
 }
 async function choose(page, eventType) {

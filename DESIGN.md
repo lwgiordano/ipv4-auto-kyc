@@ -338,7 +338,8 @@ render of its own.
 10. 4.5:1 for text and 3:1 for graphics, in both themes, or it does not ship.
 11. A table that clips says so.
 12. The raw enum survives next to the readable name — a mono subtitle or a `title`.
-13. Presentation only: nothing in this file changes what the engine computes, stores or sends.
+13. Only explicit authenticated actions mutate the service. Configuration saves create revisions
+    for new runs; existing runs and decisions keep their recorded version. Salesforce is not written.
 14. A rule that sets `text-transform` or `letter-spacing` is scoped to the block it was written
     for. Component rules that set only `font` inherit the rest from whatever else matched.
 15. Optical corrections are for inline flow only. Never write one through a selector that can
@@ -374,15 +375,15 @@ render of its own.
 29. A fixed corner is somebody's corner. Bottom-left is the sidebar footer and the refresh
     control in it; bottom-right is the toast. A badge that floats over either is a control you
     have hidden. Put it in the flow of the thing it belongs to.
-30. A browser-local preview never reads as a live configuration change. Keep its boundary notice,
-    live source values, save state and reset action visible; a failed storage write is not a save.
+30. A configuration save is confirmed only by a successful server receipt. Conflicts retain the
+    unsent draft; unknown outcomes retain the immutable request and offer only identical retry.
 31. A native select's drawn chevron belongs inside the select's own border, not merely inside a
     wider wrapper. Measure both boxes and reserve text space before the icon.
 
 ## 12. Console first-pass layout contract
 
-The shared header owns title, description, optional legend and optional actions. Its internal
-intervals are 12px from title to description and 12px from description to legend; the header as a
+The shared header owns title, description and optional actions. Its internal
+interval is 12px from title to description; the header as a
 whole owns 24px before page content. An absent slot emits no element, because an empty flex child
 can wrap and create visible space.
 
@@ -396,9 +397,8 @@ The reviewer grid names three rows and centers its avatar on the input row. Iden
 content-sized tracks so an optional subline cannot move a neighboring primary value. The reviewer
 helper reads "Recorded on every review action."
 
-Legends are groups, each with a pill above a separate description and a 4px internal gap. The grid
-uses 12px between rows and 24px between columns: five columns above 1319px, three through 1319px,
-two through 900px and one through 520px. Descriptions may wrap; pills must fit their own tracks.
+Standalone status legends are removed. Pills retain their own text and contextual help.
+Native fieldset legends remain accessible names for related form controls.
 
 Native selects fill their wrappers. The drawn chevron has a 12px right inset and ignores pointer
 events; the select reserves 48px on the right for text clearance. Regular inputs, selects and
@@ -417,14 +417,23 @@ Navigation uses theme tokens for distinct active, hover and keyboard-focus state
 header's "Message authentication: On/Off" describes configuration, not service health or delivery;
 the full labelled rules fingerprint and Copy control belong on Decision Rules, not global chrome.
 
-Configuration editors begin with "Preview only — saved in this browser; live rules are unchanged."
-Points edit evidence weights, not threshold or gates. Mapping edits change destination names,
-not displayed company values or sources. Broker entry Apply/Cancel is separate from Save Preview;
-Save is disabled while an entry is open. Each editor exposes unsaved, saved and error messages,
-plus a confirmed Reset to Live. Saved previews are validated against their source identity before
-loading: the bundle hash for points, the field/source set for mappings, and the sorted live broker
-list for brokers. A stale or malformed saved preview is not overlaid on live data. These controls
-use browser storage, never publish server configuration, and do not imply an audit record.
+Configuration editors load shared server values and expose one right-aligned Edit/Add action,
+replaced by solid Save and secondary Cancel. Points edit evidence weights, not threshold or gates.
+Mapping edits change destination names, not company values or sources. The single broker entry
+form sits directly below its header and feedback, before the full searchable table; Save commits
+the reviewed list without a separate Apply phase. Removal requires confirmation. Broker IDs and
+notes come from the complete server snapshot. Overlap warnings use server matcher semantics.
+
+Read, edit, saving, refusal, conflict and unknown states remain distinct. In-flight fields freeze;
+HTTP confirmation controls saved state. Conflicts retain drafts until deliberate reload. Unknown
+outcomes retain request identity and payload for bounded, operator-triggered identical retries.
+Other open sections are not silently rebased. Old browser-preview records are ignored.
+
+Options includes Operator access: a password control, Use credential and Clear. The credential
+stays only in page memory and is routed only to same-origin console mutations, including existing
+company/review actions. Reads keep their existing access contract. Missing browser credentials
+link to Options; an entered credential still requires server authorization. Inactive configuration
+is honestly read-only. Fingerprint and revision live together at the bottom of Decision Rules.
 
 The message composer leads with company, action and the relevant labelled fields. The technical
 event stays beside the action; Advanced JSON is optional. Its two-column workspace stacks through
@@ -432,7 +441,7 @@ event stays beside the action; Advanced JSON is optional. Its two-column workspa
 column through 720px; the response and numbered demo fixture remain separate panels. The review
 summary repeats company ID, action, technical event, unique key and exact payload before Confirm
 Send. Drafts stay in page memory, not browser storage, and survive timed refresh and event changes.
-Sending is an explicit server operation, unlike configuration previews. Response copy must not
+Sending is an explicit server operation. Response copy must not
 turn acceptance into completed verification or treat a stored response as proof of a new action.
 
 The reusable lesson is to test the relationship at the boundary that owns it. Two individually
@@ -464,8 +473,9 @@ node scripts/check_console_composer.cjs http://127.0.0.1:55717/ui
 ```
 
 These are explicit local verification commands, not a claim that browser checks run in CI.
-Preview interactions must produce no non-GET API requests. Composer checks intercept send-event
-requests; verification must not send real messages.
+Browser checks intercept all configuration mutations and composer send-event requests;
+verification must not send real messages or fixture credentials to the displayed service.
+The focused live-configuration runner also proves server-envelope wiring and response states.
 
 Then look at every route, including Options and the editor/review states, in light and dark at
 1440 and 390. Check the document does not scroll sideways at 1440 / 1147 / 1024 / 768 / 390,

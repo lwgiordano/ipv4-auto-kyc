@@ -506,10 +506,39 @@ body until they age out on the backup retention schedule, independent of
 
 ## Policy changes
 
-Rubric/decision/broker JSON changes ship as a deploy: bump the file's
-`version`, update `tests/policy_driven/policy_baseline.json` in the same
-commit (the drift-guard test enforces this), redeploy. Every run/decision
-records the sha of the policy that produced it.
+After the explicit migration-024 activation in `docs/DEPLOYMENT.md` §12,
+authorized console saves publish shared, durable revisions of scoring points,
+the complete Allowed/Blocked broker list, and Salesforce destination names.
+Points must be exact integers 0–1000. Broker limits are 200 entries, 1–200
+characters per name, 100 entries per identifier class, 1–256 characters per
+identifier, and at most 2000 characters of notes; Blocked wins on exact matches.
+Allowed never bypasses another gate. New review runs, including new runs for
+existing companies, use the saved revision. Existing runs and event replays keep
+their creation revision; Save does not recalculate, rewrite evidence/decisions,
+send events, write Salesforce, or enable automatic positive enforcement.
+
+Saving requires a nonempty configured admin credential in **every environment**,
+including development, and same-origin browser requests. A shared token proves
+the authentication mechanism, not the operator label's personal identity.
+Conflicts preserve the draft: reload/review the latest revision before resaving.
+An uncertain result is not cancellation: keep the exact payload/request ID for
+identical retry and check the returned current revision. Cancel discards only
+unsent edits. Never automatically publish old browser-local previews.
+
+Recover prior settings through new reviewed revisions, never by editing history
+or resetting the active pointer. After activation `broker_entities` is only the
+legacy/bootstrap source, not a second live editing interface. If active authority
+is missing/corrupt, new admissions/saves fail closed and the console company
+`/full` response can return 503 even when an old run snapshot is intact. For
+read-only historical inspection use `GET /v1/cases/{case_id}` and
+`GET /v1/cases/{case_id}/checks` under their existing read authorization.
+
+Threshold, hard gates, evidence rules, identity invalidation, manual record-only
+semantics, callback schema, and M2 remain unchanged. Changes to non-editable
+packaged policy still ship as a deploy: bump `version`, update
+`tests/policy_driven/policy_baseline.json` in the same commit, and redeploy.
+Every run/decision records the policy hash that produced it. See ADR-009 and
+`AUDIT_FINDINGS.md` D-LIVE-CONFIG for the approved point-cap deviation.
 
 ## Policy bundle pinning & provenance (PR 6)
 

@@ -212,9 +212,10 @@ both the job and its failed run. Three limits to know:
 
 - No code edits on the server; no schema or data edits outside the runbook
   playbooks. The audit trail assumes the repo is the truth.
-- Policy files (scoring, decisions, broker list) change only via release —
-  a guard test forces a version bump, and every decision records the policy
-  hash that produced it.
+- Packaged policy changes require a release and version-bump guard. After the
+  explicit configuration cutover below, scoring points, broker snapshots, and
+  Salesforce destination names instead use audited, server-saved revisions.
+  Threshold, hard gates, evidence rules, and M2 are not console-editable.
 - Secrets only via environment / Secrets Manager; nothing secret is logged.
 - Never set `KYC_AUTH_DISABLED` outside local dev. Production boot refuses it.
 - **ANY change to `KYC_OUTBOX_MAX_ATTEMPTS` — raising OR lowering — is a DRAINED
@@ -636,3 +637,72 @@ R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image 
     `/readyz`, then start + attest its workers; attest image digest + running processes; then re-enable
     retention, autoscaling/restarts, and submissions and remove the composer edge block. Redeploying
     the pre-7b image BEFORE 013 is applied is also safe.
+
+## 12. Live configuration cutover (migration 024)
+
+Installing schema `024` does **not** activate configuration. Migrations `013`–`024`
+are frozen; do not repair them in place. Platform activation `025` remains
+unbuilt/fail-closed; this procedure does not enable M2 or alter callbacks.
+
+1. Record a database backup and the exact digest of the configuration-capable
+   release image being deployed. Record that same tested image as the recovery
+   image; a pre-configuration image is not a supported rollback after activation.
+   Install schema `024` using the normal migration process. The following CLI
+   requires at least `024`; it is not a schema-`023` preflight.
+2. Configure `KYC_ENFORCE_BUNDLE_PINNING=true` and a nonempty
+   `KYC_UI_ADMIN_TOKEN` in the CLI and every compatible API/pipeline/dev worker
+   environment. Supply credentials through the secret store/environment, never
+   command arguments, source, screenshots, or logs. Keep UI access restricted.
+3. Run the read-only preflight before the maintenance window where schema `024`
+   is already installed:
+
+   ```bash
+   python -m kyc_tool.ops.activate_live_configuration
+   ```
+
+   Require exit 0 and `ready: true`. Inspect `blocking_jobs`, `blocking_runs`,
+   and `problems`. Any job not `done` (including dead/retryable work) and any
+   unfinished legacy run block activation. Drain them under the old behavior;
+   do not relabel them complete, delete them, or invent historical snapshots.
+   Review the entire legacy broker baseline: exact stable IDs, names, policies,
+   all identifier classes, and notes. Invalid/oversized baselines refuse rather
+   than truncate. The CLI also verifies the packaged/stored policy baseline.
+4. Block new event admissions and stop all relevant writers: API/composer,
+   pipeline and dev workers, retry/recovery tools, publishers, retention, and
+   deployment auto-restarts. Attest their stopped state at the orchestrator.
+   Rerun the read-only preflight, then apply:
+
+   ```bash
+   python -m kyc_tool.ops.activate_live_configuration \
+     --apply --attest-writers-stopped --operator-label "maintenance operator"
+   ```
+
+   The label is attribution, not verified individual identity. The attestation
+   is operator-supplied, not fleet discovery. Apply rechecks under database
+   writer fences, stores/verifies the policy, snapshots the full broker list
+   including notes, and creates default mappings and the active revision in
+   one transaction. Lock/statement budgets are 5/30 seconds; refusal writes
+   no baseline. An already-active invocation verifies it and never resets it.
+5. Start only the recorded compatible processes with pinning enabled. Require
+   `/readyz` and `GET /ui/api/configuration` to verify active authority. Enter
+   the admin credential in console Options for this session; read access alone
+   is not save authority. Confirm authenticated Save and reload on disposable
+   test state before claiming the console is editable. A single process's
+   readiness does not attest the whole fleet. Then resume admissions.
+
+Configuration requests are bounded at 32 MiB before decoding; configure the
+ingress limit consistently. The local `scripts/devproxy.py` preserves the
+browser-facing Host for same-origin checks and rejects oversized/malformed
+configuration framing before reading the body. It is a loopback development
+proxy, not a production forwarded-header trust policy. Do not restart an existing
+demo via `scripts/dev.sh`: its cleanup deletes its temporary database. Preserve
+the database and replace only compatible processes in a controlled maintenance
+window; never resume a stale destructive watcher.
+
+After activation, recover a prior desired configuration by saving its reviewed
+sections as **new revisions**, retaining history. There is no pointer-reset or
+rollback CLI. A missing/corrupt active revision is a maintenance incident:
+restore verified authority from backup or forward-fix with the recorded compatible
+image; do not substitute current packaged values. Downgrade `024` refuses any
+recorded configuration history. Completed legacy runs stay explicitly unversioned;
+ordinary requeue must not feed unfinished unversioned work to snapshot-only workers.

@@ -233,7 +233,7 @@ nav{padding:var(--s2) 0;flex:1}
 .options-form legend{padding:0;font:var(--t-strong);color:var(--text)}
 .theme-options{display:grid;gap:0;margin-top:var(--s3)}
 .options-form label{min-height:40px;display:flex;align-items:center;gap:var(--s2);cursor:pointer}
-.options-form input{width:18px;height:18px;margin:0;accent-color:var(--accent)}
+.options-form input[type=radio]{width:18px;height:18px;margin:0;accent-color:var(--accent)}
 .options-footer{margin-top:var(--s5);padding-top:var(--s3);border-top:1px solid var(--line);
   display:grid;gap:var(--s2)}
 .options-hint{min-height:16px;color:var(--danger-text);font:var(--t-meta)}
@@ -288,12 +288,13 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
    says now" into one slab — the exact distinction the page exists to draw. */
 .page>.card+.card{margin-top:var(--card-gap)}
 .card .hd{padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);display:flex;
-      align-items:center;gap:var(--s2);flex-wrap:wrap}
+      align-items:baseline;gap:var(--s2);flex-wrap:wrap}
 .card .hd h2,.card .hd h3{font:var(--t-title);color:var(--ink)}
 /* Own margin on both sides. Without the top margin the decision word and this heading touched at
    0px on every state that renders no hold callout — i.e. everywhere except the two cases anyone
    demos, where the callout's own margin happened to cover it. */
 .subsection{display:grid;gap:var(--s3);margin-top:var(--s5)}
+.subsection>.card{min-width:0}
 .sub-hd{font:var(--t-subhd);color:var(--ink);margin:0}
 .card .hd .hint{font:var(--t-meta);color:var(--muted)}
 .card .bd{padding:var(--s4)}
@@ -407,10 +408,10 @@ button.danger:hover{background:color-mix(in oklab,var(--red-soft),black 6%)}
 /* The reviewer's own action. It is peach rather than accent-blue because it bypasses the
    rulebook and must never look like the routine send — but it is the page's primary, so it
    carries the raised elevation, and the dialog it opens confirms in the same colour. */
-button.warn{background:var(--amber-soft);border-color:transparent;color:var(--amber-ink);
+button.warn{background:var(--accent);border-color:var(--accent);color:var(--on-accent);
   box-shadow:var(--e2)}
 button.warn:active{box-shadow:none}
-button.warn:hover{background:color-mix(in oklab,var(--amber-soft),black 6%)}
+button.warn:hover{background:color-mix(in oklab,var(--accent),black 6%)}
 /* Rule 9, in the place the pattern was first written. `opacity:.45` on the peach commit button
    rendered its label at 2.08:1 for the whole duration of the POST -- a worse ratio than the
    "not evaluated" state the rule was written about, on the control that commits an irreversible
@@ -493,7 +494,19 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
   padding:var(--s3);background:var(--surface-muted);border:1px solid var(--border-input);
   border-radius:var(--r);color:var(--text);font:var(--t-body)}
 .preview-note .ic{flex:none;color:var(--accent-text)}
-.preview-actions{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.preview-actions{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;margin-left:auto}
+.card .hd .header-title{display:flex;align-items:center;gap:var(--s2);min-width:0}
+.card .hd .header-title .tipbtn{margin-left:0}
+.tbar .actions{flex-wrap:wrap}
+.config-feedback{display:grid;gap:var(--s2);padding:var(--s3) var(--s4)}
+.config-feedback:empty{display:none}
+.config-access{font:var(--t-meta);color:var(--muted)}
+.operator-form{display:grid;gap:var(--s3);max-width:520px}
+.operator-form .toolbar{margin:0}
+.composer-action .field,.composer-fields .field{display:grid;grid-template-rows:auto 40px auto auto;align-content:start}
+.technical-event{align-self:stretch;margin:0;min-width:0;font:var(--t-meta);overflow-wrap:anywhere}
+.broker-identifiers .tag,.broker-entry,.broker-identifiers+ .sub{overflow-wrap:anywhere;max-width:100%}
+.rules-metadata{display:grid;gap:var(--s2)}
 .preview-actions .preview-status{flex:1;min-width:min(260px,100%)}
 .preview-status{font:var(--t-meta);color:var(--muted)}
 .preview-status.err,.entry-error{color:var(--red)}
@@ -502,14 +515,15 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 #mapping-editor .preview-table input{min-width:230px}
 .preview-table .live-value{display:block;margin-top:var(--s1);font:var(--t-meta);color:var(--muted)}
 .preview-table td{vertical-align:top}
-.broker-tools{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap;margin-bottom:var(--s3)}
+.broker-tools{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}
 .broker-tools .search{flex:1;min-width:min(240px,100%)}
 .broker-tools .search input{width:100%}
 .broker-entry{padding:var(--s4);border-top:1px solid var(--line);background:var(--surface-muted)}
-.broker-entry fieldset{border:1px solid var(--line);border-radius:var(--r);padding:var(--s3);margin:0 0 var(--s3)}
+.broker-entry fieldset{min-width:0;border:1px solid var(--line);border-radius:var(--r);padding:var(--s3);margin:0 0 var(--s3)}
 .broker-entry legend{padding:0 var(--s2);font:var(--t-strong);color:var(--ink)}
 .broker-entry .group-hint{display:block;margin:-4px 0 var(--s3);font:var(--t-meta);color:var(--muted)}
 .broker-entry-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s3)}
+.broker-entry .field{min-width:0}
 .broker-entry-grid .field{margin:0}
 .broker-entry-grid .wide{grid-column:1/-1}
 .broker-entry textarea{min-height:88px}
@@ -761,7 +775,7 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
    file, and it is deliberate — the space belongs above the label, with the group it opens. */
 h2.sec{font:var(--t-label);color:var(--muted);text-transform:uppercase;
   letter-spacing:var(--track-caps);margin:var(--s6) 0 var(--s3);
-  display:flex;align-items:center;gap:var(--s2)}
+  display:flex;align-items:baseline;gap:var(--s2)}
 h2.sec.tight{margin-top:0}
 /* Chips joined with `" "` in a template literal are spaced by the rendered width of a space:
    3.66px across and 1.00px on wrap. Anisotropic, so no scale value can produce it. Every run of
@@ -904,7 +918,7 @@ dialog.modal .banner{margin-top:var(--s3)}
     <div class="grp">Actions</div>
     <a class="nav-item" href="#/composer" data-r="composer">
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M14 2L7 9M14 2l-4.5 12-2.5-5.5L2 6z" stroke-linejoin="round"/></svg>
-      Send Message</a>
+      Company Actions</a>
   </nav>
   <div class="side-foot">
     <label><input type="checkbox" id="autorefresh"> Refresh every 5 seconds</label>
@@ -943,7 +957,13 @@ dialog.modal .banner{margin-top:var(--s3)}
 const $=(s,el=document)=>el.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const NBSP=" ";
-async function j(url,opts){const r=await fetch(url,opts);const body=await r.json().catch(()=>({}));
+let operatorCredential="";
+function consoleFetch(url,opts={}){
+  const target=new URL(url,location.href),method=(opts.method||"GET").toUpperCase(),headers=new Headers(opts.headers);
+  if(operatorCredential&&target.origin===location.origin&&target.pathname.startsWith("/ui/api/")&&!["GET","HEAD","OPTIONS"].includes(method))headers.set("Authorization","Bearer "+operatorCredential);
+  return fetch(url,{...opts,headers});
+}
+async function j(url,opts){const r=await consoleFetch(url,opts);const body=await r.json().catch(()=>({}));
   if(!r.ok&&r.status>=500)throw new Error(`${r.status}: ${JSON.stringify(body).slice(0,300)}`);
   return{status:r.status,body}}
 /* One reading of a refused request: FastAPI's `detail` (a string, or pydantic's error list) or
@@ -971,45 +991,60 @@ const exact=s=>`<span class="when">${esc(fmtExact(s))}<div class="sub">${esc(rel
 const remember=(k,v)=>{try{sessionStorage.setItem(k,v)}catch(e){/* not storable; fine */}};
 const recall=(k,d="")=>{try{return sessionStorage.getItem(k)??d}catch(e){return d}};
 
-const PREVIEW_PREFIX="kyc-preview-v1:";
-const previewKey=kind=>PREVIEW_PREFIX+kind;
 const clone=value=>JSON.parse(JSON.stringify(value));
 const canonical=value=>{
-  if(Array.isArray(value))return`[${value.map(canonical).join(",")}]`;
-  if(value&&typeof value==="object")return`{${Object.keys(value).sort().map(k=>
-    `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+  if(Array.isArray(value))return"["+value.map(canonical).join(",")+"]";
+  if(value&&typeof value==="object")return"{"+Object.keys(value).sort().map(k=>JSON.stringify(k)+":"+canonical(value[k])).join(",")+"}";
   return JSON.stringify(value);
 };
-const mapBase=p=>canonical(Object.entries(p.field_sources).sort(([a],[b])=>a.localeCompare(b)));
 const BROKER_LISTS=["aliases","domains","email_domains","org_ids","poc_handles","asns"];
-const cleanBroker=(broker,index=0)=>({
-  id:String(broker.id||`live-${index}`),name:String(broker.name??""),
-  policy:broker.policy==="blocked"?"blocked":"allowed",
-  ...Object.fromEntries(BROKER_LISTS.map(k=>[k,Array.isArray(broker[k])?broker[k].map(String):[]])),
-  notes:String(broker.notes??""),
+const cleanBroker=broker=>({
+  id:broker.id,name:broker.name??"",policy:broker.policy??"allowed",
+  ...Object.fromEntries(BROKER_LISTS.map(k=>[k,broker[k]||[]])),notes:broker.notes??null,
 });
-const brokerBase=p=>canonical((p.broker_entities||[]).map((b,i)=>cleanBroker(b,i))
-  .map(({id,...b})=>b).sort((a,b)=>a.name.localeCompare(b.name)));
-function readPreview(kind,base,validate){
-  let raw;
-  try{raw=localStorage.getItem(previewKey(kind))}
-  catch(e){return{state:"blocked",message:"Browser storage is unavailable. You can still edit, but this preview cannot be reloaded."}}
-  if(raw===null)return{state:"live"};
-  let record;
-  try{record=JSON.parse(raw)}catch(e){return{state:"invalid",message:"This saved preview cannot be used because its stored data is malformed."}}
-  if(!record||record.version!==1||typeof record.base!=="string"||!record.value||typeof record.value!=="object")
-    return{state:"invalid",message:"This saved preview cannot be used because its stored schema is invalid."};
-  if(record.base!==base)return{state:"stale",message:"The live rules changed after this preview was saved. Reset to Live before editing again."};
-  const error=validate(record.value);
-  if(error)return{state:"invalid",message:`This saved preview cannot be used: ${error}`};
-  return{state:"saved",value:clone(record.value),message:"Saved preview loaded from this browser."};
+const configEdits={};
+function configurationState(kind,configuration){
+  const prior=configEdits[kind];
+  if(prior&&(prior.editing||prior.request))return prior;
+  return configEdits[kind]={configuration:clone(configuration),working:clone(configuration[kind]),editing:false,mode:"read",message:""};
 }
-function writePreview(kind,base,value){
-  try{localStorage.setItem(previewKey(kind),JSON.stringify({version:1,base,value:clone(value)}));return true}
-  catch(e){return false}
+const setPreviewStatus=(el,message,kind="")=>{el.textContent=message;el.className=("preview-status "+kind).trim()};
+function configAccess(c){return !c.can_edit?esc(c.reason||"Configuration editing is unavailable.")
+  :!operatorCredential?'<a href="#/options">Set an operator credential in Options</a> to save changes.':""}
+function configButtons(s,label){
+  if(!s.configuration.can_edit)return"";
+  if(s.mode==="unknown")return '<button type="button" class="sm primary" data-config-retry>Retry same save</button>';
+  if(s.mode==="saving")return '<button type="button" class="sm primary" disabled>Saving…</button><button class="sm" disabled>Cancel</button>';
+  if(s.editing)return (operatorCredential?'<button type="button" class="sm primary" data-config-save>Save</button>':"")+
+    '<button type="button" class="sm" data-config-cancel>Cancel</button>'+
+    (s.mode==="conflict"?'<button type="button" class="sm" data-config-reload>Reload server values</button>':"");
+  return '<button type="button" class="sm" data-config-edit>'+label+'</button>';
 }
-function removePreview(kind){try{localStorage.removeItem(previewKey(kind));return true}catch(e){return false}}
-const setPreviewStatus=(el,message,kind="")=>{el.textContent=message;el.className=`preview-status ${kind}`.trim()};
+async function saveConfiguration(kind,s,value,paint){
+  if(s.mode==="saving")return;
+  if(!operatorCredential){s.message="Set an operator credential in Options; your draft is kept.";paint(false);return}
+  if(!s.request)s.request=JSON.stringify({expected_revision:s.configuration.revision,request_id:crypto.randomUUID(),value:clone(value),...(reviewer()?{operator_label:reviewer()}:{})});
+  const wasUnknown=s.mode==="unknown";
+  s.mode="saving";s.message="Saving to the service…";paint(false);
+  try{
+    const r=await consoleFetch("/ui/api/configuration/"+kind,{method:"PUT",headers:{"Content-Type":"application/json"},body:s.request,signal:AbortSignal.timeout(15000)});
+    const body=await r.json().catch(()=>null);
+    if(r.ok&&body?.configuration?.revision===body?.current_revision&&typeof body.current_revision==="string"){
+      s.configuration=clone(body.configuration);s.working=clone(body.configuration[kind]);s.request=null;s.editing=false;s.mode="read";
+      s.message=body.replayed&&body.revision!==body.current_revision?"Earlier save confirmed. Showing current revision "+body.current_revision+".":"Saved. Configuration revision "+body.current_revision+".";
+      for(const [other,state]of Object.entries(configEdits))if(other!==kind&&!state.editing&&!state.request){state.configuration=clone(body.configuration);state.working=clone(body.configuration[other]);state.paint?.(true)}
+      if($("#rules-hash")){$("#rules-hash").textContent=body.configuration.bundle_hash;$("#configuration-revision").textContent=body.current_revision}
+      paint(true);return;
+    }
+    if(r.status>=500||r.ok||!body){s.mode="unknown";s.message="Save outcome unknown. Retry uses the identical request; do not start a replacement save.";paint(false);return}
+    if(wasUnknown){s.mode="unknown";s.message="Retry refused; the earlier save outcome is still unknown. "+(r.status===401||r.status===403?"Update your credential in Options, then retry the same save.":errText(body)+" The original request is retained for retry.");paint(false);return}
+    s.request=null;s.mode=r.status===409?"conflict":"error";
+    s.message=(r.status===401||r.status===403?"Access refused. Update your credential in Options; your draft is kept.":errText(body));
+    paint(false);
+  }catch(error){s.mode="unknown";s.message="Save outcome unknown. Your submitted values and request ID are retained. Retry the same save.";paint(false)}
+}
+window.addEventListener("beforeunload",event=>{if(Object.values(configEdits).some(s=>s.request)){event.preventDefault();event.returnValue=""}});
+window.addEventListener("hashchange",()=>{if(Object.values(configEdits).some(s=>s.request))toast("A configuration save is unresolved. Its exact request is kept in this page; return to the editor to retry.")});
 function validatePoints(value,rubric){
   if(!value||typeof value!=="object"||Array.isArray(value))return"Points must be an object.";
   const checks=rubric.map(r=>r.check_type);
@@ -1031,11 +1066,11 @@ function validateMappings(value,fields){
 }
 const brokerNameKey=name=>String(name).trim().replace(/\s+/g," ").toLowerCase();
 function validateBrokers(value){
-  if(!value||!Array.isArray(value.brokers))return"The broker preview must contain a broker list.";
-  if(value.brokers.length>200)return"A preview can contain at most 200 brokers.";
+  if(!value||!Array.isArray(value.brokers))return"A complete broker list is required.";
+  if(value.brokers.length>200)return"The list can contain at most 200 brokers.";
   const names=new Set(),ids=new Set();
   for(const broker of value.brokers){
-    if(!broker||typeof broker!=="object"||typeof broker.id!=="string"||!broker.id||ids.has(broker.id))return"Every broker must have a unique local preview ID.";
+    if(!broker||typeof broker!=="object"||typeof broker.id!=="string"||!broker.id||ids.has(broker.id))return"Every broker must have a unique stable ID.";
     ids.add(broker.id);
     if(typeof broker.name!=="string"||broker.name.trim().length<1||broker.name.trim().length>200)return"Broker names must be 1–200 characters.";
     const name=brokerNameKey(broker.name);if(names.has(name))return`A broker named ${broker.name.trim()} already exists.`;names.add(name);
@@ -1043,7 +1078,7 @@ function validateBrokers(value){
     for(const key of BROKER_LISTS){if(!Array.isArray(broker[key])||broker[key].length>100)return`${key} must contain at most 100 entries.`;
       const values=[];for(const item of broker[key]){if(typeof item!=="string"||!item.trim()||item.trim().length>256)return`${key} entries must be nonempty and at most 256 characters.`;values.push(item.trim().toLowerCase())}
       if(new Set(values).size!==values.length)return`${key} contains a duplicate.`}
-    if(typeof broker.notes!=="string"||broker.notes.length>2000)return"Notes must be at most 2000 characters.";
+    if(broker.notes!==null&&(typeof broker.notes!=="string"||broker.notes.length>2000))return"Notes must be at most 2000 characters.";
   }
   return"";
 }
@@ -1083,6 +1118,7 @@ function needReviewer(){if(reviewer())return true;
 const ic=d=>`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"`
   +` stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${d}</svg>`;
 const I={
+  search:'<svg class="ic" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="4.5"/><path d="M14 14l-3.5-3.5"/></svg>',
   check:ic(`<path d="M3.2 8.4l3.1 3.1 6.5-6.6"/>`),
   cross:ic(`<path d="M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6"/>`),
   clock:ic(`<circle cx="8" cy="8" r="5.6"/><path d="M8 4.7V8l2.3 1.7"/>`),
@@ -1260,16 +1296,14 @@ const TIPS={
     <p>Partial means at least one source failed and the round continued without it.</p>`},
   tasks:{t:"Manual Review Tasks",b:`<p>Checks that require a reviewer. Currently this is the
     website review.</p>
-    <p>Approving the website adds ten points and re-scores the company automatically. Rejecting
+    <p>Approving the website awards its saved rubric points and re-scores the company automatically. Rejecting
     records the result without points. Either result is recorded under the reviewer ID in the
     sidebar, which must be entered first.</p>`},
   tokens:{t:"Verification Codes",b:`<p>To confirm control of an address block, a one-time code is
     emailed to the contact on the public RIR record, not to an address supplied by the
     applicant.</p><p>Sent means the code has not yet been used. Codes expire.</p>`},
-  salesforce:{t:"Salesforce Fields",b:`<p>A preview of the fields the platform is expected to write
-    to Salesforce for this company.</p>
-    <p>Read-only. This console does not write to Salesforce. If Salesforce differs from this
-    table, the Salesforce copy is behind.</p>`},
+  salesforce:{t:"Salesforce Fields",b:`<p>The service's field projection for this company.</p>
+    <p>This console does not write Salesforce. The external platform must consume the saved destination mapping.</p>`},
   history:{t:"Decision History",b:`<p>Decisions are never edited. Each new decision is appended,
     so this is the complete history of what was decided and when.</p>
     <p>Decided is when processing started; Delivered is when the platform was notified. A name in
@@ -1329,8 +1363,8 @@ const TIPS={
   hardgates:{t:"Rule Definitions",b:`<p>The five rules exactly as stored and evaluated.</p>`},
   events:{t:"Accepted Message Types",b:`<p>The complete list of message types the platform may
     send. Any other type is refused.</p>`},
-  /* Send Message */
-  composer:{t:"Send Message",b:`<p>Build and review one platform message before confirming it.
+  /* Company Actions */
+  composer:{t:"Company Actions",b:`<p>Build and review one platform message before confirming it.
     A confirmed message creates real records in this database.</p>
     <p>The unique key stays with the reviewed message. If the outcome is unknown, verify the
     company record instead of submitting that message again.</p>`},
@@ -1450,7 +1484,7 @@ let renderGeneration=0;
 let caseSearchRequest=0,caseSearchTimer=null;
 const caseLink=id=>`<a href="#/case/${encodeURIComponent(id)}" class="mono">${esc(id)}</a>`;
 const tbar=(title,desc,actions="",tk="",legend="")=>`<div class="tbar"><div class="heading"><h1>${title}${tip(tk)}</h1>
-  <div class="desc">${desc}</div>${legend?`<div class="legend">${legend}</div>`:""}</div>${
+  <div class="desc">${desc}</div></div>${
   actions?`<div class="actions">${actions}</div>`:""}</div>`;
 const sec=(title,tk="",cls="",gloss="")=>`<h2 class="sec ${cls}">${title}${
   gloss?`<span class="gloss">${gloss}</span>`:""}${tip(tk)}</h2>`;
@@ -1575,19 +1609,24 @@ async function viewCases(){
       <div class="toolbar">
         <div class="search"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><circle cx="7" cy="7" r="4.5"/><path d="M14 14l-3.5-3.5"/></svg>
           <input id="q" placeholder="Search by company or ID" value="${esc(remembered)}" aria-label="Search companies"></div>
-        <span class="note" id="case-count"></span>${tip("caselist")}</div>
+        <span class="select-wrap"><select id="case-filter" aria-label="Company filter">
+          <option value="all">All</option><option value="new">New</option><option value="review">Awaiting review</option><option value="approved">Approved</option><option value="buy_locked">Buying locked</option><option value="rejected">Rejected</option>
+        </select>${I.down}</span><span class="note" id="case-count" role="status"></span>${tip("caselist")}</div>
+      <p class="sub" id="case-filter-help" style="margin-bottom:var(--s3)">New means not yet decided. Buying locked is a subset of approved companies.</p>
       <div class="card"><div class="bd flush"><table class="companies">
         <thead><tr><th>Company</th><th>Decision</th>
         <th class="num" title="score at the time of the decision, with today's evidence total below it when the two differ">Score</th>
         <th>Status</th><th>Buying</th><th>Broker Status</th><th class="num">Updated</th><th></th></tr></thead>
         <tbody id="case-rows"></tbody></table></div></div>`;
     box=$("#q");
+    $("#case-filter").value=recall("caseFilter","all");
+    $("#case-filter").onchange=event=>{remember("caseFilter",event.target.value);viewCases()};
     box.addEventListener("input",e=>{remember("caseq",e.target.value);
       clearTimeout(caseSearchTimer);caseSearchTimer=setTimeout(()=>viewCases(),250)});
   }
-  const q=box.value;
+  const q=box.value,filter=$("#case-filter").value,filterLabel=$("#case-filter").selectedOptions[0].textContent;
   const requestId=++caseSearchRequest;
-  const{body}=await j(`/ui/api/cases?q=${encodeURIComponent(q)}`);
+  const{body}=await j(`/ui/api/cases?q=${encodeURIComponent(q)}&filter=${encodeURIComponent(filter)}`);
   if(requestId!==caseSearchRequest||page.dataset.route!=="#/cases"||box!==$("#q"))return;
   const rows=body.cases.map(c=>`<tr class="click" data-id="${esc(c.id)}">
     <td><a href="#/case/${encodeURIComponent(c.id)}" class="rowlink">${esc(c.company_name||c.id)}</a><div class="sub mono">${esc(c.id)}</div></td>
@@ -1599,11 +1638,11 @@ async function viewCases(){
     <td>${pill(c.broker_status)}</td>
     <td class="num">${when(c.updated_at)}</td>
     <td class="chev" aria-hidden="true">›</td></tr>`).join("")
-    ||(q?emptyRow(8,"No matches",`No company or ID contains “${esc(q)}”. <button class="sm" id="clearq">Clear Search</button>`)
-        :emptyRow(8,"No companies yet",`Send a <code>kyb.run_requested</code> message from <a href="#/composer">Send Message</a> to create one.`));
+    ||(q||filter!=="all"?emptyRow(8,"No matches",`No companies match ${esc(filterLabel)}${q?` and “${esc(q)}”`:""}. <button class="sm" id="clearq">Clear filters</button>`)
+        :emptyRow(8,"No companies yet",`Send a <code>kyb.run_requested</code> message from <a href="#/composer">Company Actions</a> to create one.`));
   $("#case-rows").innerHTML=rows;
-  $("#case-count").textContent=`${body.cases.length} compan${body.cases.length===1?"y":"ies"}`;
-  const cq=$("#clearq");if(cq)cq.onclick=()=>{box.value="";remember("caseq","");box.focus();viewCases()};
+  $("#case-count").textContent=body.total>body.cases.length?`${body.cases.length} shown of ${body.total} matching companies`:`${body.total??body.cases.length} matching companies`;
+  const cq=$("#clearq");if(cq)cq.onclick=()=>{box.value="";$("#case-filter").value="all";remember("caseq","");remember("caseFilter","all");box.focus();viewCases()};
   // The row's click is a convenience layered over the link, never a second navigation: a click
   // on the link itself, or one with a modifier (new tab, new window), is the browser's to handle.
   page.querySelectorAll("tr.click").forEach(tr=>
@@ -1810,7 +1849,7 @@ async function viewCase(id){
     return`<tr><td><span class="strong">${esc(say("check",type))}</span>
         <div class="sub mono">${esc(type)}</div></td><td><div class="chiprow haspill">${chain}</div></td>
       <td class="sub">${esc(say("adapter",list.at(-1).source||""))}</td></tr>`;
-  }).join("")||emptyRow(3,"No evidence yet","Evidence arrives with platform messages. Use <a href='#/composer'>Send Message</a> to submit one.");
+  }).join("")||emptyRow(3,"No evidence yet","Evidence arrives with platform messages. Use <a href='#/composer'>Company Actions</a> to submit one.");
 
   const runRows=d.runs.map(r=>{
     const ads=d.adapter_results.filter(a=>a.run_id===r.id).map(a=>
@@ -1880,7 +1919,7 @@ async function viewCase(id){
        ${decision&&c.status===decision?"":casePill(c,hold)}
        ${statePill(BUY_PILL,"buy_status",c.buy_status)}${pill(c.broker_status)}</span>`,
       `${c.status==="approved_manual"?"":`<button class="warn" id="approvebtn">${I.person}Approve Manually</button>`}
-       <button id="sendbtn">Send Message</button>`)}
+       <button id="sendbtn">Company Actions</button>`)}
     ${identityCard(c)}
     <div class="card"><div class="hd"><h2>Decision Sent to Platform</h2>
         <span class="hint">all values from one decision record</span>${tip("published")}</div>
@@ -1916,7 +1955,7 @@ async function viewCase(id){
               <span class="btick" style="left:${s.threshold/max*100}%"><span>Threshold ${s.threshold}</span></span></span>
           </div>
         </div>
-        <div class="contrib" style="--rows:${Math.ceil(s.items.length/2)}">${contrib}</div>
+        ${s.items.length?`<p class="sub">Rubric: ${esc(s.rubric_scope||"Recorded evidence")} · ${s.configuration_revision?`configuration revision ${esc(s.configuration_revision)}`:esc(s.rubric_provenance||"Legacy policy")}</p><div class="contrib" style="--rows:${Math.ceil(s.items.length/2)}">${contrib}</div>`:`<p class="callout amber" role="status">Historical rubric unavailable. Known published and current evidence scores remain shown separately; today's weights are not substituted.</p>`}
       </div></div>
     ${sec("Evidence History","checks","","— oldest first; grey entries were replaced")}
     <div class="card"><div class="bd flush"><table>
@@ -1984,7 +2023,7 @@ async function viewIntegrations(){
   if(generation!==renderGeneration)return;
   const p=d.platform_callback;
   const envChips=list=>`<div class="chiprow">`+list.map(e=>
-    `<span class="tag ${e.present?"":"warn"}">${e.present?I.check:I.absent}${esc(e.note)}</span>`).join("")+`</div>`;
+    `<span class="sub">${e.present?I.check:I.absent}${esc(e.note)}</span>`).join("")+`</div>`;
   const rows=d.adapters.map(a=>`
     <div class="irow">
       <div class="itile">${GLYPH[a.adapter_id]||"·"}</div>
@@ -2040,130 +2079,120 @@ async function viewIntegrations(){
 async function viewFieldMap(force=false){
   if(!force&&page.dataset.route==="#/fieldmap"&&page.querySelector(".mapping-editor-mounted"))return;
   const generation=renderGeneration;
-  const[{body:pol},{body:cl}]=await Promise.all([j("/ui/api/policy"),j("/ui/api/cases?limit=100")]);
-  let selected=recall("fmCase")||cl.cases[0]?.id||"";
-  let values={},valueState=selected?"ready":"empty";
-  if(selected){const r=await j(`/ui/api/cases/${encodeURIComponent(selected)}/full`);
-    if(r.status<300)values=r.body.salesforce}
+  const[{body:pol},{body:cl},{body:configuration}]=await Promise.all([j("/ui/api/policy"),j("/ui/api/cases?limit=100"),j("/ui/api/configuration")]);
   if(generation!==renderGeneration)return;
-  const fields=Object.keys(pol.field_sources),live=Object.fromEntries(fields.map(field=>[field,field]));
-  const base=mapBase(pol),saved=readPreview("salesforce",base,value=>validateMappings(value,fields));
-  let working=saved.state==="saved"?clone(saved.value):clone(live),editing=false;
-  page.innerHTML=tbar("Salesforce Fields",
-    "The Salesforce field each value is written to, and the source of that value.","","fieldmap")+`
-    <div class="toolbar"><label class="flab" for="fmcase">Show values for</label>
-      <span class="select-wrap"><select id="fmcase"><option value="">Select a company</option>
-        ${cl.cases.map(c=>`<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.company_name||c.id)} · ${esc(c.id)}</option>`).join("")}
-      </select>${I.down}</span>${tip("fieldtable")}</div>
-    <div class="preview-note">${I.warn}<span><b>Preview only</b> — saved in this browser; live rules are unchanged.
-      Destination names only: values and source projections remain read-only.</span></div>
-    <div class="card mapping-editor-mounted" id="mapping-editor"><div class="hd"><h2>Field Mappings</h2>
-      <div class="preview-actions"><button type="button" class="sm" id="edit-mappings">Edit Mappings</button>
-        <button type="button" class="sm" id="save-mappings" hidden>Save Preview</button>
-        <button type="button" class="sm" id="reset-mappings">Reset to Live</button></div></div>
-      <div class="bd flush"><table class="preview-table"><thead><tr><th style="width:250px">Salesforce Field</th>
-        <th style="width:250px">Value</th><th>Source</th></tr></thead><tbody></tbody></table></div>
-      <div class="bd"><p class="preview-status" id="mapping-status" role="status"></p></div></div>
-    <p class="sub" style="margin-top:12px">This console calculates these values; the platform writes them
-      to Salesforce. Each company is written in order, and repeated writes of the same result are
-      harmless. If Salesforce is unavailable, decisions still proceed here; only the Salesforce copy
-      is delayed.</p>`;
-  const tbody=$("#mapping-editor tbody"),status=$("#mapping-status"),edit=$("#edit-mappings"),save=$("#save-mappings"),reset=$("#reset-mappings");
-  setPreviewStatus(status,saved.message||"Showing live destination names. No preview is saved.",saved.state==="invalid"||saved.state==="stale"?"err":"");
-  const valueMarkup=field=>{if(valueState==="loading")return`<span class="sub">Loading selected company…</span>`;
-    if(valueState==="error")return`<span class="sub">Values could not load. Choose the company again to retry.</span>`;
-    const v=values[field],shown=field==="KYC_Check__c"?(Array.isArray(v)?`${v.length} record${v.length===1?"":"s"}`:""):(v===undefined||v===null?"":String(v));
-    return selected?(shown===""?`<span class="sub">—</span>`:`<span class="strong">${esc(shown)}</span>`):`<span class="sub">Select a company</span>`};
-  const drawValues=()=>fields.forEach(field=>{const cell=tbody.querySelector(`[data-source-row="${CSS.escape(field)}"] [data-map-value]`);if(cell)cell.innerHTML=valueMarkup(field)});
-  const draw=()=>{tbody.innerHTML=fields.map(field=>{const src=pol.field_sources[field];
-      const destination=working[field];return`<tr data-source-row="${esc(field)}"><td>${editing?`<input data-source-field="${esc(field)}" aria-label="Destination for ${esc(field)}" value="${esc(destination)}">`:
-          `<span class="mono strong">${esc(destination)}</span>`}${destination!==field?`<span class="live-value">Original: <span class="mono">${esc(field)}</span></span>`:""}</td>
-        <td data-map-value>${valueMarkup(field)}</td>
-        <td class="sub src">${esc(src)}</td></tr>`}).join("");edit.hidden=editing;save.hidden=!editing};
-  edit.onclick=()=>{editing=true;draw();tbody.querySelector("input")?.focus();setPreviewStatus(status,"Unsaved mapping edits.")};
-  save.onclick=()=>{const candidate={};tbody.querySelectorAll("input[data-source-field]").forEach(input=>candidate[input.dataset.sourceField]=input.value);
-    const error=validateMappings(candidate,fields);if(error){setPreviewStatus(status,error,"err");return}
-    if(!writePreview("salesforce",base,candidate)){setPreviewStatus(status,"This preview could not be saved. Browser storage may be blocked; your current form remains editable.","err");return}
-    working=clone(candidate);editing=false;draw();setPreviewStatus(status,"Preview saved in this browser. Live Salesforce mappings are unchanged.","ok")};
-  reset.onclick=()=>{if(reset.textContent!=="Confirm Reset"){reset.textContent="Confirm Reset";setPreviewStatus(status,"Confirm reset to discard this browser-local mapping preview.");return}
-    if(!removePreview("salesforce")){setPreviewStatus(status,"This preview could not be removed. Browser storage may be blocked; your current form remains usable.","err");return}
-    working=clone(live);editing=false;reset.textContent="Reset to Live";draw();setPreviewStatus(status,"Reset to live destination names. Live rules were not changed.","ok")};
-  draw();
-  let selectionRequest=0;const caseSelect=$("#fmcase");
-  caseSelect.onchange=async e=>{if(editing)tbody.querySelectorAll("input[data-source-field]").forEach(input=>working[input.dataset.sourceField]=input.value);
-    selected=e.target.value;remember("fmCase",selected);const request=++selectionRequest;values={};valueState=selected?"loading":"empty";
+  const s=configurationState("mappings",configuration),fields=Object.keys(s.configuration.mappings);
+  const sources=Object.fromEntries(fields.map(field=>[field,pol.mapping_revision===s.configuration.revision||!s.configuration.active?pol.field_sources[s.configuration.mappings[field]]||"":""]));
+  let selected=recall("fmCase")||cl.cases[0]?.id||"",values={},valueState=selected?"loading":"empty",selectionRequest=0;
+  page.innerHTML=tbar("Salesforce Fields","Saved destination names and the values calculated by this service.","","fieldmap")+`
+    <div class="toolbar"><label class="flab" for="fmcase">Show values for</label><span class="select-wrap"><select id="fmcase"><option value="">Select a company</option>
+      ${cl.cases.map(c=>`<option value="${esc(c.id)}" ${c.id===selected?"selected":""}>${esc(c.company_name||c.id)} · ${esc(c.id)}</option>`).join("")}</select>${I.down}</span>${tip("fieldtable")}</div>
+    <div class="card mapping-editor-mounted" id="mapping-editor"><div class="hd"><h2>Field Mappings</h2><div class="preview-actions"></div></div>
+      <div class="config-feedback"><p class="config-access"></p><p class="preview-status" id="mapping-status" role="status"></p></div>
+      <div class="bd flush"><table class="preview-table"><thead><tr><th>Destination field</th><th>Value</th><th>Source</th></tr></thead><tbody></tbody></table></div></div>
+    <p class="sub" style="margin-top:12px">Destination names only. This service does not write Salesforce; the platform must consume the saved mapping projection.</p>`;
+  const root=$("#mapping-editor"),tbody=$("tbody",root),caseSelect=$("#fmcase");
+  const valueMarkup=field=>{
+    if(valueState==="loading")return'<span class="sub">Loading selected company…</span>';
+    if(valueState==="error")return'<span class="sub">Values could not load. Choose the company again to retry.</span>';
+    if(valueState==="stale")return'<span class="sub">Mapping revision changed. Reload server values to refresh the projection.</span>';
+    if(!selected)return'<span class="sub">Select a company</span>';
+    const v=values[s.configuration.mappings[field]];
+    return v===null||v===undefined?'<span class="sub">—</span>':`<span class="strong">${esc(field==="KYC_Check__c"&&Array.isArray(v)?v.length+" records":String(v))}</span>`;
+  };
+  const drawValues=()=>fields.forEach(field=>{const row=tbody.querySelector(`[data-source-row="${CSS.escape(field)}"]`);if(row){$("[data-map-value]",row).innerHTML=valueMarkup(field);$(".src",row).textContent=sources[field]||"Source metadata unavailable"}});
+  const paint=(rebuild=true)=>{
+    if(!root.isConnected)return;
+    if(rebuild)tbody.innerHTML=fields.map(field=>`<tr data-source-row="${esc(field)}"><td>${s.editing?`<input data-source-field="${esc(field)}" aria-label="Destination for ${esc(field)}" value="${esc(s.working[field])}">`:`<span class="mono strong">${esc(s.working[field])}</span>`}<span class="live-value">Source ID: <span class="mono">${esc(field)}</span></span></td><td data-map-value>${valueMarkup(field)}</td><td class="sub src">${esc(sources[field]||"Source metadata unavailable")}</td></tr>`).join("");
+    $(".preview-actions",root).innerHTML=configButtons(s,"Edit Mappings")+(valueState==="stale"&&!s.editing?'<button class="sm" data-config-refresh>Reload server values</button>':"");
+    $(".config-access",root).innerHTML=configAccess(s.configuration);
+    setPreviewStatus($("#mapping-status"),s.message,["error","conflict","unknown"].includes(s.mode)?"err":"");
+    root.querySelectorAll("input").forEach(el=>{el.disabled=!!s.request;el.oninput=()=>{s.working[el.dataset.sourceField]=el.value}});
+    const bind=(key,fn)=>{const el=root.querySelector("[data-config-"+key+"]");if(el)el.onclick=fn};
+    bind("edit",()=>{s.editing=true;s.mode="edit";s.message="Unsaved destination edits.";paint();$("input",root)?.focus()});
+    bind("save",()=>{const error=validateMappings(s.working,fields);if(error){s.message=error;s.mode="error";paint(false);const names=new Set(),invalid=fields.find(field=>{const name=s.working[field];if(!/^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(name)||names.has(name.toLowerCase()))return true;names.add(name.toLowerCase());return false});root.querySelector(`[data-source-field="${CSS.escape(invalid||fields[0])}"]`)?.focus();return}saveConfiguration("mappings",s,s.working,afterSave)});
+    bind("cancel",()=>{s.working=clone(s.configuration.mappings);s.editing=false;s.mode="read";s.message="Edits canceled. No changes sent.";paint()});
+    bind("retry",()=>saveConfiguration("mappings",s,null,afterSave));
+    bind("refresh",async()=>{delete configEdits.mappings;await viewFieldMap(true)});
+    bind("reload",async()=>{if(!confirm("Discard these unsent edits and load server values?"))return;delete configEdits.mappings;await viewFieldMap(true)});
+  };
+  const loadValues=async()=>{
+    selected=caseSelect.value;remember("fmCase",selected);const request=++selectionRequest;values={};valueState=selected?"loading":"empty";drawValues();
     const current=()=>request===selectionRequest&&page.dataset.route==="#/fieldmap"&&caseSelect===$("#fmcase")&&tbody.isConnected;
-    drawValues();setPreviewStatus(status,editing?"Unsaved mapping edits. Loading selected company values…":"Loading selected company values…");
-    try{let next={};if(selected){const r=await j(`/ui/api/cases/${encodeURIComponent(selected)}/full`);if(r.status>=300)throw new Error(`HTTP ${r.status}`);next=r.body.salesforce||{}}
-      if(!current())return;values=next;valueState=selected?"ready":"empty";drawValues();setPreviewStatus(status,editing?"Unsaved mapping edits. Company values refreshed from the original live fields.":"Company values refreshed from the original live fields.")}
-    catch(error){if(!current())return;values={};valueState="error";drawValues();setPreviewStatus(status,"Values could not load for the selected company. Choose it again to retry; destination edits were kept.","err")}};
+    if(!selected)return;
+    try{const r=await j("/ui/api/cases/"+encodeURIComponent(selected)+"/full");if(r.status>=300)throw Error("values unavailable");
+      if(!current())return;valueState=r.body.mapping_revision===s.configuration.revision||!s.configuration.active?"ready":"stale";values=r.body.salesforce||{};
+      if(valueState==="ready")fields.forEach(field=>{sources[field]=r.body.field_sources[s.configuration.mappings[field]]||sources[field]});drawValues();
+      if(valueState==="stale"){s.message="The mapping revision changed. Your destination edits are kept; cancel or resolve the save conflict before reloading.";paint(false)}
+    }catch(error){if(!current())return;values={};valueState="error";drawValues();s.message="Values could not load; destination edits were kept.";paint(false)}
+  };
+  const afterSave=rebuild=>{paint(rebuild);if(rebuild)loadValues()};
+  caseSelect.onchange=loadValues;s.paint=paint;paint();loadValues();
 }
 
-function mountPointsEditor(p){
-  const live=Object.fromEntries(p.rubric.map(r=>[r.check_type,r.points])),base=p.bundle_hash;
-  const saved=readPreview("points",base,value=>validatePoints(value,p.rubric));
-  let working=saved.state==="saved"?clone(saved.value):clone(live),editing=false;
-  const body=$("#points-editor tbody"),status=$("#points-status"),edit=$("#edit-points"),save=$("#save-points"),reset=$("#reset-points");
-  setPreviewStatus(status,saved.message||"Showing live point values. No preview is saved.",saved.state==="invalid"||saved.state==="stale"?"err":"");
-  const draw=()=>{body.innerHTML=p.rubric.map(r=>`<tr data-check-row="${esc(r.check_type)}">
-      <td><span class="strong">${esc(say("check",r.check_type))}</span><div class="sub mono">${esc(r.check_type)}</div></td>
-      <td class="num strong">${editing?`<input type="number" min="0" max="1000" step="1" data-check="${esc(r.check_type)}" aria-label="Points for ${esc(say("check",r.check_type))}" value="${working[r.check_type]}">`:
-        `+${working[r.check_type]}${working[r.check_type]!==r.points?`<span class="live-value">Live +${r.points}</span>`:""}`}</td>
-      <td class="sub">${esc(say("category",r.category))}</td><td>${r.mode==="manual"?pill("manual","Manual Review"):pill("p-neutral",say("mode",r.mode))}</td>
-      <td class="sub">${esc(r.pass_rule)}</td></tr>`).join("");edit.hidden=editing;save.hidden=!editing};
-  edit.onclick=()=>{editing=true;draw();body.querySelector("input")?.focus();setPreviewStatus(status,"Unsaved point edits. Live scoring is unchanged.")};
-  save.onclick=()=>{const candidate={};body.querySelectorAll("input[data-check]").forEach(input=>candidate[input.dataset.check]=input.value===""?NaN:Number(input.value));
-    const error=validatePoints(candidate,p.rubric);if(error){setPreviewStatus(status,error,"err");return}
-    if(!writePreview("points",base,candidate)){setPreviewStatus(status,"This preview could not be saved. Browser storage may be blocked; your current form remains editable.","err");return}
-    working=clone(candidate);editing=false;draw();setPreviewStatus(status,"Preview saved in this browser. Live scoring is unchanged.","ok")};
-  reset.onclick=()=>{if(reset.textContent!=="Confirm Reset"){reset.textContent="Confirm Reset";setPreviewStatus(status,"Confirm reset to discard this browser-local point preview.");return}
-    if(!removePreview("points")){setPreviewStatus(status,"This preview could not be removed. Browser storage may be blocked; your current form remains usable.","err");return}
-    working=clone(live);editing=false;reset.textContent="Reset to Live";draw();setPreviewStatus(status,"Reset to live points. Live scoring was not changed.","ok")};
-  draw();
+function mountPointsEditor(p,configuration){
+  const s=configurationState("points",configuration),root=$("#points-editor"),body=$("tbody",root);
+  const paint=(rebuild=true)=>{
+    if(!root.isConnected)return;
+    if(rebuild)body.innerHTML=p.rubric.map(r=>`<tr data-check-row="${esc(r.check_type)}"><td><span class="strong">${esc(say("check",r.check_type))}</span><div class="sub mono">${esc(r.check_type)}</div></td>
+      <td class="num strong">${s.editing?`<input type="number" min="0" max="1000" step="1" data-check="${esc(r.check_type)}" data-point="${esc(r.check_type)}" aria-label="Points for ${esc(say("check",r.check_type))}" value="${s.working[r.check_type]}">`:"+"+s.working[r.check_type]}</td>
+      <td class="sub">${esc(say("category",r.category))}</td><td>${r.mode==="manual"?pill("manual","Manual Review"):pill("p-neutral",say("mode",r.mode))}</td><td class="sub">${esc(r.pass_rule)}</td></tr>`).join("");
+    $(".preview-actions",root).innerHTML=configButtons(s,"Edit Points");$(".config-access",root).innerHTML=configAccess(s.configuration);
+    setPreviewStatus($("#points-status"),s.message,["error","conflict","unknown"].includes(s.mode)?"err":"");
+    body.querySelectorAll("input").forEach(el=>{el.disabled=!!s.request;el.oninput=()=>{s.working[el.dataset.check]=el.value===""?null:Number(el.value)}});
+    const bind=(key,fn)=>{const el=root.querySelector("[data-config-"+key+"]");if(el)el.onclick=fn};
+    bind("edit",()=>{s.editing=true;s.mode="edit";s.message="Unsaved points. Use whole numbers from 0 to 1000; threshold and gates stay fixed.";paint();$("input",root)?.focus()});
+    bind("save",()=>{const error=validatePoints(s.working,p.rubric);if(error){s.message=error;s.mode="error";paint(false);[...body.querySelectorAll("input")].find(el=>el.value===""||!el.checkValidity())?.focus();return}saveConfiguration("points",s,s.working,paint)});
+    bind("cancel",()=>{s.working=clone(s.configuration.points);s.editing=false;s.mode="read";s.message="Edits canceled. No changes sent.";paint()});
+    bind("retry",()=>saveConfiguration("points",s,null,paint));
+    bind("reload",async()=>{if(!confirm("Discard these unsent edits and load server values?"))return;delete configEdits.points;root.classList.remove("policy-preview-mounted");await viewPolicy()});
+    if($("#rules-hash")){$("#rules-hash").textContent=s.configuration.bundle_hash;$("#configuration-revision").textContent=s.configuration.revision||"Not activated"}
+  };s.paint=paint;paint();
 }
 
-function mountBrokerEditor(p){
-  const live=(p.broker_entities||[]).map((b,i)=>cleanBroker(b,i)),base=brokerBase(p);
-  const saved=readPreview("brokers",base,validateBrokers);
-  let working=saved.state==="saved"?clone(saved.value.brokers):clone(live),search="",filter="all",editingBroker=null;
-  const body=$("#broker-editor tbody"),status=$("#broker-status"),slot=$("#broker-entry-slot"),overlapBox=$("#broker-overlap"),searchBox=$("#broker-search"),filterBox=$("#broker-filter"),save=$("#save-brokers");
-  setPreviewStatus(status,saved.message||"Showing the live broker list. No preview is saved.",saved.state==="invalid"||saved.state==="stale"?"err":"");
-  const haystack=b=>[b.name,...BROKER_LISTS.flatMap(k=>b[k]||[])].join(" ").toLowerCase();
-  const draw=()=>{searchBox.value=search;filterBox.value=filter;
-    const shown=working.filter(b=>(filter==="all"||b.policy===filter)&&haystack(b).includes(search.toLowerCase()));
-    body.innerHTML=shown.map(b=>{const identifiers=BROKER_LISTS.flatMap(k=>b[k].map(v=>`<span class="tag" title="${esc(k)}">${esc(v)}</span>`)).join("");
-      return`<tr data-broker-row="${esc(b.id)}"><td class="strong">${esc(b.name)}</td><td>${b.policy==="blocked"?pill("blocked","Blocked"):pill("clear","Allowed (flagged only)")}</td>
-        <td>${identifiers?`<div class="broker-identifiers">${identifiers}</div>`:`<span class="sub">Name only</span>`}${b.notes?`<div class="sub">${esc(b.notes)}</div>`:""}</td>
-        <td><div class="broker-row-actions"><button type="button" class="sm" data-edit-broker="${esc(b.id)}">Edit</button><button type="button" class="sm danger" data-remove-broker="${esc(b.id)}">Remove</button></div></td></tr>`}).join("")||emptyRow(4,"No matching brokers","Change the search or policy filter.");
-    const overlaps=brokerOverlaps(working);overlapBox.innerHTML=overlaps.length?`<div class="broker-overlap">${I.warn}<b>Identifier overlap:</b> ${esc(overlaps.map(x=>`${x.value} (${x.one.name} / ${x.two.name})`).join("; "))}. If policies differ, the blocked match takes precedence.</div>`:"";
-    body.querySelectorAll("[data-edit-broker]").forEach(button=>button.onclick=()=>openEntry(button.dataset.editBroker));
-    body.querySelectorAll("[data-remove-broker]").forEach(button=>button.onclick=()=>{if(button.textContent!=="Confirm Remove"){button.textContent="Confirm Remove";setPreviewStatus(status,"Confirm removal. This changes only the unsaved browser preview.");return}
-      working=working.filter(b=>b.id!==button.dataset.removeBroker);setPreviewStatus(status,"Broker removed from the unsaved preview. Save Preview to keep this draft.");draw()})};
-  const openEntry=id=>{editingBroker=id?working.find(b=>b.id===id):null;const b=editingBroker||cleanBroker({id:`local-${Date.now()}-${Math.random().toString(16).slice(2)}`,name:"",policy:"allowed"});
-    const labels={aliases:"Aliases",domains:"Domains",email_domains:"Email domains",org_ids:"Org IDs",poc_handles:"POC handles",asns:"ASNs"};
-    slot.innerHTML=`<form class="broker-entry" id="broker-entry-form" novalidate>
-      <fieldset><legend>Name and policy</legend><span class="group-hint">The display name and exact allowed or blocked treatment.</span><div class="broker-entry-grid">
-        <div class="field"><label class="flab" for="broker-name">Name</label><input id="broker-name" value="${esc(b.name)}"></div>
-        <div class="field"><label class="flab" for="broker-policy">Policy</label><span class="select-wrap"><select id="broker-policy"><option value="allowed" ${b.policy==="allowed"?"selected":""}>Allowed</option><option value="blocked" ${b.policy==="blocked"?"selected":""}>Blocked</option></select>${I.down}</span></div></div></fieldset>
-      <fieldset><legend>Matching identifiers</legend><span class="group-hint">Exact identifiers only. Enter one value per line, up to 100 in each list.</span><div class="broker-entry-grid">
-        ${BROKER_LISTS.map(key=>`<div class="field"><label class="flab" for="broker-${key}">${labels[key]}</label><textarea id="broker-${key}" data-broker-list="${key}">${esc(b[key].join("\n"))}</textarea></div>`).join("")}</div></fieldset>
-      <fieldset><legend>Preview notes</legend><span class="group-hint">Browser-local context only; notes are not sent to the server.</span><div class="field"><label class="flab" for="broker-notes">Notes</label><textarea id="broker-notes" maxlength="2000">${esc(b.notes)}</textarea></div></fieldset>
-      <p class="entry-error" id="broker-entry-error" role="alert"></p><div class="preview-actions"><button type="submit" class="sm">Apply Entry</button><button type="button" class="sm" id="cancel-broker-entry">Cancel</button></div></form>`;
-    save.disabled=true;setPreviewStatus(status,"Entry not applied. Choose Apply Entry or Cancel before saving the preview.");
-    const form=$("#broker-entry-form");form.onsubmit=event=>{event.preventDefault();const candidate=cleanBroker({id:b.id,name:$("#broker-name").value.trim(),policy:$("#broker-policy").value,
-        notes:$("#broker-notes").value,...Object.fromEntries([...form.querySelectorAll("[data-broker-list]")].map(input=>[input.dataset.brokerList,input.value.split(/[\n,]/).map(v=>v.trim()).filter(Boolean)]))});
-      const next=editingBroker?working.map(item=>item.id===candidate.id?candidate:item):[...working,candidate],error=validateBrokers({brokers:next});
-      if(error){$("#broker-entry-error").textContent=error;return}working=next;slot.innerHTML="";editingBroker=null;save.disabled=false;setPreviewStatus(status,"Unsaved broker edits. Live enforcement is unchanged.");draw()};
-    $("#cancel-broker-entry").onclick=()=>{slot.innerHTML="";editingBroker=null;save.disabled=false;setPreviewStatus(status,"Entry canceled. The preview list was not changed.")};$("#broker-name").focus()};
-  searchBox.oninput=()=>{search=searchBox.value;draw()};filterBox.onchange=()=>{filter=filterBox.value;draw()};
-  $("#add-broker").onclick=()=>openEntry(null);save.onclick=()=>{if(slot.querySelector("#broker-entry-form")){setPreviewStatus(status,"Entry not applied. Choose Apply Entry or Cancel before saving the preview.","err");return}
-    const error=validateBrokers({brokers:working});if(error){setPreviewStatus(status,error,"err");return}
-    if(!writePreview("brokers",base,{brokers:working})){setPreviewStatus(status,"This preview could not be saved. Browser storage may be blocked; your current form remains usable.","err");return}
-    setPreviewStatus(status,"Preview saved in this browser. Live broker enforcement is unchanged.","ok")};
-  $("#reset-brokers").onclick=event=>{const button=event.currentTarget;if(button.textContent!=="Confirm Reset"){button.textContent="Confirm Reset";setPreviewStatus(status,"Confirm reset to discard this browser-local broker preview.");return}
-    if(!removePreview("brokers")){setPreviewStatus(status,"This preview could not be removed. Browser storage may be blocked; your current form remains usable.","err");return}
-    working=clone(live);slot.innerHTML="";save.disabled=false;button.textContent="Reset to Live";setPreviewStatus(status,"Reset to the live broker list. Live enforcement was not changed.","ok");draw()};
-  draw();
+function mountBrokerEditor(p,configuration){
+  const s=configurationState("brokers",configuration),root=$("#broker-editor"),body=$("tbody",root),slot=$("#broker-entry-slot"),searchBox=$("#broker-search"),filterBox=$("#broker-filter");
+  let search="",filter="all";
+  const paint=(rebuild=true)=>{
+    if(!root.isConnected)return;
+    $(".preview-actions",root).innerHTML=configButtons(s,"Add Broker");$(".config-access",root).innerHTML=configAccess(s.configuration);
+    setPreviewStatus($("#broker-status"),s.message,["error","conflict","unknown"].includes(s.mode)?"err":"");
+    if(rebuild){
+      const shown=s.working.filter(b=>(filter==="all"||b.policy===filter)&&[b.name,...BROKER_LISTS.flatMap(k=>b[k]||[])].join(" ").toLowerCase().includes(search.toLowerCase()));
+      body.innerHTML=shown.map(b=>`<tr data-broker-row="${esc(b.id)}"><td class="strong">${esc(b.name)}</td><td>${b.policy==="blocked"?pill("blocked","Blocked"):pill("clear","Allowed")}</td><td><div class="broker-identifiers">${BROKER_LISTS.flatMap(k=>(b[k]||[]).map(v=>`<span class="tag" title="${esc(k)}">${esc(v)}</span>`)).join("")}</div>${b.notes?`<div class="sub">${esc(b.notes)}</div>`:""}</td><td><div class="broker-row-actions">${!s.editing&&!s.request&&s.configuration.can_edit?`<button class="sm" data-edit-broker="${esc(b.id)}">Edit</button><button class="sm danger" data-remove-broker="${esc(b.id)}">Remove</button>`:""}</div></td></tr>`).join("")||emptyRow(4,"No matching brokers","Change the search or policy filter.");
+      $("#broker-count").textContent=shown.length+" of "+s.working.length+" brokers";
+      const overlaps=s.configuration.broker_overlaps||[];$("#broker-overlap").innerHTML=overlaps.length?`<p class="broker-overlap">${I.warn} Overlapping match identifiers: ${esc(overlaps.map(o=>o.entity_ids.map(id=>s.configuration.brokers.find(b=>b.id===id)?.name||id).join(" / ")+" ("+o.identifier_classes.join(", ")+")").join("; "))}. Blocked matches take precedence.</p>`:"";
+      if(!s.editing)slot.innerHTML="";
+    }
+    slot.querySelectorAll("input,textarea,select").forEach(el=>{el.disabled=!!s.request});
+    const bind=(key,fn)=>{const el=root.querySelector("[data-config-"+key+"]");if(el)el.onclick=fn};
+    bind("edit",()=>openEntry(null));
+    bind("cancel",()=>{s.working=clone(s.configuration.brokers);s.editing=false;s.entry=null;s.mode="read";s.message="Edits canceled. No changes sent.";paint()});
+    bind("save",()=>{const next=s.entry?s.working.some(b=>b.id===s.entry.id)?s.working.map(b=>b.id===s.entry.id?s.entry:b):[...s.working,s.entry]:s.working;
+      const error=validateBrokers({brokers:next});if(error){s.message=error;s.mode="error";paint(false);const key=BROKER_LISTS.find(key=>error.startsWith(key+" "));$(key?"#broker-"+key:error.startsWith("Notes ")?"#broker-notes":error.startsWith("Broker policy ")?"#broker-policy":"#broker-name")?.focus();return}saveConfiguration("brokers",s,next,paint)});
+    bind("retry",()=>saveConfiguration("brokers",s,null,paint));
+    bind("reload",async()=>{if(!confirm("Discard these unsent edits and load server values?"))return;delete configEdits.brokers;$("#points-editor").classList.remove("policy-preview-mounted");await viewPolicy()});
+    body.querySelectorAll("[data-edit-broker]").forEach(el=>el.onclick=()=>openEntry(el.dataset.editBroker));
+    body.querySelectorAll("[data-remove-broker]").forEach(el=>el.onclick=()=>{
+      if(!operatorCredential){s.message="Set an operator credential in Options before removing a broker.";paint(false);return}
+      const broker=s.working.find(b=>b.id===el.dataset.removeBroker);
+      if(!confirm("Remove "+broker.name+" from the saved broker list?"))return;
+      s.editing=true;s.entry=null;s.working=s.working.filter(b=>b.id!==broker.id);saveConfiguration("brokers",s,s.working,paint);
+    });
+  };
+  const openEntry=id=>{
+    s.entry=clone(id?s.working.find(b=>b.id===id):cleanBroker({id:crypto.randomUUID(),name:"",policy:"allowed"}));s.editing=true;s.mode="edit";s.message="Save commits this entry and the complete broker list.";paint();
+    const b=s.entry,labels={aliases:"Aliases",domains:"Domains",email_domains:"Email domains",org_ids:"Org IDs",poc_handles:"POC handles",asns:"ASNs"};
+    slot.innerHTML=`<form class="broker-entry" id="broker-entry-form" novalidate><fieldset><legend>Name and policy</legend><div class="broker-entry-grid">
+      <div class="field"><label class="flab" for="broker-name">Name</label><input id="broker-name" maxlength="200" value="${esc(b.name)}"></div>
+      <div class="field"><label class="flab" for="broker-policy">Policy</label><span class="select-wrap"><select id="broker-policy"><option value="allowed" ${b.policy==="allowed"?"selected":""}>Allowed</option><option value="blocked" ${b.policy==="blocked"?"selected":""}>Blocked</option></select>${I.down}</span></div></div></fieldset>
+      <fieldset><legend>Matching identifiers</legend><span class="group-hint">Exact matches. One identifier per line, up to 100 in each list.</span><div class="broker-entry-grid">${BROKER_LISTS.map(key=>`<div class="field"><label class="flab" for="broker-${key}">${labels[key]}</label><textarea id="broker-${key}" data-broker-list="${key}">${esc(b[key].join("\n"))}</textarea></div>`).join("")}</div></fieldset>
+      <fieldset><legend>Notes</legend><div class="field"><label class="flab" for="broker-notes">Notes</label><textarea id="broker-notes" maxlength="2000">${esc(b.notes||"")}</textarea></div></fieldset></form>`;
+    const form=$("#broker-entry-form");form.oninput=form.onchange=()=>{s.entry={...s.entry,name:$("#broker-name").value,policy:$("#broker-policy").value,notes:$("#broker-notes").value,...Object.fromEntries([...form.querySelectorAll("[data-broker-list]")].map(el=>[el.dataset.brokerList,el.value.split("\n").map(v=>v.trim()).filter(Boolean)]))}};
+    form.onsubmit=e=>{e.preventDefault();root.querySelector("[data-config-save]")?.click()};$("#broker-name").focus();
+  };
+  searchBox.oninput=()=>{search=searchBox.value;paint()};filterBox.onchange=()=>{filter=filterBox.value;paint()};
+  s.paint=paint;paint();if(s.entry){const entry=clone(s.entry),mode=s.mode,message=s.message;openEntry(s.working.some(b=>b.id===entry.id)?entry.id:null);s.entry=entry;s.mode=mode;s.message=message;slot.querySelectorAll("input,textarea,select").forEach(el=>{el.value=el.id==="broker-name"?entry.name:el.id==="broker-policy"?entry.policy:el.id==="broker-notes"?entry.notes||"":entry[el.dataset.brokerList]?.join("\n")||""});paint(false)}
 }
 
 /* ── Policy ───────────────────────────────────────────── */
@@ -2176,63 +2205,31 @@ async function viewPolicy(rule=""){
     return;
   }
   const generation=renderGeneration;
-  const{body:p}=await j("/ui/api/policy");
+  const[{body:p},{body:configuration}]=await Promise.all([j("/ui/api/policy"),j("/ui/api/configuration")]);
   if(generation!==renderGeneration)return;
-  /* The condition is shown verbatim, in the mono register, because it IS the rule: restating a
-     compliance condition in prose on screen would let the screen drift from the bundle and assert
-     something the engine does not do. The plain reading lives in this section's explainer, where
-     it is clearly a reading and not the authority. */
-  // Every row is addressable (#/policy?rule=<decision>) so a case page can point at the exact
-  // rule that produced its verdict; the pointed row is tinted and takes focus.
-  const decisions=p.decisions.map(d0=>`<tr id="rule-${esc(d0.decision)}"${d0.decision===rule?' class="hl" tabindex="-1"':""}><td class="num">${d0.priority}</td><td>${pill(d0.decision)}</td>
-    <td class="sub mono">${esc(d0.condition)}</td><td class="sub">${esc(String(d0.platform_enforcement).replace(/_/g," "))}</td></tr>`).join("");
-  page.innerHTML=tbar("Decision Rules","The rules in force on this installation, shown as stored.",
-      `<div class="policy-hash"><span class="policy-hash-label">Rules fingerprint</span>
-        <div class="policy-hash-row"><code id="rules-hash">${esc(p.bundle_hash)}</code>
-          <button type="button" class="sm" id="copy-rules-hash" aria-label="Copy rules fingerprint">Copy</button></div>
-        <span class="policy-hash-status" id="rules-hash-status" role="status"></span></div>`,"policy")+`
-    <div class="preview-note">${I.warn}<span><b>Preview only</b> — saved in this browser; live rules are unchanged.
-      These drafts never change scoring, gates, decisions, or broker enforcement.</span></div>
-    <div class="card policy-preview-mounted" id="points-editor"><div class="hd"><h2>Scoring</h2>
-      <span class="hint" id="points-bound">threshold ${p.threshold} points · points are whole numbers from 0 to 1000</span>${tip("rubric")}
-      <div class="preview-actions"><button type="button" class="sm" id="edit-points">Edit Points</button>
-        <button type="button" class="sm" id="save-points" hidden>Save Preview</button><button type="button" class="sm" id="reset-points">Reset to Live</button></div></div>
-      <div class="bd flush"><table class="preview-table">
-      <thead><tr><th>Evidence</th><th class="num">Points</th><th>Category</th><th>Method</th><th>Pass Condition</th></tr></thead>
-      <tbody></tbody></table></div><div class="bd"><p class="preview-status" id="points-status" role="status"></p></div></div>
+  if(!configuration.points)throw Error(configuration.detail||"Configuration is unavailable.");
+  const decisions=p.decisions.map(d0=>`<tr id="rule-${esc(d0.decision)}"${d0.decision===rule?' class="hl" tabindex="-1"':""}><td class="num">${d0.priority}</td><td>${pill(d0.decision)}</td><td class="sub mono">${esc(d0.condition)}</td><td class="sub">${esc(String(d0.platform_enforcement).replace(/_/g," "))}</td></tr>`).join("");
+  page.innerHTML=tbar("Decision Rules","Saved configuration applies to newly created review runs. Existing runs and decisions keep their recorded version.","","policy")+`
+    <div class="card policy-preview-mounted" id="points-editor"><div class="hd"><div class="header-title"><h2>Scoring</h2>${tip("rubric")}</div><div class="preview-actions"></div></div>
+      <div class="config-feedback"><p class="config-access"></p><p class="preview-status" id="points-status" role="status"></p></div>
+      <div class="bd flush"><table class="preview-table"><thead><tr><th>Evidence</th><th class="num">Points</th><th>Category</th><th>Method</th><th>Pass Condition</th></tr></thead><tbody></tbody></table></div></div>
     ${sec("Decision Table (first match applies)","decisionpolicy")}
-    <div class="card"><div class="bd flush"><table>
-      <thead><tr><th class="num">#</th><th>Decision</th><th>Condition</th><th>Platform Action</th></tr></thead>
-      <tbody>${decisions}</tbody></table></div>
-      <p class="sub" style="margin:0;padding:var(--s3) var(--s4);border-top:1px solid var(--line)">
-        A company shown as <b>Held for Approval</b> matched an Approved row but was published as
-        On Hold because automatic approval is not enabled on this installation. That hold is an
-        exception to this table and is lifted only by a named reviewer.</p></div>
-    ${sec("Broker Rules","brokerpolicy")}
-    <p class="sub">Allowed brokers still need to pass the other checks. A blocked match takes precedence.
-      Server notes are not available from this API; blank live notes do not claim that the server has none.</p>
-    <div class="card" id="broker-editor"><div class="hd"><h2>Broker Preview</h2><div class="preview-actions">
-      <button type="button" class="sm" id="add-broker">Add Broker</button><button type="button" class="sm" id="save-brokers">Save Preview</button>
-      <button type="button" class="sm" id="reset-brokers">Reset to Live</button></div></div>
-      <div class="bd"><div class="broker-tools"><label class="search">${I.search}<input id="broker-search" placeholder="Search brokers" aria-label="Search brokers"></label>
-        <span class="select-wrap"><select id="broker-filter" aria-label="Broker policy filter"><option value="all">All</option><option value="allowed">Allowed</option>
-          <option value="blocked">Blocked</option></select>${I.down}</span></div><div id="broker-overlap"></div></div>
-      <div class="bd flush"><table class="preview-table"><thead><tr><th>Company</th><th>Treatment</th><th>Matching identifiers and notes</th><th></th></tr></thead><tbody></tbody></table></div>
-      <div id="broker-entry-slot"></div><div class="bd"><p class="preview-status" id="broker-status" role="status"></p></div></div>
-    ${sec("Rule Definitions","hardgates")}
-    <div class="card"><div class="bd"><pre style="margin:0">${esc(JSON.stringify(p.hard_gates,null,2))}</pre></div></div>
-    ${sec("Accepted Message Types","events")}
-    <div class="card"><div class="bd chips">${p.events.map(e=>`<span class="tag">${esc(e)}</span>`).join("")}</div></div>`;
-  page.dataset.policyRule=rule;mountPointsEditor(p);mountBrokerEditor(p);
-  if(rule){const row=page.querySelector("#rule-"+CSS.escape(rule));
-    if(row){row.scrollIntoView({block:"center"});row.focus({preventScroll:true})}}
-  $("#copy-rules-hash").onclick=async()=>{
-    const status=$("#rules-hash-status");
-    try{await navigator.clipboard.writeText(p.bundle_hash);status.textContent="Rules fingerprint copied."}
-    catch(e){const range=document.createRange();range.selectNodeContents($("#rules-hash"));
-      const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
-      status.textContent="Copy failed. The full fingerprint is selected; copy it manually."}
-  };
+    <div class="card"><div class="bd flush"><table><thead><tr><th class="num">#</th><th>Decision</th><th>Condition</th><th>Platform Action</th></tr></thead><tbody>${decisions}</tbody></table></div>
+      <p class="sub" style="padding:var(--s3) var(--s4)">Held for Approval means an approval was published as On Hold because automatic approval is not enabled. Manual approval remains record-only.</p></div>
+    <section class="subsection" style="margin-top:var(--s5)">
+    <div class="card" id="broker-editor"><div class="hd"><div class="header-title"><h2>Brokers</h2>${tip("brokerpolicy")}</div><div class="preview-actions"></div></div>
+      <div class="config-feedback"><p class="sub">Allowed brokers still need to pass the other checks. A blocked match takes precedence.</p><p class="config-access"></p><p class="preview-status" id="broker-status" role="status"></p></div>
+      <div id="broker-entry-slot"></div>
+      <div class="bd"><div class="broker-tools"><label class="search">${I.search}<input id="broker-search" placeholder="Search brokers" aria-label="Search brokers"></label><span class="select-wrap"><select id="broker-filter" aria-label="Broker policy filter"><option value="all">All</option><option value="allowed">Allowed</option><option value="blocked">Blocked</option></select>${I.down}</span><span class="note" id="broker-count"></span></div><div id="broker-overlap"></div></div>
+      <div class="bd flush"><table class="preview-table"><thead><tr><th>Company</th><th>Treatment</th><th>Matching identifiers and notes</th><th></th></tr></thead><tbody></tbody></table></div></div></section>
+    ${sec("Rule Definitions","hardgates")}<div class="card"><div class="bd"><pre style="margin:0">${esc(JSON.stringify(p.hard_gates,null,2))}</pre></div></div>
+    ${sec("Accepted Message Types","events")}<div class="card"><div class="bd chips">${p.events.map(e=>`<span class="tag">${esc(e)}</span>`).join("")}</div></div>
+    ${sec("Configuration version")}<div class="card"><div class="bd rules-metadata"><p>Active configuration revision: <span class="mono" id="configuration-revision">${esc(configuration.revision||"Not activated")}</span></p>
+      <div class="policy-hash"><span class="policy-hash-label">Rules fingerprint</span><div class="policy-hash-row"><code id="rules-hash">${esc(configuration.bundle_hash)}</code><button class="sm" id="copy-rules-hash" aria-label="Copy rules fingerprint">Copy</button></div><span id="rules-hash-status" class="policy-hash-status" role="status"></span></div></div></div>`;
+  page.dataset.policyRule=rule;mountPointsEditor(p,configuration);mountBrokerEditor(p,configuration);
+  if(rule){const row=page.querySelector("#rule-"+CSS.escape(rule));if(row){row.scrollIntoView({block:"center"});row.focus({preventScroll:true})}}
+  $("#copy-rules-hash").onclick=async()=>{const status=$("#rules-hash-status");try{await navigator.clipboard.writeText($("#rules-hash").textContent);status.textContent="Rules fingerprint copied."}
+    catch(e){const range=document.createRange();range.selectNodeContents($("#rules-hash"));const selection=getSelection();selection.removeAllRanges();selection.addRange(range);status.textContent="Copy failed. The full fingerprint is selected; copy it manually."}};
 }
 
 /* ── Options ──────────────────────────────────────────── */
@@ -2240,7 +2237,7 @@ function viewOptions(){
   // The refresh timer revisits the active route. Keep this local form mounted so a person does
   // not lose radio focus while choosing a theme.
   if(page.querySelector(".options-form")){syncTheme(KYCTheme.current);return}
-  page.innerHTML=tbar("Options","Browser-local preferences for this console.")+`
+  page.innerHTML=tbar("Options","Appearance preferences and session-only operator access.")+`
     <div class="card"><div class="hd"><h2>Appearance</h2></div><div class="bd">
       <form class="options-form"><fieldset><legend>Theme</legend><div class="theme-options">
         <label><input type="radio" name="theme" value="system"> System</label>
@@ -2249,7 +2246,16 @@ function viewOptions(){
       </fieldset>
       <div class="options-footer"><p class="sub">Saved only in this browser. System follows your operating system setting.</p>
         <p class="options-hint" id="options-hint" role="status"></p></div></form>
-    </div></div>`;
+    </div></div>
+    <div class="card"><div class="hd"><h2>Operator access</h2></div><div class="bd">
+      <form class="operator-form" id="operator-form"><label class="flab" for="operator-credential">Admin credential</label>
+        <input type="password" id="operator-credential" autocomplete="off" aria-describedby="operator-note">
+        <p class="sub" id="operator-note">Kept only in memory for this page session. Never saved in browser storage. Reloading clears access.</p>
+        <div class="toolbar"><button type="submit" class="primary">Use credential</button><button type="button" id="clear-credential">Clear</button></div>
+        <p class="sub" id="operator-status" role="status"></p></form></div></div>`;
+  const accessStatus=()=>{$("#operator-status").textContent=operatorCredential?"Credential set for this page session; the server checks each action.":"No operator credential set."};
+  $("#operator-form").onsubmit=event=>{event.preventDefault();operatorCredential=$("#operator-credential").value;$("#operator-credential").value="";accessStatus()};
+  $("#clear-credential").onclick=()=>{operatorCredential="";$("#operator-credential").value="";accessStatus()};accessStatus();
   syncTheme(KYCTheme.current);
   page.querySelector(".options-form").addEventListener("change",event=>{
     if(event.target.name!=="theme")return;
@@ -2337,7 +2343,7 @@ function composerInvalidate(root){
 function composerDrawFields(root){
   const type=composerSession.eventType,guide=COMPOSER_GUIDES[type];
   root.querySelector("#c-guided").innerHTML=composerGuidedMarkup(type,composerSession.drafts[type]);
-  root.querySelector("#c-technical").innerHTML=`<span class="note">Technical event</span><code>${esc(type)}</code>`;
+  root.querySelector("#c-technical").textContent=type;
   root.querySelector("#c-action-purpose").textContent=guide?.purpose||"Advanced-only message type.";
   const warn=root.querySelector("#c-warn");warn.hidden=!guide?.sensitive;
   if(guide?.sensitive)composerPaintWarning(root);
@@ -2425,7 +2431,7 @@ async function composerSend(root){
   if(composerSession.inFlight||composerSession.successful||!composerSession.review)return;
   const snapshot=clone(composerSession.review);composerSession.inFlight={snapshot};composerSession.result=null;composerSession.attempted=true;composerPaint(root);
   let result;
-  try{const response=await fetch("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(snapshot)});
+  try{const response=await consoleFetch("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(snapshot)});
     const rawText=await response.text(),status=response.status;let body;
     try{body=JSON.parse(rawText)}catch{body={detail:rawText}}
     const kind=status>=500?"unknown":status===409?"conflict":status===403||status===422?"refused":status>=200&&status<300?"accepted":"refused";
@@ -2467,7 +2473,7 @@ async function viewComposer(){
   const existingIdNote=composerSession.existingIdOutOfList
     ?"This retained company ID is not in the current top-100 list. The console has not substituted another company."
     :"The console cannot verify this ID from the bounded list. Sending uses it as entered.";
-  page.innerHTML=tbar("Send Message","Choose a company and action, complete the details, then review the exact message before confirming.","","composer")+`
+  page.innerHTML=tbar("Company Actions","Choose a company and action, complete the details, then review the exact message before confirming.","","composer")+`
     <div class="split" data-composer>
       <div class="card"><div class="hd"><h2>Message</h2>${tip("composerevent")}</div><div class="bd">
         <form id="composer-form" class="composer-form">
@@ -2485,7 +2491,7 @@ async function viewComposer(){
           <span class="field-error" id="c-company-error" role="alert"></span></fieldset>
           <div class="composer-action"><div class="field"><label class="flab" for="c-type">Action</label>
             <span class="select-wrap"><select id="c-type">${actionOptions}</select>${I.down}</span><span class="note" id="c-action-purpose"></span></div>
-            <div class="technical-event" id="c-technical"></div></div>
+            <div class="field"><span class="flab" id="technical-label">Technical event</span><output class="technical-event" id="c-technical" aria-labelledby="technical-label"></output><span class="note">Read-only event identifier.</span></div></div>
           <div id="c-warn" class="callout amber" role="note" hidden>${I.person}<div></div></div>
           <div id="c-guided"></div>
           <details class="composer-advanced"><summary>Advanced JSON</summary>
@@ -2497,7 +2503,7 @@ async function viewComposer(){
             <dl class="review-grid"><dt>Company ID</dt><dd id="c-review-company"></dd><dt>Action</dt><dd id="c-review-action"></dd>
               <dt>Technical event</dt><dd><code id="c-review-event"></code></dd><dt>Unique key</dt><dd><code id="c-review-key"></code></dd></dl>
             <pre class="review-payload" id="c-review-payload"></pre></section>
-          <div class="toolbar composer-actions"><button type="button" id="c-reset">Reset example</button><button type="button" class="primary" id="c-send">Review Message</button></div>
+          <div class="toolbar composer-actions"><button type="button" class="primary" id="c-send">Review Message</button><button type="button" id="c-reset">Reset example</button></div>
         </form></div></div>
       <div class="stack">
         <div class="card"><div class="hd"><h2>Response</h2>${tip("composerresult")}</div><div class="bd">
@@ -2553,7 +2559,7 @@ const routes=[
   [/^#\/fieldmap$/,()=>viewFieldMap(),"fieldmap","Salesforce Fields"],
   [/^#\/policy(?:\?rule=([^&]*))?$/,m=>viewPolicy(m[1]?decodeURIComponent(m[1]):""),"policy","Decision Rules"],
   [/^#\/options$/,()=>viewOptions(),"options","Options"],
-  [/^#\/composer$/,()=>viewComposer(),"composer","Send Message"],
+  [/^#\/composer$/,()=>viewComposer(),"composer","Company Actions"],
 ];
 const main=$("#main");
 let navigated=false;   // set by a hash change; cleared once the new page has taken focus

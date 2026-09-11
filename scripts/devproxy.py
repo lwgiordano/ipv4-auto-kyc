@@ -27,6 +27,7 @@ import json
 import socketserver
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
@@ -108,20 +109,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _proxy(self) -> None:
-        length = int(self.headers.get("Content-Length") or 0)
+        path = urllib.parse.unquote(self.path.split("?", 1)[0])
+        configuration = path == "/ui/api/configuration" or path.startswith("/ui/api/configuration/")
+        if configuration:
+            lengths = self.headers.get_all("Content-Length", [])
+            raw = lengths[0] if lengths else "0"
+            if (
+                self.headers.get_all("Transfer-Encoding")
+                or len(lengths) > 1
+                or not raw.isascii()
+                or not raw.isdigit()
+            ):
+                self._reject_configuration(400, "invalid configuration request framing")
+                return
+            raw = raw.lstrip("0") or "0"
+            if len(raw) > 8 or int(raw) > 32 * 1024 * 1024:
+                self._reject_configuration(413, "configuration request exceeds 32 MiB")
+                return
+            length = int(raw)
+        else:
+            length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else None
+        if configuration and length and len(body) != length:
+            self._reject_configuration(400, "incomplete configuration request body")
+            return
         req = urllib.request.Request(self.api + self.path, data=body, method=self.command)
         for k, v in self.headers.items():
-            if k.lower() not in HOP_BY_HOP and k.lower() != "host":
+            # Local browser Origin must be compared with its original Host, not the API port.
+            if k.lower() not in HOP_BY_HOP:
                 req.add_header(k, v)
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
                 payload, status, headers = r.read(), r.status, r.headers
-        except urllib.error.HTTPError as e:          # 4xx/5xx are answers, not failures
+        except urllib.error.HTTPError as e:  # 4xx/5xx are answers, not failures
             payload, status, headers = e.read(), e.code, e.headers
-        except Exception as e:                        # the stack is still coming up, or gone
-            self._raw(json.dumps({"detail": f"dev proxy: the API did not answer ({e})"}).encode(),
-                      "application/json", 502)
+        except Exception as e:  # the stack is still coming up, or gone
+            self._raw(
+                json.dumps({"detail": f"dev proxy: the API did not answer ({e})"}).encode(),
+                "application/json",
+                502,
+            )
             return
         self.send_response(status)
         for k, v in headers.items():
@@ -130,6 +157,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _reject_configuration(self, status: int, detail: str) -> None:
+        # Unread bytes must never become another request on this connection.
+        self.close_connection = True
+        self._raw(json.dumps({"detail": detail}).encode(), "application/json", status)
 
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?")[0]
