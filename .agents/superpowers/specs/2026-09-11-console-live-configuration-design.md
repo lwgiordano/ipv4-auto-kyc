@@ -2,10 +2,10 @@
 
 Date: 2026-09-11
 
-Status: design proposal for human review, not a build authorization. The human
-approved shared, versioned live configuration and future-review-only activation.
-The migration reorder in section 8 still needs approval. No runtime behavior,
-existing migration, or ROADMAP reservation changes in this design commit.
+Status: approved for implementation on 2026-09-11. The human approved shared,
+versioned live configuration, future-review-only activation, and the migration
+reorder in section 8, then directed: "yes proceed to implement". The original
+design commit itself changed no runtime behavior or existing migration.
 
 ## 1. Outcome and boundaries
 
@@ -229,21 +229,21 @@ versioned run or live edit, refuse destructive downgrade; recovery restores a
 previous configuration as a new version. Preserve all history. The runbook must
 name a compatible recovery image and cannot promise old code is rollback-safe.
 
-## 8. Proposed sequencing decision: requires human approval
+## 8. Approved sequencing decision
 
 The current reservation chain is 023 shipped, then 024 platform activation, 025
 revalidation, 026 queue schema, 027 evidence storage, 028 PR 10. Platform activation
 is blocked on external inputs. Shipping a new live-configuration schema now needs
 an explicit change to that plan; no slot may be reused silently.
 
-Recommended proposal: insert live configuration as 024 after 023. Move only the
+Approved: insert live configuration as 024 after 023. Move only the
 unbuilt reservations one place: platform activation 025, revalidation 026, queue
 schema 027, evidence storage 028, remaining PR 10 work 029. Pull the broker snapshot
 and per-run match-provenance portion of PR 10 into this new unit. Leave its other
 requirements assigned to PR 10. This proposal does not build or enable platform
 activation, its wire field, input resolution, retirement capabilities, or M2.
 
-If approved, update the canonical ROADMAP, pending specs/plans, executable
+Update the canonical ROADMAP, pending specs/plans, executable
 reservation/activation guards, and current operator references together before
 the build. Preserve historical release records, frozen migration hashes, and
 all existing fail-closed activation conditions. Tests must identify the activation
