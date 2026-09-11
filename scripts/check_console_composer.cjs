@@ -18,6 +18,15 @@ async function check(name, fn) {
   try { await fn(); results.push(true); console.log(`PASS ${name}`); }
   catch (error) { results.push(false); console.log(`FAIL ${name}: ${error.message}`); }
 }
+async function rect(locator) {
+  const box = await locator.boundingBox();
+  assert.ok(box, `element is not rendered: ${await locator.evaluate(el => el.outerHTML)}`);
+  return box;
+}
+function near(actual, expected, message, tolerance = 1) {
+  assert.ok(Math.abs(actual - expected) <= tolerance,
+    `${message}: expected ${expected} +/- ${tolerance}px, got ${actual}`);
+}
 async function ready(page) {
   await page.goto(`${baseUrl}#/composer`);
   await page.waitForFunction(() => location.hash === "#/composer" &&
@@ -321,15 +330,44 @@ const cases = [
       assert.match(await page.locator("#c-demo").textContent(), /hold|does not guarantee approval/i);
     });
 
+    await choose(page, "kyb.run_requested");
     for (const theme of ["light", "dark"]) for (const width of [390, 768, 1147, 1440]) {
       await page.setViewportSize({ width, height: 1137 });
       await page.emulateMedia({ colorScheme: theme });
       await page.evaluate(() => KYCTheme.current = "system");
       await check(`${width}px ${theme} composer fits and keeps labelled controls`, async () => {
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-        assert.equal(await page.locator("#c-type").evaluate(el => el.parentElement.classList.contains("select-wrap")), true);
-        assert.equal(await page.locator("#c-type").locator("..").locator(":scope > svg").count(), 1);
+        const select = page.locator("#c-type"), wrap = select.locator(".."), arrow = wrap.locator(":scope > svg");
+        assert.equal(await select.evaluate(el => el.parentElement.classList.contains("select-wrap")), true);
+        assert.equal(await arrow.count(), 1);
+        const sb = await rect(select), wb = await rect(wrap), ab = await rect(arrow);
+        near(sb.x, wb.x, "composer select and wrapper left edge");
+        near(sb.width, wb.width, "composer select fills wrapper width");
+        near(sb.x + sb.width - (ab.x + ab.width), 12, "composer select arrow right inset");
+        await select.selectOption("kyb.run_requested");
+        assert.equal(await select.inputValue(), "kyb.run_requested");
         assert.equal(await page.locator("#composer-form label").count() >= 4, true);
+        assert.equal(await page.locator(".split[data-composer] > .stack > .card").count(), 2,
+          "both composer support panels remain available");
+        if (width === 768 || width === 1147) {
+          const primary = await rect(page.locator(".split[data-composer] > .card").first());
+          assert.ok(primary.width >= 600, `composer primary card is only ${primary.width}px wide`);
+          const optionFit = await select.evaluate(el => {
+            const style = getComputedStyle(el), canvas = document.createElement("canvas");
+            const context = canvas.getContext("2d"); context.font = style.font;
+            const text = el.selectedOptions[0].textContent.trim();
+            return { text, textWidth: context.measureText(text).width,
+              contentWidth: el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) };
+          });
+          assert.ok(optionFit.contentWidth >= optionFit.textWidth,
+            `${optionFit.text} needs ${optionFit.textWidth}px but has ${optionFit.contentWidth}px`);
+          const labels = await page.locator(".composer-fields .flab").evaluateAll(nodes => nodes.map(node => {
+            const style = getComputedStyle(node); return { text: node.textContent.trim(),
+              height: node.getBoundingClientRect().height, lineHeight: parseFloat(style.lineHeight) };
+          }));
+          for (const label of labels) assert.ok(label.height <= label.lineHeight + 1,
+            `${label.text} wrapped to ${label.height}px at ${width}px`);
+        }
       });
     }
   } finally {

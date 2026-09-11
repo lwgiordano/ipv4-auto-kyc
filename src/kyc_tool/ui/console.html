@@ -425,7 +425,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{border-color:var
 textarea{min-height:180px;padding:var(--s3);width:100%;
   font-family:var(--mono);font-size:12px;line-height:16px}
 .select-wrap{position:relative;display:inline-flex;max-width:100%;min-width:0}
-.select-wrap select{appearance:none;padding-right:var(--s7);max-width:100%}
+.select-wrap select{appearance:none;padding-right:var(--s7);width:100%;max-width:100%}
 .select-wrap>.ic{position:absolute;right:var(--s3);top:50%;transform:translateY(-50%);
   color:var(--muted);pointer-events:none}
 .search{position:relative;display:inline-flex;align-items:center}
@@ -480,6 +480,7 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
   color:var(--accent-ink);display:grid;place-items:center;font:var(--t-chip);font-variant-numeric:tabular-nums}
 .demo-step b{display:block;color:var(--ink);margin-bottom:2px}
 .demo-step code{overflow-wrap:anywhere}
+@media(max-width:1260px){.split[data-composer]{grid-template-columns:1fr}}
 @media(max-width:720px){
   .composer-action,.composer-fields{grid-template-columns:1fr}
   .composer-company-control{padding-left:0}
@@ -498,6 +499,7 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .preview-status.err,.entry-error{color:var(--red)}
 .preview-status.ok{color:var(--green)}
 .preview-table input{width:100%;min-width:110px}
+#mapping-editor .preview-table input{min-width:230px}
 .preview-table .live-value{display:block;margin-top:var(--s1);font:var(--t-meta);color:var(--muted)}
 .preview-table td{vertical-align:top}
 .broker-tools{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap;margin-bottom:var(--s3)}
@@ -774,6 +776,7 @@ h2.sec.tight{margin-top:0}
   color:var(--muted);margin-bottom:var(--s4)}
 .legend .item{display:grid;align-content:start;justify-items:start;gap:var(--s1);min-width:0}
 .legend-copy{overflow-wrap:anywhere}
+@media(max-width:1319px){.legend{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:900px){.legend{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:520px){.legend{grid-template-columns:1fr}}
 .policy-hash{display:grid;gap:var(--s1);min-width:0;max-width:100%}
@@ -1481,7 +1484,7 @@ async function viewOverview(){
     ||emptyRow(3,"No decisions yet","No all-time decision records are available yet.");
   const latestCases=Array.isArray(caseList.cases)?caseList.cases:[];
   const latestRow=c=>{const hasDecision=c.decision_provenance==="latest_decision_row"&&c.latest_decision;
-    const held=hasDecision&&c.latest_decision==="approve"&&c.enforcement_held;
+    const held=hasDecision&&c.enforcement_held;
     const decision=hasDecision?pill(held?"held_for_approval":c.latest_decision):provPill(c.decision_provenance||"no_decisions");
     return`<details data-latest-decision="${esc(hasDecision?c.latest_decision:"none")}"><summary>
       <span class="strong">${esc(c.company_name||c.id)}</span>${decision}${exact(c.updated_at)}</summary>
@@ -2122,7 +2125,7 @@ function mountBrokerEditor(p){
   const live=(p.broker_entities||[]).map((b,i)=>cleanBroker(b,i)),base=brokerBase(p);
   const saved=readPreview("brokers",base,validateBrokers);
   let working=saved.state==="saved"?clone(saved.value.brokers):clone(live),search="",filter="all",editingBroker=null;
-  const body=$("#broker-editor tbody"),status=$("#broker-status"),slot=$("#broker-entry-slot"),overlapBox=$("#broker-overlap"),searchBox=$("#broker-search"),filterBox=$("#broker-filter");
+  const body=$("#broker-editor tbody"),status=$("#broker-status"),slot=$("#broker-entry-slot"),overlapBox=$("#broker-overlap"),searchBox=$("#broker-search"),filterBox=$("#broker-filter"),save=$("#save-brokers");
   setPreviewStatus(status,saved.message||"Showing the live broker list. No preview is saved.",saved.state==="invalid"||saved.state==="stale"?"err":"");
   const haystack=b=>[b.name,...BROKER_LISTS.flatMap(k=>b[k]||[])].join(" ").toLowerCase();
   const draw=()=>{searchBox.value=search;filterBox.value=filter;
@@ -2145,18 +2148,20 @@ function mountBrokerEditor(p){
         ${BROKER_LISTS.map(key=>`<div class="field"><label class="flab" for="broker-${key}">${labels[key]}</label><textarea id="broker-${key}" data-broker-list="${key}">${esc(b[key].join("\n"))}</textarea></div>`).join("")}</div></fieldset>
       <fieldset><legend>Preview notes</legend><span class="group-hint">Browser-local context only; notes are not sent to the server.</span><div class="field"><label class="flab" for="broker-notes">Notes</label><textarea id="broker-notes" maxlength="2000">${esc(b.notes)}</textarea></div></fieldset>
       <p class="entry-error" id="broker-entry-error" role="alert"></p><div class="preview-actions"><button type="submit" class="sm">Apply Entry</button><button type="button" class="sm" id="cancel-broker-entry">Cancel</button></div></form>`;
+    save.disabled=true;setPreviewStatus(status,"Entry not applied. Choose Apply Entry or Cancel before saving the preview.");
     const form=$("#broker-entry-form");form.onsubmit=event=>{event.preventDefault();const candidate=cleanBroker({id:b.id,name:$("#broker-name").value.trim(),policy:$("#broker-policy").value,
         notes:$("#broker-notes").value,...Object.fromEntries([...form.querySelectorAll("[data-broker-list]")].map(input=>[input.dataset.brokerList,input.value.split(/[\n,]/).map(v=>v.trim()).filter(Boolean)]))});
       const next=editingBroker?working.map(item=>item.id===candidate.id?candidate:item):[...working,candidate],error=validateBrokers({brokers:next});
-      if(error){$("#broker-entry-error").textContent=error;return}working=next;slot.innerHTML="";editingBroker=null;setPreviewStatus(status,"Unsaved broker edits. Live enforcement is unchanged.");draw()};
-    $("#cancel-broker-entry").onclick=()=>{slot.innerHTML="";editingBroker=null};$("#broker-name").focus()};
+      if(error){$("#broker-entry-error").textContent=error;return}working=next;slot.innerHTML="";editingBroker=null;save.disabled=false;setPreviewStatus(status,"Unsaved broker edits. Live enforcement is unchanged.");draw()};
+    $("#cancel-broker-entry").onclick=()=>{slot.innerHTML="";editingBroker=null;save.disabled=false;setPreviewStatus(status,"Entry canceled. The preview list was not changed.")};$("#broker-name").focus()};
   searchBox.oninput=()=>{search=searchBox.value;draw()};filterBox.onchange=()=>{filter=filterBox.value;draw()};
-  $("#add-broker").onclick=()=>openEntry(null);$("#save-brokers").onclick=()=>{const error=validateBrokers({brokers:working});if(error){setPreviewStatus(status,error,"err");return}
+  $("#add-broker").onclick=()=>openEntry(null);save.onclick=()=>{if(slot.querySelector("#broker-entry-form")){setPreviewStatus(status,"Entry not applied. Choose Apply Entry or Cancel before saving the preview.","err");return}
+    const error=validateBrokers({brokers:working});if(error){setPreviewStatus(status,error,"err");return}
     if(!writePreview("brokers",base,{brokers:working})){setPreviewStatus(status,"This preview could not be saved. Browser storage may be blocked; your current form remains usable.","err");return}
     setPreviewStatus(status,"Preview saved in this browser. Live broker enforcement is unchanged.","ok")};
   $("#reset-brokers").onclick=event=>{const button=event.currentTarget;if(button.textContent!=="Confirm Reset"){button.textContent="Confirm Reset";setPreviewStatus(status,"Confirm reset to discard this browser-local broker preview.");return}
     if(!removePreview("brokers")){setPreviewStatus(status,"This preview could not be removed. Browser storage may be blocked; your current form remains usable.","err");return}
-    working=clone(live);slot.innerHTML="";button.textContent="Reset to Live";setPreviewStatus(status,"Reset to the live broker list. Live enforcement was not changed.","ok");draw()};
+    working=clone(live);slot.innerHTML="";save.disabled=false;button.textContent="Reset to Live";setPreviewStatus(status,"Reset to the live broker list. Live enforcement was not changed.","ok");draw()};
   draw();
 }
 

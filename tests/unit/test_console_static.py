@@ -583,3 +583,30 @@ def test_every_mapping_redraw_uses_the_selected_company_value_state():
     assert 'valueState==="loading"' in value_markup
     assert 'valueState==="error"' in value_markup
     assert "valueMarkup(field)" in draw
+
+
+def test_overview_hold_label_uses_the_authoritative_flag_for_every_published_decision():
+    """A held manual-review decision is still held; the raw decision remains filter authority."""
+    body = _function_body("viewOverview")
+    assert "const held=hasDecision&&c.enforcement_held;" in body
+    assert 'c.latest_decision==="approve"&&c.enforcement_held' not in body
+    assert 'data-latest-decision="${esc(hasDecision?c.latest_decision:"none")}"' in body
+
+
+def test_broker_save_is_blocked_while_an_entry_form_is_unapplied():
+    body = _sync_function_body("mountBrokerEditor")
+    assert 'save=$("#save-brokers")' in body
+    open_entry = body[body.index("const openEntry="):body.index("searchBox.oninput=")]
+    assert "save.disabled=true" in open_entry
+    assert open_entry.count("save.disabled=false") >= 2  # Apply Entry and Cancel recovery.
+    save_handler = body[body.index("save.onclick="):body.index('$("#reset-brokers").onclick=')]
+    assert 'slot.querySelector("#broker-entry-form")' in save_handler
+    assert "Apply Entry or Cancel" in save_handler
+
+
+def test_final_preview_layout_contracts_are_scoped_and_responsive():
+    css = _live_css()
+    assert re.search(r"\.select-wrap select\{[^}]*width:100%", css)
+    assert "@media(max-width:1319px){.legend{grid-template-columns:repeat(3,minmax(0,1fr))}}" in css
+    assert "@media(max-width:1260px){.split[data-composer]{grid-template-columns:1fr}}" in css
+    assert "#mapping-editor .preview-table input{min-width:230px}" in css

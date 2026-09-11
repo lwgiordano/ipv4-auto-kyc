@@ -165,13 +165,18 @@ async function textRect(locator) {
       const wrap = select.locator("..");
       const arrow = wrap.locator(":scope > svg");
       assert.equal(await select.evaluate(el => el.tagName), "SELECT");
-      const sb = await rect(select), ab = await rect(arrow);
+      const sb = await rect(select), wb = await rect(wrap), ab = await rect(arrow);
+      near(sb.x, wb.x, "select and visible wrapper left edge");
+      near(sb.width, wb.width, "select fills visible wrapper width");
       near(sb.x + sb.width - (ab.x + ab.width), 12, "select arrow right inset");
       const paddingRight = await select.evaluate(el => parseFloat(getComputedStyle(el).paddingRight));
       assert.ok(paddingRight >= 36, `select reserves arrow space: ${paddingRight}px`);
+      const value = await select.locator("option:not([value=''])").first().getAttribute("value");
+      await select.selectOption(value);
+      assert.equal(await select.inputValue(), value, "native select interaction remains available");
     });
 
-    for (const theme of ["light", "dark"]) for (const width of [390, 768, 1147, 1199, 1440]) {
+    for (const theme of ["light", "dark"]) for (const width of [390, 768, 1147, 1199, 1261, 1319, 1320, 1440]) {
       await page.setViewportSize({ width, height: 1000 });
       await ready(page, "#/options", "Options", ".options-form");
       await page.getByLabel(theme === "light" ? "Light" : "Dark", { exact: true }).check();
@@ -185,13 +190,32 @@ async function textRect(locator) {
         const items = page.locator(".tbar .legend .item");
         assert.equal(await items.count(), 5);
         const boxes = await items.evaluateAll(nodes => nodes.map(node => {
-          const r = node.getBoundingClientRect(); return { x: Math.round(r.x), y: r.y, width: r.width };
+          const r = node.getBoundingClientRect();
+          const p = node.querySelector(".pill").getBoundingClientRect();
+          const c = node.querySelector(".legend-copy").getBoundingClientRect();
+          return {
+            x: Math.round(r.x), y: Math.round(r.y), width: r.width, right: r.right,
+            pill: { x: p.x, right: p.right }, copy: { x: c.x, right: c.right },
+          };
         }));
         const columns = new Set(boxes.map(box => box.x)).size;
-        assert.equal(columns, width <= 520 ? 1 : width <= 900 ? 2 : 5);
+        assert.equal(columns, width <= 520 ? 1 : width <= 900 ? 2 : width <= 1319 ? 3 : 5);
         for (let index = 1; index < boxes.length; index += 1) {
           assert.ok(boxes[index].y >= boxes[index - 1].y,
             `legend order regressed at item ${index + 1}`);
+        }
+        for (const [index, box] of boxes.entries()) {
+          assert.ok(box.pill.x >= box.x - 1 && box.pill.right <= box.right + 1,
+            `legend pill ${index + 1} stays inside its group`);
+          assert.ok(box.copy.x >= box.x - 1 && box.copy.right <= box.right + 1,
+            `legend copy ${index + 1} stays inside its group`);
+        }
+        for (let left = 0; left < boxes.length; left += 1) {
+          for (let right = left + 1; right < boxes.length; right += 1) {
+            if (boxes[left].y !== boxes[right].y) continue;
+            assert.ok(boxes[right].pill.x - boxes[left].pill.right >= 12,
+              `legend pills ${left + 1} and ${right + 1} keep a visible gap`);
+          }
         }
         for (const item of await items.all()) {
           const pill = await rect(item.locator(".pill"));

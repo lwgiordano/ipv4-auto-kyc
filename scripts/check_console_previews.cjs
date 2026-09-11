@@ -301,6 +301,51 @@ async function clearPreviews(page) {
       assert.equal(await page.locator("[data-broker-row]").count(), 6);
     });
 
+    await check("unapplied broker add and edit disable Save Preview until apply or cancel", async () => {
+      const save = page.locator("#save-brokers"), before = await page.evaluate(key => localStorage.getItem(key), previewKeys.brokers);
+      await page.getByRole("button", { name: "Add Broker" }).click();
+      await page.locator("#broker-entry-form").getByLabel("Name").fill("Unsaved entry witness");
+      assert.equal(await save.isDisabled(), true);
+      assert.match(await page.locator("#broker-status").textContent(), /Apply Entry.*Cancel|apply.*or cancel/i);
+      assert.equal(await page.evaluate(key => localStorage.getItem(key), previewKeys.brokers), before);
+      await page.locator("#broker-entry-form").getByRole("button", { name: "Cancel" }).click();
+      assert.equal(await save.isEnabled(), true);
+
+      const row = page.locator("[data-broker-row]").first(); const original = (await row.locator("td").first().textContent()).trim();
+      await row.getByRole("button", { name: "Edit" }).click();
+      await page.locator("#broker-entry-form").getByLabel("Name").fill("Edited entry witness");
+      assert.equal(await save.isDisabled(), true);
+      assert.match(await page.locator("#broker-status").textContent(), /Apply Entry.*Cancel|apply.*or cancel/i);
+      await page.locator("#broker-entry-form").getByRole("button", { name: "Cancel" }).click();
+      assert.equal(await save.isEnabled(), true);
+      assert.equal((await row.locator("td").first().textContent()).trim(), original);
+
+      await row.getByRole("button", { name: "Edit" }).click();
+      await page.locator("#broker-entry-form").getByLabel("Name").fill("Applied entry witness");
+      await page.locator("#broker-entry-form").getByRole("button", { name: "Apply Entry" }).click();
+      assert.equal(await save.isEnabled(), true);
+      assert.match(await page.locator("#broker-status").textContent(), /Unsaved broker edits/i);
+      await page.getByRole("button", { name: "Reset to Live" }).last().click();
+      await page.getByRole("button", { name: "Confirm Reset" }).last().click();
+    });
+
+    await check("broker policy select fills its visible wrapper and remains native", async () => {
+      await page.getByRole("button", { name: "Add Broker" }).click();
+      const select = page.locator("#broker-policy"), wrap = select.locator(".."), arrow = wrap.locator(":scope > svg");
+      const boxes = await page.evaluate(() => {
+        const select = document.querySelector("#broker-policy"), wrap = select.parentElement;
+        const arrow = wrap.querySelector(":scope > svg");
+        const read = el => { const r = el.getBoundingClientRect(); return { x: r.x, width: r.width, right: r.right }; };
+        return { select: read(select), wrap: read(wrap), arrow: read(arrow) };
+      });
+      assert.ok(Math.abs(boxes.select.x - boxes.wrap.x) <= 1);
+      assert.ok(Math.abs(boxes.select.width - boxes.wrap.width) <= 1);
+      assert.ok(Math.abs(boxes.select.right - boxes.arrow.right - 12) <= 1);
+      await select.selectOption("blocked");
+      assert.equal(await select.inputValue(), "blocked");
+      await page.locator("#broker-entry-form").getByRole("button", { name: "Cancel" }).click();
+    });
+
     await ready(page, "#/overview", "Overview", "#decision-distribution");
     await check("overview labels its all-time denominator and latest-company time source", async () => {
       assert.match(await page.locator("#decision-distribution").textContent(), /12 all-time decision records/i);
@@ -318,6 +363,30 @@ async function clearPreviews(page) {
       assert.ok(await visible.count() > 0);
       assert.deepEqual([...new Set(await visible.evaluateAll(rows => rows.map(row => row.dataset.latestDecision)))], ["approve"]);
     });
+
+    const heldContext = await browser.newContext();
+    const heldWrites = [];
+    heldContext.on("request", request => { if (request.url().includes("/ui/api/") && request.method() !== "GET") heldWrites.push(request.url()); });
+    await heldContext.route("**/ui/api/cases?limit=100", async route => {
+      const response = await route.fetch(); const body = await response.json();
+      body.cases[0] = { ...body.cases[0], company_name: "Held state witness",
+        decision_provenance: "latest_decision_row", latest_decision: "manual_review_insufficient",
+        enforcement_held: true };
+      await route.fulfill({ response, json: body });
+    });
+    const heldPage = await heldContext.newPage(); heldPage.setDefaultTimeout(8000);
+    await ready(heldPage, "#/overview", "Overview", "#latest-company-decisions");
+    await check("authoritative safety-held company is Held for Approval in overview summary and details", async () => {
+      const row = heldPage.locator("#latest-company-decisions details", { hasText: "Held state witness" });
+      assert.match(await row.locator("summary").textContent(), /Held for Approval/);
+      assert.equal(await row.getAttribute("data-latest-decision"), "manual_review_insufficient");
+      await row.locator("summary").click();
+      assert.match(await row.locator(".latest-detail").textContent(), /Latest decision\s*Held for Approval/);
+      await heldPage.getByLabel("Latest company decision filter").selectOption("manual_review_insufficient");
+      assert.equal(await row.isVisible(), true, "raw published decision remains the filter authority");
+      assert.deepEqual(heldWrites, []);
+    });
+    await heldContext.close();
 
     await check("auto-refresh preserves unsaved preview input and focus", async () => {
       await ready(page, "#/policy", "Decision Rules", "#points-editor");
@@ -363,6 +432,31 @@ async function clearPreviews(page) {
       assert.equal((await racePage.locator("#page h1").textContent()).trim(), "Overview");
       await race.close();
     });
+
+    for (const theme of ["light", "dark"]) for (const width of [390, 768, 1147]) {
+      await page.setViewportSize({ width, height: 1137 });
+      await page.evaluate(theme => localStorage.setItem("kyc-theme", theme), theme);
+      await ready(page, "#/fieldmap", "Salesforce Fields", "#mapping-editor");
+      await page.reload(); await page.getByRole("button", { name: "Edit Mappings" }).waitFor();
+      await page.getByRole("button", { name: "Edit Mappings" }).click();
+      await check(`${width}px ${theme} supplied Salesforce destinations are readable at rest`, async () => {
+        const input = page.getByLabel("Destination for Business_Document_Status__c");
+        await input.blur();
+        const fit = await input.evaluate(el => {
+          const style = getComputedStyle(el), canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d"); context.font = style.font;
+          return { value: el.value, textWidth: context.measureText(el.value).width,
+            contentWidth: el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) };
+        });
+        assert.equal(fit.value, "Business_Document_Status__c");
+        assert.ok(fit.contentWidth >= fit.textWidth,
+          `${fit.value} needs ${fit.textWidth}px but has ${fit.contentWidth}px`);
+        const scroller = page.locator("#mapping-editor .bd.flush");
+        if (width === 390) assert.equal(await scroller.evaluate(el => el.scrollWidth > el.clientWidth), true,
+          "narrow mapping table preserves intentional horizontal scrolling");
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      });
+    }
 
     for (const theme of ["light", "dark"]) for (const width of [390, 768, 1147, 1199, 1440]) {
       await page.setViewportSize({ width, height: width === 1147 ? 1137 : 950 });
