@@ -175,6 +175,23 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-12 — public Salesforce projection implementation
+
+turn: CODEX
+
+Extend the active event-contract batch with the human-authorized reviewed public
+projection plan. Claim `src/kyc_tool/api/{schemas,salesforce_projection,routes_read}.py`,
+`src/kyc_tool/ui/salesforce_projection.py`,
+`tests/unit/{test_salesforce_projection,test_salesforce_projection_contract,test_ops_auth}.py`,
+`tests/integration/test_salesforce_projection_api.py`, and the already-claimed
+`tests/policy_driven/test_engine_build_id_guard.py`. Shared schema edits begin
+only after the event task's independent review passes.
+Keep separate task tests/reviews, then one assembled full PostgreSQL suite and
+adversarial review of both unreleased slices before the runtime commit/release.
+This is read-only projection, never Salesforce record writes; no migration,
+configuration mutation, conditional cache protocol or platform-enforcement claim.
+Existing user-owned untracked files and the live database remain untouched.
+
 ### CLAIM [CODEX] 2026-09-12 — implement reviewed event contract
 
 turn: CODEX
