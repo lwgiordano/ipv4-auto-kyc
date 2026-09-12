@@ -121,7 +121,9 @@ contract may not have separately authored field lists.
 Publish:
 
 - Request schema for `POST /v1/cases/{case_id}/events`.
-- Path, idempotency, timestamp, key-id, signature, and wire-version headers.
+- Path and the existing idempotency, timestamp, key-id, and signature headers.
+  The current request protocol has no wire-version header; artifact versioning
+  must not silently add a required request header or payload field.
 - Exact response models for queued, replayed, rejected, and validation outcomes.
 - Decision-callback JSON Schema from the authoritative callback encoder.
 - A review-task-change contract. The default design is a separate platform

@@ -241,9 +241,18 @@ Body:
   decision the tool computed. Treat the case as pending human review.
 - **Delivery is at-least-once.** Dedupe on `(case_id, run_id)`. Retries back
   off exponentially (base 10 s, 8 attempts) before dead-lettering on our side.
-- Per-case order is preserved. An optional `event_sequence` integer (per-case
-  ordinal of the triggering event) can be enabled once you confirm you'll use
-  it.
+  Acknowledge every exact valid duplicate as processed; acknowledging a
+  callback does not mean applying it to the case.
+- **Until ordered delivery is activated in migration `025`, the wire provides no
+  callback-order authority.** Keep a manual approval authoritative. Acknowledge
+  and record subsequent valid automatic callbacks, but hold unordered callbacks
+  for review instead of applying them. If different automatic callbacks conflict,
+  use an ordering authority the platform owns or hold them for review.
+- Never infer callback order from `decided_at` or `event_sequence`.
+  `decided_at` is a display timestamp, and `event_sequence` is only the per-case
+  ingest ordinal of the event that triggered the run. Migration `025` introduces
+  the separate `decision_sequence` callback-order authority after its governed
+  activation.
 
 ### What to do with each result
 

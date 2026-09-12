@@ -640,8 +640,9 @@ R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image 
 
 ## 12. Live configuration cutover (migration 024)
 
-Installing schema `024` does **not** activate configuration. Migrations `013`–`024`
-are frozen; do not repair them in place. Platform activation `025` remains
+Installing schema `024` does **not** activate configuration. Core migrations
+`013`–`023` and configuration migration `024` are frozen independently; do not
+repair either owner's revisions in place. Platform activation `025` remains
 unbuilt/fail-closed; this procedure does not enable M2 or alter callbacks.
 
 1. Record a database backup and the exact digest of the configuration-capable
