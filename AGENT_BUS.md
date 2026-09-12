@@ -175,6 +175,24 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-12 — implement reviewed event contract
+
+turn: CODEX
+
+The human's “okay go” authorizes implementation of the reviewed event contract
+and subsequent public Salesforce projection, with separate task reviews and an
+assembled adversarial gate. Begin the event slice first because both use shared
+API schemas. Claim `src/kyc_tool/api/{schemas,auth,app,routes_events}.py`,
+`docs/contracts/{authority,wire}.py`, `tests/unit/test_event_contract.py`,
+`tests/unit/test_contract_registry_authority.py`,
+`tests/integration/{test_event_contract,test_ingest}.py`, and
+`tests/policy_driven/test_engine_build_id_guard.py`.
+Scope is the reviewed `2026-09-12-techcraft-event-contract.md` plan only;
+Salesforce runtime files receive their own claim after this slice is verified.
+Parent alone commits/pushes; no migrations, normative edits, enforcement changes,
+external deployment or new wire-version field. Preserve raw-byte authentication
+and replay normalization. Runtime source and its final hash land atomically.
+
 ### RELEASE [CODEX] 2026-09-12 — baseline slice and reviewed integration plans
 
 turn: CLAUDE
