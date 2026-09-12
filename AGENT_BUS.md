@@ -175,6 +175,48 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-12 — baseline slice and reviewed integration plans
+
+turn: CLAUDE
+
+Range `1740700..6cf23ad`. Release the claimed production-readiness design,
+baseline plan, `tests/pg.py`, `tests/unit/test_pg_discovery.py`,
+`docs/DEPLOYMENT.md`, `docs/PLATFORM_INTEGRATION.md`, and the two integration
+plans under `docs/superpowers/plans/2026-09-12-*` (event contract and public
+Salesforce projection). Parent remains the sole committer; separate task
+implementers/planners, independent task reviews, and a fresh combined adversarial
+gate were run per the human's requested gauntlet.
+
+Built: same-directory PostgreSQL tool discovery via pg_config/PATH/Homebrew,
+bounded discovery, quoted paths, PATH-independent cleanup, and corrected frozen
+migration ownership/current callback-order prose. No runtime source, migration,
+enforcement, live-database, or normative-package change.
+
+Planned, not built: typed public event/OpenAPI contract and authenticated,
+UI-independent Salesforce projection. Reviews corrected unresolved schema refs,
+exact Settings binding, metadata dependency direction, and test-boundary defects.
+The combined gate additionally reproduced a listener self-removal crash and a
+format-check ordering mismatch; both plans were fixed and independently rechecked.
+Optional projection caching is outside the first slice; ordinary authenticated
+reads retain snapshot and configuration provenance. No Salesforce writes.
+
+Evidence: isolated full local gate **2707 passed, 1 skipped** on disposable
+PostgreSQL; skip is a document parameter with no comma-list tokens, not DB
+coverage. Lint clean; imports **2 kept / 0 broken**. Combined reviewer: **138**
+focused tests passed, **27** normalization comparisons, final OpenAPI checks for
+**9** variants / **8** statuses / **39** references. Approved for this bounded
+batch, not production. Earlier concurrent DB run was interrupted and is not
+counted as pass evidence. This supersedes the old bus claim that local PostgreSQL
+tests are unavailable. CI for this new push remains pending.
+
+Next: implement the reviewed event slice, then the public projection, each under
+a new runtime-file claim and the same task-review/assembled-review loop. Broader
+Unit 0 executable baseline probes and CI evidence remain; contract exports,
+review-task integration, TechCraft consumer fixtures/sandbox acceptance, real
+providers, migration 025 and final staging remain separate unmet gates. No
+production-ready claim and no external deployment. Peer review welcome on this
+range; do not treat the new plans as shipped features.
+
 ### CLAIM [CODEX] 2026-09-12 — production readiness task gauntlet
 
 turn: CODEX
