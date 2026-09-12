@@ -49,6 +49,7 @@ from docs.contracts.wire import WIRE
 from kyc_tool.api import schemas
 from kyc_tool.api.schemas import (
     PAYLOAD_MODELS,
+    PLATFORM_EVENT_MODELS,
     DecisionCallback,
     EventEnvelope,
     EventType,
@@ -564,9 +565,22 @@ def _documented_status_codes_are_the_ones_ingest_returns():
 @verifies("WIRE.INGEST.EXTRA_FIELDS")
 def _extra_field_policy_matches_the_models():
     claim = WIRE.value("WIRE.INGEST.EXTRA_FIELDS")
-    assert EventEnvelope.model_config.get("extra") == claim["envelope"] == "forbid"
+    assert claim["envelope"] == "forbid"
+    assert PLATFORM_EVENT_MODELS
+    for model in PLATFORM_EVENT_MODELS:
+        assert model.model_config.get("extra") == claim["envelope"]
     for model in PAYLOAD_MODELS.values():
         assert model.model_config.get("extra") == claim["payload"] == "allow"
+
+    specimen = {
+        "event_type": "recalculate.requested",
+        "occurred_at": "2026-09-12T12:00:00Z",
+        "actor": {"type": "system", "id": "authority"},
+        "payload": {},
+        "top_level_extension": "refused",
+    }
+    with raises(PydanticValidationError):
+        EventEnvelope.model_validate(specimen)
 @verifies("WIRE.INGEST.ORDERING")
 def _ingest_ordering_is_the_case_lock_it_claims():
     """The claim's whole point is that same-case order is lock-acquisition order, not send order.

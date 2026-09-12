@@ -5,10 +5,31 @@ says payload essentials are a minimum). The callback body model exists so
 tests can validate what the outbox delivers.
 """
 
-from datetime import datetime
-from typing import Literal
+import re
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
+
+from kyc_tool.domain.provenance import (
+    LATEST_MANUAL_ROW,
+    LATEST_ROW,
+    LEGACY_ORDER,
+    NO_DECISIONS,
+    NO_MANUAL_DECISIONS,
+    POINTER_DRIFT,
+)
+from kyc_tool.ui.salesforce_projection import SALESFORCE_FIELD_CONTRACT
 
 EventType = Literal[
     "kyb.run_requested",
@@ -100,29 +121,390 @@ class RecalculatePayload(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class _PlatformEventBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    occurred_at: datetime
+    actor: Actor
+
+
+class KybRunRequestedEvent(_PlatformEventBase):
+    event_type: Literal["kyb.run_requested"]
+    payload: KybRunPayload
+
+
+class EmailVerifiedEvent(_PlatformEventBase):
+    event_type: Literal["email.verified"]
+    payload: EmailVerifiedPayload
+
+
+class OrgIdSubmittedEvent(_PlatformEventBase):
+    event_type: Literal["org_id.submitted"]
+    payload: OrgIdSubmittedPayload
+
+
+class PocSubmittedEvent(_PlatformEventBase):
+    event_type: Literal["poc.submitted"]
+    payload: PocSubmittedPayload
+
+
+class PocTokenVerifiedEvent(_PlatformEventBase):
+    event_type: Literal["poc.token_verified"]
+    payload: PocTokenVerifiedPayload
+
+
+class DocumentUploadedEvent(_PlatformEventBase):
+    event_type: Literal["document.uploaded"]
+    payload: DocumentUploadedPayload
+
+
+class WebsiteReviewCompletedEvent(_PlatformEventBase):
+    event_type: Literal["website.review_completed"]
+    payload: WebsiteReviewCompletedPayload
+
+
+class ReviewerManualApproveEvent(_PlatformEventBase):
+    event_type: Literal["reviewer.manual_approve"]
+    payload: ReviewerManualApprovePayload
+
+
+class RecalculateRequestedEvent(_PlatformEventBase):
+    event_type: Literal["recalculate.requested"]
+    payload: RecalculatePayload = Field(default_factory=RecalculatePayload)
+
+
+PlatformEvent = Annotated[
+    KybRunRequestedEvent
+    | EmailVerifiedEvent
+    | OrgIdSubmittedEvent
+    | PocSubmittedEvent
+    | PocTokenVerifiedEvent
+    | DocumentUploadedEvent
+    | WebsiteReviewCompletedEvent
+    | ReviewerManualApproveEvent
+    | RecalculateRequestedEvent,
+    Field(discriminator="event_type"),
+]
+
+
+def _event_variants() -> tuple[type[BaseModel], ...]:
+    union = get_args(PlatformEvent)[0]
+    return get_args(union)
+
+
+def _event_type(model: type[BaseModel]) -> str:
+    values = get_args(model.model_fields["event_type"].annotation)
+    if len(values) != 1 or type(values[0]) is not str:
+        raise TypeError(f"{model.__name__}.event_type must be one string Literal")
+    return values[0]
+
+
+PLATFORM_EVENT_MODELS: tuple[type[BaseModel], ...] = _event_variants()
+
 PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
-    "kyb.run_requested": KybRunPayload,
-    "email.verified": EmailVerifiedPayload,
-    "org_id.submitted": OrgIdSubmittedPayload,
-    "poc.submitted": PocSubmittedPayload,
-    "poc.token_verified": PocTokenVerifiedPayload,
-    "document.uploaded": DocumentUploadedPayload,
-    "website.review_completed": WebsiteReviewCompletedPayload,
-    "reviewer.manual_approve": ReviewerManualApprovePayload,
-    "recalculate.requested": RecalculatePayload,
+    _event_type(model): model.model_fields["payload"].annotation for model in PLATFORM_EVENT_MODELS
 }
 
 
-class EventEnvelope(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    event_type: EventType
-    occurred_at: datetime
-    actor: Actor
-    payload: dict = Field(default_factory=dict)
+class EventEnvelope(RootModel[PlatformEvent]):
+    @property
+    def event_type(self) -> EventType:
+        return self.root.event_type
 
-    def validated_payload(self) -> dict:
-        model = PAYLOAD_MODELS[self.event_type]
-        return model.model_validate(self.payload).model_dump(mode="json")
+    @property
+    def occurred_at(self) -> datetime:
+        return self.root.occurred_at
+
+    @property
+    def actor(self) -> Actor:
+        return self.root.actor
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return self.root.payload.model_dump(mode="json")
+
+    def validated_payload(self) -> dict[str, Any]:
+        return self.payload
+
+    def normalized(self) -> dict[str, Any]:
+        return {
+            "event_type": self.event_type,
+            "occurred_at": self.occurred_at.isoformat(),
+            "actor": self.actor.model_dump(mode="json"),
+            "payload": self.validated_payload(),
+        }
+
+
+class QueuedEventResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    status: Literal["queued"]
+
+
+class ManualApprovalEventResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    case_id: str
+    case_status: Literal["approved_manual"]
+    buy_status: Literal["buy_enabled", "buy_locked_org_id_required"]
+    recorded: Literal[True]
+
+
+class EventIngestErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    error: str
+    event_id: str | None = None
+    task_id: str | None = None
+    detail: str | None = None
+
+
+class EventHttpErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    detail: str | list[dict[str, Any]]
+
+
+class EventAcceptedResponse(RootModel[QueuedEventResponse | ManualApprovalEventResponse]):
+    pass
+
+
+class EventFailureResponse(RootModel[EventIngestErrorResponse | EventHttpErrorResponse]):
+    pass
+
+
+EVENT_RESPONSE_MODELS: dict[int, type[BaseModel]] = {
+    200: EventAcceptedResponse,
+    202: QueuedEventResponse,
+    400: EventHttpErrorResponse,
+    401: EventHttpErrorResponse,
+    404: EventIngestErrorResponse,
+    409: EventIngestErrorResponse,
+    422: EventFailureResponse,
+    503: EventFailureResponse,
+}
+
+
+_RFC3339_DATETIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\Z")
+
+
+def _parse_rfc3339_datetime(value: str) -> datetime:
+    """Parse a wire datetime only where the metadata declares one.
+
+    The public field union intentionally contains StrictStr before datetime.  A JSON roundtrip
+    therefore needs this narrow conversion before union validation, rather than a permissive
+    scalar conversion that could change text, integer, or boolean field semantics.
+    """
+    if not _RFC3339_DATETIME.fullmatch(value):
+        raise ValueError("datetime values must use an RFC3339 date-time representation")
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _parse_aware_datetime(value: Any, field_name: str) -> datetime:
+    """Accept only an aware datetime object or its RFC3339 JSON representation."""
+    if type(value) is str:
+        parsed = _parse_rfc3339_datetime(value)
+    elif isinstance(value, datetime):
+        parsed = value
+    else:
+        raise ValueError(f"{field_name} must be an aware datetime or RFC3339 date-time string")
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field_name} must include a UTC offset")
+    return parsed.astimezone(UTC)
+
+
+class KycCheckChildRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    Check_Type__c: StrictStr
+    Status__c: Literal["pass", "fail", "needs_review"]
+    Points__c: StrictInt
+    Category__c: StrictStr
+    Source__c: StrictStr
+    Superseded__c: StrictBool
+    Reason_Codes__c: StrictStr
+    Created_At__c: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_created_at_json_value(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "Created_At__c" not in value:
+            return value
+        candidate = dict(value)
+        candidate["Created_At__c"] = _parse_aware_datetime(value["Created_At__c"], "Created_At__c")
+        return candidate
+
+
+def validate_projected_value(source_field: str, value: Any) -> Any:
+    """Enforce the exact runtime shape specified by the canonical field contract."""
+    contract = SALESFORCE_FIELD_CONTRACT.get(source_field)
+    if contract is None:
+        raise ValueError(f"unknown Salesforce source field: {source_field}")
+    if value is None:
+        if contract.nullable:
+            return value
+        raise ValueError(f"{source_field} is not nullable")
+
+    value_type = contract.value_type
+    if value_type == "enum":
+        if type(value) is not str or value not in contract.allowed_values:
+            raise ValueError(f"{source_field} must be one of its declared enum values")
+    elif value_type == "integer":
+        if type(value) is not int:
+            raise ValueError(f"{source_field} must be an exact integer")
+    elif value_type == "text":
+        if type(value) is not str:
+            raise ValueError(f"{source_field} must be text")
+    elif value_type == "boolean":
+        if type(value) is not bool:
+            raise ValueError(f"{source_field} must be an exact boolean")
+    elif value_type == "datetime":
+        if not isinstance(value, datetime):
+            raise ValueError(f"{source_field} must be a datetime")
+    elif value_type == "check_records":
+        if type(value) is not list or any(not isinstance(item, KycCheckChildRecord) for item in value):
+            raise ValueError(f"{source_field} must be a list of KycCheckChildRecord values")
+    else:  # pragma: no cover - static metadata has one closed set of value types
+        raise ValueError(f"unsupported Salesforce field type: {value_type}")
+    return value
+
+
+class SalesforceProjectionField(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_field: str
+    source_identity: str
+    value_type: Literal["enum", "integer", "text", "boolean", "datetime", "check_records"]
+    nullable: bool
+    value: StrictStr | StrictInt | StrictBool | datetime | list[KycCheckChildRecord] | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_metadata_declared_datetime_value(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        contract = SALESFORCE_FIELD_CONTRACT.get(value.get("source_field"))
+        if contract is None:
+            return value
+        candidate = dict(value)
+        if contract.value_type == "datetime":
+            if candidate.get("value") is not None:
+                candidate["value"] = _parse_aware_datetime(candidate["value"], contract.source_identity)
+        elif contract.value_type == "check_records" and type(candidate.get("value")) is not list:
+            raise ValueError(f"{contract.source_identity} must be a list of check records")
+        return candidate
+
+    @model_validator(mode="after")
+    def validate_contract_metadata_and_value(self) -> "SalesforceProjectionField":
+        contract = SALESFORCE_FIELD_CONTRACT.get(self.source_field)
+        if contract is None:
+            raise ValueError(f"unknown Salesforce source field: {self.source_field}")
+        if self.source_identity != contract.source_identity:
+            raise ValueError(f"{self.source_field} has an incorrect source identity")
+        if self.value_type != contract.value_type:
+            raise ValueError(f"{self.source_field} has an incorrect value type")
+        if self.nullable is not contract.nullable:
+            raise ValueError(f"{self.source_field} has incorrect nullability")
+        validate_projected_value(self.source_field, self.value)
+        return self
+
+
+class ToolDecisionAuthority(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provenance: Literal[LATEST_ROW, POINTER_DRIFT, LEGACY_ORDER, NO_DECISIONS]
+    decision_row_id: str | None
+    run_id: str | None
+    decision_kind: Literal["automatic", "manual"] | None
+    decision: Literal["approve", "approve_buy_locked", "manual_review_insufficient", "reject"] | None
+    run_provenance: Literal["resolved", "unresolved", "not_applicable"]
+
+    @model_validator(mode="after")
+    def validate_authority_matrix(self) -> "ToolDecisionAuthority":
+        if self.provenance != LATEST_ROW:
+            if (
+                any(
+                    value is not None
+                    for value in (self.decision_row_id, self.run_id, self.decision_kind, self.decision)
+                )
+                or self.run_provenance != "not_applicable"
+            ):
+                raise ValueError("unresolved decision authority must contain only null identity values")
+            return self
+        if self.decision_row_id is None or self.decision_kind is None or self.decision is None:
+            raise ValueError("resolved decision authority requires its decision identity")
+        if self.decision_kind == "automatic":
+            if self.run_id is None or self.run_provenance not in {"resolved", "unresolved"}:
+                raise ValueError("automatic decision authority requires a run and its provenance")
+        elif self.run_id is not None or self.run_provenance != "not_applicable":
+            raise ValueError("manual decision authority has no run")
+        return self
+
+
+class ManualApprovalAuthority(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provenance: Literal[LATEST_MANUAL_ROW, POINTER_DRIFT, LEGACY_ORDER, NO_MANUAL_DECISIONS]
+    decision_row_id: str | None
+    reviewer_id: str | None
+    decided_at: datetime | None
+
+    @field_validator("decided_at", mode="before")
+    @classmethod
+    def parse_decided_at(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        return _parse_aware_datetime(value, "decided_at")
+
+    @model_validator(mode="after")
+    def validate_sticky_manual_matrix(self) -> "ManualApprovalAuthority":
+        values = (self.decision_row_id, self.reviewer_id, self.decided_at)
+        if self.provenance == LATEST_MANUAL_ROW:
+            if any(value is None for value in values):
+                raise ValueError("resolved manual authority requires its complete attribution")
+        elif any(value is not None for value in values):
+            raise ValueError("unresolved manual authority must contain only null identity values")
+        return self
+
+
+class SalesforceProjectionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str
+    mapping_revision: StrictStr | None
+    configuration_revision: StrictStr | None
+    decision_authority: ToolDecisionAuthority
+    manual_approval_authority: ManualApprovalAuthority
+    fields: dict[str, SalesforceProjectionField]
+    projection_timestamp: datetime
+
+    @field_validator("mapping_revision", "configuration_revision", mode="before")
+    @classmethod
+    def validate_decimal_revision(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if type(value) is not str or not value.isascii() or not value.isdecimal():
+            raise ValueError("revision must be a decimal string")
+        return value
+
+    @field_validator("projection_timestamp", mode="before")
+    @classmethod
+    def parse_projection_timestamp(cls, value: Any) -> Any:
+        return _parse_aware_datetime(value, "projection_timestamp")
+
+    @model_validator(mode="after")
+    def validate_projection_contract(self) -> "SalesforceProjectionResponse":
+        if set(field.source_field for field in self.fields.values()) != set(SALESFORCE_FIELD_CONTRACT):
+            raise ValueError(
+                "projection fields must cover every canonical Salesforce source field exactly once"
+            )
+        if len({field.source_field for field in self.fields.values()}) != len(self.fields):
+            raise ValueError("projection fields cannot duplicate a Salesforce source field")
+        authority = self.decision_authority
+        is_resolved_automatic = (
+            authority.provenance == LATEST_ROW
+            and authority.decision_kind == "automatic"
+            and authority.run_provenance == "resolved"
+        )
+        if not is_resolved_automatic and self.configuration_revision is not None:
+            raise ValueError("only a resolved automatic decision may carry a configuration revision")
+        return self
 
 
 class GatesBody(BaseModel):
@@ -157,9 +539,7 @@ class EnforcementHeld(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    computed_decision: Literal[
-        "approve", "approve_buy_locked", "manual_review_insufficient", "reject"
-    ]
+    computed_decision: Literal["approve", "approve_buy_locked", "manual_review_insufficient", "reject"]
     reason: str
 
 

@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from kyc_tool import __version__
+from kyc_tool.api.routes_events import install_event_contract_openapi
 from kyc_tool.api.routes_events import router as events_router
 from kyc_tool.api.routes_metrics import router as metrics_router
 from kyc_tool.api.routes_ops import router as ops_router
@@ -65,9 +66,7 @@ def create_app(
     else:  # DB-reconstructed injection: no directory to seed — require the exact hash present
         with session_factory() as session:
             if load_bundle(session, policy.bundle_hash) is None:
-                raise RuntimeError(
-                    f"selected policy {policy.bundle_hash} is not resolvable from the store"
-                )
+                raise RuntimeError(f"selected policy {policy.bundle_hash} is not resolvable from the store")
     attest(flag=settings.enforce_bundle_pinning, bundle_hash=policy.bundle_hash)
 
     app = FastAPI(title="IPv4.Global KYC Tool", version=__version__)
@@ -105,11 +104,7 @@ def create_app(
         checks: dict[str, dict] = {}
         ready = True
 
-        violations = (
-            production_config_violations(settings)
-            if settings.environment == "production"
-            else []
-        )
+        violations = production_config_violations(settings) if settings.environment == "production" else []
         checks["config"] = {"ok": not violations, "violations": violations}
         ready = ready and not violations
 
@@ -175,8 +170,7 @@ def create_app(
             checks["configuration"] = {"ok": False, "error": "Configuration authority unavailable."}
             ready = False
 
-        return JSONResponse(
-            status_code=200 if ready else 503, content={"ready": ready, "checks": checks}
-        )
+        return JSONResponse(status_code=200 if ready else 503, content={"ready": ready, "checks": checks})
 
+    install_event_contract_openapi(app)
     return app

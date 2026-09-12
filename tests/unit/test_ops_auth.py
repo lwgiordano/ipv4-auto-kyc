@@ -39,11 +39,10 @@ def test_ui_not_mounted_by_default(policy, monkeypatch):
 
 
 def test_read_endpoints_reject_unauthenticated_when_required(policy, monkeypatch):
-    client = TestClient(
-        _app(policy, monkeypatch, read_auth_required=True, platform_hmac_secret="s" * 40)
-    )
+    client = TestClient(_app(policy, monkeypatch, read_auth_required=True, platform_hmac_secret="s" * 40))
     assert client.get("/v1/cases/anything").status_code == 401
     assert client.get("/v1/cases/anything/checks").status_code == 401
+    assert client.get("/v1/cases/anything/salesforce-projection").status_code == 401
     assert client.get("/v1/runs/anything").status_code == 401
     assert client.get("/v1/review-tasks").status_code == 401
 
@@ -60,9 +59,7 @@ def test_ui_mutations_require_admin_token(policy, monkeypatch):
     client = TestClient(_app(policy, monkeypatch, ui_enabled=True, ui_admin_token="admin-secret"))
     assert client.post("/ui/api/requeue/job/1").status_code == 401
     assert (
-        client.post("/ui/api/requeue/outbox/1", headers={"Authorization": "Bearer wrong"})
-        .status_code
-        == 401
+        client.post("/ui/api/requeue/outbox/1", headers={"Authorization": "Bearer wrong"}).status_code == 401
     )
 
 

@@ -999,6 +999,25 @@ def _this_module():
     from docs.contracts import authority
 
     return authority
+
+
+def test_event_envelope_authority_refuses_a_permissive_variant(monkeypatch):
+    authority = _this_module()
+
+    class PermissiveRecalculate(schemas.RecalculateRequestedEvent):
+        model_config = {"extra": "allow"}
+
+    mutated = tuple(
+        PermissiveRecalculate if model is schemas.RecalculateRequestedEvent else model
+        for model in authority.PLATFORM_EVENT_MODELS
+    )
+    monkeypatch.setattr(authority, "PLATFORM_EVENT_MODELS", mutated)
+    assert any(
+        problem.startswith("WIRE.INGEST.EXTRA_FIELDS:")
+        for problem in authority.problems()
+    )
+
+
 def _wire_with(claim_id: str, **changes):
     """The live WIRE registry with ONE claim's fields replaced — for running the REAL assembled
     verifier against a mutated registry, per the audit's requirement that mutations target the

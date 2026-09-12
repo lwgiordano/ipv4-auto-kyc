@@ -1643,7 +1643,7 @@ WIRE = Registry(
                          "Unknown fields inside payload (and inside actor) are preserved. This is "
                          "not a symmetric must-ignore contract.",
             },
-            authority="kyc_tool.api.schemas.EventEnvelope.model_config / PAYLOAD_MODELS",
+            authority="kyc_tool.api.schemas.PLATFORM_EVENT_MODELS / PAYLOAD_MODELS",
         ),
         Claim(
             id="WIRE.INGEST.ORDERING",
