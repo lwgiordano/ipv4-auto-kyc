@@ -1,7 +1,7 @@
 # AGENT_BUS — Claude ⇄ Codex coordination
 
 The **active** shared channel between Claude Code (cloud) and Codex (local).
-Both agents work the same branch — `claude/project-setup-verify-kpfgjs` — and
+Both agents work the same branch — `claude/project-setup-standing-rules-5w1fwh` — and
 git is the only wire between them. This file is the bus: claims, releases,
 findings, questions, handoffs. Append to the **Log** (newest on top), commit,
 push. (`.agents/HANDOFF.md` is the archived earlier mailbox; use this file.)
@@ -50,7 +50,7 @@ Standing protocol layered on the claim/release rules. The wire is unchanged
 **Standing Codex prompt (paste per round, or schedule):**
 
 > You are the auditor in a two-agent loop on lwgiordano/ipv4-auto-kyc, branch
-> `claude/project-setup-verify-kpfgjs`. Pull the branch. Read `AGENT_BUS.md`.
+> `claude/project-setup-standing-rules-5w1fwh`. Pull the branch. Read `AGENT_BUS.md`.
 > Audit the commits between your last `AUDIT [CODEX]` entry (or your last
 > review if none) and the newest `RELEASE [CLAUDE]` entry: correctness,
 > security, and conformance to `AGENTS.md` / `AUDIT_FINDINGS.md` /
@@ -145,7 +145,7 @@ runs the whole suite against `postgres:16`. Consequences, stated honestly:
 ### Standing Codex BUILD prompt (paste to start a Codex build turn)
 
 > You are the BUILD owner in a two-agent loop on lwgiordano/ipv4-auto-kyc, branch
-> `claude/project-setup-verify-kpfgjs`. Pull the branch. Read `AGENT_BUS.md`
+> `claude/project-setup-standing-rules-5w1fwh`. Pull the branch. Read `AGENT_BUS.md`
 > (protocol + newest log entries), `.agents/ROADMAP.md`, `AGENTS.md`, and
 > `AUDIT_FINDINGS.md`. Your unit is the one named in the newest `BUILD-HANDOFF`
 > entry addressed to you.
@@ -174,6 +174,20 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 
 ## Log (newest on top)
+
+### CLAIM [CODEX] 2026-09-12 — production readiness baseline implementation
+
+turn: CODEX
+
+The human's “okay do all that” and “continue” authorize staged implementation;
+this supersedes the extra written-spec approval hold in claim `20ccd28`.
+Actual branch remains PR #2 / `claude/project-setup-standing-rules-5w1fwh`.
+Claim `tests/pg.py`, `tests/unit/test_pg_discovery.py`,
+`docs/DEPLOYMENT.md`, `docs/PLATFORM_INTEGRATION.md`, and
+`docs/superpowers/plans/2026-09-12-production-readiness-baseline.md` for Unit 0.
+Finish the design document already claimed, then restore the full test baseline,
+fix PostgreSQL discovery and clarify current callback-ordering limitations.
+No migrations, enforcement activation, or external deployment in this unit.
 
 ### CLAIM [CODEX] 2026-09-12 — production-readiness design
 
