@@ -25,7 +25,7 @@ class ClaimState(StrEnum):
 
     SHIPPED  — the running code behaves this way today; build against it.
     PENDING  — an accepted design that does not exist yet; requirements only, not a schema to
-               implement. (024 ordering bootstrap.)
+               implement. (025 ordering bootstrap.)
     BLOCKED  — the documented capability cannot be exercised at all right now, and the document
                must say so where a reader would otherwise act. (Production providers: the config
                kill switch demands real providers and every real provider factory raises

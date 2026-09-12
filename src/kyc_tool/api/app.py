@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from kyc_tool import __version__
+from kyc_tool.api.routes_events import install_event_contract_openapi
 from kyc_tool.api.routes_events import router as events_router
 from kyc_tool.api.routes_metrics import router as metrics_router
 from kyc_tool.api.routes_ops import router as ops_router
@@ -65,9 +66,7 @@ def create_app(
     else:  # DB-reconstructed injection: no directory to seed — require the exact hash present
         with session_factory() as session:
             if load_bundle(session, policy.bundle_hash) is None:
-                raise RuntimeError(
-                    f"selected policy {policy.bundle_hash} is not resolvable from the store"
-                )
+                raise RuntimeError(f"selected policy {policy.bundle_hash} is not resolvable from the store")
     attest(flag=settings.enforce_bundle_pinning, bundle_hash=policy.bundle_hash)
 
     app = FastAPI(title="IPv4.Global KYC Tool", version=__version__)
@@ -82,9 +81,11 @@ def create_app(
     # in the secure production configuration, where the optional /ui console is disabled.
     app.include_router(ops_router)
     if settings.ui_enabled:
+        from kyc_tool.ui.configuration_routes import router as configuration_router
         from kyc_tool.ui.routes import router as ui_router  # deferred: reads console.html
 
         app.include_router(ui_router)
+        app.include_router(configuration_router)
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -103,11 +104,7 @@ def create_app(
         checks: dict[str, dict] = {}
         ready = True
 
-        violations = (
-            production_config_violations(settings)
-            if settings.environment == "production"
-            else []
-        )
+        violations = production_config_violations(settings) if settings.environment == "production" else []
         checks["config"] = {"ok": not violations, "violations": violations}
         ready = ready and not violations
 
@@ -156,8 +153,24 @@ def create_app(
             checks["policy_bundle"] = {"ok": False, "bundle_hash": bundle_hash, "error": str(exc)[:200]}
             ready = False
 
-        return JSONResponse(
-            status_code=200 if ready else 503, content={"ready": ready, "checks": checks}
-        )
+        try:
+            from kyc_tool.configuration import repo as configuration_repo
 
+            with app.state.session_factory() as session:
+                active = configuration_repo.get_active(session)
+            valid = active is None or settings.enforce_bundle_pinning is True
+            checks["configuration"] = {
+                "ok": valid,
+                "active": active is not None,
+                "revision": str(active.revision) if active else None,
+                "pinning_enabled": settings.enforce_bundle_pinning is True,
+            }
+            ready = ready and valid
+        except Exception:  # noqa: BLE001 — corruption and unavailable authority are not-ready
+            checks["configuration"] = {"ok": False, "error": "Configuration authority unavailable."}
+            ready = False
+
+        return JSONResponse(status_code=200 if ready else 503, content={"ready": ready, "checks": checks})
+
+    install_event_contract_openapi(app)
     return app

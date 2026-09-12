@@ -235,10 +235,10 @@ OUTLINES = MappingProxyType({
                     BlockOutline(kind='heading', digest='234929f29ee78a30', roles=('H1',)),
                     BlockOutline(kind='prose', digest='ef84d6cefa3fd5e3', roles=('BODY',)),
                     BlockOutline(
-                        kind='prose', claim_id='WIRE.ORDERING.BOOTSTRAP_024', projection='paragraph',
+                        kind='prose', claim_id='WIRE.ORDERING.BOOTSTRAP_025', projection='paragraph',
                         roles=('BODY',)),
                     BlockOutline(kind='prose', digest='5d2918318bf4467c', roles=('BODY',)),
-                    BlockOutline(kind='prose', digest='c73a077c46f1732c', roles=('BODY',)),
+                    BlockOutline(kind='prose', digest='78b92bf7dba2f6c8', roles=('BODY',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.ORDERING.OBLIGATION_STATE', projection='paragraph',
                         roles=('WHY',)),
@@ -322,7 +322,7 @@ OUTLINES = MappingProxyType({
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.LEGEND_CLOSURE', projection='paragraph',
                         roles=('WHY',)),
-                    BlockOutline(kind='heading', digest='66dd2ae94a3b1d1c', roles=('H2',)),
+                    BlockOutline(kind='heading', digest='e80b9104c9b82bcb', roles=('H2',)),
                     BlockOutline(
                         kind='prose', claim_id='WIRE.CALLBACK.RELEASE_STATE', projection='paragraph',
                         roles=('WHY',)),

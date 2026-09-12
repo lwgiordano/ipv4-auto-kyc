@@ -59,7 +59,7 @@ POC_EMAIL = "poc_email"
 # so every attempt it records is 'legacy'; 7b-activation introduces 'sequenced'. The vocabulary is
 # pinned by ck_attempt_wire_vocab, so an unknown value fails at the database rather than silently
 # becoming an uninterpretable witness.
-# The active callback wire generation, compared by the pending-024 gate against the pre-024
+# The active callback wire generation, compared by the pending-025 gate against the pre-025
 # LITERAL held in the verifier itself (re-gate-3 finding 4). The previous arrangement compared this
 # to a sibling alias in this same module, so the natural two-line edit — move the alias and the
 # active value together — passed the gate while every persisted attempt advertised sequenced wire.

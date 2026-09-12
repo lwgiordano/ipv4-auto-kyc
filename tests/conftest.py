@@ -50,6 +50,9 @@ _ALL_TABLES = (
     "hmac_v1_observation",
     "policy_bundles",
     "bundle_pinning_epoch",
+    "configuration_requests",
+    "configuration_state",
+    "configuration_revisions",
 )
 
 

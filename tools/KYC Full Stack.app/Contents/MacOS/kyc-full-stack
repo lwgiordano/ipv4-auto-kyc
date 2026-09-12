@@ -1,0 +1,279 @@
+#!/bin/bash
+# KYC Full Stack — the whole application on your machine, with the UI kept current.
+#
+# This is the one that actually runs. Its companion, KYC Preview.app, only draws the screens on
+# a captured sample and cannot send anything; if buttons here do nothing, you opened that one.
+#
+# It runs scripts/dev.sh (ephemeral Postgres, migrations, the dev worker, the fake platform
+# receiver, the API), puts scripts/devproxy.py in front so the console is read from disk on every
+# request, and opens a window on it. Then it keeps pulling this branch: a UI change repaints the
+# open window in a couple of seconds without touching the database, and a change to the engine
+# restarts the stack.
+#
+# Everything you do here is real. Send Message runs the pipeline, Approve Manually writes a
+# decision under your name. The database is temporary and goes away when you quit.
+#
+# First run on a machine that has never built this project needs two things: the project's Python
+# environment, which this app offers to build for you, and a Postgres it can start, which it
+# cannot install for you. Nothing here is silent -- every way this can fail ends in a dialog.
+set -uo pipefail
+
+# Finder starts a process with no terminal and a minimal PATH, so anything that goes wrong has
+# nowhere to appear -- which is how double-clicking this looked like nothing happening at all,
+# while the identical script run from a shell worked first time. Rather than guess at which of
+# the two differences did it, hand the script to Terminal and let the run be visible: the same
+# window, the same output, and Ctrl-C or closing it stops everything exactly as before.
+# The flag matters as much as the test: by the time this script re-execs itself after a pull,
+# stdout is the pipe to tee, so -t 1 is false and an unguarded check would open a second window.
+if [ ! -t 1 ] && [ -z "${KYC_CONSOLE_TTY:-}" ]; then
+  open -a Terminal "$0"
+  exit 0
+fi
+export KYC_CONSOLE_TTY=1
+# Homebrew and /usr/local are not on a non-login PATH, and Postgres usually lives in one of them.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# Bash reads a script off disk as it runs, so a pull that rewrites this file mid-run leaves it
+# executing whatever now sits at the byte offset it had reached. This app pulls -- at startup and
+# every ${INTERVAL}s after -- so that is not hypothetical. Run from a copy and the checkout is
+# free to change underneath.
+if [ -z "${KYC_CONSOLE_SELF:-}" ]; then
+  KYC_CONSOLE_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  export KYC_CONSOLE_SELF
+  copy="$(mktemp "${TMPDIR:-/tmp}/kyc-full-stack.XXXXXX")" || exit 1
+  cat "$0" > "$copy" && chmod +x "$copy" || exit 1
+  exec bash "$copy"
+fi
+SELF="$KYC_CONSOLE_SELF"   # the bundle on disk; "$0" is this run's throwaway copy
+
+# Follows the branch you have checked out. Set KYC_CONSOLE_BRANCH to pin one instead -- useful
+# when someone else is pushing to a branch you are not on. KYC_CONSOLE_INTERVAL is the seconds
+# between pulls; 20 is frequent enough that a push here is on screen before you look up.
+BRANCH="${KYC_CONSOLE_BRANCH:-}"
+INTERVAL="${KYC_CONSOLE_INTERVAL:-20}"
+# Shared with KYC Preview.app on purpose: whichever you opened first already found the checkout.
+STATE="$HOME/Library/Application Support/KYC Console"
+mkdir -p "$STATE"
+LOG="$STATE/full-stack.log"
+# Append, so the lines from before a self-restart are still there to read.
+[ -n "${KYC_CONSOLE_RESTARTS:-}" ] || : > "$LOG"
+exec > >(tee -a "$LOG") 2>&1
+
+TITLE="KYC Full Stack"
+
+# An AppleScript string literal, from arbitrary text. The earlier version of this interpolated a
+# log tail straight into -e "...", so the one dialog that mattered -- the stack did not start --
+# was the one that could not be displayed: a real newline ends the literal, and the failure was
+# swallowed by the 2>/dev/null on the end. Escape the two characters AppleScript cares about,
+# then fold real newlines into the two-character escape it reads as a newline.
+aesc() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
+    | awk '{ if (NR>1) printf "\\n"; printf "%s", $0 }'
+}
+
+say() {  # one OK button
+  osascript >/dev/null 2>&1 <<OSA
+display dialog "$(aesc "$1")" buttons {"OK"} default button 1 with title "$TITLE" with icon caution
+OSA
+}
+
+# Same, plus a way to look at the log, since a failure people cannot read is a failure twice.
+say_log() {
+  local pick
+  pick="$(osascript 2>/dev/null <<OSA
+button returned of (display dialog "$(aesc "$1")" buttons {"Open log", "OK"} default button 2 with title "$TITLE" with icon stop)
+OSA
+)"
+  [ "$pick" = "Open log" ] && open -e "$LOG"
+  return 0
+}
+
+ask() {  # $1 prompt, $2 affirmative button; prints the button that was pressed
+  osascript 2>/dev/null <<OSA
+button returned of (display dialog "$(aesc "$1")" buttons {"Cancel", "$2"} default button 2 with title "$TITLE")
+OSA
+}
+
+valid() { [ -n "${1:-}" ] && [ -f "$1/scripts/dev.sh" ] && [ -f "$1/scripts/devproxy.py" ]; }
+freeport() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
+
+# The bundle ships inside the repo, so its own location is the first guess.
+REPO=""; here="$(cd "$(dirname "$SELF")" && pwd)"
+while [ "$here" != "/" ]; do valid "$here" && { REPO="$here"; break; }; here="$(dirname "$here")"; done
+[ -n "$REPO" ] || REPO="$(cat "$STATE/repo-path" 2>/dev/null || true)"
+valid "$REPO" || REPO="$(find "$HOME" -maxdepth 6 -type d -name ipv4-auto-kyc 2>/dev/null | head -1)"
+if ! valid "$REPO"; then
+  say "I could not find your ipv4-auto-kyc checkout.
+
+Clone it, then open this app from the tools folder inside it."
+  exit 1
+fi
+printf '%s' "$REPO" > "$STATE/repo-path"
+cd "$REPO" || exit 1
+
+if ! command -v python3 >/dev/null 2>&1; then
+  say "This needs python3, which macOS installs with the Command Line Tools.
+
+Run this in Terminal, then open the app again:
+
+    xcode-select --install"
+  exit 1
+fi
+
+# Pull first, then run what was pulled. The loop at the bottom keeps pulling, but that only helps
+# once you are already running: the first launch used to start whatever you happened to have on
+# disk. A dirty tree is left alone -- your own edits are not this app's to discard.
+export GIT_TERMINAL_PROMPT=0  # a credential prompt here would just hang
+if [ -n "$BRANCH" ] && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+  git fetch --quiet origin "$BRANCH" 2>/dev/null
+  git checkout --quiet "$BRANCH" 2>/dev/null || echo "could not switch to $BRANCH"
+fi
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "on $BRANCH with local changes — nothing will be pulled over them"
+elif ! git rev-parse --abbrev-ref "@{u}" >/dev/null 2>&1; then
+  echo "on $BRANCH, which has no upstream — nothing will be pulled"
+else
+  was="$(git rev-parse HEAD)"
+  if git pull --ff-only --quiet 2>/dev/null; then
+    now="$(git rev-parse HEAD)"
+    if [ "$was" = "$now" ]; then
+      echo "on $BRANCH — already current"
+    else
+      echo "pulled $BRANCH: ${was:0:7} → ${now:0:7}"
+      git --no-pager log --oneline "$was..$now" | sed 's/^/  /'
+      # That pull may have replaced this launcher, in which case the one running is the old one.
+      # Start the new one instead. The counter stops a bad push turning this into a loop.
+      if ! cmp -s "$SELF" "$0"; then
+        if [ "${KYC_CONSOLE_RESTARTS:-0}" -lt 2 ]; then
+          echo "the launcher itself changed — starting the new one"
+          export KYC_CONSOLE_RESTARTS=$(( ${KYC_CONSOLE_RESTARTS:-0} + 1 ))
+          unset KYC_CONSOLE_SELF
+          rm -f "$0"
+          exec bash "$SELF"
+        fi
+        echo "the launcher changed again — carrying on with this one"
+      fi
+    fi
+  else
+    echo "could not pull $BRANCH (offline, or it needs a merge) — running what you have"
+  fi
+  echo "pulling every ${INTERVAL}s from here on"
+fi
+
+# The one prerequisite this app can supply. Its location is defined by this repo, so a file test
+# is the whole check -- no probing for someone else's tooling, which is how the last version of
+# this got Postgres wrong. Postgres itself is left to dev.sh, which already knows where to look
+# across apt, Homebrew and Postgres.app and says so in its own words; a failure there now reaches
+# you in about a second rather than after two minutes of nothing.
+if [ ! -x "$REPO/.venv/bin/python" ]; then
+  if [ "$(ask "The stack needs this project's Python environment, and this checkout does not have one yet.
+
+I can build it now by running ./manage.sh setup. It downloads the dependencies, so it needs a network, and it takes a few minutes the first time. After that, opening this app just works." "Build it")" != "Build it" ]; then
+    exit 1
+  fi
+  echo "building .venv — ./manage.sh setup"
+  if ! bash ./manage.sh setup; then
+    say_log "Building the Python environment did not finish.
+
+$(tail -n 10 "$LOG")
+
+Full log: $LOG"
+    exit 1
+  fi
+  if [ ! -x "$REPO/.venv/bin/python" ]; then
+    say_log "Setup finished but did not leave a .venv, so the stack has nothing to run.
+
+$(tail -n 10 "$LOG")
+
+Full log: $LOG"
+    exit 1
+  fi
+fi
+
+API_PORT="$(freeport)"; RCV_PORT="$(freeport)"; PG_PORT="$(freeport)"; UI_PORT="$(freeport)"
+URL="http://127.0.0.1:$UI_PORT/ui"
+pytree() { find src -name '*.py' -type f -exec shasum {} + 2>/dev/null | shasum | cut -d' ' -f1; }
+
+DEV_PID=""; PROXY_PID=""
+stop_stack() { [ -n "$DEV_PID" ] && kill "$DEV_PID" 2>/dev/null; DEV_PID=""; sleep 3; }
+trap 'stop_stack; [ -n "$PROXY_PID" ] && kill $PROXY_PID 2>/dev/null; rm -f "$0"' EXIT INT TERM
+
+start_stack() {
+  echo "starting the stack (api $API_PORT, receiver $RCV_PORT, postgres $PG_PORT)…"
+  KYC_DEV_API_PORT="$API_PORT" KYC_DEV_RECEIVER_PORT="$RCV_PORT" KYC_DEV_PG_PORT="$PG_PORT" \
+    bash scripts/dev.sh &
+  DEV_PID=$!
+  for _ in $(seq 1 120); do
+    curl -sf -o /dev/null "http://127.0.0.1:$API_PORT/ui" && return 0
+    # dev.sh has stopped. Missing Postgres, a port taken, a migration that will not apply -- it
+    # said which on its way out, and waiting the rest of the two minutes only delays reading it.
+    if ! kill -0 "$DEV_PID" 2>/dev/null; then DEV_PID=""; return 1; fi
+    sleep 1
+  done
+  echo "the API did not answer within two minutes"
+  return 1
+}
+
+if ! start_stack; then
+  say_log "The stack did not start.
+
+$(tail -n 10 "$LOG")
+
+Full log: $LOG"
+  exit 1
+fi
+
+# An empty Companies list is correct but not much to look at; walk one company through.
+EMPTY="$(curl -s "http://127.0.0.1:$API_PORT/ui/api/cases" | grep -c 'demo-case-001' || true)"
+SEED=""; [ "$EMPTY" = "0" ] && SEED="--seed"
+
+python3 scripts/devproxy.py --api "http://127.0.0.1:$API_PORT" --port "$UI_PORT" $SEED &
+PROXY_PID=$!
+for _ in $(seq 1 40); do curl -sf -o /dev/null "$URL" && break; sleep 0.25; done
+if ! curl -sf -o /dev/null "$URL"; then
+  say_log "The stack came up, but the console proxy in front of it did not.
+
+$(tail -n 10 "$LOG")
+
+Full log: $LOG"
+  exit 1
+fi
+
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+EDGE="/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+BRAVE="/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+if   [ -x "$CHROME" ]; then "$CHROME" --app="$URL" --window-size=1440,960 >/dev/null 2>&1 &
+elif [ -x "$EDGE"   ]; then "$EDGE"   --app="$URL" --window-size=1440,960 >/dev/null 2>&1 &
+elif [ -x "$BRAVE"  ]; then "$BRAVE"  --app="$URL" --window-size=1440,960 >/dev/null 2>&1 &
+else open "$URL"; fi
+
+echo "console on $URL"
+echo "quit this app (Cmd-Q from the Dock) to stop everything and drop the temporary database"
+
+PY_WAS="$(pytree)"
+while true; do
+  sleep "$INTERVAL"
+  # Whatever branch you are on, from whoever pushed to it. A dirty tree is left alone: your edits
+  # are already live, and a pull on top of them is not this app's decision to make.
+  [ -n "$(git status --porcelain 2>/dev/null)" ] || git pull --ff-only --quiet 2>/dev/null
+  PY_NOW="$(pytree)"
+  if [ "$PY_NOW" != "$PY_WAS" ]; then
+    echo "the engine changed — restarting the stack (the temporary database resets)"
+    PY_WAS="$PY_NOW"
+    stop_stack
+    start_stack || { say_log "The stack did not come back up after an engine change.
+
+$(tail -n 10 "$LOG")
+
+Full log: $LOG"; exit 1; }
+    curl -s "http://127.0.0.1:$API_PORT/ui/api/cases" | grep -q 'demo-case-001' \
+      || python3 - "$API_PORT" <<'SEEDPY'
+import sys
+sys.path.insert(0, "scripts")
+import devproxy
+devproxy.seed(f"http://127.0.0.1:{sys.argv[1]}")
+SEEDPY
+  fi
+  # A UI-only change needs nothing: the proxy reads console.html per request and the page notices.
+done

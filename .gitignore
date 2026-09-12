@@ -1,5 +1,10 @@
 # agent-substrate-kit local artifacts
 .substrate/state/
+
+# Impeccable's live-server runtime state: a pid, a port and a session token for a server that
+# exists only while a critique is running. Machine-local, stale the moment it is written, and it
+# carries a token. The critique SNAPSHOTS under .impeccable/critique/ are committed on purpose.
+.impeccable/live/
 .venv/
 __pycache__/
 

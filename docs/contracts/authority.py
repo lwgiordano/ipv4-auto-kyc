@@ -49,6 +49,7 @@ from docs.contracts.wire import WIRE
 from kyc_tool.api import schemas
 from kyc_tool.api.schemas import (
     PAYLOAD_MODELS,
+    PLATFORM_EVENT_MODELS,
     DecisionCallback,
     EventEnvelope,
     EventType,
@@ -564,9 +565,22 @@ def _documented_status_codes_are_the_ones_ingest_returns():
 @verifies("WIRE.INGEST.EXTRA_FIELDS")
 def _extra_field_policy_matches_the_models():
     claim = WIRE.value("WIRE.INGEST.EXTRA_FIELDS")
-    assert EventEnvelope.model_config.get("extra") == claim["envelope"] == "forbid"
+    assert claim["envelope"] == "forbid"
+    assert PLATFORM_EVENT_MODELS
+    for model in PLATFORM_EVENT_MODELS:
+        assert model.model_config.get("extra") == claim["envelope"]
     for model in PAYLOAD_MODELS.values():
         assert model.model_config.get("extra") == claim["payload"] == "allow"
+
+    specimen = {
+        "event_type": "recalculate.requested",
+        "occurred_at": "2026-09-12T12:00:00Z",
+        "actor": {"type": "system", "id": "authority"},
+        "payload": {},
+        "top_level_extension": "refused",
+    }
+    with raises(PydanticValidationError):
+        EventEnvelope.model_validate(specimen)
 @verifies("WIRE.INGEST.ORDERING")
 def _ingest_ordering_is_the_case_lock_it_claims():
     """The claim's whole point is that same-case order is lock-acquisition order, not send order.
@@ -689,11 +703,11 @@ def _effectiveness_table_is_executable_and_total():
     _receiver_surface_ok()
     from docs.contracts import predicates
     from docs.contracts.receiver_reference import Callback, LedgerState, decide
-    from docs.contracts.wire import INTERIM, POST_024, RECEIVER_TRANSITIONS
+    from docs.contracts.wire import INTERIM, POST_025, RECEIVER_TRANSITIONS
 
     rows = WIRE.value("WIRE.CALLBACK.EFFECTIVENESS")
     assert rows is RECEIVER_TRANSITIONS
-    assert {t.phase for t in rows} == {INTERIM, POST_024}
+    assert {t.phase for t in rows} == {INTERIM, POST_025}
     assert not any("otherwise" in t.condition.lower() for t in rows)
 
     # ── the partition property (re-audit `4cb2cb7` F10) ──────────────────────────────────────
@@ -701,7 +715,7 @@ def _effectiveness_table_is_executable_and_total():
     # manual/automatic predicate, an uncovered sequence relation, a deleted row, and a shadowed
     # extra row all kept four rows and every token. Enumeration over the closed state space is
     # the property all four mutations break: every state matches EXACTLY ONE row.
-    for phase in (INTERIM, POST_024):
+    for phase in (INTERIM, POST_025):
         phase_rows = [t for t in rows if t.phase == phase]
         problems = predicates.partition_problems(phase_rows)
         assert not problems, f"{phase}: {problems}"
@@ -729,7 +743,7 @@ def _effectiveness_table_is_executable_and_total():
             return (True, False, True)  # manual holds; the mark still moves on proven order
         return (True, True, True)  # proven order, nothing manual in force: apply
 
-    for phase in (INTERIM, POST_024):
+    for phase in (INTERIM, POST_025):
         phase_rows = [t for t in rows if t.phase == phase]
         for observed in predicates.state_space():
             (expected_row,) = [i for i, r in enumerate(phase_rows) if r.when.matches(observed)]
@@ -755,7 +769,7 @@ def _effectiveness_table_is_executable_and_total():
                                 "M1" if source == "manual" else None))
         return state, Callback(case_id="c", run_id=run_id, decision_sequence=sequence)
 
-    for phase in (INTERIM, POST_024):
+    for phase in (INTERIM, POST_025):
         phase_rows = [t for t in rows if t.phase == phase]
         for observed in predicates.state_space():
             (expected_row,) = [i for i, r in enumerate(phase_rows) if r.when.matches(observed)]
@@ -794,7 +808,7 @@ def _effectiveness_table_is_executable_and_total():
     # sequenced callback for a case — must still be ABOVE, not a fourth relation
     state = LedgerState(seen_run_ids=frozenset(), current_source=None, high_water=None)
     outcome = decide(state, Callback(case_id="c", run_id="r1", decision_sequence=1),
-                     phase=POST_024)
+                     phase=POST_025)
     assert outcome.effective and outcome.advance_high_water
 
     # the two outcomes the finding turns on, executed
@@ -805,7 +819,7 @@ def _effectiveness_table_is_executable_and_total():
 
     manual_current = decide(
         LedgerState(current_source="manual", high_water=5),
-        Callback("c", "r", decision_sequence=6), phase=POST_024)
+        Callback("c", "r", decision_sequence=6), phase=POST_025)
     assert not manual_current.effective and manual_current.advance_high_water
 @verifies("WIRE.CALLBACK.VALIDATION")
 def _receiver_validation_rules_are_executable_and_precede_classification():
@@ -907,11 +921,11 @@ def _the_release_table_is_total_and_held_to_its_own_oracle():
     _receiver_surface_ok()
     from docs.contracts import predicates
     from docs.contracts import receiver_reference as rr
-    from docs.contracts.wire import POST_024, RELEASE_TRANSITIONS
+    from docs.contracts.wire import POST_025, RELEASE_TRANSITIONS
 
     claim = WIRE["WIRE.CALLBACK.RELEASE"]
     assert claim.state is ClaimState.PENDING, (
-        "the release protocol arrives with 024; publishing it as exercisable is finding 13's "
+        "the release protocol arrives with 025; publishing it as exercisable is finding 13's "
         "free-prose defect in table form"
     )
     rows = claim.value
@@ -970,7 +984,7 @@ def _the_release_table_is_total_and_held_to_its_own_oracle():
 
     for observed in predicates.release_state_space():
         state, callback, now = realize(observed)
-        outcome = rr.decide(state, callback, phase=POST_024, now=now)
+        outcome = rr.decide(state, callback, phase=POST_025, now=now)
         assert (outcome.record, outcome.effective, outcome.advance_high_water,
                 outcome.completes_release) == oracle(observed), (
             f"{observed}: the executed release decision disagrees with the invariant oracle"
@@ -1037,12 +1051,12 @@ def _alembic_script(config_path=None, script_location=None) -> ScriptDirectory:
     The previous guard globbed `REPO/migrations/versions` — a path this repo does not have, since
     it uses `alembic/versions` (re-audit `4c3015a..cccd5f7` F12). The set was therefore always
     empty and the staleness assertion was vacuously true from the day it was written: adding a real
-    `024_*.py` left the PENDING verifier green. Reading through `ScriptDirectory` means a layout
+    `025_*.py` left the PENDING verifier green. Reading through `ScriptDirectory` means a layout
     change cannot silently disarm the guard, and it sees branch structure a glob cannot.
 
     Gate finding 5: this used to overwrite `script_location` UNCONDITIONALLY with `REPO/alembic`,
     which substitutes a convention for the configuration. An `alembic.ini` pointing at a different
-    tree that contains 024 passed while the stale `./alembic` ended at 023 — the guard was watching
+    tree that contains 025 passed while the stale `./alembic` ended at 023 — the guard was watching
     a directory Alembic would not have used. The production path now takes the configured value
     verbatim; an explicit location is a TEST-FIXTURE injection only.
     """
@@ -1056,77 +1070,80 @@ def _alembic_script(config_path=None, script_location=None) -> ScriptDirectory:
         base = Path(config_path or (REPO / "alembic.ini")).parent
         cfg.set_main_option("script_location", str((base / declared).resolve()))
     return ScriptDirectory.from_config(cfg)
-def assert_024_unbuilt(script: ScriptDirectory, callback_model) -> None:
-    """PENDING means 024 exists in NEITHER authority, and the two must agree.
+def assert_025_unbuilt(script: ScriptDirectory, callback_model) -> None:
+    """PENDING means 025 exists in NEITHER authority, and the two must agree.
 
     A claim that publishes requirements instead of a schema is only honest while the thing is
-    genuinely unbuilt, and 024 can become half-built from either side: the migration that installs
-    the ordering schema, or `decision_sequence` on the callback — the post-024 ordering authority
+    genuinely unbuilt, and 025 can become half-built from either side: the migration that installs
+    the ordering schema, or `decision_sequence` on the callback — the post-025 ordering authority
     per ROADMAP D1. Checking one lets the other land silently, so both are checked and either alone
     is a failure. A field without its revision is not "nearly pending"; it is an undeclared partial
     build that an integrator could discover in the wire before the document admits it exists.
     """
     heads = script.get_heads()
     assert len(heads) == 1, (
-        f"the revision graph has {len(heads)} heads ({sorted(heads)}). 024 landing on a branch is "
+        f"the revision graph has {len(heads)} heads ({sorted(heads)}). 025 landing on a branch is "
         "exactly how it arrives without moving the single head this claim is checked against."
     )
     revisions = {revision.revision for revision in script.walk_revisions()}
-    built = sorted(r for r in revisions if r.startswith("024"))
-    assert not built, f"revision(s) {built} exist; WIRE.ORDERING.BOOTSTRAP_024 is stale"
+    activation = [r for r in roadmap.records() if r.unit == "PR 7b-activation"]
+    assert len(activation) == 1 and activation[0].state == "pending"
+    assert activation[0].revisions == (25,), "activation ownership/reservation drifted"
+    built = sorted(r for r in revisions if r.startswith(f"{activation[0].revisions[0]:03d}"))
+    assert not built, f"revision(s) {built} exist; WIRE.ORDERING.BOOTSTRAP_025 is stale"
 
     fields = set(getattr(callback_model, "model_fields", {}))
     assert "decision_sequence" not in fields, (
-        "the callback model publishes `decision_sequence` — the post-024 ordering authority — "
-        "while the claim still says 024 is NOT BUILT. Either the revision is missing and the wire "
+        "the callback model publishes `decision_sequence` — the post-025 ordering authority — "
+        "while the claim still says 025 is NOT BUILT. Either the revision is missing and the wire "
         "is ahead of the schema, or the claim is stale; both are failures."
     )
 
     # EXECUTE the encoder rather than reading a declaration (gate finding 6). Inspecting
     # `DecisionCallback.model_fields` alone watched a model the publisher did not use: it built a
-    # plain dict, so adding `decision_sequence` to the emitter put the post-024 ordering key on the
+    # plain dict, so adding `decision_sequence` to the emitter put the post-025 ordering key on the
     # wire with this verifier green. The encoder is now the single path to the outbox, so running
     # it against a body that TRIES to carry the key is a statement about what can actually be
     # published, not about what somebody declared.
-    # The PUBLISHER's active value against the pre-024 LITERAL held in THIS verifier
+    # The PUBLISHER's active value against the pre-025 LITERAL held in THIS verifier
     # (re-gate-3 finding 4). Comparing it to a sibling alias in the publisher's own module let the
     # natural two-line edit — move the alias and the active value together — pass while every
     # persisted attempt advertised sequenced wire. The verifier's literal does not move with the
     # module it checks; the vocabulary itself is pinned independently by ck_attempt_wire_vocab.
     assert publisher._WIRE_VERSION == "legacy", (
-        f"the publisher advertises {publisher._WIRE_VERSION!r} wire while the claim says 024 is "
+        f"the publisher advertises {publisher._WIRE_VERSION!r} wire while the claim says 025 is "
         "NOT BUILT"
     )
     # REFUSED, not dropped (re-gate finding 3). Silently discarding an unmodelled field made the
-    # same key vanish on one path and leak on another; a post-024 ordering key arriving before 024
+    # same key vanish on one path and leak on another; a post-025 ordering key arriving before 025
     # exists is a defect to surface.
     try:
         emitted = schemas.encode_decision_callback(_sequenced_callback_attempt())
     except Exception:
         emitted = None
     assert emitted is None, (
-        "the publisher's own encoder accepted `decision_sequence` while 024 is unbuilt"
+        "the publisher's own encoder accepted `decision_sequence` while 025 is unbuilt"
     )
-@verifies("WIRE.ORDERING.BOOTSTRAP_024")
+@verifies("WIRE.ORDERING.BOOTSTRAP_025")
 def _bootstrap_is_pending_and_publishes_no_schema():
-    """024 is designed but unbuilt. The document must publish requirements, never a draft schema
+    """025 is designed but unbuilt. The document must publish requirements, never a draft schema
     an integrator could implement."""
-    claim = WIRE["WIRE.ORDERING.BOOTSTRAP_024"]
+    claim = WIRE["WIRE.ORDERING.BOOTSTRAP_025"]
     assert claim.state is ClaimState.PENDING
     assert "NOT BUILT" in claim.value
     # ...and the REQUIREMENTS survive. Reducing the claim to the bare marker deleted everything an
     # integrator needs in order to answer, while still passing every check (re-audit F3).
     for requirement in ("accepted-run ledger", "manual approval", "two-sided coverage",
                         "response digests", "signed response envelope"):
-        assert requirement in claim.value, f"the 024 requirements no longer mention {requirement!r}"
+        assert requirement in claim.value, f"the 025 requirements no longer mention {requirement!r}"
     for schema_ish in ("{", "}", "schema_version", "latest_run_id", "high_water_run_id"):
         assert schema_ish not in claim.value, "the pending claim is publishing a schema again"
-    assert_024_unbuilt(_alembic_script(), DecisionCallback)
+    assert_025_unbuilt(_alembic_script(), DecisionCallback)
 @verifies("WIRE.ORDERING.SEQUENCE_DOMAINS")
 def _the_two_sequence_domains_match_D1_and_the_activation_spec():
     """Static parity across D1, the ROADMAP rows, the activation spec, and what we publish.
 
-    Re-audit `4f23f23..122cc67` finding 1. The published post-024 rule ordered on
+    Re-audit `4f23f23..122cc67` finding 1. The published post-025 rule ordered on
     `event_sequence`, which ROADMAP D1 assigns to PR 2 as ingest provenance; the callback-order
     authority is PR 7b's `decision_sequence`. The two invert whenever work completes out of
     admission order, so a receiver built on the wrong one suppresses the LATER decision — and
@@ -1153,23 +1170,23 @@ def _the_two_sequence_domains_match_D1_and_the_activation_spec():
 
     assert "event_sequence" in DecisionCallback.model_fields
     assert "decision_sequence" not in DecisionCallback.model_fields, (
-        "decision_sequence now ships; the claim must stop saying it arrives with 024"
+        "decision_sequence now ships; the claim must stop saying it arrives with 025"
     )
     assert "arrives with the activation unit" in " ".join(lines) or "with the activation unit" in authority
 
     # and the transition table orders on the authority, not the provenance
-    post = [t for t in WIRE.value("WIRE.CALLBACK.EFFECTIVENESS") if t.phase == "post-024"]
+    post = [t for t in WIRE.value("WIRE.CALLBACK.EFFECTIVENESS") if t.phase == "post-025"]
     ordering_rows = " ".join(t.condition + " " + t.record for t in post)
     assert "decision_sequence" in ordering_rows
     assert "event_sequence" not in ordering_rows, (
-        "the post-024 rows order on ingest provenance again"
+        "the post-025 rows order on ingest provenance again"
     )
 @verifies("WIRE.ORDERING.PENDING_INPUTS")
-def _pending_024_inputs_cover_every_live_obligation():
+def _pending_025_inputs_cover_every_live_obligation():
     """One-to-one against the obligation ids PARSED FROM THE LIVE SPEC.
 
     Re-audit `4f23f23..97deeae` finding 10. The document asked three questions TechCraft could
-    answer completely while 024 stayed non-buildable, because O1-O4 need decisions only the
+    answer completely while 025 stayed non-buildable, because O1-O4 need decisions only the
     platform can make. Parsing the spec rather than hardcoding the ids means a fifth obligation
     appearing there fails this test until the document asks for it too.
     """
@@ -1187,7 +1204,7 @@ def _pending_024_inputs_cover_every_live_obligation():
     for item in inputs:
         assert item.owner in {"TechCraft", "IPv4.Global", "both"}, item.owner
         # EVERY input carries an executable acceptance test, and it actually rejects the answers
-        # that look complete while leaving 024 unsafe (re-audit `4f23f23..122cc67` finding 10):
+        # that look complete while leaving 025 unsafe (re-audit `4f23f23..122cc67` finding 10):
         # a v1 signature, a local clock, a per-case release id, a writer matrix missing the
         # inline manual approve. `answer_type` describes a shape; only this decides.
         assert callable(item.accept), f"{item.obligation}: no executable acceptance test"
@@ -1234,7 +1251,7 @@ def _pending_024_inputs_cover_every_live_obligation():
     for missing in ("principal", "HMAC VERSION", "deadline", "SOLE terminal", "reaper",
                     "GLOBALLY unique", "WRITER-ROLE MATRIX", "old-image",
                     "EVERY process role"):
-        assert missing in text, f"the 024 request still does not ask about {missing!r}"
+        assert missing in text, f"the 025 request still does not ask about {missing!r}"
 
     # audit `4c3015a..cccd5f7` finding 11, folded fail-closed: screening is not resolution. Every
     # obligation is UNRESOLVABLE — even wrapping the best screenable answer in the most complete
@@ -1891,7 +1908,7 @@ def _forward_only_revisions_named_in(body: str) -> set[str]:
     versions = REPO / "alembic" / "versions"
     forward_only = set()
     for revision in set(re.findall(r"\b(0\d{2})\b", body)):
-        # A three-digit token is not necessarily a revision — 024 is named throughout and is
+        # A three-digit token is not necessarily a revision — 025 is named throughout and is
         # unbuilt. Only numbers with a revision file behind them are classified.
         if not sorted(versions.glob(f"{revision}_*.py")):
             continue
@@ -1957,7 +1974,7 @@ def _command_inventory_problems(ref, section: str) -> list[str]:
 PROCEDURE_DEFINITION_PINS = {
     "PR 5b full maintenance window": "74dc08a643bcc640",
     "Bundle-pinning activation": "1906bcffd7980305",
-    "Migrations 013-023": "4447ddc48c2844ae",
+    "Migrations 013-023": "bda1cf4ad00de4ed",
 }
 @verifies("OPS.CUTOVER.PROCEDURES")
 def _every_procedure_points_at_a_reviewed_playbook_body():
@@ -2207,11 +2224,11 @@ def _every_procedure_points_at_a_reviewed_playbook_body():
     assert suspended < diagnostic
     assert any("backup" in p for p in pr7b)
 
-    # 013-023 is LOCAL authority; platform ordering waits for 024 (finding 5)
+    # 013-023 is LOCAL authority; platform ordering waits for 025 (finding 5)
     when = by_name["Migrations 013-023"].when.lower()
     assert "receipt/transition-authority" in when
     assert "best-effort local supersession" in when
-    assert "024" in when and "absent until" in when
+    assert "025" in when and "absent until" in when
     assert "ordering-authority schema" not in when
 
     # the control a step summary kept dropping
@@ -2305,7 +2322,7 @@ def _requeue_endpoints_exist_and_take_the_admin_token():
     assert grant.default is inspect.Parameter.empty, "the retry grant now has a silent default"
 ALL_CLAIM_IDS = frozenset(WIRE.ids) | frozenset(OPERATIONS.ids)
 def _sequenced_callback_attempt() -> dict:
-    """A well-formed callback body that ALSO tries to carry the post-024 ordering key."""
+    """A well-formed callback body that ALSO tries to carry the post-025 ordering key."""
     return {
         "case_id": "c1",
         "run_id": "r1",
@@ -2418,7 +2435,7 @@ def _rotation_closed_surface_ok() -> None:
         f"the rotation rationales changed since review (was {ROTATION_RATIONALES_PIN}, "
         f"now {rationales}) — read them, then re-pin in the same commit"
     )
-RECEIVER_SURFACE_PIN = "24ed7efcfa93edfc"
+RECEIVER_SURFACE_PIN = "b7bbfb8f42a7af04"
 def _receiver_surface_ok() -> None:
     """Asserted by the effectiveness AND release verifiers: both published tables EQUAL their
     registry derivation, and the complete surface digest equals the reviewed pin."""
@@ -2701,9 +2718,9 @@ REGISTRY_PROSE_PINS = {
     ("WIRE.CALLBACK.RELEASE_STATE", "value:Statement.alternatives{live}"):
         ("95983e50056df421",
          "the live reading: The release protocol is live today, so this tabl"),
-    ("WIRE.CALLBACK.RELEASE_STATE", "value:Statement.alternatives{post_024_only}"):
-        ("e14b065121269fdc",
-         "the post_024_only reading: POST-024 ONLY: the release protocol arrives with"),
+    ("WIRE.CALLBACK.RELEASE_STATE", "value:Statement.alternatives{post_025_only}"):
+        ("8e10c51d8ee0b133",
+         "the post_025_only reading: POST-025 ONLY: the release protocol arrives with"),
     ("WIRE.CALLBACK.VALIDATION_ORDER", "value:Statement.alternatives{classify_first}"):
         ("b4902f5bc3078cc9",
          "the classify_first reading: You may classify first and validate afterwards: "),
@@ -2714,8 +2731,8 @@ REGISTRY_PROSE_PINS = {
         ("ac81e3d4c342138a",
          "the resolvable reading: A complete emailed answer clears the obligation "),
     ("WIRE.ORDERING.OBLIGATION_STATE", "value:Statement.alternatives{unresolvable}"):
-        ("c0168092a5044cbc",
-         "the unresolvable reading: These are the decisions 024 cannot be built with"),
+        ("41c29a2422960c90",
+         "the unresolvable reading: These are the decisions 025 cannot be built with"),
     ("WIRE.ORDERING.ORDINAL_AUTHORITY", "value:Statement.alternatives{both_order}"):
         ("e35b34b359a5016e",
          "the both_order reading: Two ordinals for one case, and either ordinal or"),
@@ -2779,16 +2796,16 @@ REGISTRY_PROSE_PINS = {
     ("WIRE.ORDERING.INTERIM", "value"):
         ("b6244cbcf0e8b1ca", "Until ordered delivery is activated: dedupe exact repeats ..."),
     ("WIRE.ORDERING.SEQUENCE_DOMAINS", "value[]"):
-        ("157c8ec72343f56b", "event_sequence is INGEST PROVENANCE / decision_sequence orders ..."),
+        ("e5e4ac91f7ed37f6", "event_sequence is INGEST PROVENANCE / decision_sequence orders ..."),
     ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.owner"):
         ("49b8b60e5696f071", "obligation owners: TechCraft / platform"),
     ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.question"):
-        ("476f3e9b300db914", "O1-O4 questions: Which platform principal is authorised ..."),
+        ("d7469eebf82695ef", "O1-O4 questions: Which platform principal is authorised ..."),
     ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.answer_type"):
         ("dd4ae27b7ff99ee6", "answer shapes: principal identifier + key id + which HMAC ..."),
     ("WIRE.ORDERING.PENDING_INPUTS", "value[]:PendingInput.blocked_deliverable"):
         ("5efc3281a00f6419", "blocked deliverables: the manual.release_requested request model ..."),
-    ("WIRE.ORDERING.BOOTSTRAP_024", "value"):
+    ("WIRE.ORDERING.BOOTSTRAP_025", "value"):
         ("e0e3dbdc4a5609ff", "Ordered delivery needs a signed bootstrap of per-case high-water ..."),
     ("WIRE.ORDERING.INTEGRITY_MISMATCH", "value"):
         ("07d15b3e8ed5c95e", "integrity_mismatch is a POST-ACTIVATION terminal state ..."),
@@ -3081,14 +3098,14 @@ def _every_published_condition_token_comes_from_the_legend():
     assert statement.answer == "closed"
 @verifies("WIRE.CALLBACK.RELEASE_STATE")
 def _the_release_protocol_is_not_exercisable_today():
-    """`post_024_only` is bound to the same absence the release claim is: the table is PENDING and
+    """`post_025_only` is bound to the same absence the release claim is: the table is PENDING and
     no shipped code path emits its states."""
     statement = _statement("WIRE.CALLBACK.RELEASE_STATE")
     assert WIRE["WIRE.CALLBACK.RELEASE"].state is ClaimState.PENDING
     for module in ("api/schemas.py", "outbox/publisher.py", "events/ingest.py"):
         source = (SRC / module).read_text()
         assert "manual_release_pending" not in source, f"{module} already implements the protocol"
-    assert statement.answer == "post_024_only"
+    assert statement.answer == "post_025_only"
 @verifies("WIRE.ORDERING.ORDINAL_AUTHORITY")
 def _only_the_decision_ordinal_orders_decisions():
     """`only_one_orders` is the D1 split, executed against the published domains."""

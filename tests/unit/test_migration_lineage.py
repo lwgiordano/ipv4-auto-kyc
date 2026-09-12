@@ -142,6 +142,7 @@ _SHIPPED_OWNERS = {
     18: "PR 7b-core transition authority", 19: "PR 7b-core payload repair",
     20: "PR 7b-core redaction uniformity", 21: "PR 7b-core poison recovery",
     22: "PR 7b-core authority invariant repair", 23: "PR 7b-core cross-table authority repair",
+    24: "PR Console Configuration",
 }
 
 
@@ -352,16 +353,16 @@ def _activation_live() -> str:
     return text_[: marker.start()] if marker else text_
 
 
-def test_activation_live_contract_points_at_024_not_the_frozen_022():
+def test_activation_live_contract_points_at_025_not_frozen_owners():
     """Re-audit `8377440` F8: O3 said "expand the canonical 022 ROADMAP row" while activation is
-    024 and 022 is frozen 7b-core. No live activation-owned instruction may target 022/023 as if
+    025 and 022/023 are frozen 7b-core; 024 belongs to configuration. No instruction may target them as if
     it were this unit's row."""
     live = _activation_live()
     stale = [
         f"line {i}: {ln.strip()}"
         for i, ln in enumerate(live.splitlines(), 1)
-        if re.search(r"canonical\s+0(?:22|23)\s+ROADMAP row", ln)
-        or re.search(r"expand the\s+0(?:22|23)\b", ln, re.IGNORECASE)
+        if re.search(r"canonical\s+0(?:22|23|24)\s+ROADMAP row", ln)
+        or re.search(r"expand the\s+0(?:22|23|24)\b", ln, re.IGNORECASE)
     ]
     assert not stale, "activation live text still points work at a frozen 7b-core row\n" + "\n".join(stale)
 

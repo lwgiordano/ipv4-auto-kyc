@@ -20,7 +20,7 @@ import shutil
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "kyc_tool"
-EXPECTED_ENGINE_SOURCE_HASH = "e1c2f1b6a34eed18832e7b6f9e333e3a1d18312c499f5165f6d40fc809fa254f"
+EXPECTED_ENGINE_SOURCE_HASH = "8acfc121cd01a3b6d999a69068c32decdb92a0862fa425a761ae68528c6ceae7"
 
 
 def _framed_hash(root: Path) -> str:
@@ -45,39 +45,39 @@ def test_framing_catches_cross_file_move_rename_empty(tmp_path):
     # A real equal-byte transfer: move "MOVE\n" from a.py to b.py. The UNFRAMED
     # concat of sorted-path bytes is byte-IDENTICAL both ways; framing
     # (path\0len\0bytes) makes the two trees differ — proving boundary safety.
-    d1 = tmp_path/"d1"
+    d1 = tmp_path / "d1"
     d1.mkdir()
-    (d1/"a.py").write_bytes(b"AAAA\nMOVE\n")
-    (d1/"b.py").write_bytes(b"BBBB\n")
-    d2 = tmp_path/"d2"
+    (d1 / "a.py").write_bytes(b"AAAA\nMOVE\n")
+    (d1 / "b.py").write_bytes(b"BBBB\n")
+    d2 = tmp_path / "d2"
     d2.mkdir()
-    (d2/"a.py").write_bytes(b"AAAA\n")
-    (d2/"b.py").write_bytes(b"MOVE\nBBBB\n")
-    assert b"AAAA\nMOVE\n"+b"BBBB\n" == b"AAAA\n"+b"MOVE\nBBBB\n"   # unframed concat identical
-    assert _framed_hash(d1) != _framed_hash(d2)                     # framed differs
-    d3 = tmp_path/"d3"
+    (d2 / "a.py").write_bytes(b"AAAA\n")
+    (d2 / "b.py").write_bytes(b"MOVE\nBBBB\n")
+    assert b"AAAA\nMOVE\n" + b"BBBB\n" == b"AAAA\n" + b"MOVE\nBBBB\n"  # unframed concat identical
+    assert _framed_hash(d1) != _framed_hash(d2)  # framed differs
+    d3 = tmp_path / "d3"
     d3.mkdir()
-    (d3/"a.py").write_bytes(b"AAAA\n")
-    d4 = tmp_path/"d4"
+    (d3 / "a.py").write_bytes(b"AAAA\n")
+    d4 = tmp_path / "d4"
     d4.mkdir()
-    (d4/"a.py").write_bytes(b"AAAA\n")
-    (d4/"z.py").write_bytes(b"")
-    assert _framed_hash(d3) != _framed_hash(d4)                     # empty-file add
-    d5 = tmp_path/"d5"
+    (d4 / "a.py").write_bytes(b"AAAA\n")
+    (d4 / "z.py").write_bytes(b"")
+    assert _framed_hash(d3) != _framed_hash(d4)  # empty-file add
+    d5 = tmp_path / "d5"
     d5.mkdir()
-    (d5/"a.py").write_bytes(b"AAAA\n")
-    d6 = tmp_path/"d6"
+    (d5 / "a.py").write_bytes(b"AAAA\n")
+    d6 = tmp_path / "d6"
     d6.mkdir()
-    (d6/"renamed.py").write_bytes(b"AAAA\n")
-    assert _framed_hash(d5) != _framed_hash(d6)                     # rename (path change)
+    (d6 / "renamed.py").write_bytes(b"AAAA\n")
+    assert _framed_hash(d5) != _framed_hash(d6)  # rename (path change)
 
 
 def test_non_domain_edit_trips_guard(tmp_path):
     # The whole src tree is in the closure, so a semantic edit OUTSIDE domain/
     # (broker_gate.py) changes the hash — no curated list can omit it.
-    base = tmp_path/"src"
+    base = tmp_path / "src"
     shutil.copytree(SRC, base)
     h0 = _framed_hash(base)
-    bg = base/"orchestration"/"broker_gate.py"
+    bg = base / "orchestration" / "broker_gate.py"
     bg.write_bytes(bg.read_bytes() + b"\n# semantic change\n")
     assert _framed_hash(base) != h0

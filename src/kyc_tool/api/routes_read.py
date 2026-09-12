@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import select, text
 
 from kyc_tool.api.auth import require_read_access
+from kyc_tool.api.salesforce_projection import build_salesforce_projection
+from kyc_tool.api.schemas import SalesforceProjectionResponse
 from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.db.tables import Case, DecisionRow, ReviewTask, Run
 from kyc_tool.domain import provenance
@@ -24,6 +26,15 @@ def _check_json(check) -> dict:
         "superseded_by_check_id": check.superseded_by_check_id,
         "created_at": check.created_at.isoformat(),
     }
+
+
+@router.get(
+    "/v1/cases/{case_id}/salesforce-projection",
+    response_model=SalesforceProjectionResponse,
+)
+def get_salesforce_projection(case_id: str, request: Request):
+    require_read_access(request.app.state.settings, request)
+    return build_salesforce_projection(request.app.state.session_factory, case_id)
 
 
 @router.get("/v1/cases/{case_id}")
@@ -59,9 +70,10 @@ def get_case(case_id: str, request: Request) -> dict:
         decision_provenance = provenance.classify(
             pointer_set=case.latest_decision_row_id is not None,
             row_resolved=latest is not None,
-            any_rows=case.latest_decision_row_id is not None or bool(session.execute(
-                select(DecisionRow.id).where(DecisionRow.case_id == case_id).limit(1)
-            ).first()),
+            any_rows=case.latest_decision_row_id is not None
+            or bool(
+                session.execute(select(DecisionRow.id).where(DecisionRow.case_id == case_id).limit(1)).first()
+            ),
         )
         return {
             "case_id": case.id,

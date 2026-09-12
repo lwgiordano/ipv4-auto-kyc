@@ -143,7 +143,7 @@ def attest_new_value(record: DrainedCutover, *, target: int, observed: dict[str,
     it must be read from the ORCHESTRATOR's live task-definition inventory, never from the process
     environment it is attesting (self-attestation proves nothing about the rest of the fleet).
     There is no central receipt yet: the DB CAS cutover record + inventory receipt that publishers
-    compare against before claiming is reserved into migration 028 (PR 10b). Until it lands, the
+    compare against before claiming is reserved into migration 029 (PR 10b). Until it lands, the
     drained STOP + ATTEST-ZERO phases are the fleet-level control this check rides behind."""
     from kyc_tool.config import numeric_domain_of, numeric_value_violation
 

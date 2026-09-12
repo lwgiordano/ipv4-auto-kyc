@@ -1,0 +1,3917 @@
+{
+ "cases": {
+  "cases": [
+   {
+    "broker_status": "clear",
+    "buy_status": "not_applicable",
+    "company_name": "Acme Networks Ltd",
+    "current_evidence_score": 45,
+    "decision_provenance": "latest_decision_row",
+    "decision_score": 45,
+    "enforcement_held": false,
+    "id": "demo-case-003",
+    "jurisdiction": "GB",
+    "latest_decision": "manual_review_insufficient",
+    "status": "manual_review_insufficient",
+    "updated_at": "2026-09-04T01:05:43.240412+00:00"
+   },
+   {
+    "broker_status": "clear",
+    "buy_status": "buy_enabled",
+    "company_name": "Acme Networks Ltd",
+    "current_evidence_score": 105,
+    "decision_provenance": "latest_decision_row",
+    "decision_score": 105,
+    "enforcement_held": false,
+    "id": "demo-case-002",
+    "jurisdiction": "GB",
+    "latest_decision": "approve",
+    "status": "approved_manual",
+    "updated_at": "2026-09-04T01:05:38.771840+00:00"
+   },
+   {
+    "broker_status": "clear",
+    "buy_status": "not_applicable",
+    "company_name": "Acme Networks Ltd",
+    "current_evidence_score": 105,
+    "decision_provenance": "latest_decision_row",
+    "decision_score": 105,
+    "enforcement_held": true,
+    "id": "demo-case-001",
+    "jurisdiction": "GB",
+    "latest_decision": "manual_review_insufficient",
+    "status": "manual_review_insufficient",
+    "updated_at": "2026-09-04T01:05:22.773235+00:00"
+   }
+  ]
+ },
+ "full": {
+  "demo-case-001": {
+   "adapter_results": [
+    {
+     "adapter_id": "email_verification",
+     "fetched_at": "2026-09-04T01:05:14.917931+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "755863d498984a05875014b52838416c",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "companies_house",
+     "fetched_at": "2026-09-04T01:05:14.929576+00:00",
+     "latency_ms": 2,
+     "raw_ref": "fs://adapter-raw/demo-case-001/755863d498984a05875014b52838416c/companies_house/8a480c72c56042a7967bdbf3880efcc9",
+     "run_id": "755863d498984a05875014b52838416c",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "gleif",
+     "fetched_at": "2026-09-04T01:05:14.936662+00:00",
+     "latency_ms": 1,
+     "raw_ref": "fs://adapter-raw/demo-case-001/755863d498984a05875014b52838416c/gleif/bb86cda5af5a42ab83e45858682e209b",
+     "run_id": "755863d498984a05875014b52838416c",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "floqer_company_enrichment",
+     "fetched_at": "2026-09-04T01:05:14.943601+00:00",
+     "latency_ms": 1,
+     "raw_ref": "fs://adapter-raw/demo-case-001/755863d498984a05875014b52838416c/floqer_company_enrichment/cc7864b539d14a978abfcc72c5f45f1f",
+     "run_id": "755863d498984a05875014b52838416c",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "rir_rdap",
+     "fetched_at": "2026-09-04T01:05:14.948452+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "755863d498984a05875014b52838416c",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "rir_poc",
+     "fetched_at": "2026-09-04T01:05:14.953176+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "755863d498984a05875014b52838416c",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "document_ocr",
+     "fetched_at": "2026-09-04T01:05:14.957418+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "755863d498984a05875014b52838416c",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "website_manual_review",
+     "fetched_at": "2026-09-04T01:05:14.962405+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "755863d498984a05875014b52838416c",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "email_verification",
+     "fetched_at": "2026-09-04T01:05:19.146445+00:00",
+     "latency_ms": 0,
+     "raw_ref": "fs://adapter-raw/demo-case-001/f1dcdb38326e434fac411bdfe2d299f6/email_verification/c07a3acf23674e739b04b26e11780301",
+     "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "rir_rdap",
+     "fetched_at": "2026-09-04T01:05:22.764247+00:00",
+     "latency_ms": 0,
+     "raw_ref": "fs://adapter-raw/demo-case-001/db9d9dd1454f4edd9873f981f4f57ebb/rir_rdap/703ec144db534bcbbb0ea34a28f561a9",
+     "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+     "status": "ok"
+    }
+   ],
+   "audit": [
+    {
+     "action": "event.received",
+     "actor": "ops-console",
+     "at": "2026-09-04T01:05:14.588107+00:00",
+     "detail_json": {
+      "event_id": "bcf38675ddc840c7a8a2410032878cb5",
+      "event_sequence": 1,
+      "event_type": "kyb.run_requested",
+      "idempotency_key": "console-b956480899c349f8a63406e889bdfb18"
+     },
+     "id": 1
+    },
+    {
+     "action": "run.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.588107+00:00",
+     "detail_json": {
+      "event_id": "bcf38675ddc840c7a8a2410032878cb5",
+      "run_id": "755863d498984a05875014b52838416c"
+     },
+     "id": 2
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.882444+00:00",
+     "detail_json": {
+      "run_id": "755863d498984a05875014b52838416c",
+      "stage": "RESOLVE_INPUTS"
+     },
+     "id": 3
+    },
+    {
+     "action": "run.inputs_resolved",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.890919+00:00",
+     "detail_json": {
+      "event_type": "kyb.run_requested",
+      "run_id": "755863d498984a05875014b52838416c",
+      "snapshot_keys": [
+       "address",
+       "company_legal_name",
+       "contact",
+       "jurisdiction",
+       "occurred_at",
+       "platform_account_id",
+       "registration_number",
+       "website"
+      ]
+     },
+     "id": 4
+    },
+    {
+     "action": "run.broker_gate",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.903678+00:00",
+     "detail_json": {
+      "broker_status": "clear",
+      "run_id": "755863d498984a05875014b52838416c",
+      "short_circuit": false
+     },
+     "id": 5
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.917931+00:00",
+     "detail_json": {
+      "adapter_id": "email_verification",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "755863d498984a05875014b52838416c",
+      "status": "not_applicable"
+     },
+     "id": 6
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.929576+00:00",
+     "detail_json": {
+      "adapter_id": "companies_house",
+      "error": null,
+      "latency_ms": 2,
+      "raw_ref": "fs://adapter-raw/demo-case-001/755863d498984a05875014b52838416c/companies_house/8a480c72c56042a7967bdbf3880efcc9",
+      "run_id": "755863d498984a05875014b52838416c",
+      "status": "ok"
+     },
+     "id": 7
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.936662+00:00",
+     "detail_json": {
+      "adapter_id": "gleif",
+      "error": null,
+      "latency_ms": 1,
+      "raw_ref": "fs://adapter-raw/demo-case-001/755863d498984a05875014b52838416c/gleif/bb86cda5af5a42ab83e45858682e209b",
+      "run_id": "755863d498984a05875014b52838416c",
+      "status": "ok"
+     },
+     "id": 8
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.943601+00:00",
+     "detail_json": {
+      "adapter_id": "floqer_company_enrichment",
+      "error": null,
+      "latency_ms": 1,
+      "raw_ref": "fs://adapter-raw/demo-case-001/755863d498984a05875014b52838416c/floqer_company_enrichment/cc7864b539d14a978abfcc72c5f45f1f",
+      "run_id": "755863d498984a05875014b52838416c",
+      "status": "ok"
+     },
+     "id": 9
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.948452+00:00",
+     "detail_json": {
+      "adapter_id": "rir_rdap",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "755863d498984a05875014b52838416c",
+      "status": "not_applicable"
+     },
+     "id": 10
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.953176+00:00",
+     "detail_json": {
+      "adapter_id": "rir_poc",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "755863d498984a05875014b52838416c",
+      "status": "not_applicable"
+     },
+     "id": 11
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.957418+00:00",
+     "detail_json": {
+      "adapter_id": "document_ocr",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "755863d498984a05875014b52838416c",
+      "status": "not_applicable"
+     },
+     "id": 12
+    },
+    {
+     "action": "review_task.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.962405+00:00",
+     "detail_json": {
+      "domain": "acme.example",
+      "run_id": "755863d498984a05875014b52838416c",
+      "task_id": "afa6d178fc114bc2941f204ed31cd67b",
+      "task_type": "website"
+     },
+     "id": 13
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.962405+00:00",
+     "detail_json": {
+      "adapter_id": "website_manual_review",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "755863d498984a05875014b52838416c",
+      "status": "ok"
+     },
+     "id": 14
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.977868+00:00",
+     "detail_json": {
+      "run_id": "755863d498984a05875014b52838416c",
+      "stage": "VALIDATE"
+     },
+     "id": 15
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.981905+00:00",
+     "detail_json": {
+      "intents": 2,
+      "run_id": "755863d498984a05875014b52838416c",
+      "stage": "VALIDATE"
+     },
+     "id": 16
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.981905+00:00",
+     "detail_json": {
+      "check_id": "18f209dcc95a4c39bbe0fe4423cdf7f7",
+      "check_type": "official_registry_match",
+      "points": 25,
+      "reason_codes": [],
+      "run_id": "755863d498984a05875014b52838416c",
+      "status": "pass"
+     },
+     "id": 17
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.981905+00:00",
+     "detail_json": {
+      "check_id": "6e47c3e7d2c34ee5ab3721e5d4f8f4b5",
+      "check_type": "linkedin_company_match",
+      "points": 20,
+      "reason_codes": [],
+      "run_id": "755863d498984a05875014b52838416c",
+      "status": "pass"
+     },
+     "id": 18
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.981905+00:00",
+     "detail_json": {
+      "run_id": "755863d498984a05875014b52838416c",
+      "stage": "WRITE_CHECKS",
+      "written": 2
+     },
+     "id": 19
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.981905+00:00",
+     "detail_json": {
+      "by_check": {
+       "linkedin_company_match": 20,
+       "official_registry_match": 25
+      },
+      "gates": {
+       "broker_ok": true,
+       "control_proof": false,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": false
+      },
+      "run_id": "755863d498984a05875014b52838416c",
+      "score": 45,
+      "stage": "SCORE"
+     },
+     "id": 20
+    },
+    {
+     "action": "run.decided",
+     "actor": "system",
+     "at": "2026-09-04T01:05:14.981905+00:00",
+     "detail_json": {
+      "buy_enablement": "locked_org_id_required",
+      "computed_decision": "manual_review_insufficient",
+      "decision": "manual_review_insufficient",
+      "enforcement_held": false,
+      "gates": {
+       "broker_ok": true,
+       "control_proof": false,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": false
+      },
+      "partial": false,
+      "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "resolved_policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "run_id": "755863d498984a05875014b52838416c",
+      "score": 45
+     },
+     "id": 21
+    },
+    {
+     "action": "event.received",
+     "actor": "ops-console",
+     "at": "2026-09-04T01:05:18.655367+00:00",
+     "detail_json": {
+      "event_id": "2a6389fef0f24fe48ca6b1cbe9b03e27",
+      "event_sequence": 2,
+      "event_type": "email.verified",
+      "idempotency_key": "console-19ac6917f041468db03997d46cbadb7a"
+     },
+     "id": 22
+    },
+    {
+     "action": "run.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:18.655367+00:00",
+     "detail_json": {
+      "event_id": "2a6389fef0f24fe48ca6b1cbe9b03e27",
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6"
+     },
+     "id": 23
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.119564+00:00",
+     "detail_json": {
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "stage": "RESOLVE_INPUTS"
+     },
+     "id": 24
+    },
+    {
+     "action": "run.inputs_resolved",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.124561+00:00",
+     "detail_json": {
+      "event_type": "email.verified",
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "snapshot_keys": [
+       "address",
+       "company_legal_name",
+       "contact",
+       "email",
+       "jurisdiction",
+       "occurred_at",
+       "platform_account_id",
+       "registration_number",
+       "website"
+      ]
+     },
+     "id": 25
+    },
+    {
+     "action": "run.broker_gate",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.132819+00:00",
+     "detail_json": {
+      "broker_status": "clear",
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "short_circuit": false
+     },
+     "id": 26
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.146445+00:00",
+     "detail_json": {
+      "adapter_id": "email_verification",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": "fs://adapter-raw/demo-case-001/f1dcdb38326e434fac411bdfe2d299f6/email_verification/c07a3acf23674e739b04b26e11780301",
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "status": "ok"
+     },
+     "id": 27
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.151826+00:00",
+     "detail_json": {
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "stage": "VALIDATE"
+     },
+     "id": 28
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.155256+00:00",
+     "detail_json": {
+      "intents": 2,
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "stage": "VALIDATE"
+     },
+     "id": 29
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.155256+00:00",
+     "detail_json": {
+      "check_id": "d7ef812ad4ab4e75b1057cb44501c806",
+      "check_type": "verified_email",
+      "points": 10,
+      "reason_codes": [],
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "status": "pass"
+     },
+     "id": 30
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.155256+00:00",
+     "detail_json": {
+      "check_id": "420f917e3ced454392eb101c1e0a6fac",
+      "check_type": "verified_company_email",
+      "points": 25,
+      "reason_codes": [],
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "status": "pass"
+     },
+     "id": 31
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.155256+00:00",
+     "detail_json": {
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "stage": "WRITE_CHECKS",
+      "written": 2
+     },
+     "id": 32
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.155256+00:00",
+     "detail_json": {
+      "by_check": {
+       "linkedin_company_match": 20,
+       "official_registry_match": 25,
+       "verified_company_email": 25,
+       "verified_email": 10
+      },
+      "gates": {
+       "broker_ok": true,
+       "control_proof": true,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": false
+      },
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "score": 80,
+      "stage": "SCORE"
+     },
+     "id": 33
+    },
+    {
+     "action": "run.decided",
+     "actor": "system",
+     "at": "2026-09-04T01:05:19.155256+00:00",
+     "detail_json": {
+      "buy_enablement": "locked_org_id_required",
+      "computed_decision": "manual_review_insufficient",
+      "decision": "manual_review_insufficient",
+      "enforcement_held": false,
+      "gates": {
+       "broker_ok": true,
+       "control_proof": true,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": false
+      },
+      "partial": false,
+      "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "resolved_policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+      "score": 80
+     },
+     "id": 34
+    },
+    {
+     "action": "event.received",
+     "actor": "ops-console",
+     "at": "2026-09-04T01:05:22.686003+00:00",
+     "detail_json": {
+      "event_id": "13c4f5cc766046b9b6991c96e036c643",
+      "event_sequence": 3,
+      "event_type": "org_id.submitted",
+      "idempotency_key": "console-b9193fcec88d4aac98c218818ab1f3cc"
+     },
+     "id": 35
+    },
+    {
+     "action": "run.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.686003+00:00",
+     "detail_json": {
+      "event_id": "13c4f5cc766046b9b6991c96e036c643",
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb"
+     },
+     "id": 36
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.743681+00:00",
+     "detail_json": {
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+      "stage": "RESOLVE_INPUTS"
+     },
+     "id": 37
+    },
+    {
+     "action": "run.inputs_resolved",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.748059+00:00",
+     "detail_json": {
+      "event_type": "org_id.submitted",
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+      "snapshot_keys": [
+       "address",
+       "company_legal_name",
+       "contact",
+       "email",
+       "jurisdiction",
+       "occurred_at",
+       "org_id",
+       "platform_account_id",
+       "registration_number",
+       "website"
+      ]
+     },
+     "id": 38
+    },
+    {
+     "action": "run.broker_gate",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.753745+00:00",
+     "detail_json": {
+      "broker_status": "clear",
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+      "short_circuit": false
+     },
+     "id": 39
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.764247+00:00",
+     "detail_json": {
+      "adapter_id": "rir_rdap",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": "fs://adapter-raw/demo-case-001/db9d9dd1454f4edd9873f981f4f57ebb/rir_rdap/703ec144db534bcbbb0ea34a28f561a9",
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+      "status": "ok"
+     },
+     "id": 40
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.769371+00:00",
+     "detail_json": {
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+      "stage": "VALIDATE"
+     },
+     "id": 41
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.773235+00:00",
+     "detail_json": {
+      "intents": 1,
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+      "stage": "VALIDATE"
+     },
+     "id": 42
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.773235+00:00",
+     "detail_json": {
+      "check_id": "07a8642756fa41788b9b42986a2a1b6b",
+      "check_type": "org_id_match",
+      "points": 25,
+      "reason_codes": [],
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+      "status": "pass"
+     },
+     "id": 43
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.773235+00:00",
+     "detail_json": {
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+      "stage": "WRITE_CHECKS",
+      "written": 1
+     },
+     "id": 44
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.773235+00:00",
+     "detail_json": {
+      "by_check": {
+       "linkedin_company_match": 20,
+       "official_registry_match": 25,
+       "org_id_match": 25,
+       "verified_company_email": 25,
+       "verified_email": 10
+      },
+      "gates": {
+       "broker_ok": true,
+       "control_proof": true,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": true
+      },
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+      "score": 105,
+      "stage": "SCORE"
+     },
+     "id": 45
+    },
+    {
+     "action": "run.decided",
+     "actor": "system",
+     "at": "2026-09-04T01:05:22.773235+00:00",
+     "detail_json": {
+      "buy_enablement": "enabled",
+      "computed_decision": "approve",
+      "decision": "manual_review_insufficient",
+      "enforcement_held": true,
+      "gates": {
+       "broker_ok": true,
+       "control_proof": true,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": true
+      },
+      "partial": false,
+      "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "resolved_policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+      "score": 105
+     },
+     "id": 46
+    }
+   ],
+   "case": {
+    "broker_status": "clear",
+    "buy_status": "not_applicable",
+    "company_name": "Acme Networks Ltd",
+    "created_at": "2026-09-04T01:05:14.588107+00:00",
+    "current_score": 105,
+    "event_sequence": 3,
+    "id": "demo-case-001",
+    "jurisdiction": "GB",
+    "last_decision_sequence": 3,
+    "latest_decision": "manual_review_insufficient",
+    "latest_decision_row_id": "92c27299dee4423eb23c353e6602abb4",
+    "latest_manual_decision_row_id": null,
+    "platform_account_id": null,
+    "status": "manual_review_insufficient",
+    "submitted_json": {
+     "address": "1 Main Street, London, EC1A 1AA",
+     "company_legal_name": "Acme Networks Ltd",
+     "contact": {
+      "name": "Jane Doe",
+      "title": "Director"
+     },
+     "email": {
+      "domain": "acme.example",
+      "email": "ops@acme.example",
+      "occurred_at": "2026-09-04T01:05:18.649909+00:00",
+      "verified_at": "2026-01-01T00:00:00Z"
+     },
+     "jurisdiction": "GB",
+     "occurred_at": "2026-09-04T01:05:14.581665+00:00",
+     "org_id": {
+      "occurred_at": "2026-09-04T01:05:22.681032+00:00",
+      "org_handle": "ORG-ACME-1",
+      "rir": "arin"
+     },
+     "platform_account_id": null,
+     "registration_number": "12345678",
+     "website": "https://acme.example"
+    },
+    "updated_at": "2026-09-04T01:05:22.773235+00:00"
+   },
+   "checks": [
+    {
+     "case_id": "demo-case-001",
+     "category": "legal_business_proof",
+     "check_type": "official_registry_match",
+     "created_at": "2026-09-04T01:05:14.981905+00:00",
+     "created_by_run_id": "755863d498984a05875014b52838416c",
+     "id": "18f209dcc95a4c39bbe0fe4423cdf7f7",
+     "points_awarded": 25,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "companies_house",
+     "source_detail_json": {
+      "company_number": "12345678",
+      "legal_name": "ACME NETWORKS LTD",
+      "registry": "companies_house"
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    },
+    {
+     "case_id": "demo-case-001",
+     "category": "supporting",
+     "check_type": "linkedin_company_match",
+     "created_at": "2026-09-04T01:05:14.981905+00:00",
+     "created_by_run_id": "755863d498984a05875014b52838416c",
+     "id": "6e47c3e7d2c34ee5ab3721e5d4f8f4b5",
+     "points_awarded": 20,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "floqer_discovery_plus_deterministic_match",
+     "source_detail_json": {
+      "linkedin": {
+       "company": "Acme Networks Ltd",
+       "company_domain": "acme.example",
+       "person_name": "Jane Doe",
+       "title": "Director"
+      }
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    },
+    {
+     "case_id": "demo-case-001",
+     "category": "control_proof",
+     "check_type": "verified_company_email",
+     "created_at": "2026-09-04T01:05:19.155256+00:00",
+     "created_by_run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+     "id": "420f917e3ced454392eb101c1e0a6fac",
+     "points_awarded": 25,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "platform_email_verification",
+     "source_detail_json": {
+      "email_domain": "acme.example",
+      "submitted_domain": "acme.example"
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    },
+    {
+     "case_id": "demo-case-001",
+     "category": "account_access",
+     "check_type": "verified_email",
+     "created_at": "2026-09-04T01:05:19.155256+00:00",
+     "created_by_run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+     "id": "d7ef812ad4ab4e75b1057cb44501c806",
+     "points_awarded": 10,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "platform_email_verification",
+     "source_detail_json": {
+      "email_domain": "acme.example"
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    },
+    {
+     "case_id": "demo-case-001",
+     "category": "control_proof",
+     "check_type": "org_id_match",
+     "created_at": "2026-09-04T01:05:22.773235+00:00",
+     "created_by_run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+     "id": "07a8642756fa41788b9b42986a2a1b6b",
+     "points_awarded": 25,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "direct_rir_rdap",
+     "source_detail_json": {
+      "entity_name": "ACME NETWORKS LTD",
+      "org_handle": "ORG-ACME-1",
+      "rir": "arin"
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    }
+   ],
+   "decision_provenance": "latest_decision_row",
+   "decisions": [
+    {
+     "buy_enablement": "enabled",
+     "decided_at": "2026-09-04T01:05:22.773235+00:00",
+     "decision": "manual_review_insufficient",
+     "enforcement_held": true,
+     "gates_json": {
+      "broker_ok": true,
+      "control_proof": true,
+      "legal_proof": true,
+      "no_hard_conflict": true,
+      "score_met": true
+     },
+     "id": "92c27299dee4423eb23c353e6602abb4",
+     "manual": false,
+     "published_at": "2026-09-04T01:05:22.944468+00:00",
+     "reviewer_id": null,
+     "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+     "score": 105
+    },
+    {
+     "buy_enablement": "locked_org_id_required",
+     "decided_at": "2026-09-04T01:05:19.155256+00:00",
+     "decision": "manual_review_insufficient",
+     "enforcement_held": false,
+     "gates_json": {
+      "broker_ok": true,
+      "control_proof": true,
+      "legal_proof": true,
+      "no_hard_conflict": true,
+      "score_met": false
+     },
+     "id": "58b5f9e4b1e74d2cadcf1aa64b93bdd5",
+     "manual": false,
+     "published_at": "2026-09-04T01:05:19.410793+00:00",
+     "reviewer_id": null,
+     "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+     "score": 80
+    },
+    {
+     "buy_enablement": "locked_org_id_required",
+     "decided_at": "2026-09-04T01:05:14.981905+00:00",
+     "decision": "manual_review_insufficient",
+     "enforcement_held": false,
+     "gates_json": {
+      "broker_ok": true,
+      "control_proof": false,
+      "legal_proof": true,
+      "no_hard_conflict": true,
+      "score_met": false
+     },
+     "id": "34f22ddab1bc4a30877d84c2a722f98b",
+     "manual": false,
+     "published_at": "2026-09-04T01:05:15.366311+00:00",
+     "reviewer_id": null,
+     "run_id": "755863d498984a05875014b52838416c",
+     "score": 45
+    }
+   ],
+   "enforcement_hold": {
+    "computed_decision": "approve",
+    "published_decision": "manual_review_insufficient"
+   },
+   "events": [
+    {
+     "event_type": "org_id.submitted",
+     "id": "13c4f5cc766046b9b6991c96e036c643",
+     "processed_at": "2026-09-04T01:05:22.789864+00:00",
+     "received_at": "2026-09-04T01:05:22.686003+00:00",
+     "run_id": "db9d9dd1454f4edd9873f981f4f57ebb"
+    },
+    {
+     "event_type": "email.verified",
+     "id": "2a6389fef0f24fe48ca6b1cbe9b03e27",
+     "processed_at": "2026-09-04T01:05:19.170399+00:00",
+     "received_at": "2026-09-04T01:05:18.655367+00:00",
+     "run_id": "f1dcdb38326e434fac411bdfe2d299f6"
+    },
+    {
+     "event_type": "kyb.run_requested",
+     "id": "bcf38675ddc840c7a8a2410032878cb5",
+     "processed_at": "2026-09-04T01:05:15.003164+00:00",
+     "received_at": "2026-09-04T01:05:14.588107+00:00",
+     "run_id": "755863d498984a05875014b52838416c"
+    }
+   ],
+   "field_sources": {
+    "Broker_Status__c": "case broker_status (exact-match gate)",
+    "Business_Document_Status__c": "live business_document_verified; uploaded-but-unprocessed \u2192 Uploaded",
+    "Buy_Enablement_Status__c": "case buy_status (tool asserts enabled/locked; platform may show transients)",
+    "Hard_Conflict__c": "NOT gates.no_hard_conflict from the latest decision; NULL when no authoritative decision evaluated the gate (unresolved pointer, manual bypass)",
+    "KYC_Check__c": "one child record per check row (live + superseded)",
+    "KYC_Score__c": "pointed decision row's score (blank while pre-014 order is unresolved)",
+    "KYC_Status__c": "case status (approved_manual \u2192 'Account Approved', AUDIT:A5)",
+    "Manual_Approved_At__c": "latest MANUAL decision row's timestamp (sticky across later autos)",
+    "Manual_Approved_By__c": "latest MANUAL decision row's reviewer (sticky across later autos)",
+    "ORG_ID_Status__c": "live org_id_match status; history without live row \u2192 Superseded",
+    "ORG_ID__c": "live org_id_match check detail, else submitted org handle",
+    "POC_Handle__c": "live poc_verified check detail, else submitted poc handle",
+    "POC_Verification_Status__c": "live poc_verified status; outstanding token \u2192 Token Sent",
+    "Platform_Action_Taken__c": "latest decision; 'Manual Approve' when case is approved_manual",
+    "Review_Reason_Codes__c": "union of live checks' reason codes",
+    "Website_Review_Status__c": "open website task \u2192 Open; else live website_verified status"
+   },
+   "latest_manual_decision": null,
+   "manual_decision_provenance": "no_manual_decisions",
+   "outbox": [
+    {
+     "attempts": 1,
+     "delivered_at": "2026-09-04T01:05:22.944468+00:00",
+     "id": 3,
+     "kind": "decision_callback",
+     "last_error": null,
+     "next_attempt_at": "2026-09-04T01:05:22.773235+00:00",
+     "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+     "status": "delivered"
+    },
+    {
+     "attempts": 1,
+     "delivered_at": "2026-09-04T01:05:19.410793+00:00",
+     "id": 2,
+     "kind": "decision_callback",
+     "last_error": null,
+     "next_attempt_at": "2026-09-04T01:05:19.155256+00:00",
+     "run_id": "f1dcdb38326e434fac411bdfe2d299f6",
+     "status": "delivered"
+    },
+    {
+     "attempts": 1,
+     "delivered_at": "2026-09-04T01:05:15.366311+00:00",
+     "id": 1,
+     "kind": "decision_callback",
+     "last_error": null,
+     "next_attempt_at": "2026-09-04T01:05:14.981905+00:00",
+     "run_id": "755863d498984a05875014b52838416c",
+     "status": "delivered"
+    }
+   ],
+   "poc_tokens": [],
+   "pointer_decision": {
+    "buy_enablement": "enabled",
+    "decided_at": "2026-09-04T01:05:22.773235+00:00",
+    "decision": "manual_review_insufficient",
+    "gates_json": {
+     "broker_ok": true,
+     "control_proof": true,
+     "legal_proof": true,
+     "no_hard_conflict": true,
+     "score_met": true
+    },
+    "id": "92c27299dee4423eb23c353e6602abb4",
+    "manual": false,
+    "published_at": "2026-09-04T01:05:22.944468+00:00",
+    "reviewer_id": null,
+    "run_id": "db9d9dd1454f4edd9873f981f4f57ebb",
+    "score": 105
+   },
+   "review_tasks": [
+    {
+     "completed_at": null,
+     "context_json": {
+      "company_legal_name": "Acme Networks Ltd",
+      "discovery": {
+       "aliases": [],
+       "broker_context": {},
+       "company_domain": "acme.example",
+       "discovered": true,
+       "linkedin": {
+        "company": "Acme Networks Ltd",
+        "company_domain": "acme.example",
+        "person_name": "Jane Doe",
+        "title": "Director"
+       },
+       "registry_candidates": [],
+       "website": "https://acme.example"
+      },
+      "domain": "acme.example"
+     },
+     "created_at": "2026-09-04T01:05:14.962405+00:00",
+     "id": "afa6d178fc114bc2941f204ed31cd67b",
+     "reason_codes": [],
+     "result": null,
+     "reviewer_id": null,
+     "status": "open",
+     "task_type": "website"
+    }
+   ],
+   "runs": [
+    {
+     "error": null,
+     "finished_at": "2026-09-04T01:05:22.944468+00:00",
+     "id": "db9d9dd1454f4edd9873f981f4f57ebb",
+     "partial": false,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "started_at": "2026-09-04T01:05:22.686003+00:00",
+     "state": "COMPLETE",
+     "triggering_event_id": "13c4f5cc766046b9b6991c96e036c643"
+    },
+    {
+     "error": null,
+     "finished_at": "2026-09-04T01:05:19.410793+00:00",
+     "id": "f1dcdb38326e434fac411bdfe2d299f6",
+     "partial": false,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "started_at": "2026-09-04T01:05:18.655367+00:00",
+     "state": "COMPLETE",
+     "triggering_event_id": "2a6389fef0f24fe48ca6b1cbe9b03e27"
+    },
+    {
+     "error": null,
+     "finished_at": "2026-09-04T01:05:15.366311+00:00",
+     "id": "755863d498984a05875014b52838416c",
+     "partial": false,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "started_at": "2026-09-04T01:05:14.588107+00:00",
+     "state": "COMPLETE",
+     "triggering_event_id": "bcf38675ddc840c7a8a2410032878cb5"
+    }
+   ],
+   "salesforce": {
+    "Broker_Status__c": "Clear",
+    "Business_Document_Status__c": "None",
+    "Buy_Enablement_Status__c": "Not Applicable",
+    "Hard_Conflict__c": false,
+    "KYC_Check__c": [
+     {
+      "Category__c": "legal_business_proof",
+      "Check_Type__c": "official_registry_match",
+      "Created_At__c": "2026-09-04T01:05:14.981905+00:00",
+      "Points__c": 25,
+      "Reason_Codes__c": "",
+      "Source__c": "companies_house",
+      "Status__c": "pass",
+      "Superseded__c": false
+     },
+     {
+      "Category__c": "supporting",
+      "Check_Type__c": "linkedin_company_match",
+      "Created_At__c": "2026-09-04T01:05:14.981905+00:00",
+      "Points__c": 20,
+      "Reason_Codes__c": "",
+      "Source__c": "floqer_discovery_plus_deterministic_match",
+      "Status__c": "pass",
+      "Superseded__c": false
+     },
+     {
+      "Category__c": "control_proof",
+      "Check_Type__c": "verified_company_email",
+      "Created_At__c": "2026-09-04T01:05:19.155256+00:00",
+      "Points__c": 25,
+      "Reason_Codes__c": "",
+      "Source__c": "platform_email_verification",
+      "Status__c": "pass",
+      "Superseded__c": false
+     },
+     {
+      "Category__c": "account_access",
+      "Check_Type__c": "verified_email",
+      "Created_At__c": "2026-09-04T01:05:19.155256+00:00",
+      "Points__c": 10,
+      "Reason_Codes__c": "",
+      "Source__c": "platform_email_verification",
+      "Status__c": "pass",
+      "Superseded__c": false
+     },
+     {
+      "Category__c": "control_proof",
+      "Check_Type__c": "org_id_match",
+      "Created_At__c": "2026-09-04T01:05:22.773235+00:00",
+      "Points__c": 25,
+      "Reason_Codes__c": "",
+      "Source__c": "direct_rir_rdap",
+      "Status__c": "pass",
+      "Superseded__c": false
+     }
+    ],
+    "KYC_Score__c": 105,
+    "KYC_Status__c": "Manual Review - Insufficient Score",
+    "Manual_Approved_At__c": null,
+    "Manual_Approved_By__c": null,
+    "ORG_ID_Status__c": "Pass",
+    "ORG_ID__c": "ORG-ACME-1",
+    "POC_Handle__c": null,
+    "POC_Verification_Status__c": "Pending",
+    "Platform_Action_Taken__c": null,
+    "Review_Reason_Codes__c": null,
+    "Website_Review_Status__c": "Open"
+   },
+   "score": {
+    "current_evidence_score": 105,
+    "is_published_decision": false,
+    "items": [
+     {
+      "awarded": 25,
+      "category": "control_proof",
+      "check_type": "verified_company_email",
+      "points": 25,
+      "status": "pass"
+     },
+     {
+      "awarded": 25,
+      "category": "legal_business_proof",
+      "check_type": "official_registry_match",
+      "points": 25,
+      "status": "pass"
+     },
+     {
+      "awarded": 25,
+      "category": "control_proof",
+      "check_type": "org_id_match",
+      "points": 25,
+      "status": "pass"
+     },
+     {
+      "awarded": 0,
+      "category": "control_proof",
+      "check_type": "poc_verified",
+      "points": 25,
+      "status": "missing"
+     },
+     {
+      "awarded": 0,
+      "category": "legal_business_proof",
+      "check_type": "business_document_verified",
+      "points": 25,
+      "status": "missing"
+     },
+     {
+      "awarded": 20,
+      "category": "supporting",
+      "check_type": "linkedin_company_match",
+      "points": 20,
+      "status": "pass"
+     },
+     {
+      "awarded": 0,
+      "category": "supporting",
+      "check_type": "website_verified",
+      "points": 10,
+      "status": "missing"
+     },
+     {
+      "awarded": 10,
+      "category": "account_access",
+      "check_type": "verified_email",
+      "points": 10,
+      "status": "pass"
+     }
+    ],
+    "threshold": 100,
+    "total": 105
+   }
+  },
+  "demo-case-002": {
+   "adapter_results": [
+    {
+     "adapter_id": "email_verification",
+     "fetched_at": "2026-09-04T01:05:26.861522+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "companies_house",
+     "fetched_at": "2026-09-04T01:05:26.868207+00:00",
+     "latency_ms": 1,
+     "raw_ref": "fs://adapter-raw/demo-case-002/9f5f4f0d64fd484d89d55a2fdf32658e/companies_house/0ffe29943ff4482491603d95cb204086",
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "gleif",
+     "fetched_at": "2026-09-04T01:05:26.874513+00:00",
+     "latency_ms": 1,
+     "raw_ref": "fs://adapter-raw/demo-case-002/9f5f4f0d64fd484d89d55a2fdf32658e/gleif/6159cf042b924ec1a91f3c9eebb29422",
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "floqer_company_enrichment",
+     "fetched_at": "2026-09-04T01:05:26.880220+00:00",
+     "latency_ms": 1,
+     "raw_ref": "fs://adapter-raw/demo-case-002/9f5f4f0d64fd484d89d55a2fdf32658e/floqer_company_enrichment/9b07c2c6f8da44fe8806aa9db844245f",
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "rir_rdap",
+     "fetched_at": "2026-09-04T01:05:26.884361+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "rir_poc",
+     "fetched_at": "2026-09-04T01:05:26.889307+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "document_ocr",
+     "fetched_at": "2026-09-04T01:05:26.893603+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "website_manual_review",
+     "fetched_at": "2026-09-04T01:05:26.898139+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "email_verification",
+     "fetched_at": "2026-09-04T01:05:30.994477+00:00",
+     "latency_ms": 0,
+     "raw_ref": "fs://adapter-raw/demo-case-002/ba24642fb4554a7997416b900086af1f/email_verification/7a88664609844e19a04fe215baec96b9",
+     "run_id": "ba24642fb4554a7997416b900086af1f",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "rir_rdap",
+     "fetched_at": "2026-09-04T01:05:35.078699+00:00",
+     "latency_ms": 0,
+     "raw_ref": "fs://adapter-raw/demo-case-002/f6f54551ff2b467f82001344c779ec43/rir_rdap/7bf06bb50a8742e8849c9f12d6b905af",
+     "run_id": "f6f54551ff2b467f82001344c779ec43",
+     "status": "ok"
+    }
+   ],
+   "audit": [
+    {
+     "action": "event.received",
+     "actor": "ops-console",
+     "at": "2026-09-04T01:05:26.709503+00:00",
+     "detail_json": {
+      "event_id": "3430749d565e4f6aa720a85c6dcda1d2",
+      "event_sequence": 1,
+      "event_type": "kyb.run_requested",
+      "idempotency_key": "console-4a2bbdb053194e2baf792f15428b61ac"
+     },
+     "id": 47
+    },
+    {
+     "action": "run.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.709503+00:00",
+     "detail_json": {
+      "event_id": "3430749d565e4f6aa720a85c6dcda1d2",
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e"
+     },
+     "id": 48
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.840931+00:00",
+     "detail_json": {
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "stage": "RESOLVE_INPUTS"
+     },
+     "id": 49
+    },
+    {
+     "action": "run.inputs_resolved",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.845429+00:00",
+     "detail_json": {
+      "event_type": "kyb.run_requested",
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "snapshot_keys": [
+       "address",
+       "company_legal_name",
+       "contact",
+       "jurisdiction",
+       "occurred_at",
+       "platform_account_id",
+       "registration_number",
+       "website"
+      ]
+     },
+     "id": 50
+    },
+    {
+     "action": "run.broker_gate",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.851713+00:00",
+     "detail_json": {
+      "broker_status": "clear",
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "short_circuit": false
+     },
+     "id": 51
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.861522+00:00",
+     "detail_json": {
+      "adapter_id": "email_verification",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "status": "not_applicable"
+     },
+     "id": 52
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.868207+00:00",
+     "detail_json": {
+      "adapter_id": "companies_house",
+      "error": null,
+      "latency_ms": 1,
+      "raw_ref": "fs://adapter-raw/demo-case-002/9f5f4f0d64fd484d89d55a2fdf32658e/companies_house/0ffe29943ff4482491603d95cb204086",
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "status": "ok"
+     },
+     "id": 53
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.874513+00:00",
+     "detail_json": {
+      "adapter_id": "gleif",
+      "error": null,
+      "latency_ms": 1,
+      "raw_ref": "fs://adapter-raw/demo-case-002/9f5f4f0d64fd484d89d55a2fdf32658e/gleif/6159cf042b924ec1a91f3c9eebb29422",
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "status": "ok"
+     },
+     "id": 54
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.880220+00:00",
+     "detail_json": {
+      "adapter_id": "floqer_company_enrichment",
+      "error": null,
+      "latency_ms": 1,
+      "raw_ref": "fs://adapter-raw/demo-case-002/9f5f4f0d64fd484d89d55a2fdf32658e/floqer_company_enrichment/9b07c2c6f8da44fe8806aa9db844245f",
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "status": "ok"
+     },
+     "id": 55
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.884361+00:00",
+     "detail_json": {
+      "adapter_id": "rir_rdap",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "status": "not_applicable"
+     },
+     "id": 56
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.889307+00:00",
+     "detail_json": {
+      "adapter_id": "rir_poc",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "status": "not_applicable"
+     },
+     "id": 57
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.893603+00:00",
+     "detail_json": {
+      "adapter_id": "document_ocr",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "status": "not_applicable"
+     },
+     "id": 58
+    },
+    {
+     "action": "review_task.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.898139+00:00",
+     "detail_json": {
+      "domain": "acme.example",
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "task_id": "5c4df6123af444c8b0046d493bf36611",
+      "task_type": "website"
+     },
+     "id": 59
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.898139+00:00",
+     "detail_json": {
+      "adapter_id": "website_manual_review",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "status": "ok"
+     },
+     "id": 60
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.905320+00:00",
+     "detail_json": {
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "stage": "VALIDATE"
+     },
+     "id": 61
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.908508+00:00",
+     "detail_json": {
+      "intents": 2,
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "stage": "VALIDATE"
+     },
+     "id": 62
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.908508+00:00",
+     "detail_json": {
+      "check_id": "3282f4e4ef32423b888dfbc088a57e19",
+      "check_type": "official_registry_match",
+      "points": 25,
+      "reason_codes": [],
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "status": "pass"
+     },
+     "id": 63
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.908508+00:00",
+     "detail_json": {
+      "check_id": "a7174034239344c6a4d8175ecd08cb55",
+      "check_type": "linkedin_company_match",
+      "points": 20,
+      "reason_codes": [],
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "status": "pass"
+     },
+     "id": 64
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.908508+00:00",
+     "detail_json": {
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "stage": "WRITE_CHECKS",
+      "written": 2
+     },
+     "id": 65
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.908508+00:00",
+     "detail_json": {
+      "by_check": {
+       "linkedin_company_match": 20,
+       "official_registry_match": 25
+      },
+      "gates": {
+       "broker_ok": true,
+       "control_proof": false,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": false
+      },
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "score": 45,
+      "stage": "SCORE"
+     },
+     "id": 66
+    },
+    {
+     "action": "run.decided",
+     "actor": "system",
+     "at": "2026-09-04T01:05:26.908508+00:00",
+     "detail_json": {
+      "buy_enablement": "locked_org_id_required",
+      "computed_decision": "manual_review_insufficient",
+      "decision": "manual_review_insufficient",
+      "enforcement_held": false,
+      "gates": {
+       "broker_ok": true,
+       "control_proof": false,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": false
+      },
+      "partial": false,
+      "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "resolved_policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+      "score": 45
+     },
+     "id": 67
+    },
+    {
+     "action": "event.received",
+     "actor": "ops-console",
+     "at": "2026-09-04T01:05:30.730508+00:00",
+     "detail_json": {
+      "event_id": "9c72d1dee0b649fa91dc61b30136018d",
+      "event_sequence": 2,
+      "event_type": "email.verified",
+      "idempotency_key": "console-92ddb4e3624d4765988743fbf90f9a7d"
+     },
+     "id": 68
+    },
+    {
+     "action": "run.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:30.730508+00:00",
+     "detail_json": {
+      "event_id": "9c72d1dee0b649fa91dc61b30136018d",
+      "run_id": "ba24642fb4554a7997416b900086af1f"
+     },
+     "id": 69
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:30.976345+00:00",
+     "detail_json": {
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "stage": "RESOLVE_INPUTS"
+     },
+     "id": 70
+    },
+    {
+     "action": "run.inputs_resolved",
+     "actor": "system",
+     "at": "2026-09-04T01:05:30.980103+00:00",
+     "detail_json": {
+      "event_type": "email.verified",
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "snapshot_keys": [
+       "address",
+       "company_legal_name",
+       "contact",
+       "email",
+       "jurisdiction",
+       "occurred_at",
+       "platform_account_id",
+       "registration_number",
+       "website"
+      ]
+     },
+     "id": 71
+    },
+    {
+     "action": "run.broker_gate",
+     "actor": "system",
+     "at": "2026-09-04T01:05:30.985308+00:00",
+     "detail_json": {
+      "broker_status": "clear",
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "short_circuit": false
+     },
+     "id": 72
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:30.994477+00:00",
+     "detail_json": {
+      "adapter_id": "email_verification",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": "fs://adapter-raw/demo-case-002/ba24642fb4554a7997416b900086af1f/email_verification/7a88664609844e19a04fe215baec96b9",
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "status": "ok"
+     },
+     "id": 73
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:30.998666+00:00",
+     "detail_json": {
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "stage": "VALIDATE"
+     },
+     "id": 74
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:31.001798+00:00",
+     "detail_json": {
+      "intents": 2,
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "stage": "VALIDATE"
+     },
+     "id": 75
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:31.001798+00:00",
+     "detail_json": {
+      "check_id": "887ca77520d44129bd7bd020270f1183",
+      "check_type": "verified_email",
+      "points": 10,
+      "reason_codes": [],
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "status": "pass"
+     },
+     "id": 76
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:31.001798+00:00",
+     "detail_json": {
+      "check_id": "6813dae930e84547bde9addee52e8bee",
+      "check_type": "verified_company_email",
+      "points": 25,
+      "reason_codes": [],
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "status": "pass"
+     },
+     "id": 77
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:31.001798+00:00",
+     "detail_json": {
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "stage": "WRITE_CHECKS",
+      "written": 2
+     },
+     "id": 78
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:31.001798+00:00",
+     "detail_json": {
+      "by_check": {
+       "linkedin_company_match": 20,
+       "official_registry_match": 25,
+       "verified_company_email": 25,
+       "verified_email": 10
+      },
+      "gates": {
+       "broker_ok": true,
+       "control_proof": true,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": false
+      },
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "score": 80,
+      "stage": "SCORE"
+     },
+     "id": 79
+    },
+    {
+     "action": "run.decided",
+     "actor": "system",
+     "at": "2026-09-04T01:05:31.001798+00:00",
+     "detail_json": {
+      "buy_enablement": "locked_org_id_required",
+      "computed_decision": "manual_review_insufficient",
+      "decision": "manual_review_insufficient",
+      "enforcement_held": false,
+      "gates": {
+       "broker_ok": true,
+       "control_proof": true,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": false
+      },
+      "partial": false,
+      "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "resolved_policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "run_id": "ba24642fb4554a7997416b900086af1f",
+      "score": 80
+     },
+     "id": 80
+    },
+    {
+     "action": "event.received",
+     "actor": "ops-console",
+     "at": "2026-09-04T01:05:34.753683+00:00",
+     "detail_json": {
+      "event_id": "24f5433993b6484d9b2ab424b6827e3c",
+      "event_sequence": 3,
+      "event_type": "org_id.submitted",
+      "idempotency_key": "console-22cef4fd0470430696f8d1b8935efcf8"
+     },
+     "id": 81
+    },
+    {
+     "action": "run.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:34.753683+00:00",
+     "detail_json": {
+      "event_id": "24f5433993b6484d9b2ab424b6827e3c",
+      "run_id": "f6f54551ff2b467f82001344c779ec43"
+     },
+     "id": 82
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:35.058188+00:00",
+     "detail_json": {
+      "run_id": "f6f54551ff2b467f82001344c779ec43",
+      "stage": "RESOLVE_INPUTS"
+     },
+     "id": 83
+    },
+    {
+     "action": "run.inputs_resolved",
+     "actor": "system",
+     "at": "2026-09-04T01:05:35.062464+00:00",
+     "detail_json": {
+      "event_type": "org_id.submitted",
+      "run_id": "f6f54551ff2b467f82001344c779ec43",
+      "snapshot_keys": [
+       "address",
+       "company_legal_name",
+       "contact",
+       "email",
+       "jurisdiction",
+       "occurred_at",
+       "org_id",
+       "platform_account_id",
+       "registration_number",
+       "website"
+      ]
+     },
+     "id": 84
+    },
+    {
+     "action": "run.broker_gate",
+     "actor": "system",
+     "at": "2026-09-04T01:05:35.068583+00:00",
+     "detail_json": {
+      "broker_status": "clear",
+      "run_id": "f6f54551ff2b467f82001344c779ec43",
+      "short_circuit": false
+     },
+     "id": 85
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:35.078699+00:00",
+     "detail_json": {
+      "adapter_id": "rir_rdap",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": "fs://adapter-raw/demo-case-002/f6f54551ff2b467f82001344c779ec43/rir_rdap/7bf06bb50a8742e8849c9f12d6b905af",
+      "run_id": "f6f54551ff2b467f82001344c779ec43",
+      "status": "ok"
+     },
+     "id": 86
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:35.083670+00:00",
+     "detail_json": {
+      "run_id": "f6f54551ff2b467f82001344c779ec43",
+      "stage": "VALIDATE"
+     },
+     "id": 87
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:35.086925+00:00",
+     "detail_json": {
+      "intents": 1,
+      "run_id": "f6f54551ff2b467f82001344c779ec43",
+      "stage": "VALIDATE"
+     },
+     "id": 88
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:35.086925+00:00",
+     "detail_json": {
+      "check_id": "bd316117e2824024804464ae43a5e8e8",
+      "check_type": "org_id_match",
+      "points": 25,
+      "reason_codes": [],
+      "run_id": "f6f54551ff2b467f82001344c779ec43",
+      "status": "pass"
+     },
+     "id": 89
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:35.086925+00:00",
+     "detail_json": {
+      "run_id": "f6f54551ff2b467f82001344c779ec43",
+      "stage": "WRITE_CHECKS",
+      "written": 1
+     },
+     "id": 90
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:35.086925+00:00",
+     "detail_json": {
+      "by_check": {
+       "linkedin_company_match": 20,
+       "official_registry_match": 25,
+       "org_id_match": 25,
+       "verified_company_email": 25,
+       "verified_email": 10
+      },
+      "gates": {
+       "broker_ok": true,
+       "control_proof": true,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": true
+      },
+      "run_id": "f6f54551ff2b467f82001344c779ec43",
+      "score": 105,
+      "stage": "SCORE"
+     },
+     "id": 91
+    },
+    {
+     "action": "run.decided",
+     "actor": "system",
+     "at": "2026-09-04T01:05:35.086925+00:00",
+     "detail_json": {
+      "buy_enablement": "enabled",
+      "computed_decision": "approve",
+      "decision": "manual_review_insufficient",
+      "enforcement_held": true,
+      "gates": {
+       "broker_ok": true,
+       "control_proof": true,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": true
+      },
+      "partial": false,
+      "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "resolved_policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "run_id": "f6f54551ff2b467f82001344c779ec43",
+      "score": 105
+     },
+     "id": 92
+    },
+    {
+     "action": "event.received",
+     "actor": "j.okonjo",
+     "at": "2026-09-04T01:05:38.771840+00:00",
+     "detail_json": {
+      "event_id": "f3f6c6a15e3440419f6fedfa86bfef5e",
+      "event_sequence": 4,
+      "event_type": "reviewer.manual_approve",
+      "idempotency_key": "console-6e38d195a5084734b5d5830c2c08c194"
+     },
+     "id": 93
+    },
+    {
+     "action": "reviewer.manual_approve",
+     "actor": "j.okonjo",
+     "at": "2026-09-04T01:05:38.771840+00:00",
+     "detail_json": {
+      "buy_enablement": "buy_enabled",
+      "event_id": "f3f6c6a15e3440419f6fedfa86bfef5e",
+      "note": ""
+     },
+     "id": 94
+    }
+   ],
+   "case": {
+    "broker_status": "clear",
+    "buy_status": "buy_enabled",
+    "company_name": "Acme Networks Ltd",
+    "created_at": "2026-09-04T01:05:26.709503+00:00",
+    "current_score": 105,
+    "event_sequence": 4,
+    "id": "demo-case-002",
+    "jurisdiction": "GB",
+    "last_decision_sequence": 3,
+    "latest_decision": "manual_review_insufficient",
+    "latest_decision_row_id": "08151f86e71d4084aea02f8a1e520aa6",
+    "latest_manual_decision_row_id": "08151f86e71d4084aea02f8a1e520aa6",
+    "platform_account_id": null,
+    "status": "approved_manual",
+    "submitted_json": {
+     "address": "1 Main Street, London, EC1A 1AA",
+     "company_legal_name": "Acme Networks Ltd",
+     "contact": {
+      "name": "Jane Doe",
+      "title": "Director"
+     },
+     "email": {
+      "domain": "acme.example",
+      "email": "ops@acme.example",
+      "occurred_at": "2026-09-04T01:05:30.726227+00:00",
+      "verified_at": "2026-01-01T00:00:00Z"
+     },
+     "jurisdiction": "GB",
+     "occurred_at": "2026-09-04T01:05:26.704613+00:00",
+     "org_id": {
+      "occurred_at": "2026-09-04T01:05:34.750189+00:00",
+      "org_handle": "ORG-ACME-1",
+      "rir": "arin"
+     },
+     "platform_account_id": null,
+     "registration_number": "12345678",
+     "website": "https://acme.example"
+    },
+    "updated_at": "2026-09-04T01:05:38.771840+00:00"
+   },
+   "checks": [
+    {
+     "case_id": "demo-case-002",
+     "category": "legal_business_proof",
+     "check_type": "official_registry_match",
+     "created_at": "2026-09-04T01:05:26.908508+00:00",
+     "created_by_run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "id": "3282f4e4ef32423b888dfbc088a57e19",
+     "points_awarded": 25,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "companies_house",
+     "source_detail_json": {
+      "company_number": "12345678",
+      "legal_name": "ACME NETWORKS LTD",
+      "registry": "companies_house"
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    },
+    {
+     "case_id": "demo-case-002",
+     "category": "supporting",
+     "check_type": "linkedin_company_match",
+     "created_at": "2026-09-04T01:05:26.908508+00:00",
+     "created_by_run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "id": "a7174034239344c6a4d8175ecd08cb55",
+     "points_awarded": 20,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "floqer_discovery_plus_deterministic_match",
+     "source_detail_json": {
+      "linkedin": {
+       "company": "Acme Networks Ltd",
+       "company_domain": "acme.example",
+       "person_name": "Jane Doe",
+       "title": "Director"
+      }
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    },
+    {
+     "case_id": "demo-case-002",
+     "category": "control_proof",
+     "check_type": "verified_company_email",
+     "created_at": "2026-09-04T01:05:31.001798+00:00",
+     "created_by_run_id": "ba24642fb4554a7997416b900086af1f",
+     "id": "6813dae930e84547bde9addee52e8bee",
+     "points_awarded": 25,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "platform_email_verification",
+     "source_detail_json": {
+      "email_domain": "acme.example",
+      "submitted_domain": "acme.example"
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    },
+    {
+     "case_id": "demo-case-002",
+     "category": "account_access",
+     "check_type": "verified_email",
+     "created_at": "2026-09-04T01:05:31.001798+00:00",
+     "created_by_run_id": "ba24642fb4554a7997416b900086af1f",
+     "id": "887ca77520d44129bd7bd020270f1183",
+     "points_awarded": 10,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "platform_email_verification",
+     "source_detail_json": {
+      "email_domain": "acme.example"
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    },
+    {
+     "case_id": "demo-case-002",
+     "category": "control_proof",
+     "check_type": "org_id_match",
+     "created_at": "2026-09-04T01:05:35.086925+00:00",
+     "created_by_run_id": "f6f54551ff2b467f82001344c779ec43",
+     "id": "bd316117e2824024804464ae43a5e8e8",
+     "points_awarded": 25,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "direct_rir_rdap",
+     "source_detail_json": {
+      "entity_name": "ACME NETWORKS LTD",
+      "org_handle": "ORG-ACME-1",
+      "rir": "arin"
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    }
+   ],
+   "decision_provenance": "latest_decision_row",
+   "decisions": [
+    {
+     "buy_enablement": "enabled",
+     "decided_at": "2026-09-04T01:05:38.771840+00:00",
+     "decision": "approve",
+     "enforcement_held": false,
+     "gates_json": {
+      "bypassed": true
+     },
+     "id": "08151f86e71d4084aea02f8a1e520aa6",
+     "manual": true,
+     "published_at": null,
+     "reviewer_id": "j.okonjo",
+     "run_id": null,
+     "score": 105
+    },
+    {
+     "buy_enablement": "enabled",
+     "decided_at": "2026-09-04T01:05:35.086925+00:00",
+     "decision": "manual_review_insufficient",
+     "enforcement_held": true,
+     "gates_json": {
+      "broker_ok": true,
+      "control_proof": true,
+      "legal_proof": true,
+      "no_hard_conflict": true,
+      "score_met": true
+     },
+     "id": "5b0726ed71ff473a97dedaf1a153cff3",
+     "manual": false,
+     "published_at": "2026-09-04T01:05:35.543102+00:00",
+     "reviewer_id": null,
+     "run_id": "f6f54551ff2b467f82001344c779ec43",
+     "score": 105
+    },
+    {
+     "buy_enablement": "locked_org_id_required",
+     "decided_at": "2026-09-04T01:05:31.001798+00:00",
+     "decision": "manual_review_insufficient",
+     "enforcement_held": false,
+     "gates_json": {
+      "broker_ok": true,
+      "control_proof": true,
+      "legal_proof": true,
+      "no_hard_conflict": true,
+      "score_met": false
+     },
+     "id": "efa414716a174df6bcc536efa54e3d48",
+     "manual": false,
+     "published_at": "2026-09-04T01:05:31.512076+00:00",
+     "reviewer_id": null,
+     "run_id": "ba24642fb4554a7997416b900086af1f",
+     "score": 80
+    },
+    {
+     "buy_enablement": "locked_org_id_required",
+     "decided_at": "2026-09-04T01:05:26.908508+00:00",
+     "decision": "manual_review_insufficient",
+     "enforcement_held": false,
+     "gates_json": {
+      "broker_ok": true,
+      "control_proof": false,
+      "legal_proof": true,
+      "no_hard_conflict": true,
+      "score_met": false
+     },
+     "id": "1dbefb09ffb1462c8614aed5ad3fcdd5",
+     "manual": false,
+     "published_at": "2026-09-04T01:05:26.975834+00:00",
+     "reviewer_id": null,
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "score": 45
+    }
+   ],
+   "enforcement_hold": null,
+   "events": [
+    {
+     "event_type": "reviewer.manual_approve",
+     "id": "f3f6c6a15e3440419f6fedfa86bfef5e",
+     "processed_at": "2026-09-04T01:05:38.782180+00:00",
+     "received_at": "2026-09-04T01:05:38.771840+00:00",
+     "run_id": null
+    },
+    {
+     "event_type": "org_id.submitted",
+     "id": "24f5433993b6484d9b2ab424b6827e3c",
+     "processed_at": "2026-09-04T01:05:35.100509+00:00",
+     "received_at": "2026-09-04T01:05:34.753683+00:00",
+     "run_id": "f6f54551ff2b467f82001344c779ec43"
+    },
+    {
+     "event_type": "email.verified",
+     "id": "9c72d1dee0b649fa91dc61b30136018d",
+     "processed_at": "2026-09-04T01:05:31.013813+00:00",
+     "received_at": "2026-09-04T01:05:30.730508+00:00",
+     "run_id": "ba24642fb4554a7997416b900086af1f"
+    },
+    {
+     "event_type": "kyb.run_requested",
+     "id": "3430749d565e4f6aa720a85c6dcda1d2",
+     "processed_at": "2026-09-04T01:05:26.922629+00:00",
+     "received_at": "2026-09-04T01:05:26.709503+00:00",
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e"
+    }
+   ],
+   "field_sources": {
+    "Broker_Status__c": "case broker_status (exact-match gate)",
+    "Business_Document_Status__c": "live business_document_verified; uploaded-but-unprocessed \u2192 Uploaded",
+    "Buy_Enablement_Status__c": "case buy_status (tool asserts enabled/locked; platform may show transients)",
+    "Hard_Conflict__c": "NOT gates.no_hard_conflict from the latest decision; NULL when no authoritative decision evaluated the gate (unresolved pointer, manual bypass)",
+    "KYC_Check__c": "one child record per check row (live + superseded)",
+    "KYC_Score__c": "pointed decision row's score (blank while pre-014 order is unresolved)",
+    "KYC_Status__c": "case status (approved_manual \u2192 'Account Approved', AUDIT:A5)",
+    "Manual_Approved_At__c": "latest MANUAL decision row's timestamp (sticky across later autos)",
+    "Manual_Approved_By__c": "latest MANUAL decision row's reviewer (sticky across later autos)",
+    "ORG_ID_Status__c": "live org_id_match status; history without live row \u2192 Superseded",
+    "ORG_ID__c": "live org_id_match check detail, else submitted org handle",
+    "POC_Handle__c": "live poc_verified check detail, else submitted poc handle",
+    "POC_Verification_Status__c": "live poc_verified status; outstanding token \u2192 Token Sent",
+    "Platform_Action_Taken__c": "latest decision; 'Manual Approve' when case is approved_manual",
+    "Review_Reason_Codes__c": "union of live checks' reason codes",
+    "Website_Review_Status__c": "open website task \u2192 Open; else live website_verified status"
+   },
+   "latest_manual_decision": {
+    "decided_at": "2026-09-04T01:05:38.771840+00:00",
+    "decision": "approve",
+    "id": "08151f86e71d4084aea02f8a1e520aa6",
+    "manual": true,
+    "reviewer_id": "j.okonjo",
+    "run_id": null,
+    "score": 105
+   },
+   "manual_decision_provenance": "latest_manual_row",
+   "outbox": [
+    {
+     "attempts": 1,
+     "delivered_at": "2026-09-04T01:05:35.543102+00:00",
+     "id": 6,
+     "kind": "decision_callback",
+     "last_error": null,
+     "next_attempt_at": "2026-09-04T01:05:35.086925+00:00",
+     "run_id": "f6f54551ff2b467f82001344c779ec43",
+     "status": "delivered"
+    },
+    {
+     "attempts": 1,
+     "delivered_at": "2026-09-04T01:05:31.512076+00:00",
+     "id": 5,
+     "kind": "decision_callback",
+     "last_error": null,
+     "next_attempt_at": "2026-09-04T01:05:31.001798+00:00",
+     "run_id": "ba24642fb4554a7997416b900086af1f",
+     "status": "delivered"
+    },
+    {
+     "attempts": 1,
+     "delivered_at": "2026-09-04T01:05:26.975834+00:00",
+     "id": 4,
+     "kind": "decision_callback",
+     "last_error": null,
+     "next_attempt_at": "2026-09-04T01:05:26.908508+00:00",
+     "run_id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "status": "delivered"
+    }
+   ],
+   "poc_tokens": [],
+   "pointer_decision": {
+    "buy_enablement": "enabled",
+    "decided_at": "2026-09-04T01:05:38.771840+00:00",
+    "decision": "approve",
+    "gates_json": {
+     "bypassed": true
+    },
+    "id": "08151f86e71d4084aea02f8a1e520aa6",
+    "manual": true,
+    "published_at": null,
+    "reviewer_id": "j.okonjo",
+    "run_id": null,
+    "score": 105
+   },
+   "review_tasks": [
+    {
+     "completed_at": null,
+     "context_json": {
+      "company_legal_name": "Acme Networks Ltd",
+      "discovery": {
+       "aliases": [],
+       "broker_context": {},
+       "company_domain": "acme.example",
+       "discovered": true,
+       "linkedin": {
+        "company": "Acme Networks Ltd",
+        "company_domain": "acme.example",
+        "person_name": "Jane Doe",
+        "title": "Director"
+       },
+       "registry_candidates": [],
+       "website": "https://acme.example"
+      },
+      "domain": "acme.example"
+     },
+     "created_at": "2026-09-04T01:05:26.898139+00:00",
+     "id": "5c4df6123af444c8b0046d493bf36611",
+     "reason_codes": [],
+     "result": null,
+     "reviewer_id": null,
+     "status": "open",
+     "task_type": "website"
+    }
+   ],
+   "runs": [
+    {
+     "error": null,
+     "finished_at": "2026-09-04T01:05:35.543102+00:00",
+     "id": "f6f54551ff2b467f82001344c779ec43",
+     "partial": false,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "started_at": "2026-09-04T01:05:34.753683+00:00",
+     "state": "COMPLETE",
+     "triggering_event_id": "24f5433993b6484d9b2ab424b6827e3c"
+    },
+    {
+     "error": null,
+     "finished_at": "2026-09-04T01:05:31.512076+00:00",
+     "id": "ba24642fb4554a7997416b900086af1f",
+     "partial": false,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "started_at": "2026-09-04T01:05:30.730508+00:00",
+     "state": "COMPLETE",
+     "triggering_event_id": "9c72d1dee0b649fa91dc61b30136018d"
+    },
+    {
+     "error": null,
+     "finished_at": "2026-09-04T01:05:26.975834+00:00",
+     "id": "9f5f4f0d64fd484d89d55a2fdf32658e",
+     "partial": false,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "started_at": "2026-09-04T01:05:26.709503+00:00",
+     "state": "COMPLETE",
+     "triggering_event_id": "3430749d565e4f6aa720a85c6dcda1d2"
+    }
+   ],
+   "salesforce": {
+    "Broker_Status__c": "Clear",
+    "Business_Document_Status__c": "None",
+    "Buy_Enablement_Status__c": "Buy Enabled",
+    "Hard_Conflict__c": null,
+    "KYC_Check__c": [
+     {
+      "Category__c": "legal_business_proof",
+      "Check_Type__c": "official_registry_match",
+      "Created_At__c": "2026-09-04T01:05:26.908508+00:00",
+      "Points__c": 25,
+      "Reason_Codes__c": "",
+      "Source__c": "companies_house",
+      "Status__c": "pass",
+      "Superseded__c": false
+     },
+     {
+      "Category__c": "supporting",
+      "Check_Type__c": "linkedin_company_match",
+      "Created_At__c": "2026-09-04T01:05:26.908508+00:00",
+      "Points__c": 20,
+      "Reason_Codes__c": "",
+      "Source__c": "floqer_discovery_plus_deterministic_match",
+      "Status__c": "pass",
+      "Superseded__c": false
+     },
+     {
+      "Category__c": "control_proof",
+      "Check_Type__c": "verified_company_email",
+      "Created_At__c": "2026-09-04T01:05:31.001798+00:00",
+      "Points__c": 25,
+      "Reason_Codes__c": "",
+      "Source__c": "platform_email_verification",
+      "Status__c": "pass",
+      "Superseded__c": false
+     },
+     {
+      "Category__c": "account_access",
+      "Check_Type__c": "verified_email",
+      "Created_At__c": "2026-09-04T01:05:31.001798+00:00",
+      "Points__c": 10,
+      "Reason_Codes__c": "",
+      "Source__c": "platform_email_verification",
+      "Status__c": "pass",
+      "Superseded__c": false
+     },
+     {
+      "Category__c": "control_proof",
+      "Check_Type__c": "org_id_match",
+      "Created_At__c": "2026-09-04T01:05:35.086925+00:00",
+      "Points__c": 25,
+      "Reason_Codes__c": "",
+      "Source__c": "direct_rir_rdap",
+      "Status__c": "pass",
+      "Superseded__c": false
+     }
+    ],
+    "KYC_Score__c": 105,
+    "KYC_Status__c": "Account Approved",
+    "Manual_Approved_At__c": "2026-09-04T01:05:38.771840+00:00",
+    "Manual_Approved_By__c": "j.okonjo",
+    "ORG_ID_Status__c": "Pass",
+    "ORG_ID__c": "ORG-ACME-1",
+    "POC_Handle__c": null,
+    "POC_Verification_Status__c": "Pending",
+    "Platform_Action_Taken__c": "Manual Approve",
+    "Review_Reason_Codes__c": null,
+    "Website_Review_Status__c": "Open"
+   },
+   "score": {
+    "current_evidence_score": 105,
+    "is_published_decision": false,
+    "items": [
+     {
+      "awarded": 25,
+      "category": "control_proof",
+      "check_type": "verified_company_email",
+      "points": 25,
+      "status": "pass"
+     },
+     {
+      "awarded": 25,
+      "category": "legal_business_proof",
+      "check_type": "official_registry_match",
+      "points": 25,
+      "status": "pass"
+     },
+     {
+      "awarded": 25,
+      "category": "control_proof",
+      "check_type": "org_id_match",
+      "points": 25,
+      "status": "pass"
+     },
+     {
+      "awarded": 0,
+      "category": "control_proof",
+      "check_type": "poc_verified",
+      "points": 25,
+      "status": "missing"
+     },
+     {
+      "awarded": 0,
+      "category": "legal_business_proof",
+      "check_type": "business_document_verified",
+      "points": 25,
+      "status": "missing"
+     },
+     {
+      "awarded": 20,
+      "category": "supporting",
+      "check_type": "linkedin_company_match",
+      "points": 20,
+      "status": "pass"
+     },
+     {
+      "awarded": 0,
+      "category": "supporting",
+      "check_type": "website_verified",
+      "points": 10,
+      "status": "missing"
+     },
+     {
+      "awarded": 10,
+      "category": "account_access",
+      "check_type": "verified_email",
+      "points": 10,
+      "status": "pass"
+     }
+    ],
+    "threshold": 100,
+    "total": 105
+   }
+  },
+  "demo-case-003": {
+   "adapter_results": [
+    {
+     "adapter_id": "email_verification",
+     "fetched_at": "2026-09-04T01:05:43.196623+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "588e6e5290e74577bda75954e5ba726e",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "companies_house",
+     "fetched_at": "2026-09-04T01:05:43.203679+00:00",
+     "latency_ms": 1,
+     "raw_ref": "fs://adapter-raw/demo-case-003/588e6e5290e74577bda75954e5ba726e/companies_house/b90ea49277b24edb90ca1e7cf80ce54a",
+     "run_id": "588e6e5290e74577bda75954e5ba726e",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "gleif",
+     "fetched_at": "2026-09-04T01:05:43.209995+00:00",
+     "latency_ms": 1,
+     "raw_ref": "fs://adapter-raw/demo-case-003/588e6e5290e74577bda75954e5ba726e/gleif/a327b7555dd54194a5bb2cf32b45336e",
+     "run_id": "588e6e5290e74577bda75954e5ba726e",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "floqer_company_enrichment",
+     "fetched_at": "2026-09-04T01:05:43.215120+00:00",
+     "latency_ms": 1,
+     "raw_ref": "fs://adapter-raw/demo-case-003/588e6e5290e74577bda75954e5ba726e/floqer_company_enrichment/ad09cccce3a4453d9cad30163c901ebc",
+     "run_id": "588e6e5290e74577bda75954e5ba726e",
+     "status": "ok"
+    },
+    {
+     "adapter_id": "rir_rdap",
+     "fetched_at": "2026-09-04T01:05:43.218905+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "588e6e5290e74577bda75954e5ba726e",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "rir_poc",
+     "fetched_at": "2026-09-04T01:05:43.223543+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "588e6e5290e74577bda75954e5ba726e",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "document_ocr",
+     "fetched_at": "2026-09-04T01:05:43.227063+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "588e6e5290e74577bda75954e5ba726e",
+     "status": "not_applicable"
+    },
+    {
+     "adapter_id": "website_manual_review",
+     "fetched_at": "2026-09-04T01:05:43.231079+00:00",
+     "latency_ms": 0,
+     "raw_ref": null,
+     "run_id": "588e6e5290e74577bda75954e5ba726e",
+     "status": "ok"
+    }
+   ],
+   "audit": [
+    {
+     "action": "event.received",
+     "actor": "ops-console",
+     "at": "2026-09-04T01:05:42.795864+00:00",
+     "detail_json": {
+      "event_id": "8b0952fe37ee4f78987d26d24f67f11a",
+      "event_sequence": 1,
+      "event_type": "kyb.run_requested",
+      "idempotency_key": "console-462ff914193649bd93c925f0c918331a"
+     },
+     "id": 95
+    },
+    {
+     "action": "run.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:42.795864+00:00",
+     "detail_json": {
+      "event_id": "8b0952fe37ee4f78987d26d24f67f11a",
+      "run_id": "588e6e5290e74577bda75954e5ba726e"
+     },
+     "id": 96
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.174008+00:00",
+     "detail_json": {
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "stage": "RESOLVE_INPUTS"
+     },
+     "id": 97
+    },
+    {
+     "action": "run.inputs_resolved",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.179137+00:00",
+     "detail_json": {
+      "event_type": "kyb.run_requested",
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "snapshot_keys": [
+       "address",
+       "company_legal_name",
+       "contact",
+       "jurisdiction",
+       "occurred_at",
+       "platform_account_id",
+       "registration_number",
+       "website"
+      ]
+     },
+     "id": 98
+    },
+    {
+     "action": "run.broker_gate",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.186629+00:00",
+     "detail_json": {
+      "broker_status": "clear",
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "short_circuit": false
+     },
+     "id": 99
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.196623+00:00",
+     "detail_json": {
+      "adapter_id": "email_verification",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "status": "not_applicable"
+     },
+     "id": 100
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.203679+00:00",
+     "detail_json": {
+      "adapter_id": "companies_house",
+      "error": null,
+      "latency_ms": 1,
+      "raw_ref": "fs://adapter-raw/demo-case-003/588e6e5290e74577bda75954e5ba726e/companies_house/b90ea49277b24edb90ca1e7cf80ce54a",
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "status": "ok"
+     },
+     "id": 101
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.209995+00:00",
+     "detail_json": {
+      "adapter_id": "gleif",
+      "error": null,
+      "latency_ms": 1,
+      "raw_ref": "fs://adapter-raw/demo-case-003/588e6e5290e74577bda75954e5ba726e/gleif/a327b7555dd54194a5bb2cf32b45336e",
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "status": "ok"
+     },
+     "id": 102
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.215120+00:00",
+     "detail_json": {
+      "adapter_id": "floqer_company_enrichment",
+      "error": null,
+      "latency_ms": 1,
+      "raw_ref": "fs://adapter-raw/demo-case-003/588e6e5290e74577bda75954e5ba726e/floqer_company_enrichment/ad09cccce3a4453d9cad30163c901ebc",
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "status": "ok"
+     },
+     "id": 103
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.218905+00:00",
+     "detail_json": {
+      "adapter_id": "rir_rdap",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "status": "not_applicable"
+     },
+     "id": 104
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.223543+00:00",
+     "detail_json": {
+      "adapter_id": "rir_poc",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "status": "not_applicable"
+     },
+     "id": 105
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.227063+00:00",
+     "detail_json": {
+      "adapter_id": "document_ocr",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "status": "not_applicable"
+     },
+     "id": 106
+    },
+    {
+     "action": "review_task.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.231079+00:00",
+     "detail_json": {
+      "domain": "acme.example",
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "task_id": "2e26a4e8c5574f43b714ddf07818c481",
+      "task_type": "website"
+     },
+     "id": 107
+    },
+    {
+     "action": "adapter.recorded",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.231079+00:00",
+     "detail_json": {
+      "adapter_id": "website_manual_review",
+      "error": null,
+      "latency_ms": 0,
+      "raw_ref": null,
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "status": "ok"
+     },
+     "id": 108
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.237215+00:00",
+     "detail_json": {
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "stage": "VALIDATE"
+     },
+     "id": 109
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.240412+00:00",
+     "detail_json": {
+      "intents": 2,
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "stage": "VALIDATE"
+     },
+     "id": 110
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.240412+00:00",
+     "detail_json": {
+      "check_id": "68b7af9290ff47859bcd19c4b5515b58",
+      "check_type": "official_registry_match",
+      "points": 25,
+      "reason_codes": [],
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "status": "pass"
+     },
+     "id": 111
+    },
+    {
+     "action": "check.created",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.240412+00:00",
+     "detail_json": {
+      "check_id": "2089b7fe4448463abb961c727631ea7b",
+      "check_type": "linkedin_company_match",
+      "points": 20,
+      "reason_codes": [],
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "status": "pass"
+     },
+     "id": 112
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.240412+00:00",
+     "detail_json": {
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "stage": "WRITE_CHECKS",
+      "written": 2
+     },
+     "id": 113
+    },
+    {
+     "action": "run.stage",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.240412+00:00",
+     "detail_json": {
+      "by_check": {
+       "linkedin_company_match": 20,
+       "official_registry_match": 25
+      },
+      "gates": {
+       "broker_ok": true,
+       "control_proof": false,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": false
+      },
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "score": 45,
+      "stage": "SCORE"
+     },
+     "id": 114
+    },
+    {
+     "action": "run.decided",
+     "actor": "system",
+     "at": "2026-09-04T01:05:43.240412+00:00",
+     "detail_json": {
+      "buy_enablement": "locked_org_id_required",
+      "computed_decision": "manual_review_insufficient",
+      "decision": "manual_review_insufficient",
+      "enforcement_held": false,
+      "gates": {
+       "broker_ok": true,
+       "control_proof": false,
+       "legal_proof": true,
+       "no_hard_conflict": true,
+       "score_met": false
+      },
+      "partial": false,
+      "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "resolved_policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+      "run_id": "588e6e5290e74577bda75954e5ba726e",
+      "score": 45
+     },
+     "id": 115
+    }
+   ],
+   "case": {
+    "broker_status": "clear",
+    "buy_status": "not_applicable",
+    "company_name": "Acme Networks Ltd",
+    "created_at": "2026-09-04T01:05:42.795864+00:00",
+    "current_score": 45,
+    "event_sequence": 1,
+    "id": "demo-case-003",
+    "jurisdiction": "GB",
+    "last_decision_sequence": 1,
+    "latest_decision": "manual_review_insufficient",
+    "latest_decision_row_id": "29262dfb7e1c4c59ab3352f5b831b402",
+    "latest_manual_decision_row_id": null,
+    "platform_account_id": null,
+    "status": "manual_review_insufficient",
+    "submitted_json": {
+     "address": "1 Main Street, London, EC1A 1AA",
+     "company_legal_name": "Acme Networks Ltd",
+     "contact": {
+      "name": "Jane Doe",
+      "title": "Director"
+     },
+     "jurisdiction": "GB",
+     "occurred_at": "2026-09-04T01:05:42.792264+00:00",
+     "platform_account_id": null,
+     "registration_number": "12345678",
+     "website": "https://acme.example"
+    },
+    "updated_at": "2026-09-04T01:05:43.240412+00:00"
+   },
+   "checks": [
+    {
+     "case_id": "demo-case-003",
+     "category": "supporting",
+     "check_type": "linkedin_company_match",
+     "created_at": "2026-09-04T01:05:43.240412+00:00",
+     "created_by_run_id": "588e6e5290e74577bda75954e5ba726e",
+     "id": "2089b7fe4448463abb961c727631ea7b",
+     "points_awarded": 20,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "floqer_discovery_plus_deterministic_match",
+     "source_detail_json": {
+      "linkedin": {
+       "company": "Acme Networks Ltd",
+       "company_domain": "acme.example",
+       "person_name": "Jane Doe",
+       "title": "Director"
+      }
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    },
+    {
+     "case_id": "demo-case-003",
+     "category": "legal_business_proof",
+     "check_type": "official_registry_match",
+     "created_at": "2026-09-04T01:05:43.240412+00:00",
+     "created_by_run_id": "588e6e5290e74577bda75954e5ba726e",
+     "id": "68b7af9290ff47859bcd19c4b5515b58",
+     "points_awarded": 25,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "reason_codes": [],
+     "source": "companies_house",
+     "source_detail_json": {
+      "company_number": "12345678",
+      "legal_name": "ACME NETWORKS LTD",
+      "registry": "companies_house"
+     },
+     "status": "pass",
+     "superseded_by_check_id": null
+    }
+   ],
+   "decision_provenance": "latest_decision_row",
+   "decisions": [
+    {
+     "buy_enablement": "locked_org_id_required",
+     "decided_at": "2026-09-04T01:05:43.240412+00:00",
+     "decision": "manual_review_insufficient",
+     "enforcement_held": false,
+     "gates_json": {
+      "broker_ok": true,
+      "control_proof": false,
+      "legal_proof": true,
+      "no_hard_conflict": true,
+      "score_met": false
+     },
+     "id": "29262dfb7e1c4c59ab3352f5b831b402",
+     "manual": false,
+     "published_at": "2026-09-04T01:05:43.589971+00:00",
+     "reviewer_id": null,
+     "run_id": "588e6e5290e74577bda75954e5ba726e",
+     "score": 45
+    }
+   ],
+   "enforcement_hold": null,
+   "events": [
+    {
+     "event_type": "kyb.run_requested",
+     "id": "8b0952fe37ee4f78987d26d24f67f11a",
+     "processed_at": "2026-09-04T01:05:43.253458+00:00",
+     "received_at": "2026-09-04T01:05:42.795864+00:00",
+     "run_id": "588e6e5290e74577bda75954e5ba726e"
+    }
+   ],
+   "field_sources": {
+    "Broker_Status__c": "case broker_status (exact-match gate)",
+    "Business_Document_Status__c": "live business_document_verified; uploaded-but-unprocessed \u2192 Uploaded",
+    "Buy_Enablement_Status__c": "case buy_status (tool asserts enabled/locked; platform may show transients)",
+    "Hard_Conflict__c": "NOT gates.no_hard_conflict from the latest decision; NULL when no authoritative decision evaluated the gate (unresolved pointer, manual bypass)",
+    "KYC_Check__c": "one child record per check row (live + superseded)",
+    "KYC_Score__c": "pointed decision row's score (blank while pre-014 order is unresolved)",
+    "KYC_Status__c": "case status (approved_manual \u2192 'Account Approved', AUDIT:A5)",
+    "Manual_Approved_At__c": "latest MANUAL decision row's timestamp (sticky across later autos)",
+    "Manual_Approved_By__c": "latest MANUAL decision row's reviewer (sticky across later autos)",
+    "ORG_ID_Status__c": "live org_id_match status; history without live row \u2192 Superseded",
+    "ORG_ID__c": "live org_id_match check detail, else submitted org handle",
+    "POC_Handle__c": "live poc_verified check detail, else submitted poc handle",
+    "POC_Verification_Status__c": "live poc_verified status; outstanding token \u2192 Token Sent",
+    "Platform_Action_Taken__c": "latest decision; 'Manual Approve' when case is approved_manual",
+    "Review_Reason_Codes__c": "union of live checks' reason codes",
+    "Website_Review_Status__c": "open website task \u2192 Open; else live website_verified status"
+   },
+   "latest_manual_decision": null,
+   "manual_decision_provenance": "no_manual_decisions",
+   "outbox": [
+    {
+     "attempts": 1,
+     "delivered_at": "2026-09-04T01:05:43.589971+00:00",
+     "id": 7,
+     "kind": "decision_callback",
+     "last_error": null,
+     "next_attempt_at": "2026-09-04T01:05:43.240412+00:00",
+     "run_id": "588e6e5290e74577bda75954e5ba726e",
+     "status": "delivered"
+    }
+   ],
+   "poc_tokens": [],
+   "pointer_decision": {
+    "buy_enablement": "locked_org_id_required",
+    "decided_at": "2026-09-04T01:05:43.240412+00:00",
+    "decision": "manual_review_insufficient",
+    "gates_json": {
+     "broker_ok": true,
+     "control_proof": false,
+     "legal_proof": true,
+     "no_hard_conflict": true,
+     "score_met": false
+    },
+    "id": "29262dfb7e1c4c59ab3352f5b831b402",
+    "manual": false,
+    "published_at": "2026-09-04T01:05:43.589971+00:00",
+    "reviewer_id": null,
+    "run_id": "588e6e5290e74577bda75954e5ba726e",
+    "score": 45
+   },
+   "review_tasks": [
+    {
+     "completed_at": null,
+     "context_json": {
+      "company_legal_name": "Acme Networks Ltd",
+      "discovery": {
+       "aliases": [],
+       "broker_context": {},
+       "company_domain": "acme.example",
+       "discovered": true,
+       "linkedin": {
+        "company": "Acme Networks Ltd",
+        "company_domain": "acme.example",
+        "person_name": "Jane Doe",
+        "title": "Director"
+       },
+       "registry_candidates": [],
+       "website": "https://acme.example"
+      },
+      "domain": "acme.example"
+     },
+     "created_at": "2026-09-04T01:05:43.231079+00:00",
+     "id": "2e26a4e8c5574f43b714ddf07818c481",
+     "reason_codes": [],
+     "result": null,
+     "reviewer_id": null,
+     "status": "open",
+     "task_type": "website"
+    }
+   ],
+   "runs": [
+    {
+     "error": null,
+     "finished_at": "2026-09-04T01:05:43.589971+00:00",
+     "id": "588e6e5290e74577bda75954e5ba726e",
+     "partial": false,
+     "policy_bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+     "started_at": "2026-09-04T01:05:42.795864+00:00",
+     "state": "COMPLETE",
+     "triggering_event_id": "8b0952fe37ee4f78987d26d24f67f11a"
+    }
+   ],
+   "salesforce": {
+    "Broker_Status__c": "Clear",
+    "Business_Document_Status__c": "None",
+    "Buy_Enablement_Status__c": "Not Applicable",
+    "Hard_Conflict__c": false,
+    "KYC_Check__c": [
+     {
+      "Category__c": "supporting",
+      "Check_Type__c": "linkedin_company_match",
+      "Created_At__c": "2026-09-04T01:05:43.240412+00:00",
+      "Points__c": 20,
+      "Reason_Codes__c": "",
+      "Source__c": "floqer_discovery_plus_deterministic_match",
+      "Status__c": "pass",
+      "Superseded__c": false
+     },
+     {
+      "Category__c": "legal_business_proof",
+      "Check_Type__c": "official_registry_match",
+      "Created_At__c": "2026-09-04T01:05:43.240412+00:00",
+      "Points__c": 25,
+      "Reason_Codes__c": "",
+      "Source__c": "companies_house",
+      "Status__c": "pass",
+      "Superseded__c": false
+     }
+    ],
+    "KYC_Score__c": 45,
+    "KYC_Status__c": "Manual Review - Insufficient Score",
+    "Manual_Approved_At__c": null,
+    "Manual_Approved_By__c": null,
+    "ORG_ID_Status__c": "Pending",
+    "ORG_ID__c": null,
+    "POC_Handle__c": null,
+    "POC_Verification_Status__c": "Pending",
+    "Platform_Action_Taken__c": null,
+    "Review_Reason_Codes__c": null,
+    "Website_Review_Status__c": "Open"
+   },
+   "score": {
+    "current_evidence_score": 45,
+    "is_published_decision": false,
+    "items": [
+     {
+      "awarded": 0,
+      "category": "control_proof",
+      "check_type": "verified_company_email",
+      "points": 25,
+      "status": "missing"
+     },
+     {
+      "awarded": 25,
+      "category": "legal_business_proof",
+      "check_type": "official_registry_match",
+      "points": 25,
+      "status": "pass"
+     },
+     {
+      "awarded": 0,
+      "category": "control_proof",
+      "check_type": "org_id_match",
+      "points": 25,
+      "status": "missing"
+     },
+     {
+      "awarded": 0,
+      "category": "control_proof",
+      "check_type": "poc_verified",
+      "points": 25,
+      "status": "missing"
+     },
+     {
+      "awarded": 0,
+      "category": "legal_business_proof",
+      "check_type": "business_document_verified",
+      "points": 25,
+      "status": "missing"
+     },
+     {
+      "awarded": 20,
+      "category": "supporting",
+      "check_type": "linkedin_company_match",
+      "points": 20,
+      "status": "pass"
+     },
+     {
+      "awarded": 0,
+      "category": "supporting",
+      "check_type": "website_verified",
+      "points": 10,
+      "status": "missing"
+     },
+     {
+      "awarded": 0,
+      "category": "account_access",
+      "check_type": "verified_email",
+      "points": 10,
+      "status": "missing"
+     }
+    ],
+    "threshold": 100,
+    "total": 45
+   }
+  }
+ },
+ "integrations": {
+  "adapters": [
+   {
+    "adapter_id": "broker_policy",
+    "detail": "6 entities seeded, 0 with identifiers beyond name",
+    "env": [],
+    "kind": "internal gate (broker_entities table)",
+    "probeable": false,
+    "stats": null,
+    "status": "live",
+    "todo": "ops maintain identifier arrays (aliases/domains/org_ids/\u2026) via SQL"
+   },
+   {
+    "adapter_id": "email_verification",
+    "detail": "reads platform-delivered verification state",
+    "env": [],
+    "kind": "platform event data (no upstream)",
+    "probeable": false,
+    "stats": {
+     "calls": 5,
+     "error_rate": 0.0,
+     "last_call_at": "2026-09-04T01:05:43.196623+00:00",
+     "p95_ms": 0.0
+    },
+    "status": "live",
+    "todo": "TODO(integration): platform email-verification fetch API (AUDIT:C4)"
+   },
+   {
+    "adapter_id": "companies_house",
+    "detail": "CH_API_KEY not set \u2014 requests will be unauthenticated",
+    "env": [
+     {
+      "name": "CH_API_KEY",
+      "note": "CH_API_KEY",
+      "present": false
+     }
+    ],
+    "kind": "HTTP \u00b7 api.company-information.service.gov.uk",
+    "probeable": true,
+    "stats": {
+     "calls": 3,
+     "error_rate": 0.0,
+     "last_call_at": "2026-09-04T01:05:43.203679+00:00",
+     "p95_ms": 1.9
+    },
+    "status": "needs-config",
+    "todo": null
+   },
+   {
+    "adapter_id": "gleif",
+    "detail": "public API, no key required",
+    "env": [],
+    "kind": "HTTP \u00b7 api.gleif.org (public)",
+    "probeable": true,
+    "stats": {
+     "calls": 3,
+     "error_rate": 0.0,
+     "last_call_at": "2026-09-04T01:05:43.209995+00:00",
+     "p95_ms": 1.0
+    },
+    "status": "live",
+    "todo": null
+   },
+   {
+    "adapter_id": "floqer_company_enrichment",
+    "detail": "FixtureFloqerClient \u2014 returns canned records only",
+    "env": [],
+    "kind": "HTTP \u00b7 Floqer enrichment",
+    "probeable": false,
+    "stats": {
+     "calls": 3,
+     "error_rate": 0.0,
+     "last_call_at": "2026-09-04T01:05:43.215120+00:00",
+     "p95_ms": 1.0
+    },
+    "status": "stub",
+    "todo": "TODO(integration): real Floqer API contract unknown (AUDIT:C4)"
+   },
+   {
+    "adapter_id": "rir_rdap",
+    "detail": "5 RIR strategies: afrinic, apnic, arin, lacnic, ripe",
+    "env": [
+     {
+      "name": "ARIN_API_KEY",
+      "note": "ARIN_API_KEY (optional, rate limits)",
+      "present": false
+     }
+    ],
+    "kind": "HTTP \u00b7 5 RIR RDAP endpoints",
+    "probeable": true,
+    "stats": {
+     "calls": 5,
+     "error_rate": 0.0,
+     "last_call_at": "2026-09-04T01:05:43.218905+00:00",
+     "p95_ms": 0.0
+    },
+    "status": "live",
+    "todo": null
+   },
+   {
+    "adapter_id": "rir_poc",
+    "detail": "FixturePocDirectory (0 canned records)",
+    "env": [],
+    "kind": "RIR POC directory + token email",
+    "probeable": false,
+    "stats": {
+     "calls": 3,
+     "error_rate": 0.0,
+     "last_call_at": "2026-09-04T01:05:43.223543+00:00",
+     "p95_ms": 0.0
+    },
+    "status": "stub",
+    "todo": "TODO(integration): wire POC lookup to RDAP; email provider (AUDIT:C2/C4)"
+   },
+   {
+    "adapter_id": "document_ocr",
+    "detail": "JsonScanOcrEngine \u2014 parses JSON 'scans', not real OCR",
+    "env": [],
+    "kind": "object store + OCR engine",
+    "probeable": false,
+    "stats": {
+     "calls": 3,
+     "error_rate": 0.0,
+     "last_call_at": "2026-09-04T01:05:43.227063+00:00",
+     "p95_ms": 0.0
+    },
+    "status": "dev",
+    "todo": "TODO(integration): production OCR engine (AUDIT:C4)"
+   },
+   {
+    "adapter_id": "website_manual_review",
+    "detail": "by design \u2014 reviewers complete tasks via the queue",
+    "env": [],
+    "kind": "human review queue (no crawler in v1)",
+    "probeable": false,
+    "stats": {
+     "calls": 3,
+     "error_rate": 0.0,
+     "last_call_at": "2026-09-04T01:05:43.231079+00:00",
+     "p95_ms": 0.0
+    },
+    "status": "manual",
+    "todo": null
+   }
+  ],
+  "email_sender": {
+   "detail": "LoggingEmailSender \u2014 POC token emails are logged, not sent",
+   "status": "stub",
+   "todo": "TODO(integration): outbound email provider (AUDIT:C4)"
+  },
+  "object_store": {
+   "kind": "fs",
+   "root": ".substrate/state/evidence"
+  },
+  "platform_callback": {
+   "auth_disabled": false,
+   "callback_url_is_default_stub": false,
+   "callback_url_set": true,
+   "hmac_secret_set": true,
+   "status": "live",
+   "todo": null
+  }
+ },
+ "overview": {
+  "config": {
+   "auth_disabled": false,
+   "callback_url": "http://127.0.0.1:9099",
+   "hmac_secret_set": true,
+   "object_store": "fs",
+   "policy_dir": "KYC_Tool_Build_Package/machine_readable"
+  },
+  "dead_jobs": [],
+  "dead_outbox": [],
+  "metrics": {
+   "adapter_latency": [
+    {
+     "adapter_id": "companies_house",
+     "avg_ms": 1.3333333333333333,
+     "calls": 3,
+     "error_rate": 0.0,
+     "p95_ms": 1.9
+    },
+    {
+     "adapter_id": "document_ocr",
+     "avg_ms": 0.0,
+     "calls": 3,
+     "error_rate": 0.0,
+     "p95_ms": 0.0
+    },
+    {
+     "adapter_id": "email_verification",
+     "avg_ms": 0.0,
+     "calls": 5,
+     "error_rate": 0.0,
+     "p95_ms": 0.0
+    },
+    {
+     "adapter_id": "floqer_company_enrichment",
+     "avg_ms": 1.0,
+     "calls": 3,
+     "error_rate": 0.0,
+     "p95_ms": 1.0
+    },
+    {
+     "adapter_id": "gleif",
+     "avg_ms": 1.0,
+     "calls": 3,
+     "error_rate": 0.0,
+     "p95_ms": 1.0
+    },
+    {
+     "adapter_id": "rir_poc",
+     "avg_ms": 0.0,
+     "calls": 3,
+     "error_rate": 0.0,
+     "p95_ms": 0.0
+    },
+    {
+     "adapter_id": "rir_rdap",
+     "avg_ms": 0.0,
+     "calls": 5,
+     "error_rate": 0.0,
+     "p95_ms": 0.0
+    },
+    {
+     "adapter_id": "website_manual_review",
+     "avg_ms": 0.0,
+     "calls": 3,
+     "error_rate": 0.0,
+     "p95_ms": 0.0
+    }
+   ],
+   "cases_with_unresolved_decision_order": 0,
+   "decisions_by_type": {
+    "approve": 1,
+    "manual_review_insufficient": 7
+   },
+   "event_to_decision_seconds": {
+    "avg": 0.31842914285714286,
+    "p95": 0.48328669999999996
+   },
+   "hmac": {
+    "auth_diagnostics": {
+     "counts": {
+      "rejected": 0,
+      "v2_accepted": 0
+     },
+     "process_id": 1695,
+     "process_started_at": "2026-09-04T01:05:11.800907+00:00",
+     "scope": "process_local"
+    },
+    "observation": {
+     "accepted_count": 0,
+     "active": false,
+     "last_accepted_at": null,
+     "observation_started_at": null
+    },
+    "v1_accepted": 0
+   },
+   "jobs_by_status": {
+    "done": 7
+   },
+   "latency_window": "24h",
+   "outbox_alerting": {},
+   "outbox_by_status": {},
+   "outbox_terminal_total_estimate": 0,
+   "review_tasks_open_by_type": {
+    "website": 3
+   },
+   "runs_by_state": {
+    "COMPLETE": 7
+   }
+  },
+  "policy": {
+   "bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+   "rubric_version": "2.0",
+   "shas": {
+    "adapter_catalog.json": "f4ef67b9277778e49811920990cb0c83b70b106dadf4c405a5b9ae05dfe0377e",
+    "broker_policy.json": "fcbcf019515b611a915496df8210db99c89e68667be30d416978741014ae6360",
+    "decision_policy.json": "72614f11854da72edb61f0271003b176fcb6fda3990ba5ceba6513939087ca90",
+    "platform_events.json": "aaa8cb10a03b02d70386528010b2756455d6bb4303d4f641bb933196f0261787",
+    "salesforce_sync_fields.json": "9b1f9be12696888deef574cc588963087bf83b194d92b861dd613a5a28305d0a",
+    "scoring_rubric.json": "3aebc6ed2ca24c62936617bd50df21228416319917f9a26b5b312184c8cd7438",
+    "state_machine.json": "220230adc23121a6627e5dfc01f59ff3dda65cf5d41a7a253b03642958d2594d"
+   },
+   "threshold": 100
+  }
+ },
+ "policy": {
+  "adapters": [
+   {
+    "adapter_id": "broker_policy",
+    "behavior": "exact match only; blocked -> reject + short-circuit remaining adapters; allowed -> tag and continue; none -> clear",
+    "match_on": [
+     "legal_name",
+     "aliases",
+     "domains",
+     "email_domains",
+     "rir_org_ids",
+     "poc_handles",
+     "asns"
+    ],
+    "mode": "automated",
+    "order": 1,
+    "source": "local broker entity list",
+    "tier": "policy_gate"
+   },
+   {
+    "adapter_id": "email_verification",
+    "mode": "automated",
+    "order": 2,
+    "provides": [
+     "email_verified_event",
+     "email_domain_class"
+    ],
+    "scoring_use": "verified_email +10; verified_company_email +25",
+    "source": "IPv4.Global platform email verification",
+    "tier": "approval_grade"
+   },
+   {
+    "adapter_id": "companies_house",
+    "mode": "automated",
+    "order": 3,
+    "provides": [
+     "legal_name",
+     "company_number",
+     "status",
+     "registered_address"
+    ],
+    "scoring_use": "official_registry_match +25",
+    "source": "UK Companies House API",
+    "tier": "approval_grade"
+   },
+   {
+    "adapter_id": "gleif",
+    "mode": "automated",
+    "order": 3,
+    "provides": [
+     "lei",
+     "legal_name",
+     "address",
+     "entity_status",
+     "relationships"
+    ],
+    "scoring_use": "official_registry_match +25 (deterministic match only)",
+    "source": "GLEIF LEI API",
+    "tier": "approval_grade"
+   },
+   {
+    "adapter_id": "floqer_company_enrichment",
+    "mode": "automated",
+    "order": 4,
+    "provides": [
+     "company_domain",
+     "website",
+     "linkedin",
+     "aliases",
+     "registry_candidates",
+     "broker_context"
+    ],
+    "scoring_use": "linkedin_company_match +20 after deterministic match; seeds registry lookups and website review context; NEVER satisfies email/org-id/poc/registry points alone",
+    "source": "Floqer",
+    "tier": "discovery_only"
+   },
+   {
+    "adapter_id": "rir_rdap",
+    "mode": "automated",
+    "needs_review_routing": [
+     "parent/subsidiary ambiguity",
+     "address missing or stale",
+     "handle belongs to related but non-identical entity",
+     "resources held by ISP/broker/customer/technical provider",
+     "handle found only via broad name search"
+    ],
+    "order": 5,
+    "provides": [
+     "org_handle",
+     "entity_name",
+     "address",
+     "pocs",
+     "asn_ip_resources"
+    ],
+    "scoring_use": "org_id_match +25",
+    "source": "ARIN Whois-RWS/RDAP, RIPE DB REST/RDAP, APNIC RDAP, LACNIC RDAP, AFRINIC RDAP",
+    "tier": "approval_grade"
+   },
+   {
+    "adapter_id": "rir_poc",
+    "fallback": "if RIR email hidden: no points; create poc_email_unavailable review task",
+    "mode": "automated_plus_user_token",
+    "order": 6,
+    "provides": [
+     "poc_record",
+     "association_with_org_or_resource",
+     "rir_listed_email"
+    ],
+    "scoring_use": "poc_verified +25 after token verified from the RIR-listed email",
+    "source": "RIR POC/contact records + email token",
+    "tier": "approval_grade"
+   },
+   {
+    "adapter_id": "document_ocr",
+    "mode": "automated",
+    "order": 7,
+    "provides": [
+     "extracted_name",
+     "extracted_address",
+     "extracted_number",
+     "jurisdiction"
+    ],
+    "scoring_use": "business_document_verified +25",
+    "source": "uploaded document + OCR pipeline",
+    "tier": "legal_proof"
+   },
+   {
+    "adapter_id": "website_manual_review",
+    "mode": "manual",
+    "notes": "No automated crawler in v1. The tool creates the task with domain + discovery context; a human completes it.",
+    "order": 8,
+    "provides": [
+     "reviewer_verdict",
+     "reason_codes"
+    ],
+    "scoring_use": "website_verified +10 on reviewer pass",
+    "source": "human reviewer (queue task)",
+    "tier": "supporting"
+   }
+  ],
+  "broker_entities": [
+   {
+    "aliases": [],
+    "asns": [],
+    "domains": [],
+    "email_domains": [],
+    "name": "IP Trading",
+    "org_ids": [],
+    "poc_handles": [],
+    "policy": "allowed"
+   },
+   {
+    "aliases": [],
+    "asns": [],
+    "domains": [],
+    "email_domains": [],
+    "name": "IPXO",
+    "org_ids": [],
+    "poc_handles": [],
+    "policy": "allowed"
+   },
+   {
+    "aliases": [],
+    "asns": [],
+    "domains": [],
+    "email_domains": [],
+    "name": "Silicon Desert",
+    "org_ids": [],
+    "poc_handles": [],
+    "policy": "allowed"
+   },
+   {
+    "aliases": [],
+    "asns": [],
+    "domains": [],
+    "email_domains": [],
+    "name": "Brander",
+    "org_ids": [],
+    "poc_handles": [],
+    "policy": "blocked"
+   },
+   {
+    "aliases": [],
+    "asns": [],
+    "domains": [],
+    "email_domains": [],
+    "name": "InterLIR",
+    "org_ids": [],
+    "poc_handles": [],
+    "policy": "blocked"
+   },
+   {
+    "aliases": [],
+    "asns": [],
+    "domains": [],
+    "email_domains": [],
+    "name": "Larus",
+    "org_ids": [],
+    "poc_handles": [],
+    "policy": "blocked"
+   }
+  ],
+  "bundle_hash": "f17b5972bd36f1499ba91f09e7b7ef01b87ea11236acda82634c94a309e25fe5",
+  "decisions": [
+   {
+    "condition": "exact_match_blocked_broker OR hard_block",
+    "decision": "reject",
+    "notes": "Short-circuits: remaining adapters are skipped; no further enrichment spend.",
+    "platform_enforcement": "reject_or_suspend_account",
+    "priority": 1
+   },
+   {
+    "condition": "score >= 100 AND legal_proof AND control_proof AND broker_ok AND NOT hard_conflict AND org_id_check_passed",
+    "decision": "approve",
+    "platform_enforcement": "approve_account_enable_buying",
+    "priority": 2
+   },
+   {
+    "condition": "score >= 100 AND legal_proof AND control_proof AND broker_ok AND NOT hard_conflict AND NOT org_id_check_passed",
+    "decision": "approve_buy_locked",
+    "platform_enforcement": "approve_account_lock_buying",
+    "priority": 3,
+    "upgrade": "org_id pass event -> recalculate -> approve (platform enables buying)"
+   },
+   {
+    "auto_clear": true,
+    "condition": "otherwise (score < 100 or a non-broker gate failing, with no hard block)",
+    "decision": "manual_review_insufficient",
+    "notes": "Holding state, not a human queue. Auto-clears when a recalculation satisfies approve/approve_buy_locked.",
+    "platform_enforcement": "hold_account_pending",
+    "priority": 4
+   }
+  ],
+  "events": [
+   "kyb.run_requested",
+   "email.verified",
+   "org_id.submitted",
+   "poc.submitted",
+   "poc.token_verified",
+   "document.uploaded",
+   "website.review_completed",
+   "reviewer.manual_approve",
+   "recalculate.requested"
+  ],
+  "field_sources": {
+   "Broker_Status__c": "case broker_status (exact-match gate)",
+   "Business_Document_Status__c": "live business_document_verified; uploaded-but-unprocessed \u2192 Uploaded",
+   "Buy_Enablement_Status__c": "case buy_status (tool asserts enabled/locked; platform may show transients)",
+   "Hard_Conflict__c": "NOT gates.no_hard_conflict from the latest decision; NULL when no authoritative decision evaluated the gate (unresolved pointer, manual bypass)",
+   "KYC_Check__c": "one child record per check row (live + superseded)",
+   "KYC_Score__c": "pointed decision row's score (blank while pre-014 order is unresolved)",
+   "KYC_Status__c": "case status (approved_manual \u2192 'Account Approved', AUDIT:A5)",
+   "Manual_Approved_At__c": "latest MANUAL decision row's timestamp (sticky across later autos)",
+   "Manual_Approved_By__c": "latest MANUAL decision row's reviewer (sticky across later autos)",
+   "ORG_ID_Status__c": "live org_id_match status; history without live row \u2192 Superseded",
+   "ORG_ID__c": "live org_id_match check detail, else submitted org handle",
+   "POC_Handle__c": "live poc_verified check detail, else submitted poc handle",
+   "POC_Verification_Status__c": "live poc_verified status; outstanding token \u2192 Token Sent",
+   "Platform_Action_Taken__c": "latest decision; 'Manual Approve' when case is approved_manual",
+   "Review_Reason_Codes__c": "union of live checks' reason codes",
+   "Website_Review_Status__c": "open website task \u2192 Open; else live website_verified status"
+  },
+  "hard_gates": {
+   "broker_status_allowed": [
+    "clear",
+    "allowed_broker"
+   ],
+   "control_proof_required": true,
+   "hard_conflict_must_be_false": true,
+   "legal_business_proof_required": true,
+   "score_met": "score >= 100"
+  },
+  "rubric": [
+   {
+    "cap": null,
+    "category": "control_proof",
+    "check_type": "verified_company_email",
+    "mode": "automated",
+    "pass_rule": "verified inbox AND business domain (not free/disposable) AND domain matches submitted company domain",
+    "points": 25,
+    "source": "platform_email_verification"
+   },
+   {
+    "cap": null,
+    "category": "legal_business_proof",
+    "check_type": "official_registry_match",
+    "mode": "automated",
+    "pass_rule": "active/current company AND exact normalized match on name + address + registration number",
+    "points": 25,
+    "source": "companies_house | gleif | state_country_registry"
+   },
+   {
+    "cap": 25,
+    "category": "control_proof",
+    "check_type": "org_id_match",
+    "mode": "automated",
+    "pass_rule": "exact handle exists AND org name matches company AND address materially matches AND no broker/rejected-entity conflict",
+    "points": 25,
+    "source": "direct_rir_rdap"
+   },
+   {
+    "cap": 25,
+    "category": "control_proof",
+    "check_type": "poc_verified",
+    "mode": "automated_plus_user_token",
+    "pass_rule": "POC associated with submitted ORG-ID/resource AND token sent to RIR-listed email is verified",
+    "points": 25,
+    "source": "rir_poc_record_plus_token"
+   },
+   {
+    "cap": null,
+    "category": "legal_business_proof",
+    "check_type": "business_document_verified",
+    "mode": "automated",
+    "pass_rule": "OCR-extracted name/address/number/jurisdiction match submission AND no conflict with official registry evidence",
+    "points": 25,
+    "source": "document_ocr_matching"
+   },
+   {
+    "cap": null,
+    "category": "supporting",
+    "check_type": "linkedin_company_match",
+    "mode": "automated",
+    "pass_rule": "person name AND current company AND title AND company domain all match deterministically",
+    "points": 20,
+    "source": "floqer_discovery_plus_deterministic_match"
+   },
+   {
+    "cap": null,
+    "category": "supporting",
+    "check_type": "website_verified",
+    "mode": "manual",
+    "notes": "No automated website adapter in v1. Points awarded only on reviewer pass.",
+    "pass_rule": "reviewer confirms: domain resolves, HTTPS, genuine company content tied to applicant, not parked, no fraud indicators",
+    "points": 10,
+    "source": "human_review_task"
+   },
+   {
+    "cap": null,
+    "category": "account_access",
+    "check_type": "verified_email",
+    "mode": "automated",
+    "pass_rule": "any email inbox verified",
+    "points": 10,
+    "source": "platform_email_verification"
+   }
+  ],
+  "threshold": 100
+ },
+ "templates": {
+  "event_types": [
+   "document.uploaded",
+   "email.verified",
+   "kyb.run_requested",
+   "org_id.submitted",
+   "poc.submitted",
+   "poc.token_verified",
+   "recalculate.requested",
+   "reviewer.manual_approve",
+   "website.review_completed"
+  ],
+  "templates": {
+   "document.uploaded": {
+    "doc_type": "registration_certificate",
+    "object_ref": "fs://uploads/doc.json"
+   },
+   "email.verified": {
+    "domain": "acme.example",
+    "email": "ops@acme.example",
+    "verified_at": "2026-01-01T00:00:00Z"
+   },
+   "kyb.run_requested": {
+    "address": "1 Main Street, London, EC1A 1AA",
+    "company_legal_name": "Acme Networks Ltd",
+    "contact": {
+     "name": "Jane Doe",
+     "title": "Director"
+    },
+    "jurisdiction": "GB",
+    "registration_number": "12345678",
+    "website": "https://acme.example"
+   },
+   "org_id.submitted": {
+    "org_handle": "ORG-ACME-1",
+    "rir": "arin"
+   },
+   "poc.submitted": {
+    "org_handle": "ORG-ACME-1",
+    "poc_handle": "JD123-ARIN",
+    "rir": "arin"
+   },
+   "poc.token_verified": {
+    "token": "<paste token from the POC email>",
+    "token_id": "tok-1",
+    "verified_at": "2026-01-01T00:00:00Z"
+   },
+   "recalculate.requested": {},
+   "reviewer.manual_approve": {
+    "note": "",
+    "reviewer_id": ""
+   },
+   "website.review_completed": {
+    "reason_codes": [],
+    "result": "pass",
+    "reviewer_id": "",
+    "task_id": "<open task id>"
+   }
+  }
+ }
+}

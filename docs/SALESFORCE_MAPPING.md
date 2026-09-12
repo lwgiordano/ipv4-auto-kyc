@@ -9,6 +9,16 @@ audit finding **A5** (`approved_manual` has no `KYC_Status__c` value).
 Sources for every value below: the decision callback (`POST …/kyc/decision`),
 `GET /v1/cases/{case_id}` and `GET /v1/cases/{case_id}/checks?all=1`.
 
+After explicit live-configuration activation, the field names below remain the
+default destinations and stable source identities. The console edits destination
+names only (1–80 ASCII identifier characters, case-insensitively unique), not
+sources, types, or company values. Saves are shared server revisions, not previews.
+The company `GET /ui/api/cases/{case_id}/full` response exposes destination-keyed
+`salesforce` and `field_sources` plus `mapping_revision`; subsequent projection
+reads use the saved mapping without rewriting old decisions or callback bytes.
+The external platform must explicitly consume this projection to change its sync.
+A mapping save neither writes Salesforce nor proves that the platform adopted it.
+
 ## KYC_Case__c fields
 
 | Salesforce field | Source in tool output | Mapping |

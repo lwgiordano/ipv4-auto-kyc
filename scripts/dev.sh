@@ -35,7 +35,9 @@ PIDS=()
 
 cleanup() {
   echo; echo "shutting down…"
-  for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
+  # ${PIDS[@]:-} on an empty array is an unbound-variable error under `set -u` in bash 3.2,
+  # which is what macOS ships -- and it aborts cleanup, leaving Postgres running.
+  for pid in ${PIDS[@]+"${PIDS[@]}"}; do kill "$pid" 2>/dev/null || true; done
   as_pg_user "$PGBIN/pg_ctl -D $PGDIR/data -m immediate stop" 2>/dev/null || true
   rm -rf "$PGDIR"
 }
