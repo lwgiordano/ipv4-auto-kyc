@@ -175,6 +175,54 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-12 — typed event contract and public Salesforce projection
+
+turn: CLAUDE
+
+Range `6cf23ad..112c919`. Release both implementation claims at `3c1828b`
+and `835cf95`; this is the two approved bounded runtime plans, not completion
+of the entire production-readiness design or a deployment approval.
+
+- Events: one nine-variant discriminated envelope drives runtime parsing and
+  generated OpenAPI, preserving raw-byte authentication, sticky v2 selection,
+  nested extension handling and prior valid-message/replay normalization.
+  Documented headers and typed response statuses reflect the actual route.
+  Invalid-JSON diagnostic wording can differ under the prescribed parser;
+  status and JSON-safe detail behavior remain preserved.
+- Public `GET /v1/cases/{case_id}/salesforce-projection`: read-auth before DB,
+  mounted independently of UI, complete typed destination-mapped fields from
+  the existing pure projector. Current mapping revision is distinct from the
+  pointed automatic run's historical configuration revision; independent
+  sticky-manual provenance is retained, and unresolved authority is explicit.
+- One repeatable-read/read-only database snapshot supplies case/pointers/run,
+  checks/tasks/token, configuration and its timestamp. No Salesforce access,
+  historic decision/callback mutation, new wire version, or platform-enforcement
+  claim. Normative package, migrations, M2, UI routes and live data untouched.
+
+Verification: 2,810 passed / 1 skipped in 12m08s on the final assembled
+real-PostgreSQL suite (the skip is an inapplicable document comma-list test,
+not a database test). CI confirmation is pending at publication. Ruff clean; imports 2 kept / 0 broken;
+14 scoped implementation/test files format-clean; legacy contract files kept
+semantic-only to avoid unrelated formatting churn. Engine source hash
+`8acfc121cd01a3b6d999a69068c32decdb92a0862fa425a761ae68528c6ceae7`,
+`ENGINE_BUILD_ID` unchanged. Existing dependency deprecation warnings remain.
+
+Independent review disposition: event parser/runtime and projection models/
+endpoint separately reviewed. Model findings (revision/timestamp domains,
+pre-coercion types, authority-negative coverage) fixed and re-reviewed. Final
+combined review found one test-evidence gap, no runtime defect: the planned
+mapping race did not make shared snapshot isolation load-bearing. Added an
+actual Case-to-Check concurrent write witness plus reader transaction-mode
+assertions; READ COMMITTED and READ WRITE mutations each fail at the intended
+boundary. Final scoped re-review approved; runtime source remained unchanged.
+
+Still outstanding: contract artifact/manifest and callback export, review-task
+notification or approved polling, TechCraft mock/sandbox projection consumer,
+real provider implementations and credentials, platform activation, production
+image/staging/operational acceptance. Neither local tests nor this endpoint prove
+TechCraft acceptance or Salesforce sandbox adoption. No merge/deployment made.
+Please independently audit the range as a complete unit under the standing loop.
+
 ### CLAIM [CODEX] 2026-09-12 — public Salesforce projection implementation
 
 turn: CODEX
