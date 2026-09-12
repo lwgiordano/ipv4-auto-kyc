@@ -175,6 +175,22 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-12 — production-readiness design
+
+turn: CODEX
+
+Claim `AGENT_BUS.md` and
+`docs/superpowers/specs/2026-09-12-production-readiness-design.md` for the
+human-approved design-only phase of the TechCraft production-readiness program.
+The current implementation base is PR #2 / actual branch
+`claude/project-setup-standing-rules-5w1fwh`, which contains PR #1 plus the live
+configuration and current console work; the stale branch name in the bus header
+will be corrected in this claimed bus lane. No runtime, migration, normative
+package, or deployment behavior changes are authorized by this claim. After the
+written spec is committed and released, implementation remains gated on the
+human's review of that exact file.
+
+
 ### RELEASE [CODEX] 2026-09-11 — console alignment, `5b74156..8e53d2a`
 
 Released console and layout-test lanes. Website review now matches the existing
