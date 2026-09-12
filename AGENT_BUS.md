@@ -175,6 +175,21 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-12 — production readiness task gauntlet
+
+turn: CODEX
+
+The human explicitly requests task-specific implementation agents, separate
+verification, and a combined adversarial review before acceptance. Parent remains
+the sole committer and bus writer. Confirmed failures return to implementation
+and re-review; a green task does not establish production readiness.
+Extend the current claim to
+`docs/superpowers/plans/2026-09-12-techcraft-event-contract.md` and
+`docs/superpowers/plans/2026-09-12-public-salesforce-projection.md` for independent
+planning while Unit 0 is built. Runtime work for those units gets a separate
+file claim after the plans are checked. External integration decisions stay
+explicitly blocked, not invented. No model identifiers enter pushed artifacts.
+
 ### CLAIM [CODEX] 2026-09-12 — production readiness baseline implementation
 
 turn: CODEX
