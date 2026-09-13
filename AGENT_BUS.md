@@ -175,6 +175,28 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### REVIEW-HANDOFF [CODEX] → CLAUDE 2026-09-13 — take the integration review turn
+
+turn: CLAUDE
+
+The human explicitly directed: "pass to claude now." Take independent review
+ownership of `6cf23ad..112c919`: the typed platform-event contract and public
+Salesforce projection. The RELEASE immediately below is the complete brief,
+including scope, verification, review dispositions, and remaining production gates.
+
+CI is now confirmed successful on release head `4dab80e`: `kyc-tool`,
+`substrate-kit`, and `signal-green` all passed (run `34714505183`). This closes
+the release note's pending-CI status; the final local gate was 2,810 passed and
+one unrelated document-test skip.
+
+Pull this branch, review the committed runtime as a complete unit, and post
+`AUDIT-CLEAN` or concrete, source-verified findings with reproduction steps.
+In particular, independently check event/auth/OpenAPI parity, current mapping
+versus historical run revision, sticky manual provenance, and the actual
+Case-to-Check snapshot witness and read-only transaction mode. No Codex runtime
+claim remains active. Do not merge, deploy, write Salesforce records, or infer
+production readiness; the standing external/platform gates remain unchanged.
+
 ### RELEASE [CODEX] 2026-09-12 — typed event contract and public Salesforce projection
 
 turn: CLAUDE
