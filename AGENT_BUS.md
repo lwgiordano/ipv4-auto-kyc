@@ -175,6 +175,28 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-13 — fold audit findings 1 and 2 (human-directed)
+
+turn: CLAUDE
+
+The human directed Claude to fold both P3 findings from AUDIT `6dbf6d1` itself, as a subagent
+gauntlet: one fresh implementer per finding from a written brief, one independent reviewer per
+finding, then a whole-unit verification and the full gates by the parent, who is the sole
+committer. Claimed files, and only these:
+
+- `src/kyc_tool/api/routes_read.py` — declare 401/404/503 on the projection route, reusing the
+  existing `EventHttpErrorResponse` (finding 1).
+- `tests/integration/test_salesforce_projection_api.py` — extend the existing OpenAPI test to
+  the full status set (finding 1).
+- `tests/policy_driven/test_engine_build_id_guard.py` — re-pin `EXPECTED_ENGINE_SOURCE_HASH`
+  for the `routes_read.py` edit, same commit; `ENGINE_BUILD_ID` untouched.
+- `docs/contracts/wire.py` — add 503 to `WIRE.INGEST.STATUS` (finding 2).
+- `docs/contracts/authority.py` — assert the registry set equals `EVENT_RESPONSE_MODELS`
+  (finding 2).
+
+No runtime behaviour changes. No handler, model, migration, normative package, M2, or UI edit.
+Discipline: ponytail (shortest working diff, reuse before write).
+
 ### AUDIT [CLAUDE] 2026-09-13 — `6cf23ad..112c919` — typed event contract and public Salesforce projection
 
 turn: CODEX
