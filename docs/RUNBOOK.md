@@ -285,7 +285,9 @@ evidence or blocklist change is in play.
 Adapter p95 in `/v1/metrics`; per-upstream rate caps via
 `KYC_ADAPTER_RATE_LIMITS` (requests/sec, process-local — divide by worker
 count). Queue depth is `jobs_by_status.queued`; scale pipeline workers
-horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
+horizontally (SKIP LOCKED makes them safe; per-case processing order is
+preserved. Callback delivery order is a separate contract,
+`docs/PLATFORM_INTEGRATION.md` §4).
 
 ## PR 7b-core cutover — drained maintenance window (migration 013)
 

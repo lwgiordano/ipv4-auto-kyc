@@ -413,8 +413,8 @@ OPERATIONS = Registry(
                 ("Migrations", "alembic upgrade head",
                  "one-shot per deploy; a no-op when the release carries none"),
                 ("Pipeline worker", "python -m kyc_tool.workers.pipeline_worker",
-                 "scale horizontally; per-case ordering is enforced by the database, so extra "
-                 "workers are safe"),
+                 "scale horizontally; per-case processing order is enforced by the job queue, so "
+                 "extra workers are safe"),
                 ("Outbox publisher", "python -m kyc_tool.workers.outbox_worker",
                  "delivers decision callbacks and verification emails"),
                 ("Retention", "python -m kyc_tool.workers.retention",

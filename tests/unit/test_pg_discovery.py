@@ -119,6 +119,19 @@ def test_find_pg_bin_reports_one_actionable_error_when_no_installation_exists(tm
     assert "KYC_TEST_DATABASE_URL" in message
 
 
+def test_homebrew_pg_bindirs_orders_newest_version_first(tmp_path):
+    prefix = tmp_path / "opt"
+    (prefix / "postgresql@15" / "bin").mkdir(parents=True)
+    (prefix / "postgresql@9" / "bin").mkdir(parents=True)
+    (prefix / "postgresql@17" / "bin").mkdir(parents=True)
+
+    assert pg._homebrew_pg_bindirs(str(prefix)) == (
+        str(prefix / "postgresql@17" / "bin"),
+        str(prefix / "postgresql@15" / "bin"),
+        str(prefix / "postgresql@9" / "bin"),
+    )
+
+
 def test_external_database_url_bypasses_local_discovery(tmp_path, monkeypatch):
     external_url = "postgresql+psycopg://external.example/kyc_test"
     monkeypatch.setenv("KYC_TEST_DATABASE_URL", external_url)

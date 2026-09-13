@@ -59,7 +59,8 @@ Step by step, for one customer ("case"):
    ORG-ID"). The tool records it, queues the work, and instantly returns a run
    ID; it does not block.
 2. **A worker picks it up.** A background worker claims the job. Events for the
-   same case are processed in order.
+   same case are processed in order; the delivery order of the resulting
+   callbacks is a separate contract (`docs/PLATFORM_INTEGRATION.md` §4).
 3. **Broker check first.** The company's identifiers are matched against the
    blocked-broker list. An exact match short-circuits everything → `reject`.
 4. **Gather evidence.** The tool calls the external sources it needs for

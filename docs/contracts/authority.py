@@ -2816,7 +2816,7 @@ REGISTRY_PROSE_PINS = {
     ("OPS.BLOCKER.PRODUCTION_PROVIDERS", "value[]"):
         ("acb99d446c3b05a6", "This tool cannot run in production yet, and no configuration ..."),
     ("OPS.PROCESS.COMMANDS", "value[][]"):
-        ("7a59c32b1e5070b9", "process table rows: API / Migrations / workers, commands, notes"),
+        ("5cd889859b1d8656", "process table rows: API / Migrations / workers, commands, notes"),
     ("OPS.PROCESS.DEV_WORKER_BANNED", "value"):
         ("df4438bbe893ea56", "dev_worker is a development role that wires fixture adapters ..."),
     ("OPS.INFRA.COMPONENTS", "value[][]"):

@@ -7,6 +7,7 @@ Preference order:
 """
 
 import contextlib
+import glob
 import os
 import shlex
 import shutil
@@ -18,10 +19,26 @@ from pathlib import Path
 
 REQUIRED_PG_BINARIES = ("initdb", "pg_ctl", "pg_isready", "createdb")
 PG_CONFIG_TIMEOUT_SECONDS = 1
+
+
+def _homebrew_pg_bindirs(*prefixes: str) -> tuple[str, ...]:
+    """List `<prefix>/postgresql@N/bin` under each prefix, newest version first."""
+
+    def version_key(bindir: str) -> float:
+        suffix = Path(bindir).parent.name.rpartition("@")[2]
+        try:
+            return -float(suffix)
+        except ValueError:
+            return float("inf")
+
+    matches = [match for prefix in prefixes for match in glob.glob(f"{prefix}/postgresql@*/bin")]
+    return tuple(sorted(matches, key=version_key))
+
+
 PG_BINDIRS = (
-    "/opt/homebrew/opt/postgresql@16/bin",
+    *_homebrew_pg_bindirs("/opt/homebrew/opt"),
     "/opt/homebrew/bin",
-    "/usr/local/opt/postgresql@16/bin",
+    *_homebrew_pg_bindirs("/usr/local/opt"),
     "/usr/lib/postgresql/16/bin",
     "/usr/lib/postgresql/15/bin",
     "/usr/local/bin",

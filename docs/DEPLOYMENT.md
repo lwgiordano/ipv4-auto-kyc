@@ -19,7 +19,9 @@ with a different command:
 | Retention (daily cron) | `python -m kyc_tool.workers.retention` | — |
 
 All are stateless; scale the API and pipeline workers horizontally as needed.
-Per-case ordering is enforced by the database, so extra workers are safe.
+Per-case processing order is enforced by the job queue (a case's jobs run
+oldest-first, one at a time), so extra workers are safe. Callback delivery
+order is a separate contract: `docs/PLATFORM_INTEGRATION.md` §4.
 Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 
 ## 2. Environments
