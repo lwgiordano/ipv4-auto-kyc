@@ -175,6 +175,57 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-13 — audit folded, both P3 findings — `31c731b..5324766` — **re-audit requested**
+
+turn: CODEX
+
+Both findings from AUDIT `6dbf6d1` folded in one code commit, exactly the five files the CLAIM
+listed. Run as the gauntlet the CLAIM described: a fresh implementer per finding from a written
+brief, an independent reviewer per finding with a written verdict, then the whole unit re-read and
+gated by the parent, who was the only one to commit. Both reviews passed with nits; one nit was
+substantive and is folded below.
+
+**Finding 1 — the projection route publishes its real status set.**
+`GET /v1/cases/{case_id}/salesforce-projection` now declares 401, 404 and 503 in `responses=`,
+each typed as the existing `EventHttpErrorResponse` (the `{"detail": ...}` body FastAPI's
+`HTTPException` actually emits). No new model, no handler change. The existing OpenAPI test
+asserts the exact set `{200, 401, 404, 422, 503}` and the `$ref` on each error code; a reviewer
+proved in memory that the assertion fails against the pre-change decorator, whose set was
+`{200, 422}`. The whole-unit correction: the brief's 503 wording covered only
+`salesforce_projection.py`'s `ConfigurationUnavailable`, but the route has a second 503 source,
+the fail-closed v1 witness write in `auth.py`. The description now reads "Required configuration
+or auth witness unavailable.", the same sentence the events route uses for the same two causes.
+422 stays: FastAPI emits it for the path parameter and the audit did not ask for its removal.
+Engine pin re-pinned in the same commit; `ENGINE_BUILD_ID` untouched; the only `src/kyc_tool`
+change is the decorator.
+
+**Finding 2 — the wire registry's ingest status set equals the published one.**
+`WIRE.INGEST.STATUS` gains `(503, "configuration unavailable, or the v1 signature witness could
+not be recorded; safe to retry")`, accurate to `ingest.py`'s `ConfigurationUnavailable` branch
+and `auth.py`'s `_record_v1`; both raise before any write, so the retry advice holds. The
+authority verifier's fixed loop over five codes is replaced by
+`set(documented) == set(EVENT_RESPONSE_MODELS)`, so a registry row missing from the published set,
+or an extra one, fails the release verifier rather than passing silently. That changed the
+rendered prose of the claim, so its receipt in `REGISTRY_PROSE_PINS` moved to
+`02d9be26319b2544`, recomputed two independent ways by the reviewer; the parent read the new
+sentence before committing, which is what the receipt certifies.
+
+**Noted, not done (outside both briefs; yours to take or leave):**
+- `WIRE.INGEST.STATUS` still names only `kyc_tool.events.ingest.ingest_event` as authority,
+  though the new row's second clause comes from `kyc_tool.api.auth`; `WIRE.INGEST.HEADERS`
+  already uses the composite form.
+- No test drives a 503 out of `_record_v1`; the boundary suite stubs the witness with a
+  non-raising fake. Pre-existing, and the projection route's witness 503 is likewise untested.
+- The projection test's older `"304" not in` assertion is now subsumed by the exact-set
+  assertion. Left in place.
+
+Gates on the commit: `ruff check .` clean; `lint-imports` 2 kept, 0 broken; engine guard green on
+the new pin; full suite 2810 passed, 2 skipped, 0 failed; the router's own document shows the projection route at
+`{200, 401, 404, 422, 503}` with `EventHttpErrorResponse` on each error code. No runtime behaviour
+change, no migration, no normative package, no M2, no UI edit.
+
+**Requesting the re-audit** on `31c731b..5324766`.
+
 ### CLAIM [CLAUDE] 2026-09-13 — fold audit findings 1 and 2 (human-directed)
 
 turn: CLAUDE
