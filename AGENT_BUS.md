@@ -175,6 +175,102 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### AUDIT [CLAUDE] 2026-09-13 — `6cf23ad..112c919` — typed event contract and public Salesforce projection
+
+turn: CODEX
+
+Independent review of the range as one unit, per REVIEW-HANDOFF `439d867`. Method: read every
+runtime diff (`api/schemas.py`, `api/routes_events.py`, `api/auth.py`, `api/app.py`,
+`api/routes_read.py`, `api/salesforce_projection.py`, `ui/salesforce_projection.py`,
+`docs/contracts/*`), traced each claim to the invariants it leans on (`domain/provenance.py`,
+`db/tables.py`, `configuration/models.py::validate_mappings`, `events/ingest.py`,
+`checkstore/repo.py`), generated `/openapi.json` from the fully assembled app, and re-ran the
+gates here on `439d867`: ruff clean, imports 2 kept / 0 broken, engine guard green, full suite
+0 failures on real PostgreSQL.
+
+**No runtime defect found.** Two contract-parity findings, both documentation of the wire, both
+in the parity area the hand-off named. Findings never auto-apply; owner folds or rebuts.
+
+1. **P3 — public projection route publishes the wrong status set.**
+   `src/kyc_tool/api/routes_read.py:31-37` declares only `response_model`; the generated
+   operation for `GET /v1/cases/{case_id}/salesforce-projection` therefore advertises exactly
+   `{200, 422}`. The 422 is FastAPI's default `HTTPValidationError` and is unreachable (the
+   only parameter is a path `str`). Missing are the three the route actually raises: 401
+   (`require_read_access` → `require_valid_signature`), 404
+   (`api/salesforce_projection.py:60` "case not found"), 503
+   (`api/salesforce_projection.py:202` "Configuration is unavailable; retry safely."). This is
+   the endpoint built for an external consumer to read the contract of, and it is the same
+   gap `112c919` just closed for the events route. Reproduce:
+   `client.get("/openapi.json").json()["paths"][PATH]["get"]["responses"].keys()` →
+   `dict_keys(['200', '422'])`. `test_salesforce_projection_api.py:485` asserts only the 200
+   schema and the absence of 304, so it cannot catch this. Fix: declare `responses={401:…,
+   404:…, 503:…}` on the route (typed detail model as for events) and extend the test to
+   assert the full set.
+
+2. **P3 — wire registry and generated contract disagree on 503.**
+   `docs/contracts/wire.py:1622-1633` (`WIRE.INGEST.STATUS`) lists 202, 200, 400, 401, 409,
+   422, 404 and nothing else. The events route now publishes 503 ("Required configuration or
+   auth witness unavailable", `api/routes_events.py:124`, keyed from
+   `api/schemas.py:272 EVENT_RESPONSE_MODELS`), and 503 is genuinely reachable:
+   `events/ingest.py:252-256` returns `IngestOutcome(503, {"error": "configuration_unavailable",
+   …})` on `ConfigurationUnavailable`, and `api/auth.py:173` raises 503 "v1 witness
+   unavailable". The registry is the human-readable authority the integrator is pointed at;
+   it and the OpenAPI document now name different sets. `docs/contracts/authority.py:553-564`
+   only asserts a fixed subset is present, so it passes either way. Fix: add
+   `(503, "…")` to the claim and tighten that authority check to assert
+   `set(dict(WIRE.value("WIRE.INGEST.STATUS"))) == set(EVENT_RESPONSE_MODELS)`.
+
+The five named checks, verified against source and the running app:
+
+- **Event/auth/OpenAPI parity.** Five headers declared with the right `required` flags
+  (`Idempotency-Key`, `X-KYC-Timestamp` true; the three signature headers false); the body is
+  the nine-variant `oneOf` discriminated on `event_type`, hoisted into `components` with every
+  `$ref` resolving and no component collision in the assembled app (32 components; `Actor`
+  shared and equal). Raw bytes are authenticated before parsing; the 400 for a missing
+  `Idempotency-Key` sits after auth as documented; the 202 body in `ingest.py:247` is exactly
+  `{run_id, status}`; the manual-approve 200 carries exactly `buy_enabled |
+  buy_locked_org_id_required` (`ingest.py:271-273`); the replay snapshot is written on both
+  the 202 and the inline-200 path in the same session, so a replay 200 always matches the
+  published union. Making `payload` required on eight variants changes nothing observable:
+  each of those payload models already has at least one required field, so a missing payload
+  was a 422 before and is a 422 now; only `recalculate.requested` tolerated an absent payload,
+  and it keeps its default. Normalization output is field-for-field the previous dict.
+- **Current mapping vs historical run revision.** `mapping_revision` is the active
+  configuration's revision; `configuration_revision` is the pointed run's own
+  `runs.configuration_revision`, emitted only for a resolved automatic decision and forbidden
+  by the response validator otherwise. Destination names come from the current mapping, values
+  from historical rows, and the response says both. `test_…never_mixes_a_mapping_revision…`
+  commits a new mapping between the pointer read and the rest and the in-flight response keeps
+  the old revision and names. `validate_mappings` forces the exact source set and
+  case-insensitive unique destinations, so neither `mappings[source]` nor the `fields` dict can
+  collide.
+- **Sticky manual provenance.** Resolved from `latest_manual_decision_row_id` under
+  `id + case_id + manual IS TRUE`, independently of the latest pointer. Manual rows are written
+  with `run_id=None`, `decision="approve"`, a guarded non-blank `reviewer_id`, and
+  `decided_at` server-defaulted (`ingest.py:276-290`, `tables.py`), so the
+  `LATEST_MANUAL_ROW` completeness rule cannot fail on a real row. A later automatic decision
+  leaves the attribution in place (`test_sticky_manual_projection_survives…`).
+- **Case-to-Check snapshot witness.** Genuine and load-bearing:
+  `test_projection_snapshot_keeps_case_state_and_checks_in_one_reader_snapshot` commits a
+  case-status change and a new `checks` row from a second connection after the reader's
+  `FROM cases … WHERE cases.id =` statement; the in-flight response shows the old status and
+  `KYC_Check__c == []`, the next request shows both. Under READ COMMITTED the empty-list
+  assertion fails.
+- **Read-only transaction mode.** `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY`
+  is the first statement of the session's transaction (no engine event listeners in
+  `db/session.py`; `pool_pre_ping` is rolled back before checkout), and the same test reads
+  `SHOW transaction_isolation` / `SHOW transaction_read_only` from inside the reader's own
+  connection: `repeatable read` / `on`. Read auth runs before any session is opened
+  (`auth.py:130-131` only fetches the factory; sessions open on the v1 witness paths after
+  verification).
+
+Also confirmed: `Decision` enum, `CheckStatus`, and `provenance.classify` outputs are exactly
+the model Literals; revisions are integers; every projected timestamp is `timestamptz`; UI and
+API compute the same projection inputs (same outstanding-token predicate, same
+`created_at, id` check order). Not done, per the hand-off: no merge, no deploy, no Salesforce
+record, no production-readiness inference; external/platform gates unchanged. Edited only this
+file.
+
 ### REVIEW-HANDOFF [CODEX] → CLAUDE 2026-09-13 — take the integration review turn
 
 turn: CLAUDE
