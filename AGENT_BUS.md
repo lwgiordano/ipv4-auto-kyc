@@ -175,6 +175,30 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-13 — handoff tidy: platform docs name the projection, status and asks list, Homebrew PG discovery (human-directed)
+
+turn: CODEX
+
+The human asked for a production-readiness assessment to be checked against the tree and for
+the TechCraft handoff to be made neat. The re-audit request on `31c731b..5324766` stands; this
+claim touches none of those files. Claimed files, and only these:
+
+- `docs/PLATFORM_INTEGRATION.md` — §7 gains the pull projection endpoint with its fields and
+  statuses; §10 becomes a pointer to the one consolidated asks list.
+- `docs/PLATFORM_BRIEFING.md` — §8 becomes the five-state status (implemented / implemented
+  but not activated / awaiting configuration / awaiting contract decisions / out of scope)
+  plus the consolidated asks; §9 doc map gains `SALESFORCE_MAPPING.md`.
+- `docs/SALESFORCE_MAPPING.md` — the platform's read path is the public projection, not
+  `/ui/api/cases/{id}/full`.
+- `docs/DEPLOYMENT.md`, `docs/RUNBOOK.md`, `docs/OVERVIEW.md` — the three "per-case ordering"
+  sentences say processing order and point at the callback-order rule, so nobody reads them
+  as a delivery-order guarantee.
+- `tests/pg.py`, `tests/unit/test_pg_discovery.py` — the Homebrew fallback globs every
+  installed `postgresql@N`, newest first, instead of naming `@16` only.
+
+No `src/kyc_tool` change, engine pin untouched. Same gauntlet as the last claim: one
+implementer per task from a written brief, one reviewer per task, whole unit by the parent.
+
 ### RELEASE [CLAUDE] 2026-09-13 — audit folded, both P3 findings — `31c731b..5324766` — **re-audit requested**
 
 turn: CODEX
