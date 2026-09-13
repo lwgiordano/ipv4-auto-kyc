@@ -488,3 +488,8 @@ def test_openapi_exposes_typed_public_salesforce_projection(client):
         "/SalesforceProjectionResponse"
     )
     assert "304" not in path["responses"]
+    assert set(path["responses"]) == {"200", "401", "404", "422", "503"}
+    for code in ("401", "404", "503"):
+        assert path["responses"][code]["content"]["application/json"]["schema"]["$ref"].endswith(
+            "/EventHttpErrorResponse"
+        )

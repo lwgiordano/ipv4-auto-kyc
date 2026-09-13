@@ -48,6 +48,7 @@ from docs.contracts.signing_example import sign as example_sign
 from docs.contracts.wire import WIRE
 from kyc_tool.api import schemas
 from kyc_tool.api.schemas import (
+    EVENT_RESPONSE_MODELS,
     PAYLOAD_MODELS,
     PLATFORM_EVENT_MODELS,
     DecisionCallback,
@@ -560,8 +561,9 @@ def _documented_status_codes_are_the_ones_ingest_returns():
     assert "IngestOutcome(200" in source
     assert "queued" in documented[202]
     assert "replay" in documented[200].lower() and "inline" in documented[200].lower()
-    for code in (400, 401, 409, 422, 404):
-        assert code in documented
+    assert set(documented) == set(EVENT_RESPONSE_MODELS), (
+        f"registry {sorted(documented)} != published {sorted(EVENT_RESPONSE_MODELS)}"
+    )
 @verifies("WIRE.INGEST.EXTRA_FIELDS")
 def _extra_field_policy_matches_the_models():
     claim = WIRE.value("WIRE.INGEST.EXTRA_FIELDS")
@@ -2756,7 +2758,7 @@ REGISTRY_PROSE_PINS = {
     ("WIRE.INGEST.HEADERS", "value[]:HeaderSpec.why"):
         ("bc30558c830a6df1", "header why column: a replay returns the stored response verbatim ..."),
     ("WIRE.INGEST.STATUS", "value[][]"):
-        ("5b6e84d6fa388b1c", "status meanings: accepted and queued — the normal result ..."),
+        ("02d9be26319b2544", "status meanings: accepted and queued — the normal result ..."),
     ("WIRE.INGEST.EXTRA_FIELDS", "value{prose}"):
         ("ebb5fb1852ddc911", "Unknown fields at the TOP LEVEL of the envelope are rejected ..."),
     ("WIRE.INGEST.ORDERING", "value"):

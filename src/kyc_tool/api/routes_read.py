@@ -6,7 +6,7 @@ from sqlalchemy import select, text
 
 from kyc_tool.api.auth import require_read_access
 from kyc_tool.api.salesforce_projection import build_salesforce_projection
-from kyc_tool.api.schemas import SalesforceProjectionResponse
+from kyc_tool.api.schemas import EventHttpErrorResponse, SalesforceProjectionResponse
 from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.db.tables import Case, DecisionRow, ReviewTask, Run
 from kyc_tool.domain import provenance
@@ -31,6 +31,17 @@ def _check_json(check) -> dict:
 @router.get(
     "/v1/cases/{case_id}/salesforce-projection",
     response_model=SalesforceProjectionResponse,
+    responses={
+        401: {
+            "model": EventHttpErrorResponse,
+            "description": "Read signature is invalid, missing, or retired.",
+        },
+        404: {"model": EventHttpErrorResponse, "description": "Case was not found."},
+        503: {
+            "model": EventHttpErrorResponse,
+            "description": "Required configuration or auth witness unavailable.",
+        },
+    },
 )
 def get_salesforce_projection(case_id: str, request: Request):
     require_read_access(request.app.state.settings, request)

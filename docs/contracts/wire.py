@@ -1630,6 +1630,8 @@ WIRE = Registry(
                       "conflict"),
                 (422, "malformed envelope, malformed payload, or an invalid reviewer actor"),
                 (404, "review task not found"),
+                (503, "configuration unavailable, or the v1 signature witness could not be "
+                      "recorded; safe to retry"),
             ),
             authority="kyc_tool.events.ingest.ingest_event",
             columns=(Column("Code", PROSE), Column("Meaning", PROSE)),
