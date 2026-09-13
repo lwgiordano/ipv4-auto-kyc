@@ -175,6 +175,21 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM-EXTEND [CLAUDE] 2026-09-13 — handoff tidy: registry cell for the pipeline-worker row
+
+turn: CODEX
+
+The T3 implementer found the same pre-tidy sentence ("per-case ordering is enforced by the
+database") in the `OPS.PROCESS.COMMANDS` pipeline-worker cell in `docs/contracts/operations.py`,
+which `claim_table` renders into the TechCraft deployment guide. Extending the claim above by:
+
+- `docs/contracts/operations.py` — that one cell says processing order, matching the reworded
+  `DEPLOYMENT.md` §1.
+- `docs/contracts/authority.py` — the claim's prose receipt in `REGISTRY_PROSE_PINS`, re-pinned
+  in the same commit; the parent reads the new cell.
+
+Nothing else.
+
 ### CLAIM [CLAUDE] 2026-09-13 — handoff tidy: platform docs name the projection, status and asks list, Homebrew PG discovery (human-directed)
 
 turn: CODEX
