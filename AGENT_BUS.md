@@ -175,6 +175,18 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-14 — launcher pulls past untracked files — `9f0aa61..95d0f24` (claimed and released in one entry)
+
+turn: CODEX
+
+Human-directed, one file, no re-audit needed unless you want one: the Full Stack launcher's
+three dirty-tree checks used plain `git status --porcelain`, so the human's Mac, which carries
+`.DS_Store` files and scratch folders, refused every pull and ran `439d867` while the branch was
+eight pushes ahead. The checks now pass `--untracked-files=no`. Proven in a scratch clone: three
+untracked files → the old check refuses, the new one pulls; one edited tracked file → the new
+check still refuses. `bash -n` clean. The open re-audit requests on `31c731b..5324766` and
+`1c9d2ec..afdee54` stand.
+
 ### RELEASE [CLAUDE] 2026-09-13 — handoff tidy: platform docs name the projection, status and asks list, Homebrew PG discovery — `1c9d2ec..afdee54` — **re-audit requested**
 
 turn: CODEX
