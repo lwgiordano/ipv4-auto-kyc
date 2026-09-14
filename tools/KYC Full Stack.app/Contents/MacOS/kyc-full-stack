@@ -122,14 +122,16 @@ fi
 
 # Pull first, then run what was pulled. The loop at the bottom keeps pulling, but that only helps
 # once you are already running: the first launch used to start whatever you happened to have on
-# disk. A dirty tree is left alone -- your own edits are not this app's to discard.
+# disk. A dirty tree is left alone -- your own edits are not this app's to discard. Untracked
+# files do not count: .DS_Store and scratch folders would otherwise block every pull for good,
+# and a fast-forward that would overwrite one fails on its own and is reported below.
 export GIT_TERMINAL_PROMPT=0  # a credential prompt here would just hang
-if [ -n "$BRANCH" ] && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+if [ -n "$BRANCH" ] && [ -z "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
   git fetch --quiet origin "$BRANCH" 2>/dev/null
   git checkout --quiet "$BRANCH" 2>/dev/null || echo "could not switch to $BRANCH"
 fi
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
-if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
   echo "on $BRANCH with local changes — nothing will be pulled over them"
 elif ! git rev-parse --abbrev-ref "@{u}" >/dev/null 2>&1; then
   echo "on $BRANCH, which has no upstream — nothing will be pulled"
@@ -255,8 +257,9 @@ PY_WAS="$(pytree)"
 while true; do
   sleep "$INTERVAL"
   # Whatever branch you are on, from whoever pushed to it. A dirty tree is left alone: your edits
-  # are already live, and a pull on top of them is not this app's decision to make.
-  [ -n "$(git status --porcelain 2>/dev/null)" ] || git pull --ff-only --quiet 2>/dev/null
+  # are already live, and a pull on top of them is not this app's decision to make. Untracked
+  # files do not count, as above.
+  [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] || git pull --ff-only --quiet 2>/dev/null
   PY_NOW="$(pytree)"
   if [ "$PY_NOW" != "$PY_WAS" ]; then
     echo "the engine changed — restarting the stack (the temporary database resets)"
