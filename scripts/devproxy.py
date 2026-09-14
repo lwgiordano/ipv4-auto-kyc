@@ -24,6 +24,7 @@ import argparse
 import hashlib
 import http.server
 import json
+import os
 import socketserver
 import sys
 import urllib.error
@@ -91,6 +92,9 @@ HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authoriza
 def console_html() -> tuple[bytes, str]:
     src = CONSOLE.read_text(encoding="utf-8")
     build = hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
+    # The dev stack's admin credential, so saves work without pasting it under Options each launch.
+    credential = json.dumps(os.environ.get("KYC_UI_ADMIN_TOKEN", ""))
+    src = src.replace('let operatorCredential="";', f"let operatorCredential={credential};", 1)
     at = src.rindex("</body>")
     page = src[:at] + MARK + (RELOADER % {"build": json.dumps(build)}) + src[at:]
     return page.encode("utf-8"), build
@@ -190,10 +194,13 @@ def seed(api: str) -> None:
         p = dict(t[event])
         p.update(over)
         p["occurred_at"] = datetime.now(UTC).isoformat()
+        headers = {"Content-Type": "application/json"}
+        if os.environ.get("KYC_UI_ADMIN_TOKEN"):  # the composer needs it once the stack has one
+            headers["Authorization"] = "Bearer " + os.environ["KYC_UI_ADMIN_TOKEN"]
         req = urllib.request.Request(
             f"{api}/ui/api/send-event",
             data=json.dumps({"case_id": case, "event_type": event, "payload": p}).encode(),
-            headers={"Content-Type": "application/json"})
+            headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 return str(r.status)

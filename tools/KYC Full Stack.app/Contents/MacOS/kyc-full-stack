@@ -194,6 +194,9 @@ Full log: $LOG"
 fi
 
 API_PORT="$(freeport)"; RCV_PORT="$(freeport)"; PG_PORT="$(freeport)"; UI_PORT="$(freeport)"
+# The stack activates live configuration on every start (scripts/dev.sh) and the console proxy
+# pre-fills this credential, so Scoring, Brokers and Mappings save without a paste under Options.
+export KYC_UI_ADMIN_TOKEN="${KYC_UI_ADMIN_TOKEN:-dev-admin}"
 URL="http://127.0.0.1:$UI_PORT/ui"
 pytree() { find src -name '*.py' -type f -exec shasum {} + 2>/dev/null | shasum | cut -d' ' -f1; }
 
@@ -251,6 +254,7 @@ elif [ -x "$BRAVE"  ]; then "$BRAVE"  --app="$URL" --window-size=1440,960 >/dev/
 else open "$URL"; fi
 
 echo "console on $URL"
+echo "editing is live: Scoring, Brokers and Mappings save to this session's database"
 echo "quit this app (Cmd-Q from the Dock) to stop everything and drop the temporary database"
 
 PY_WAS="$(pytree)"

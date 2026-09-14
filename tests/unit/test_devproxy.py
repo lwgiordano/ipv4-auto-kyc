@@ -98,3 +98,11 @@ def test_oversized_configuration_refuses_before_body_and_closes_connection(proxy
         response.read()
         assert conn.recv(1) == b""
     assert proxy[1] == []
+
+
+def test_console_page_prefills_the_dev_stack_credential(monkeypatch):
+    console_html = runpy.run_path(str(Path(__file__).parents[2] / "scripts/devproxy.py"))["console_html"]
+    monkeypatch.setenv("KYC_UI_ADMIN_TOKEN", 'dev-"admin"')
+    assert b'let operatorCredential="dev-\\"admin\\"";' in console_html()[0]
+    monkeypatch.delenv("KYC_UI_ADMIN_TOKEN")
+    assert b'let operatorCredential="";' in console_html()[0]
