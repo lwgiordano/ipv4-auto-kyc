@@ -241,9 +241,18 @@ Body:
   decision the tool computed. Treat the case as pending human review.
 - **Delivery is at-least-once.** Dedupe on `(case_id, run_id)`. Retries back
   off exponentially (base 10 s, 8 attempts) before dead-lettering on our side.
-- Per-case order is preserved. An optional `event_sequence` integer (per-case
-  ordinal of the triggering event) can be enabled once you confirm you'll use
-  it.
+  Acknowledge every exact valid duplicate as processed; acknowledging a
+  callback does not mean applying it to the case.
+- **Until ordered delivery is activated in migration `025`, the wire provides no
+  callback-order authority.** Keep a manual approval authoritative. Acknowledge
+  and record subsequent valid automatic callbacks, but hold unordered callbacks
+  for review instead of applying them. If different automatic callbacks conflict,
+  use an ordering authority the platform owns or hold them for review.
+- Never infer callback order from `decided_at` or `event_sequence`.
+  `decided_at` is a display timestamp, and `event_sequence` is only the per-case
+  ingest ordinal of the event that triggered the run. Migration `025` introduces
+  the separate `decision_sequence` callback-order authority after its governed
+  activation.
 
 ### What to do with each result
 
@@ -335,6 +344,10 @@ The event contract does not change — only what `object_ref` points at.
 - `GET /v1/runs/{id}` — one run's state and adapter results.
 - `GET /v1/review-tasks?status=open` — open human-review tasks (website
   checks, hidden POC email).
+- `GET /v1/cases/{id}/salesforce-projection` — the Salesforce-shaped view of a
+  case: every `salesforce_sync_fields.json` destination with its value already
+  mapped, keyed by the destination name the console currently has saved
+  (below).
 
 **Completing a website review** is a normal signed event, not a separate
 endpoint: post `website.review_completed` to `POST /v1/cases/{case_id}/events`
@@ -346,6 +359,38 @@ field. The tool validates the task exists, is a website task on that case, and
 is open (else 404/409/422); the transition, check, and audit are identical to
 any other event. (The old `POST /v1/review-tasks/{id}/complete` endpoint is
 retired — it duplicated this event.)
+
+### Salesforce projection (pull)
+
+`GET /v1/cases/{case_id}/salesforce-projection` is how the platform reads the
+Salesforce-shaped view of a case. It is a pull: call it after a callback, or on
+your own schedule, for the case you are about to mirror. The tool never writes
+Salesforce; this endpoint is the only sanctioned source for the mirror, and
+nothing in a production integration reads the console's `/ui/api/…` routes.
+
+One response is one consistent snapshot (a repeatable-read, read-only
+transaction), so a mapping saved in the console mid-request cannot produce a
+half-old, half-new body.
+
+| Field | Meaning |
+|---|---|
+| `case_id` | the case |
+| `fields` | object keyed by the **destination** name currently saved in the console; each entry carries `source_field` (the canonical `salesforce_sync_fields.json` name, e.g. `KYC_Status__c`), `source_identity` (the tool value it came from, e.g. `case.status`), `value_type` (`enum`, `integer`, `text`, `boolean`, `datetime`, `check_records`), `nullable`, and `value` |
+| `mapping_revision` | the active configuration revision the destination names were read from; `null` when no live configuration has been activated (destinations then equal the canonical names) |
+| `configuration_revision` | the configuration revision the pointed automatic decision ran under; present only for a resolved automatic decision, otherwise `null` |
+| `decision_authority` | which decision the values come from: `provenance`, `decision_row_id`, `run_id`, `decision_kind` (`automatic` or `manual`), `decision`, `run_provenance` |
+| `manual_approval_authority` | the latest manual approval, if any: `provenance`, `decision_row_id`, `reviewer_id`, `decided_at` |
+| `projection_timestamp` | RFC 3339 UTC timestamp of the snapshot |
+
+Statuses: `200`; `401` (signature invalid, missing, or retired); `404` (unknown
+case); `503` (configuration or the v1 signature witness unavailable; retry).
+Error bodies are `{"detail": "..."}`. The exact schema is
+`SalesforceProjectionResponse` in `/openapi.json`.
+
+A console mapping change affects the next read. It never rewrites earlier
+decisions or callback bytes, and it does not by itself prove the platform
+adopted the new destination names. `docs/SALESFORCE_MAPPING.md` has the
+per-field value rules.
 
 In production these reads also require the §2 signature headers. There is also
 an operator console (`/ui`) for the registration team — dashboards, case
@@ -394,22 +439,9 @@ None of these change the API in §§2–7.
 
 ## 10. Answers we need
 
-From the platform team:
+The consolidated list of what we need from the platform team and from
+IPv4.Global is `docs/PLATFORM_BRIEFING.md` §8; the questions already answered
+are in its §4 and §5.
 
-1. Callback base URLs (staging, production).
-2. Secret exchange procedure.
-3. ~~Documents~~ — answered on the kickoff call: platform extracts (§6);
-   tool-side OCR stays a later option.
-4. Will you consume `event_sequence`?
-5. Confirm you'll host the POC page and echo back both `token` and `token_id`.
-6. ~~Where the tool runs~~ — answered: the platform team deploys and operates
-   it in IPv4.Global's AWS account (RDS Postgres, an S3 bucket, outbound
-   HTTPS).
-
-From IPv4.Global:
-
-7. Email provider choice and sending domain.
-8. Companies House API key.
-9. ~~Who staffs manual review~~ — answered: the IPv4.Global team, working in
-   the platform admin. The platform should therefore surface held cases and
-   their reason codes (from the webhook body or the read API).
+Secrets never travel in chat, email, tickets, or documents: use the deployment
+secret manager.

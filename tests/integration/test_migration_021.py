@@ -9,6 +9,7 @@ unbounded outage of every stream. A guard must stop the bad write, never strand 
 import httpx
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from kyc_tool.config import ProcessRole
@@ -169,7 +170,9 @@ def test_upgrade_refuses_when_a_poisoned_row_already_exists(pg, claimed):
     command.upgrade(cfg, "head")
     with eng.connect() as conn:
         assert conn.execute(
-            text("SELECT version_num FROM alembic_version")).scalar_one() == "023"
+            text("SELECT version_num FROM alembic_version")).scalar_one() == (
+                ScriptDirectory.from_config(cfg).get_current_head()
+            )
     eng.dispose()
 
 

@@ -35,7 +35,9 @@ PIDS=()
 
 cleanup() {
   echo; echo "shutting down…"
-  for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
+  # ${PIDS[@]:-} on an empty array is an unbound-variable error under `set -u` in bash 3.2,
+  # which is what macOS ships -- and it aborts cleanup, leaving Postgres running.
+  for pid in ${PIDS[@]+"${PIDS[@]}"}; do kill "$pid" 2>/dev/null || true; done
   as_pg_user "$PGBIN/pg_ctl -D $PGDIR/data -m immediate stop" 2>/dev/null || true
   rm -rf "$PGDIR"
 }
@@ -61,6 +63,24 @@ export KYC_UI_ENABLED="${KYC_UI_ENABLED:-true}"
 echo "→ migrations"
 "$ROOT/.venv/bin/alembic" upgrade head >/dev/null
 
+# Scoring, brokers and Salesforce mappings are editable in the console only after the drained
+# activation production uses: bundle pinning epoch, then live configuration revision 1. A fresh
+# database with nothing running yet IS the drained state, so this stack activates on every
+# start. Every process below inherits the flag and the credential; the console sends the
+# credential with each save (the app's proxy pre-fills it; by hand, paste it under Options).
+export KYC_UI_ADMIN_TOKEN="${KYC_UI_ADMIN_TOKEN:-dev-admin}"
+export KYC_ENFORCE_BUNDLE_PINNING=true
+echo "→ live configuration (bundle pinning epoch, revision 1)"
+{ read -r BUNDLE_HASH; read -r ENGINE; } < <("$PY" -c 'from kyc_tool.config import get_settings
+from kyc_tool.domain.engine import ENGINE_BUILD_ID
+from kyc_tool.policy.loader import load_policy
+print(load_policy(get_settings().policy_dir).bundle_hash); print(ENGINE_BUILD_ID)')
+"$PY" -m kyc_tool.ops.seed_policy_bundle --expect-hash "$BUNDLE_HASH" >/dev/null
+"$PY" -m kyc_tool.ops.activate_bundle_pinning_epoch \
+  --expect-bundle-hash "$BUNDLE_HASH" --expect-engine "$ENGINE" >/dev/null
+"$PY" -m kyc_tool.ops.activate_live_configuration \
+  --apply --attest-writers-stopped --operator-label dev-stack >/dev/null
+
 echo "→ fake platform receiver on :$RECEIVER_PORT"
 "$PY" scripts/dev_receiver.py "$RECEIVER_PORT" & PIDS+=($!)
 
@@ -78,6 +98,8 @@ cat <<EOF
   │  Ops console   http://127.0.0.1:$API_PORT/ui              │
   │  API           http://127.0.0.1:$API_PORT               │
   │  Callbacks     .substrate/state/callbacks.log        │
+  │  Editing       Scoring, Brokers, Mappings are live;  │
+  │                credential $KYC_UI_ADMIN_TOKEN        │
   │                                                     │
   │  Try: Composer → send kyb.run_requested (template   │
   │  is Acme) → open the case → watch checks/score/     │

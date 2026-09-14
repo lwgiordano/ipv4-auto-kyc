@@ -152,6 +152,19 @@ documented choice · 🔵 hygiene/wording.
 
 ## D. Design tightenings adopted (not contradictions — hardening)
 
+### 🔵 D-LIVE-CONFIG — Approved live point caps and broker snapshot ownership
+
+The 2026-09-11 approved console design permits server-saved point weights as exact
+integers 0–1000. ORG-ID and POC caps follow the edited single-check weight, with
+derived metadata/descriptions kept consistent, instead of fixed packaged
+25-point defaults. A type still counts once; the threshold, five gates, evidence
+rules, and M2 hold do not change. Packaged normative JSON stays unmodified.
+Immutable configuration `024` now owns full broker snapshots (including stable
+IDs and notes) and per-run match provenance, pulled forward from PR 10; remaining
+PR 10 scope stays in `029`. Saves affect new runs only, never relabel old runs or
+replays. Mapping edits change service-side destination names, never Salesforce
+directly. See ADR-009 and `docs/DEPLOYMENT.md` §12 for activation and recovery.
+
 - **D1 — Broker gate runs on every event.** The spec runs it "first on every full run";
   single-evidence events (`org_id.submitted`, `poc.submitted`) introduce identifiers
   that are broker match classes (`rir_org_ids`, `poc_handles`). The gate is local and

@@ -59,7 +59,8 @@ Step by step, for one customer ("case"):
    ORG-ID"). The tool records it, queues the work, and instantly returns a run
    ID; it does not block.
 2. **A worker picks it up.** A background worker claims the job. Events for the
-   same case are processed in order.
+   same case are processed in order; the delivery order of the resulting
+   callbacks is a separate contract (`docs/PLATFORM_INTEGRATION.md` §4).
 3. **Broker check first.** The company's identifiers are matched against the
    blocked-broker list. An exact match short-circuits everything → `reject`.
 4. **Gather evidence.** The tool calls the external sources it needs for
@@ -191,7 +192,7 @@ gets an internal per-case `decision_sequence`, allocated under the case's `FOR U
 `superseded` guard**: an older requeued callback is suppressed only when a higher-sequence decision
 already carries a locally-stamped `published_at`. Each claim is fenced by a `claim_token` so a stale
 publisher cannot overwrite a reclaimer's terminal. **Boundary:** THREE residual reverts are NOT
-closed here and remain expected until 7b-activation (`024`) adds the platform high-water mark:
+closed here and remain expected until 7b-activation (`025`) adds the platform high-water mark:
 send-before-stamp; cross-replica; and a queued automatic callback delivered AFTER a later manual
 approval (manual approvals carry no run, no callback, and no sequence, so the local guard has no
 higher locally-published automatic sequence to compare). 7b-core does not claim exactly-once (see

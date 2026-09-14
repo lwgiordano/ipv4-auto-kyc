@@ -228,16 +228,86 @@ print(r.status_code, r.json())
   cases, scores, gates, run states, and can compose signed test events from
   the browser.
 
-## 8. What we need from you
+## 8. Where things stand, and what we need from you
 
-1. Staging callback URL (production's later).
-2. A secure channel to exchange the HMAC secrets (the v1 legacy secret plus the
-   split v2 inbound/outbound secrets + key ids).
-3. AWS access for whoever on your side deploys.
-4. ~~Confirmation of the document path~~ — answered on the kickoff call:
-   platform ingests and extracts; exact field spec in
-   `PLATFORM_INTEGRATION.md` §6.
-5. Will you consume the optional `event_sequence` ordering field?
+Status at this release, grouped into five states. Nothing here calls the
+service production-ready; the go/no-go gate is §8 of
+`docs/superpowers/specs/2026-09-12-production-readiness-design.md`.
+
+**Implemented now**
+
+- Signed event ingestion with a typed request and response contract in
+  `/openapi.json` (all nine event types, exact status codes) and idempotent
+  replay.
+- Decision webhook delivery, at-least-once, with retries and dead-lettering.
+- The read API and the pull-style Salesforce projection
+  (`PLATFORM_INTEGRATION.md` §7).
+- Website review and manual approval as signed events; the operator console,
+  including live configuration and Salesforce destination-name mapping.
+- Live registry adapters: Companies House (needs the API key, item 13), GLEIF,
+  and the five RIR RDAP strategies. S3-compatible evidence storage.
+- The production boot check that refuses stub providers and unsafe config.
+
+**Implemented but not activated**
+
+- Ordered callback delivery (`decision_sequence`). The interim receiver rule in
+  `PLATFORM_INTEGRATION.md` §4 applies until migration 025 is bootstrapped from
+  your accepted-run ledger and activated.
+- Positive enforcement of automatic approvals stays off at launch; held
+  decisions arrive as `enforcement_held` (`PLATFORM_INTEGRATION.md` §4).
+- v1 signature retirement: dual-accept now; sunset dates are set at cutover.
+
+**Awaiting your configuration** (through the deployment secret manager or
+written deployment config, never chat)
+
+1. Callback base URLs, staging and production.
+2. Key ids and the HMAC secrets for each wire direction, through the secret
+   manager.
+3. S3 bucket, key prefixes, and IAM ownership for evidence and extracted JSON.
+4. The Salesforce sandbox and the platform service that will consume the
+   projection.
+5. AWS deployment access for whoever on your side deploys.
+
+**Awaiting your contract decisions** (write each down; we turn it into a
+tested contract)
+
+6. Your callback receiver's behavior: that it commits the decision before
+   returning 2xx, and how it dedupes on `(case_id, run_id)`.
+7. Ordering bootstrap, needed before migration 025 can be planned: where the
+   platform's accepted-run ledger lives; how we query the accepted decision for
+   every case; how manual approvals and reverted decisions appear in it; who
+   signs the bootstrap response and how that signer is identified; the maximum
+   bootstrap size and the recovery procedure.
+8. Review-task changes: the default is a webhook you host for task
+   opened/completed/cancelled; if you would rather poll
+   `GET /v1/review-tasks?status=open`, say so with the cursor, freshness, and
+   missed-poll recovery rules you need.
+9. Document extraction stays platform-owned for production, as agreed at
+   kickoff, or you name an OCR provider for us to integrate instead.
+10. POC verification email: we plan an SES sender (not built yet, below)
+    unless you want a platform-owned delivery contract. Confirm too that you
+    host the POC page and echo back both `token` and `token_id`
+    (`PLATFORM_INTEGRATION.md` §5).
+11. Floqer: a production contract, or an explicit decision to launch with it
+    disabled (reduced coverage, recorded as a decision).
+12. Operating targets: expected daily and peak case volume, concurrent runs,
+    acceptable latency for light and full checks, soak duration, deployment
+    region, maintenance-window constraints, availability and recovery
+    objectives.
+
+**From IPv4.Global**
+
+13. Companies House API key (secret manager).
+14. Email provider choice and sending domain, if not SES.
+
+**Coming on our side, not yet built**: a conformance kit you can run against
+staging, a downloadable versioned contract bundle, the production provider
+profile (POC directory, email sender, document provider, Floqer client), the
+load and soak harness, and migration 025 once item 7 is answered.
+
+**Out of scope by design**: the tool never writes Salesforce, never judges a
+website automatically, never replaces your platform UI, and never changes a
+historical decision when configuration or mappings change.
 
 ## 9. Doc map
 
@@ -247,4 +317,5 @@ print(r.status_code, r.json())
 | Deploying, releasing, rollback, monitoring | `docs/DEPLOYMENT.md` |
 | Operating it: env vars, health, dead letters, console | `docs/RUNBOOK.md` |
 | How scoring and decisions work, in depth | `docs/OVERVIEW.md` |
+| Salesforce field-by-field mapping and value rules | `docs/SALESFORCE_MAPPING.md` |
 | Normative spec and policy files | `KYC_Tool_Build_Package/` |

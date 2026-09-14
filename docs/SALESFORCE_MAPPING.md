@@ -7,7 +7,21 @@ into the `salesforce_sync_fields.json` field set, including the resolution of
 audit finding **A5** (`approved_manual` has no `KYC_Status__c` value).
 
 Sources for every value below: the decision callback (`POST …/kyc/decision`),
-`GET /v1/cases/{case_id}` and `GET /v1/cases/{case_id}/checks?all=1`.
+`GET /v1/cases/{case_id}` and `GET /v1/cases/{case_id}/checks?all=1`; the
+mapped, destination-keyed view of all of them is
+`GET /v1/cases/{case_id}/salesforce-projection` (`PLATFORM_INTEGRATION.md` §7).
+
+After explicit live-configuration activation, the field names below remain the
+default destinations and stable source identities. The console edits destination
+names only (1–80 ASCII identifier characters, case-insensitively unique), not
+sources, types, or company values. Saves are shared server revisions, not previews.
+The platform reads the destination-keyed values, `mapping_revision`, and source
+identities from `GET /v1/cases/{case_id}/salesforce-projection`; the console's
+own case view shows the same mapping to operators. Subsequent projection reads
+use the saved mapping without rewriting old decisions or callback bytes. The
+platform must explicitly consume the projection for a mapping change to reach
+Salesforce.
+A mapping save neither writes Salesforce nor proves that the platform adopted it.
 
 ## KYC_Case__c fields
 

@@ -101,3 +101,66 @@ def test_unauthenticated_event_rejected(client, clean_db):
     headers["X-KYC-Signature"] = "0" * 64
     response = client.post("/v1/cases/case-401/events", content=body, headers=headers)
     assert response.status_code == 401
+
+
+def test_signature_failure_wins_over_invalid_json(client, clean_db):
+    body = b'{"not":'
+    headers = sign_headers(body)
+    headers["X-KYC-Signature"] = "0" * 64
+    response = client.post("/v1/cases/auth-first/events", content=body, headers=headers)
+    assert response.status_code == 401
+
+
+def test_valid_signature_then_invalid_json_is_422(client, clean_db):
+    body = b'{"not":'
+    response = client.post("/v1/cases/parse-second/events", content=body, headers=sign_headers(body))
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
+    assert response.json()["detail"].startswith("invalid JSON:")
+
+
+def test_semantically_equal_normalized_envelopes_replay(client, clean_db):
+    first_body = json.dumps(
+        {
+            "event_type": "kyb.run_requested",
+            "occurred_at": "2026-09-12T12:00:00Z",
+            "actor": {"type": "system", "id": "techcraft", "actor_extension": "kept"},
+            "payload": {"company_legal_name": "Acme", "payload_extension": "kept"},
+        }
+    ).encode()
+    second_body = json.dumps(
+        {
+            "payload": {
+                "company_legal_name": "Acme",
+                "address": None,
+                "registration_number": None,
+                "jurisdiction": None,
+                "website": None,
+                "contact": None,
+                "platform_account_id": None,
+                "payload_extension": "kept",
+            },
+            "actor": {
+                "actor_extension": "kept",
+                "id": "techcraft",
+                "type": "system",
+            },
+            "occurred_at": "2026-09-12T12:00:00+00:00",
+            "event_type": "kyb.run_requested",
+        },
+        separators=(",", ":"),
+    ).encode()
+    key = "normalized-replay"
+    first = client.post(
+        "/v1/cases/normalized/events",
+        content=first_body,
+        headers=sign_headers(first_body, key=key),
+    )
+    replay = client.post(
+        "/v1/cases/normalized/events",
+        content=second_body,
+        headers=sign_headers(second_body, key=key),
+    )
+    assert first.status_code == 202
+    assert replay.status_code == 200
+    assert replay.json() == first.json()

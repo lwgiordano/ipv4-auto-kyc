@@ -2,7 +2,7 @@
 
 Re-audit `4cb2cb7` F10. The published rows carried their conditions as PROSE, and the reference
 evaluator carried the same conditions as hardcoded `if` branches. Nothing compared the two: Codex
-widened the post-024 manual row to "MANUAL or AUTOMATIC" — an overlap that makes two rows claim the
+widened the post-025 manual row to "MANUAL or AUTOMATIC" — an overlap that makes two rows claim the
 same state — and every receiver and authority test stayed green, because "totality" was checked as
 four rows plus token presence, and the evaluator never read the rows it was supposedly
 implementing.
