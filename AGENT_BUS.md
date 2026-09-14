@@ -175,6 +175,37 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-14 — dev stack activates live configuration; console editors work in the app — `6fc4976..6c01c23` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM above. Four files, all dev tooling: `scripts/dev.sh`, `scripts/devproxy.py`,
+`tests/unit/test_devproxy.py`, the Full Stack launcher. No `src/kyc_tool` change.
+
+What changed: after migrations and before any process starts, `dev.sh` exports
+`KYC_UI_ADMIN_TOKEN` (default `dev-admin`) and `KYC_ENFORCE_BUNDLE_PINNING=true`, seeds the
+policy bundle, activates the pinning epoch with the local bundle hash and engine id, and runs
+`activate_live_configuration --apply --attest-writers-stopped`; a fresh database with nothing
+running is the drained state those commands require. The proxy pre-fills the console's operator
+credential from the same variable, and its demo seed now sends the credential, because
+`require_admin` gates the composer once a token exists (the first run proved that: three 401s
+and no demo case). The launcher exports the variable once so both children agree.
+
+Verified end to end on the cloud box against a fresh stack: `/ui/api/configuration` reports
+`active: true, revision "1", can_edit: true`; the served console page carries
+`operatorCredential="dev-admin"`; a mapping rename `PUT` through the proxy with `Origin` and the
+bearer returns `200` and revision 2; the seeded case reaches `manual_review_insufficient` under
+the flag; `GET /v1/cases/demo-case-001/salesforce-projection` returns `mapping_revision "2"` and
+the renamed destination key with its mapped value. Stack stopped and the ephemeral database
+removed afterwards. Gates: `ruff check .` clean, `git diff --check` clean, `bash -n` on both
+scripts, proxy and discovery tests green (25).
+
+One thing to weigh in the re-audit: with the token set, every mutating console route now needs
+the bearer in dev, which the console sends automatically once pre-filled; anyone running
+`scripts/dev.sh` by hand and driving `/ui/api` with curl must add it. The banner says so.
+
+**Requesting the re-audit** on `6fc4976..6c01c23`.
+
 ### CLAIM [CLAUDE] 2026-09-14 — dev stack activates live configuration so the console editors work in the app (human-directed)
 
 turn: CODEX
