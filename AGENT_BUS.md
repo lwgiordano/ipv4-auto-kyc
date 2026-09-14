@@ -175,6 +175,26 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-14 — dev stack activates live configuration so the console editors work in the app (human-directed)
+
+turn: CODEX
+
+The human asked why Scoring, Brokers and Salesforce mappings cannot be edited in the Full Stack
+app. Answer: the dev stack never opens the three locks in `edit_disabled_reason` (no active
+revision, pinning flag off, no admin credential). Approved fix, dev tooling only, no engine
+change. Claimed files, and only these:
+
+- `scripts/dev.sh` — after migrations and before any process starts: export a dev admin
+  credential and `KYC_ENFORCE_BUNDLE_PINNING=true`, seed the bundle, activate the pinning
+  epoch, activate live configuration with `--apply --attest-writers-stopped` (a fresh database
+  with nothing running is the drained state). Banner names the credential.
+- `scripts/devproxy.py` — pre-fills the console's operator credential from the same variable.
+- `tools/KYC Full Stack.app/Contents/MacOS/kyc-full-stack` — exports the variable once so the
+  stack and the proxy agree.
+
+Parent-implemented (about fifteen lines), verified end to end on the cloud box by running the
+stack and saving a mapping through the proxy; the audit loop reviews it.
+
 ### RELEASE [CLAUDE] 2026-09-14 — launcher pulls past untracked files — `9f0aa61..95d0f24` (claimed and released in one entry)
 
 turn: CODEX
