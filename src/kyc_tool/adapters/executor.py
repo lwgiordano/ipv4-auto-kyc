@@ -9,7 +9,7 @@ transport), the whole physical fetch runs in a FORK-PER-CALL child the parent TE
 absolute deadline: occupancy itself becomes bounded, unconditionally.
 
 Contract details:
-- The child performs ONLY wire + containment (`_contained_get` under a child-local budget carrying
+- The child performs ONLY wire + containment (`_contained_request` under a child-local budget carrying
   the deadline + byte cap). Rate permits and the DB liveness proof already ran PARENT-side in
   `_authorize_send` — the fork must never touch inherited DB connections.
 - The child exits via `os._exit` so inherited finalizers (DB sockets, pools) never run in the
@@ -42,8 +42,8 @@ def process_portable(client: httpx.Client) -> bool:
     return isinstance(transport, httpx.HTTPTransport)
 
 
-def _child_fetch(config: dict, url: str, params: dict | None, remaining: float,
-                 cap: int | None, conn) -> None:  # pragma: no cover — runs in the fork
+def _child_fetch(config: dict, method: str, url: str, params: dict | None, json: dict | None,
+                 remaining: float, cap: int | None, conn) -> None:  # pragma: no cover — in the fork
     try:
         from kyc_tool.adapters import retry
 
@@ -57,8 +57,8 @@ def _child_fetch(config: dict, url: str, params: dict | None, remaining: float,
             deadline_monotonic=time.monotonic() + remaining, max_response_bytes=cap
         )
         with budget_scope(budget):
-            response = retry._contained_get(
-                child_client, url, params, budget, {"timeout": config["timeout"]}
+            response = retry._contained_request(
+                child_client, method, url, params, json, budget, {"timeout": config["timeout"]}
             )
         conn.send(("ok", response.status_code, list(response.headers.multi_items()),
                    response.content))
@@ -92,8 +92,10 @@ def _rebuild_error(name: str, message: str) -> Exception:
 
 def supervised_fetch(
     client: httpx.Client,
+    method: str,
     url: str,
     params: dict | None,
+    json: dict | None,
     budget: RetryBudget,
     phase_timeout,
 ) -> httpx.Response:
@@ -113,7 +115,7 @@ def supervised_fetch(
     parent_conn, child_conn = ctx.Pipe(duplex=False)
     child = ctx.Process(
         target=_child_fetch,
-        args=(config, url, params, remaining, budget.max_response_bytes, child_conn),
+        args=(config, method, url, params, json, remaining, budget.max_response_bytes, child_conn),
         daemon=True,
     )
     child.start()
@@ -135,7 +137,7 @@ def supervised_fetch(
         child.join(2)
     if message[0] == "ok":
         _, status, headers, body = message
-        request = httpx.Request("GET", httpx.URL(str(client.base_url)).join(url))
+        request = httpx.Request(method, httpx.URL(str(client.base_url)).join(url))
         return httpx.Response(status, headers=headers, content=body, request=request)
     _, name, text = message
     raise _rebuild_error(name, text)

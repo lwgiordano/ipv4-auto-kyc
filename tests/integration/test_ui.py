@@ -331,6 +331,8 @@ def prod_ui_client(settings, session_factory, policy, clean_db) -> TestClient:
     prod_settings = settings.model_copy(
         update={
             "environment": "production",
+            "floqer_api_key": "floq_placeholder-not-a-real-key",
+            "floqer_shortcut_id": "00000000-0000-0000-0000-000000000000",
             "auth_disabled": False,
             "platform_hmac_secret": "s" * 40,
             "platform_callback_url": "https://platform.example/kyc",

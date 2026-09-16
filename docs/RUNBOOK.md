@@ -145,6 +145,8 @@ lists **all** violations at once:
 | `KYC_OCR_ENGINE` | not the `json_scan` dev stub |
 | `KYC_EMAIL_PROVIDER` | not the `logging` dev stub |
 | `KYC_ADAPTERS_PROFILE` | not the `fixture` stub |
+| `KYC_FLOQER_API_KEY` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`; secret manager or `.env` only — never a task definition, a log, or a case snapshot |
+| `KYC_FLOQER_SHORTCUT_ID` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`; the id of the ONE published shortcut the tool runs |
 | `KYC_READ_AUTH_REQUIRED` | `true` (read API requires a signed request) |
 | `KYC_UI_ADMIN_TOKEN` | required when `KYC_UI_ENABLED=true` |
 | `KYC_OUTBOX_LEASE_SECONDS` | must EXCEED `4 × KYC_OUTBOX_HTTP_TIMEOUT_SECONDS + KYC_OUTBOX_LEASE_MARGIN_SECONDS` — the publisher enforces 4 × timeout as a hard per-attempt deadline, and a lease that expires mid-attempt makes every delivery unwitnessable |
@@ -288,6 +290,14 @@ count). Queue depth is `jobs_by_status.queued`; scale pipeline workers
 horizontally (SKIP LOCKED makes them safe; per-case processing order is
 preserved. Callback delivery order is a separate contract,
 `docs/PLATFORM_INTEGRATION.md` §4).
+
+**Floqer.** The documented limits are 200 requests/minute and 10,000/day per
+key. One case costs one run request plus its polls — about 12, hard-capped near
+45 by the 180 s client deadline — and 1.6-9.6 credits. Set
+`KYC_ADAPTER_RATE_LIMITS={"floqer_company_enrichment": <n>}` per worker so the
+whole fleet stays under 200/minute, and remember credits and requests are
+separate budgets. A run ending `outOfCredits` is a billing stop, not a fault to
+retry: top the account up, do not re-drive the cases.
 
 ## PR 7b-core cutover — drained maintenance window (migration 013)
 

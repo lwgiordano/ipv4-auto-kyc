@@ -145,8 +145,9 @@ documented choice · 🔵 hygiene/wording.
   in the ingestion response.
 
 ### 🟡 C4 — Unknown external contracts
-- Floqer response shape, platform callback URL, platform email-verification fetch API,
-  outbound email provider, production OCR engine.
+- Floqer's contract is settled: the Shortcut API (one run POST, then polls of the run
+  until a terminal status) behind `ShortcutFloqerClient`. Still unknown: platform callback
+  URL, platform email-verification fetch API, outbound email provider, production OCR engine.
 - **v1 behavior**: each sits behind a small interface with a fixture/fake
   implementation, configured by environment, marked `TODO(integration)`.
 

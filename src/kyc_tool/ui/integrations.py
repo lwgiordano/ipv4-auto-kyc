@@ -35,9 +35,9 @@ WIRING = {
     },
     "gleif": {"kind": "HTTP · api.gleif.org (public)", "env": [], "todo": None},
     "floqer_company_enrichment": {
-        "kind": "HTTP · Floqer enrichment",
-        "env": [],
-        "todo": "TODO(integration): real Floqer API contract unknown (AUDIT:C4)",
+        "kind": "HTTP · api.floqer.com shortcut",
+        "env": ["KYC_FLOQER_API_KEY", "KYC_FLOQER_SHORTCUT_ID"],
+        "todo": None,
     },
     "rir_rdap": {
         "kind": "HTTP · 5 RIR RDAP endpoints",
@@ -91,7 +91,7 @@ def _classify(adapter_id: str, adapter: object) -> tuple[str, str]:
         client = getattr(adapter, "client", None)
         if type(client).__name__ == "FixtureFloqerClient":
             return "stub", "FixtureFloqerClient — returns canned records only"
-        return "live", type(client).__name__
+        return "live", f"{type(client).__name__} — shortcut {getattr(client, 'shortcut_id', '')}"
     if adapter_id == "rir_rdap":
         strategies = getattr(adapter, "strategies", {})
         names = {type(s).__name__ for s in strategies.values()}

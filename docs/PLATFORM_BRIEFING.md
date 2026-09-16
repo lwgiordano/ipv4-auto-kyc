@@ -288,8 +288,9 @@ tested contract)
     unless you want a platform-owned delivery contract. Confirm too that you
     host the POC page and echo back both `token` and `token_id`
     (`PLATFORM_INTEGRATION.md` §5).
-11. Floqer: a production contract, or an explicit decision to launch with it
-    disabled (reduced coverage, recorded as a decision).
+11. Floqer: contract in place; the tool calls a published shortcut in
+    IPv4.Global's own Floqer account (discovery-only, feeds the LinkedIn
+    match). Nothing needed from the platform.
 12. Operating targets: expected daily and peak case volume, concurrent runs,
     acceptable latency for light and full checks, soak duration, deployment
     region, maintenance-window constraints, availability and recovery

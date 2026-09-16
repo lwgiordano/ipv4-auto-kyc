@@ -18,7 +18,7 @@ import httpx
 from kyc_tool.adapters.companies_house import CompaniesHouseAdapter
 from kyc_tool.adapters.document_ocr import DocumentOcrAdapter
 from kyc_tool.adapters.email_verification import EmailVerificationAdapter
-from kyc_tool.adapters.floqer import FixtureFloqerClient, FloqerAdapter
+from kyc_tool.adapters.floqer import FloqerAdapter, make_floqer_client
 from kyc_tool.adapters.gleif import GleifAdapter
 from kyc_tool.adapters.ocr import JsonScanOcrEngine
 from kyc_tool.adapters.rir_poc import FixturePocDirectory, RirPocAdapter
@@ -83,7 +83,7 @@ def _registry_transport(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"data": []})
 
 
-def build_dev_adapters(store) -> dict:
+def build_dev_adapters(store, settings) -> dict:
     transport = httpx.MockTransport(_registry_transport)
     return {
         "email_verification": EmailVerificationAdapter(),
@@ -93,7 +93,7 @@ def build_dev_adapters(store) -> dict:
         "gleif": GleifAdapter(
             client=httpx.Client(transport=transport, base_url="https://gleif.dev.local")
         ),
-        "floqer_company_enrichment": FloqerAdapter(FixtureFloqerClient(FLOQER_RECORDS)),
+        "floqer_company_enrichment": FloqerAdapter(make_floqer_client(settings, FLOQER_RECORDS)),
         "rir_rdap": RirRdapAdapter({"arin": FixtureRirStrategy(RDAP_RECORDS)}),
         "rir_poc": RirPocAdapter(FixturePocDirectory(POC_DIRECTORY)),
         "document_ocr": DocumentOcrAdapter(store, JsonScanOcrEngine()),
@@ -126,7 +126,7 @@ def main() -> None:
         policy,
         store,
         settings,
-        adapters=build_dev_adapters(store),
+        adapters=build_dev_adapters(store, settings),
         broker_matcher=BrokerGate(),
     )
     worker = Worker(

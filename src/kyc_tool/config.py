@@ -551,6 +551,11 @@ class Settings(BaseSettings):
     ocr_engine: str = STUB_OCR_ENGINE
     email_provider: str = STUB_EMAIL_PROVIDER  # logging | file | (real: item 12)
     adapters_profile: str = STUB_ADAPTERS_PROFILE  # fixture | real
+    # Floqer discovery over the Shortcut API: the key authorizes the account, the id names the
+    # ONE published shortcut the tool runs. Both required outside the fixture profile; the key
+    # comes from the secret manager / .env and is never logged or echoed into evidence.
+    floqer_api_key: str = ""
+    floqer_shortcut_id: str = ""
     # Sink path for email_provider="file" (closed staging/dev only): each token
     # email is appended as a JSON line so the POC round-trip is testable.
     email_file_path: Path = REPO_ROOT / ".substrate" / "state" / "poc-emails.log"
@@ -906,6 +911,11 @@ def _section_providers_and_storage(settings: Settings, v: list[str]) -> None:
         v.append("email_provider is the staging file sink (writes raw tokens to disk)")
     if settings.adapters_profile == STUB_ADAPTERS_PROFILE:
         v.append(f"adapters_profile is the fixture stub ({STUB_ADAPTERS_PROFILE!r})")
+    else:
+        # Outside the fixture profile the Floqer client is live: without both the key and the
+        # published shortcut id every case loses LinkedIn discovery silently.
+        for name in ("floqer_api_key", "floqer_shortcut_id"):
+            v.extend(string_setting_violations(getattr(settings, name), name))
 
     if not settings.read_auth_required:
         v.append("read_auth_required is False (the read API would be unauthenticated)")
