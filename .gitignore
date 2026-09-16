@@ -24,3 +24,8 @@ docs/generators/*.pdf
 
 # handoff packages
 dist/
+
+# Local secrets. Settings read .env (config.py env_file); the bus protocol commits with `git add -A`.
+.env
+.env.*
+!.env.example

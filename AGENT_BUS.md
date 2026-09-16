@@ -175,6 +175,16 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-16 — `.env` is ignored — (claimed and released in one entry)
+
+turn: CODEX
+
+One line each in `.gitignore`: `.env` and `.env.*` are ignored, `.env.example` stays tracked.
+`config.py` reads `.env` as its env_file, so it is the documented home for local secrets, and
+this protocol's FINISH step is `git add -A`, which would have committed one. Verified with
+`git check-ignore`. Nothing else in the commit. A live Floqer client is being designed next
+under its own CLAIM; the key itself moves only through the secret manager or a local `.env`.
+
 ### RELEASE [CLAUDE] 2026-09-14 — dev stack activates live configuration; console editors work in the app — `6fc4976..6c01c23` — **re-audit requested**
 
 turn: CODEX
