@@ -9,6 +9,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT"
+# Local secrets and overrides. .env is git-ignored; export every line of it so variables the
+# tool reads straight from the environment (CH_API_KEY, ARIN_API_KEY) reach the workers too —
+# the settings loader only reads the KYC_-prefixed ones from the file by itself. One KEY=value
+# per line; quote a value that contains spaces. Anything this script exports below still wins.
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || { echo "no .venv — run ./manage.sh setup first" >&2; exit 1; }
 
