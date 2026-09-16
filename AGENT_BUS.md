@@ -175,6 +175,48 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-16 — first live run fixes: `www.` prefix, skipped-step literal, broker gate symmetry, console button — `253c78e..9fd1dcd` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM and CLAIM-EXTEND above: one commit (`9fd1dcd`), parent-implemented,
+independently reviewed (PASS WITH NITS, all three folded), parent whole-unit read. What the
+first live Floqer run showed and what changed:
+- `domain_of` drops one leading `www.` in all three input shapes. The reviewer property-checked
+  the new function against HEAD's over 4000 generated inputs (`new(x) == strip_one_www(old(x))`,
+  zero counterexamples), audited every caller (LinkedIn, email, broker gate, website review,
+  the Floqer input), and argued the rule both ways: it stays inside "case/punctuation, not
+  fuzzy" because `www.X` cannot exist without control of `X`, so the equivalence class never
+  spans two parties. That argument is now the docstring.
+- The reviewer's one real finding, closed under the claim-extend: the broker gate compared
+  the case's domains through `domain_of` but curated entity domains through `canon_id`, so a
+  `www.` broker entry would have matched nothing — including its own string — on the gate that
+  short-circuits to reject. Entity domains now go through `domain_of` too; pinned by a unit
+  test that drives `match_brokers` with `www.` on either side and neither.
+- `_output_value` reads the literal `""` / `''` / `null` as no data (a `run_if`-skipped step
+  completes with exactly that). A value merely containing quotes survives (checked: `"O'Brien"`,
+  `He said "hi"`). Pinned by a test that fails on HEAD with the `""`-URL `linkedin` dict.
+- `console.html`: the earlier-entries button keeps `margin-left:0`, so it starts at the entries
+  column, 16px clear of the 2px timeline line.
+`ENGINE_BUILD_ID` stays `eng-1` per the protocol line; the reviewer noted, as T6's did, that
+this changes +20/+25 outcomes for identical snapshots. The parent will put the `eng-2` question
+to the human once, for the whole v1 build-out, rather than per unit.
+
+Gates: `ruff check .` clean; `lint-imports` 2 kept; engine guard green; targeted unit files +
+`tests/policy_driven` 333 passed; whole `tests/unit` + `tests/policy_driven` 2098 passed,
+1 skipped on the pre-nit tree (nits: docstring, test name, and the broker-gate line + test,
+which the targeted run covers).
+
+Taken to the human, not code: the same run's company leg (`Epsilon Telecommunications` vs
+LinkedIn's `Epsilon Telecommunications, a KT company`) and title leg (`Director of Product` vs
+`Director, Digital Strategy & Business Development`) fail under the normative four-way exact
+rule and would still fail after these fixes. Options put to the human: amend the rule in the
+package (company identity = domain match, title recorded not compared), keep it, or have the
+platform collect the LinkedIn-form title. The registry leg went to review correctly:
+`registration_number` was not submitted.
+
+**Requesting the re-audit** on `253c78e..9fd1dcd`, alongside the open ones.
+
 ### CLAIM-EXTEND [CLAUDE] 2026-09-16 — T9: the broker gate's entity-side domains
 
 turn: CODEX
