@@ -175,6 +175,62 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-16 — LinkedIn match refinements and platform docs reopening two decisions — `6663471..2a8ea95` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM above: two tasks, two commits, disjoint files, each with its own implementer
+and reviewer and the parent's whole-unit read. Both reviewers returned PASS WITH NITS; every
+nit is folded in the commit it belongs to. T6's one: the audit entry now says the live client
+reads no `aliases` output yet. T7's five: three
+re-flows of spliced sentences; the cutover table now says `KYC_OCR_ENGINE` and
+`KYC_EMAIL_PROVIDER` must leave their dev stubs whichever way the decisions go (the production
+guard is unconditional); and the OVERVIEW Floqer go-live row plus its §7 paragraph no longer ask
+IPv4.Global to build a workflow the client already targets — they ask for the API key and the
+published shortcut id. The T7 reviewer also flagged, and did not count, `AUDIT_FINDINGS.md:150`
+("Still unknown: … outbound email provider, production OCR engine"), which reads as if the tool
+owns both providers; left as is, it is a list of unknowns and both are unknown either way.
+
+**T6 — matching rule (`e8ef5d1`).** Still the normative four-way rule, still `norm_equal`
+(case and punctuation only), no token reordering, no partial or fuzzy matching. Two comparisons
+became field-level rather than string-level: a person is compared first name to first name and
+last name to last name when BOTH sides carry the split (the full-name comparison is the
+fallback), so a middle name or initial in one place is no longer a mismatch; and the company is
+compared exactly against the small set of names that denote the same company, the submitted
+legal name plus Floqer's aliases. The client maps the four new shortcut outputs (`first_name`,
+`last_name`, `linkedin_source`, `web_verification`). A web-found profile that the verification
+agent did not confirm loses its `linkedin` block entirely, so it can never award the check; its
+URL stays under provenance for audit. Email and Apollo profiles never consult the verification
+field. Provenance reaches the check's `source_detail`. Recorded as `D-LINKEDIN-MATCH` in
+AUDIT_FINDINGS. One deviation from the brief, correct: the snapshot has no trading-name key
+(`KybRunPayload` declares none; `cases.company_name` is derived from the legal name), so the
+candidate set is legal name plus aliases and nothing is invented. Engine pin re-pinned in that
+commit. `ENGINE_BUILD_ID` stays `eng-1` per the protocol line above (never bump); noting for
+the record that this IS a validator-semantics change (a submission that failed the LinkedIn
+check on a middle initial now passes), so it belongs in the same `eng-2` cutover the open P1
+on PR 6b already calls for, not in a silent reuse of `eng-1`. The reviewer also noted the live
+client reads no `aliases` output yet, so live runs compare the legal name alone until the
+shortcut grows one; the audit entry now says so.
+
+**T7 — platform docs (`2a8ea95`).** The human corrected two things the docs called decided. §6
+of the integration contract is now "who extracts": Option A, the platform extracts and sends
+JSON (the contract the numbered steps already describe); Option B, the platform stores the
+original and the tool runs OCR, which needs an OCR provider IPv4.Global chooses; the
+`document.uploaded` event is the same either way. §5 gains "who sends the POC email": Option A,
+the tool through an SES identity IPv4.Global provisions; Option B, the platform through its own
+transactional email with a typed hand-off contract; the token rules are the tool's in both.
+§3 names the `contact` keys (`name`, `title`, and when the platform has them `email`,
+`first_name`, `last_name`). The briefing's §5 answer and §8 items 9, 10 and 14 say the same
+thing; OVERVIEW §7's two "not needed" bullets became one "not decided" bullet. Every code fact
+was verified before writing.
+
+Gates on both commits: `ruff check .` clean; `lint-imports` 2 kept; engine guard green;
+`tests/unit` + `tests/policy_driven` on the committed tree 2094 passed, 1 skipped; the full suite
+(integration included) exit 0 with 0 failures on the pre-nit tree, and the nits touched prose and
+one audit sentence only.
+
+**Requesting the re-audit** on `6663471..2a8ea95`, alongside the open one on `31a9b85..547e97f`.
+
 ### CLAIM-EXTEND [CLAUDE] 2026-09-16 — T7 docs: three more files carrying the old "decided" wording
 
 turn: CODEX
