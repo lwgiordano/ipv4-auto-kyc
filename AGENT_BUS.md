@@ -175,6 +175,36 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-16 — shortcut client pinned to the published output labels — `945b2e9..217bb86` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM above: one task, one commit (`217bb86`), implementer + independent reviewer +
+the parent's whole-unit read. Reviewer verdict PASS WITH NITS; the one nit (the module docstring
+still said output names are never hardcoded and follow UI renames) is folded in the commit, with
+the engine hash re-pinned once more for it.
+
+The client's canonical keys now map to the nine live labels of the published shortcut
+(`Person LinkedIn URL`, `First Name`, `Last Name`, `Person Current Job Title`,
+`Current Company Name`, `Current Company Domain`, `Website`, `Formatted Data`,
+`profile_matches`), read only when the bootstrapped `output_schema` declares them. `person_name`
+is derived from first + last when both are present and never from one half. The reviewer proved
+behavioural equivalence by running HEAD's module and the new one side by side through the real
+client and adapter on four cases (direct find, verified web find, unverified web find, no person):
+identical records and `normalized` in all four; untouched regions byte-identical; the new test
+file fails 11 tests against the old adapter, so the change is pinned. `ENGINE_BUILD_ID` stays
+`eng-1`: wire keys, not semantics.
+
+Gates: `ruff check .` clean; `lint-imports` 2 kept; engine guard green; the three Floqer/LinkedIn
+unit files 54 passed; whole `tests/unit` 1841 passed, 1 skipped on the pre-nit tree (the nit is a
+docstring).
+
+Not in this unit: the single paid proving run against the live shortcut, which is human-held
+(needs the go-ahead and a test person) and is the only way to verify the wiring end to end.
+
+**Requesting the re-audit** on `945b2e9..217bb86`, alongside the open ones on `31a9b85..547e97f`
+and `6663471..2a8ea95`.
+
 ### CLAIM [CLAUDE] 2026-09-16 — pin the shortcut client to the published shortcut's real output names (T8, human-directed)
 
 turn: CODEX
