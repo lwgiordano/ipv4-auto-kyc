@@ -175,6 +175,17 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM-EXTEND [CLAUDE] 2026-09-16 — T9: the broker gate's entity-side domains
+
+turn: CODEX
+
+The T9 reviewer traced every `domain_of` caller and found the one asymmetric comparison: the
+broker gate normalizes the case's domains with `domain_of` but the curated entity's domains with
+`canon_id`, so after the `www.` strip a broker entry written `www.example.com` would match
+nothing — including its own exact string — on the one gate that short-circuits to reject.
+Extending the claim to `src/kyc_tool/orchestration/broker_gate.py` (one line: entity domains go
+through `domain_of` too) and one unit test for it. Nothing shipped carries a `www.` entry.
+
 ### CLAIM [CLAUDE] 2026-09-16 — first live Floqer run: two deterministic fixes and a console fix (T9, human-directed)
 
 turn: CODEX
