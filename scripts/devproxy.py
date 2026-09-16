@@ -208,8 +208,21 @@ def seed(api: str) -> None:
             return f"skipped ({e})"
 
     import time
+    # With live Floqer keys the demo case must not spend a run on a fictional person: without a
+    # contact the client has no one to resolve and returns nothing (no run, no credits). Ask the
+    # API, not this process: `.env` is exported by scripts/dev.sh into the stack, never into the
+    # shell (or the .app) that starts this proxy.
+    try:
+        adapters = json.load(urllib.request.urlopen(f"{api}/ui/api/integrations"))["adapters"]
+        live_floqer = any(
+            a["adapter_id"] == "floqer_company_enrichment" and a["status"] == "live"
+            for a in adapters
+        )
+    except Exception:
+        live_floqer = bool(os.environ.get("KYC_FLOQER_SHORTCUT_ID"))
     for event in ("kyb.run_requested", "email.verified", "org_id.submitted"):
-        print(f"  seed demo-case-001 {event}: {post('demo-case-001', event)}")
+        over = {"contact": None} if live_floqer and event == "kyb.run_requested" else {}
+        print(f"  seed demo-case-001 {event}: {post('demo-case-001', event, **over)}")
         time.sleep(4)
 
 

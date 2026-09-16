@@ -146,7 +146,7 @@ Retry on network failure with the **same** key and **same bytes**; you'll get
 
 | event_type | Payload (required unless noted) | Notes |
 |---|---|---|
-| `kyb.run_requested` | `company_legal_name`; optional `address`, `registration_number`, `jurisdiction`, `website`, `contact`, `platform_account_id` | send at registration; full check run; `contact` is an object with `name`, `title`, and, when the platform has them, `email`, `first_name`, `last_name`; the LinkedIn check compares name, company, title and company domain, and uses `email` and the split names to find the right profile |
+| `kyb.run_requested` | `company_legal_name`; optional `address`, `registration_number`, `jurisdiction`, `website`, `contact`, `platform_account_id` | send at registration; full check run; `contact` is an object with `name`, `title`, and, when the platform has them, `email`, `first_name`, `last_name`; the LinkedIn check compares the person's name and the company domain (company name and title are recorded for the reviewer, not compared), and uses `email` and the split names to find the right profile |
 | `email.verified` | `email`, `domain`, `verified_at` | you own email verification; this asserts it happened |
 | `org_id.submitted` | `rir`, `org_handle` | `rir` ∈ `arin, ripe, apnic, lacnic, afrinic` |
 | `poc.submitted` | `rir`, `poc_handle`; optional `org_handle`, `resource` | starts the verification email (§5) |

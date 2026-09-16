@@ -98,7 +98,7 @@ event, and records which policy version produced it).
 | `org_id_match` | +25 | control proof | RIR ORG-ID handle exists and matches the company, no broker conflict. |
 | `poc_verified` | +25 | control proof | Point-of-contact token sent to the RIR-listed email and verified. |
 | `business_document_verified` | +25 | legal proof | Uploaded document's name/address/number/jurisdiction match submission and registry. |
-| `linkedin_company_match` | +20 | supporting | Person name + company + title + domain all match deterministically. |
+| `linkedin_company_match` | +20 | supporting | Person name and company identity (the company domain) match deterministically; company name and title are recorded for the reviewer, not decisive. |
 | `website_verified` | +10 | supporting | Human reviewer confirms the company website is genuine. |
 | `verified_email` | +10 | account access | Any email inbox verified. |
 

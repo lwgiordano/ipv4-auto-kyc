@@ -20,8 +20,8 @@
     "version": "2.0"
   },
   "scoring_rubric.json": {
-    "sha256": "3aebc6ed2ca24c62936617bd50df21228416319917f9a26b5b312184c8cd7438",
-    "version": "2.0"
+    "sha256": "10d4c7f3b2641a688ab79e3f5f30192c3a3c390020303b133b32aafd242a82eb",
+    "version": "2.1"
   },
   "state_machine.json": {
     "sha256": "220230adc23121a6627e5dfc01f59ff3dda65cf5d41a7a253b03642958d2594d",

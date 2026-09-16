@@ -1,5 +1,5 @@
 {
-  "version": "2.0",
+  "version": "2.1",
   "threshold": 100,
   "hard_gates": {
     "score_met": "score >= 100",
@@ -57,7 +57,7 @@
       "category": "supporting",
       "mode": "automated",
       "source": "floqer_discovery_plus_deterministic_match",
-      "pass_rule": "person name AND current company AND title AND company domain all match deterministically"
+      "pass_rule": "person name AND company identity match deterministically; company identity is the company domain, falling back to an exact company-name / alias match only when LinkedIn reports no domain; company name and title are recorded, not compared"
     },
     {
       "check_type": "website_verified",

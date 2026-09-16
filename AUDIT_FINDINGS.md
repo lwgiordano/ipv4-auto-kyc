@@ -342,8 +342,9 @@ directly. See ADR-009 and `docs/DEPLOYMENT.md` §12 for activation and recovery.
 
 ### 🔵 D-LINKEDIN-MATCH — Field-level name and candidate-set company comparison, plus profile provenance
 
-- The normative rule (`KYC_Tool_Build_Package/03_ADAPTERS_AND_EVIDENCE.md`) is unchanged: person
-  name AND current company AND title AND company domain must ALL match deterministically, and
+- The normative rule (`KYC_Tool_Build_Package/03_ADAPTERS_AND_EVIDENCE.md`) was, until the
+  2026-09-16 amendment in the last bullet of this section: person name AND current company AND
+  title AND company domain must ALL match deterministically, and
   normalization stays "for case/punctuation, not fuzzy" (`validators/normalize.py`). Two of the
   four comparisons were losing legitimate contacts on a difference that is not a disagreement.
 - **Person name is compared field to field**, first name to first name and last name to last
@@ -377,3 +378,11 @@ directly. See ADR-009 and `docs/DEPLOYMENT.md` §12 for activation and recovery.
   The broker gate's entity side now goes through `domain_of` as well (it compared curated domains
   with `canon_id`), so a broker entry and a submitted website meet whether or not either carries
   `www.`; before, `larus.example` in the list missed a `www.larus.example` submission.
+- **Rule amended 2026-09-16 by the human, after the first live run.** Pass = person name AND
+  company identity, where company identity is the company domain (LinkedIn's current-company
+  domain equals the submitted website domain) and only a LinkedIn record with NO domain falls
+  back to the exact legal-name / alias comparison. Company name and title are still compared
+  and recorded under `source_detail.recorded` for the reviewer; they no longer decide (LinkedIn
+  display names carry taglines — `Epsilon Telecommunications, a KT company` — and titles are
+  self-described). Spec line 03 §2 and `scoring_rubric.json` (`2.0` → `2.1`) changed together;
+  the policy baseline is re-pinned. Still `norm_equal` / `domain_of`, nothing fuzzy.

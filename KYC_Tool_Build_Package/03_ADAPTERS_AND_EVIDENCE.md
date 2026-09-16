@@ -26,7 +26,7 @@ Validation is a separate pure layer: `validate(normalized, submitted_data) → p
 ### 2. Floqer — `floqer_company_enrichment` (discovery-only, automated)
 - Provides: company domain, website, LinkedIn URL, aliases, registry candidates, broker context.
 - **Never awards points by itself.** Output seeds: registry candidate lookups, the LinkedIn check, and website review context.
-- LinkedIn check (+20) pass rule: person name AND current company AND title AND company domain all deterministically match between Floqer's LinkedIn data and the platform submission.
+- LinkedIn check (+20) pass rule: person name AND company identity deterministically match between Floqer's LinkedIn data and the platform submission. Company identity is the company domain (LinkedIn's current-company domain equals the submitted website domain); only when LinkedIn reports no company domain does the current company name have to equal the submitted legal name or a discovered alias exactly. Current company name and title are recorded in the check's evidence for the reviewer, not compared — LinkedIn display names carry taglines and titles are self-described. (Amended 2026-09-16 from the four-field rule after the first live run.)
 
 ### 3. Registries — `companies_house`, `gleif`, state/country registries (approval-grade, automated)
 - Provides: legal name, company number, status, registered address (Companies House); LEI, legal name, address, entity status (GLEIF).
