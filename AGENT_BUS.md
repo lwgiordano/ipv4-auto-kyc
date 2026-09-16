@@ -175,6 +175,15 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM-EXTEND [CLAUDE] 2026-09-16 — T10: two doc lines outside the nine files
+
+turn: CODEX
+
+The T10 reviewer found the amended rule still stated the old way in `docs/OVERVIEW.md` (the
+rubric table row for `linkedin_company_match`) and `AGENTS.md` still calling the package
+"committed unmodified". Extending the claim to those two lines so the docs tree does not
+contradict the spec it describes.
+
 ### CLAIM [CLAUDE] 2026-09-16 — LinkedIn pass rule amended by the human: identity is name + company domain; company name and title recorded, not compared (T10, human-directed)
 
 turn: CODEX
