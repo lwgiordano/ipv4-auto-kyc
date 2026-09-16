@@ -48,7 +48,7 @@ def entity_identifiers(entity) -> dict[str, set[str]]:
     """Matcher-equivalent classes shared by matches and overlap warnings."""
     return {
         "legal_name": {norm(entity.name), *(norm(a) for a in entity.aliases or [])} - {""},
-        "domains": {_canon(d) for d in entity.domains or []} - {""},
+        "domains": {domain_of(d) for d in entity.domains or []} - {""},
         "email_domains": {_canon(d) for d in entity.email_domains or []} - {""},
         "rir_org_ids": {_canon(d) for d in entity.org_ids or []} - {""},
         "poc_handles": {_canon(d) for d in entity.poc_handles or []} - {""},

@@ -31,12 +31,20 @@ def canon_id(value: str | None) -> str:
 
 
 def domain_of(value: str | None) -> str:
-    """Extract a bare lowercase domain from an email, URL, or naked host."""
+    """Extract a bare lowercase domain from an email, URL, or naked host.
+
+    A leading `www.` is a host label, not part of the registrable domain, and it can only exist
+    under the registrant of that domain — so `www.acme.example` and `acme.example` are the same
+    domain here: an equivalence class one party controls, which is what keeps it exact rather
+    than fuzzy.
+    """
     if not value:
         return ""
     value = value.strip().lower()
     if "@" in value:
-        return value.rsplit("@", 1)[1]
-    if "//" in value:
-        return urlparse(value).hostname or ""
-    return value.split("/", 1)[0]
+        host = value.rsplit("@", 1)[1]
+    elif "//" in value:
+        host = urlparse(value).hostname or ""
+    else:
+        host = value.split("/", 1)[0]
+    return host[4:] if host.startswith("www.") else host

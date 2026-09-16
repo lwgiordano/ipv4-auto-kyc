@@ -366,7 +366,10 @@ def _output_value(entry: object) -> str:
     if not isinstance(entry, dict) or str(entry.get("status") or "") != "completed":
         return ""
     value = entry.get("value")
-    return "" if value is None else str(value).strip()
+    text = "" if value is None else str(value).strip()
+    # A `run_if`-skipped step completes with the literal two-character string `""` (seen live
+    # on `Website` and `profile_matches`): that is no data, not a value.
+    return "" if text in ('""', "''", "null") else text
 
 
 def make_floqer_client(settings, records: dict[str, dict] | None = None) -> FloqerClient:

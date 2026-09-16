@@ -498,3 +498,28 @@ def test_input_hash_covers_every_contact_field_the_adapter_now_reads(contact):
         dict(_SNAPSHOT, contact=contact), {}
     )
     assert adapter.input_hash(_SNAPSHOT, {}) == adapter.input_hash(dict(_SNAPSHOT), {})
+
+
+def test_a_skipped_step_returns_the_literal_empty_string_not_a_value():
+    """A `run_if`-skipped step completes with the literal two-character string `""` (seen live on
+    `Website` and `profile_matches`). It must read as absent: a skipped scrape must not become a
+    `linkedin` dict with a `""` URL, and a skipped fallback must not record `""` as the website."""
+    output = _completed({
+        URL: _field('""'), FIRST: _field('""'), LAST: _field('""'), TITLE: _field("''"),
+        COMPANY: _field("null"), COMPANY_DOMAIN: _field('""'), WEBSITE: _field('""'),
+        SOURCE: _field('""'), MATCHES: _field('""'),
+    })
+    client, _, _ = _make(_handler([output]))
+    record = client.enrich("Acme", "acme.example", contact_name="Jane Doe")
+    assert record == {
+        "aliases": [],
+        "provenance": {"shortcut_id": SHORTCUT_ID, "run_id": RUN_ID, "data_id": DATA_ID},
+    }
+
+
+def test_the_website_domain_sent_to_floqer_has_no_www_prefix():
+    """`website_domain` wants a bare registrable host: `www.` is stripped like a scheme is."""
+    client, requests, _ = _make(_handler([_FULL_OUTPUT]))
+    client.enrich("Acme", "https://www.acme.example/about", contact_name="Jane Doe")
+    sent = [r for r in requests if r.method == "POST"][0]
+    assert _json.loads(sent.content)["input_data"]["website_domain"] == "acme.example"

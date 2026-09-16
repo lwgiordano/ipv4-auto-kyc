@@ -370,4 +370,10 @@ directly. See ADR-009 and `docs/DEPLOYMENT.md` §12 for activation and recovery.
   `Person Current Job Title`, `Current Company Name`, `Current Company Domain`, `Website`,
   `Formatted Data` — the single JS-formatter output, which carries the source — and
   `profile_matches`) onto its canonical keys, deriving `person_name` from both halves because it is
-  no longer an output of its own.
+  no longer an output of its own. The first live run then showed two more things the client and
+  normalizer had to absorb: a `run_if`-skipped step completes with the literal two-character
+  string `""`, which now reads as no data; and `domain_of` now drops a leading `www.`, so the
+  submitted `www.epsilontel.com` equals LinkedIn's `epsilontel.com` (a host prefix, not fuzziness).
+  The broker gate's entity side now goes through `domain_of` as well (it compared curated domains
+  with `canon_id`), so a broker entry and a submitted website meet whether or not either carries
+  `www.`; before, `larus.example` in the list missed a `www.larus.example` submission.

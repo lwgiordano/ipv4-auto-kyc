@@ -33,6 +33,12 @@ def test_domain_of_variants():
     assert domain_of("https://acme.example/about") == "acme.example"
     assert domain_of("ops@acme.example") == "acme.example"
     assert domain_of("ACME.EXAMPLE") == "acme.example"
+    # `www.` is a host prefix, not the domain: the first live run submitted
+    # `www.epsilontel.com` and LinkedIn reported `epsilontel.com`.
+    assert domain_of("www.acme.example") == "acme.example"
+    assert domain_of("https://www.acme.example/about") == "acme.example"
+    assert domain_of("ops@www.acme.example") == "acme.example"
+    assert domain_of("wwwacme.example") == "wwwacme.example"
 
 
 # --- email (AUDIT:D5) ------------------------------------------------------
@@ -305,3 +311,28 @@ def test_email_payload_domain_conflict_fails_both_checks():
         ReasonCode.EMAIL_PAYLOAD_DOMAIN_CONFLICT.value
         in intents["verified_email"].reason_codes
     )
+
+
+def test_broker_gate_compares_domains_the_same_way_on_both_sides():
+    """A curated broker domain and a submitted website meet whether or not either carries `www.`:
+    both sides go through `domain_of`, so a `www.` entry cannot silently match nothing."""
+    from types import SimpleNamespace
+
+    from kyc_tool.domain.models import BrokerStatus
+    from kyc_tool.orchestration.broker_gate import match_brokers
+
+    def broker(domain):
+        return SimpleNamespace(
+            id="b1", policy="blocked", name="Larus", aliases=[], domains=[domain],
+            email_domains=[], org_ids=[], poc_handles=[], asns=[],
+        )
+
+    for entry, website in (
+        ("www.larus.example", "https://larus.example/"),
+        ("larus.example", "https://www.larus.example/"),
+        ("www.larus.example", "https://www.larus.example/"),
+    ):
+        hit = match_brokers([broker(entry)], {"website": website})
+        assert (hit.status, hit.identifier_class) == (BrokerStatus.BLOCKED, "domains"), (entry, website)
+    clear = match_brokers([broker("larus.example")], {"website": "https://other.example/"})
+    assert clear.status is BrokerStatus.CLEAR
