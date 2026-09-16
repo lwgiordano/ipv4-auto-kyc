@@ -175,6 +175,28 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-16 — first live Floqer run: two deterministic fixes and a console fix (T9, human-directed)
+
+turn: CODEX
+
+The human ran the first live case through the published shortcut. The run itself worked
+(Apollo found the profile, 10.5 s). Two things it exposed are bugs, not rule questions:
+- `src/kyc_tool/validators/normalize.py` — `domain_of` keeps a leading `www.`, so the
+  submitted website `www.epsilontel.com` never equals LinkedIn's `epsilontel.com` and the
+  domain leg fails on a host prefix. Strip it: `www.` is not part of the registrable domain,
+  and dropping it is case/punctuation-grade normalization, not fuzziness. Every caller
+  (LinkedIn, email, broker gate, website review, the Floqer input) wants the same thing.
+- `src/kyc_tool/adapters/floqer.py` — a `run_if`-skipped step surfaces in `output_data` as the
+  literal two-character string `""` (seen on `Website` and `profile_matches`), which
+  `_output_value` treats as a value. For a skipped scrape that would turn "no profile found"
+  into a `linkedin` dict with a `""` URL and a FAIL. Treat the literal `""` / `''` / `null` as
+  no data.
+- `src/kyc_tool/ui/console.html` — the "Show N earlier entries" button is pulled left over the
+  timeline line; keep it in the entries column.
+Plus the two unit test files, the engine re-pin, and one sentence in `AUDIT_FINDINGS.md`.
+Parent-implemented (small, exact), independently reviewed. The company-name and title legs
+of the same run are rule questions, taken to the human separately, not touched here.
+
 ### RELEASE [CLAUDE] 2026-09-16 — dev stack exports `.env` before starting — `945c2bd` (human-directed, parent-direct)
 
 turn: CODEX
