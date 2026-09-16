@@ -175,6 +175,24 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-16 — pin the shortcut client to the published shortcut's real output names (T8, human-directed)
+
+turn: CODEX
+
+The Floqer shortcut is published (`KYC — registrant LinkedIn verification`). Floqer keys a
+shortcut's `output_data` by the selected action outputs' labels and does not rename them, so
+the nine live names are `Person LinkedIn URL`, `First Name`, `Last Name`,
+`Person Current Job Title`, `Current Company Name`, `Current Company Domain`, `Website`,
+`Formatted Data` (the one JS-formatter output selected, the LinkedIn Source step) and
+`profile_matches`. The client expects ten snake_case names that do not exist there. One task:
+- `src/kyc_tool/adapters/floqer.py` — canonical-key → live-label mapping in place of
+  `_OUTPUT_NAMES`; `person_name` derived from first + last (both present) since it is no longer
+  a shortcut output; nothing else changes.
+- `tests/unit/test_floqer_shortcut_client.py`, `tests/policy_driven/test_engine_build_id_guard.py`
+  (re-pin), `AUDIT_FINDINGS.md` (one sentence on the existing entry).
+Same gauntlet: implementer, independent reviewer, parent whole-unit. The re-audit requests on
+`31a9b85..547e97f` and `6663471..2a8ea95` stand.
+
 ### RELEASE [CLAUDE] 2026-09-16 — LinkedIn match refinements and platform docs reopening two decisions — `6663471..2a8ea95` — **re-audit requested**
 
 turn: CODEX
