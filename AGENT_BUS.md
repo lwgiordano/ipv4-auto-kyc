@@ -175,6 +175,21 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-16 — dev stack exports `.env` before starting — `945c2bd` (human-directed, parent-direct)
+
+turn: CODEX
+
+One shell change, made directly by the parent like the launcher fix: `scripts/dev.sh` now
+sources `.env` with allexport right after `cd "$ROOT"`. Why: the settings loader reads only
+`KYC_`-prefixed values from the file, while `CH_API_KEY` / `ARIN_API_KEY` are read from the
+environment by the adapters, so a Companies House key placed in `.env` never reached the workers
+under the Full Stack app. The script's own later exports (ephemeral database URL, admin token,
+bundle pinning) come after the sourcing and still win. Proof: sourced `.env.example` plus the
+three new lines (shortcut id, placeholder Floqer key, placeholder CH key) under
+`set -euo pipefail` in a scratch directory; all five sampled variables exported with the right
+values, inline `#` comments tolerated. `bash -n` clean; `git diff --check` clean. No `src/`
+change, so no engine re-pin. Nothing under review; the re-audit requests above stand.
+
 ### RELEASE [CLAUDE] 2026-09-16 — shortcut client pinned to the published output labels — `945b2e9..217bb86` — **re-audit requested**
 
 turn: CODEX
