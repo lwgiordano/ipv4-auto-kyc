@@ -25,7 +25,8 @@ SHORTCUT_ID = "shortcut-1"
 RUN_ID = "run-9"
 DATA_ID = "row-42"
 REFERENCES = ("company_name", "website_domain", "contact_full_name", "contact_title")
-OUTPUTS = ("linkedin_url", "person_name", "title", "company", "company_domain", "website")
+OUTPUTS = ("linkedin_url", "person_name", "first_name", "last_name", "title", "company",
+           "company_domain", "website", "linkedin_source", "web_verification")
 
 
 def _shortcut(*, is_published=True, references=REFERENCES, outputs=OUTPUTS):
@@ -295,6 +296,60 @@ def test_no_person_resolved_omits_linkedin_but_keeps_the_company_fields():
     assert record["company_domain"] == "acme.example"  # derived from the website
 
 
+# ── how the profile was found ─────────────────────────────────────────────────────────────────────
+def _found(source, verification=""):
+    return _completed(
+        linkedin_url=_field("https://www.linkedin.com/in/jane-doe"),
+        person_name=_field("Jane Doe"),
+        first_name=_field("Jane"),
+        last_name=_field("Doe"),
+        company=_field("Acme Networks"),
+        linkedin_source=_field(source),
+        web_verification=_field(verification),
+    )
+
+
+@pytest.mark.parametrize("source", ["email", "apollo"])
+def test_a_directly_found_profile_keeps_its_split_names_and_ignores_web_verification(source):
+    """email/apollo resolve a KNOWN person, so `web_verification` says nothing about them: no
+    `web_verified` flag is invented for a source that cannot have one."""
+    client, _, _ = _make(_handler([_found(source, verification="no")]))
+    record = client.enrich("Acme", "acme.example", contact_name="Jane Doe")
+    assert record["linkedin_source"] == source and "web_verified" not in record
+    assert record["linkedin"]["first_name"] == "Jane"
+    assert record["linkedin"]["last_name"] == "Doe"
+
+
+def test_an_unverified_web_found_profile_never_reaches_the_validator():
+    client, _, _ = _make(_handler([_found("web_search", verification="No")]))
+    record = client.enrich("Acme", "acme.example", contact_name="Jane Doe")
+    assert "linkedin" not in record  # a guess about WHICH person is not matchable evidence
+    assert record["linkedin_source"] == "web_search" and record["web_verified"] is False
+    assert record["provenance"]["unverified_linkedin_url"] == (
+        "https://www.linkedin.com/in/jane-doe"  # still auditable, just outside the match inputs
+    )
+
+
+def test_only_an_explicit_yes_verifies_a_web_found_profile():
+    verified, _, _ = _make(_handler([_found("web_search", verification=" YES ")]))
+    record = verified.enrich("Acme", "acme.example", contact_name="Jane Doe")
+    assert record["web_verified"] is True
+    assert record["linkedin"]["url"] == "https://www.linkedin.com/in/jane-doe"
+    for verification in ("", "maybe", "not verified"):
+        client, _, _ = _make(_handler([_found("web_search", verification=verification)]))
+        run = client.enrich("Acme", "acme.example", contact_name="Jane Doe")
+        assert run["web_verified"] is False and "linkedin" not in run
+
+
+def test_a_source_outside_the_documented_set_is_dropped_not_recorded():
+    """An unknown value is provenance the tool cannot interpret — and it is not `web_search`, so
+    it must not silently acquire a verification verdict either."""
+    client, _, _ = _make(_handler([_found("guesswork", verification="no")]))
+    record = client.enrich("Acme", "acme.example", contact_name="Jane Doe")
+    assert "linkedin_source" not in record and "web_verified" not in record
+    assert record["linkedin"]["url"] == "https://www.linkedin.com/in/jane-doe"
+
+
 def test_values_are_coerced_from_whatever_the_schema_actually_returns():
     """Declared types are a hint, not a contract: ints must not reach norm_equal/domain_of, and a
     null value is no data rather than the string "None"."""
@@ -370,6 +425,23 @@ def test_adapter_forwards_the_contact_to_the_client():
          {"contact_name": "Jane Doe", "contact_title": "Director", "contact_email": "",
           "contact_first_name": "", "contact_last_name": ""}),
     ]
+
+
+def test_the_adapter_passes_the_profile_provenance_into_normalized():
+    """source_detail can only report how the profile was found if the adapter forwards it — and a
+    shortcut that reports neither must not have the two keys defaulted into the evidence."""
+    class _Client:
+        def __init__(self, record):
+            self.record = record
+
+        def enrich(self, company_name, domain, **contact):
+            return self.record
+
+    found = {"linkedin": {"url": "u"}, "linkedin_source": "web_search", "web_verified": True}
+    normalized = FloqerAdapter(_Client(found)).run(_SNAPSHOT, {}).normalized
+    assert normalized["linkedin_source"] == "web_search" and normalized["web_verified"] is True
+    bare = FloqerAdapter(_Client({"linkedin": {"url": "u"}})).run(_SNAPSHOT, {}).normalized
+    assert "linkedin_source" not in bare and "web_verified" not in bare
 
 
 @pytest.mark.parametrize(

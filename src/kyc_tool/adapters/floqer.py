@@ -35,8 +35,13 @@ _INPUT_REFERENCES = ("company_name", "website_domain", "contact_full_name", "con
 # wire (an unknown key rejects the whole run with a 400).
 _OPTIONAL_REFERENCES = ("contact_email", "contact_first_name", "contact_last_name")
 _OUTPUT_NAMES = (
-    "linkedin_url", "person_name", "title", "company", "company_domain", "website",
+    "linkedin_url", "person_name", "first_name", "last_name", "title", "company",
+    "company_domain", "website", "linkedin_source", "web_verification",
 )
+# How the shortcut found the profile. `web_search` is the only one that is a GUESS: it is the
+# verification agent, not the lookup, that makes such a profile usable as evidence.
+_LINKEDIN_SOURCES = ("email", "apollo", "web_search")
+_LINKEDIN_FIELDS = ("person_name", "first_name", "last_name", "company", "title", "company_domain")
 # A configuration fault, never a transient one: retrying cannot make it right.
 _CONFIG_STATUS_CODES = (400, 401, 403, 404)
 _MAX_RETRY_AFTER_SECONDS = 60.0
@@ -79,8 +84,9 @@ class FloqerClient(Protocol):
         contact_first_name: str = "",
         contact_last_name: str = "",
     ) -> dict:
-        """→ {company_domain, website, linkedin: {person_name, company, title,
-        company_domain, url}, aliases: [..], provenance: {...}} — keys optional."""
+        """→ {company_domain, website, linkedin: {person_name, first_name, last_name,
+        company, title, company_domain, url}, linkedin_source, web_verified, aliases: [..],
+        provenance: {...}} — keys optional."""
         ...
 
 
@@ -310,16 +316,23 @@ class ShortcutFloqerClient:
         company_domain = got.get("company_domain") or domain_of(got.get("website", ""))
         if company_domain:
             record["company_domain"] = company_domain
+        if got.get("linkedin_source") in _LINKEDIN_SOURCES:
+            record["linkedin_source"] = got["linkedin_source"]
+        if record.get("linkedin_source") == "web_search":
+            # Only an explicit "yes" from the verification agent counts; anything else — "no",
+            # blank, a field that failed — leaves the profile unverified.
+            record["web_verified"] = got.get("web_verification", "").lower() == "yes"
         if got.get("linkedin_url"):
             # Only a RESOLVED person gets a `linkedin` key: without one the validator must record
             # no check at all rather than a mismatch.
-            linkedin = {
-                key: got[key]
-                for key in ("person_name", "company", "title", "company_domain")
-                if got.get(key)
-            }
+            linkedin = {key: got[key] for key in _LINKEDIN_FIELDS if got.get(key)}
             linkedin["url"] = got["linkedin_url"]
-            record["linkedin"] = linkedin
+            if record.get("web_verified") is False:
+                # An unverified web-found profile is a guess about WHICH person this is: it must
+                # never reach the validator. The URL stays for audit, outside the match inputs.
+                record["provenance"]["unverified_linkedin_url"] = linkedin["url"]
+            else:
+                record["linkedin"] = linkedin
         return record
 
 
@@ -403,5 +416,8 @@ class FloqerAdapter:
                 "aliases": record.get("aliases", []),
                 "registry_candidates": record.get("registry_candidates", []),
                 "broker_context": record.get("broker_context", {}),
+                # Absent when the shortcut did not report them — the validator carries whichever
+                # of the two is present into source_detail and never defaults the missing one.
+                **{k: record[k] for k in ("linkedin_source", "web_verified") if k in record},
             },
         )

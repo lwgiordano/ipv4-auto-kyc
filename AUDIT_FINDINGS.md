@@ -339,3 +339,29 @@ directly. See ADR-009 and `docs/DEPLOYMENT.md` §12 for activation and recovery.
   fabricated clean bill downstream. The package stays committed unmodified (repo rule); this item
   and `docs/SALESFORCE_MAPPING.md` are the recorded correction, and
   `tests/unit/test_salesforce_projection.py` + the drift e2e pin the runtime behavior.
+
+### 🔵 D-LINKEDIN-MATCH — Field-level name and candidate-set company comparison, plus profile provenance
+
+- The normative rule (`KYC_Tool_Build_Package/03_ADAPTERS_AND_EVIDENCE.md`) is unchanged: person
+  name AND current company AND title AND company domain must ALL match deterministically, and
+  normalization stays "for case/punctuation, not fuzzy" (`validators/normalize.py`). Two of the
+  four comparisons were losing legitimate contacts on a difference that is not a disagreement.
+- **Person name is compared field to field**, first name to first name and last name to last
+  name, whenever BOTH the LinkedIn record and the submitted `contact` carry the split; otherwise
+  the whole-name comparison is exactly what it was. A middle name or initial present on one side
+  only is no longer a mismatch. Still `norm_equal` per field — no token reordering, no partial or
+  prefix matching, and neither half is ever inferred from the other.
+- **Company is compared against a candidate set**: the submitted `company_legal_name` plus the
+  aliases Floqer discovered for the same company. LinkedIn shows the brand a company trades
+  under where the platform submits its legal name; each candidate is still an EXACT match after
+  normalization, so this widens the set of names compared, never the comparison itself. The live
+  client reads no `aliases` output yet, so its candidate set is the legal name alone until the
+  shortcut grows one; fixture-backed records already carry aliases.
+- **Profile provenance is recorded and is load-bearing.** The shortcut now reports how the
+  profile was found (`email` | `apollo` | `web_search`) and, for a web-found one, the verification
+  agent's verdict. A `web_search` profile counts as verified ONLY on an explicit "yes"; on
+  anything else — "no", blank, a field that failed — the adapter DROPS the `linkedin` dict
+  entirely, so an unverified guess about which person this is can never award the +20. The URL is
+  kept under `provenance` for audit, outside the match inputs, and `linkedin_source` /
+  `web_verified` travel into the check's `source_detail`. Pinned by
+  `tests/unit/test_floqer_shortcut_client.py` and `tests/unit/test_linkedin_validator.py`.
