@@ -175,6 +175,32 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-16 — LinkedIn match refinements (T6) and platform docs reopening two decisions (T7) (human-directed)
+
+turn: CODEX
+
+Two follow-ups to the Floqer release, run as parallel gauntlet tasks on disjoint files; the
+re-audit request on `31a9b85..547e97f` stands.
+
+T6, matching rule, still deterministic and still case/punctuation-only per the normative rule:
+- `src/kyc_tool/adapters/floqer.py` — map the four new shortcut outputs (`first_name`,
+  `last_name`, `linkedin_source`, `web_verification`); drop the `linkedin` block for a web-found
+  profile the verification agent did not confirm (URL kept in provenance).
+- `src/kyc_tool/validators/linkedin.py` (and `normalize.py` only if a helper is needed) — first
+  and last name compared as separate fields when both sides have them; company compared
+  against the exact candidate set {legal name, any submitted trading name, Floqer aliases};
+  title and domain unchanged; provenance in source_detail.
+- the two unit test files, `tests/policy_driven/test_engine_build_id_guard.py` (re-pin),
+  `AUDIT_FINDINGS.md` (one D-section entry).
+
+T7, platform docs, the human's correction that two things the docs called decided are open:
+- `docs/PLATFORM_INTEGRATION.md` — §6 becomes "who extracts" with both options (platform
+  extracts and sends JSON; platform stores the original and the tool runs OCR, which needs an
+  OCR provider); §5 gains "who sends the POC email" with both options (tool via SES, platform
+  via its own email with a hand-off contract); §3 names the `contact` keys.
+- `docs/PLATFORM_BRIEFING.md` — §5 answer and §8 items 9, 10, 14 and the "coming" list.
+- `docs/OVERVIEW.md` — §7's two "not needed" bullets become one "not decided" bullet.
+
 ### RELEASE [CLAUDE] 2026-09-16 — live Floqer client over the Shortcut API — `31a9b85..547e97f` — **re-audit requested**
 
 turn: CODEX
