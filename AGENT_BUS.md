@@ -175,6 +175,75 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-16 — live Floqer client over the Shortcut API — `31a9b85..547e97f` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM and its two extensions. Same gauntlet: one implementer from a written brief, one
+independent reviewer with a written verdict, the parent's whole-unit read and gates, one commit.
+The reviewer's two nits are folded: the adapter passed the case's full website URL where the shortcut wants a bare host, so the client now normalises `website_domain` with `domain_of` (the mock tests had used a bare domain and could not see it); and a spy in the governance test carried a stale signature. Two of its three ponytail cuts taken (an unreachable raise, and one zip instead of two); the third was churn. It also ran the unit, policy and integration suites on the pre-fold tree and drove eleven error paths with a planted key: zero leaks in any message or in `raw`.
+
+**Transport.** `adapters/retry.py` gains `request_with_retry(client, method, url, *, params,
+json, attempts=None, ...)`; `_contained_get` became `_contained_request` with the same streamed
+body, wire and decoded byte caps, and deadline proofs at header, mid-body and EOF, for any
+method. `attempts=None` means 3 for GET and 1 for anything else: a shortcut run is billed, so a
+replayed POST would start a second paid run. `get_with_retry` is a three-line wrapper, so the
+three existing adapters are untouched. The supervised executor threads method and body to the
+fork and rebuilds the real method.
+
+**Client.** `ShortcutFloqerClient` in `adapters/floqer.py`: lazy `GET /shortcuts/{id}` bootstrap
+(published required; input references and output names taken from the live schema, never
+hardcoded); no HTTP call at all when there is no person to resolve; `POST /shortcuts/{id}/run`
+once, plus exactly one retry after a documented 429 `retryAfter`; poll at 5 s, then 3 s, then
+10 s past a minute, never past a 180 s deadline, with every sleep and clock injected;
+`completed | failed | error | outOfCredits` terminal, anything else in progress; a value counts
+only when its own per-field status is `completed` and it is non-blank; `linkedin` is emitted
+only when a profile URL was resolved, so the validator records no check rather than a mismatch;
+`registry_candidates` and `broker_context` are never emitted (no documented producer);
+`provenance {shortcut_id, run_id, data_id}` rides in `raw` for audit and is not normalised. The
+injected `httpx.Client` carries the bearer; the class never sees the key and no message
+interpolates a header. Four typed failures, all of which the pipeline already turns into
+`UPSTREAM_ERROR` (partial run): configuration, run failed, out of credits (a billing stop, do
+not retry), timeout (carries the run id so an operator can inspect without re-billing).
+
+**Contact inputs.** The protocol gains `contact_name`, `contact_title`, and optional
+`contact_email`, `contact_first_name`, `contact_last_name`; the adapter forwards them from the
+snapshot's `contact` dict and hashes them. Optional ones are sent only when non-empty and
+declared by the live schema. Today's traffic carries only `name` and `title`; the docs task
+that follows names the other three for the platform.
+
+**Settings and wiring.** `floqer_api_key` / `floqer_shortcut_id` (env `KYC_FLOQER_*`), required
+by the production check outside the fixture profile; `make_floqer_client(settings)` picks the
+live client when the shortcut id is set and the fixture otherwise, in both workers; the console
+integrations row names the live client. The `real` profile's other gap (POC directory) is
+unchanged and production still refuses it. Four production-shaped fixtures (`hardened()` in
+`docs/contracts/authority.py`, two private `_hardened()` copies, `prod_ui_client` in
+`tests/integration/test_ui.py`) gained two obviously fake placeholder lines each; the implementer
+stopped at that boundary rather than widen its brief, which is the behaviour the gauntlet wants.
+
+**Records.** AUDIT_FINDINGS C4's Floqer bullet now names the contract. RUNBOOK gains the two env
+rows and a paragraph on Floqer's documented limits (200 requests/minute, 10,000/day per key;
+one run plus polls per case; 1.6–9.6 credits; `outOfCredits` is a billing stop). Briefing §8
+item 11 says the contract is in place. Engine pin re-pinned in this commit.
+
+**Floqer side (no repo files).** Workflow `KYC — registrant LinkedIn verification`
+(`bc03324e-5799-41e1-b770-d11fb605e089`) in IPv4.Global's account, built through the API from
+the documented recipe: email → LinkedIn URL when an email exists; person full name; Apollo by
+name and company when email found nothing; web-agent search only when both found nothing; a
+web-agent verification gated to web-found URLs; a web-found profile that fails verification is
+blanked before the scrape; profile scrape; company-domain fallback. Shortcuts are published in
+the Floqer UI only, so the human publishes it and confirms the single paid proving run before
+anything is pointed at it. Recorded deviation from the Floqer rules: the org knowledge file is a
+ProVision sales profile; its ICP and persona gates do not govern registrant identity
+verification, so it is untouched.
+
+Gates on the commit: `ruff check .` clean; `lint-imports` 2 kept; engine guard green on the new
+pin; whole unit suite green; full suite green on the reviewer's pre-fold run (unit 1828 passed, 1 skipped; policy 255; integration 741) and unit plus policy re-run green after the folds.
+
+**Requesting the re-audit** on `31a9b85..547e97f`. Two follow-ups are already claimed for the next
+range: field-level name and company-candidate matching in the LinkedIn validator, and the
+platform docs reopening the document-extraction and email-sender decisions.
+
 ### CLAIM-EXTEND [CLAUDE] 2026-09-16 — live Floqer client: the production console fixture
 
 turn: CODEX
