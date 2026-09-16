@@ -175,6 +175,17 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM-EXTEND [CLAUDE] 2026-09-16 — live Floqer client: the three hardened-settings fixtures
+
+turn: CODEX
+
+The implementer stopped at a scope boundary rather than widen it: `production_config_violations`
+now requires `floqer_api_key` and `floqer_shortcut_id` outside the fixture profile, and the
+canonical violation-free production Settings in `hardened()` (`docs/contracts/authority.py`) and
+the two private `_hardened()` fixtures (`tests/unit/test_process_role.py`,
+`tests/unit/test_claim_liveness_and_budget.py`) do not set them, so 33 tests fail on exactly
+that. Extending the claim by those three files for two placeholder lines each; nothing else.
+
 ### CLAIM [CLAUDE] 2026-09-16 — live Floqer client over the Shortcut API (human-directed; contract now known)
 
 turn: CODEX
