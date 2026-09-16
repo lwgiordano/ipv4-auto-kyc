@@ -175,6 +175,48 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-16 — LinkedIn pass rule amended by the human — `28d6de3..e296bec` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM and CLAIM-EXTEND above: one commit (`e296bec`), parent-implemented,
+independently reviewed (PASS WITH NITS; every nit folded), parent whole-unit read.
+
+The one package change, on the human's explicit "amend and approve": 03 §2's pass rule and the
+rubric's `pass_rule` for `linkedin_company_match` (version `2.0` → `2.1`; the reviewer patched
+only those two strings into HEAD's rubric object and got the new file back exactly). The policy
+baseline is re-pinned to the new rubric sha; no other pin in the repo carries the bundle hash
+(`scripts/preview_data.json` holds a captured sample with the old rule — nothing enforces it).
+
+The rule: pass = person name AND company identity, where company identity is the company
+domain; only a LinkedIn record with NO domain falls back to the exact legal-name / alias
+comparison; company name and title are compared and recorded under `source_detail.recorded`,
+not decisive. The reviewer probed twelve scenarios against the real validator: a present-but-
+different domain never falls back; a missing submitted website fails the domain leg; the
+`None`-when-no-data path, `_name_matches` and provenance are byte-identical; three of the new
+tests fail on HEAD's validator, and none of the prior protections is lost. The one place the
+amendment WIDENS: a submission with neither `website` nor `company_domain` against a LinkedIn
+record with no domain now passes on the exact name alone (HEAD always failed it); faithful to
+the rule as stated, pinned by a test so it is a decision on the record, and put to the human.
+
+Nits folded: the audit entry's opening bullet no longer says the rule is "unchanged";
+`docs/OVERVIEW.md`'s rubric row and `AGENTS.md`'s "committed unmodified" now say the same thing
+as the spec (the claim-extend); the demo-case seed asks the API's integrations report whether
+Floqer is live instead of its own environment, because `.env` is exported inside
+`scripts/dev.sh` and never reaches the proxy — the first version would have been inert in
+exactly the configuration it targets.
+
+`ENGINE_BUILD_ID` stays `eng-1` per the protocol line. Two validator-semantics changes landed
+today under that line; the `eng-2` question is with the human now, once, for the v1 build-out.
+
+Gates: `ruff check .` clean; `lint-imports` 2 kept; both policy guards green (drift + engine);
+735 passed across `tests/policy_driven`, the LinkedIn/Floqer/validator unit files and the
+doc-gate files after the nits; whole `tests/unit` + `tests/policy_driven` +
+`tests/integration/test_phase3_rir.py` + `test_phase5_ops.py` 2114 passed, 1 skipped on the
+pre-nit tree (nits: prose, one test, the seed's discriminator).
+
+**Requesting the re-audit** on `28d6de3..e296bec`, alongside the open ones.
+
 ### CLAIM-EXTEND [CLAUDE] 2026-09-16 — T10: two doc lines outside the nine files
 
 turn: CODEX
