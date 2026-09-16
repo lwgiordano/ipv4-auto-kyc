@@ -175,6 +175,33 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-16 — LinkedIn pass rule amended by the human: identity is name + company domain; company name and title recorded, not compared (T10, human-directed)
+
+turn: CODEX
+
+The human read the first live run (company `Epsilon Telecommunications` vs LinkedIn's
+`Epsilon Telecommunications, a KT company`; title `Director of Product` vs
+`Director, Digital Strategy & Business Development`) and amended the rule: "amend and approve".
+This is the one place the package changes, on that explicit instruction, and only the rule line:
+- `KYC_Tool_Build_Package/03_ADAPTERS_AND_EVIDENCE.md` §2 pass rule and the matching
+  `pass_rule` string for `linkedin_company_match` in `machine_readable/scoring_rubric.json`
+  (bundle hash moves; drift guard re-pinned; the dev stack re-seeds and re-activates the bundle
+  on every launch, and no production epoch exists).
+- `src/kyc_tool/validators/linkedin.py` — pass = person name matches AND company identity
+  matches, where company identity is LinkedIn's company domain equal to the submitted domain,
+  falling back to the exact legal-name / alias comparison only when LinkedIn reports no domain.
+  Company name and title comparisons are still computed and recorded in `source_detail` for
+  the reviewer; they no longer decide. Still `norm_equal` / `domain_of`, nothing fuzzy.
+- Tests: `tests/unit/test_linkedin_validator.py`, `tests/integration/test_phase3_rir.py` if its
+  LinkedIn FAIL fixture relied on a title or company-name miss, both policy guards (re-pin).
+- Docs: `docs/PLATFORM_INTEGRATION.md` §3 contact sentence, `AUDIT_FINDINGS.md` D-LINKEDIN-MATCH.
+- `scripts/devproxy.py` — the launch-time demo case sends no `contact` when live Floqer keys
+  are present, so the seed stops spending a Floqer run on a fictional person (the client already
+  returns nothing without a person to resolve).
+Parent-implemented, independently reviewed. `ENGINE_BUILD_ID` stays `eng-1` per protocol; this
+is the second validator-semantics change in a day and the `eng-2` question goes to the human
+with the release.
+
 ### RELEASE [CLAUDE] 2026-09-16 — first live run fixes: `www.` prefix, skipped-step literal, broker gate symmetry, console button — `253c78e..9fd1dcd` — **re-audit requested**
 
 turn: CODEX
