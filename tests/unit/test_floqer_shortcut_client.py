@@ -25,8 +25,12 @@ SHORTCUT_ID = "shortcut-1"
 RUN_ID = "run-9"
 DATA_ID = "row-42"
 REFERENCES = ("company_name", "website_domain", "contact_full_name", "contact_title")
-OUTPUTS = ("linkedin_url", "person_name", "first_name", "last_name", "title", "company",
-           "company_domain", "website", "linkedin_source", "web_verification")
+# Floqer keys `output_data` by the selected action output's LABEL and cannot rename it, so these
+# nine strings are the wire contract; the record keeps the client's canonical keys.
+OUTPUTS = ("Person LinkedIn URL", "First Name", "Last Name", "Person Current Job Title",
+           "Current Company Name", "Current Company Domain", "Website", "Formatted Data",
+           "profile_matches")
+URL, FIRST, LAST, TITLE, COMPANY, COMPANY_DOMAIN, WEBSITE, SOURCE, MATCHES = OUTPUTS
 
 
 def _shortcut(*, is_published=True, references=REFERENCES, outputs=OUTPUTS):
@@ -96,18 +100,21 @@ def _make(handler, **kwargs):
     return client, requests, sleeps
 
 
-def _completed(**values):
+def _completed(values):
     return {"status": "completed", "output_data": values}
 
 
-_FULL_OUTPUT = _completed(
-    linkedin_url=_field("https://www.linkedin.com/in/jane-doe"),
-    person_name=_field("Jane Doe"),
-    title=_field("Director"),
-    company=_field("Acme Networks"),
-    company_domain=_field("acme.example"),
-    website=_field("https://www.acme.example/about"),
-)
+_FULL_OUTPUT = _completed({
+    URL: _field("https://www.linkedin.com/in/jane-doe"),
+    FIRST: _field("Jane"),
+    LAST: _field("Doe"),
+    TITLE: _field("Director"),
+    COMPANY: _field("Acme Networks"),
+    COMPANY_DOMAIN: _field("acme.example"),
+    WEBSITE: _field("https://www.acme.example/about"),
+    SOURCE: _field("email"),
+    MATCHES: _field(""),
+})
 
 
 # ── bootstrap ─────────────────────────────────────────────────────────────────────────────────────
@@ -242,6 +249,8 @@ def test_a_5xx_run_start_fails_after_the_single_attempt():
 
 # ── polling to a terminal status ──────────────────────────────────────────────────────────────────
 def test_happy_path_maps_every_output_and_records_provenance():
+    """All nine LIVE output labels in, the canonical record out — including `person_name`, which
+    is no longer an output at all but the two halves joined."""
     client, requests, sleeps = _make(
         _handler([{"status": "pending"}, {"status": "inProgress"}, _FULL_OUTPUT])
     )
@@ -252,8 +261,11 @@ def test_happy_path_maps_every_output_and_records_provenance():
         "provenance": {"shortcut_id": SHORTCUT_ID, "run_id": RUN_ID, "data_id": DATA_ID},
         "website": "https://www.acme.example/about",
         "company_domain": "acme.example",
+        "linkedin_source": "email",
         "linkedin": {
             "person_name": "Jane Doe",
+            "first_name": "Jane",
+            "last_name": "Doe",
             "company": "Acme Networks",
             "title": "Director",
             "company_domain": "acme.example",
@@ -265,14 +277,15 @@ def test_happy_path_maps_every_output_and_records_provenance():
 
 
 def test_a_failed_field_is_no_data_not_a_value():
-    output = _completed(
-        linkedin_url=_field("https://www.linkedin.com/in/jane-doe"),
-        person_name=_field("Jane Doe"),
-        title=_field("No data found", status="failed"),
-        company=_field("Acme Networks"),
-        company_domain=_field("acme.example"),
-        website=_field(""),
-    )
+    output = _completed({
+        URL: _field("https://www.linkedin.com/in/jane-doe"),
+        FIRST: _field("Jane"),
+        LAST: _field("Doe"),
+        TITLE: _field("No data found", status="failed"),
+        COMPANY: _field("Acme Networks"),
+        COMPANY_DOMAIN: _field("acme.example"),
+        WEBSITE: _field(""),
+    })
     client, _, _ = _make(_handler([output]))
     record = client.enrich("Acme", "acme.example", contact_name="Jane Doe")
     assert "title" not in record["linkedin"]
@@ -284,11 +297,12 @@ def test_a_failed_field_is_no_data_not_a_value():
 def test_no_person_resolved_omits_linkedin_but_keeps_the_company_fields():
     """The validator records NO check when `linkedin` is absent; a half-filled dict would be a
     mismatch and cost the case points it never had."""
-    output = _completed(
-        linkedin_url=_field(""),
-        person_name=_field("", status="failed"),
-        website=_field("https://acme.example/contact"),
-    )
+    output = _completed({
+        URL: _field(""),
+        FIRST: _field("", status="failed"),
+        LAST: _field("", status="failed"),
+        WEBSITE: _field("https://acme.example/contact"),
+    })
     client, _, _ = _make(_handler([output]))
     record = client.enrich("Acme", "acme.example", contact_name="Jane Doe")
     assert "linkedin" not in record
@@ -296,17 +310,43 @@ def test_no_person_resolved_omits_linkedin_but_keeps_the_company_fields():
     assert record["company_domain"] == "acme.example"  # derived from the website
 
 
+def test_person_name_is_derived_only_from_both_halves():
+    """`person_name` is not a shortcut output any more: a whole name exists only when the run
+    returned BOTH halves — half a name is not a name the validator may match on."""
+    for half in ({FIRST: _field("Jane")}, {LAST: _field("Doe")}):
+        output = _completed({URL: _field("https://www.linkedin.com/in/jane-doe"), **half})
+        client, _, _ = _make(_handler([output]))
+        record = client.enrich("Acme", "acme.example", contact_name="Jane Doe")
+        assert "person_name" not in record["linkedin"]
+
+
+def test_snake_case_output_keys_read_as_absent():
+    """Outputs are read by LIVE LABEL only: a run whose output_data still carries the old
+    snake_case keys has nothing this client can read, and claims no profile from it."""
+    output = _completed({
+        "linkedin_url": _field("https://www.linkedin.com/in/jane-doe"),
+        "first_name": _field("Jane"),
+        "last_name": _field("Doe"),
+        "website": _field("https://www.acme.example/about"),
+    })
+    client, _, _ = _make(_handler([output]))
+    record = client.enrich("Acme", "acme.example", contact_name="Jane Doe")
+    assert record == {
+        "aliases": [],
+        "provenance": {"shortcut_id": SHORTCUT_ID, "run_id": RUN_ID, "data_id": DATA_ID},
+    }
+
+
 # ── how the profile was found ─────────────────────────────────────────────────────────────────────
 def _found(source, verification=""):
-    return _completed(
-        linkedin_url=_field("https://www.linkedin.com/in/jane-doe"),
-        person_name=_field("Jane Doe"),
-        first_name=_field("Jane"),
-        last_name=_field("Doe"),
-        company=_field("Acme Networks"),
-        linkedin_source=_field(source),
-        web_verification=_field(verification),
-    )
+    return _completed({
+        URL: _field("https://www.linkedin.com/in/jane-doe"),
+        FIRST: _field("Jane"),
+        LAST: _field("Doe"),
+        COMPANY: _field("Acme Networks"),
+        SOURCE: _field(source),
+        MATCHES: _field(verification),
+    })
 
 
 @pytest.mark.parametrize("source", ["email", "apollo"])
@@ -353,12 +393,12 @@ def test_a_source_outside_the_documented_set_is_dropped_not_recorded():
 def test_values_are_coerced_from_whatever_the_schema_actually_returns():
     """Declared types are a hint, not a contract: ints must not reach norm_equal/domain_of, and a
     null value is no data rather than the string "None"."""
-    output = _completed(
-        linkedin_url=_field(12345),
-        person_name=_field(None),
-        company_domain=_field(" ACME.example "),
-        website=_field(None),
-    )
+    output = _completed({
+        URL: _field(12345),
+        FIRST: _field(None),
+        COMPANY_DOMAIN: _field(" ACME.example "),
+        WEBSITE: _field(None),
+    })
     client, _, _ = _make(_handler([output]))
     record = client.enrich("Acme", "acme.example", contact_name="Jane Doe")
     assert record["linkedin"] == {"company_domain": "ACME.example", "url": "12345"}

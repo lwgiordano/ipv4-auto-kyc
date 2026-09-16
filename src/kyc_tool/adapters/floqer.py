@@ -8,10 +8,10 @@ Floqer except linkedin_company_match after a full deterministic match.
 The contract is the Floqer SHORTCUT API (AUDIT:C4): a shortcut wraps one
 published workflow behind a typed input/output schema, so a case is one
 `POST /shortcuts/{id}/run` plus polls of `GET /shortcuts/{id}/runs/{run_id}`
-until a terminal status, then one read of `output_data`. Input `reference`
-keys and output `name` keys are resolved from `GET /shortcuts/{id}` at first
-use, never hardcoded — an operator renaming a field in the Floqer UI renames
-the wire key.
+until a terminal status, then one read of `output_data`. WHICH `reference`
+and `name` keys exist is read from `GET /shortcuts/{id}` at first use: only
+references the live input_schema declares are sent, and only output names it
+declares are read (see `_OUTPUT_NAMES`).
 """
 
 import json
@@ -34,10 +34,22 @@ _INPUT_REFERENCES = ("company_name", "website_domain", "contact_full_name", "con
 # value and the live schema declares the key — anything else is dropped, never guessed onto the
 # wire (an unknown key rejects the whole run with a 400).
 _OPTIONAL_REFERENCES = ("contact_email", "contact_first_name", "contact_last_name")
-_OUTPUT_NAMES = (
-    "linkedin_url", "person_name", "first_name", "last_name", "title", "company",
-    "company_domain", "website", "linkedin_source", "web_verification",
-)
+# Canonical key -> the LIVE output name. Those names are the selected action outputs' LABELS:
+# Floqer keys `output_data` by label and does not let an output be renamed. "Formatted Data" is
+# the ONE JS-formatter output selected (the LinkedIn Source step) — selecting a second formatter
+# output would make Floqer suffix the duplicates (`Formatted Data_2`, ...) in an order this client
+# cannot know, so the shortcut must keep exactly one.
+_OUTPUT_NAMES = {
+    "linkedin_url": "Person LinkedIn URL",
+    "first_name": "First Name",
+    "last_name": "Last Name",
+    "title": "Person Current Job Title",
+    "company": "Current Company Name",
+    "company_domain": "Current Company Domain",
+    "website": "Website",
+    "linkedin_source": "Formatted Data",
+    "web_verification": "profile_matches",
+}
 # How the shortcut found the profile. `web_search` is the only one that is a GUESS: it is the
 # verification agent, not the lookup, that makes such a profile usable as evidence.
 _LINKEDIN_SOURCES = ("email", "apollo", "web_search")
@@ -303,7 +315,15 @@ class ShortcutFloqerClient:
                 f"run {run_id} completed with output_data of type "
                 f"{type(output_data).__name__} — outside the documented contract"
             )
-        got = {name: _output_value(output_data.get(name)) for name in _OUTPUT_NAMES if name in outputs}
+        got = {
+            key: _output_value(output_data.get(name))
+            for key, name in _OUTPUT_NAMES.items()
+            if name in outputs
+        }
+        if got.get("first_name") and got.get("last_name"):
+            # Not a shortcut output: the shortcut returns the halves, so the whole name exists
+            # only when BOTH are present — never inferred from one of them.
+            got["person_name"] = f"{got['first_name']} {got['last_name']}"
         record: dict = {
             "aliases": [],
             # Audit trail only — the adapter keeps this in `raw` and never normalises it.

@@ -20,7 +20,7 @@ import shutil
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "kyc_tool"
-EXPECTED_ENGINE_SOURCE_HASH = "5226e0e6b8196967e59ee9f32dfd1f2d2ece833af06602b9e123aec6bf460448"
+EXPECTED_ENGINE_SOURCE_HASH = "9874663bcbb224e44a29af9548cd0a6b8359df5ccc912b3c0acca6415a1af9e5"
 
 
 def _framed_hash(root: Path) -> str:

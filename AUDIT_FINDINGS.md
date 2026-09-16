@@ -365,3 +365,9 @@ directly. See ADR-009 and `docs/DEPLOYMENT.md` §12 for activation and recovery.
   kept under `provenance` for audit, outside the match inputs, and `linkedin_source` /
   `web_verified` travel into the check's `source_detail`. Pinned by
   `tests/unit/test_floqer_shortcut_client.py` and `tests/unit/test_linkedin_validator.py`.
+  The published shortcut keys `output_data` by each selected output's LABEL and cannot rename one,
+  so the client reads the nine live labels (`Person LinkedIn URL`, `First Name`, `Last Name`,
+  `Person Current Job Title`, `Current Company Name`, `Current Company Domain`, `Website`,
+  `Formatted Data` — the single JS-formatter output, which carries the source — and
+  `profile_matches`) onto its canonical keys, deriving `person_name` from both halves because it is
+  no longer an output of its own.
