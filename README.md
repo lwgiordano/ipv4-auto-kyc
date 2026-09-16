@@ -88,8 +88,9 @@ platform-team sync mapping.
 
 Stubbed behind interfaces, marked `TODO(integration)` (AUDIT_FINDINGS §C):
 platform callback URL + HMAC secret exchange, Floqer API contract, platform
-email-verification fetch, outbound email provider, production OCR engine,
-POC token link hosting (platform forwards the raw token, `AUDIT:C2`).
+email-verification fetch, the POC email sender and the document OCR engine
+(both open decisions — who sends/extracts, `docs/PLATFORM_INTEGRATION.md`
+§5/§6), POC token link hosting (platform forwards the raw token, `AUDIT:C2`).
 
 ## Repo layout
 

@@ -16,9 +16,9 @@ screens the broker blocklist, scores the evidence, and POSTs the verdict to a
 webhook you host.
 
 The tool never drives the platform's UI and never changes platform state — it
-scores and answers, the platform acts. Its one piece of direct outbound contact
-is the POC verification email, sent to the registry-listed address (§4, and
-`PLATFORM_INTEGRATION.md` §5).
+scores and answers, the platform acts. The one message that reaches a person
+directly is the POC verification email, always to the registry-listed address;
+who sends it is an open decision (§8 item 10, and `PLATFORM_INTEGRATION.md` §5).
 
 ## 2. What it does
 
@@ -68,7 +68,8 @@ An outage can delay a better verdict; it can never produce a wrong one.
 2. Seconds later your webhook receives the first verdict: registry matched
    (25) → score 25, `manual_review_insufficient`, reason codes showing what's
    still missing.
-3. The platform extracts the uploaded document's fields → `document.uploaded`
+3. The uploaded document's fields are extracted — by the platform or by the
+   tool, still open (§5) → `document.uploaded`
    → matches submission and registry (25) → score 50.
 4. User verifies their work email → platform POSTs `email.verified` →
    `verified_email` (10) + `verified_company_email` (25) → score 85.
@@ -104,12 +105,14 @@ automatically. The full trigger table is `PLATFORM_INTEGRATION.md` §3.
 
 ## 5. Answers to the open questions
 
-**File formats (#2).** In the MVP the platform extracts the document fields —
-company name, address, registration number, jurisdiction — and uploads them as
-a small JSON; the tool cross-checks those against the registries. So supported
-input formats are whatever you choose to parse. Later the tool can OCR raw
-PDFs/images itself once an engine is picked; your integration doesn't change.
-(§6.)
+**File formats (#2).** The kickoff call leaned toward the platform extracting
+the document fields — company name, address, registration number,
+jurisdiction — and sending them as a small JSON; the tool cross-checks those
+against the registries. That is now an open decision between platform
+extraction (JSON to the tool) and the tool running OCR on the original file
+(needs an OCR provider IPv4.Global chooses). The event contract is the same
+either way.
+See `PLATFORM_INTEGRATION.md` §6.
 
 **Stack and deployment (#3).** Your team hosts and operates the tool in
 IPv4.Global's AWS account. The code itself stays IPv4.Global-maintained: we
@@ -282,12 +285,15 @@ tested contract)
    opened/completed/cancelled; if you would rather poll
    `GET /v1/review-tasks?status=open`, say so with the cursor, freshness, and
    missed-poll recovery rules you need.
-9. Document extraction stays platform-owned for production, as agreed at
-   kickoff, or you name an OCR provider for us to integrate instead.
-10. POC verification email: we plan an SES sender (not built yet, below)
-    unless you want a platform-owned delivery contract. Confirm too that you
-    host the POC page and echo back both `token` and `token_id`
-    (`PLATFORM_INTEGRATION.md` §5).
+9. Document extraction: decide between the platform extracting the four
+   fields (JSON to the tool) and the tool running OCR on the original upload
+   (needs an OCR provider). Open on both sides; `PLATFORM_INTEGRATION.md` §6
+   has the two options.
+10. POC verification email: decide who sends it, the tool through an SES
+    sender IPv4.Global provisions, or the platform through its own
+    transactional email with a typed hand-off contract
+    (`PLATFORM_INTEGRATION.md` §5). Confirm too that you host the POC page
+    and echo back both `token` and `token_id`.
 11. Floqer: contract in place; the tool calls a published shortcut in
     IPv4.Global's own Floqer account (discovery-only, feeds the LinkedIn
     match). Nothing needed from the platform.
@@ -299,12 +305,14 @@ tested contract)
 **From IPv4.Global**
 
 13. Companies House API key (secret manager).
-14. Email provider choice and sending domain, if not SES.
+14. Email: if the tool sends, an SES identity and sending domain in the
+    secret manager and deployment config.
 
 **Coming on our side, not yet built**: a conformance kit you can run against
 staging, a downloadable versioned contract bundle, the production provider
-profile (POC directory, email sender, document provider, Floqer client), the
-load and soak harness, and migration 025 once item 7 is answered.
+profile (POC directory, Floqer client, and — whichever way items 9 and 10 go
+— the email sender or the platform hand-off, and the OCR engine), the load
+and soak harness, and migration 025 once item 7 is answered.
 
 **Out of scope by design**: the tool never writes Salesforce, never judges a
 website automatically, never replaces your platform UI, and never changes a

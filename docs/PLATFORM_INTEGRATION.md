@@ -146,7 +146,7 @@ Retry on network failure with the **same** key and **same bytes**; you'll get
 
 | event_type | Payload (required unless noted) | Notes |
 |---|---|---|
-| `kyb.run_requested` | `company_legal_name`; optional `address`, `registration_number`, `jurisdiction`, `website`, `contact`, `platform_account_id` | send at registration; full check run |
+| `kyb.run_requested` | `company_legal_name`; optional `address`, `registration_number`, `jurisdiction`, `website`, `contact`, `platform_account_id` | send at registration; full check run; `contact` is an object with `name`, `title`, and, when the platform has them, `email`, `first_name`, `last_name`; the LinkedIn check compares name, company, title and company domain, and uses `email` and the split names to find the right profile |
 | `email.verified` | `email`, `domain`, `verified_at` | you own email verification; this asserts it happened |
 | `org_id.submitted` | `rir`, `org_handle` | `rir` ∈ `arin, ripe, apnic, lacnic, afrinic` |
 | `poc.submitted` | `rir`, `poc_handle`; optional `org_handle`, `resource` | starts the verification email (§5) |
@@ -285,8 +285,9 @@ strings safe to key copy on.
 Flow for proving control of IP resources:
 
 1. You post `poc.submitted`.
-2. The tool looks up the POC in the registry directory and emails the
-   **registry-listed** address (never a user-supplied one). The email contains:
+2. The tool looks up the POC in the registry directory. Whichever side sends
+   the email (open decision, below), it goes to the **registry-listed**
+   address, never a user-supplied one. The email contains:
    `Your verification token: <secret>` and `Verification reference: <id>`.
 3. The user enters both on your confirmation page.
 4. You post `poc.token_verified` with `token` (the secret) and `token_id` (the
@@ -307,13 +308,41 @@ Rules your page must respect:
   scores to drop after an ORG-ID/POC edit until re-verified
   (`org_id_revalidation_pending`, `poc_not_associated`). Not a bug.
 
-## 6. Documents (decided: you extract)
+**Who sends the email (open decision).**
 
-Settled on the kickoff call: uploads stay on the platform (your existing virus
-scanning and quarantine unchanged), the platform extracts the fields, and the
-tool cross-checks them against the registries. Documents are optional at
-registration — a case scores without them, and a later upload just re-runs
-verification (§3).
+- Option A — the tool sends it, through an Amazon SES sender the tool owns
+  (not built yet; needs an SES identity and sending domain from
+  IPv4.Global).
+- Option B — the platform sends it, through its existing transactional
+  email, in which case the tool hands the platform the token and reference
+  through a typed delivery contract to be written.
+
+In both options the token rules above (single-use, 72 hours, binding) are
+enforced by the tool.
+
+## 6. Documents (open decision: who extracts)
+
+The kickoff call leaned toward the platform extracting the document fields,
+but that is not decided. Two options are open until IPv4.Global confirms one:
+
+**Option A — platform extracts.** The platform stores the upload (your
+existing virus scanning and quarantine unchanged), extracts the four fields
+below, writes them as a JSON object to the shared object store, and posts
+`document.uploaded` with `object_ref` pointing at that JSON. The tool runs no
+OCR — it reads that JSON as posted. The numbered steps below are Option A's
+contract.
+
+**Option B — tool extracts.** The platform stores the upload and posts
+`document.uploaded` with `object_ref` pointing at the **original file** (PDF
+or image) in the shared object store. The tool runs an OCR engine and
+extracts the same four fields itself. What it requires: an OCR provider
+chosen and contracted by IPv4.Global (none is built; the current engine only
+reads extracted JSON, and production refuses that stub), file-type and size
+limits agreed, and the same `document.uploaded` event — the wire contract
+does not change either way.
+
+Documents are optional at registration — a case scores without them, and a
+later upload just re-runs verification (§3).
 
 1. Put a JSON object in the shared object store:
    `{"fields": {"name": "...", "address": "...", "number": "...", "jurisdiction": "..."}}`
@@ -333,8 +362,8 @@ verification (§3).
    types can be added as needed).
 3. Keep the original upload on your side for audit.
 
-Add-later: the tool OCRs raw PDFs/images itself, once an OCR engine is chosen.
-The event contract does not change — only what `object_ref` points at.
+Until this is answered, staging uses Option A with hand-extracted JSON;
+production cannot start on either option before it is decided.
 
 ## 7. Read API and review tasks
 
@@ -408,8 +437,8 @@ operator guide (every env var, health checks, dead-letter recovery).
   infrastructure dependency** — queue and webhook outbox live in Postgres. No
   Redis/broker.
 - **Also needed in production:** an S3-compatible bucket (evidence), outbound
-  HTTPS (RDAP registries, Companies House, GLEIF), an email provider (only for
-  the §5 flow).
+  HTTPS (RDAP registries, Companies House, GLEIF), and — if the tool sends the
+  §5 email — an email provider.
 - **Processes** (stateless, scale horizontally): API (`uvicorn
   kyc_tool.api.app:create_app --factory`), pipeline worker, outbox worker, and
   a daily retention cron.
@@ -428,7 +457,7 @@ email checks, scoring, webhooks, review queue, audit trail, idempotent replays.
 | Added later | Unblocked by |
 |---|---|
 | Tool-side OCR of raw files | extraction decision + engine choice |
-| Live POC verification emails | email provider + sending domain |
+| Live POC verification emails | the §5 sender decision, then an email provider + sending domain, or the platform hand-off contract |
 | Live Companies House lookups | API key (free registration) |
 | LinkedIn/company enrichment | Floqer access |
 | `event_sequence` in callbacks | your confirmation |

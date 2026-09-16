@@ -30,7 +30,7 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 |---|---|---|
 | `KYC_ENVIRONMENT` | `development` (until real providers land) | `production` |
 | `KYC_ENFORCE_POSITIVE_DECISIONS` | `true` — rehearse full automation | `false` at launch; flipped after staging proves out |
-| Providers | built-in stand-ins (fixture registries, email file sink) | real OCR/email/registry providers, required |
+| Providers | built-in stand-ins (fixture registries, email file sink) | real registry providers, required; real OCR/email providers only if the tool extracts documents / sends the POC email — open decisions, `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
 | Secret | staging secret | separate production secret |
 
 Production mode validates config at boot and refuses to start on anything

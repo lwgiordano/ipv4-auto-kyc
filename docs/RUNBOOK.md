@@ -142,7 +142,7 @@ lists **all** violations at once:
 | `KYC_HMAC_V1_OBSERVATION_WINDOW_DAYS` | ≥ 1 |
 | `KYC_PLATFORM_CALLBACK_URL` | HTTPS, not localhost |
 | `KYC_OBJECT_STORE` / `KYC_S3_BUCKET` | `s3` / non-empty |
-| `KYC_OCR_ENGINE` | not the `json_scan` dev stub |
+| `KYC_OCR_ENGINE` | not the `json_scan` dev stub — required today regardless of the open document-extraction decision (`docs/PLATFORM_INTEGRATION.md` §6) |
 | `KYC_EMAIL_PROVIDER` | not the `logging` dev stub |
 | `KYC_ADAPTERS_PROFILE` | not the `fixture` stub |
 | `KYC_FLOQER_API_KEY` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`; secret manager or `.env` only — never a task definition, a log, or a case snapshot |
