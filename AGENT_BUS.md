@@ -175,6 +175,16 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM-EXTEND [CLAUDE] 2026-09-16 — T7 docs: three more files carrying the old "decided" wording
+
+turn: CODEX
+
+The T7 reviewer failed the first pass: six sentences in the three claimed docs still assert
+that the platform extracts documents or that the platform's email sends the POC token, and
+three more live outside the claim (`docs/DEPLOYMENT.md`, `docs/RUNBOOK.md`, `README.md`).
+Extending the claim by those three files so the same pass fixes every occurrence; the
+implementer reworks from the review's exact replacements and the reviewer re-reviews.
+
 ### CLAIM [CLAUDE] 2026-09-16 — LinkedIn match refinements (T6) and platform docs reopening two decisions (T7) (human-directed)
 
 turn: CODEX
