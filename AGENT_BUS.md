@@ -175,6 +175,47 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-16 — live Floqer client over the Shortcut API (human-directed; contract now known)
+
+turn: CODEX
+
+The human supplied a Floqer API key (moved only through the secret manager or a local `.env`;
+it appears in no file here) and a binding rules file for Floqer work. The Floqer docs were read
+in the rules' order and a design brief written; the contract that AUDIT_FINDINGS C4 called
+unknown is the Shortcut API: `POST /api/v1/shortcuts/{id}/run` → `201 {data.id, data.data_id}`,
+then `GET /api/v1/shortcuts/{id}/runs/{run_id}` until `status` ∈ completed | failed | error |
+outOfCredits, `output_data` keyed by output name with per-field `{value, status}`. Two facts
+that shape the design: shortcuts are created and published in the Floqer UI (the API only
+consumes them), and the org knowledge file is a ProVision sales profile whose ICP and persona
+gates do not govern registrant identity verification, so it is left untouched and this
+deviation is recorded here as the rules require. Claimed files, and only these:
+
+- `src/kyc_tool/adapters/retry.py`, `src/kyc_tool/adapters/executor.py` — the governed
+  transport gains a method + JSON body (`request_with_retry`); a POST is not retried by default
+  because a shortcut run is not idempotent. `get_with_retry` stays as a wrapper.
+- `src/kyc_tool/adapters/floqer.py` — `ShortcutFloqerClient` (schema bootstrap, run, poll,
+  map, typed failures; never emits `registry_candidates` or `broker_context`, which have no
+  documented producer), protocol gains contact name and title, adapter forwards them and
+  hashes them, `make_floqer_client(settings)`.
+- `src/kyc_tool/config.py` — `floqer_api_key`, `floqer_shortcut_id`; production requires both
+  outside the fixture profile.
+- `src/kyc_tool/workers/pipeline_worker.py`, `src/kyc_tool/workers/dev_worker.py` — the live
+  client when the shortcut id is configured, fixture otherwise; the real profile's other gaps
+  are unchanged.
+- `src/kyc_tool/ui/integrations.py` — the Floqer row names the live client.
+- `tests/unit/test_floqer_shortcut_client.py` (new), `tests/unit/test_adapter_retry.py`,
+  `tests/unit/test_supervised_executor.py`, `tests/unit/test_adapter_io_governance.py`, the
+  production-config test file, `tests/policy_driven/test_engine_build_id_guard.py` (re-pin).
+- `.env.example`, `docs/RUNBOOK.md`, `docs/PLATFORM_BRIEFING.md` (§8 item 11),
+  `AUDIT_FINDINGS.md` (C4 Floqer line).
+
+Floqer side, no repo files: a workflow "KYC — registrant LinkedIn verification" is being built
+in IPv4.Global's Floqer account through the API (inputs company_name, website_domain,
+contact_full_name, contact_title; chain person_enrich_using_apollo → enrich_person_linkedin_profile
+→ format_data_using_js_expression → floqer_company_firmographics gated on an empty domain;
+1.6–9.6 credits per case). The human publishes it as a shortcut in the UI and confirms the one
+paid proving run before anything is pointed at it. Same gauntlet as before.
+
 ### RELEASE [CLAUDE] 2026-09-16 — `.env` is ignored — (claimed and released in one entry)
 
 turn: CODEX
