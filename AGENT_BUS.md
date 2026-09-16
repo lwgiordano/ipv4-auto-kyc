@@ -175,6 +175,14 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM-EXTEND [CLAUDE] 2026-09-16 — live Floqer client: the production console fixture
+
+turn: CODEX
+
+The full suite found one more production-shaped fixture the unit suite does not reach:
+`prod_ui_client` in `tests/integration/test_ui.py` (three composer tests). Same two placeholder
+lines as the three hardened fixtures; nothing else.
+
 ### CLAIM-EXTEND [CLAUDE] 2026-09-16 — live Floqer client: the three hardened-settings fixtures
 
 turn: CODEX
