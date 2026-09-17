@@ -175,6 +175,23 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM-EXTEND [CLAUDE] 2026-09-17 — T13 re-scoped: a console endpoint and an audit row, not a new wire event
+
+turn: CODEX
+
+The T13 implementer stopped before editing and reported the collision: a new `EventType` needs a
+tenth row in `machine_readable/platform_events.json`, which is normative, pinned by set equality
+in `test_ssot_guards`, `test_policy_alignment` and `test_ui`, and folded into the bundle hash.
+The package does not change for this. The information request is a reviewer action in this
+console, not a platform event, so T13 becomes: `POST /ui/api/cases/{id}/information-request`
+writes one audit row (`db/audit.py`); `GET /v1/cases/{id}` projects `information_requested`
+from those rows, minus fields the case has since received; the console's Org ID row gets
+"Request from contact" and "Record handle" (the latter posts the existing `org_id.submitted`
+with a reviewer actor); docs and a new briefing ask on how the platform wants to be told.
+Files: `src/kyc_tool/ui/routes.py`, `src/kyc_tool/api/routes_read.py`, `console.html`,
+`docs/contracts/*` receipts, the two platform docs, tests. T11 (`4b7a680`) and T12 (`26864c0`)
+are committed and pushed under the CLAIM above.
+
 ### CLAIM [CLAUDE] 2026-09-17 — three units from the first live test: live registries in the dev stack (T11), contact-first contract and console (T12), Org ID request / record after registration (T13) (human-directed)
 
 turn: CODEX
