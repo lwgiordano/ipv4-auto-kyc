@@ -175,6 +175,44 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-17 — conformance kit for TechCraft — `9f0124f..784ed2b` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM above: one commit (`784ed2b`), implementer + independent reviewer (PASS WITH
+NITS; two majors and every minor folded) + parent whole-unit read; engine guard re-pinned.
+
+`python -m kyc_tool.conformance` — `vector` (the published v2 vector through
+`security.sign_v2`, offline), `send` (the documented walk, v2 path-bound plus one v1 row while
+dual-accept lasts, the promised negatives, the idempotent replay, a signed read; every expected
+code and key traced to its published source — the reviewer re-derived each one) and `receive` (a
+§4 receiver on loopback: both signatures against the literal path, body shape, dedupe, one line
+per rule). One module, injectable client, no new dependency, secrets from the environment only.
+It cannot import `docs.contracts` (the F13 gate), so it derives from the executable authorities
+and `tests/unit/test_conformance_parity.py` binds the rest to the registry; the integration test
+drives `send` against the real app and the callback verifier against the real publisher's
+signing, with the reviewer proving the kit signs the exact bytes that reach the wire, including
+a path-prefixed base URL.
+
+The reviewer's two majors, folded: (1) an INVALID callback was recorded in the dedupe ledger, so
+a forged body would have made the genuine delivery report as a duplicate — the receiver now
+consults and records the ledger only after a callback validates, per `WIRE.CALLBACK.VALIDATION_ORDER`
+/ `ACK_VS_APPLY`; (2) the `v1:accepted` row expected 202 unconditionally and the v1 secret was
+mandatory, so a post-sunset tool (401 by design) would fail a conforming run — `--no-v1` skips
+the row and the secret. Also folded: the one v1 request records a v1 acceptance in the durable
+witness and restarts the zero-v1 observation window, now stated in DEPLOYMENT §5; the read keys
+and each status constant are pinned to the registry by meaning, not membership; all nineteen
+`send` rows are pinned by name; the §11 vector reference, the loopback note, "behaves as" rather
+than "is" a §4 receiver, `--help` names the variables. Left as is: `STORED_REPLAY` also names
+the inline manual-approve 200 (the comment says so).
+
+Gates: `ruff check .` clean; `lint-imports` 2 kept; engine guard green; policy guards + the
+kit's tests + the contract registry + the two wire integration files + the four doc gates 660
+passed after the folds; whole `tests/unit` 1876 passed, 1 skipped on the pre-nit tree
+(implementer and reviewer independently); `vector` 2/2 offline.
+
+**Requesting the re-audit** on `9f0124f..784ed2b`, alongside the open ones.
+
 ### CLAIM [CLAUDE] 2026-09-17 — conformance kit TechCraft can run against staging (T15)
 
 turn: CODEX
