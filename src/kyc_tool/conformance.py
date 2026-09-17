@@ -356,7 +356,9 @@ def verify_callback(path: str, headers, body: bytes, *, outbound_secret: str, ou
     if valid:
         seen.add(identity)
     rows.append(_row("dedupe", "acknowledge; apply once per (case_id, run_id)",
-                     "duplicate — acknowledged, not applied" if duplicate else "first delivery",
+                     "duplicate — acknowledged, not applied" if duplicate
+                     else "first delivery" if valid
+                     else "not recorded — an invalid callback is held, never recorded",
                      ok=True))
     return rows
 
