@@ -1174,6 +1174,10 @@ const SAY={
     business_document_verified:"Business document verified",
     linkedin_company_match:"LinkedIn company match",
     website_verified:"Website reviewed",verified_email:"Email verified"},
+  /* What a reviewer can ask the contact for. The tool records the ask; the platform owns the
+     message that goes out. */
+  info_field:{org_id:"Org ID",registration_number:"Registration number",
+    address:"Registered address",poc:"RIR contact"},
   status:{pass:"Passed",fail:"Failed",needs_review:"Needs Review",missing:"Not Yet Available"},
   /* Subjects, not verdicts. These labels used to assert an outcome, so a failed rule printed
      "Score threshold met / NOT MET" -- the label and the result contradicting each other on two
@@ -1657,7 +1661,14 @@ async function viewCases(){
 function humanizeAudit(a){
   const d=a.detail_json||{};
   switch(a.action){
-    case"event.received":return`Platform message received: <b>${esc(d.event_type||"?")}</b>`;
+    /* The same Org ID can arrive from the platform or be typed in by a reviewer the contact
+       sent it to. The event's actor is the only thing that tells them apart, so the line says
+       which rather than calling both of them a platform message. */
+    case"event.received":return d.event_type==="org_id.submitted"
+      ?(d.actor_type==="reviewer"?`<b>Org ID</b> recorded by reviewer`:`<b>Org ID</b> submitted by the platform`)
+      :`Platform message received: <b>${esc(d.event_type||"?")}</b>`;
+    case"information_requested":return`<b>${esc((d.fields||[]).map(f=>say("info_field",f)).join(", "))}</b>
+      requested from the contact${d.note?` · ${esc(d.note)}`:""}`;
     case"run.created":return`Verification round started`;
     case"run.broker_gate":return`Blocked broker check: <b>${esc(say("broker",d.broker_status))}</b>${d.short_circuit?" · round ended":""}`;
     case"adapter.recorded":return`Queried <b>${esc(say("adapter",d.adapter_id))}</b> · ${esc(d.status==="ok"?"responded":say("status",d.status))} · ${d.latency_ms??0}ms`;
@@ -1851,7 +1862,34 @@ async function viewCase(id){
       <span class="pts ${it.awarded?"":"zero"}">${it.awarded?`+${it.awarded}`:"0"}</span>
       <span class="cap">/ ${it.points}</span></div>`).join("");
 
+  /* The RIR Org ID is the one piece of evidence a registrant may simply not have at sign-up, so
+     a case can sit in review with nothing on this screen to act on. Two ways forward from the
+     Org ID row, both recorded under the reviewer's own name: ask the contact for it (the
+     platform sends the message; the tool records the ask), or enter a handle the contact has
+     already sent by other means. The ask clears itself when the handle arrives. */
+  const orgHandle=((c.submitted_json||{}).org_id||{}).org_handle;
+  const orgOpen=!orgHandle||d.checks.some(ch=>ch.check_type==="org_id_match"&&!ch.superseded_by_check_id
+    &&ch.status==="needs_review"&&(ch.reason_codes||[]).includes("org_id_submission_incomplete"));
+  const orgAsked=(d.information_requested||[]).find(r=>r.field==="org_id");
+  const orgPanel=!orgOpen?"":`${orgAsked?`<p class="sub">Org ID requested from contact on ${
+      esc(fmtExact(orgAsked.requested_at))} by ${esc(orgAsked.requested_by)}.${
+      orgAsked.note?` ${esc(orgAsked.note)}`:""}</p>`:""}
+    <form class="chiprow" id="org-ask-form">
+      <label class="vh" for="org-ask-note">Note for the contact</label>
+      <input id="org-ask-note" placeholder="Optional note">
+      <button class="sm" type="submit">Request from contact</button>
+      <button class="sm" type="button" id="org-record-toggle">Record handle</button></form>
+    <form class="chiprow" id="org-record-form" hidden>
+      <label class="vh" for="org-rir">RIR</label>
+      <span class="select-wrap"><select id="org-rir">${["arin","ripe","apnic","lacnic","afrinic"]
+        .map(r=>`<option value="${r}">${r.toUpperCase()}</option>`).join("")}</select>${I.down}</span>
+      <label class="vh" for="org-handle">Org handle</label>
+      <input id="org-handle" placeholder="ORG-EXAMPLE-1">
+      <button class="sm" type="submit">Record</button></form>`;
+
   const byType={};d.checks.forEach(ch=>(byType[ch.check_type]??=[]).push(ch));
+  // The Org ID row is drawn before its first check exists, because it is where the reviewer acts.
+  if(orgOpen)byType["org_id_match"]??=[];
   const chains=Object.entries(byType).map(([type,list])=>{
     const chain=list.map((ch,i)=>{
       const live=!ch.superseded_by_check_id;
@@ -1860,8 +1898,9 @@ async function viewCase(id){
         title="${esc(ch.id)} · ${esc(fmtExact(ch.created_at))}">${pill(ch.status)}${live&&ch.points_awarded?`<b class="strong">+${ch.points_awarded}</b>`:""}</span>${reasons}`;
     }).join("");
     return`<tr><td><span class="strong">${esc(say("check",type))}</span>
-        <div class="sub mono">${esc(type)}</div></td><td><div class="chiprow haspill">${chain}</div></td>
-      <td class="sub">${esc(say("adapter",list.at(-1).source||""))}</td></tr>`;
+        <div class="sub mono">${esc(type)}</div></td><td><div class="chiprow haspill">${chain}</div>${
+        type==="org_id_match"?orgPanel:""}</td>
+      <td class="sub">${esc(say("adapter",(list.at(-1)||{}).source||""))}</td></tr>`;
   }).join("")||emptyRow(3,"No evidence yet","Evidence arrives with platform messages. Use <a href='#/composer'>Case actions</a> to submit one.");
 
   const runRows=d.runs.map(r=>{
@@ -2013,6 +2052,30 @@ async function viewCase(id){
     composerSession.caseMode="existing";composerSession.selectedCase=c.id;location.hash="#/composer"};
   const ab=$("#approvebtn");if(ab)ab.onclick=()=>openApprove(d,hold);
   const fm=$("#feedmore");if(fm)fm.onclick=()=>{$("#feedhead").hidden=false;fm.parentElement.remove()};
+  /* Both Org ID actions name the reviewer, because both land on the case record under a person:
+     the ask as an audit row of its own, the handle as the actor on the submitted evidence. */
+  const askForm=$("#org-ask-form");
+  if(askForm)askForm.onsubmit=async e=>{
+    e.preventDefault();
+    if(!needReviewer())return;
+    const r=await j(`/ui/api/cases/${encodeURIComponent(c.id)}/information-request`,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({fields:["org_id"],note:$("#org-ask-note").value.trim()||null,reviewer:reviewer()})});
+    if(r.status<300){toast(`${I.check}<span>Org ID requested from the contact. The platform sends the message; this is the record of the ask.</span>`);setTimeout(route,700);return}
+    toast(`${I.cross}<span>${esc(errText(r.body))}</span>`)};
+  const recordToggle=$("#org-record-toggle");
+  if(recordToggle)recordToggle.onclick=()=>{$("#org-record-form").hidden=false;$("#org-handle").focus()};
+  const recordForm=$("#org-record-form");
+  if(recordForm)recordForm.onsubmit=async e=>{
+    e.preventDefault();
+    if(!needReviewer())return;
+    const handle=$("#org-handle").value.trim();
+    if(!handle){toast(`${I.cross}<span>Enter the Org handle the contact sent you.</span>`);$("#org-handle").focus();return}
+    const r=await j("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({case_id:c.id,event_type:"org_id.submitted",reviewer_id:reviewer(),
+        payload:{rir:$("#org-rir").value,org_handle:handle}})});
+    if(r.status<300){toast(`${I.check}<span>Org ID recorded under your name. The case will be re-scored shortly.</span>`);setTimeout(route,700);return}
+    toast(`${I.cross}<span>${esc(errText(r.body))}</span>`)};
   page.querySelectorAll("[data-complete]").forEach(b=>b.onclick=async()=>{
     if(!needReviewer())return;
     const[taskId,result]=b.dataset.complete.split(":");

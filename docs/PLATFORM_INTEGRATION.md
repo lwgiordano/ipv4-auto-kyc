@@ -157,7 +157,7 @@ Retry on network failure with the **same** key and **same bytes**; you'll get
 |---|---|---|
 | `kyb.run_requested` | `company_legal_name`, `contact`, `platform_account_id`; optional `address`, `registration_number`, `jurisdiction`, `website` | send at registration; full check run; `contact` is the registrant, an object with required `name` and `email` (the address they signed up with) and optional `title`, `first_name`, `last_name`; the LinkedIn check compares the person's name and the company domain (company name and title are recorded for the reviewer, not compared), and uses `email` and the split names to find the right profile |
 | `email.verified` | `email`, `domain`, `verified_at` | you own email verification; this asserts it happened; `email` must be the contact's sign-up address (`contact.email`) |
-| `org_id.submitted` | `rir`, `org_handle` | `rir` ∈ `arin, ripe, apnic, lacnic, afrinic` |
+| `org_id.submitted` | `rir`, `org_handle` | `rir` ∈ `arin, ripe, apnic, lacnic, afrinic`; send it right after the sign-up event when the registrant supplied a handle at registration, and again whenever they add or change it later — it is optional at registration, and the check runs the moment it arrives. A reviewer may also record one in the operator console when the contact supplies it by other means; the envelope's `actor` says which (`reviewer` rather than your own `user`/`system` actor) |
 | `poc.submitted` | `rir`, `poc_handle`; optional `org_handle`, `resource` | starts the verification email (§5) |
 | `poc.token_verified` | `token_id`, `token`, `verified_at` | posted by your confirmation page (§5) |
 | `document.uploaded` | `object_ref`, `doc_type` | see §6 |
@@ -377,7 +377,8 @@ production cannot start on either option before it is decided.
 ## 7. Read API and review tasks
 
 - `GET /v1/cases/{id}` — status, score, latest decision, live checks with
-  reason codes ("what's missing" for follow-up).
+  reason codes ("what's missing" for follow-up), and `information_requested`
+  (below).
 - `GET /v1/cases/{id}/checks?all=1` — full check history.
 - `GET /v1/runs/{id}` — one run's state and adapter results.
 - `GET /v1/review-tasks?status=open` — open human-review tasks (website
@@ -397,6 +398,23 @@ field. The tool validates the task exists, is a website task on that case, and
 is open (else 404/409/422); the transition, check, and audit are identical to
 any other event. (The old `POST /v1/review-tasks/{id}/complete` endpoint is
 retired — it duplicated this event.)
+
+**What a reviewer has asked the contact for.** `GET /v1/cases/{id}` carries
+`information_requested`: one entry per outstanding ask, shaped `{"field":
+"org_id" | "registration_number" | "address" | "poc", "requested_at": …,
+"requested_by": …, "note": … or null}`. A reviewer raises one from the operator
+console when a case is stuck for want of evidence the registrant never
+supplied. The tool records the ask; the platform owns the message that reaches
+the contact. An entry drops off by itself once the case receives that evidence
+— `org_id` clears when `org_id.submitted` arrives, and so on — so there is
+nothing to close and nothing to acknowledge.
+
+You do not need this field to chase a missing ORG-ID today: the decision
+webhook's `checks[].reason_codes` already carry
+`org_id_submission_incomplete`, which is the same fact at decision time. How
+you would rather learn of a reviewer's request — polling this field, or a
+message we send you — is `PLATFORM_BRIEFING.md` §8 item 13, and nothing
+outbound is built until you answer.
 
 ### Salesforce projection (pull)
 

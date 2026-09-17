@@ -204,6 +204,10 @@ def ingest_event(
                 "event.received",
                 case_id=case_id,
                 actor=str(actor.get("id", "platform")),
+                # WHICH kind of actor, beside the id: the same evidence can arrive from the
+                # platform or be recorded by a reviewer who was sent it directly, and the
+                # activity log has to be able to say which without re-reading the event row.
+                actor_type=actor.get("type"),
                 event_id=event.id,
                 event_type=event_type,
                 event_sequence=next_sequence,

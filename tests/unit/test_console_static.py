@@ -401,6 +401,34 @@ def test_the_identity_block_never_links_a_scheme_the_payload_chose():
     assert 'rel="noopener noreferrer"' in fn
 
 
+def test_the_org_id_row_offers_both_ways_forward_before_a_handle_arrives():
+    """The RIR Org ID is the one piece of evidence a registrant may simply not have at sign-up,
+    so the case parked in review on `org_id_submission_incomplete` with nothing on the screen to
+    act on. The row is now drawn before its first check exists, and carries both moves."""
+    assert 'if(orgOpen)byType["org_id_match"]??=[]' in VIEW_CASE
+    assert "org_id_submission_incomplete" in VIEW_CASE
+    assert 'type==="org_id_match"?orgPanel:""' in VIEW_CASE
+    assert ">Request from contact<" in VIEW_CASE
+    assert ">Record handle<" in VIEW_CASE
+    assert "Org ID requested from contact on" in VIEW_CASE
+    # the ask is a record on the case, through its own endpoint; the handle is ordinary evidence
+    assert "/information-request" in VIEW_CASE
+    assert 'event_type:"org_id.submitted"' in VIEW_CASE
+    # neither move is anonymous
+    assert "reviewer:reviewer()" in VIEW_CASE
+
+
+def test_the_activity_log_says_who_supplied_the_org_id():
+    """The same handle can come from the platform or from a reviewer the contact sent it to.
+    The event's actor is the only thing that tells them apart, so the feed reads it rather than
+    calling both of them a platform message."""
+    feed = _sync_function_body("humanizeAudit")
+    assert 'd.actor_type==="reviewer"' in feed
+    assert "recorded by reviewer" in feed
+    assert "submitted by the platform" in feed
+    assert 'case"information_requested"' in feed
+
+
 def test_the_five_rules_name_a_subject_not_a_verdict():
     """"Score threshold met / NOT MET" is the label and the result contradicting each other, and
     "No conflicting evidence / NOT MET" is a double negative that means the opposite."""

@@ -1,17 +1,67 @@
 """Read endpoints (04 §2). Review completion is the keyed website.review_completed
 event (PR 5a §4), no longer a dedicated endpoint."""
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
 from kyc_tool.api.auth import require_read_access
 from kyc_tool.api.salesforce_projection import build_salesforce_projection
 from kyc_tool.api.schemas import EventHttpErrorResponse, SalesforceProjectionResponse
 from kyc_tool.checkstore import repo as checkstore
-from kyc_tool.db.tables import Case, DecisionRow, ReviewTask, Run
+from kyc_tool.db.tables import AuditLog, Case, DecisionRow, ReviewTask, Run
 from kyc_tool.domain import provenance
 
 router = APIRouter()
+
+INFORMATION_REQUEST_ACTION = "information_requested"
+
+InformationField = Literal["org_id", "registration_number", "address", "poc"]
+
+# The same four names, mapped to where the case snapshot carries each one once it arrives. A
+# request clears ITSELF when the evidence lands, which is why nothing has to close one: there is
+# no open/closed column to get out of step with the evidence it was asking for.
+INFORMATION_FIELDS: dict[str, tuple[str, ...]] = {
+    "org_id": ("org_id", "org_handle"),
+    "registration_number": ("registration_number",),
+    "address": ("address",),
+    "poc": ("poc", "poc_handle"),
+}
+
+
+def _supplied(snapshot: dict, field: str) -> bool:
+    value = snapshot
+    for key in INFORMATION_FIELDS[field]:
+        value = value.get(key) if isinstance(value, dict) else None
+    return bool(value)
+
+
+def information_requested(session: Session, case_id: str, snapshot: dict) -> list[dict]:
+    """The reviewer information requests this case still has open.
+
+    There is NO wire event and no column behind this: a reviewer asking the contact for missing
+    evidence is a console act on the case record (ui/routes.py writes one audit row), and this is
+    the projection of those rows. The latest request for a field wins, and a field the case has
+    since received is no longer open.
+    """
+    rows = session.execute(
+        select(AuditLog.at, AuditLog.actor, AuditLog.detail_json)
+        .where(AuditLog.case_id == case_id, AuditLog.action == INFORMATION_REQUEST_ACTION)
+        .order_by(AuditLog.id)
+    ).all()
+    open_requests: dict[str, dict] = {}
+    for at, actor, detail in rows:
+        for field in (detail or {}).get("fields", []):
+            if field in INFORMATION_FIELDS and not _supplied(snapshot, field):
+                open_requests[field] = {
+                    "field": field,
+                    "requested_at": at.isoformat(),
+                    "requested_by": actor,
+                    "note": (detail or {}).get("note"),
+                }
+    return list(open_requests.values())
 
 
 def _check_json(check) -> dict:
@@ -100,6 +150,9 @@ def get_case(case_id: str, request: Request) -> dict:
             "gates": (latest.gates_json if latest else {}),
             "decision_provenance": decision_provenance,
             "live_checks": [_check_json(c) for c in live],
+            # What a reviewer has asked this contact for and not yet received (see above). The
+            # platform owns the message to the contact; this is the tool's record of the ask.
+            "information_requested": information_requested(session, case_id, case.submitted_json or {}),
         }
 
 

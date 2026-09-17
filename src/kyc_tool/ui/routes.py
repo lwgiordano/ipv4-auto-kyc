@@ -14,14 +14,21 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import text
 
 from kyc_tool.api.auth import require_admin
 from kyc_tool.api.routes_metrics import collect_metrics
+from kyc_tool.api.routes_read import (
+    INFORMATION_REQUEST_ACTION,
+    InformationField,
+    information_requested,
+)
 from kyc_tool.api.schemas import PAYLOAD_MODELS, EventEnvelope
 from kyc_tool.configuration import repo as configuration_repo
 from kyc_tool.configuration.models import ConfigurationUnavailable, brokers_json
+from kyc_tool.db.audit import audit
+from kyc_tool.db.session import uow
 from kyc_tool.domain import provenance
 from kyc_tool.events.ingest import ingest_event
 from kyc_tool.ops.requeue_service import requeue_dead_job, requeue_dead_outbox
@@ -405,6 +412,9 @@ def case_full(case_id: str, request: Request) -> dict:
                     "computed_decision": decided.get("computed_decision"),
                     "published_decision": pointer_decision["decision"],
                 }
+        # Projected from its audit rows exactly as GET /v1/cases/{id} projects it, so the case
+        # page and the platform's read never disagree about what is still outstanding.
+        info_requested = information_requested(session, case_id, case.get("submitted_json") or {})
         tasks = _rows(
             session.execute(
                 text(
@@ -594,6 +604,8 @@ def case_full(case_id: str, request: Request) -> dict:
             # the safety overlay's hold on the pointed verdict, or None (see above)
             "enforcement_hold": enforcement_hold,
             "review_tasks": tasks,
+            # open reviewer asks to the contact, cleared by the evidence itself (routes_read.py)
+            "information_requested": info_requested,
             "poc_tokens": tokens,
             "audit": list(reversed(audit)),
             "outbox": outbox,
@@ -719,7 +731,12 @@ async def send_event(request: Request) -> JSONResponse:
             )
         actor = {"type": "reviewer", "id": rid}
     else:
-        actor = {"type": "system", "id": "ops-console"}
+        # A reviewer may also record ordinary evidence a contact supplied by other means -- an
+        # Org ID emailed to them, say. `reviewer_id` rides on the REQUEST, not in the payload, so
+        # it names the actor without joining the evidence the validators read; the case record
+        # then says who recorded it instead of crediting the platform for it.
+        rid = str(body.get("reviewer_id") or "").strip()
+        actor = {"type": "reviewer", "id": rid} if rid else {"type": "system", "id": "ops-console"}
 
     try:
         envelope = EventEnvelope.model_validate(
@@ -756,6 +773,57 @@ async def send_event(request: Request) -> JSONResponse:
         status_code=outcome.status_code,
         content={**outcome.body, "idempotency_key": idempotency_key, "jobs_queued": queued},
     )
+
+
+class InformationRequestBody(BaseModel):
+    """What a reviewer is asking the contact for. `reviewer` is who asked: the audit row carries
+    it, and "console" is not a person."""
+
+    model_config = ConfigDict(extra="forbid")
+    fields: list[InformationField] = Field(min_length=1)
+    note: str | None = None
+    reviewer: str
+
+
+@router.post("/ui/api/cases/{case_id}/information-request", status_code=202)
+async def request_information(case_id: str, request: Request) -> dict:
+    """Record that a reviewer asked this contact for evidence the case is missing.
+
+    ONE audit row and nothing else: no run, no snapshot change, and no event on the platform
+    wire -- the accepted event catalogue is the platform's, and this is a reviewer acting in this
+    console, not the platform reporting something. The platform still owns the message to the
+    contact; `GET /v1/cases/{id}` serves the open requests so it can see what was asked for, and
+    they clear themselves when the evidence arrives (api/routes_read.py).
+    """
+    require_admin(request.app.state.settings, request.headers)
+    try:
+        body = InformationRequestBody.model_validate(await request.json())
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+    reviewer = body.reviewer.strip()
+    if not reviewer:
+        raise HTTPException(
+            status_code=422,
+            detail="reviewer must name the person asking: the audit row carries it",
+        )
+    with uow(request.app.state.session_factory) as session:
+        if session.execute(text("SELECT 1 FROM cases WHERE id=:id"), {"id": case_id}).first() is None:
+            raise HTTPException(status_code=404, detail="case not found")
+        audit(
+            session,
+            INFORMATION_REQUEST_ACTION,
+            case_id=case_id,
+            actor=reviewer,
+            fields=list(body.fields),
+            note=body.note,
+        )
+    return {
+        "case_id": case_id,
+        "fields": list(body.fields),
+        "note": body.note,
+        "requested_by": reviewer,
+        "recorded": True,
+    }
 
 
 @router.post("/ui/api/requeue/job/{job_id}")

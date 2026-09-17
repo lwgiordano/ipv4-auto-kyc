@@ -239,6 +239,127 @@ def test_console_manual_approve_records_the_named_reviewer(client, engine, phase
     assert manual_rows == 1
 
 
+def test_information_request_is_one_audit_row_that_both_reads_serve(client, engine):
+    """A reviewer asking the contact for a missing Org ID is a console act on the case record:
+    one audit row, no run, no event on the platform wire. Both the read API and the case page
+    project the same open asks from that row, and a field the case ALREADY carries is never
+    open -- `address` rides in on the sign-up, so only `org_id` is outstanding."""
+    client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-ask", "event_type": "kyb.run_requested",
+              "payload": ACME_KYB_WITH_CONTACT},
+    )
+    before = client.get("/v1/cases/ui-ask").json()["information_requested"]
+    assert before == []
+
+    asked = client.post(
+        "/ui/api/cases/ui-ask/information-request",
+        json={"fields": ["org_id", "address"], "note": "Please send your ARIN handle.",
+              "reviewer": "jane.doe"},
+    )
+    assert asked.status_code == 202, asked.text
+    assert asked.json() == {"case_id": "ui-ask", "fields": ["org_id", "address"],
+                            "note": "Please send your ARIN handle.", "requested_by": "jane.doe",
+                            "recorded": True}
+
+    with engine.connect() as conn:
+        rows, runs, sent, events = conn.execute(
+            text("SELECT (SELECT count(*) FROM audit_log WHERE case_id='ui-ask' "
+                 "AND action='information_requested'), "
+                 "(SELECT count(*) FROM runs WHERE case_id='ui-ask'), "
+                 "(SELECT count(*) FROM outbox WHERE case_id='ui-ask'), "
+                 "(SELECT count(*) FROM events WHERE case_id='ui-ask')")
+        ).one()
+    assert rows == 1
+    assert runs == 1  # the sign-up's own run, and no second one for the ask
+    assert sent == 0  # nothing is delivered to anyone: the platform owns the message
+    assert events == 1  # the sign-up's own event: the ask is not on the platform wire
+
+    open_asks = client.get("/v1/cases/ui-ask").json()["information_requested"]
+    assert [a["field"] for a in open_asks] == ["org_id"]
+    assert open_asks[0]["requested_by"] == "jane.doe"
+    assert open_asks[0]["note"] == "Please send your ARIN handle."
+    assert open_asks[0]["requested_at"]
+    assert client.get("/ui/api/cases/ui-ask/full").json()["information_requested"] == open_asks
+
+    # a second ask for the same field REPLACES the first -- the latest one is what is open
+    client.post(
+        "/ui/api/cases/ui-ask/information-request",
+        json={"fields": ["org_id"], "note": "Still waiting.", "reviewer": "sam.patel"},
+    )
+    again = client.get("/v1/cases/ui-ask").json()["information_requested"]
+    assert [(a["field"], a["requested_by"], a["note"]) for a in again] == [
+        ("org_id", "sam.patel", "Still waiting.")
+    ]
+
+    # the evidence itself closes the ask -- there is no "resolve" call to forget
+    client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-ask", "event_type": "org_id.submitted",
+              "payload": {"rir": "arin", "org_handle": "ORG-ACME-1"}},
+    )
+    assert client.get("/v1/cases/ui-ask").json()["information_requested"] == []
+    assert client.get("/ui/api/cases/ui-ask/full").json()["information_requested"] == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"fields": [], "reviewer": "jane.doe"},                     # nothing asked for
+        {"fields": ["favourite_colour"], "reviewer": "jane.doe"},   # not a requestable field
+        {"reviewer": "jane.doe"},                                   # no fields at all
+        {"fields": ["org_id"]},                                     # nobody asking
+        {"fields": ["org_id"], "reviewer": "   "},                  # still nobody asking
+    ],
+)
+def test_information_request_refuses_an_empty_ask_or_a_nameless_reviewer(client, body):
+    r = client.post("/ui/api/cases/ui-ask-bad/information-request", json=body)
+    assert r.status_code == 422, r.text
+
+
+def test_information_request_is_404_for_a_case_that_does_not_exist(client):
+    """The ask is a record ON a case. Writing one for an id nobody has sent an event for would
+    be an audit row pointing at nothing."""
+    r = client.post(
+        "/ui/api/cases/ui-no-such-case/information-request",
+        json={"fields": ["org_id"], "reviewer": "jane.doe"},
+    )
+    assert r.status_code == 404
+    assert r.json()["detail"] == "case not found"  # the case check, not a missing route
+
+
+def test_console_records_an_org_id_under_the_reviewer_who_entered_it(client, engine):
+    """Record-handle posts the ordinary org_id.submitted, but the actor is the reviewer who
+    typed it rather than the console, so the case record says who supplied the handle. The
+    platform's own submissions keep the system actor."""
+    client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-org-actor", "event_type": "kyb.run_requested",
+              "payload": ACME_KYB_WITH_CONTACT},
+    )
+    by_reviewer = client.post(
+        "/ui/api/send-event",
+        json={"case_id": "ui-org-actor", "event_type": "org_id.submitted",
+              "reviewer_id": "jane.doe",
+              "payload": {"rir": "arin", "org_handle": "ORG-ACME-1"}},
+    )
+    assert by_reviewer.status_code == 202, by_reviewer.text
+    with engine.connect() as conn:
+        actor = conn.execute(
+            text("SELECT actor_json FROM events WHERE case_id='ui-org-actor' "
+                 "AND event_type='org_id.submitted'")
+        ).scalar_one()
+    assert actor == {"type": "reviewer", "id": "jane.doe"}
+    # the activity log reads the actor kind off the audit row, not out of the event table
+    received = [a for a in client.get("/ui/api/cases/ui-org-actor/full").json()["audit"]
+                if a["action"] == "event.received"]
+    assert received[-1]["detail_json"]["actor_type"] == "reviewer"
+    assert received[0]["detail_json"]["actor_type"] == "system"  # the platform's own sign-up
+    # the handle itself is evidence, never polluted by who recorded it
+    snapshot = client.get("/ui/api/cases/ui-org-actor/full").json()["case"]["submitted_json"]
+    assert snapshot["org_id"] == {"rir": "arin", "org_handle": "ORG-ACME-1"}
+
+
 def test_integrations_report_classifies_stubs(client):
     body = client.get("/ui/api/integrations").json()
     by_id = {a["adapter_id"]: a for a in body["adapters"]}
@@ -386,3 +507,17 @@ def test_composer_allows_scoring_events_in_production(prod_ui_client):
         headers=_admin_headers(),
     )
     assert r.status_code != 403
+
+
+def test_information_request_needs_the_operator_credential_when_one_is_configured(prod_ui_client):
+    """It MUTATES the case record, so it is gated like every other console mutation -- and the
+    gate is checked before the body is parsed, so a refusal never depends on what was sent."""
+    body = {"fields": ["org_id"], "reviewer": "jane.doe"}
+    assert prod_ui_client.post("/ui/api/cases/c1/information-request", json=body).status_code == 401
+    assert prod_ui_client.post(
+        "/ui/api/cases/c1/information-request", json={"nonsense": True}
+    ).status_code == 401
+    # with the credential it gets as far as the case check, which is the real 404 for c1
+    assert prod_ui_client.post(
+        "/ui/api/cases/c1/information-request", json=body, headers=_admin_headers()
+    ).status_code == 404

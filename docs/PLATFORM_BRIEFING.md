@@ -68,7 +68,10 @@ Approving the case approves that person, not the company, so the sign-up event
 must carry who they are — `contact.name` and `contact.email` (the address they
 signed up with, the one `email.verified` later confirms), and the
 `platform_account_id` your side holds for them. A second registrant at the same
-company is a second case.
+company is a second case. Send the RIR org handle when the registrant has one:
+`org_id.submitted` right after the sign-up event, and again whenever they add
+or change it later — it is optional at registration, and the check runs the
+moment it arrives.
 
 1. User registers → platform POSTs `kyb.run_requested` with the registrant's
    contact details and the company details → `202 {"run_id": "…"}`.
@@ -257,7 +260,7 @@ service production-ready; the go/no-go gate is §8 of
   (`PLATFORM_INTEGRATION.md` §7).
 - Website review and manual approval as signed events; the operator console,
   including live configuration and Salesforce destination-name mapping.
-- Live registry adapters: Companies House (needs the API key, item 13), GLEIF,
+- Live registry adapters: Companies House (needs the API key, item 14), GLEIF,
   and the five RIR RDAP strategies. S3-compatible evidence storage.
 - The production boot check that refuses stub providers and unsafe config.
 
@@ -311,11 +314,18 @@ tested contract)
     acceptable latency for light and full checks, soak duration, deployment
     region, maintenance-window constraints, availability and recovery
     objectives.
+13. Reviewer information requests: when a case stalls for evidence the
+    registrant never supplied — most often the RIR org handle — a reviewer
+    records the ask in the console, and `GET /v1/cases/{id}` serves it as
+    `information_requested` (`PLATFORM_INTEGRATION.md` §7). Say how you would
+    rather learn of one: poll that field, or a new webhook message we send
+    you. We build the webhook only once you answer; the request itself is
+    recorded either way.
 
 **From IPv4.Global**
 
-13. Companies House API key (secret manager).
-14. Email: if the tool sends, an SES identity and sending domain in the
+14. Companies House API key (secret manager).
+15. Email: if the tool sends, an SES identity and sending domain in the
     secret manager and deployment config.
 
 **Coming on our side, not yet built**: a conformance kit you can run against
