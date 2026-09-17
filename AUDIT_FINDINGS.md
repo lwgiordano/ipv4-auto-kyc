@@ -386,3 +386,14 @@ directly. See ADR-009 and `docs/DEPLOYMENT.md` §12 for activation and recovery.
   display names carry taglines — `Epsilon Telecommunications, a KT company` — and titles are
   self-described). Spec line 03 §2 and `scoring_rubric.json` (`2.0` → `2.1`) changed together;
   the policy baseline is re-pinned. Still `norm_equal` / `domain_of`, nothing fuzzy.
+
+### 🔵 D-CONTACT-FIRST — A case is one registrant, and the contact's email is required
+
+- **Decided 2026-09-17 by the human.** Contacts are what trigger this: a registrant is a
+  person applying on behalf of a company, and it is that person who is approved or rejected,
+  not the company. So a case is ONE registrant, a second registrant at the same company is a
+  second case, and `kyb.run_requested` now REQUIRES `contact` (with `name` and `email`, the
+  address they signed up with and the one `email.verified` must carry) and
+  `platform_account_id`. Company evidence stays what it is — evidence about the company the
+  person claims. The contract (`api/schemas.py`, `docs/contracts/wire.py`), the three platform
+  docs and the console's language all say registrant/case where they used to say company.

@@ -474,7 +474,16 @@ def test_manual_current_then_late_automatic_callback_sent_expected_pre_activatio
     callback IS sent AFTER the manual approval — EXPECTED pre-activation behavior, closed
     only by 7b-activation's platform high-water (the strengthened 014 acceptance makes an
     unaccepted older callback a sticky no-op against a manual-current source)."""
-    post_event("case-mc", "kyb.run_requested", {"company_legal_name": "A", "jurisdiction": "GB"})
+    post_event(
+        "case-mc",
+        "kyb.run_requested",
+        {
+            "company_legal_name": "A",
+            "jurisdiction": "GB",
+            "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"},
+            "platform_account_id": "acct-1",
+        },
+    )
     worker.run_until_idle()          # automatic decision made; callback enqueued, NOT processed
     with session_factory() as s:
         queued = s.execute(text("SELECT status, run_id FROM outbox "

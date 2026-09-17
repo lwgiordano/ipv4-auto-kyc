@@ -60,7 +60,11 @@ def test_actual_200_through_422_bodies_match_the_published_status_models(client,
     conflict, _ = post_event(
         "contract-409",
         "kyb.run_requested",
-        {"company_legal_name": "different"},
+        {
+            "company_legal_name": "different",
+            "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"},
+            "platform_account_id": "acct-1",
+        },
         key=conflict_key,
         force_new_body=True,
     )

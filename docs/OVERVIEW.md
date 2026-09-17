@@ -52,7 +52,8 @@ platform ──POST event──► API ──(persist + queue)──► backgrou
             → push decision to platform via signed webhook
 ```
 
-Step by step, for one customer ("case"):
+Step by step, for one registrant ("case" — one person, applying on behalf of
+a company):
 
 1. **Event arrives.** The platform POSTs a signed event (e.g. "submitted
    company details," "verified email," "uploaded a document," "submitted an
@@ -150,8 +151,8 @@ authenticated:
 
 | Event | Payload |
 |---|---|
-| `kyb.run_requested` | **`company_legal_name`**, `address`, `jurisdiction`, `website`, `contact{name,title}`, `platform_account_id` |
-| `email.verified` | **`email`**, **`domain`**, **`verified_at`** |
+| `kyb.run_requested` | **`company_legal_name`**, **`contact{name,email}`** (the registrant, plus optional `title`, `first_name`, `last_name`), **`platform_account_id`**, `address`, `jurisdiction`, `website` |
+| `email.verified` | **`email`** (must be the registrant's `contact.email`), **`domain`**, **`verified_at`** |
 | `org_id.submitted` | **`rir`**, **`org_handle`** |
 | `poc.submitted` | **`rir`**, **`poc_handle`**, `org_handle`, `resource` |
 | `poc.token_verified` | **`token_id`**, **`verified_at`**, `token` |

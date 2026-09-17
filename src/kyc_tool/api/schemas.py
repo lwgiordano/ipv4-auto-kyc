@@ -52,6 +52,19 @@ class Actor(BaseModel):
     id: str
 
 
+class ContactPayload(BaseModel):
+    """The registrant. A case is ONE of these: the person applying on behalf of a
+    company, identified on the platform by platform_account_id. The decision is
+    about this contact, so name and the sign-up email are required."""
+
+    model_config = ConfigDict(extra="allow")
+    name: str
+    email: str
+    title: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+
+
 class KybRunPayload(BaseModel):
     model_config = ConfigDict(extra="allow")
     company_legal_name: str
@@ -62,8 +75,8 @@ class KybRunPayload(BaseModel):
     registration_number: str | None = None
     jurisdiction: str | None = None
     website: str | None = None
-    contact: dict | None = None
-    platform_account_id: str | None = None
+    contact: ContactPayload
+    platform_account_id: str
 
 
 class EmailVerifiedPayload(BaseModel):

@@ -14,6 +14,10 @@ KYB_PAYLOAD = {
     "company_legal_name": "Acme Networks Ltd",
     "jurisdiction": "GB",
     "website": "https://acme.example",
+    # A case is ONE registrant: the contact and the platform's account id for that person are
+    # required, and a sign-up missing either is refused below.
+    "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"},
+    "platform_account_id": "acct-1",
 }
 
 
@@ -81,6 +85,23 @@ def test_schema_violation_is_422(client, clean_db):
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {k: v for k, v in KYB_PAYLOAD.items() if k != "contact"},
+        {**KYB_PAYLOAD, "contact": {"name": "Robin Vale"}},
+        {k: v for k, v in KYB_PAYLOAD.items() if k != "platform_account_id"},
+    ],
+    ids=["no-contact", "contact-without-email", "no-platform-account-id"],
+)
+def test_sign_up_without_the_registrant_is_422(client, clean_db, payload):
+    """The case IS the contact: a sign-up that does not say who applied, or that omits the
+    address they signed up with, is refused at the door rather than scored as a company."""
+    body = json.dumps(envelope("kyb.run_requested", payload)).encode()
+    response = client.post("/v1/cases/case-422c/events", content=body, headers=sign_headers(body))
+    assert response.status_code == 422
+
+
 def test_unknown_event_type_is_422(client, clean_db):
     body = json.dumps(envelope("nonsense.event", {})).encode()
     response = client.post("/v1/cases/case-422b/events", content=body, headers=sign_headers(body))
@@ -125,7 +146,12 @@ def test_semantically_equal_normalized_envelopes_replay(client, clean_db):
             "event_type": "kyb.run_requested",
             "occurred_at": "2026-09-12T12:00:00Z",
             "actor": {"type": "system", "id": "techcraft", "actor_extension": "kept"},
-            "payload": {"company_legal_name": "Acme", "payload_extension": "kept"},
+            "payload": {
+                "company_legal_name": "Acme",
+                "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"},
+                "platform_account_id": "acct-1",
+                "payload_extension": "kept",
+            },
         }
     ).encode()
     second_body = json.dumps(
@@ -136,8 +162,14 @@ def test_semantically_equal_normalized_envelopes_replay(client, clean_db):
                 "registration_number": None,
                 "jurisdiction": None,
                 "website": None,
-                "contact": None,
-                "platform_account_id": None,
+                "contact": {
+                    "name": "Robin Vale",
+                    "email": "robin.vale@acme.example",
+                    "title": None,
+                    "first_name": None,
+                    "last_name": None,
+                },
+                "platform_account_id": "acct-1",
                 "payload_extension": "kept",
             },
             "actor": {

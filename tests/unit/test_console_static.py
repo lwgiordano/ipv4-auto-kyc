@@ -373,20 +373,22 @@ def test_one_raised_button_per_screen():
     assert 'class="warn" id="ap-go"' in dialog, "the confirm keeps the trigger's colour"
 
 
-def test_each_case_tab_is_named_for_its_company():
-    assert "document.title=`${c.company_name||c.id} · KYC Tool`" in VIEW_CASE
+def test_each_case_tab_is_named_for_its_registrant():
+    assert "document.title=`${caseHeadline(c)} · KYC Tool`" in VIEW_CASE
 
 
-# --- the company is on the company page ------------------------------------------------------
+# --- the registrant is on the case page ------------------------------------------------------
 
-def test_the_case_page_prints_the_company_it_is_asking_about():
-    """Nine sections described what the engine did; the legal name, registration number,
-    jurisdiction, address, director and RIR handle were a raw JSON dump at the foot of a 4200px
-    page. The reviewer is being asked to vouch for that identity."""
+def test_the_case_page_prints_the_registrant_it_is_asking_about():
+    """Nine sections described what the engine did; the contact, the legal name, registration
+    number, jurisdiction, address and RIR handle were a raw JSON dump at the foot of a 4200px
+    page. The reviewer is being asked to vouch for that person, so the contact leads, and the
+    verified address sits beside the one they signed up with."""
     assert "function identityFields(c)" in CONSOLE
     assert "${identityCard(c)}" in VIEW_CASE
-    for field in ("Legal name", "Registration number", "Jurisdiction", "Registered address",
-                  "RIR Org ID", "Contact", "Website"):
+    for field in ("Contact name", "Email", "Verified email", "Title", "Legal name",
+                  "Registration number", "Jurisdiction", "Registered address",
+                  "RIR Org ID", "Website"):
         assert f'"{field}"' in CONSOLE, f"the identity block must name {field}"
     # the verbatim payload stays where an auditor expects it
     assert "Submitted Details" in VIEW_CASE
@@ -474,12 +476,12 @@ def test_reviewer_and_identity_grids_align_content_rows():
     assert idf and "align-content:start" in idf.group(1)
 
 
-def test_routes_name_every_non_company_document():
+def test_routes_name_every_non_case_document():
     router = CONSOLE[CONSOLE.index("const routes=["):]
-    for title in ("Overview", "Companies", "Data Sources", "Salesforce Fields",
-                  "Decision Rules", "Options", "Company Actions"):
+    for title in ("Overview", "Cases", "Data Sources", "Salesforce Fields",
+                  "Decision Rules", "Options", "Case actions"):
         assert f'"{title}"' in router
-    assert 'document.title=title?`${title} · KYC Tool`:"Company · KYC Tool"' in router
+    assert 'document.title=title?`${title} · KYC Tool`:"Case · KYC Tool"' in router
 
 
 def test_one_header_chip_per_fact():

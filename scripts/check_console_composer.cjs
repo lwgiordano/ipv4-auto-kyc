@@ -30,7 +30,7 @@ function near(actual, expected, message, tolerance = 1) {
 async function ready(page) {
   await page.goto(`${baseUrl}#/composer`);
   await page.waitForFunction(() => location.hash === "#/composer" &&
-    document.querySelector("#page h1")?.textContent.trim() === "Company Actions");
+    document.querySelector("#page h1")?.textContent.trim() === "Case actions");
   await page.locator("#composer-form").waitFor();
 }
 async function choose(page, eventType) {
@@ -53,12 +53,12 @@ async function advanced(page) {
   if (!(await details.evaluate(el => el.open))) await details.locator("summary").click();
   return page.getByLabel("Advanced JSON payload");
 }
-async function validCompany(page) {
+async function validCase(page) {
   const existing = page.locator("#c-case-list option:not([value=''])");
   if (await existing.count()) await page.locator("#c-case-list").selectOption(await existing.first().getAttribute("value"));
   else {
-    await page.getByLabel("New company with ID").check();
-    await page.getByLabel("New company ID").fill("composer-test-company");
+    await page.getByLabel("New case with ID").check();
+    await page.getByLabel("New case ID").fill("composer-test-case");
   }
 }
 
@@ -66,10 +66,12 @@ const cases = [
   ["kyb.run_requested", {
     "Company legal name": "Composer Co", Address: "1 Main St", "Registration number": "REG-1",
     Jurisdiction: "US", Website: "https://composer.example", "Contact name": "Alex Example",
-    "Contact title": "Director", "Platform account ID": "acct-1",
+    "Contact email": "alex@composer.example", "Contact title": "Director",
+    "Platform account ID": "acct-1",
   }, { company_legal_name: "Composer Co", address: "1 Main St", registration_number: "REG-1",
     jurisdiction: "US", website: "https://composer.example",
-    contact: { name: "Alex Example", title: "Director" }, platform_account_id: "acct-1" }],
+    contact: { name: "Alex Example", email: "alex@composer.example", title: "Director" },
+    platform_account_id: "acct-1" }],
   ["email.verified", { Email: "ops@composer.example", Domain: "composer.example",
     "Verified at": "2026-09-10T12:00:00Z" }, { email: "ops@composer.example", domain: "composer.example",
     verified_at: "2026-09-10T12:00:00Z" }],
@@ -114,14 +116,14 @@ const cases = [
     });
     const disappearingPage = await disappearing.newPage(); disappearingPage.setDefaultTimeout(9000);
     await ready(disappearingPage);
-    await check("a listed company that leaves the refreshed top-100 is retained without retargeting", async () => {
+    await check("a listed case that leaves the refreshed top-100 is retained without retargeting", async () => {
       await disappearingPage.locator("#c-case-list").selectOption("case-beta");
       await disappearingPage.locator('[data-r="overview"]').click();
       await disappearingPage.getByRole("heading", { name: "Overview", level: 1 }).waitFor();
       await disappearingPage.locator('[data-r="composer"]').click();
       await disappearingPage.locator("#composer-form").waitFor();
-      assert.equal(await disappearingPage.getByLabel("Use an existing company ID beyond this list").isChecked(), true);
-      assert.equal(await disappearingPage.getByLabel("Existing company ID beyond this list", { exact: true }).inputValue(), "case-beta");
+      assert.equal(await disappearingPage.getByLabel("Use an existing case ID beyond this list").isChecked(), true);
+      assert.equal(await disappearingPage.getByLabel("Existing case ID beyond this list", { exact: true }).inputValue(), "case-beta");
       assert.match(await disappearingPage.locator('[data-company-control="existing-id"] .note').textContent(), /not in the current .*list|no longer in/i);
       await disappearingPage.getByRole("button", { name: "Review Message" }).click();
       assert.equal(await disappearingPage.locator("#c-review-company").textContent(), "case-beta",
@@ -142,30 +144,30 @@ const cases = [
     });
     const page = await context.newPage(); page.setDefaultTimeout(9000);
     await page.addInitScript(() => { window.__composerPostCount = 0; });
-    await ready(page); await validCompany(page);
+    await ready(page); await validCase(page);
 
-    await check("company choice is bounded, explicit, and does not default to creating an unknown company", async () => {
-      assert.equal(await page.getByRole("group", { name: "Company" }).count(), 1);
-      assert.equal(await page.getByLabel("Existing company from this list").isChecked(), true);
+    await check("case choice is bounded, explicit, and does not default to creating an unknown case", async () => {
+      assert.equal(await page.getByRole("group", { name: "Case" }).count(), 1);
+      assert.equal(await page.getByLabel("Existing case from this list").isChecked(), true);
       assert.ok(await page.locator("#c-case-list option").count() >= 1);
       assert.match(await page.locator("#c-company-note").textContent(), /up to 100|first 100/i);
-      assert.equal(await page.getByLabel("Existing company ID beyond this list", { exact: true }).count(), 1);
-      assert.equal(await page.getByLabel("New company with ID", { exact: true }).count(), 1);
-      assert.equal(await page.getByLabel("New company ID").inputValue(), "");
+      assert.equal(await page.getByLabel("Existing case ID beyond this list", { exact: true }).count(), 1);
+      assert.equal(await page.getByLabel("New case with ID", { exact: true }).count(), 1);
+      assert.equal(await page.getByLabel("New case ID").inputValue(), "");
       assert.match(await page.locator("#c-status").textContent(), /no message sent/i);
     });
 
-    await check("company draft survives navigation without entering local storage", async () => {
-      await page.getByLabel("Use an existing company ID beyond this list").check();
-      await page.getByLabel("Existing company ID beyond this list", { exact: true }).fill("private-company-reference");
+    await check("case draft survives navigation without entering local storage", async () => {
+      await page.getByLabel("Use an existing case ID beyond this list").check();
+      await page.getByLabel("Existing case ID beyond this list", { exact: true }).fill("private-case-reference");
       await page.locator('[data-r="overview"]').click();
       await page.getByRole("heading", { name: "Overview", level: 1 }).waitFor();
       await page.locator('[data-r="composer"]').click(); await page.locator("#composer-form").waitFor();
-      assert.equal(await page.getByLabel("Use an existing company ID beyond this list").isChecked(), true);
-      assert.equal(await page.getByLabel("Existing company ID beyond this list", { exact: true }).inputValue(), "private-company-reference");
+      assert.equal(await page.getByLabel("Use an existing case ID beyond this list").isChecked(), true);
+      assert.equal(await page.getByLabel("Existing case ID beyond this list", { exact: true }).inputValue(), "private-case-reference");
       const stored = await page.evaluate(() => Object.keys(localStorage).map(key => `${key}:${localStorage.getItem(key)}`).join("\n"));
-      assert.doesNotMatch(stored, /private-company-reference|composer/i);
-      await page.getByLabel("Existing company from this list").check();
+      assert.doesNotMatch(stored, /private-case-reference|composer/i);
+      await page.getByLabel("Existing case from this list").check();
     });
 
     await check("all nine accepted actions have labelled guided fields and produce the intended payload", async () => {
@@ -185,7 +187,7 @@ const cases = [
       }
     });
 
-    await check("sensitive guided actions point to the selected company context", async () => {
+    await check("sensitive guided actions point to the selected case context", async () => {
       await choose(page, "website.review_completed");
       const selected = await page.locator("#c-case-list").inputValue();
       const link = page.locator("#c-warn a");
@@ -220,7 +222,8 @@ const cases = [
       await choose(page, "kyb.run_requested");
       const advancedInput = await advanced(page);
       await advancedInput.fill(JSON.stringify({ company_legal_name: "Extra Co", top_extra: "keep",
-        contact: { name: "Old", title: "Lead", channel: "signal" } }, null, 2));
+        platform_account_id: "acct-extra",
+        contact: { name: "Old", email: "old@extra.example", title: "Lead", channel: "signal" } }, null, 2));
       await advancedInput.blur();
       assert.equal(await page.getByLabel("Contact name", { exact: true }).inputValue(), "Old");
       await page.getByLabel("Contact name", { exact: true }).fill("New");
@@ -259,7 +262,9 @@ const cases = [
       await page.getByLabel("Company legal name", { exact: true }).fill("Snapshot Co"); await review(page);
       assert.match(await page.locator("#c-review-summary").textContent(), /Snapshot Co/);
       const advancedInput = await advanced(page);
-      await advancedInput.evaluate(el => { el.value = '{"company_legal_name":"Tampered"}'; });
+      // the registrant fields ride along: a direct value= assignment fires no input event, but the
+      // next guided edit re-reads this text into the draft, and a draft without them cannot review
+      await advancedInput.evaluate(el => { el.value = '{"company_legal_name":"Tampered","platform_account_id":"acct-tamper","contact":{"name":"T Ampered","email":"t@tamper.example"}}'; });
       const sent = await confirm(page);
       assert.equal(sent.payload.company_legal_name, "Snapshot Co");
       await page.getByLabel("Company legal name", { exact: true }).fill("Edited after review");
@@ -279,7 +284,7 @@ const cases = [
     await check("ambiguous 503 retains semantic identity and blocks blind resubmission", async () => {
       await choose(page, "kyb.run_requested");
       const advancedInput = await advanced(page);
-      await advancedInput.fill('{"company_legal_name":"Retry Co","contact":{"name":"A","title":"B"}}'); await advancedInput.blur();
+      await advancedInput.fill('{"company_legal_name":"Retry Co","platform_account_id":"acct-retry","contact":{"name":"A","email":"a@retry.example","title":"B"}}'); await advancedInput.blur();
       await review(page); reply = { status: 503, body: { detail: "temporary failure" } }; await confirm(page);
       const first = posts.at(-1).idempotency_key, sentCount = posts.length;
       assert.match(await page.locator("#c-status").textContent(), /outcome unknown/i);
@@ -287,7 +292,7 @@ const cases = [
       assert.equal(await page.locator("#c-status a").getAttribute("href"),
         `#/case/${encodeURIComponent(posts.at(-1).case_id)}`);
       assert.equal(await page.getByRole("button", { name: /confirmation blocked/i }).isDisabled(), true);
-      await advancedInput.fill('{"contact":{"title":"B","name":"A"},"company_legal_name":"Retry Co"}'); await advancedInput.blur();
+      await advancedInput.fill('{"contact":{"title":"B","email":"a@retry.example","name":"A"},"company_legal_name":"Retry Co","platform_account_id":"acct-retry"}'); await advancedInput.blur();
       await review(page);
       assert.equal(await page.locator("#c-review-key").textContent(), first);
       assert.equal(await page.getByRole("button", { name: /confirmation blocked/i }).isDisabled(), true);

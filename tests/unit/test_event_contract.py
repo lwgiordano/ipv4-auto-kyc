@@ -19,7 +19,11 @@ from kyc_tool.api.schemas import (
 )
 
 VALID_PAYLOADS = {
-    "kyb.run_requested": {"company_legal_name": "Acme Networks Ltd"},
+    "kyb.run_requested": {
+        "company_legal_name": "Acme Networks Ltd",
+        "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"},
+        "platform_account_id": "acct-1",
+    },
     "email.verified": {
         "email": "ops@acme.example",
         "domain": "acme.example",
@@ -237,3 +241,15 @@ def test_openapi_publishes_only_the_real_headers_and_all_live_statuses():
 )
 def test_published_response_models_accept_the_existing_exact_shapes(model, body):
     assert model.model_validate(body).model_dump(mode="json", exclude_none=True) == body
+
+
+def test_console_templates_satisfy_the_published_payload_models():
+    """The console's built-in examples ARE the contract's shop window, and the demo seed's only
+    source of payloads: a template that no longer validates hands an operator a 422, and the
+    demo's email.verified must carry the registrant's own sign-up address."""
+    from kyc_tool.ui.routes import EVENT_TEMPLATES
+
+    for event_type, template in EVENT_TEMPLATES.items():
+        PAYLOAD_MODELS[event_type].model_validate(template)
+    assert (EVENT_TEMPLATES["email.verified"]["email"]
+            == EVENT_TEMPLATES["kyb.run_requested"]["contact"]["email"])

@@ -189,10 +189,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def seed(api: str) -> None:
     """The demo walk, so the console is never staring at an empty list."""
-    def post(case: str, event: str, **over) -> str:
+    def post(case: str, event: str) -> str:
         t = json.load(urllib.request.urlopen(f"{api}/ui/api/event-templates"))["templates"]
         p = dict(t[event])
-        p.update(over)
         p["occurred_at"] = datetime.now(UTC).isoformat()
         headers = {"Content-Type": "application/json"}
         if os.environ.get("KYC_UI_ADMIN_TOKEN"):  # the composer needs it once the stack has one
@@ -208,10 +207,10 @@ def seed(api: str) -> None:
             return f"skipped ({e})"
 
     import time
-    # With live Floqer keys the demo case must not spend a run on a fictional person: without a
-    # contact the client has no one to resolve and returns nothing (no run, no credits). Ask the
-    # API, not this process: `.env` is exported by scripts/dev.sh into the stack, never into the
-    # shell (or the .app) that starts this proxy.
+    # With live Floqer keys the demo case must not spend a run on a fictional person, and the
+    # contact is now REQUIRED on kyb.run_requested — there is no contact-less demo walk left to
+    # post, so the whole seed is skipped. Ask the API, not this process: `.env` is exported by
+    # scripts/dev.sh into the stack, never into the shell (or the .app) that starts this proxy.
     try:
         adapters = json.load(urllib.request.urlopen(f"{api}/ui/api/integrations"))["adapters"]
         live_floqer = any(
@@ -220,9 +219,11 @@ def seed(api: str) -> None:
         )
     except Exception:
         live_floqer = bool(os.environ.get("KYC_FLOQER_SHORTCUT_ID"))
+    if live_floqer:
+        print("  seed skipped: live Floqer configured (a fictional contact would spend a run)")
+        return
     for event in ("kyb.run_requested", "email.verified", "org_id.submitted"):
-        over = {"contact": None} if live_floqer and event == "kyb.run_requested" else {}
-        print(f"  seed demo-case-001 {event}: {post('demo-case-001', event, **over)}")
+        print(f"  seed demo-case-001 {event}: {post('demo-case-001', event)}")
         time.sleep(4)
 
 

@@ -377,7 +377,11 @@ def test_composer_allows_scoring_events_in_production(prod_ui_client):
         json={
             "case_id": "c1",
             "event_type": "kyb.run_requested",
-            "payload": {"company_legal_name": "Acme"},
+            "payload": {
+                "company_legal_name": "Acme",
+                "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"},
+                "platform_account_id": "acct-1",
+            },
         },
         headers=_admin_headers(),
     )

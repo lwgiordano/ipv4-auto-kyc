@@ -1531,11 +1531,12 @@ class EventRow:
 
 
 EVENT_TABLE = (
-    EventRow("kyb.run_requested", ("company_legal_name",),
-             ("address", "contact", "jurisdiction", "platform_account_id", "registration_number",
-              "website"),
+    EventRow("kyb.run_requested", ("company_legal_name", "contact", "platform_account_id"),
+             ("address", "jurisdiction", "registration_number", "website"),
              "First event for a case creates it; there is no registration call. Incomplete "
-             "submissions ingest fine, and missing evidence simply never passes a check."),
+             "submissions ingest fine, and missing evidence simply never passes a check. "
+             "A case is one registrant: contact.email is the address that person signed up "
+             "with, and email.verified must carry that same address."),
     EventRow("email.verified", ("domain", "email", "verified_at"), (),
              "You verify the mailbox; we score it."),
     EventRow("org_id.submitted", ("org_handle", "rir"), (),

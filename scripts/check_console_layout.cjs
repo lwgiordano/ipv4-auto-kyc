@@ -231,7 +231,7 @@ async function textRect(locator) {
 
     const metadata = await browser.newContext();
     const metadataPage = await metadata.newPage(); metadataPage.setDefaultTimeout(7000);
-    await ready(metadataPage, "#/composer", "Company Actions", "#c-send");
+    await ready(metadataPage, "#/composer", "Case actions", "#c-send");
     await check("direct route initializes accurately scoped global metadata", async () => {
       await metadataPage.locator("#envchip .pill").waitFor();
       assert.equal((await metadataPage.locator("#envchip").textContent()).trim(), "Message authentication: On");

@@ -43,10 +43,11 @@ EVENT_TEMPLATES = {
         "registration_number": "12345678",
         "jurisdiction": "GB",
         "website": "https://acme.example",
-        "contact": {"name": "Jane Doe", "title": "Director"},
+        "contact": {"name": "Jane Doe", "email": "jane.doe@acme.example", "title": "Director"},
+        "platform_account_id": "acct-001",
     },
     "email.verified": {
-        "email": "ops@acme.example",
+        "email": "jane.doe@acme.example",
         "domain": "acme.example",
         "verified_at": "2026-01-01T00:00:00Z",
     },
@@ -96,6 +97,12 @@ def _held_sql(d: str) -> str:
         f" AND a.detail_json->>'run_id' = {d}.run_id"
         " ORDER BY a.id DESC LIMIT 1), false)"
     )
+
+
+# The case is ONE registrant, and the contact rides in on kyb.run_requested rather than in a
+# column of its own: the list reads it straight out of the case snapshot (no migration).
+_CONTACT_NAME = "c.submitted_json->'contact'->>'name'"
+_CONTACT_EMAIL = "c.submitted_json->'contact'->>'email'"
 
 
 def _active_configuration(session):
@@ -179,6 +186,7 @@ def list_cases(
     sql = """
         SELECT c.id, c.company_name, c.jurisdiction, c.status, c.buy_status, c.broker_status,
                c.current_score AS current_evidence_score,
+               {contact_name} AS contact_name, {contact_email} AS contact_email,
                d.decision AS latest_decision, d.score AS decision_score, c.updated_at,
                c.latest_decision_row_id IS NOT NULL AS pointer_set,
                d.id IS NOT NULL AS pointer_resolved,
@@ -224,13 +232,26 @@ def list_cases(
         "FROM cases c LEFT JOIN decisions d ON d.id=c.latest_decision_row_id AND d.case_id=c.id "
         "LEFT JOIN decisions m ON m.id=c.latest_manual_decision_row_id "
         "AND m.case_id=c.id AND m.manual IS TRUE "
-        f"WHERE ({predicates[filter]}) AND (c.id ILIKE :q OR c.company_name ILIKE :q)"
+        f"WHERE ({predicates[filter]}) AND (c.id ILIKE :q OR c.company_name ILIKE :q "
+        f"OR {_CONTACT_NAME} ILIKE :q OR {_CONTACT_EMAIL} ILIKE :q)"
     )
     with request.app.state.session_factory() as session:
         # One read snapshot makes count and rows coherent during concurrent admissions.
         session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
         total = session.execute(text("SELECT count(*) " + population), params).scalar_one()
-        cases = _rows(session.execute(text(sql.format(population=population, held=_held_sql("d"))), params))
+        cases = _rows(
+            session.execute(
+                text(
+                    sql.format(
+                        population=population,
+                        held=_held_sql("d"),
+                        contact_name=_CONTACT_NAME,
+                        contact_email=_CONTACT_EMAIL,
+                    )
+                ),
+                params,
+            )
+        )
     # `enforcement_held` is the engine's own word for the pointed verdict (see _held_sql).
     #
     # Classified through the shared taxonomy, so a NULL verdict cell is never ambiguous between

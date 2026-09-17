@@ -388,8 +388,8 @@ def make_floqer_client(settings, records: dict[str, dict] | None = None) -> Floq
     )
 
 
-# `contact` is a free-form dict on the platform payload (api.schemas.KybRunPayload); today's
-# submissions carry name/title, and the rest are read when present and blank when not.
+# `contact` is the registrant on the platform payload (api.schemas.ContactPayload): `name` and
+# `email` are required; the rest are read when present and blank when not.
 _CONTACT_KEYS = ("name", "title", "email", "first_name", "last_name")
 
 

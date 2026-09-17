@@ -52,12 +52,12 @@ async function rect(locator) {
 async function openHash(page, hash) {
   const headings = {
     "#/overview": "Overview",
-    "#/cases": "Companies",
+    "#/cases": "Cases",
     "#/integrations": "Data Sources",
     "#/fieldmap": "Salesforce Fields",
     "#/policy": "Decision Rules",
     "#/options": "Options",
-    "#/composer": "Company Actions",
+    "#/composer": "Case actions",
   };
   await page.evaluate(next => { location.hash = next; }, hash);
   await page.waitForFunction(({ next, heading }) => location.hash === next &&
@@ -165,7 +165,7 @@ async function openHash(page, hash) {
     });
 
     await page.evaluate(() => { location.hash = "#/case/no-such-console-regression-case"; });
-    await page.getByText("No company with this ID").waitFor();
+    await page.getByText("No case with this ID").waitFor();
     await check("a missing-company error does not retain the previous company title", async () => {
       assert.equal(cleanTitle(await page.title()), "KYC Tool · Console");
       assert.ok(!cleanTitle(await page.title()).includes(companyName));
@@ -238,19 +238,19 @@ async function openHash(page, hash) {
     await page.waitForTimeout(300);
     await openHash(page, "#/integrations");
     await page.waitForTimeout(750);
-    await check("a late Companies result cannot overwrite a new view", async () => {
+    await check("a late Cases result cannot overwrite a new view", async () => {
       assert.equal(await page.locator("#page h1").textContent(), "Data Sources");
       assert.equal(await page.locator("#q").count(), 0);
     });
 
     const expectedTitles = [
       ["#/overview", "Overview · KYC Tool"],
-      ["#/cases", "Companies · KYC Tool"],
+      ["#/cases", "Cases · KYC Tool"],
       ["#/integrations", "Data Sources · KYC Tool"],
       ["#/fieldmap", "Salesforce Fields · KYC Tool"],
       ["#/policy", "Decision Rules · KYC Tool"],
       ["#/options", "Options · KYC Tool"],
-      ["#/composer", "Company Actions · KYC Tool"],
+      ["#/composer", "Case actions · KYC Tool"],
     ];
     for (const [hash, title] of expectedTitles) {
       await page.evaluate(next => { location.hash = next; }, companyHash);
@@ -269,7 +269,7 @@ async function openHash(page, hash) {
       await page.reload();
       await page.locator("#page h1").waitFor();
       await check(`${colorScheme} theme renders the console`, async () => {
-        assert.equal(await page.locator("#page h1").textContent(), "Company Actions");
+        assert.equal(await page.locator("#page h1").textContent(), "Case actions");
         assert.notEqual(await page.locator("body").evaluate(el => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
       });
     }

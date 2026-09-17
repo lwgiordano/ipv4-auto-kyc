@@ -14,6 +14,15 @@ public registries, scores it, and POSTs a decision to your webhook.
 Decisions: `approve`, `approve_buy_locked` (account OK, purchasing held until
 ORG-ID verifies), `manual_review_insufficient`, `reject`.
 
+A case is one registrant — the person (the contact) signing up, on behalf of a
+company. `platform_account_id` on the sign-up event is your id for that person,
+and every decision we send back is about that case, so about that contact.
+Company evidence (registry records, ORG-ID, website) is about the company they
+claim; contact evidence (an inbox at the company's domain, a LinkedIn profile
+showing them at that company, later the RIR contact token) ties the person to
+it. Approving a case approves the contact, not the company. A second registrant
+at the same company is a second case, with its own `case_id`.
+
 **MVP posture:** auto-enforcement is off. A computed `approve` /
 `approve_buy_locked` is delivered as `manual_review_insufficient` with an
 `enforcement_held` marker (§4), and the registration team confirms it. Flipping
@@ -112,8 +121,8 @@ Idempotency-Key: <unique string per event attempt>
 X-KYC-Timestamp / X-KYC-Signature: as above
 ```
 
-`case_id` is your identifier for the applicant (stable across all events for
-that applicant). Cases are created on first event.
+`case_id` is your identifier for the registrant (stable across all events for
+that person). Cases are created on first event, one per registrant.
 
 Envelope (exactly these four keys):
 
@@ -146,8 +155,8 @@ Retry on network failure with the **same** key and **same bytes**; you'll get
 
 | event_type | Payload (required unless noted) | Notes |
 |---|---|---|
-| `kyb.run_requested` | `company_legal_name`; optional `address`, `registration_number`, `jurisdiction`, `website`, `contact`, `platform_account_id` | send at registration; full check run; `contact` is an object with `name`, `title`, and, when the platform has them, `email`, `first_name`, `last_name`; the LinkedIn check compares the person's name and the company domain (company name and title are recorded for the reviewer, not compared), and uses `email` and the split names to find the right profile |
-| `email.verified` | `email`, `domain`, `verified_at` | you own email verification; this asserts it happened |
+| `kyb.run_requested` | `company_legal_name`, `contact`, `platform_account_id`; optional `address`, `registration_number`, `jurisdiction`, `website` | send at registration; full check run; `contact` is the registrant, an object with required `name` and `email` (the address they signed up with) and optional `title`, `first_name`, `last_name`; the LinkedIn check compares the person's name and the company domain (company name and title are recorded for the reviewer, not compared), and uses `email` and the split names to find the right profile |
+| `email.verified` | `email`, `domain`, `verified_at` | you own email verification; this asserts it happened; `email` must be the contact's sign-up address (`contact.email`) |
 | `org_id.submitted` | `rir`, `org_handle` | `rir` ∈ `arin, ripe, apnic, lacnic, afrinic` |
 | `poc.submitted` | `rir`, `poc_handle`; optional `org_handle`, `resource` | starts the verification email (§5) |
 | `poc.token_verified` | `token_id`, `token`, `verified_at` | posted by your confirmation page (§5) |

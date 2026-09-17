@@ -103,17 +103,17 @@ async function run(){
     await check("unavailable history does not invent rubric or NaN",async()=>{
       state.unavailableHistory=true;await go("#/case/demo-case-00131");await page.getByText(/Historical rubric unavailable/).waitFor();assert.doesNotMatch(await page.locator("#page").innerText(),/NaN/);state.unavailableHistory=false;
     });
-    await check("standalone legends removed and Company Actions retains composer route",async()=>{
-      await go("#/integrations");assert.equal(await page.locator(".legend").count(),0);await go("#/composer");await page.locator("#composer-form").waitFor();assert.equal((await page.locator("#page h1").innerText()).trim(),"Company Actions");
+    await check("standalone legends removed and Case actions retains composer route",async()=>{
+      await go("#/integrations");assert.equal(await page.locator(".legend").count(),0);await go("#/composer");await page.locator("#composer-form").waitFor();assert.equal((await page.locator("#page h1").innerText()).trim(),"Case actions");
       assert.equal(await page.locator(".composer-actions button").first().getAttribute("id"),"c-send");
     });
-    await check("credential routes only to same-origin mutations, including Company Actions",async()=>{
+    await check("credential routes only to same-origin mutations, including Case actions",async()=>{
       const headers=[];await page.route("**/ui/api/auth-fixture",route=>{headers.push(route.request().headers());return route.fulfill({json:{ok:true},headers:{"Access-Control-Allow-Origin":"*"}})});
       await page.evaluate(async()=>{await consoleFetch("/ui/api/auth-fixture");await consoleFetch("/ui/api/auth-fixture",{method:"POST"});await consoleFetch("https://external.invalid/ui/api/auth-fixture",{method:"POST"})});
       assert.equal(headers[0].authorization,undefined);assert.equal(headers[1].authorization,"Bearer browser-fixture-credential");assert.equal(headers[2].authorization,undefined);
       await page.locator("#c-send").click();await page.getByRole("button",{name:"Confirm Send",exact:true}).click();await page.waitForTimeout(150);assert.equal(state.requests.at(-1).headers.authorization,"Bearer browser-fixture-credential");
     });
-    await check("Companies filters combine search and show server total separately",async()=>{
+    await check("Cases filters combine search and show server total separately",async()=>{
       const requests=[];await page.route("**/ui/api/cases?*",async route=>{const url=new URL(route.request().url());requests.push(url.searchParams);const response=await route.fetch(),body=await response.json();return route.fulfill({response,json:{...body,total:73}})});
       await go("#/cases");await page.locator("#case-filter").selectOption("review");await page.locator("#q").fill("Acme");await page.waitForTimeout(500);
       assert.equal(requests.at(-1).get("filter"),"review");assert.equal(requests.at(-1).get("q"),"Acme");assert.match(await page.locator("#case-count").innerText(),/shown of 73 matching/);

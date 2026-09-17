@@ -10,10 +10,10 @@ out the staging plan. Read this first, build from that one.
 An asynchronous verification service, integrated the way you recommended: the
 platform POSTs an event — a registration, a verified email, an uploaded
 document, an ORG-ID — gets an immediate acknowledgment, and the tool works in
-the background. It checks the company against Companies House, GLEIF, and the
-five regional internet registries (ARIN, RIPE, APNIC, LACNIC, AFRINIC),
-screens the broker blocklist, scores the evidence, and POSTs the verdict to a
-webhook you host.
+the background. It checks the company the registrant claims against Companies
+House, GLEIF, and the five regional internet registries (ARIN, RIPE, APNIC,
+LACNIC, AFRINIC), screens the broker blocklist, scores the evidence, and POSTs
+the verdict to a webhook you host.
 
 The tool never drives the platform's UI and never changes platform state — it
 scores and answers, the platform acts. The one message that reaches a person
@@ -63,8 +63,15 @@ An outage can delay a better verdict; it can never produce a wrong one.
 
 ## 3. A case, end to end
 
-1. User registers → platform POSTs `kyb.run_requested` with the company
-   details → `202 {"run_id": "…"}`.
+A case is one registrant: the person signing up on behalf of a company.
+Approving the case approves that person, not the company, so the sign-up event
+must carry who they are — `contact.name` and `contact.email` (the address they
+signed up with, the one `email.verified` later confirms), and the
+`platform_account_id` your side holds for them. A second registrant at the same
+company is a second case.
+
+1. User registers → platform POSTs `kyb.run_requested` with the registrant's
+   contact details and the company details → `202 {"run_id": "…"}`.
 2. Seconds later your webhook receives the first verdict: registry matched
    (25) → score 25, `manual_review_insufficient`, reason codes showing what's
    still missing.
@@ -207,7 +214,10 @@ body = json.dumps({
     "actor": {"type": "system", "id": "smoke-test"},
     "payload": {"company_legal_name": "Acme Networks Ltd",
                 "address": "1 Main Street, London, EC1A 1AA",
-                "registration_number": "12345678", "jurisdiction": "GB"},
+                "registration_number": "12345678", "jurisdiction": "GB",
+                "contact": {"name": "Jane Doe", "email": "jane.doe@acme.example",
+                            "title": "Director"},
+                "platform_account_id": "acct-001"},
 }).encode()
 ts = str(time.time())
 sig = hmac.new(SECRET.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()

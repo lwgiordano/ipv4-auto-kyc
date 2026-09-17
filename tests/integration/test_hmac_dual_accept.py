@@ -12,7 +12,8 @@ from tests.conftest import TEST_SECRET, envelope, sign_headers, sign_headers_v2
 
 pytestmark = pytest.mark.postgres
 
-KYB = {"company_legal_name": "Acme Networks Ltd", "jurisdiction": "GB"}
+KYB = {"company_legal_name": "Acme Networks Ltd", "jurisdiction": "GB",
+       "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"}, "platform_account_id": "acct-1"}
 
 
 def _client(settings, session_factory, policy):

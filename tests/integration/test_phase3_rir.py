@@ -114,7 +114,7 @@ def test_linkedin_mismatch_awards_nothing(client, post_event, session_factory, p
     post_event(
         "case-li-miss",
         "kyb.run_requested",
-        {**ACME_KYB, "contact": {"name": "Bob Smith", "title": "CTO"}},
+        {**ACME_KYB, "contact": {"name": "Bob Smith", "email": "bob@acme.example", "title": "CTO"}},
     )
     worker.run_until_idle()
     checks = _live(client, "case-li-miss")

@@ -2770,7 +2770,7 @@ REGISTRY_PROSE_PINS = {
     ("WIRE.ACTOR.SENSITIVE", "value{trap}"):
         ("4a802291233aa6a5", "The generic envelope example shows actor.type 'user' ..."),
     ("WIRE.EVENT.TABLE", "value[]:EventRow.note"):
-        ("a544984f5e28e9ef", "event notes: First event for a case creates it ..."),
+        ("ecbcb2d5b0050ce8", "event notes: First event for a case creates it ..."),
     ("WIRE.SIGN.COMPANION", "value"):
         ("d8a840df49e2d780", "The runnable signer ships as a FILE alongside this document ..."),
     ("WIRE.SIGN.V1_SUNSET", "value"):
