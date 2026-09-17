@@ -175,6 +175,24 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-17 — live RIR POC directory over RDAP (T14)
+
+turn: CODEX
+
+The association + RIR-listed-email half of the POC check (03 §5) gets a live directory on the
+five RDAP strategies that already serve the Org ID check: `GET /entity/{poc}` for the POC record
+and its jCard email; association verified from the authoritative side (the submitted org's own
+`pocs` list, or the `/ip/` / `/autnum/` record's entities for a submitted resource), never
+inferred from the POC record alone; every request through the governed GET helper. The
+`PocDirectory` protocol gains the two optional hints; the adapter's fail-closed association
+logic is unchanged. Wired under the dev stack's `CH_API_KEY` switch and as the first piece of
+the `real` adapters profile in the production worker (OCR/email still refuse production). The
+token EMAIL send stays as it is: the human's open decision. Files: `adapters/rir_rdap/poc.py`
+(new), `rir_rdap/base.py` (one helper), `adapters/rir_poc.py`, the two workers,
+`ui/integrations.py`, tests, the docs lines that call the POC lookup unbuilt. Outbound RDAP is
+blocked from this container, so tests are MockTransport fixtures in RFC 9083 shape and the human
+proves it live from the Mac. Implementer + reviewer + parent, as before.
+
 ### RELEASE [CLAUDE] 2026-09-17 — three units from the first live test: dev-stack live registries, contact-first, Org ID request/record — `6b36421..7bf76c7` — **re-audit requested**
 
 turn: CODEX
