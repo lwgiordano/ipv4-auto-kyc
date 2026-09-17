@@ -503,3 +503,30 @@ are in its §4 and §5.
 
 Secrets never travel in chat, email, tickets, or documents: use the deployment
 secret manager.
+
+## 11. Conformance kit
+
+Both directions are self-checking before anything goes live. The kit ships in
+the repository — `python -m kyc_tool.conformance <mode>`, run from a checkout —
+and reads every expected status, header, event, and key from the same contract
+registry this document is written against, so it cannot drift from what you are
+reading here.
+
+| Command | What it proves |
+|---|---|
+| `python -m kyc_tool.conformance vector` | your signer: recomputes the worked v2 vector published in the signed integration contract (§4 there) byte for byte, offline. Run this first. |
+| `python -m kyc_tool.conformance send --tool <base-url> --case <case-id>` | your sender: signs and posts one of every accepted event type (§3, plus the §7 website-review completion) — v2 path-bound, plus one v1 request while dual-accept lasts (`--no-v1` once your inbound v1 sunset has passed) — then the negatives — bad signature 401, timestamp outside the 300 s window 401, a sign-up with no `contact` 422, an unknown event type 422, the same `Idempotency-Key` twice 200 with the stored body verbatim — then a signed `GET /v1/cases/{id}` carrying `status`, `score`, the latest decision, the live checks, and `information_requested`. |
+| `python -m kyc_tool.conformance receive --port <n>` | your receiver: it behaves as a §4 receiver — verifies v1 and v2 (v2 against the literal request path), validates the callback body, dedupes on `(case_id, run_id)`, answers 2xx — and prints one PASS/FAIL line per rule per callback. Point a staging tool's callback URL at it. It listens on 127.0.0.1 only, so reach it from staging through an SSH tunnel (`ssh -R`) or a local forward — do not expose it; it authenticates nothing. Unlike a production receiver, it acknowledges an invalid callback (2xx) instead of holding it, so a broken rule is reported once rather than retried eight times. |
+
+Every mode prints a `check / expected / got / PASS|FAIL` table; `vector` and
+`send` exit non-zero if any row FAILs, so both drop straight into CI. `send`
+writes real events, so give it a throwaway case id on staging.
+
+Secrets are read from the **environment only** — never a command-line argument,
+never printed, never logged:
+
+| Variable | Used by |
+|---|---|
+| `KYC_CONFORMANCE_V1_SECRET` | `send` (the v1 request), `receive` (the dual-emitted v1 callback signature) |
+| `KYC_CONFORMANCE_INBOUND_SECRET`, `KYC_CONFORMANCE_INBOUND_KEY_ID` | `send` (v2) |
+| `KYC_CONFORMANCE_OUTBOUND_SECRET`, `KYC_CONFORMANCE_OUTBOUND_KEY_ID` | `receive` (v2) |

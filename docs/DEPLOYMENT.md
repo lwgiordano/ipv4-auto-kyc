@@ -115,7 +115,12 @@ three things: does it include a **migration**, any **new env vars**, and any
 - `GET /healthz` → returns the policy bundle hash; it must match the release
   notes. A hash change **without** a deploy is an incident (policy files are
   immutable per release).
-- Staging: run the smoke event end to end.
+- Staging: run the smoke event end to end, then the conformance kit against it
+  (`python -m kyc_tool.conformance send --tool <base-url> --case <throwaway>`;
+  `docs/PLATFORM_INTEGRATION.md` §11). Note: the kit's one v1-signed request
+  records a v1 acceptance in the durable witness, which restarts the zero-v1
+  observation window — pass `--no-v1` (or skip the kit) while an inbound v1
+  sunset is being observed (§2 of the integration contract).
 - Watch `GET /v1/metrics` for 15 minutes: `jobs_by_status.dead` and
   `outbox_by_status.dead` must stay 0; `event_to_decision_seconds.p95` budget
   is < 10 s for light runs, < 120 s for full runs.

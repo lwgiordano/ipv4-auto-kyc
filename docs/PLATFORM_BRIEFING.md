@@ -331,10 +331,14 @@ tested contract)
 15. Email: if the tool sends, an SES identity and sending domain in the
     secret manager and deployment config.
 
-**Coming on our side, not yet built**: a conformance kit you can run against
-staging, a downloadable versioned contract bundle, the production provider
-profile (Floqer client, the switch that hands it the built POC directory, and
-— whichever way items 9 and 10 go — the email
+**Implemented now**: the conformance kit you can run against staging —
+`python -m kyc_tool.conformance` checks your signer offline, your sender against
+a running tool, and your decision receiver against real signed callbacks
+(`PLATFORM_INTEGRATION.md` §11).
+
+**Coming on our side, not yet built**: a downloadable versioned contract
+bundle, the production provider profile (Floqer client, the switch that hands
+it the built POC directory, and — whichever way items 9 and 10 go — the email
 sender or the platform hand-off, and the OCR engine), the load and soak
 harness, and migration 025 once item 7 is answered.
 
