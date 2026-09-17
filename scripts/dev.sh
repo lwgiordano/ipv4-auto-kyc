@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-command local stack: ephemeral Postgres → migrations → API (+ /ui ops
-# console) → dev worker (fixture adapters) → fake platform callback receiver.
+# console) → dev worker (fixtures, or live registries when CH_API_KEY is set) → fake platform
+# callback receiver.
 #
 #   bash scripts/dev.sh          # Ctrl-C tears everything down
 #
@@ -89,7 +90,7 @@ print(load_policy(get_settings().policy_dir).bundle_hash); print(ENGINE_BUILD_ID
 echo "→ fake platform receiver on :$RECEIVER_PORT"
 "$PY" scripts/dev_receiver.py "$RECEIVER_PORT" & PIDS+=($!)
 
-echo "→ dev worker (fixture adapters: Acme Networks Ltd walks to approve)"
+echo "→ dev worker (fixtures unless CH_API_KEY is set: Acme Networks Ltd walks to approve)"
 "$PY" -m kyc_tool.workers.dev_worker & PIDS+=($!)
 
 echo "→ API + ops console on :$API_PORT"

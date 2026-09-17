@@ -1032,7 +1032,8 @@ def validate_for_production(settings: Settings) -> None:
 
 
 class ProcessRole(StrEnum):
-    """Every executable entry point's role. dev_worker is DEV-ONLY (it always wires fixture adapters);
+    """Every executable entry point's role. dev_worker is DEV-ONLY (fixture adapters, or live
+    registries when CH_API_KEY is set — never a production configuration);
     the rest are production roles."""
 
     API = "api"

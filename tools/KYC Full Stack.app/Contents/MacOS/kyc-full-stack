@@ -255,6 +255,15 @@ else open "$URL"; fi
 
 echo "console on $URL"
 echo "editing is live: Scoring, Brokers and Mappings save to this session's database"
+# dev.sh exports .env, this shell does not -- so decide it exactly the way dev.sh does, in a
+# subshell (.env wins over the inherited environment, `export` lines and quotes included), and
+# say which stack is coming up (src/kyc_tool/workers/dev_worker.py reads the same CH_API_KEY).
+CH_LIVE="$(bash -c 'set -a; [ -f .env ] && . ./.env >/dev/null 2>&1; set +a; printf %s "${CH_API_KEY:-}"')"
+if [ -n "$CH_LIVE" ]; then
+  echo "registries are live: Companies House, GLEIF and all five RIR RDAP endpoints"
+else
+  echo "registries are fixtures: only Acme Networks Ltd matches — set CH_API_KEY in .env for real ones"
+fi
 echo "quit this app (Cmd-Q from the Dock) to stop everything and drop the temporary database"
 
 PY_WAS="$(pytree)"
