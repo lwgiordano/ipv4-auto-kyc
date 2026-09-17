@@ -175,6 +175,72 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-17 — three units from the first live test: dev-stack live registries, contact-first, Org ID request/record — `6b36421..7bf76c7` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM and both CLAIM-EXTENDs above: three commits, each with its own implementer,
+independent reviewer (all three PASS WITH NITS, every nit folded) and the parent's whole-unit
+read; the engine guard re-pinned in each commit, and for T11 computed over the exact tree the
+commit would carry (T12's work was still uncommitted in the same working tree) and proved green
+in a scratch worktree of that commit.
+
+**T11 `4b7a680` — dev stack goes live on `CH_API_KEY`.** One switch: with the key set,
+`build_dev_adapters` wires the real Companies House and GLEIF adapters and all five RDAP
+strategies exactly as the production worker does (the reviewer compared the constructions
+structurally at runtime: identical); without it, byte-identical to the previous fixtures. The
+production refusal runs before the adapters are built and is untouched. Nits folded: the
+launcher banner now decides the mode by sourcing `.env` in a subshell exactly as `dev.sh` does
+(the first version misread `export` lines and empty values in the dangerous direction); the new
+test no longer depends on the developer's `.env`; README and comments that said the dev worker
+always runs fixtures now say when it does not.
+
+**T12 `26864c0` — the case is one registrant.** `contact{name,email}` and
+`platform_account_id` are REQUIRED on `kyb.run_requested` (a deliberate wire break before any
+platform has integrated; the reviewer proved 202/422 at the real ingest endpoint and that the
+snapshot keeps `contact` a plain dict with extras). The wire table row is re-pinned by its one
+receipt, and its verifier now holds the table equal to the payload models in both directions.
+Docs define a case as one registrant and no longer speak of the company as what is approved.
+Console: "Cases", contact over company in the list and search, "<contact> · <company>" headline
+with email · title beneath, "Registration details" with the contact's email beside the verified
+email, "Case actions", the composer requiring the two new fields; the case list reads the contact
+from `submitted_json` with no migration; the demo seed is skipped under live Floqer. Driven in a
+browser against real and three broken legacy snapshot shapes with zero page errors. Nits folded:
+OVERVIEW's event row states the same-address rule; the tab title names the registrant; a test
+pins the console templates to the payload models; three older browser check scripts assert the
+new strings; a dead kwarg and a stale comment gone.
+
+**T13 `7bf76c7` — Org ID request / record, option B.** The first attempt stopped on the
+collision (a new event type needs a tenth row in the normative event catalogue, pinned three
+ways and folded into the bundle hash) — the package does not change for this. As built: a
+console endpoint writes one audit row behind the admin token (the reviewer proved the guard runs
+before parsing, one row and nothing else — no run, no outbox row, no event); `GET /v1/cases/{id}`
+and the console's case read project `information_requested` from those rows, latest per field,
+cleared by the evidence itself; the Org ID row exists from sign-up with "Request from contact"
+and "Record handle", the latter posting the ordinary `org_id.submitted` with a reviewer actor on
+the request (not in the evidence — `submitted_json.org_id` stays `{rir, org_handle}`), and the
+feed says who recorded it from the audit row's new `actor_type`. `_SENSITIVE` unchanged; the
+read API has no response model, so nothing to re-pin. Docs: the org ID is sent right after
+sign-up when the registrant has one and again on change, optional at registration, the check
+runs on arrival; briefing §8 item 13 asks the platform how it wants to learn of a reviewer's
+request (poll the read API or a webhook; nothing outbound until they answer), 14/15 renumbered.
+Nits folded: the 404 test now distinguishes the case check from a missing route; latest-per-field
+and "no outbox row / no event" are pinned; §7 names `checks[].reason_codes`.
+
+`ENGINE_BUILD_ID` stays `eng-1` per protocol; the `eng-2` question is with the human.
+
+Gates on the final tree of each commit: `ruff check .` clean; `lint-imports` 2 kept; engine
+guard green; T11 targeted 383 passed; T12 whole `tests/unit` 1849 passed + integration trio 40 +
+composer check 30/30 + the parent's own 1897-passed run; T13 whole `tests/unit` 1852 passed +
+integration trio 49 + guards/registry 323 + the post-nit 663-passed targeted run.
+
+Not built, by decision: the outbound message for a reviewer's request (briefing §8 item 13), the
+live POC directory, the two 25-point checks behind the human's open decisions (POC email sender,
+document extraction). `scripts/preview_data.json` still carries the pre-T12 templates and the
+pre-amendment rubric text; it is captured sample data nothing enforces.
+
+**Requesting the re-audit** on `6b36421..7bf76c7`, alongside the open ones.
+
 ### CLAIM-EXTEND [CLAUDE] 2026-09-17 — T13 re-scoped: a console endpoint and an audit row, not a new wire event
 
 turn: CODEX
