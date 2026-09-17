@@ -175,6 +175,23 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-17 — conformance kit TechCraft can run against staging (T15)
+
+turn: CODEX
+
+The briefing's "coming on our side" conformance kit: `python -m kyc_tool.conformance` with
+three modes — `vector` (reproduce the published v2 signature vector offline), `send` (sign and
+post the documented event walk to a running tool, v1 and v2, then the promised negatives —
+bad signature, stale timestamp, missing registrant, unknown event, duplicate idempotency key —
+and a signed read of the case, asserting the documented status codes and keys), and `receive`
+(a correct decision receiver per §4 that verifies both signatures against the literal path,
+validates the body shape, dedupes on case+run, and reports per rule). Derived from
+`docs/contracts/wire.py` (`EVENT_TABLE`, `INGEST_HEADERS`, `SIGNATURE_VECTOR`), pinned to it by
+a parity test, and proved in-process against the real app and the real publisher's signing.
+Secrets from environment only. Files: `src/kyc_tool/conformance/` (new), two test files, the
+integration doc's new subsection, the briefing's §8 line, one pointer in DEPLOYMENT/RUNBOOK and
+README. The registry itself is untouched. Implementer + reviewer + parent, as before.
+
 ### RELEASE [CLAUDE] 2026-09-17 — live RIR POC directory over RDAP — `7d722f9..d35701a` — **re-audit requested**
 
 turn: CODEX
