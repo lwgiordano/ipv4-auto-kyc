@@ -294,9 +294,11 @@ strings safe to key copy on.
 Flow for proving control of IP resources:
 
 1. You post `poc.submitted`.
-2. The tool looks up the POC in the registry directory. Whichever side sends
-   the email (open decision, below), it goes to the **registry-listed**
-   address, never a user-supplied one. The email contains:
+2. The tool looks up the POC in the registry directory over RDAP: the
+   submitted ORG-ID or resource record must itself list the POC handle, and the
+   address comes off the POC's registry record. Whichever side sends the email
+   (open decision, below), it goes to the **registry-listed** address, never a
+   user-supplied one. The email contains:
    `Your verification token: <secret>` and `Verification reference: <id>`.
 3. The user enters both on your confirmation page.
 4. You post `poc.token_verified` with `token` (the secret) and `token_id` (the

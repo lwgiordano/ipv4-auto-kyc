@@ -47,7 +47,8 @@ WIRING = {
     "rir_poc": {
         "kind": "RIR POC directory + token email",
         "env": [],
-        "todo": "TODO(integration): wire POC lookup to RDAP; email provider (AUDIT:C2/C4)",
+        "todo": "TODO(integration): outbound email provider for the token (AUDIT:C4); the "
+        "RDAP POC lookup is built (RdapPocDirectory, live under the dev switch)",
     },
     "document_ocr": {
         "kind": "object store + OCR engine",

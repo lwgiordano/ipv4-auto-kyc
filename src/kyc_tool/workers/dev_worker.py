@@ -9,8 +9,9 @@ LinkedIn profile, ORG-ACME-1 at ARIN, POC JD123-ARIN with a visible RIR email.
 Everything else behaves like a real miss (fail / needs_review / no data),
 which is exactly what you want for debugging validators.
 
-Set CH_API_KEY and the registries (Companies House, GLEIF) and all five RIR RDAP
-endpoints run for real instead; everything else stays fixtures.
+Set CH_API_KEY and the registries (Companies House, GLEIF), all five RIR RDAP
+endpoints and the POC directory on top of them run for real instead; everything
+else stays fixtures.
 """
 
 import json
@@ -31,6 +32,7 @@ from kyc_tool.adapters.rir_rdap.afrinic import AfrinicStrategy
 from kyc_tool.adapters.rir_rdap.apnic import ApnicStrategy
 from kyc_tool.adapters.rir_rdap.arin import ArinStrategy
 from kyc_tool.adapters.rir_rdap.lacnic import LacnicStrategy
+from kyc_tool.adapters.rir_rdap.poc import RdapPocDirectory
 from kyc_tool.adapters.rir_rdap.ripe import RipeStrategy
 from kyc_tool.adapters.website_manual_review import WebsiteManualReviewAdapter
 from kyc_tool.config import ProcessRole, get_settings, validate_process_role
@@ -93,10 +95,11 @@ def _registry_transport(request: httpx.Request) -> httpx.Response:
 
 
 def build_dev_adapters(store, settings) -> dict:
-    """Fixtures, except when CH_API_KEY is set: then Companies House, GLEIF and all five RIR
-    RDAP endpoints are the real ones, wired exactly as workers.pipeline_worker.build_adapters
-    wires them (one switch, like the Floqer shortcut id). POC, OCR and website review have no
-    live implementation and stay fixtures either way."""
+    """Fixtures, except when CH_API_KEY is set: then Companies House, GLEIF, all five RIR
+    RDAP endpoints and the POC directory over those same strategies are the real ones, wired
+    exactly as workers.pipeline_worker.build_adapters wires them (one switch, like the Floqer
+    shortcut id). OCR and website review have no live implementation and stay fixtures either
+    way."""
     live = bool(os.environ.get("CH_API_KEY"))
     print(
         "dev worker: registries + RDAP are " + ("LIVE (CH_API_KEY is set)" if live else "fixtures"),
@@ -125,7 +128,9 @@ def build_dev_adapters(store, settings) -> dict:
         "gleif": GleifAdapter(client=gleif_client),
         "floqer_company_enrichment": FloqerAdapter(make_floqer_client(settings, FLOQER_RECORDS)),
         "rir_rdap": RirRdapAdapter(strategies),
-        "rir_poc": RirPocAdapter(FixturePocDirectory(POC_DIRECTORY)),
+        "rir_poc": RirPocAdapter(
+            RdapPocDirectory(strategies) if live else FixturePocDirectory(POC_DIRECTORY)
+        ),
         "document_ocr": DocumentOcrAdapter(store, JsonScanOcrEngine()),
         "website_manual_review": WebsiteManualReviewAdapter(),
     }

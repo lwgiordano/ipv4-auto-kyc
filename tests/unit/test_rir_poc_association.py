@@ -41,3 +41,21 @@ def test_no_target_submitted_is_not_associated():
 def test_wrong_org_is_not_associated():
     out = _run({"rir": "arin", "poc_handle": "JD123-ARIN", "org_handle": "ORG-OTHER-9"})
     assert out["associated"] is False
+
+
+def test_submitted_targets_reach_the_directory():
+    """T14: a live directory verifies the association against the submitted
+    ORG-ID / resource record, so the adapter must hand both over."""
+    seen = {}
+
+    class RecordingDirectory(FixturePocDirectory):
+        def lookup(self, rir, poc_handle, **targets):
+            seen.update(targets)
+            return super().lookup(rir, poc_handle)
+
+    RirPocAdapter(RecordingDirectory(DIRECTORY)).run(
+        {"poc": {"rir": "arin", "poc_handle": "JD123-ARIN", "org_handle": "ORG-ACME-1",
+                 "resource": " 192.0.2.0/24 "}},
+        {},
+    )
+    assert seen == {"org_handle": "ORG-ACME-1", "resource": "192.0.2.0/24"}

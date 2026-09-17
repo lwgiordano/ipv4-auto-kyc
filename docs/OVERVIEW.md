@@ -262,7 +262,7 @@ end-to-end. A green draft PR carries the entire build.
 | `companies_house` | **Needs key** | UK registry; works unauthenticated, `CH_API_KEY` raises limits. |
 | `gleif` | **Live** | Global entity registry; public API, no key. |
 | `rir_rdap` | **Live** | ORG-ID / IP ownership; five RIR strategies (ARIN, RIPE, APNIC, LACNIC, AFRINIC). |
-| `rir_poc` | **Stub** | POC token machinery; who delivers the email is an open decision (§6). |
+| `rir_poc` | **Live lookup** | POC association verified on the RDAP org/resource record, RIR-listed email read from it; who delivers the token email is an open decision (§6). |
 | `document_ocr` | **Dev engine** | Reads structured test data today; production extraction is an open decision (§6). |
 | `floqer_company_enrichment` | **Stub** | Contract fixed against a published shortcut; account exists, API key + wiring pending (§6). |
 | `website_manual_review` | **Manual** | Human review queue — by design, not an automated source. |

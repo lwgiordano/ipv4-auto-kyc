@@ -9,9 +9,10 @@ the migrations, the dev worker, the fake platform receiver, and the API. Send Me
 pipeline for real. Approve Manually writes a decision, under your name, to a row you can go and
 look at. The database is created when you open the app and thrown away when you quit, so you can
 break whatever you like. The registries are fixtures unless `CH_API_KEY` is in your `.env`:
-with it set, the stack runs the real Companies House, GLEIF and all five RIR RDAP endpoints,
-so real companies and real org handles return real evidence — enrichment, POC lookup and OCR stay
-canned, so a real company still will not walk all the way to approve.
+with it set, the stack runs the real Companies House, GLEIF, all five RIR RDAP endpoints and the
+POC directory over them, so real companies, org handles and POC handles return real evidence —
+enrichment and OCR stay canned and the token email is only logged, so a real company still will
+not walk all the way to approve.
 
 It keeps itself current. It pulls on startup, and every 20 seconds after. A change to the console
 repaints the open window a couple of seconds later without disturbing the database; a change to

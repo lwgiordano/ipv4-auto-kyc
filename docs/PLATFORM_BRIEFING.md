@@ -261,7 +261,10 @@ service production-ready; the go/no-go gate is §8 of
 - Website review and manual approval as signed events; the operator console,
   including live configuration and Salesforce destination-name mapping.
 - Live registry adapters: Companies House (needs the API key, item 14), GLEIF,
-  and the five RIR RDAP strategies. S3-compatible evidence storage.
+  and the five RIR RDAP strategies — including the POC directory lookup over
+  them (association verified on the org/resource record, registry-listed email
+  read off it; who sends the token email stays open, item 10). S3-compatible
+  evidence storage.
 - The production boot check that refuses stub providers and unsafe config.
 
 **Implemented but not activated**
@@ -330,9 +333,10 @@ tested contract)
 
 **Coming on our side, not yet built**: a conformance kit you can run against
 staging, a downloadable versioned contract bundle, the production provider
-profile (POC directory, Floqer client, and — whichever way items 9 and 10 go
-— the email sender or the platform hand-off, and the OCR engine), the load
-and soak harness, and migration 025 once item 7 is answered.
+profile (Floqer client, the switch that hands it the built POC directory, and
+— whichever way items 9 and 10 go — the email
+sender or the platform hand-off, and the OCR engine), the load and soak
+harness, and migration 025 once item 7 is answered.
 
 **Out of scope by design**: the tool never writes Salesforce, never judges a
 website automatically, never replaces your platform UI, and never changes a
