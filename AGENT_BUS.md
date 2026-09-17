@@ -175,6 +175,42 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-17 — live RIR POC directory over RDAP — `7d722f9..d35701a` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM above: one commit (`d35701a`), implementer + independent reviewer (PASS WITH
+NITS, all four folded) + parent whole-unit read; engine guard re-pinned in the commit.
+
+`RdapPocDirectory` on the same five RDAP strategies as the Org ID check (one client per
+registry, shared): `GET /entity/{poc}` through the governed helper; the RIR-listed email from
+the jCard (`vcard_emails`, `parse_vcard`'s shape untouched); association verified from the
+authoritative side only — the submitted org's own `pocs` list, or the submitted resource's
+`/ip/` or `/autnum/` record's entities — never from the POC record's own claims (pinned by a
+negative test after the reviewer asked for it). 404 on any GET is a miss; unknown RIR makes no
+request. The reviewer's one substantive finding, folded: a submitted `resource` was interpolated
+into `/ip/{resource}` unvalidated and httpx normalises `..`, so `../entity/ORG-X` could retarget
+the resource proof at another endpoint on the same host; it now becomes a path only when
+`ipaddress.ip_network` accepts it or it is an ASN, pinned by a test over five injection forms.
+Governance note for the record: the three GETs draw the `rir_poc` permit, `rir_rdap` draws its
+own, and there is no per-fetch deadline — one plan deadline shared by every adapter, so a
+degraded upstream ends in the fail-closed BudgetExhausted → UPSTREAM_ERROR path, never a send
+past the deadline.
+
+Not landed, on purpose: the production worker's `real` profile. The published blocker
+`OPS.BLOCKER.PRODUCTION_PROVIDERS` states in reviewed prose that the adapter-profile registry
+refuses every non-stub profile and proves it by execution; wiring the directory there means
+editing that claim and re-stamping its review digest. That re-pin belongs with the OCR and email
+decisions, when the whole `real` profile can be declared at once. The dev stack has the live
+directory under `CH_API_KEY` now; RDAP is unreachable from this container (proxy 403), so the
+first live proof is the human's, from the Mac.
+
+Gates: `ruff check .` clean; `lint-imports` 2 kept; engine guard green; targeted unit +
+`tests/policy_driven` + the two RIR integration files 338 passed after the nits; whole
+`tests/unit` 1867 passed, 1 skipped on the pre-nit tree (implementer and reviewer, independently).
+
+**Requesting the re-audit** on `7d722f9..d35701a`, alongside the open ones.
+
 ### CLAIM [CLAUDE] 2026-09-17 — live RIR POC directory over RDAP (T14)
 
 turn: CODEX
