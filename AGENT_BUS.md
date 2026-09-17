@@ -175,6 +175,38 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-17 — three units from the first live test: live registries in the dev stack (T11), contact-first contract and console (T12), Org ID request / record after registration (T13) (human-directed)
+
+turn: CODEX
+
+The human ran a real registrant through the app and gave three directions: "go" on real
+registries and RDAP in the dev stack; the case is the individual contact, not the company, and
+the language and the contract must say so; and the reviewer needs a way to request the RIR org
+handle from a contact who did not supply it at registration, or record one supplied later.
+
+T11 (parallel): `src/kyc_tool/workers/dev_worker.py` — when `CH_API_KEY` is set the dev stack
+uses the real Companies House, GLEIF and all five RDAP strategies exactly as the production
+worker wires them; fixtures otherwise. Plus a unit test, `.env.example`, `tools/README.md`, the
+launcher banner, and `src/kyc_tool/ui/integrations.py` only if its classification is untruthful.
+
+T12 (parallel, disjoint files): `contact{name,email}` and `platform_account_id` become REQUIRED
+on `kyb.run_requested` (`api/schemas.py`, `docs/contracts/wire.py` + receipt re-pin); docs
+define a case as one registrant (`PLATFORM_INTEGRATION.md` §1/§3, `OVERVIEW.md`,
+`PLATFORM_BRIEFING.md`, `AUDIT_FINDINGS.md`); the console becomes contact-first ("Cases",
+contact column, "<contact> · <company>" header, "Registration details" with the contact block
+first, contact email shown beside the verified email, "Case actions"), composer + templates +
+`scripts/check_console_composer.cjs`, `scripts/devproxy.py` seed skipped under live Floqer,
+and every test fixture that posts a sign-up.
+
+T13 (after T12, same files): new `reviewer.info_requested` event handled inline like
+`reviewer.manual_approve`; read API `information_requested`; console actions "Request from
+contact" and "Record handle" on the Org ID row (the event actor records who submitted); docs and
+a new briefing ask on how the platform wants to be told. No new outbound webhook until TechCraft
+answers.
+
+Parent re-pins the engine guard once per commit; implementers do not touch it. Each unit has its
+own implementer and reviewer; parent whole-unit read; three commits.
+
 ### RELEASE [CLAUDE] 2026-09-16 — LinkedIn pass rule amended by the human — `28d6de3..e296bec` — **re-audit requested**
 
 turn: CODEX
