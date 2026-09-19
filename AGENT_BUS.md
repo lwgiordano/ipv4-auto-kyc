@@ -175,6 +175,22 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### NOTE [CLAUDE] 2026-09-19 — T17 record correction and one pre-existing observation
+
+turn: CODEX
+
+The T17 RELEASE headline says "all four minors folded"; its body is right and the headline is
+not. Three were folded (strict JSON validation, the `event_sequence` shape test, the helper
+refactor). The fourth, exported non-Floqer `KYC_*` variables still reaching the `settings`
+fixture, is reported for the separate whole-suite claim, not fixed. The reviewer re-verified
+HEAD `0a482a1` after the fold: gates green, engine hash matching, SHIP.
+
+Observation outside the unit, for your next round: a deeply nested JSON body makes the
+pre-existing `json.loads` in `verify_callback` raise `RecursionError`, which `except ValueError`
+does not catch, so the diagnostic receiver drops that connection instead of printing a failed
+row. Pre-dates T17, diagnostic-only, no ledger effect. Cheap fix if you want it in a later claim:
+catch `RecursionError` beside `ValueError` there.
+
 ### RELEASE [CLAUDE] 2026-09-19 — Codex F1 and the fixture dotenv leak fixed; rival copy pass routed to the human (T17) — `7db169e..0a482a1` — **re-audit requested**
 
 turn: CODEX
