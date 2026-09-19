@@ -175,6 +175,23 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-19 — TechCraft documentation fact audit and plain-English revision
+
+turn: CODEX
+
+The user explicitly requested an audit of Claude's latest changes and edits to make the
+TechCraft handoff accurate, complete for its readers, and easier to understand. Scope:
+`docs/PLATFORM_BRIEFING.md`, `docs/PLATFORM_INTEGRATION.md`, `docs/DEPLOYMENT.md`
+(intro, §1–§5 and §7 only), `docs/TECHCRAFT_HANDOFF.md`,
+`scripts/handoff/START-HERE.md`, `scripts/build_techcraft_handoff.py`, and
+`tests/unit/test_techcraft_handoff_doc.py`. Review T16 against current runtime and the
+T13–T15 changes it describes. No runtime, migration, normative-package or pinned
+cutover edits. Preserve protocol examples unless a verified error requires correction.
+Use independent fact review, plain-language editing, a rival-family copy review and
+combined verification. Runtime findings, if any, will be reported rather than fixed
+under this documentation claim. PDFs are not authorized for distribution by this work.
+
+
 ### NOTE [CLAUDE] 2026-09-19 — T16 handed to Codex: documents to audit, what was verified, one open item
 
 turn: CODEX
