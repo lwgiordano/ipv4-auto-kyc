@@ -175,6 +175,52 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-19 — TechCraft documents tightened, plus a generated combined handoff document (T16) — `f6f8061..ea360c5` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM above: one commit (`ea360c5`), three writers in parallel + an independent fact
+reviewer (SHIP AFTER MAJORS; all five majors and all seven minors folded) + parent whole-unit
+read. Docs, scripts and one test only; no `src/` change, so no engine re-pin.
+
+`docs/PLATFORM_BRIEFING.md` is rewritten for a product manager first: what the tool is, one case
+end to end with the points it earns, what the platform builds, the two open decisions put to
+TechCraft as questions (can your platform send the POC email? can it read the four fields off a
+document?) with an "if yes / if no" path under each, the staging plan, and the numbered asks
+1–15 unchanged. `docs/PLATFORM_INTEGRATION.md` keeps every fence, header, key, status code and
+the worked v2 vector byte-identical; the prose is tightened, the same two questions replace the
+"open decision" framing in §5/§6, the responses table gains the 404 and 503 rows
+`WIRE.INGEST.STATUS` publishes, and the event table its ninth row (`website.review_completed`).
+`docs/DEPLOYMENT.md` is edited only in the intro, §1–§5 and §7; §6 and §8–§12 are byte-identical
+to HEAD (the `operations.py` PlaybookRef pins recomputed and the cutover-parity gate hold).
+`scripts/handoff/START-HERE.md` lists the two files it shipped but never named. New:
+`scripts/build_techcraft_handoff.py` writes `docs/TECHCRAFT_HANDOFF.md`, a cover plus the three
+documents whole (stdlib, deterministic, no heading renumbered so every §N still lands),
+`tests/unit/test_techcraft_handoff_doc.py` fails when the checked-in copy drifts, and
+`scripts/package_handoff.sh` builds it into the package.
+
+Facts corrected against the tree while tightening (each one verified by the reviewer against
+`src/`, most inherited from HEAD): staging registry lookups are LIVE, not "recorded data"
+(`pipeline_worker.build_adapters` wires the real Companies House, GLEIF and RDAP clients in its
+only profile), so `CH_API_KEY` joins the deployment minimum and the staging env list; the
+pipeline's fixture profile ships `FixturePocDirectory({})`, so the POC flow cannot be rehearsed
+in staging until the built directory is switched in (the docs now say so instead of promising a
+round-trip); `website` is the only source of the submitted company domain, which both
+`verified_company_email` and `linkedin_company_match` compare against, so the walkthrough and
+the sample payload now carry it; the live Floqer client already exists (the rewrite had called
+it "not built"); several migrations are forward-only, not one; the kit's `vector` mode prints
+the contract PDF's vector, not the §2 example; `reviewer.manual_approve` runs inline with no run
+or callback; `/readyz` vets configuration in production mode only; the `contact.email` rule on
+`email.verified` is recorded, not cross-checked; two cross-references now land where they say.
+
+Gates: style linter 5/5 on the briefing, the contract, START-HERE, the combined document's
+cover and the permitted regions of DEPLOYMENT (the whole-file score stays 1/5 because every
+remaining hit is inside the pinned §6/§8–§12 text this unit may not touch); the rival-model
+cleanse step of the loop could not run here (no `codex` CLI in the container); the nine doc-gate
+test files pass (cutover parity, restore wording and CLI contract, plan artifact static, outbox
+ceiling, contract registry authority, contract rendering, handoff-doc parity, conformance
+parity); `ruff check` clean on the new python; `bash -n scripts/package_handoff.sh` clean.
+
 ### CLAIM [CLAUDE] 2026-09-19 — TechCraft documents tightened for a PM-first reader, plus a combined handoff document (T16, human-directed)
 
 turn: CODEX
