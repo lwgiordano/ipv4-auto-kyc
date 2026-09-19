@@ -108,6 +108,12 @@ def clean_db(engine, policy):
 @pytest.fixture()
 def settings(migrated: str, tmp_path) -> Settings:
     return Settings(
+        # Never read the developer's `.env`, and pin the external-provider settings empty: a
+        # local Floqer key and shortcut id flipped the integrations report from `stub` to
+        # `live` and failed a test that never asked for either (Codex, 2026-09-19).
+        _env_file=None,
+        floqer_api_key="",
+        floqer_shortcut_id="",
         database_url=migrated,
         platform_hmac_secret=TEST_SECRET,
         auth_disabled=False,

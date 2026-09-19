@@ -33,6 +33,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import NamedTuple, get_args
 
 import httpx
+from pydantic import ValidationError
 
 from kyc_tool import security
 from kyc_tool.api.auth import (
@@ -346,6 +347,23 @@ def verify_callback(path: str, headers, body: bytes, *, outbound_secret: str, ou
     rows.append(_row("body.enforcement_held", f"absent, or {', '.join(HELD_KEYS)}",
                      "absent" if held is None else held,
                      ok=held is None or (isinstance(held, dict) and set(held) == set(HELD_KEYS))))
+
+    # The complete schema, through the model the publisher encodes with. The key and enum rows
+    # above cannot see a wrong TYPE — a string score, a non-boolean gate, a malformed check, an
+    # unknown field — and a receiver that accepted one was being certified. Strict JSON mode, over
+    # the raw bytes: lax mode would coerce "10", 10.0 or "true" into the model, shapes the tool
+    # never emits. The named rows above stay: they say WHICH rule broke, this one says the body as
+    # a whole is not the contract. A schema failure holds the callback out of the ledger like any
+    # other failed row.
+    try:
+        DecisionCallback.model_validate_json(body or b"", strict=True)
+        schema, schema_ok = "valid", True
+    except ValidationError as exc:
+        errors = exc.errors()
+        where = ".".join(str(part) for part in errors[0]["loc"]) or "<root>"
+        schema = f"{len(errors)} error(s), first at {where}: {errors[0]['msg']}"
+        schema_ok = False
+    rows.append(_row("body.schema", "validates as DecisionCallback", schema, ok=schema_ok))
 
     identity = (payload.get("case_id"), payload.get("run_id"))
     # §4 WIRE.CALLBACK.VALIDATION_ORDER / ACK_VS_APPLY: consult the replay ledger only AFTER the

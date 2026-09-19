@@ -1175,12 +1175,12 @@ on staging. Its v1 request records v1 traffic: use `--no-v1` throughout an
 inbound zero-v1 observation window. Waiting until the retirement date is too late. The
 `receive` process reports failures in its output. It is not a CI exit-code gate.
 
-Known limitation: `receive` checks selected keys and values, not the complete
-callback schema. A malformed field type can still receive PASS. Validate your
-receiver against §4 and the `DecisionCallback` model in
-`src/kyc_tool/api/schemas.py`, and test malformed
-bodies independently. Do not use this kit's PASS output as acceptance evidence
-for full callback validation until that defect is fixed.
+`receive` validates every callback body through the `DecisionCallback` model
+in `src/kyc_tool/api/schemas.py`, the same model the tool encodes with, so a
+wrong field type or an unknown field fails its `body.schema` row and stays out
+of its dedupe memory. That is still a check of the tool's output, not of your
+receiver. Validate your own receiver against §4 and that model, and test
+malformed bodies independently.
 
 TechCraft must also test its actual receiver: crash before commit, retry an
 exact callback, submit invalid content, and deliver callbacks out of order.
