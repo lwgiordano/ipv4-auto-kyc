@@ -5,7 +5,12 @@ Ownership: IPv4.Global maintains the code and cuts releases. You pull a
 release and redeploy. No code is edited on the server. Anything that needs
 changing changes in the repo and ships as the next release.
 
-## 1. One image, four processes
+This is a closed-staging release. Production startup is blocked by unfinished
+provider wiring. Choosing who extracts documents and sends POC email does not
+by itself remove that block. See `PLATFORM_BRIEFING.md` §8 for the remaining
+work and approvals. These instructions do not authorize a production launch.
+
+## 1. One image: services and scheduled jobs
 
 The repo `Dockerfile` builds a single image. Each process is the same image
 with a different command:
@@ -18,8 +23,10 @@ with a different command:
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | — |
 | Retention (daily cron) | `python -m kyc_tool.workers.retention` | — |
 
-All are stateless, so scale the API and pipeline workers horizontally as
-needed. The job queue keeps each case's jobs in order (oldest first, one at a
+Run the API, pipeline worker and outbox publisher as services. Run migrations
+once per deployment when required, and retention as a daily scheduled job.
+Scale the API and pipeline workers horizontally as needed. The job queue keeps
+each case's jobs in order (oldest first, one at a
 time), which is what makes extra workers safe. Callback delivery order is a
 separate contract: `docs/PLATFORM_INTEGRATION.md` §4.
 Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
@@ -34,8 +41,9 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 | Secret | staging secret | separate production secret |
 
 Production mode validates config at boot and refuses to start on anything
-unsafe (missing secret, stub providers, non-HTTPS callback URL), listing every
-violation at once. A bad deploy fails loudly instead of running quietly broken.
+invalid under its checks (for example, a missing secret, stub provider or
+non-HTTPS callback URL), listing the violations. Passing these checks does not
+prove that external services are available or the platform integration works.
 
 Staging's automation-on is safe **only** while staging is closed to untrusted
 callers. PR 5a adds path-bound HMAC v2, but during the dual-accept window a
@@ -58,8 +66,9 @@ zero-witness never turns green (by design), so v1 can never be sunset.
 
 ## 3. First-time setup (per environment)
 
-1. Provision: RDS PostgreSQL 14+, an S3 bucket, an ECS/Fargate service (or
-   EC2) for the processes above.
+1. Provision PostgreSQL 16 (the server version tested in CI), an S3 bucket,
+   and ECS/Fargate or EC2 capacity for the services and jobs above.
+   Confirm RDS settings and backup/restore procedures in your staging deployment.
 2. Generate the shared HMAC secret into AWS Secrets Manager. Set the same
    value in the platform's config for that environment.
 3. Set env vars. All carry the `KYC_` prefix except `CH_API_KEY`, the
@@ -98,8 +107,8 @@ zero-witness never turns green (by design), so v1 can never be sunset.
 ## 4. Deploying an update
 
 Each release from IPv4.Global is a tagged version with release notes stating
-three things: does it include a **migration**, any **new env vars**, and any
-**contract change** (almost always: none — the API contract is stable).
+whether it includes a migration, new environment variables or a contract change.
+Read those notes before scheduling the update.
 
 1. Pull the release tag and build the image.
 2. If the notes list new env vars, set them first.
@@ -219,8 +228,10 @@ token. Three limits to know:
 - `recalculate.requested` re-decides from existing evidence but does **not**
   re-run the broker screen — after a blocklist update, re-send the original
   evidence event (or `kyb.run_requested`) instead.
-- Registry-outage behavior needs no action: runs complete as partial and
-  nothing wrong is ever emitted.
+- For a registry outage, inspect the failed source and case reason codes.
+  Some runs complete with partial evidence; a failed job may need recovery.
+  After the source recovers, send the relevant evidence event to fetch again.
+  `recalculate.requested` alone does not refresh the source data.
 
 ## 8. Rules
 

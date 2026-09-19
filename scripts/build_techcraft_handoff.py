@@ -4,8 +4,8 @@
     .venv/bin/python scripts/build_techcraft_handoff.py [--out PATH]
 
 The output is a pure function of the three sources, so rebuilding an unchanged tree
-rewrites the same bytes. Each source is copied whole, headings untouched, so every
-"§N" cross-reference between the documents still lands where it says it does.
+rewrites the same bytes. Each source is copied whole, headings untouched.
+Section references are local to the named source document, not globally numbered.
 `tests/unit/test_techcraft_handoff_doc.py` fails when the checked-in copy drifts.
 """
 
@@ -24,12 +24,18 @@ PARTS = (
 
 COVER_TITLE = "# TechCraft handoff"
 HOW_TO_READ = """\
-This file is generated: it stacks the three source documents in reading order and
-changes nothing inside them. Start with Part 1 for what the tool does and who does
-what. Part 2 is the wire contract your engineers build against. Part 3 is for whoever
-runs the service. Section numbers belong to the source files, so a pointer such as
-"`docs/PLATFORM_INTEGRATION.md` §5" means the same section here. Edit a source and
-rebuild with `.venv/bin/python scripts/build_techcraft_handoff.py`."""
+This release is for closed staging, not production. It verifies a registrant's
+connection to a company and returns a decision for the platform to handle.
+
+Start with **Part 1**: what the tool does, what TechCraft builds, and the decisions
+and access needed from each team. Integration developers use **Part 2** for events,
+signatures, callback handling and Salesforce reads. Operators use **Part 3** for
+deployment and recovery. You do not need to read all three parts to answer the
+product questions.
+
+The three source documents are included in full below. Section numbers restart in
+each part: `PLATFORM_INTEGRATION.md` §5 means §5 within Part 2. Older deployment
+procedures are retained for upgrades; they are not a claim that production is ready."""
 
 
 def outline(text: str) -> tuple[str, list[str]]:
