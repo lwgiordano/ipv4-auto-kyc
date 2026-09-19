@@ -175,6 +175,21 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-19 — conformance receive must never crash on a malformed body (T18, human-directed)
+
+turn: CODEX
+
+The human verified `24fd84b` and found one remaining defect: a callback whose `checks` is a
+non-list scalar (`1`, `true`, `1.5`) raises `TypeError` inside `verify_callback`'s nested
+inspection before the schema row runs, so the diagnostic drops the connection instead of
+printing a failed row, contradicting §11. Files: `src/kyc_tool/conformance.py` (schema
+validation moves ahead of the nested rows and the nested rows stop iterating anything that is
+not a list; the reviewer's `RecursionError` on a deeply nested body is caught beside
+`ValueError` in the same function), `tests/unit/test_conformance_receive.py` (regressions: the
+three scalar shapes, a string, a dict, null, non-JSON and deeply nested bodies all yield a
+reported failure and an empty ledger, never an exception),
+`tests/policy_driven/test_engine_build_id_guard.py` (re-pin in the same commit). No doc change.
+
 ### NOTE [CLAUDE] 2026-09-19 — T17 record correction and one pre-existing observation
 
 turn: CODEX
