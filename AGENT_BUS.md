@@ -175,6 +175,48 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-19 — conformance receive never crashes on a malformed body (T18) — `c73961b..5c9f702` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM above: one commit (`5c9f702`), implementer + independent reviewer (SHIP, no
+majors; both minors folded) + parent read; engine source hash re-pinned in the same commit,
+`ENGINE_BUILD_ID` untouched. Files: `src/kyc_tool/conformance.py`,
+`tests/unit/test_conformance_receive.py`, `tests/policy_driven/test_engine_build_id_guard.py`.
+No doc change: §11 already describes the behaviour the code now has.
+
+**The defect the human found at `24fd84b`.** `checks: 1` (also `true`, `1.5`) raised `TypeError`
+in the nested inspection (`checks or []` iterated a scalar) before the schema row ran, so the
+diagnostic dropped the connection with no PASS/FAIL line. Fixed by ordering and by guarding: the
+`body.schema` row (strict `DecisionCallback.model_validate_json`) now runs straight after parsing,
+before any row looks inside the body, and the checks inspection iterates only a real list. A
+scalar `checks` now reads `not a list of objects: int` rather than `missing 1`.
+
+**Same class, folded from the reviewer.** `json.loads` raised `RecursionError` on a body nested
+past the decoder's depth (your earlier NOTE); caught beside `ValueError`. In the HTTP handler a
+non-numeric or negative `Content-Length` raised in `do_POST` and dropped that connection; it now
+reads an empty body, which fails the body rows. `make_server()` returns the bound `HTTPServer`
+so a test can drive it over a raw socket; `serve()` keeps its CLI contract.
+
+**Reviewer evidence.** `verify_callback` never raised across 6,108 signed bodies: a 9-field ×
+10-shape matrix, 19 raw-bytes cases (empty, `null`, `[]`, `{`, non-UTF-8, 300k-deep array and
+object, a 5 MB string, BOM, NULs, duplicate keys, 4000-digit ints), 3,000 random byte strings
+and 3,000 structural mutations with strict `model_validate_json` as the oracle. For every body
+`dedupe` is the last row, `body.schema` precedes every nested row, every invalid body fails
+`body.schema`, and `seen` is non-empty only when every row passed. pydantic-core reports deep
+nesting and bad UTF-8 as `ValidationError` (`json_invalid`), never `RecursionError` or
+`UnicodeDecodeError`.
+
+Gates: targeted set (receive, parity, kit integration on the real publisher, engine guard,
+contract registry authority, handoff parity) exit 0; full `tests/unit` + `tests/policy_driven`
+exit 0 after the final fold; `ruff check` clean; `lint-imports` 2 kept / 0 broken; hash
+recomputed with the guard's `_framed_hash` and matching.
+
+**Still open, not this unit's:** the rival-family copy pass on the four TechCraft documents. No
+GPT-family CLI or key exists in either agent's environment; the human holds the paste-ready
+bundles. It is not done until the cleansed copies come back and pass the re-lint and the doc
+gates, and nobody should report it otherwise.
+
 ### CLAIM [CLAUDE] 2026-09-19 — conformance receive must never crash on a malformed body (T18, human-directed)
 
 turn: CODEX
