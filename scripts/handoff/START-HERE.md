@@ -7,12 +7,16 @@ work), so use this to stand up staging and to build production readiness — not
 
 ## What's in the box
 
+- `docs/TECHCRAFT_HANDOFF.md` — start here. The briefing, the wire contract and the deployment
+  document, stacked in one file and generated from the three sources below, so every section
+  number and cross-reference still points where it says.
 - `techcraft-deployment-guide.pdf` — the ops manual: one image, six commands, Postgres 14+, one
   S3 bucket, configuration, health checks, cutovers.
-- The **Staging Handoff** document accompanying this package is the single read-first reference;
-  the **Platform Integration Contract PDF** and the runnable signer `kyc-signer-example.py`
-  accompany it too (both also ship inside this tree, under `docs/artifacts/` for the signer).
+- The **Staging Handoff** document, the **Platform Integration Contract PDF** and the runnable
+  signer `kyc-signer-example.py` accompany this package. The signer also ships inside this tree,
+  under `docs/artifacts/`.
 - `docs/PLATFORM_BRIEFING.md` — orientation: what the tool is and how the staging plan runs.
+- `docs/PLATFORM_INTEGRATION.md` — the wire contract your integration developers build against.
 - `docs/DEPLOYMENT.md`, `docs/RUNBOOK.md`, `docs/ALERTS.md` — full procedures, failure
   playbooks, the complete configuration table, alerting.
 - `src/`, `alembic/`, `KYC_Tool_Build_Package/` — the application, its migrations, and the
@@ -26,9 +30,9 @@ work), so use this to stand up staging and to build production readiness — not
 
 ## First steps
 
-1. Ops: read the deployment guide end to end — especially "Read this before provisioning
-   anything" — then stand up staging per sections 1–4. Configuration starts from
-   `.env.example`; a misconfigured boot prints every violation at once.
+1. Ops: read the deployment guide end to end, starting with "Read this before provisioning
+   anything". Then stand up staging per sections 1–4. Configuration starts from
+   `.env.example`, and a misconfigured boot prints every violation at once.
 2. Integration developers: build the event sender and the `/kyc/decision` callback receiver
    against the contract. Verify your signing against its published test vector first.
 3. Secrets (HMAC keys both directions) move over an encrypted channel only — never email,

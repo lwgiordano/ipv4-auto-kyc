@@ -1,9 +1,9 @@
 # Deployment & Releases
 
 For the platform team operating the KYC tool in IPv4.Global's AWS account.
-Ownership: IPv4.Global maintains the code and cuts releases; you pull a
-release and redeploy. No code is edited on the server — if something needs
-changing, it changes in the repo and ships as the next release.
+Ownership: IPv4.Global maintains the code and cuts releases. You pull a
+release and redeploy. No code is edited on the server. Anything that needs
+changing changes in the repo and ships as the next release.
 
 ## 1. One image, four processes
 
@@ -18,10 +18,10 @@ with a different command:
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | — |
 | Retention (daily cron) | `python -m kyc_tool.workers.retention` | — |
 
-All are stateless; scale the API and pipeline workers horizontally as needed.
-Per-case processing order is enforced by the job queue (a case's jobs run
-oldest-first, one at a time), so extra workers are safe. Callback delivery
-order is a separate contract: `docs/PLATFORM_INTEGRATION.md` §4.
+All are stateless, so scale the API and pipeline workers horizontally as
+needed. The job queue keeps each case's jobs in order (oldest first, one at a
+time), which is what makes extra workers safe. Callback delivery order is a
+separate contract: `docs/PLATFORM_INTEGRATION.md` §4.
 Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 
 ## 2. Environments
@@ -29,8 +29,8 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 | | Staging | Production |
 |---|---|---|
 | `KYC_ENVIRONMENT` | `development` (until real providers land) | `production` |
-| `KYC_ENFORCE_POSITIVE_DECISIONS` | `true` — rehearse full automation | `false` at launch; flipped after staging proves out |
-| Providers | built-in stand-ins (fixture registries, email file sink) | real registry providers, required; real OCR/email providers only if the tool extracts documents / sends the POC email — open decisions, `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
+| `KYC_ENFORCE_POSITIVE_DECISIONS` | `true` — rehearse full automation | `false` at launch, flipped after staging proves out |
+| Providers | live registry lookups (`CH_API_KEY` set), with stand-ins for the POC directory, document extraction and email (file sink) | real registry providers, required. Real OCR and email providers are needed only if the tool extracts documents or sends the POC email, which are the two open questions in `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
 | Secret | staging secret | separate production secret |
 
 Production mode validates config at boot and refuses to start on anything
@@ -42,9 +42,10 @@ callers. PR 5a adds path-bound HMAC v2, but during the dual-accept window a
 **v1-only** request is still path-unbound — a captured signed event could be
 replayed to another case within the skew window. The redirect closes for v2
 traffic at deploy, but for everyone only once **inbound v1 is actually disabled**
-(the §6 zero-witness satisfied AND `hmac_v1_inbound_sunset_at` in effect). Keep
-staging's perimeter closed until then — not merely until PR 5a is deployed.
-Production automation stays off regardless until the M2 gate is met.
+(the zero-witness satisfied AND `hmac_v1_inbound_sunset_at` in effect). Keep
+staging's perimeter closed until that day arrives. Deploying PR 5a is not the
+moment it can open. Production automation stays off regardless until the M2
+gate is met.
 
 **PR 5a is a non-hot cutover.** Migration 010 drops the global unique that the
 old image's ingest still uses, so an old replica serving after the migration
@@ -59,15 +60,17 @@ zero-witness never turns green (by design), so v1 can never be sunset.
 
 1. Provision: RDS PostgreSQL 14+, an S3 bucket, an ECS/Fargate service (or
    EC2) for the processes above.
-2. Generate the shared HMAC secret into AWS Secrets Manager; set the same
+2. Generate the shared HMAC secret into AWS Secrets Manager. Set the same
    value in the platform's config for that environment.
-3. Set env vars (`KYC_` prefix; full table in `docs/RUNBOOK.md`; sample in
-   `.env.example`). **Not every setting is hot-swappable by a rolling restart:**
-   `KYC_OUTBOX_MAX_ATTEMPTS` is a both-direction DRAINED cutover (§8) — for those,
-   follow the release/config-specific non-hot procedure, not the default rolling
-   deploy. Minimum: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL`,
-   `KYC_OBJECT_STORE=s3`, `KYC_S3_BUCKET`, the two per-environment values from
-   §2, and the full **HMAC credential set** — production boot refuses without
+3. Set env vars. All carry the `KYC_` prefix except `CH_API_KEY`, the
+   Companies House key. `docs/RUNBOOK.md` holds the full table and
+   `.env.example` a sample. **A rolling restart does not carry
+   every setting.** Changing `KYC_OUTBOX_MAX_ATTEMPTS` in either direction is a
+   DRAINED cutover (§8). Where a release note or a setting calls for one, run
+   that procedure rather than the default rolling deploy.
+   Minimum: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL`,
+   `KYC_OBJECT_STORE=s3`, `KYC_S3_BUCKET`, `CH_API_KEY`, the two per-environment
+   values from §2, and the full **HMAC credential set**. Production boot refuses without
    all of it (PR 5a):
    - v1 legacy secret: `KYC_PLATFORM_HMAC_SECRET`
    - v2 **inbound** (platform→tool): `KYC_HMAC_INBOUND_KEY_ID` +
@@ -85,7 +88,7 @@ zero-witness never turns green (by design), so v1 can never be sunset.
 4. Run the migration task: `alembic upgrade head`.
 5. Start the processes. Wire `GET /readyz` to the load balancer — it checks
    DB connectivity, migration version, and storage access, and returns 503
-   until all pass. Config safety is validated only in production mode; in
+   until all pass. Config safety is validated only in production mode. In
    staging's development mode `/readyz` does NOT vet the env vars, so verify
    the §3 values by hand.
 6. Smoke test: send one signed `kyb.run_requested` (script in
@@ -98,32 +101,33 @@ Each release from IPv4.Global is a tagged version with release notes stating
 three things: does it include a **migration**, any **new env vars**, and any
 **contract change** (almost always: none — the API contract is stable).
 
-1. Pull the release tag; build the image.
+1. Pull the release tag and build the image.
 2. If the notes list new env vars, set them first.
 3. Run the migration task (`alembic upgrade head`). Safe to run when there is
    no migration — it does nothing. **Do not assume a migration is compatible
    with the still-running previous image**: the release notes state whether it
-   is. When they don't say so (or say it isn't), use a brief cutover — stop
+   is. When they don't say so (or say it isn't), use a brief cutover: stop
    the processes, migrate, start the new image. Not every migration is
-   hot-compatible; 008 was not.
+   hot-compatible. 008 was not.
 4. Rolling restart: API, then workers.
 5. Verify (§5).
 
 ## 5. Post-deploy verification
 
 - `GET /readyz` → 200 on every instance.
-- `GET /healthz` → returns the policy bundle hash; it must match the release
-  notes. A hash change **without** a deploy is an incident (policy files are
-  immutable per release).
+- `GET /healthz` → returns the policy bundle hash, which must match the
+  release notes. A hash change **without** a deploy is an incident (policy
+  files are immutable per release).
 - Staging: run the smoke event end to end, then the conformance kit against it
-  (`python -m kyc_tool.conformance send --tool <base-url> --case <throwaway>`;
-  `docs/PLATFORM_INTEGRATION.md` §11). Note: the kit's one v1-signed request
-  records a v1 acceptance in the durable witness, which restarts the zero-v1
-  observation window — pass `--no-v1` (or skip the kit) while an inbound v1
-  sunset is being observed (§2 of the integration contract).
-- Watch `GET /v1/metrics` for 15 minutes: `jobs_by_status.dead` and
-  `outbox_by_status.dead` must stay 0; `event_to_decision_seconds.p95` budget
-  is < 10 s for light runs, < 120 s for full runs.
+  (`python -m kyc_tool.conformance send --tool <base-url> --case <throwaway>`,
+  documented in `docs/PLATFORM_INTEGRATION.md` §11). The kit's one v1-signed
+  request records a v1 acceptance in the durable witness, which restarts the
+  zero-v1 observation window. Pass `--no-v1` (or skip the kit) while an
+  inbound v1 sunset is being observed (`docs/PLATFORM_INTEGRATION.md` §2).
+- Watch `GET /v1/metrics` for 15 minutes. `jobs_by_status.dead` and
+  `outbox_by_status.dead` must stay 0. The budget for
+  `event_to_decision_seconds.p95` is < 10 s for light runs, < 120 s for full
+  runs.
 
 ## 6. Rollback
 
@@ -203,9 +207,12 @@ Alert on, from `GET /v1/metrics`:
 - `adapter_latency[].error_rate` per upstream registry
 - `event_to_decision_seconds.p95` over budget
 
-`docs/RUNBOOK.md` has the failure playbooks; the ops console's requeue
-buttons (`/ui/api/requeue/...`) are the preferred recovery path — they reset
-both the job and its failed run. Three limits to know:
+`docs/RUNBOOK.md` has the failure playbooks. Recovery runs through the
+requeue endpoints, which reset both the job and its failed run. The ops
+console offers them as buttons (`/ui/api/requeue/...`) wherever
+`KYC_UI_ENABLED` is on, and `POST /v1/ops/requeue/job/{job_id}` and
+`/v1/ops/requeue/outbox/{outbox_id}` are always mounted behind the operator
+token. Three limits to know:
 
 - A dead `poc_email` row cannot be requeued: its token was scrubbed when it
   died (the endpoint refuses it). Recovery is a fresh `poc.submitted`.

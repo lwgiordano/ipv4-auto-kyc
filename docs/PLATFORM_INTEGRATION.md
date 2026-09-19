@@ -2,26 +2,29 @@
 
 For the IPv4.Global platform team. Everything needed to integrate the KYC tool:
 the API you call, the two things you build (a webhook receiver and a POC
-confirmation page), the MVP scope, and the open decisions.
+confirmation page), the MVP scope, and the two questions we need answered.
 
 ## 1. The model
 
+A case is one registrant: the person signing up on your platform on behalf of a
+company. You send us what they told you, we check it against public registries,
+and we send back a verdict your registration team can act on.
+
 The tool is an async verification service. You POST events (registration data,
 a verified email, an uploaded document, an ORG-ID). Each event is acknowledged
-immediately and processed in the background: the tool gathers evidence from
-public registries, scores it, and POSTs a decision to your webhook.
+immediately and processed in the background: the tool gathers evidence, scores
+it, and POSTs a decision to your webhook.
 
 Decisions: `approve`, `approve_buy_locked` (account OK, purchasing held until
 ORG-ID verifies), `manual_review_insufficient`, `reject`.
 
-A case is one registrant — the person (the contact) signing up, on behalf of a
-company. `platform_account_id` on the sign-up event is your id for that person,
-and every decision we send back is about that case, so about that contact.
-Company evidence (registry records, ORG-ID, website) is about the company they
-claim; contact evidence (an inbox at the company's domain, a LinkedIn profile
-showing them at that company, later the RIR contact token) ties the person to
-it. Approving a case approves the contact, not the company. A second registrant
-at the same company is a second case, with its own `case_id`.
+`platform_account_id` on the sign-up event is your id for that person, and
+every decision we send back is about that case, so about that contact. Company
+evidence (registry records, ORG-ID, website) is about the company they claim.
+Contact evidence ties the person to it: an inbox at the company's domain, a
+LinkedIn profile showing them at that company, later the RIR contact token.
+Approving a case approves the contact, not the company. A second registrant at
+the same company is a second case, with its own `case_id`.
 
 **MVP posture:** auto-enforcement is off. A computed `approve` /
 `approve_buy_locked` is delivered as `manual_review_insufficient` with an
@@ -30,7 +33,8 @@ enforcement on later changes no part of this contract.
 
 ## 2. Authentication (both directions)
 
-Every request — yours to us, our webhook to you — carries:
+Nothing is accepted unsigned, in either direction. Your requests to us and our
+webhook to you carry the same two headers:
 
 ```
 X-KYC-Timestamp: <unix seconds, e.g. "1752681600">
@@ -38,9 +42,9 @@ X-KYC-Signature: <hex HMAC-SHA256(secret, timestamp + "." + raw_body)>
 ```
 
 - The signed message is the timestamp string, a literal `.`, then the **raw
-  request body bytes**. Sign the exact bytes you send; verify the exact bytes
-  you receive (before any JSON parsing).
-- Requests older/newer than 300 seconds are rejected — keep clocks on NTP.
+  request body bytes**. Sign the exact bytes you send. Verify the exact bytes
+  you receive, before any JSON parsing.
+- Requests older or newer than 300 seconds are rejected, so keep clocks on NTP.
 - Compare signatures constant-time.
 - v1 uses one shared secret per environment (staging ≠ production), ≥ 32 chars.
   v2 (below) splits this into **separate inbound (platform→tool) and outbound
@@ -64,8 +68,8 @@ def verify(secret: str, timestamp: str, body: bytes, signature: str) -> bool:
 
 v1 does not bind the URL, so a captured signature can be replayed to a different
 case. **v2** signs the method and path too. We accept **both** during a
-dual-accept window and give you fixed sunset dates; integrate v2 at your pace,
-nothing breaks in the meantime. Headers change to:
+dual-accept window and give you fixed sunset dates, so you can take up v2 at
+your own pace without anything breaking. Headers change to:
 
 ```
 X-KYC-Timestamp: <unix seconds>
@@ -86,7 +90,7 @@ platform->tool
 <hex sha256 of the raw body>
 ```
 
-One recipe covers everything you send — the only per-request variables are the
+One recipe covers everything you send. The only per-request variables are the
 method, path, timestamp, idempotency key (empty on GETs), and body hash:
 
 ```python
@@ -106,14 +110,18 @@ def sign_v2(secret, *, key_id, method, path_qs, timestamp, slot, body: bytes):
 #   Reproduce this exact hex before going live to confirm byte-for-byte parity.
 ```
 
-Rules: **if you send any v2 header, the request must be complete, valid v2** — we
+Rules: **if you send any v2 header, the request must be complete, valid v2.** We
 do not fall back to v1 for a v2-labelled request, and sending *any* v2 header
-(even present-but-empty) locks the request to v2. `key_id` is a constant from your
-config (it only changes on a secret rotation). Our webhook callbacks dual-emit
-both signatures until the outbound sunset, so your receiver can migrate whenever
-it's ready.
+(even present-but-empty) locks the request to v2. `key_id` is a constant from
+your config and changes only on a secret rotation. Our webhook callbacks
+dual-emit both signatures until the outbound sunset, so your receiver can
+migrate whenever it is ready.
 
 ## 3. Sending events
+
+Everything you tell us arrives as an event on one endpoint. There is no
+registration call and no re-verify call: you post what happened, and the tool
+decides again.
 
 ```
 POST /v1/cases/{case_id}/events
@@ -121,8 +129,8 @@ Idempotency-Key: <unique string per event attempt>
 X-KYC-Timestamp / X-KYC-Signature: as above
 ```
 
-`case_id` is your identifier for the registrant (stable across all events for
-that person). Cases are created on first event, one per registrant.
+`case_id` is your identifier for the registrant, stable across every event for
+that person. Cases are created on the first event, one per registrant.
 
 Envelope (exactly these four keys):
 
@@ -135,42 +143,48 @@ Envelope (exactly these four keys):
 }
 ```
 
-`actor.type` is `user`, `reviewer`, or `system`.
+`actor.type` is `user`, `reviewer`, or `system`. A fifth key at the top level
+of the envelope is rejected 422, while unknown fields inside `payload` are
+accepted and preserved.
 
 ### Responses
 
 | Code | Meaning | Handling |
 |---|---|---|
-| 202 | Accepted; body `{"run_id": ..., "status": "queued"}` | done — result comes by webhook |
-| 200 | Replay of an already-processed key; stored response returned | safe retry, done |
+| 202 | Accepted. Body `{"run_id": ..., "status": "queued"}` | done — result comes by webhook |
+| 200 | Replay of an already-processed key, stored response returned | safe retry, done |
 | 400 | Missing `Idempotency-Key` | fix request |
 | 401 | Bad/missing signature or stale timestamp | fix signing |
-| 409 | Same `Idempotency-Key`, different body | bug on your side — never reuse keys |
-| 422 | Payload failed validation | fix payload |
+| 409 | Same `Idempotency-Key`, different body, or the review task named by a `website.review_completed` is on another case or not open | bug on your side — never reuse keys |
+| 422 | Payload failed validation, or an unknown top-level envelope key | fix payload |
+| 404 | The review task named by the event does not exist | fix the task id |
+| 503 | Configuration unavailable, or the v1 signature witness could not be recorded | safe retry |
 
-Retry on network failure with the **same** key and **same bytes**; you'll get
-200 instead of a duplicate run.
+Retry on network failure with the **same** key and **same** bytes. You get 200
+back rather than a duplicate run.
 
 ### Event types and payloads
 
 | event_type | Payload (required unless noted) | Notes |
 |---|---|---|
-| `kyb.run_requested` | `company_legal_name`, `contact`, `platform_account_id`; optional `address`, `registration_number`, `jurisdiction`, `website` | send at registration; full check run; `contact` is the registrant, an object with required `name` and `email` (the address they signed up with) and optional `title`, `first_name`, `last_name`; the LinkedIn check compares the person's name and the company domain (company name and title are recorded for the reviewer, not compared), and uses `email` and the split names to find the right profile |
-| `email.verified` | `email`, `domain`, `verified_at` | you own email verification; this asserts it happened; `email` must be the contact's sign-up address (`contact.email`) |
-| `org_id.submitted` | `rir`, `org_handle` | `rir` ∈ `arin, ripe, apnic, lacnic, afrinic`; send it right after the sign-up event when the registrant supplied a handle at registration, and again whenever they add or change it later — it is optional at registration, and the check runs the moment it arrives. A reviewer may also record one in the operator console when the contact supplies it by other means; the envelope's `actor` says which (`reviewer` rather than your own `user`/`system` actor) |
+| `kyb.run_requested` | `company_legal_name`, `contact`, `platform_account_id`; optional `address`, `registration_number`, `jurisdiction`, `website` | send at registration, runs the full check set. `contact` is the registrant: an object with required `name` and `email` (the address they signed up with) and optional `title`, `first_name`, `last_name`. The LinkedIn check compares the person's name and the company domain, using `email` and the split names to find the right profile. Company name and title are recorded for the reviewer, never compared. `website` is optional to ingest, but `verified_company_email` and `linkedin_company_match` compare against its domain and cannot pass without it |
+| `email.verified` | `email`, `domain`, `verified_at` | you own email verification, and this asserts it happened. `email` must be the contact's sign-up address (`contact.email`). The tool records it as sent and does not cross-check the two |
+| `org_id.submitted` | `rir`, `org_handle` | `rir` ∈ `arin, ripe, apnic, lacnic, afrinic`. Optional at registration. Send it right after the sign-up event when the registrant supplied a handle there, and again whenever they add or change one later. The check runs the moment a handle arrives. A reviewer may also record one in the operator console when the contact supplies it by other means, and the envelope's `actor` says which (`reviewer` rather than your own `user`/`system` actor) |
 | `poc.submitted` | `rir`, `poc_handle`; optional `org_handle`, `resource` | starts the verification email (§5) |
 | `poc.token_verified` | `token_id`, `token`, `verified_at` | posted by your confirmation page (§5) |
 | `document.uploaded` | `object_ref`, `doc_type` | see §6 |
-| `reviewer.manual_approve` | `reviewer_id`; optional `note` | inline 200 with case state; no run, no callback; buying still locked without a verified ORG-ID; requires a matching reviewer actor (below) |
-| `recalculate.requested` | `{}` | re-decides from current evidence |
+| `website.review_completed` | `task_id`, `result`, `reviewer_id`; optional `reason_codes` | completes a website review task (§7). Needs a matching reviewer actor (below) |
+| `reviewer.manual_approve` | `reviewer_id`; optional `note` | answers 200 inline with the case state. No run, no callback. Buying stays locked without a verified ORG-ID. Needs a matching reviewer actor (below) |
+| `recalculate.requested` | `{}` | re-scores from stored evidence, with no new fetches |
 
-Unknown extra payload fields are accepted and preserved. Send events in the
-order they happen; each triggers its own run and its own decision callback.
+Send events in the order they happen. Each one except `reviewer.manual_approve`
+triggers its own run and its own decision callback.
 
 ### Reviewer actor requirement (`website.review_completed`, `reviewer.manual_approve`)
 
-These two events are reviewer-sensitive: the signed envelope's `actor` must
-identify the reviewer who acted, not just any authenticated caller.
+A valid signature proves a request came from you. It does not say who acted,
+and these two events need that: the signed envelope's `actor` must identify the
+reviewer.
 
 - `actor.type` MUST be `"reviewer"`.
 - `actor.id` MUST equal the payload's `reviewer_id` — both **nonblank** after
@@ -180,15 +194,16 @@ identify the reviewer who acted, not just any authenticated caller.
   **422** — the request is authenticated (it carried a valid signature) but
   internally inconsistent, so it is not a 401/403.
 - The tool records the **actor-derived** reviewer identity (`actor.id`) as the
-  reviewer of record on the task, check, and audit trail — never the payload's
-  `reviewer_id` field. Send both, and make them match.
+  reviewer of record on the review task, on the check it writes and in the
+  audit trail. The payload's `reviewer_id` field is never the record. Send
+  both, and make them match.
 
 ### When to send each event
 
-Evidence is optional at every step — the tool scores whatever exists. The
-platform's whole job is: when verification-relevant information is added **or
-changed**, send the matching event. The tool re-runs and sends a fresh verdict;
-there is no separate "retry" or "re-verify" call.
+Evidence is optional at every step, and the tool scores whatever exists. Your
+whole job is this: when verification-relevant information is added **or
+changed**, send the matching event. The tool re-runs and returns a fresh
+verdict, so there is no separate "retry" or "re-verify" call.
 
 | Moment on the platform | Send |
 |---|---|
@@ -207,12 +222,18 @@ re-verified, so a score can drop after an edit (§5). Expected, not a bug.
 
 ## 4. The decision webhook (you build this)
 
-Expose HTTPS `POST {your_base_url}/kyc/decision`. We sign it per §2 — dual-emitting
+This is the endpoint we POST every verdict to, and the first thing to build.
+One body carries the decision, the score behind it and the reason codes for
+each check.
+
+Expose HTTPS `POST {your_base_url}/kyc/decision`. We sign it per §2, dual-emitting
 v1 (the legacy shared secret) and v2 (the dedicated **outbound** secret + key id)
-until the outbound sunset, then v2 only. The v2 signature binds the **literal**
-request path, so if `{your_base_url}` has a path prefix (e.g. `…/hooks`), we sign
-`/hooks/kyc/decision`, not `/kyc/decision` — verify against the full path you
-received. Respond 2xx to acknowledge; anything else and we retry.
+until the outbound sunset, then v2 only. Two lines of the §2 canonical differ
+on this direction: it reads `tool->platform`, and the idempotency-key line is
+empty. The v2 signature binds the **literal** request path, so if
+`{your_base_url}` has a path prefix (e.g. `…/hooks`), we sign
+`/hooks/kyc/decision` rather than `/kyc/decision`. Verify against the full path
+you received. Respond 2xx to acknowledge. Anything else and we retry.
 
 Body:
 
@@ -250,8 +271,8 @@ Body:
   decision the tool computed. Treat the case as pending human review.
 - **Delivery is at-least-once.** Dedupe on `(case_id, run_id)`. Retries back
   off exponentially (base 10 s, 8 attempts) before dead-lettering on our side.
-  Acknowledge every exact valid duplicate as processed; acknowledging a
-  callback does not mean applying it to the case.
+  Acknowledge every exact valid duplicate as processed. Acknowledging a
+  callback is a different act from applying it to the case.
 - **Until ordered delivery is activated in migration `025`, the wire provides no
   callback-order authority.** Keep a manual approval authoritative. Acknowledge
   and record subsequent valid automatic callbacks, but hold unordered callbacks
@@ -266,7 +287,7 @@ Body:
 ### What to do with each result
 
 Notifications, reviewer assignment, and user-facing screens are platform
-features; the tool supplies the statuses. Suggested mapping:
+features. The tool supplies the statuses. Suggested mapping:
 
 | Result | Suggested platform handling |
 |---|---|
@@ -276,33 +297,34 @@ features; the tool supplies the statuses. Suggested mapping:
 | `manual_review_insufficient`, no marker | manual-review queue; assign a reviewer; notify admins |
 | `reject` | admin notification; user handling per ops policy |
 
-Two boundaries that shape this: only a broker-blocklist match ever auto-rejects
-(everything else that falls short goes to review, so expect the review queue,
-not rejections, to carry the volume), and sanctions screening happens on the
-platform **before** the tool is called — a sanctioned registrant never reaches
-it.
+Two boundaries shape the volume. Only a broker-blocklist match ever
+auto-rejects, so expect the review queue rather than rejections to fill up. And
+sanctions screening happens on the platform **before** the tool is called, so a
+sanctioned registrant never reaches it.
 
 **Display guidance.** Per case you have: decision, buy state, score, the five
 gate booleans, and per-check status with reason codes. Show users the status
-and the next useful step (verify your email, add your ORG-ID). Keep score,
-gates, and reason codes in admin views — publishing exactly why checks fail
-makes them easier to game. Wording is yours; the reason codes are stable
-strings safe to key copy on.
+and the next useful step (verify your email, add your ORG-ID). Keep the score,
+the gate booleans and the reason codes in admin views, because publishing
+exactly why a check fails makes it easier to game. Wording is yours, and the
+reason codes are stable strings safe to key copy on.
 
 ## 5. POC verification page (you build this)
 
-Flow for proving control of IP resources:
+Proving that a registrant controls IP resources means sending a code to the
+address their regional registry lists, and having them type it back. You host
+the page they type it into. Who sends that email is the first open question.
 
 1. You post `poc.submitted`.
 2. The tool looks up the POC in the registry directory over RDAP: the
    submitted ORG-ID or resource record must itself list the POC handle, and the
-   address comes off the POC's registry record. Whichever side sends the email
-   (open decision, below), it goes to the **registry-listed** address, never a
-   user-supplied one. The email contains:
+   address comes off the POC's registry record. Whichever side sends the email,
+   it goes to the **registry-listed** address, never a user-supplied one. The
+   email contains:
    `Your verification token: <secret>` and `Verification reference: <id>`.
 3. The user enters both on your confirmation page.
 4. You post `poc.token_verified` with `token` (the secret) and `token_id` (the
-   reference). Both are required; a placeholder `token_id` fails.
+   reference). Both are required, and a placeholder `token_id` fails.
 5. Result arrives as a normal decision callback.
 
 Rules your page must respect:
@@ -312,48 +334,50 @@ Rules your page must respect:
 - **Bound to the submitted identity.** If the user changes their ORG-ID, POC
   handle, or resource after the email went out, the old token fails
   (`poc_token_binding_mismatch`).
-- Recovery is always the same: re-submit the POC (`poc.submitted` again) — old
-  tokens are cancelled and a fresh email goes out. Don't build a "resend same
-  code" button.
+- Recovery is always the same: re-submit the POC (`poc.submitted` again), which
+  cancels old tokens and sends a fresh email. Don't build a "resend same code"
+  button.
 - Changing identity details also suspends previously earned proof: expect
   scores to drop after an ORG-ID/POC edit until re-verified
   (`org_id_revalidation_pending`, `poc_not_associated`). Not a bug.
 
-**Who sends the email (open decision).**
+**Open question: can your platform send that email?**
 
-- Option A — the tool sends it, through an Amazon SES sender the tool owns
-  (not built yet; needs an SES identity and sending domain from
-  IPv4.Global).
-- Option B — the platform sends it, through its existing transactional
-  email, in which case the tool hands the platform the token and reference
-  through a typed delivery contract to be written.
+- **If yes** — the platform sends it through its existing transactional email.
+  We hand you the token, the registry-listed recipient and the case reference
+  over a typed delivery contract still to be written, and we host no mail.
+- **If no** — the tool sends it through an Amazon SES sender that IPv4.Global
+  provisions with an identity and a sending domain. That sender is not built,
+  and a production process refuses to boot while the email provider is the dev
+  stub.
 
-In both options the token rules above (single-use, 72 hours, binding) are
-enforced by the tool.
+Either way the token rules above are enforced by the tool, and the POC check
+cannot pass until the question is answered.
 
-## 6. Documents (open decision: who extracts)
+## 6. Documents (open question: who reads the fields?)
 
-The kickoff call leaned toward the platform extracting the document fields,
-but that is not decided. Two options are open until IPv4.Global confirms one:
+A registrant can upload a formation document. Before the tool can compare it
+against what the user typed, someone has to read four fields off it: legal
+name, address, registration number, jurisdiction. Which side reads them is the
+second open question. The kickoff call leaned toward the platform.
 
-**Option A — platform extracts.** The platform stores the upload (your
-existing virus scanning and quarantine unchanged), extracts the four fields
-below, writes them as a JSON object to the shared object store, and posts
-`document.uploaded` with `object_ref` pointing at that JSON. The tool runs no
-OCR — it reads that JSON as posted. The numbered steps below are Option A's
-contract.
+**Open question: can your platform extract those four fields?**
 
-**Option B — tool extracts.** The platform stores the upload and posts
-`document.uploaded` with `object_ref` pointing at the **original file** (PDF
-or image) in the shared object store. The tool runs an OCR engine and
-extracts the same four fields itself. What it requires: an OCR provider
-chosen and contracted by IPv4.Global (none is built; the current engine only
-reads extracted JSON, and production refuses that stub), file-type and size
-limits agreed, and the same `document.uploaded` event — the wire contract
-does not change either way.
+- **If yes** — the platform stores the upload (your existing virus scanning
+  and quarantine unchanged), writes the four fields as a JSON object to the
+  shared object store, and posts `document.uploaded` with `object_ref`
+  pointing at that JSON. The tool runs no OCR and reads that JSON as posted.
+  The numbered steps below are this path's contract.
+- **If no** — the platform stores the upload and posts `document.uploaded`
+  with `object_ref` pointing at the **original file** (PDF or image) in the
+  shared object store. The tool runs an OCR engine and extracts the same four
+  fields itself. That path needs an OCR provider chosen and contracted by
+  IPv4.Global, plus agreed file-type and size limits. None of it is built: the
+  current engine reads extracted JSON only, and production refuses that stub.
 
-Documents are optional at registration — a case scores without them, and a
-later upload just re-runs verification (§3).
+`document.uploaded` is the same event on the wire either way, so your sending
+code does not wait on the answer. Documents are optional at registration. A
+case scores without them, and a later upload re-runs verification (§3).
 
 1. Put a JSON object in the shared object store:
    `{"fields": {"name": "...", "address": "...", "number": "...", "jurisdiction": "..."}}`
@@ -365,18 +389,21 @@ later upload just re-runs verification (§3).
    | `fields.number` | registration / company number as printed |
    | `fields.jurisdiction` | issuing jurisdiction, e.g. `GB` |
 
-   Each key is individually optional; anything missing routes toward review,
-   never toward a pass. Extract what the document says, not what the user
-   typed — the tool's job is exactly to compare the two.
+   Each key is individually optional, and anything missing routes toward review
+   rather than toward a pass. Extract what the document says, not what the user
+   typed. Comparing the two is exactly the tool's job.
 2. Post `document.uploaded` with `object_ref` (storage key) and `doc_type`
-   (`registration_certificate` for formation/registration documents; more
+   (`registration_certificate` for formation/registration documents, and more
    types can be added as needed).
 3. Keep the original upload on your side for audit.
 
-Until this is answered, staging uses Option A with hand-extracted JSON;
-production cannot start on either option before it is decided.
+Staging runs on hand-extracted JSON until you answer. Production cannot start
+on either path before then.
 
 ## 7. Read API and review tasks
+
+Everything the tool knows about a case is readable over signed GETs. Use them
+to chase what is missing and to mirror a case into Salesforce.
 
 - `GET /v1/cases/{id}` — status, score, latest decision, live checks with
   reason codes ("what's missing" for follow-up), and `information_requested`
@@ -390,15 +417,15 @@ production cannot start on either option before it is decided.
   mapped, keyed by the destination name the console currently has saved
   (below).
 
-**Completing a website review** is a normal signed event, not a separate
+**Completing a website review** is a normal signed event rather than a separate
 endpoint: post `website.review_completed` to `POST /v1/cases/{case_id}/events`
 with payload `{"task_id": "...", "result": "pass"|"fail", "reviewer_id": "..."}`.
-The envelope's `actor` must identify the same reviewer — `actor.type:
-"reviewer"` and `actor.id` equal to `reviewer_id` (§3) — or the event is
-rejected 422; the tool records the actor-derived reviewer, never the payload
-field. The tool validates the task exists, is a website task on that case, and
-is open (else 404/409/422); the transition, check, and audit are identical to
-any other event. (The old `POST /v1/review-tasks/{id}/complete` endpoint is
+The envelope's `actor` must identify the same reviewer (`actor.type:
+"reviewer"`, `actor.id` equal to `reviewer_id`, §3) or the event is rejected
+422, and the actor-derived reviewer is the one recorded. The tool checks that
+the task exists, that it is a website task on that case, and that it is open
+(else 404/409/422). The state change, the check and the audit row are identical
+to any other event. (The old `POST /v1/review-tasks/{id}/complete` endpoint is
 retired — it duplicated this event.)
 
 **What a reviewer has asked the contact for.** `GET /v1/cases/{id}` carries
@@ -406,42 +433,41 @@ retired — it duplicated this event.)
 "org_id" | "registration_number" | "address" | "poc", "requested_at": …,
 "requested_by": …, "note": … or null}`. A reviewer raises one from the operator
 console when a case is stuck for want of evidence the registrant never
-supplied. The tool records the ask; the platform owns the message that reaches
-the contact. An entry drops off by itself once the case receives that evidence
-— `org_id` clears when `org_id.submitted` arrives, and so on — so there is
-nothing to close and nothing to acknowledge.
+supplied. The tool records the ask, and the platform owns the message that
+reaches the contact. An entry drops off by itself once the case receives that
+evidence, so there is nothing to close and nothing to acknowledge. `org_id`
+clears when `org_id.submitted` arrives, and the other three clear the same way.
 
-You do not need this field to chase a missing ORG-ID today: the decision
-webhook's `checks[].reason_codes` already carry
-`org_id_submission_incomplete`, which is the same fact at decision time. How
-you would rather learn of a reviewer's request — polling this field, or a
-message we send you — is `PLATFORM_BRIEFING.md` §8 item 13, and nothing
-outbound is built until you answer.
+You do not need this field to chase a missing ORG-ID today. The decision
+webhook's `checks[].reason_codes` already carry `org_id_submission_incomplete`,
+which is the same fact at decision time. How you would rather learn of a
+reviewer's request is `PLATFORM_BRIEFING.md` §8 item 13: poll this field, or
+have us send you a message. Nothing outbound is built until you answer.
 
 ### Salesforce projection (pull)
 
 `GET /v1/cases/{case_id}/salesforce-projection` is how the platform reads the
 Salesforce-shaped view of a case. It is a pull: call it after a callback, or on
 your own schedule, for the case you are about to mirror. The tool never writes
-Salesforce; this endpoint is the only sanctioned source for the mirror, and
+Salesforce. This endpoint is the only sanctioned source for the mirror, and
 nothing in a production integration reads the console's `/ui/api/…` routes.
 
-One response is one consistent snapshot (a repeatable-read, read-only
-transaction), so a mapping saved in the console mid-request cannot produce a
-half-old, half-new body.
+One response is one consistent snapshot, taken in a single read-only
+transaction. A mapping saved in the console while the request is in flight
+cannot produce a body that is half old and half new.
 
 | Field | Meaning |
 |---|---|
 | `case_id` | the case |
-| `fields` | object keyed by the **destination** name currently saved in the console; each entry carries `source_field` (the canonical `salesforce_sync_fields.json` name, e.g. `KYC_Status__c`), `source_identity` (the tool value it came from, e.g. `case.status`), `value_type` (`enum`, `integer`, `text`, `boolean`, `datetime`, `check_records`), `nullable`, and `value` |
-| `mapping_revision` | the active configuration revision the destination names were read from; `null` when no live configuration has been activated (destinations then equal the canonical names) |
-| `configuration_revision` | the configuration revision the pointed automatic decision ran under; present only for a resolved automatic decision, otherwise `null` |
+| `fields` | object keyed by the **destination** name currently saved in the console. Each entry carries `source_field` (the canonical `salesforce_sync_fields.json` name, e.g. `KYC_Status__c`), `source_identity` (the tool value it came from, e.g. `case.status`), `value_type` (`enum`, `integer`, `text`, `boolean`, `datetime`, `check_records`), `nullable`, and `value` |
+| `mapping_revision` | the active configuration revision the destination names were read from. `null` when no live configuration has been activated (destinations then equal the canonical names) |
+| `configuration_revision` | the configuration revision the pointed automatic decision ran under, and present only for a resolved automatic decision, otherwise `null` |
 | `decision_authority` | which decision the values come from: `provenance`, `decision_row_id`, `run_id`, `decision_kind` (`automatic` or `manual`), `decision`, `run_provenance` |
 | `manual_approval_authority` | the latest manual approval, if any: `provenance`, `decision_row_id`, `reviewer_id`, `decided_at` |
 | `projection_timestamp` | RFC 3339 UTC timestamp of the snapshot |
 
-Statuses: `200`; `401` (signature invalid, missing, or retired); `404` (unknown
-case); `503` (configuration or the v1 signature witness unavailable; retry).
+Statuses: `200`, `401` (signature invalid, missing, or retired), `404` (unknown
+case), `503` (configuration or the v1 signature witness unavailable, so retry).
 Error bodies are `{"detail": "..."}`. The exact schema is
 `SalesforceProjectionResponse` in `/openapi.json`.
 
@@ -450,45 +476,48 @@ decisions or callback bytes, and it does not by itself prove the platform
 adopted the new destination names. `docs/SALESFORCE_MAPPING.md` has the
 per-field value rules.
 
-In production these reads also require the §2 signature headers. There is also
-an operator console (`/ui`) for the registration team — dashboards, case
-detail, review queue — independent of this API.
+In production these reads also require the §2 signature headers. The
+registration team also has an operator console at `/ui` (dashboards, case
+detail, review queue), independent of this API.
 
 ## 8. Hosting and deployment (you run this too)
 
-The platform team hosts and operates the tool in IPv4.Global's AWS account;
-IPv4.Global maintains the code and cuts releases. An update is: pull the
-release, build the image, run the migration, restart — no code is edited on
-the server. A `Dockerfile` ships in the repo; `docs/RUNBOOK.md` is the
-operator guide (every env var, health checks, dead-letter recovery).
+You host and operate the tool in IPv4.Global's AWS account, and IPv4.Global
+maintains the code and cuts releases. An update is: pull the release, build the
+image, run the migration, restart. No code is edited on the server. A
+`Dockerfile` ships in the repo, and `docs/RUNBOOK.md` is the operator guide
+(every env var, health checks, dead-letter recovery).
 
 - **Stack:** Python 3.11, FastAPI. **PostgreSQL 14+ is the only hard
   infrastructure dependency** — queue and webhook outbox live in Postgres. No
   Redis/broker.
 - **Also needed in production:** an S3-compatible bucket (evidence), outbound
-  HTTPS (RDAP registries, Companies House, GLEIF), and — if the tool sends the
-  §5 email — an email provider.
+  HTTPS (RDAP registries, Companies House, GLEIF), and an email provider if the
+  tool ends up sending the §5 email.
 - **Processes** (stateless, scale horizontally): API (`uvicorn
   kyc_tool.api.app:create_app --factory`), pipeline worker, outbox worker, and
   a daily retention cron.
 - **Deploy:** `alembic upgrade head`, start processes. Wire `GET /readyz` to
-  the load balancer (checks config, DB, migration version, storage);
-  `GET /healthz` for liveness.
+  the load balancer (checks DB, migration version, storage, and the config in
+  production mode), and use `GET /healthz` for liveness.
 - Config is environment variables prefixed `KYC_` (full table:
   `docs/RUNBOOK.md`). With `KYC_ENVIRONMENT=production` a misconfigured process
   refuses to boot and lists every violation — intentional fail-closed.
 
 ## 9. MVP scope and what comes later
 
-Works now: full event flow, registry + broker + document (extracted-fields) +
-email checks, scoring, webhooks, review queue, audit trail, idempotent replays.
+What is built today, and what each missing piece waits on.
+
+Works now: the full event flow, the registry, ORG-ID, broker, LinkedIn,
+document (extracted-fields) and email checks, scoring, webhooks, the review
+queue, the audit trail and idempotent replays.
 
 | Added later | Unblocked by |
 |---|---|
 | Tool-side OCR of raw files | extraction decision + engine choice |
-| Live POC verification emails | the §5 sender decision, then an email provider + sending domain, or the platform hand-off contract |
-| Live Companies House lookups | API key (free registration) |
-| LinkedIn/company enrichment | Floqer access |
+| Live POC verification emails | the §5 answer, then an email provider + sending domain, or the platform hand-off contract |
+| Companies House lookups in your deployment | `CH_API_KEY` in the deployment config (`PLATFORM_BRIEFING.md` §8 item 14). The adapter is live |
+| LinkedIn matching in your deployment | the Floqer key and shortcut id in the deployment config. The adapter is live, and nothing is needed from the platform |
 | `event_sequence` in callbacks | your confirmation |
 | v1 signature retirement (v2 path-bound signing is live now, §2) | agreed inbound/outbound sunset dates |
 | Auto-enforcement (the flag flip) | staging end-to-end on real providers + platform cutover sign-off |
@@ -497,28 +526,29 @@ None of these change the API in §§2–7.
 
 ## 10. Answers we need
 
-The consolidated list of what we need from the platform team and from
-IPv4.Global is `docs/PLATFORM_BRIEFING.md` §8; the questions already answered
-are in its §4 and §5.
+Every answer we still need from the platform team and from IPv4.Global is in
+`docs/PLATFORM_BRIEFING.md` §8. Its §4 lists what your team builds, and its §5
+holds the two questions still open.
 
 Secrets never travel in chat, email, tickets, or documents: use the deployment
 secret manager.
 
 ## 11. Conformance kit
 
-Both directions are self-checking before anything goes live. The kit ships in
-the repository — `python -m kyc_tool.conformance <mode>`, run from a checkout —
-and reads every expected status, header, event, and key from the same contract
-registry this document is written against, so it cannot drift from what you are
-reading here.
+Both sides can check themselves against this contract before anything goes
+live. The kit ships in the repository and runs from a checkout as
+`python -m kyc_tool.conformance <mode>`. It derives every expected status,
+header, event, and key from the same authorities the published contract is
+verified against, so it cannot drift from what you are reading here without a
+test failing.
 
 | Command | What it proves |
 |---|---|
-| `python -m kyc_tool.conformance vector` | your signer: recomputes the worked v2 vector published in the signed integration contract (§4 there) byte for byte, offline. Run this first. |
-| `python -m kyc_tool.conformance send --tool <base-url> --case <case-id>` | your sender: signs and posts one of every accepted event type (§3, plus the §7 website-review completion) — v2 path-bound, plus one v1 request while dual-accept lasts (`--no-v1` once your inbound v1 sunset has passed) — then the negatives — bad signature 401, timestamp outside the 300 s window 401, a sign-up with no `contact` 422, an unknown event type 422, the same `Idempotency-Key` twice 200 with the stored body verbatim — then a signed `GET /v1/cases/{id}` carrying `status`, `score`, the latest decision, the live checks, and `information_requested`. |
-| `python -m kyc_tool.conformance receive --port <n>` | your receiver: it behaves as a §4 receiver — verifies v1 and v2 (v2 against the literal request path), validates the callback body, dedupes on `(case_id, run_id)`, answers 2xx — and prints one PASS/FAIL line per rule per callback. Point a staging tool's callback URL at it. It listens on 127.0.0.1 only, so reach it from staging through an SSH tunnel (`ssh -R`) or a local forward — do not expose it; it authenticates nothing. Unlike a production receiver, it acknowledges an invalid callback (2xx) instead of holding it, so a broken rule is reported once rather than retried eight times. |
+| `python -m kyc_tool.conformance vector` | your signer: recomputes the worked v2 vector published in the signed integration contract (§4 there) byte for byte, offline, so you can hold your own implementation against it. Run this first. |
+| `python -m kyc_tool.conformance send --tool <base-url> --case <case-id>` | your sender: signs and posts one of every accepted event type (§3, plus the §7 website-review completion), v2 path-bound, plus one v1 request while dual-accept lasts (`--no-v1` once your inbound v1 sunset has passed). Then the negatives: bad signature 401, timestamp outside the 300 s window 401, a sign-up with no `contact` 422, an unknown event type 422, the same `Idempotency-Key` twice 200 with the stored body verbatim. Then a signed `GET /v1/cases/{id}` carrying `status`, `score`, the latest decision, the live checks, and `information_requested`. |
+| `python -m kyc_tool.conformance receive --port <n>` | your receiver: the kit stands in as a §4 receiver. It verifies v1 and v2 (v2 against the literal request path), validates the callback body, dedupes on `(case_id, run_id)`, answers 2xx, and prints one PASS/FAIL line per rule per callback. Point a staging tool's callback URL at it. It listens on 127.0.0.1 only, so reach it from staging through an SSH tunnel (`ssh -R`) or a local forward. Do not expose it, because it authenticates nothing. Unlike a production receiver it acknowledges an invalid callback (2xx) instead of holding it, so a broken rule is reported once rather than retried eight times. |
 
-Every mode prints a `check / expected / got / PASS|FAIL` table; `vector` and
+Every mode prints a `check / expected / got / PASS|FAIL` table. `vector` and
 `send` exit non-zero if any row FAILs, so both drop straight into CI. `send`
 writes real events, so give it a throwaway case id on staging.
 
