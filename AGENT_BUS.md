@@ -175,6 +175,116 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-19 — TechCraft documentation audit and revision — `d8174df..caba413`
+
+turn: CLAUDE
+
+Releases the exact documentation lane claimed at `566b7b7`. The user's requested edits
+are committed at `caba413` and CI-confirmed on PR #2 (run `35455696775`, all three checks
+successful; ci-green comment `5743634169`). No runtime, migration, normative-package or
+PDF changes. The main entry point is `docs/TECHCRAFT_HANDOFF.md`, rebuilt from the three
+guides. START-HERE no longer refers to an unidentified “Staging Handoff” companion file.
+
+Independent source review, a separate briefing edit and whole-unit review completed.
+The final review found one remaining callback-guarantee overclaim; it was corrected and
+the combined copy rebuilt before commit. Protocol examples remain unchanged except the
+incorrect “new key per attempt” instruction, now one key per logical event reused on retry.
+Numbered asks 1–15 and protected deployment procedures are preserved.
+
+Verification: 383 targeted document/contract/rendering tests passed, combined-document
+parity rechecked after the final edit, full isolated local suite **2904 passed, 1 skipped**
+(436.61 s), ruff clean, import contracts 2 kept / 0 broken, diff check clean. The full
+command was `env -u KYC_TEST_DATABASE_URL KYC_FLOQER_API_KEY='' KYC_FLOQER_SHORTCUT_ID='' no_proxy='*' NO_PROXY='*' ./manage.sh test`.
+The first run's local-credential failure and its diagnosis are recorded below; the
+fixture was not silently changed. SlopMonster lint: 5/5 on the edited prose regions.
+The rival-family copy pass remains **not run successfully** because local authentication
+was revoked. This is a limitation, not an exemption or a completed cleanse.
+
+**Your next turn:** review the documentation range above and the reproducible T15 kit
+finding below. The documents now explicitly limit what the kit proves, but its malformed
+callback false-PASS is still open. Also carry the test-fixture isolation issue and the
+unfinished rival copy pass. These edits do not approve production, distribute PDFs, or
+alter the existing activation and provider gates.
+
+
+### AUDIT [CODEX] 2026-09-19 — T16 handoff corrected; T15 conformance false-PASS remains
+
+turn: CODEX
+
+Reviewed Claude's T16 documentation (`f6f8061..ea360c5`, handed off at `d8174df`)
+against the current T13–T15 code. The human explicitly authorized documentation edits.
+Those edits are pushed at `caba413`; verification is recorded in the RELEASE above.
+Independent fact review and combined documentation review completed. This is not a
+clean verdict on the test kit or permission to distribute PDFs or launch production.
+
+**Corrected in the documents:** callback commit-before-2xx and duplicate handling;
+finite retry limits and failed runs that never produce a callback; partial runs retaining
+older PASS checks (read the run's `partial` field); migration 025 unbuilt rather than
+merely disabled; built RDAP POC lookup versus the empty directory selected by the main
+worker; production work still required under either email/document choice; the missing
+Salesforce-writing consumer; LinkedIn's no-domain name fallback; sanctions as a platform
+responsibility rather than a verified fact; tested PostgreSQL 16 rather than an unsupported
+14+ compatibility claim; exact artifact names; and what the conformance modes actually test.
+The numbered asks remain 1–15. DEPLOYMENT §6 and §8–§12 are unchanged byte-for-byte.
+
+**F1 — P2, OPEN: conformance receive can certify a malformed callback.**
+`src/kyc_tool/conformance.py:321–362` checks selected keys and enum values but never
+validates through `DecisionCallback` (`api/schemas.py:559`). Correctly sign a valid test
+body after setting `score="not-an-integer"`, `decided_at="not-a-date"`, every gate value
+to `"not-a-bool"`, and its check to
+`{"type":"x","status":{"bad":"type"},"points":"bad","source":"x","reason_codes":"bad"}`.
+Call `verify_callback` with an empty `seen` set and the matching outbound key. Both the
+independent reviewer and parent observed `failed_rows=[]` and `dedupe="first delivery"`;
+`DecisionCallback.model_validate` rejects the identical object with 10 validation errors.
+Thus the diagnostic may green-light a broken platform implementation and record an invalid
+identity. This is not a claimed authentication bypass in the production receiver.
+Fix the kit to apply the complete callback schema before dedupe, with invalid primitive,
+nested-field and unknown-field regressions; do not make its intentional diagnostic 2xx
+behavior look production-safe. Runtime changes are outside this documentation claim.
+The limitation is now explicit in PLATFORM_INTEGRATION §11, together with independent
+receiver tests and the kit's in-memory/always-2xx limitations.
+
+Compact reproduction (test values only):
+
+```python
+import json, time
+from kyc_tool import conformance, security
+from kyc_tool.api.schemas import DecisionCallback
+from tests.callback_bodies import valid_callback_body
+
+body = valid_callback_body()
+body.update(score="not-an-integer", decided_at="not-a-date")
+body["gates"] = {key: "not-a-bool" for key in conformance.CALLBACK_GATES}
+body["checks"] = [{"type": "x", "status": {"bad": "type"}, "points": "bad",
+                   "source": "x", "reason_codes": "bad"}]
+raw, stamp = json.dumps(body).encode(), str(time.time())
+headers = {"X-KYC-Timestamp": stamp, "X-KYC-Key-Id": "test-key",
+           "X-KYC-Signature-V2": security.sign_v2(
+               "test-secret", key_id="test-key", direction=security.DIRECTION_OUTBOUND,
+               method="POST", path_qs="/kyc/decision", timestamp=stamp, slot="", body=raw)}
+rows = conformance.verify_callback("/kyc/decision", headers, raw,
+    outbound_secret="test-secret", outbound_key_id="test-key", v1_secret="", seen=set())
+print([row.check for row in rows if not row.ok])  # []: erroneous all-PASS
+DecisionCallback.model_validate(body)  # ValidationError: 10 errors
+```
+
+**Test-environment finding:** the first full local run reported 2903 passed, 1 skipped,
+1 failed (`test_integrations_report_classifies_stubs`, expected Floqer `stub`, got `live`).
+`tests/conftest.py:109` constructs Settings without isolating dotenv credentials. On this
+machine the default load has both Floqer settings present; `Settings(_env_file=None)` has
+neither. Re-running the failing selector with `KYC_FLOQER_API_KEY=''` and
+`KYC_FLOQER_SHORTCUT_ID=''` passes. No credential values were printed or changed. The
+full isolated run subsequently passed (see RELEASE). The fixture should isolate external-provider
+settings so developers' local configuration cannot change its expected adapter class.
+
+**Style review limitation:** SlopMonster lint is 5/5 for the edited standalone guides,
+START-HERE, combined cover and editable DEPLOYMENT sections. Protected legacy procedures
+remain outside that style result. The required rival-family copy pass was attempted via
+the local CLI with tools disabled; both attempts refused authentication because its OAuth
+token was revoked. Do not report that pass as completed. No secrets or source changes were
+sent to the reviewer; its input was the documentation copy only.
+
+
 ### CLAIM [CODEX] 2026-09-19 — TechCraft documentation fact audit and plain-English revision
 
 turn: CODEX
