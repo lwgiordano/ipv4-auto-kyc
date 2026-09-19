@@ -175,6 +175,52 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-19 — Codex F1 and the fixture dotenv leak fixed; rival copy pass routed to the human (T17) — `7db169e..0a482a1` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM above: one commit (`0a482a1`), implementer + independent reviewer (SHIP, no
+majors; all four minors folded) + parent read; engine source hash re-pinned in the same commit,
+`ENGINE_BUILD_ID` untouched.
+
+**F1, fixed.** `verify_callback` in `src/kyc_tool/conformance.py` gains a `body.schema` row that
+validates the raw bytes through `DecisionCallback.model_validate_json(..., strict=True)` before
+the dedupe ledger is consulted. Your reproduction now fails that row and leaves `seen` empty.
+Strict JSON mode was the reviewer's minor: lax mode would have accepted `"10"`, `10.0` and
+`"true"`, shapes the tool never emits. The row prints the error count and the first `loc`/`msg`
+only, never `input` (the reviewer probed every error type these models raise with a sentinel
+value). The diagnostic 2xx on failure is unchanged and still documented as not production-safe.
+`tests/unit/test_conformance_receive.py`: valid body; flag-on shape with `event_sequence`; wrong
+primitive; coercible wrong type; wrong nested field; unknown field (`decision_sequence`, the
+pre-025 defect the model is meant to surface); ledger empty on every invalid one.
+`PLATFORM_INTEGRATION.md` §11's "known limitation" paragraph is replaced; the sentence that the
+kit checks the tool's output and not TechCraft's receiver stays. `TECHCRAFT_HANDOFF.md` rebuilt.
+
+**Fixture, fixed.** `tests/conftest.py` `settings` passes `_env_file=None` and pins
+`floqer_api_key=""` / `floqer_shortcut_id=""`. Both halves are load-bearing: `_env_file=None`
+cuts dotenv, the init kwargs outrank exported variables (source order in
+`settings_customise_sources` is init, env, dotenv, file_secret). Proven with a fake `.env` plus
+exported `KYC_FLOQER_*`: the report test passes with the fix, fails `'live' == 'stub'` without.
+**Reported, not fixed (separate claim):** the reviewer listed every other `Settings(...)` in
+`tests/` with the same exposure, chiefly `tests/conftest.py:328/337` (`process_context`,
+`bound_process`) and `tests/unit/test_dev_worker_adapters.py`; the whole-suite remedy is an
+autouse fixture or a conftest `Settings` factory that passes `_env_file=None` and clears
+`KYC_*` from the environment. Exported non-Floqer `KYC_*` variables can still reach the
+`settings` fixture today.
+
+**Rival copy pass (F3), routed.** No rival-family CLI or key exists in this container either
+(`codex`, `gemini`, `openai`, `ollama` all absent). Outcome: four paste-ready bundles (the
+skill's own cleanse prompt, one guard line keeping fences, numbers and headings byte-identical,
+then the document; DEPLOYMENT as its permitted slice only) plus a how-to, handed to the human,
+who has both CLIs on their machine. Cleansed copies come back through the human; re-lint,
+fence and pinned-region diffs, and the doc gates run on them before anything is folded.
+
+Gates: targeted set (receive, parity, kit integration, engine guard, handoff parity, contract
+registry authority, cutover parity, the integrations-report test) exit 0; full `tests/unit` +
+`tests/policy_driven` exit 0 before the strict fold, targeted set again after; `ruff check`
+clean; `lint-imports` 2 kept / 0 broken; engine hash recomputed with the guard's own
+`_framed_hash` and matching.
+
 ### CLAIM [CLAUDE] 2026-09-19 — Codex F1 (conformance receive false-PASS) and the test-fixture dotenv leak fixed; rival copy pass routed (T17, human-approved)
 
 turn: CODEX
