@@ -30,6 +30,23 @@ def parse_vcard(vcard_array: list | None) -> dict:
     return {"name": name, "address": address}
 
 
+def vcard_emails(vcard_array: list | None) -> list[str]:
+    """RDAP jCard → the listed addresses of its `email` entries, in order
+    (RFC 9083: `["email", {...}, "text", "<address>"]`). A redacted card simply
+    has none, so the caller gets [] rather than a guess."""
+    if not vcard_array or len(vcard_array) < 2:
+        return []
+    return [
+        entry[3]
+        for entry in vcard_array[1]
+        if isinstance(entry, list)
+        and len(entry) >= 4
+        and entry[0] == "email"
+        and isinstance(entry[3], str)
+        and entry[3]
+    ]
+
+
 def parse_entity(payload: dict) -> dict:
     """Normalize an RDAP entity lookup response."""
     card = parse_vcard(payload.get("vcardArray"))

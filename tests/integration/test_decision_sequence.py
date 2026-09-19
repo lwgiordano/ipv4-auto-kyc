@@ -117,7 +117,16 @@ def test_concurrent_decides_serialize_via_case_lock(session_factory, pipeline, p
 
 
 def test_manual_approve_allocates_no_sequence(client, session_factory, post_event, worker, sign):
-    post_event("case-man", "kyb.run_requested", {"company_legal_name": "A", "jurisdiction": "GB"})
+    post_event(
+        "case-man",
+        "kyb.run_requested",
+        {
+            "company_legal_name": "A",
+            "jurisdiction": "GB",
+            "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"},
+            "platform_account_id": "acct-1",
+        },
+    )
     worker.run_until_idle()
     # ReviewerManualApprovePayload requires reviewer_id; review_guard requires actor.id == reviewer_id.
     body = json.dumps({

@@ -9,19 +9,30 @@ the port with network controls (see runbook).
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import text
 
 from kyc_tool.api.auth import require_admin
 from kyc_tool.api.routes_metrics import collect_metrics
+from kyc_tool.api.routes_read import (
+    INFORMATION_REQUEST_ACTION,
+    InformationField,
+    information_requested,
+)
 from kyc_tool.api.schemas import PAYLOAD_MODELS, EventEnvelope
+from kyc_tool.configuration import repo as configuration_repo
+from kyc_tool.configuration.models import ConfigurationUnavailable, brokers_json
+from kyc_tool.db.audit import audit
+from kyc_tool.db.session import uow
 from kyc_tool.domain import provenance
 from kyc_tool.events.ingest import ingest_event
 from kyc_tool.ops.requeue_service import requeue_dead_job, requeue_dead_outbox
+from kyc_tool.policy_store import repo as policy_store
 from kyc_tool.ui import integrations as integrations_report
 from kyc_tool.ui.salesforce_projection import FIELD_SOURCES, project_salesforce_fields
 
@@ -29,7 +40,9 @@ router = APIRouter()
 
 _CONSOLE_HTML = (Path(__file__).parent / "console.html").read_text()
 
-# Composer payload templates — starting points, not constraints.
+# Composer payload templates — starting points, not constraints. The two reviewer events carry
+# NO canned identity: whatever is typed into reviewer_id lands on the audit row and the decision
+# record as the person who acted, and "console" is not a person. Blank is refused by send_event.
 EVENT_TEMPLATES = {
     "kyb.run_requested": {
         "company_legal_name": "Acme Networks Ltd",
@@ -37,10 +50,11 @@ EVENT_TEMPLATES = {
         "registration_number": "12345678",
         "jurisdiction": "GB",
         "website": "https://acme.example",
-        "contact": {"name": "Jane Doe", "title": "Director"},
+        "contact": {"name": "Jane Doe", "email": "jane.doe@acme.example", "title": "Director"},
+        "platform_account_id": "acct-001",
     },
     "email.verified": {
-        "email": "ops@acme.example",
+        "email": "jane.doe@acme.example",
         "domain": "acme.example",
         "verified_at": "2026-01-01T00:00:00Z",
     },
@@ -55,10 +69,10 @@ EVENT_TEMPLATES = {
     "website.review_completed": {
         "task_id": "<open task id>",
         "result": "pass",
-        "reviewer_id": "console",
+        "reviewer_id": "",
         "reason_codes": [],
     },
-    "reviewer.manual_approve": {"reviewer_id": "console", "note": "manual approval via ops console"},
+    "reviewer.manual_approve": {"reviewer_id": "", "note": ""},
     "recalculate.requested": {},
 }
 
@@ -75,6 +89,34 @@ def _json_safe(value):
     if isinstance(value, list):
         return [_json_safe(v) for v in value]
     return value
+
+
+def _held_sql(d: str) -> str:
+    """The engine's own word for whether a decision row's positive verdict was held back by the
+    safety overlay: the decide stage writes `enforcement_held` on that run's `run.decided` audit
+    row (orchestration/pipeline.py) when a computed approval was published as
+    manual_review_insufficient. `d` is the decisions alias to correlate on. Read from there,
+    never inferred from five green gates -- the console must not compute a verdict the engine
+    did not. A manual row (run_id NULL) correlates with nothing and reads false."""
+    return (
+        "COALESCE((SELECT (a.detail_json->>'enforcement_held')::boolean FROM audit_log a"
+        f" WHERE a.case_id = {d}.case_id AND a.action = 'run.decided'"
+        f" AND a.detail_json->>'run_id' = {d}.run_id"
+        " ORDER BY a.id DESC LIMIT 1), false)"
+    )
+
+
+# The case is ONE registrant, and the contact rides in on kyb.run_requested rather than in a
+# column of its own: the list reads it straight out of the case snapshot (no migration).
+_CONTACT_NAME = "c.submitted_json->'contact'->>'name'"
+_CONTACT_EMAIL = "c.submitted_json->'contact'->>'email'"
+
+
+def _active_configuration(session):
+    try:
+        return configuration_repo.get_active(session)
+    except ConfigurationUnavailable as exc:
+        raise HTTPException(503, "Configuration authority unavailable.") from exc
 
 
 @router.get("/ui", include_in_schema=False)
@@ -103,6 +145,16 @@ def overview(request: Request) -> dict:
         },
     }
     with request.app.state.session_factory() as session:
+        active = _active_configuration(session)
+        if active:
+            policy = active.bundle
+            body["policy"].update(
+                bundle_hash=policy.bundle_hash,
+                shas=policy.shas,
+                rubric_version=policy.rubric.version,
+                threshold=policy.rubric.threshold,
+            )
+        body["policy"]["configuration_revision"] = str(active.revision) if active else None
         body["dead_jobs"] = _rows(
             session.execute(
                 text(
@@ -123,7 +175,13 @@ def overview(request: Request) -> dict:
 
 
 @router.get("/ui/api/cases")
-def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(default=50)) -> dict:
+def list_cases(
+    request: Request,
+    q: str = Query(default=""),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    filter: Literal["all", "new", "review", "approved", "buy_locked", "rejected"] = "all",
+) -> dict:
     # The listed decision is the POINTED row's value (or NULL when unresolved/none) — the
     # cases.latest_decision projection column goes stale after a record-only manual approval
     # and must not be served as the verdict (re-audit 0c46443 F6).
@@ -135,22 +193,74 @@ def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(
     sql = """
         SELECT c.id, c.company_name, c.jurisdiction, c.status, c.buy_status, c.broker_status,
                c.current_score AS current_evidence_score,
+               {contact_name} AS contact_name, {contact_email} AS contact_email,
                d.decision AS latest_decision, d.score AS decision_score, c.updated_at,
                c.latest_decision_row_id IS NOT NULL AS pointer_set,
                d.id IS NOT NULL AS pointer_resolved,
-               EXISTS (SELECT 1 FROM decisions dd WHERE dd.case_id = c.id) AS has_decisions
-        FROM cases c
-        LEFT JOIN decisions d ON d.id = c.latest_decision_row_id AND d.case_id = c.id
-        {where}
-        ORDER BY c.updated_at DESC LIMIT :limit
+               EXISTS (SELECT 1 FROM decisions dd WHERE dd.case_id = c.id) AS has_decisions,
+               {held} AS enforcement_held
+        {population}
+        ORDER BY c.updated_at DESC, c.id LIMIT :limit OFFSET :offset
     """
-    params: dict = {"limit": min(limit, 200)}
-    where = ""
-    if q:
-        where = "WHERE c.id ILIKE :q OR c.company_name ILIKE :q"
-        params["q"] = f"%{q}%"
+    params = {"limit": limit, "offset": offset, "q": f"%{q}%"}
+    has_rows = "EXISTS (SELECT 1 FROM decisions dd WHERE dd.case_id=c.id)"
+    resolved = "d.id IS NOT NULL"
+    manual = "(c.status='approved_manual' AND m.id IS NOT NULL)"
+    automatic = (
+        "(c.status='account_approved' AND d.decision IN ('approve','approve_buy_locked') "
+        f"AND NOT {_held_sql('d')})"
+    )
+    unresolved = (
+        "((c.latest_decision_row_id IS NOT NULL AND d.id IS NULL) "
+        f"OR (c.latest_decision_row_id IS NULL AND {has_rows}) "
+        "OR (c.latest_manual_decision_row_id IS NOT NULL AND m.id IS NULL) "
+        "OR (c.status='approved_manual' AND m.id IS NULL))"
+    )
+    # Any unresolved authority wins over a terminal display state, including
+    # manual-pointer drift beside an otherwise valid automatic approval/rejection.
+    approved = f"(NOT {unresolved} AND {resolved} AND ({manual} OR {automatic}))"
+    predicates = {
+        "all": "TRUE",
+        "new": (
+            f"(NOT {has_rows} AND c.latest_decision_row_id IS NULL "
+            "AND c.latest_manual_decision_row_id IS NULL)"
+        ),
+        "approved": approved,
+        "buy_locked": f"({approved} AND c.buy_status='buy_locked_org_id_required')",
+        "rejected": f"(NOT {unresolved} AND {resolved} AND c.status='rejected' AND d.decision='reject')",
+        "review": (
+            f"(NOT {approved} AND ({unresolved} OR {_held_sql('d')} "
+            "OR c.status IN ('manual_review_insufficient','kyc_pending',"
+            "'email_verification_pending','email_verified','enrichment_running')))"
+        ),
+    }
+    # Both queries consume exactly this bound population, before pagination.
+    population = (
+        "FROM cases c LEFT JOIN decisions d ON d.id=c.latest_decision_row_id AND d.case_id=c.id "
+        "LEFT JOIN decisions m ON m.id=c.latest_manual_decision_row_id "
+        "AND m.case_id=c.id AND m.manual IS TRUE "
+        f"WHERE ({predicates[filter]}) AND (c.id ILIKE :q OR c.company_name ILIKE :q "
+        f"OR {_CONTACT_NAME} ILIKE :q OR {_CONTACT_EMAIL} ILIKE :q)"
+    )
     with request.app.state.session_factory() as session:
-        cases = _rows(session.execute(text(sql.format(where=where)), params))
+        # One read snapshot makes count and rows coherent during concurrent admissions.
+        session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+        total = session.execute(text("SELECT count(*) " + population), params).scalar_one()
+        cases = _rows(
+            session.execute(
+                text(
+                    sql.format(
+                        population=population,
+                        held=_held_sql("d"),
+                        contact_name=_CONTACT_NAME,
+                        contact_email=_CONTACT_EMAIL,
+                    )
+                ),
+                params,
+            )
+        )
+    # `enforcement_held` is the engine's own word for the pointed verdict (see _held_sql).
+    #
     # Classified through the shared taxonomy, so a NULL verdict cell is never ambiguous between
     # "no decisions", "unresolved legacy order" and "pointer drift" — the last one is an
     # integrity condition the console must surface, not render as an ordinary blank.
@@ -160,13 +270,16 @@ def list_cases(request: Request, q: str = Query(default=""), limit: int = Query(
             row_resolved=c.pop("pointer_resolved"),
             any_rows=c.pop("has_decisions"),
         )
-    return _json_safe({"cases": cases})
+    return _json_safe({"cases": cases, "total": total, "limit": limit, "offset": offset})
 
 
 @router.get("/ui/api/cases/{case_id}/full")
 def case_full(case_id: str, request: Request) -> dict:
     policy = request.app.state.policy
     with request.app.state.session_factory() as session:
+        active = _active_configuration(session)
+        mappings = active.mappings if active else None
+        mapping_revision = str(active.revision) if active else None
         case = session.execute(
             text("SELECT * FROM cases WHERE id=:id"), {"id": case_id}
         ).mappings().first()
@@ -184,7 +297,8 @@ def case_full(case_id: str, request: Request) -> dict:
             session.execute(
                 text(
                     "SELECT id, state, partial, error, started_at, finished_at, "
-                    "triggering_event_id, policy_bundle_hash FROM runs "
+                    "triggering_event_id, policy_bundle_hash, configuration_revision, "
+                    "matched_broker_entity_id, matched_identifier_class FROM runs "
                     "WHERE case_id=:id ORDER BY started_at DESC LIMIT 25"
                 ),
                 {"id": case_id},
@@ -210,12 +324,15 @@ def case_full(case_id: str, request: Request) -> dict:
         )
         # DISPLAY order only — decided_at is transaction-start time and can invert against the
         # lock-serialized commit order, so this list must never select the authoritative row.
+        # Each row carries the engine's own hold flag (_held_sql), so the history table never
+        # has to derive it from the audit feed below, which is a 200-row window.
         decisions = _rows(
             session.execute(
                 text(
-                    "SELECT id, run_id, decision, score, gates_json, buy_enablement, manual, "
-                    "reviewer_id, decided_at, published_at FROM decisions "
-                    "WHERE case_id=:id ORDER BY decided_at DESC LIMIT 25"
+                    "SELECT d.id, d.run_id, d.decision, d.score, d.gates_json, d.buy_enablement, "
+                    "d.manual, d.reviewer_id, d.decided_at, d.published_at, "
+                    f"{_held_sql('d')} AS enforcement_held FROM decisions d "
+                    "WHERE d.case_id=:id ORDER BY d.decided_at DESC LIMIT 25"
                 ),
                 {"id": case_id},
             )
@@ -275,6 +392,29 @@ def case_full(case_id: str, request: Request) -> dict:
             ).scalar_one()),
             manual=True,
         )
+        # The enforcement hold for the pointed verdict, read from the decide stage's own
+        # `run.decided` audit record (it carries `enforcement_held` and the `computed_decision`
+        # the rulebook produced). The pointed decision row stores only what was PUBLISHED, so
+        # this is the one place the "held approval" is written down — and the console renders
+        # it from here rather than deducing it from the gates, which would be the screen
+        # computing a verdict. None means the pointed verdict was not held (or there is none).
+        enforcement_hold = None
+        if pointer_decision is not None and pointer_decision.get("run_id"):
+            decided = session.execute(
+                text(
+                    "SELECT detail_json FROM audit_log WHERE case_id=:id AND action='run.decided' "
+                    "AND detail_json->>'run_id' = :run ORDER BY id DESC LIMIT 1"
+                ),
+                {"id": case_id, "run": pointer_decision["run_id"]},
+            ).scalar_one_or_none()
+            if decided and decided.get("enforcement_held"):
+                enforcement_hold = {
+                    "computed_decision": decided.get("computed_decision"),
+                    "published_decision": pointer_decision["decision"],
+                }
+        # Projected from its audit rows exactly as GET /v1/cases/{id} projects it, so the case
+        # page and the platform's read never disagree about what is still outstanding.
+        info_requested = information_requested(session, case_id, case.get("submitted_json") or {})
         tasks = _rows(
             session.execute(
                 text(
@@ -313,6 +453,89 @@ def case_full(case_id: str, request: Request) -> dict:
             )
         )
 
+        # The pointed automatic decision owns its rubric. A manual record has no
+        # run: its separately labelled current-evidence rubric may use a known last
+        # automatic run, but never guess among NULL/tied legacy sequences.
+        rubric_run = None
+        rubric_scope = "legacy_unrecorded"
+        rubric_unavailable = None
+        if decision_provenance not in provenance.AUTHORITATIVE | {provenance.NO_DECISIONS}:
+            rubric_unavailable = "unavailable_decision_authority"
+        elif pointer_decision and pointer_decision.get("run_id"):
+            rubric_run = (
+                session.execute(
+                    text(
+                        "SELECT id,policy_bundle_hash,configuration_revision FROM runs "
+                        "WHERE id=:run AND case_id=:case"
+                    ),
+                    {"run": pointer_decision["run_id"], "case": case_id},
+                )
+                .mappings()
+                .first()
+            )
+            rubric_scope = "pointed_decision"
+            if rubric_run is None:
+                rubric_unavailable = "unavailable_run"
+        elif pointer_decision and pointer_decision.get("manual"):
+            candidates = list(
+                session.execute(
+                    text(
+                        "SELECT r.id,r.policy_bundle_hash,r.configuration_revision,d.decision_sequence "
+                        "FROM decisions d JOIN runs r ON r.id=d.run_id AND r.case_id=d.case_id "
+                        "WHERE d.case_id=:id AND d.manual IS FALSE "
+                        "ORDER BY d.decision_sequence DESC NULLS LAST LIMIT 2"
+                    ),
+                    {"id": case_id},
+                ).mappings()
+            )
+            rubric_scope = "current_evidence_run"
+            if (
+                len(candidates) > 1
+                and candidates[0]["decision_sequence"] == candidates[1]["decision_sequence"]
+            ):
+                rubric_unavailable = "unavailable_legacy_order"
+            elif candidates:
+                rubric_run = candidates[0]
+        elif decision_provenance == provenance.NO_DECISIONS:
+            candidates = list(
+                session.execute(
+                    text(
+                        "SELECT r.id,r.policy_bundle_hash,r.configuration_revision,e.event_sequence "
+                        "FROM runs r JOIN events e ON e.id=r.triggering_event_id AND e.case_id=r.case_id "
+                        "WHERE r.case_id=:id AND e.sequence_backfilled IS FALSE "
+                        "ORDER BY e.event_sequence DESC NULLS LAST LIMIT 2"
+                    ),
+                    {"id": case_id},
+                ).mappings()
+            )
+            rubric_scope = "pending_run"
+            if len(candidates) > 1 and candidates[0]["event_sequence"] == candidates[1]["event_sequence"]:
+                rubric_unavailable = "unavailable_legacy_order"
+            elif candidates:
+                rubric_run = candidates[0]
+        rubric_revision = None
+        rubric_provenance = rubric_unavailable or "legacy_process_policy"
+        if rubric_run and rubric_run["configuration_revision"] is not None:
+            try:
+                resolved = configuration_repo.get_revision(session, rubric_run["configuration_revision"])
+                if resolved.bundle.bundle_hash != rubric_run["policy_bundle_hash"]:
+                    raise ConfigurationUnavailable("run pins disagree")
+                policy = resolved.bundle
+                rubric_revision = str(resolved.revision)
+                rubric_provenance = "run_configuration"
+            except ConfigurationUnavailable as exc:
+                raise HTTPException(503, "Historical run configuration unavailable.") from exc
+        elif rubric_run and rubric_run["policy_bundle_hash"]:
+            try:
+                historical = policy_store.load_bundle(session, rubric_run["policy_bundle_hash"])
+            except policy_store.BundleCorrupt as exc:
+                raise HTTPException(503, "Historical policy bundle unavailable.") from exc
+            if historical is not None:
+                policy = historical
+                rubric_provenance = "legacy_run_bundle"
+            else:
+                rubric_unavailable = rubric_provenance = "unavailable_legacy_bundle"
+
     live = [c for c in checks if not c["superseded_by_check_id"]]
     live_by_type = {c["check_type"]: c for c in live}
     score_items = [
@@ -321,11 +544,15 @@ def case_full(case_id: str, request: Request) -> dict:
             "points": item.points,
             "category": item.category,
             "status": live_by_type.get(item.check_type, {}).get("status", "missing"),
-            "awarded": live_by_type.get(item.check_type, {}).get("points_awarded", 0)
+            "awarded": (
+                item.points
+                if rubric_revision is not None
+                else live_by_type.get(item.check_type, {}).get("points_awarded", 0)
+            )
             if live_by_type.get(item.check_type, {}).get("status") == "pass"
             else 0,
         }
-        for item in policy.rubric.items
+        for item in (() if rubric_unavailable else policy.rubric.items)
     ]
 
     now = datetime.now(UTC)
@@ -340,6 +567,7 @@ def case_full(case_id: str, request: Request) -> dict:
         poc_token_outstanding=token_outstanding,
         latest_decision=pointer_decision,
         latest_manual_decision=latest_manual_decision,
+        mappings=mappings,
     )
 
     return _json_safe(
@@ -355,6 +583,10 @@ def case_full(case_id: str, request: Request) -> dict:
                 "threshold": policy.rubric.threshold,
                 "items": score_items,
                 "is_published_decision": False,
+                "configuration_revision": rubric_revision,
+                "bundle_hash": None if rubric_unavailable else policy.bundle_hash,
+                "rubric_provenance": rubric_provenance,
+                "rubric_scope": rubric_scope,
             },
             "runs": runs,
             "adapter_results": adapter_results,
@@ -369,12 +601,19 @@ def case_full(case_id: str, request: Request) -> dict:
             # legacy multi-manual history — the projection treats both as unresolved)
             "latest_manual_decision": latest_manual_decision,
             "manual_decision_provenance": manual_decision_provenance,
+            # the safety overlay's hold on the pointed verdict, or None (see above)
+            "enforcement_hold": enforcement_hold,
             "review_tasks": tasks,
+            # open reviewer asks to the contact, cleared by the evidence itself (routes_read.py)
+            "information_requested": info_requested,
             "poc_tokens": tokens,
             "audit": list(reversed(audit)),
             "outbox": outbox,
             "salesforce": salesforce,
-            "field_sources": FIELD_SOURCES,
+            "field_sources": {
+                mappings[key] if mappings else key: value for key, value in FIELD_SOURCES.items()
+            },
+            "mapping_revision": mapping_revision,
         }
     )
 
@@ -383,17 +622,25 @@ def case_full(case_id: str, request: Request) -> dict:
 def policy_view(request: Request) -> dict:
     policy = request.app.state.policy
     with request.app.state.session_factory() as session:
-        brokers = _rows(
-            session.execute(
-                text(
-                    "SELECT name, policy, aliases, domains, email_domains, org_ids, "
-                    "poc_handles, asns FROM broker_entities ORDER BY policy, name"
+        active = _active_configuration(session)
+        if active:
+            policy = active.bundle
+        brokers = (
+            brokers_json(active.brokers)
+            if active
+            else _rows(
+                session.execute(
+                    text(
+                        "SELECT name, policy, aliases, domains, email_domains, org_ids, "
+                        "poc_handles, asns FROM broker_entities ORDER BY policy, name"
+                    )
                 )
             )
         )
     return _json_safe(
         {
             "bundle_hash": policy.bundle_hash,
+            "configuration_revision": str(active.revision) if active else None,
             "threshold": policy.rubric.threshold,
             "rubric": [item.model_dump() for item in policy.rubric.items],
             "hard_gates": policy.rubric.hard_gates,
@@ -401,7 +648,10 @@ def policy_view(request: Request) -> dict:
             "events": list(policy.events.event_types),
             "adapters": [entry.model_dump() for entry in policy.adapter_catalog.root],
             "broker_entities": brokers,
-            "field_sources": FIELD_SOURCES,
+            "field_sources": {
+                active.mappings[key] if active else key: value for key, value in FIELD_SOURCES.items()
+            },
+            "mapping_revision": str(active.revision) if active else None,
         }
     )
 
@@ -468,10 +718,25 @@ async def send_event(request: Request) -> JSONResponse:
         )
 
     if event_type in _SENSITIVE:
-        rid = raw_payload.get("reviewer_id") or "ops-console"
+        # The actor IS the typed reviewer_id, and it must be a person. The old fallback quietly
+        # substituted "ops-console" for a blank one -- an identity the audit row would then carry
+        # for whoever bypassed the rulebook. A blank is refused here with a reason the console can
+        # show, before the ingest floor turns the same blank into a bare "invalid reviewer actor".
+        rid = str(raw_payload.get("reviewer_id") or "").strip()
+        if not rid:
+            raise HTTPException(
+                status_code=422,
+                detail="reviewer_id must name the person acting: the audit row and the "
+                "decision record carry it",
+            )
         actor = {"type": "reviewer", "id": rid}
     else:
-        actor = {"type": "system", "id": "ops-console"}
+        # A reviewer may also record ordinary evidence a contact supplied by other means -- an
+        # Org ID emailed to them, say. `reviewer_id` rides on the REQUEST, not in the payload, so
+        # it names the actor without joining the evidence the validators read; the case record
+        # then says who recorded it instead of crediting the platform for it.
+        rid = str(body.get("reviewer_id") or "").strip()
+        actor = {"type": "reviewer", "id": rid} if rid else {"type": "system", "id": "ops-console"}
 
     try:
         envelope = EventEnvelope.model_validate(
@@ -492,6 +757,7 @@ async def send_event(request: Request) -> JSONResponse:
         request.app.state.policy,
         case_id=case_id,
         idempotency_key=idempotency_key,
+        settings=request.app.state.settings,
         envelope={
             "event_type": envelope.event_type,
             "occurred_at": envelope.occurred_at.isoformat(),
@@ -507,6 +773,57 @@ async def send_event(request: Request) -> JSONResponse:
         status_code=outcome.status_code,
         content={**outcome.body, "idempotency_key": idempotency_key, "jobs_queued": queued},
     )
+
+
+class InformationRequestBody(BaseModel):
+    """What a reviewer is asking the contact for. `reviewer` is who asked: the audit row carries
+    it, and "console" is not a person."""
+
+    model_config = ConfigDict(extra="forbid")
+    fields: list[InformationField] = Field(min_length=1)
+    note: str | None = None
+    reviewer: str
+
+
+@router.post("/ui/api/cases/{case_id}/information-request", status_code=202)
+async def request_information(case_id: str, request: Request) -> dict:
+    """Record that a reviewer asked this contact for evidence the case is missing.
+
+    ONE audit row and nothing else: no run, no snapshot change, and no event on the platform
+    wire -- the accepted event catalogue is the platform's, and this is a reviewer acting in this
+    console, not the platform reporting something. The platform still owns the message to the
+    contact; `GET /v1/cases/{id}` serves the open requests so it can see what was asked for, and
+    they clear themselves when the evidence arrives (api/routes_read.py).
+    """
+    require_admin(request.app.state.settings, request.headers)
+    try:
+        body = InformationRequestBody.model_validate(await request.json())
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+    reviewer = body.reviewer.strip()
+    if not reviewer:
+        raise HTTPException(
+            status_code=422,
+            detail="reviewer must name the person asking: the audit row carries it",
+        )
+    with uow(request.app.state.session_factory) as session:
+        if session.execute(text("SELECT 1 FROM cases WHERE id=:id"), {"id": case_id}).first() is None:
+            raise HTTPException(status_code=404, detail="case not found")
+        audit(
+            session,
+            INFORMATION_REQUEST_ACTION,
+            case_id=case_id,
+            actor=reviewer,
+            fields=list(body.fields),
+            note=body.note,
+        )
+    return {
+        "case_id": case_id,
+        "fields": list(body.fields),
+        "note": body.note,
+        "requested_by": reviewer,
+        "recorded": True,
+    }
 
 
 @router.post("/ui/api/requeue/job/{job_id}")

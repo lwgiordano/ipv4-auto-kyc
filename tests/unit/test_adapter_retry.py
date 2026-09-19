@@ -13,6 +13,7 @@ from kyc_tool.adapters.retry import (
     budget_scope,
     get_with_retry,
     is_transient,
+    request_with_retry,
 )
 
 
@@ -40,6 +41,27 @@ def test_non_transient_statuses_return_first_attempt(status):
         return httpx.Response(status)
     r = get_with_retry(_client(responder), "/x", sleep=sleeps.append)
     assert r.status_code == status and len(calls) == 1 and sleeps == []
+
+
+# ── a non-idempotent method is NOT replayed by default ────────────────────────────────────────────
+def test_post_is_not_retried_by_default_but_is_when_attempts_are_asked_for():
+    """A Floqer shortcut run is a PAID run: replaying the POST after a transient 503 would start a
+    SECOND one. `attempts=None` therefore means 1 for POST (3 for GET) — a caller that knows its
+    POST is safe to replay asks for it explicitly."""
+    sends = []
+
+    def responder(request):
+        sends.append((request.method, request.read()))
+        return httpx.Response(503)
+
+    r = request_with_retry(_client(responder), "POST", "/run", json={"input_data": {"a": "b"}},
+                           sleep=lambda s: None)
+    assert r.status_code == 503
+    assert sends == [("POST", b'{"input_data":{"a":"b"}}')]  # ONE send, body on the wire
+
+    sends.clear()
+    request_with_retry(_client(responder), "POST", "/run", attempts=2, sleep=lambda s: None)
+    assert len(sends) == 2  # explicit attempts still retry the transient
 
 
 # ── F5: Retry-After parsing — delta, HTTP-date, garbage, clamp ────────────────────────────────────

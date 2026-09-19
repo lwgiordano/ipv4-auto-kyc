@@ -145,12 +145,26 @@ documented choice · 🔵 hygiene/wording.
   in the ingestion response.
 
 ### 🟡 C4 — Unknown external contracts
-- Floqer response shape, platform callback URL, platform email-verification fetch API,
-  outbound email provider, production OCR engine.
+- Floqer's contract is settled: the Shortcut API (one run POST, then polls of the run
+  until a terminal status) behind `ShortcutFloqerClient`. Still unknown: platform callback
+  URL, platform email-verification fetch API, outbound email provider, production OCR engine.
 - **v1 behavior**: each sits behind a small interface with a fixture/fake
   implementation, configured by environment, marked `TODO(integration)`.
 
 ## D. Design tightenings adopted (not contradictions — hardening)
+
+### 🔵 D-LIVE-CONFIG — Approved live point caps and broker snapshot ownership
+
+The 2026-09-11 approved console design permits server-saved point weights as exact
+integers 0–1000. ORG-ID and POC caps follow the edited single-check weight, with
+derived metadata/descriptions kept consistent, instead of fixed packaged
+25-point defaults. A type still counts once; the threshold, five gates, evidence
+rules, and M2 hold do not change. Packaged normative JSON stays unmodified.
+Immutable configuration `024` now owns full broker snapshots (including stable
+IDs and notes) and per-run match provenance, pulled forward from PR 10; remaining
+PR 10 scope stays in `029`. Saves affect new runs only, never relabel old runs or
+replays. Mapping edits change service-side destination names, never Salesforce
+directly. See ADR-009 and `docs/DEPLOYMENT.md` §12 for activation and recovery.
 
 - **D1 — Broker gate runs on every event.** The spec runs it "first on every full run";
   single-evidence events (`org_id.submitted`, `poc.submitted`) introduce identifiers
@@ -325,3 +339,61 @@ documented choice · 🔵 hygiene/wording.
   fabricated clean bill downstream. The package stays committed unmodified (repo rule); this item
   and `docs/SALESFORCE_MAPPING.md` are the recorded correction, and
   `tests/unit/test_salesforce_projection.py` + the drift e2e pin the runtime behavior.
+
+### 🔵 D-LINKEDIN-MATCH — Field-level name and candidate-set company comparison, plus profile provenance
+
+- The normative rule (`KYC_Tool_Build_Package/03_ADAPTERS_AND_EVIDENCE.md`) was, until the
+  2026-09-16 amendment in the last bullet of this section: person name AND current company AND
+  title AND company domain must ALL match deterministically, and
+  normalization stays "for case/punctuation, not fuzzy" (`validators/normalize.py`). Two of the
+  four comparisons were losing legitimate contacts on a difference that is not a disagreement.
+- **Person name is compared field to field**, first name to first name and last name to last
+  name, whenever BOTH the LinkedIn record and the submitted `contact` carry the split; otherwise
+  the whole-name comparison is exactly what it was. A middle name or initial present on one side
+  only is no longer a mismatch. Still `norm_equal` per field — no token reordering, no partial or
+  prefix matching, and neither half is ever inferred from the other.
+- **Company is compared against a candidate set**: the submitted `company_legal_name` plus the
+  aliases Floqer discovered for the same company. LinkedIn shows the brand a company trades
+  under where the platform submits its legal name; each candidate is still an EXACT match after
+  normalization, so this widens the set of names compared, never the comparison itself. The live
+  client reads no `aliases` output yet, so its candidate set is the legal name alone until the
+  shortcut grows one; fixture-backed records already carry aliases.
+- **Profile provenance is recorded and is load-bearing.** The shortcut now reports how the
+  profile was found (`email` | `apollo` | `web_search`) and, for a web-found one, the verification
+  agent's verdict. A `web_search` profile counts as verified ONLY on an explicit "yes"; on
+  anything else — "no", blank, a field that failed — the adapter DROPS the `linkedin` dict
+  entirely, so an unverified guess about which person this is can never award the +20. The URL is
+  kept under `provenance` for audit, outside the match inputs, and `linkedin_source` /
+  `web_verified` travel into the check's `source_detail`. Pinned by
+  `tests/unit/test_floqer_shortcut_client.py` and `tests/unit/test_linkedin_validator.py`.
+  The published shortcut keys `output_data` by each selected output's LABEL and cannot rename one,
+  so the client reads the nine live labels (`Person LinkedIn URL`, `First Name`, `Last Name`,
+  `Person Current Job Title`, `Current Company Name`, `Current Company Domain`, `Website`,
+  `Formatted Data` — the single JS-formatter output, which carries the source — and
+  `profile_matches`) onto its canonical keys, deriving `person_name` from both halves because it is
+  no longer an output of its own. The first live run then showed two more things the client and
+  normalizer had to absorb: a `run_if`-skipped step completes with the literal two-character
+  string `""`, which now reads as no data; and `domain_of` now drops a leading `www.`, so the
+  submitted `www.epsilontel.com` equals LinkedIn's `epsilontel.com` (a host prefix, not fuzziness).
+  The broker gate's entity side now goes through `domain_of` as well (it compared curated domains
+  with `canon_id`), so a broker entry and a submitted website meet whether or not either carries
+  `www.`; before, `larus.example` in the list missed a `www.larus.example` submission.
+- **Rule amended 2026-09-16 by the human, after the first live run.** Pass = person name AND
+  company identity, where company identity is the company domain (LinkedIn's current-company
+  domain equals the submitted website domain) and only a LinkedIn record with NO domain falls
+  back to the exact legal-name / alias comparison. Company name and title are still compared
+  and recorded under `source_detail.recorded` for the reviewer; they no longer decide (LinkedIn
+  display names carry taglines — `Epsilon Telecommunications, a KT company` — and titles are
+  self-described). Spec line 03 §2 and `scoring_rubric.json` (`2.0` → `2.1`) changed together;
+  the policy baseline is re-pinned. Still `norm_equal` / `domain_of`, nothing fuzzy.
+
+### 🔵 D-CONTACT-FIRST — A case is one registrant, and the contact's email is required
+
+- **Decided 2026-09-17 by the human.** Contacts are what trigger this: a registrant is a
+  person applying on behalf of a company, and it is that person who is approved or rejected,
+  not the company. So a case is ONE registrant, a second registrant at the same company is a
+  second case, and `kyb.run_requested` now REQUIRES `contact` (with `name` and `email`, the
+  address they signed up with and the one `email.verified` must carry) and
+  `platform_account_id`. Company evidence stays what it is — evidence about the company the
+  person claims. The contract (`api/schemas.py`, `docs/contracts/wire.py`), the three platform
+  docs and the console's language all say registrant/case where they used to say company.

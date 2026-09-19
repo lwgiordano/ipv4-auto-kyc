@@ -8,6 +8,9 @@ verify their sync against. Encodes AUDIT:A5 (approved_manual → "Account
 Approved" + "Manual Approve").
 """
 
+from dataclasses import dataclass
+from types import MappingProxyType
+
 KYC_STATUS_MAP = {
     "registered": "Registered",
     "email_verification_pending": "Email Verification Pending",
@@ -68,6 +71,7 @@ def project_salesforce_fields(
     poc_token_outstanding: bool,
     latest_decision: dict | None,
     latest_manual_decision: dict | None = None,
+    mappings: dict[str, str] | None = None,
 ) -> dict:
     live = _live(checks)
     submitted = case.get("submitted_json") or {}
@@ -106,9 +110,7 @@ def project_salesforce_fields(
     # Business document
     doc_live = _live(_of_type(checks, "business_document_verified"))
     if doc_live:
-        doc_status = {"pass": "Verified", "fail": "Failed"}.get(
-            doc_live[0].get("status", ""), "Uploaded"
-        )
+        doc_status = {"pass": "Verified", "fail": "Failed"}.get(doc_live[0].get("status", ""), "Uploaded")
     elif submitted.get("documents"):
         doc_status = "Uploaded"
     else:
@@ -119,9 +121,7 @@ def project_salesforce_fields(
     if "website" in open_task_types:
         website_status = "Open"
     elif website_live:
-        website_status = {"pass": "Pass", "fail": "Fail"}.get(
-            website_live[0].get("status", ""), "Open"
-        )
+        website_status = {"pass": "Pass", "fail": "Fail"}.get(website_live[0].get("status", ""), "Open")
     else:
         website_status = None
 
@@ -147,7 +147,7 @@ def project_salesforce_fields(
         else (latest_decision if (latest_decision or {}).get("manual") else None)
     )
 
-    return {
+    fields = {
         "KYC_Status__c": KYC_STATUS_MAP.get(case.get("status", "")),
         # the POINTED decision's score — what was actually decided — never the live recomputed
         # case score, which can drift after the decision; None when the pointer is unresolved
@@ -167,9 +167,7 @@ def project_salesforce_fields(
         # approval) both project NULL. The old default fabricated `False` — a definite "no
         # hard conflict" — out of the gate never having been evaluated (re-audit `45cc215`
         # F9). NULLABLE refines `salesforce_sync_fields.json`'s `boolean` (package frozen).
-        "Hard_Conflict__c": (
-            not gates["no_hard_conflict"] if "no_hard_conflict" in gates else None
-        ),
+        "Hard_Conflict__c": (not gates["no_hard_conflict"] if "no_hard_conflict" in gates else None),
         "Review_Reason_Codes__c": "; ".join(reason_codes) if reason_codes else None,
         "Manual_Approved_By__c": (manual or {}).get("reviewer_id"),
         "Manual_Approved_At__c": (manual or {}).get("decided_at"),
@@ -187,6 +185,7 @@ def project_salesforce_fields(
             for c in checks
         ],
     }
+    return {mappings[key] if mappings is not None else key: value for key, value in fields.items()}
 
 
 # Static "source of truth" notes per field, for the Field Map view (mirrors the
@@ -210,3 +209,95 @@ FIELD_SOURCES = {
     "Manual_Approved_At__c": "latest MANUAL decision row's timestamp (sticky across later autos)",
     "KYC_Check__c": "one child record per check row (live + superseded)",
 }
+
+
+@dataclass(frozen=True)
+class SalesforceFieldContract:
+    """Machine-readable public metadata for one canonical projector source field."""
+
+    source_identity: str
+    value_type: str
+    nullable: bool
+    allowed_values: frozenset[str] | None = None
+
+
+# This must remain pure UI-owned metadata. API response validation imports it, but this module
+# never imports the API models: the UI continues to own the canonical projector vocabulary.
+SALESFORCE_FIELD_CONTRACT = MappingProxyType(
+    {
+        "KYC_Status__c": SalesforceFieldContract(
+            "case.status",
+            "enum",
+            True,
+            frozenset(
+                {
+                    "Registered",
+                    "Email Verification Pending",
+                    "Email Verified",
+                    "Enrichment Running",
+                    "KYC Pending",
+                    "Manual Review - Insufficient Score",
+                    "Account Approved",
+                    "Rejected",
+                }
+            ),
+        ),
+        "KYC_Score__c": SalesforceFieldContract("decision.score", "integer", True),
+        "Buy_Enablement_Status__c": SalesforceFieldContract(
+            "case.buy_status",
+            "enum",
+            True,
+            frozenset(
+                {
+                    "Not Applicable",
+                    "Buy Locked - ORG-ID Required",
+                    "ORG-ID Validation Pending",
+                    "ORG-ID Failed",
+                    "Buy Enabled",
+                    "Buy Suspended",
+                }
+            ),
+        ),
+        "Platform_Action_Taken__c": SalesforceFieldContract(
+            "tool.decision_or_manual_approval",
+            "enum",
+            True,
+            frozenset(
+                {
+                    "Approve Account",
+                    "Approve Account - Buy Locked",
+                    "Reject",
+                    "Manual Approve",
+                }
+            ),
+        ),
+        "ORG_ID__c": SalesforceFieldContract("org_id_match.handle_or_submission", "text", True),
+        "ORG_ID_Status__c": SalesforceFieldContract(
+            "org_id_match.status", "enum", False, frozenset({"Pending", "Pass", "Fail", "Superseded"})
+        ),
+        "POC_Handle__c": SalesforceFieldContract("poc_verified.handle_or_submission", "text", True),
+        "POC_Verification_Status__c": SalesforceFieldContract(
+            "poc_verified.status_or_token",
+            "enum",
+            False,
+            frozenset({"Pending", "Token Sent", "Verified", "Failed", "Superseded"}),
+        ),
+        "Business_Document_Status__c": SalesforceFieldContract(
+            "business_document_verified.status_or_submission",
+            "enum",
+            False,
+            frozenset({"None", "Uploaded", "Verified", "Failed"}),
+        ),
+        "Website_Review_Status__c": SalesforceFieldContract(
+            "website.review_task_or_check", "enum", True, frozenset({"Open", "Pass", "Fail"})
+        ),
+        "Broker_Status__c": SalesforceFieldContract(
+            "case.broker_status", "enum", True, frozenset({"Clear", "Allowed Broker", "Blocked"})
+        ),
+        "Hard_Conflict__c": SalesforceFieldContract("decision.gates_json.no_hard_conflict", "boolean", True),
+        "Review_Reason_Codes__c": SalesforceFieldContract("checks.live.reason_codes", "text", True),
+        "Manual_Approved_By__c": SalesforceFieldContract("manual_decision.reviewer_id", "text", True),
+        "Manual_Approved_At__c": SalesforceFieldContract("manual_decision.decided_at", "datetime", True),
+        "KYC_Check__c": SalesforceFieldContract("checks.all", "check_records", False),
+    }
+)

@@ -64,7 +64,7 @@ from docs.contracts.authority import (
     _sequenced_callback_attempt,
     _unique_quote_problems,
     _unmarked_instruction_problems,
-    assert_024_unbuilt,
+    assert_025_unbuilt,
     governing_string_paths,
 )
 from docs.contracts.operations import OPERATIONS, Procedure
@@ -346,7 +346,7 @@ def test_a_span_cannot_name_a_walk_the_graph_does_not_contain():
     from docs.contracts.playbook import MigrationSpan
 
     with pytest.raises(CommandError):
-        _resolved_migration_range(MigrationSpan("012", "024"))  # unbuilt target
+        _resolved_migration_range(MigrationSpan("012", "025"))  # unbuilt target
     with pytest.raises(CommandError):
         _resolved_migration_range(MigrationSpan("023", "013"))  # reversed
     with pytest.raises(CommandError):
@@ -398,28 +398,28 @@ class _Model:
         self.model_fields = dict.fromkeys(names)
 def test_the_shipped_tree_is_genuinely_pending():
     """Baseline. Without this, every rejection below could be the helper failing on anything."""
-    assert_024_unbuilt(_alembic_script(), DecisionCallback)
-def test_024_present_while_pending_is_caught(tmp_path):
-    script = _fake_script(tmp_path, {"022": None, "023": "022", "024": "023"})
+    assert_025_unbuilt(_alembic_script(), DecisionCallback)
+def test_025_present_while_pending_is_caught(tmp_path):
+    script = _fake_script(tmp_path, {"022": None, "023": "022", "025": "023"})
     with pytest.raises(AssertionError, match="is stale"):
-        assert_024_unbuilt(script, _Model("case_id"))
-def test_024_on_a_multiple_head_branch_is_caught(tmp_path):
-    """The interesting shape: 024 lands beside the existing head rather than after it, so a check
+        assert_025_unbuilt(script, _Model("case_id"))
+def test_025_on_a_multiple_head_branch_is_caught(tmp_path):
+    """The interesting shape: 025 lands beside the existing head rather than after it, so a check
     that only followed the single head would walk straight past it."""
-    script = _fake_script(tmp_path, {"022": None, "023": "022", "024": "022"})
+    script = _fake_script(tmp_path, {"022": None, "023": "022", "025": "022"})
     with pytest.raises(AssertionError, match="heads"):
-        assert_024_unbuilt(script, _Model("case_id"))
-def test_024_present_without_the_callback_field_is_caught(tmp_path):
+        assert_025_unbuilt(script, _Model("case_id"))
+def test_025_present_without_the_callback_field_is_caught(tmp_path):
     """Half-built from the schema side: the revision exists, the wire has not caught up."""
-    script = _fake_script(tmp_path, {"023": None, "024": "023"})
+    script = _fake_script(tmp_path, {"023": None, "025": "023"})
     with pytest.raises(AssertionError, match="is stale"):
-        assert_024_unbuilt(script, _Model("case_id", "event_sequence"))
+        assert_025_unbuilt(script, _Model("case_id", "event_sequence"))
 def test_the_callback_field_present_while_the_revision_is_absent_is_caught(tmp_path):
     """Half-built from the wire side, and the direction the old guard could never have seen: the
     integrator meets `decision_sequence` on the callback while the document says NOT BUILT."""
     script = _fake_script(tmp_path, {"022": None, "023": "022"})
     with pytest.raises(AssertionError, match="decision_sequence"):
-        assert_024_unbuilt(script, _Model("case_id", "decision_sequence"))
+        assert_025_unbuilt(script, _Model("case_id", "decision_sequence"))
 def test_the_guard_reads_alembic_not_a_directory_path():
     """The defect itself: the old check globbed `REPO/migrations/versions`, which does not exist,
     so its revision set was empty no matter what was on disk. Pin the layout it actually uses."""
@@ -440,7 +440,7 @@ def test_the_guard_uses_the_CONFIGURED_tree_not_the_conventional_one(tmp_path):
     """
     configured = tmp_path / "canonical"
     (configured / "versions").mkdir(parents=True)
-    for revision, down in (("023", None), ("024", "023")):
+    for revision, down in (("023", None), ("025", "023")):
         (configured / "versions" / f"{revision}_probe.py").write_text(
             f'"""probe"""\nrevision = "{revision}"\ndown_revision = '
             f'{"None" if down is None else repr(down)}\n'
@@ -451,9 +451,9 @@ def test_the_guard_uses_the_CONFIGURED_tree_not_the_conventional_one(tmp_path):
 
     resolved = _alembic_script(config_path=ini)
     assert Path(resolved.dir).resolve() == configured.resolve()
-    assert {r.revision for r in resolved.walk_revisions()} == {"023", "024"}
+    assert {r.revision for r in resolved.walk_revisions()} == {"023", "025"}
     with pytest.raises(AssertionError, match="is stale"):
-        assert_024_unbuilt(resolved, _Model("case_id"))
+        assert_025_unbuilt(resolved, _Model("case_id"))
 def test_the_helper_resolves_a_relative_script_location_independently_of_cwd(tmp_path):
     """The repo's own config uses a RELATIVE `script_location`, so a helper that resolved it
     against the process cwd would pass or fail by accident depending on where pytest ran."""
@@ -512,14 +512,14 @@ def test_the_optional_fields_still_survive_encoding():
     emitted = schemas.encode_decision_callback(payload)
     assert emitted["event_sequence"] == 4
     assert emitted["enforcement_held"]["computed_decision"] == "approve"
-def test_a_sequenced_wire_version_without_024_fails():
+def test_a_sequenced_wire_version_without_025_fails():
     """Codex's matrix, third case, now aimed at the PUBLISHER's own value (re-gate finding 4).
     Patching a parallel constant in `schemas` proved nothing about what gets persisted."""
     with (
         mock.patch.object(publisher, "_WIRE_VERSION", "sequenced"),
         pytest.raises(AssertionError, match="advertises"),
     ):
-        assert_024_unbuilt(_alembic_script(), DecisionCallback)
+        assert_025_unbuilt(_alembic_script(), DecisionCallback)
 def test_an_encoder_that_emits_the_sequence_fails_even_with_the_model_clean():
     """Fourth case: the model stays clean and the ENCODER starts emitting. This is the direction
     the old declaration-reading guard was blind to."""
@@ -534,7 +534,7 @@ def test_an_encoder_that_emits_the_sequence_fails_even_with_the_model_clean():
         mock.patch.object(schemas, "encode_decision_callback", leaking_encoder),
         pytest.raises(AssertionError, match="accepted `decision_sequence`"),
     ):
-        assert_024_unbuilt(_alembic_script(), DecisionCallback)
+        assert_025_unbuilt(_alembic_script(), DecisionCallback)
 class _CapturingSession:
     """Captures what would be persisted, without a database."""
 
@@ -893,12 +893,12 @@ def test_plan_preflight_and_diagnostic_bind_to_the_ref_commands():
     assert ("python", "-m", "kyc_tool.ops.verify_pinnable_backlog") in pr6_argvs
     pr7b_argvs = {c.argv for c in procedures["Migrations 013-023"].playbook_ref.commands}
     assert ("python", "-m", "kyc_tool.ops.verify_pr7b_core_backfill") in pr7b_argvs
-def test_the_schema_maintenance_when_binds_to_024_pending():
-    """The derived template says '024 is pending'; the wire claim is the authority for that."""
+def test_the_schema_maintenance_when_binds_to_025_pending():
+    """The derived template says '025 is pending'; the wire claim is the authority for that."""
     pr7b = next(p for p in OPERATIONS.value("OPS.CUTOVER.PROCEDURES")
                 if p.name == "Migrations 013-023")
-    assert "024 is pending" in pr7b.when
-    assert WIRE["WIRE.ORDERING.BOOTSTRAP_024"].state is ClaimState.PENDING
+    assert "025 is pending" in pr7b.when
+    assert WIRE["WIRE.ORDERING.BOOTSTRAP_025"].state is ClaimState.PENDING
 def test_plan_evidence_quotes_sit_in_the_digest_bound_section():
     for procedure in OPERATIONS.value("OPS.CUTOVER.PROCEDURES"):
         prose = _playbook_prose(procedure.playbook_ref)
@@ -999,6 +999,25 @@ def _this_module():
     from docs.contracts import authority
 
     return authority
+
+
+def test_event_envelope_authority_refuses_a_permissive_variant(monkeypatch):
+    authority = _this_module()
+
+    class PermissiveRecalculate(schemas.RecalculateRequestedEvent):
+        model_config = {"extra": "allow"}
+
+    mutated = tuple(
+        PermissiveRecalculate if model is schemas.RecalculateRequestedEvent else model
+        for model in authority.PLATFORM_EVENT_MODELS
+    )
+    monkeypatch.setattr(authority, "PLATFORM_EVENT_MODELS", mutated)
+    assert any(
+        problem.startswith("WIRE.INGEST.EXTRA_FIELDS:")
+        for problem in authority.problems()
+    )
+
+
 def _wire_with(claim_id: str, **changes):
     """The live WIRE registry with ONE claim's fields replaced — for running the REAL assembled
     verifier against a mutated registry, per the audit's requirement that mutations target the
@@ -1255,7 +1274,7 @@ def test_f9_an_omitted_branch_fails_the_assembled_verifier(monkeypatch):
     with pytest.raises(AssertionError):
         AUTHORITY_VERIFIERS["OPS.CUTOVER.PROCEDURES"]()
 def _installed_effectiveness_mutation(monkeypatch, row_index: int, **flips):
-    """Install a boolean-flipped copy of one post-024 row into BOTH consumers: the published
+    """Install a boolean-flipped copy of one post-025 row into BOTH consumers: the published
     registry object and the reference implementation's imported table."""
     import copy
 
@@ -1263,7 +1282,7 @@ def _installed_effectiveness_mutation(monkeypatch, row_index: int, **flips):
     from docs.contracts import wire as w
 
     rows = list(wire_module.RECEIVER_TRANSITIONS)
-    target = [i for i, t in enumerate(rows) if t.phase == w.POST_024][row_index]
+    target = [i for i, t in enumerate(rows) if t.phase == w.POST_025][row_index]
     mutated_row = copy.copy(rows[target])
     for field_name, flipped in flips.items():
         object.__setattr__(mutated_row, field_name, flipped)
@@ -1276,11 +1295,11 @@ def _installed_effectiveness_mutation(monkeypatch, row_index: int, **flips):
         _wire_with("WIRE.CALLBACK.EFFECTIVENESS", value=mutated))
 def test_f2_every_installed_outcome_flip_fails_the_assembled_verifier(monkeypatch):
     """The audit's reproduction: flip `becomes_effective` on the interim fresh/no-current row (and
-    every other boolean on every post-024 row), install it in the real table, and the top-level
+    every other boolean on every post-025 row), install it in the real table, and the top-level
     verifier stayed green. Now every flip must fail against the invariant oracle."""
     from docs.contracts import wire as w
 
-    post_rows = [t for t in wire_module.RECEIVER_TRANSITIONS if t.phase == w.POST_024]
+    post_rows = [t for t in wire_module.RECEIVER_TRANSITIONS if t.phase == w.POST_025]
     for index in range(len(post_rows)):
         for field, current in (
             ("records", post_rows[index].records),
@@ -1861,7 +1880,7 @@ def test_ra2_partial_release_bindings_never_reach_the_ordinary_table():
     and both-present callbacks entered the ordinary table (and could become effective). All are
     now one stable integrity refusal before any row is consulted."""
     from docs.contracts import receiver_reference as rr
-    from docs.contracts.wire import POST_024
+    from docs.contracts.wire import POST_025
 
     for source in (None, "automatic", "manual"):
         state = rr.LedgerState(
@@ -1871,12 +1890,12 @@ def test_ra2_partial_release_bindings_never_reach_the_ordinary_table():
                        {"release_id": "R1", "manual_event_id": "M1"}):
             callback = rr.Callback(case_id="c", run_id="r", decision_sequence=6, **fields)
             with pytest.raises(rr.ReceiverIntegrityError):
-                rr.decide(state, callback, phase=POST_024, now=500)
+                rr.decide(state, callback, phase=POST_025, now=500)
 def test_ra2_blank_release_identities_cannot_complete():
     """Blank matching release and manual ids completed. PendingRelease refuses blanks at
     construction, and a bound callback with blank fields is an integrity refusal."""
     from docs.contracts import receiver_reference as rr
-    from docs.contracts.wire import POST_024
+    from docs.contracts.wire import POST_025
 
     with pytest.raises((rr.ReceiverIntegrityError, ValueError)):
         rr.PendingRelease(release_id="", requested_manual_event_id="", deadline=1000)
@@ -1888,11 +1907,11 @@ def test_ra2_blank_release_identities_cannot_complete():
     with pytest.raises(rr.ReceiverIntegrityError):
         rr.decide(state, rr.Callback(case_id="c", run_id="r", decision_sequence=6,
                                      release_id=" ", manual_event_id="M1"),
-                  phase=POST_024, now=500)
+                  phase=POST_025, now=500)
 def test_ra2_a_boolean_deadline_cannot_complete():
     """`0 < True` made a Boolean deadline live. Exact int only, Boolean excluded, bounded."""
     from docs.contracts import receiver_reference as rr
-    from docs.contracts.wire import POST_024
+    from docs.contracts.wire import POST_025
 
     with pytest.raises((rr.ReceiverIntegrityError, ValueError)):
         rr.PendingRelease(release_id="R1", requested_manual_event_id="M1", deadline=True)
@@ -1905,12 +1924,12 @@ def test_ra2_a_boolean_deadline_cannot_complete():
         with pytest.raises(rr.ReceiverIntegrityError):
             rr.decide(state, rr.Callback(case_id="c", run_id="r", decision_sequence=6,
                                          release_id="R1", manual_event_id="M1"),
-                      phase=POST_024, now=bad_now)
+                      phase=POST_025, now=bad_now)
 def test_ra2_hostile_state_shapes_are_one_stable_refusal():
     """Unhashable sources, a None run-id set, and inconsistent source/release pairs escaped as
     incidental TypeErrors or dispatched anyway. Every one is the same typed refusal."""
     from docs.contracts import receiver_reference as rr
-    from docs.contracts.wire import POST_024
+    from docs.contracts.wire import POST_025
 
     hostile = [
         rr.LedgerState(seen_run_ids=frozenset(), current_source=["manual"]),
@@ -1924,14 +1943,14 @@ def test_ra2_hostile_state_shapes_are_one_stable_refusal():
     for state in hostile:
         with pytest.raises(rr.ReceiverIntegrityError):
             rr.decide(state, rr.Callback(case_id="c", run_id="r", decision_sequence=6),
-                      phase=POST_024, now=500)
+                      phase=POST_025, now=500)
 def test_ra2_terminal_release_replays_answer_from_durable_history():
     """'Replaying it returns the original outcome and changes nothing, including after completed
     or expired.' The ledger now carries durable terminal release records; a bound replay answers
     from them — never from the ordinary table, and a bound callback naming a release the ledger
     never knew holds."""
     from docs.contracts import receiver_reference as rr
-    from docs.contracts.wire import POST_024
+    from docs.contracts.wire import POST_025
 
     for terminal in ("completed", "expired", "cancelled"):
         state = rr.LedgerState(
@@ -1941,7 +1960,7 @@ def test_ra2_terminal_release_replays_answer_from_durable_history():
         outcome = rr.decide(
             state, rr.Callback(case_id="c", run_id="r-new", decision_sequence=10,
                                release_id="R9", manual_event_id="M1"),
-            phase=POST_024, now=500)
+            phase=POST_025, now=500)
         assert not outcome.record and not outcome.effective
         assert not outcome.advance_high_water and not outcome.completes_release
         assert outcome.release_replay == terminal
@@ -1949,7 +1968,7 @@ def test_ra2_terminal_release_replays_answer_from_durable_history():
     with pytest.raises(rr.ReceiverIntegrityError):
         rr.decide(unknown, rr.Callback(case_id="c", run_id="r", decision_sequence=10,
                                        release_id="R-never", manual_event_id="M1"),
-                  phase=POST_024, now=500)
+                  phase=POST_025, now=500)
 def test_ra8_a_deceptive_paraphrase_cannot_ride_the_legend(monkeypatch):
     """The audit's reproduction: 'manual' redefined as 'the case mentions a manual approval, but
     no decision is currently in force' — keeps the expected words, avoids the forbidden one,
@@ -2623,13 +2642,13 @@ def test_r3f2_a_terminal_replay_must_match_the_complete_original_binding():
     replay = receiver.decide(
         state, receiver.Callback(case_id="c", run_id="r-new", release_id="R9",
                                  manual_event_id="M9"),
-        phase="post-024", now=500)
+        phase="post-025", now=500)
     assert replay.release_replay == "completed" and not replay.effective
     with pytest.raises(receiver.ReceiverIntegrityError):
         receiver.decide(
             state, receiver.Callback(case_id="c", run_id="r-new", release_id="R9",
                                      manual_event_id="M-WRONG"),
-            phase="post-024", now=500)
+            phase="post-025", now=500)
 def test_r3f2_history_uniqueness_and_active_disjointness_are_enforced():
     """Conflicting terminals in both orders, an identical duplicate, an active release that is
     also terminal, and a post-terminal rewrite are each refused BEFORE any classification."""
@@ -2647,7 +2666,7 @@ def test_r3f2_history_uniqueness_and_active_disjointness_are_enforced():
                                      release_history=history)
         with pytest.raises(receiver.ReceiverIntegrityError):
             receiver.decide(state, receiver.Callback(case_id="c", run_id="r"),
-                            phase="post-024")
+                            phase="post-025")
     active_and_terminal = receiver.LedgerState(
         current_source="manual_release_pending", current_manual_event_id="M9",
         release=receiver.PendingRelease(release_id="R9", requested_manual_event_id="M9",
@@ -2657,7 +2676,7 @@ def test_r3f2_history_uniqueness_and_active_disjointness_are_enforced():
         receiver.decide(active_and_terminal,
                         receiver.Callback(case_id="c", run_id="r", release_id="R9",
                                           manual_event_id="M9"),
-                        phase="post-024", now=500)
+                        phase="post-025", now=500)
 def test_r3f3_forged_nested_records_are_refused_at_every_public_boundary():
     """The audit's reproduction: a valid frozen PendingRelease whose deadline was then forged
     to Boolean True completed the release at now=0. Every public boundary now revalidates
@@ -2674,7 +2693,7 @@ def test_r3f3_forged_nested_records_are_refused_at_every_public_boundary():
     callback = receiver.Callback(case_id="c", run_id="r-new", decision_sequence=9,
                                  release_id="R1", manual_event_id="M1")
     with pytest.raises(receiver.ReceiverIntegrityError):
-        receiver.decide(state, callback, phase="post-024", now=0)
+        receiver.decide(state, callback, phase="post-025", now=0)
 
     forged_terminal = receiver.ReleaseTerminal(
         release_id="R2", requested_manual_event_id="M2", terminal="expired")
@@ -2684,7 +2703,7 @@ def test_r3f3_forged_nested_records_are_refused_at_every_public_boundary():
                                          release_history=(forged_terminal,))
     with pytest.raises(receiver.ReceiverIntegrityError):
         receiver.decide(history_state, receiver.Callback(case_id="c", run_id="r"),
-                        phase="post-024")
+                        phase="post-025")
     with pytest.raises(receiver.ReceiverIntegrityError):
         receiver.apply_manual_approval(history_state, manual_event_id="M3")
 def test_r3f4_wrong_manual_id_and_absent_mark_are_literal_expectations():
@@ -2702,13 +2721,13 @@ def test_r3f4_wrong_manual_id_and_absent_mark_are_literal_expectations():
                                      release_id="R1", manual_event_id="M-WRONG")
     observed = receiver.observe_release(state, wrong_manual, now=500)
     assert observed["binding"] == predicates_module.BIND_MISMATCH
-    outcome = receiver.decide(state, wrong_manual, phase="post-024", now=500)
+    outcome = receiver.decide(state, wrong_manual, phase="post-025", now=500)
     assert not outcome.completes_release and not outcome.effective
 
     no_mark = receiver.LedgerState(current_source="automatic", high_water=None)
     sequenced = receiver.Callback(case_id="c", run_id="r-new", decision_sequence=1)
     assert receiver.observe(no_mark, sequenced)["sequence"] == predicates_module.SEQ_ABOVE
-    first = receiver.decide(no_mark, sequenced, phase="post-024")
+    first = receiver.decide(no_mark, sequenced, phase="post-025")
     assert first.effective and first.advance_high_water
 def test_r3f5_run_dedupe_and_release_replay_are_distinct_authorities():
     """The audit's crossing cases: a duplicate run id on a pending case follows the TABLE's
@@ -2724,7 +2743,7 @@ def test_r3f5_run_dedupe_and_release_replay_are_distinct_authorities():
     dup_run = receiver.decide(
         pending, receiver.Callback(case_id="c", run_id="r-seen", release_id="R1",
                                    manual_event_id="M1"),
-        phase="post-024", now=500)
+        phase="post-025", now=500)
     assert dup_run.row == 0 and dup_run.release_replay is None
 
     terminated = receiver.LedgerState(
@@ -2734,7 +2753,7 @@ def test_r3f5_run_dedupe_and_release_replay_are_distinct_authorities():
     replay = receiver.decide(
         terminated, receiver.Callback(case_id="c", run_id="r-new", release_id="R1",
                                       manual_event_id="M1"),
-        phase="post-024", now=500)
+        phase="post-025", now=500)
     assert replay.row == -1 and replay.release_replay == "expired"
 
     dup_row = wire_module.release_transitions()[0]
@@ -4357,7 +4376,7 @@ def test_the_document_identity_registry_matches_its_review_pin():
         f"  reviewed: {pinned}\n  now:      {digest}\n"
         "Read the new titles, then re-pin them in the SAME commit."
     )
-RELEASE_OUTLINE_PIN = ("e47cf4357bd52d82", "the contract's 8 sections and the guide's 9: ordered "
+RELEASE_OUTLINE_PIN = ("7f7ac1ed8bd7086f", "the contract's 8 sections and the guide's 9: ordered "
                                         "blocks, claim ids and projections, narration digests, "
                                         "the reviewed contact slot sentence, every "
                                         "label, residue, and composed template the renderer "

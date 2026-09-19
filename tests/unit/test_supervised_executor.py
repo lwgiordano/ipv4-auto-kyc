@@ -30,6 +30,16 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def do_POST(self):  # noqa: N802 — http.server API
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        echo = gzip.compress(body)
+        self.send_response(200)
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(echo)))
+        self.end_headers()
+        self.wfile.write(echo)
+
     def do_GET(self):  # noqa: N802 — http.server API
         try:
             if self.path.startswith("/bomb"):
@@ -156,4 +166,18 @@ def test_supervised_fetch_refuses_a_spent_budget_without_forking(server_url):
     client = httpx.Client(base_url=server_url, timeout=5.0)
     spent = RetryBudget(deadline_monotonic=0.0, clock=lambda: 1.0, hard_kill=True)
     with pytest.raises(BudgetExhausted):
-        supervised_fetch(client, "/ok", None, spent, None)
+        supervised_fetch(client, "GET", "/ok", None, None, spent, None)
+
+
+def test_post_body_reaches_the_child_and_the_rebuilt_response_carries_the_method(server_url):
+    """The fork used to rebuild every request as a GET with no body — a shortcut run POSTed
+    through the hard-kill boundary would have started a run with empty input. The echo handler
+    proves the JSON body crossed the process boundary, and the response's own request is a POST."""
+    client = httpx.Client(base_url=server_url, timeout=5.0)
+    budget = _hard_budget(10.0)
+    with budget_scope(budget):
+        response = supervised_fetch(
+            client, "POST", "/echo", None, {"input_data": {"company_name": "ACME"}}, budget, None
+        )
+    assert response.json() == {"input_data": {"company_name": "ACME"}}
+    assert response.request.method == "POST"

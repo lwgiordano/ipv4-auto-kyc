@@ -39,6 +39,9 @@ chmod +x "$STAGE/$PKG/manage.sh"
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__COMMIT__/$COMMIT/g" \
   scripts/handoff/START-HERE.md > "$STAGE/$PKG/START-HERE.md"
 
+# The combined document is generated from the three source docs, never hand-edited.
+.venv/bin/python scripts/build_techcraft_handoff.py --out "$STAGE/$PKG/docs/TECHCRAFT_HANDOFF.md" >/dev/null
+
 # The guide publishes from the repository (its provenance gate reads git);
 # the registry owns the filename.
 .venv/bin/python -m docs.generators.techcraft_deployment_guide --out-dir "$STAGE/$PKG" >/dev/null

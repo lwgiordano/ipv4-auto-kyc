@@ -64,7 +64,7 @@ def test_lost_claim_places_zero_floqer_calls():
     calls = []
 
     class _SpyClient(FixtureFloqerClient):
-        def enrich(self, company_name, domain):
+        def enrich(self, company_name, domain, **contact):
             calls.append(company_name)
             return {}
 

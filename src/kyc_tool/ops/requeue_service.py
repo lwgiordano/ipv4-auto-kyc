@@ -13,6 +13,8 @@ from fastapi import HTTPException
 from sqlalchemy import text
 
 from kyc_tool.config import PG_INT4_MAX, require_numeric_domain
+from kyc_tool.configuration import repo as configuration_repo
+from kyc_tool.configuration.models import ConfigurationUnavailable
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
 
@@ -39,6 +41,10 @@ def requeue_dead_job(session_factory, job_id: int, *, attempt_grant: int) -> dic
     409 (a dead job pointing at a COMPLETE run or another case's run recovers nothing)."""
     require_numeric_domain("job_recovery_attempt_grant", attempt_grant)
     with uow(session_factory) as session:
+        try:
+            configuration = configuration_repo.get_active(session, lock=True)
+        except ConfigurationUnavailable as exc:
+            raise HTTPException(503, "Configuration authority unavailable; recovery refused.") from exc
         row = session.execute(
             text("SELECT status, attempts, case_id, payload_json FROM jobs WHERE id=:id"),
             {"id": job_id},
@@ -60,6 +66,16 @@ def requeue_dead_job(session_factory, job_id: int, *, attempt_grant: int) -> dic
                 detail="job payload carries no run_id (unsupported shape); refusing to requeue "
                 "a job whose run cannot be verified",
             )
+        if configuration is not None:
+            pin = session.execute(
+                text("SELECT configuration_revision FROM runs WHERE id=:r"), {"r": run_id}
+            ).scalar_one_or_none()
+            if pin is None:
+                raise HTTPException(409, "Active configuration refuses unversioned legacy job recovery.")
+            try:
+                configuration_repo.get_revision(session, pin)
+            except ConfigurationUnavailable as exc:
+                raise HTTPException(503, "Pinned configuration unavailable; recovery refused.") from exc
         if row.case_id is not None:
             # HOLD the case-order authority, don't observe it (re-audit `ddbff39..c3884bd` F1):
             # ingest locks this same case row FOR UPDATE before admitting a new event/job, so

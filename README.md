@@ -75,6 +75,7 @@ platform ──POST /v1/cases/{id}/events──► api/ ──TXN-1──► eve
 | `GET /v1/metrics` | run/decision/queue/outbox/review-queue counters |
 | `GET /v1/review-tasks?status=open` | human queues: website review, POC email unavailable |
 | `python -m kyc_tool.workers.retention` | prune audit/evidence past retention (default 7y) |
+| `python -m kyc_tool.conformance <vector\|send\|receive>` | conformance kit: check a platform integration against the published wire contract (`docs/PLATFORM_INTEGRATION.md` §11) |
 
 The console is debug tooling in the same trust domain as the read API; its
 composer/requeue endpoints mutate. Set `KYC_UI_ENABLED=false` in production or
@@ -88,8 +89,9 @@ platform-team sync mapping.
 
 Stubbed behind interfaces, marked `TODO(integration)` (AUDIT_FINDINGS §C):
 platform callback URL + HMAC secret exchange, Floqer API contract, platform
-email-verification fetch, outbound email provider, production OCR engine,
-POC token link hosting (platform forwards the raw token, `AUDIT:C2`).
+email-verification fetch, the POC email sender and the document OCR engine
+(both open decisions — who sends/extracts, `docs/PLATFORM_INTEGRATION.md`
+§5/§6), POC token link hosting (platform forwards the raw token, `AUDIT:C2`).
 
 ## Repo layout
 

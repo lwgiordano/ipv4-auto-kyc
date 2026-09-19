@@ -481,7 +481,9 @@ def _resolve_module_raises(source_text: str, imported: dict[str, str]) -> tuple[
     raised: set[str] = set()
     plain = 0
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Raise):
+        # Bare raise propagates the database/dependency failure unchanged; it
+        # constructs no deliberate migration refusal requiring a new sentinel.
+        if not isinstance(node, ast.Raise) or node.exc is None:
             continue
         parts: list[str] = []
         for sub in ast.walk(node):
@@ -543,6 +545,13 @@ def test_every_migration_refusal_carries_a_sentinel_except_the_frozen_three():
         "deliberate refusal must raise a stable MIGRATION_NNN_* sentinel (and be indexed in the "
         "runbook); the frozen three are published and may not change"
     )
+
+
+def test_bare_exception_propagation_is_not_a_new_deliberate_migration_refusal():
+    propagated = "try:\n    database_operation()\nexcept Exception:\n    raise\n"
+    constructed = "try:\n    database_operation()\nexcept Exception:\n    raise RuntimeError('refused')\n"
+    assert _resolve_module_raises(propagated, {}) == (set(), 0)
+    assert _resolve_module_raises(constructed, {}) == (set(), 1)
 
 
 # A module-level sentinel constant, then a raise that a LOCAL binding shadows. Each variant binds
@@ -671,8 +680,8 @@ def _live_section(text: str) -> str:
 
 
 @pytest.mark.parametrize("path", _RANGE_DOCS, ids=lambda p: p.name)
-def test_core_range_claims_name_the_live_head(path):
-    """Everywhere live text states the 7b-core range as `013`-`0NN`, NN is the live head.
+def test_core_range_claims_name_the_core_owner_last_revision(path):
+    """A later unit must never be relabelled as a 7b-core migration.
 
     Enumerated bans could never keep up with this one: the range appears in ROADMAP prose, the
     ADR, AUDIT_FINDINGS, both specs, the plan and both runbooks, and every release moves it.
@@ -683,11 +692,11 @@ def test_core_range_claims_name_the_live_head(path):
         f"line {i}: {line.strip()[:110]}"
         for i, line in enumerate(live.splitlines(), 1)
         for m in _CORE_RANGE.finditer(line)
-        if int(m.group(1)) != _HEAD
+        if int(m.group(1)) != _CORE[-1]
     ]
     assert not wrong, (
-        f"{path.name} states the 7b-core range with an end other than the live head "
-        f"{_HEAD:03d}\n" + "\n".join(wrong)
+        f"{path.name} states the 7b-core range with an end other than its owner's last revision "
+        f"{_CORE[-1]:03d}\n" + "\n".join(wrong)
     )
 
 
@@ -701,10 +710,8 @@ def test_derived_bans_track_the_roadmap():
     assert _CORE and list(range(_CORE[0], _CORE[-1] + 1)) == _CORE, (
         f"7b-core's §C reservations are not a contiguous range: {_CORE}"
     )
-    assert _CORE[-1] == _HEAD, (
-        f"live head {_HEAD:03d} is not 7b-core's last revision {_CORE[-1]:03d} — a later unit "
-        "shipped, so the bans below need re-reading, not just re-deriving"
-    )
+    assert _CORE[-1] < _HEAD
+    assert roadmap.unit_revisions(_RECORDS, "PR Console Configuration") == [_HEAD]
     assert _ACTIVATION == _HEAD + 1, (
         f"activation reserves {_ACTIVATION:03d}, not head+1 ({_HEAD + 1:03d})"
     )
