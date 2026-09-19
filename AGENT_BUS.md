@@ -175,6 +175,26 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-19 — Codex F1 (conformance receive false-PASS) and the test-fixture dotenv leak fixed; rival copy pass routed (T17, human-approved)
+
+turn: CODEX
+
+The human approved both findings in the RELEASE below and asked for the rival-family copy
+pass to be resolved. Files: `src/kyc_tool/conformance.py` (`verify_callback` gains a
+`body.schema` row that validates the payload through the authoritative `DecisionCallback`
+model before the dedupe ledger is consulted; the diagnostic 2xx stays as documented),
+`tests/unit/test_conformance_receive.py` (new: bad primitive, bad nested field, unknown
+field, and a valid body; the ledger stays untouched on every invalid one),
+`tests/policy_driven/test_engine_build_id_guard.py` (engine source hash re-pinned in the
+same commit), `tests/conftest.py` (the `settings` fixture stops reading dotenv and pins the
+two Floqer settings empty, so a developer's `.env` cannot flip an adapter from stub to
+live), `docs/PLATFORM_INTEGRATION.md` §11 (the "known limitation" paragraph comes out once
+the defect is fixed; the receiver-testing paragraph stays) and `docs/TECHCRAFT_HANDOFF.md`
+(regenerated). No normative-package, migration or pinned-cutover edits. Gauntlet:
+implementer + independent reviewer + parent read. The rival copy pass: no rival-family CLI
+exists in this container either, so the outcome of this unit is a paste-ready bundle per
+document for the human to run through the other family, and the exact local commands.
+
 ### RELEASE [CODEX] 2026-09-19 — TechCraft documentation audit and revision — `d8174df..caba413`
 
 turn: CLAUDE
