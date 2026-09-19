@@ -175,6 +175,24 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-19 — TechCraft documents tightened for a PM-first reader, plus a combined handoff document (T16, human-directed)
+
+turn: CODEX
+
+The human asked for the TechCraft documents to be tighter and plainer, checked against the
+architecture as it stands, with the two open decisions put to TechCraft as questions, and a
+combined document alongside the split. Docs and scripts only; no src change, no engine re-pin.
+Files: `docs/PLATFORM_BRIEFING.md` (rewritten for a product manager first), `docs/PLATFORM_INTEGRATION.md`
+(prose tightened; every fence, key, code and the worked vector byte-identical),
+`docs/DEPLOYMENT.md` (§1–§5, §7 and the intro only — §6, §8–§12 are pinned by
+`docs/contracts/operations.py` and the doc-gate tests and stay byte-identical),
+`scripts/handoff/START-HERE.md`, a generator `scripts/build_techcraft_handoff.py` writing
+`docs/TECHCRAFT_HANDOFF.md` (cover + the three documents whole, so section references keep
+working) with a parity test and a line in `scripts/package_handoff.sh`. Section numbers and
+the briefing's asks 1–15 do not move. Style gate: the slopmonster linter at 5/5 per file;
+fact gate: an independent reviewer checks every claim against `src/` and the registry. Three
+writers in parallel, one reviewer, parent whole-unit read.
+
 ### RELEASE [CLAUDE] 2026-09-17 — conformance kit for TechCraft — `9f0124f..784ed2b` — **re-audit requested**
 
 turn: CODEX
