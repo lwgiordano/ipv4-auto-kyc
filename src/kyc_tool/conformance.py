@@ -321,10 +321,27 @@ def verify_callback(path: str, headers, body: bytes, *, outbound_secret: str, ou
 
     try:
         payload = json.loads(body or b"{}")
-    except ValueError:
+    except (ValueError, RecursionError):  # not JSON, or nested past the decoder's depth
         payload = None
     if not isinstance(payload, dict):
         payload = {}
+
+    # The complete schema first, through the model the publisher encodes with, before any row
+    # looks inside the body. The named rows below cannot see a wrong TYPE — a string score, a
+    # non-boolean gate, a malformed check, an unknown field — and a receiver that accepted one was
+    # being certified. Strict JSON mode, over the raw bytes: lax mode would coerce "10", 10.0 or
+    # "true" into the model, shapes the tool never emits. The named rows stay: they say WHICH
+    # rule broke, this one says the body as a whole is not the contract. A schema failure holds
+    # the callback out of the ledger like any other failed row.
+    try:
+        DecisionCallback.model_validate_json(body or b"", strict=True)
+        schema, schema_ok = "valid", True
+    except ValidationError as exc:
+        errors = exc.errors()
+        where = ".".join(str(part) for part in errors[0]["loc"]) or "<root>"
+        schema = f"{len(errors)} error(s), first at {where}: {errors[0]['msg']}"
+        schema_ok = False
+    rows.append(_row("body.schema", "validates as DecisionCallback", schema, ok=schema_ok))
 
     rows.append(_row("body.required_keys", list(CALLBACK_FIELDS),
                      [key for key in CALLBACK_FIELDS if key in payload]))
@@ -337,33 +354,19 @@ def verify_callback(path: str, headers, body: bytes, *, outbound_secret: str, ou
     buy = payload.get("buy_enablement")
     rows.append(_row("body.buy_enablement", f"one of {BUY_ENABLEMENT}", buy, ok=buy in BUY_ENABLEMENT))
     checks = payload.get("checks")
-    missing = sorted({key for check in (checks or []) if isinstance(check, dict)
+    check_list = checks if isinstance(checks, list) else []  # a scalar here is a failed row, not a crash
+    missing = sorted({key for check in check_list if isinstance(check, dict)
                       for key in CHECK_KEYS if key not in check})
     checks_ok = isinstance(checks, list) and not missing and all(
-        isinstance(check, dict) for check in checks)
+        isinstance(check, dict) for check in check_list)
     rows.append(_row("body.checks", f"each carries {', '.join(CHECK_KEYS)}",
-                     "ok" if checks_ok else f"missing {missing or checks}", ok=checks_ok))
+                     "ok" if checks_ok
+                     else f"missing {missing}" if missing
+                     else f"not a list of objects: {type(checks).__name__}", ok=checks_ok))
     held = payload.get("enforcement_held")
     rows.append(_row("body.enforcement_held", f"absent, or {', '.join(HELD_KEYS)}",
                      "absent" if held is None else held,
                      ok=held is None or (isinstance(held, dict) and set(held) == set(HELD_KEYS))))
-
-    # The complete schema, through the model the publisher encodes with. The key and enum rows
-    # above cannot see a wrong TYPE — a string score, a non-boolean gate, a malformed check, an
-    # unknown field — and a receiver that accepted one was being certified. Strict JSON mode, over
-    # the raw bytes: lax mode would coerce "10", 10.0 or "true" into the model, shapes the tool
-    # never emits. The named rows above stay: they say WHICH rule broke, this one says the body as
-    # a whole is not the contract. A schema failure holds the callback out of the ledger like any
-    # other failed row.
-    try:
-        DecisionCallback.model_validate_json(body or b"", strict=True)
-        schema, schema_ok = "valid", True
-    except ValidationError as exc:
-        errors = exc.errors()
-        where = ".".join(str(part) for part in errors[0]["loc"]) or "<root>"
-        schema = f"{len(errors)} error(s), first at {where}: {errors[0]['msg']}"
-        schema_ok = False
-    rows.append(_row("body.schema", "validates as DecisionCallback", schema, ok=schema_ok))
 
     identity = (payload.get("case_id"), payload.get("run_id"))
     # §4 WIRE.CALLBACK.VALIDATION_ORDER / ACK_VS_APPLY: consult the replay ledger only AFTER the
@@ -381,12 +384,21 @@ def verify_callback(path: str, headers, body: bytes, *, outbound_secret: str, ou
     return rows
 
 
-def serve(port: int, *, outbound_secret: str, outbound_key_id: str, v1_secret: str) -> None:
+def make_server(port: int, *, outbound_secret: str, outbound_key_id: str,
+                v1_secret: str) -> HTTPServer:
+    """The diagnostic receiver, bound to loopback and not yet serving (tests drive it directly)."""
     seen: set = set()
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802 — BaseHTTPRequestHandler's dispatch name
-            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            # A malformed Content-Length is a malformed request, not a reason to drop the
+            # connection: a non-numeric or negative value reads an empty body, which then fails
+            # the body rows like any other invalid callback.
+            try:
+                length = max(0, int(self.headers.get("Content-Length") or 0))
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length)
             rows = verify_callback(self.path, self.headers, body, outbound_secret=outbound_secret,
                                    outbound_key_id=outbound_key_id, v1_secret=v1_secret, seen=seen)
             dedupe = next(row.got for row in rows if row.check == "dedupe")
@@ -404,8 +416,14 @@ def serve(port: int, *, outbound_secret: str, outbound_key_id: str, v1_secret: s
         def log_message(self, *args):  # quiet access log; the PASS/FAIL line is the output
             pass
 
-    print(f"conformance receiver on http://127.0.0.1:{port}/kyc/decision", flush=True)
-    HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    return HTTPServer(("127.0.0.1", port), Handler)
+
+
+def serve(port: int, *, outbound_secret: str, outbound_key_id: str, v1_secret: str) -> None:
+    server = make_server(port, outbound_secret=outbound_secret, outbound_key_id=outbound_key_id,
+                         v1_secret=v1_secret)
+    print(f"conformance receiver on http://127.0.0.1:{server.server_port}/kyc/decision", flush=True)
+    server.serve_forever()
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────────────────────
