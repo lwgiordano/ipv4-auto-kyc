@@ -175,6 +175,48 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### NOTE [CLAUDE] 2026-09-19 — T16 handed to Codex: documents to audit, what was verified, one open item
+
+turn: CODEX
+
+The T16 RELEASE below is the unit record; this note is the reading list. The human asked for
+the whole of it to go to you through the bus, so everything is here or in the tree at
+`9b26936`.
+
+**Read these five, in this order.** `docs/TECHCRAFT_HANDOFF.md` (generated: cover + the three
+documents whole; rebuild with `.venv/bin/python scripts/build_techcraft_handoff.py`, and
+`tests/unit/test_techcraft_handoff_doc.py` fails when it drifts), `docs/PLATFORM_BRIEFING.md`
+(PM-first; the two open decisions are now questions to TechCraft in §5 with if-yes/if-no
+paths; asks 1–15 in §8 unchanged), `docs/PLATFORM_INTEGRATION.md` (fences, headers, keys,
+codes and the worked vector byte-identical to `f6f8061`; +404/+503 rows, +`website.review_completed`
+row), `docs/DEPLOYMENT.md` (intro, §1–§5, §7 only; §6 and §8–§12 byte-identical, PlaybookRef
+pins recomputed), `scripts/handoff/START-HERE.md`.
+
+**What the independent reviewer verified against `src/`** (its five majors and seven minors
+are all folded; the RELEASE lists the corrected facts): the ingest status table against
+`WIRE.INGEST.STATUS`; all nine event rows against `EVENT_TABLE` and the payload models; the
+`contact` model and `platform_account_id`; reviewer-actor rules and `actor_type` on the audit
+row; the outbound canonical (`tool->platform`, empty slot); `information_requested` and its
+four fields; every conformance-kit command and env name; rubric points and the amended LinkedIn
+rule; live vs stubbed adapters in `pipeline_worker.build_adapters` (live Companies House, GLEIF,
+RDAP, Floqer; empty `FixturePocDirectory`; JSON-scan OCR; no SES sender; no migration 025);
+every env var name in the edited DEPLOYMENT regions; every §N cross-reference in the four files.
+
+**Audit ask for your round** (`f6f8061..9b26936`, docs/scripts/one test, no `src/`): read the
+four prose documents as TechCraft would and flag any sentence that is wrong about the tree,
+any cross-reference that does not land, and anything a PM needs that is missing. Two claims the
+reviewer could not ground in code and left as found: "PostgreSQL 14+" (nothing pins a server
+version) and "free registration" for the Companies House key.
+
+**One open item for the human, not for you:** START-HERE still names a "Staging Handoff
+document" that accompanies the package; nothing in the repo carries that name. If it is the
+combined document under an older name, that bullet goes.
+
+Style gate: slopmonster linter 5/5 on every file and permitted region (DEPLOYMENT whole-file
+1/5, all hits inside the pinned sections). The loop's rival-model cleanse could not run in this
+container (no `codex` CLI); if you have it locally, `deslop.py` on the four files is a cheap
+second opinion.
+
 ### RELEASE [CLAUDE] 2026-09-19 — TechCraft documents tightened, plus a generated combined handoff document (T16) — `f6f8061..ea360c5` — **re-audit requested**
 
 turn: CODEX
