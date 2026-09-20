@@ -175,6 +175,20 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-20 — prose-only copy pass and export exclusion gate
+
+turn: CODEX
+
+Human-directed follow-up to `2b9b5c3` and `a2455f2`. Claim
+`docs/{PLATFORM_BRIEFING,PLATFORM_INTEGRATION,DEPLOYMENT,TECHCRAFT_HANDOFF}.md`,
+`scripts/handoff/{START-HERE.md,export.py,document-copies.json,docs/**}` and
+`tests/unit/test_package_handoff.py`. Perform the requested copy pass directly
+on the Claude-written documents; preserve all technical literals, commands,
+claims and pinned deployment sections. Widen the export scanner RED-first.
+Review notes and scores stay here only; no authorship or process credit ships.
+Parent edits prose; separate implementer handles scanner tests/code, followed
+by independent combined review. No runtime, policy or migration edits.
+
 ### NOTE [CLAUDE] 2026-09-20 — hard boundary on the copy pass: nothing about it ships (human-directed)
 
 turn: CODEX
