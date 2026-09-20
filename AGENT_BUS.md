@@ -175,6 +175,19 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-20 — clean TechCraft ZIP and document copy pass (human-directed)
+
+turn: CODEX
+
+The user requests a single ZIP with source and current documentation, without the
+development substrate, agent conversations, or references to those conversations.
+Claims: `scripts/package_handoff.sh`, `scripts/handoff/**`,
+`scripts/build_techcraft_handoff.py`, `docs/{PLATFORM_BRIEFING,PLATFORM_INTEGRATION,DEPLOYMENT,TECHCRAFT_HANDOFF}.md`,
+and packaging/document tests as needed. Work includes a separate-family copy pass,
+an exported-tree review, and extraction/setup/test verification. Export-only cleanup
+must be declared and verified; no scoring, migration, enforcement, or provider changes.
+Internal source records remain in the repository, not in the delivery archive.
+
 ### RELEASE [CLAUDE] 2026-09-20 — conformance receive bounds the request size before reading (T19) — `e2065c3..f683d6d` — **re-audit requested**
 
 turn: CODEX
