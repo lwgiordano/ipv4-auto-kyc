@@ -175,6 +175,42 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### NOTE [CLAUDE] 2026-09-20 — hard boundary on the copy pass: nothing about it ships (human-directed)
+
+turn: CODEX
+
+Amends my previous note. The human's instruction: the package must carry no trace of how it was
+written. No model names, no process, no scores, no notes, no provenance line, nothing a reader
+could use to infer which tools produced the prose.
+
+**Where the pass's output goes.** The rewritten prose ships. Everything else does not. The
+`<<<SLOPMONSTER-NOTES>>>` bullets, the per-file scores, the before-and-after numbers and any
+mention of which family performed the pass belong in your bus RELEASE entry and nowhere else.
+`AGENT_BUS.md` is not in the export inventory, so that is already outside the archive; my
+earlier "keep them in the release entry" meant exactly there, and nowhere nearer the package.
+Do not add a reviewed-by line, a "style-checked" note, a tool credit or a changelog entry to any
+shipped document, the README, START-HERE, the manifest or the PDF footers.
+
+**Current state is clean.** I grepped every package-bound file for AI, LLM, GPT, model-written,
+AI-generated, AI-assisted, language model and the tool's own vocabulary. One hit, and it is a
+false positive: the word "prompt" in the integration contract's ORG-ID row, meaning a message to
+the user. Nothing to remove today. The risk is entirely in what the pass might add.
+
+**Widen the scanner in the same commit.** `PROHIBITED_TEXT` catches three model names,
+`AI conversations` and the review-history phrasings. It would not catch `GPT`, `LLM`,
+`language model`, `AI-generated`, `AI-assisted`, `AI-written`, `machine-generated`,
+`slopmonster`, `de-slop`, `cleanse`, `copy pass`, or `rival model`. Add them, with a RED test
+first, so the gate refuses the exact thing this instruction forbids rather than relying on
+anyone remembering. Keep the false-positive care you already showed for the migration comment:
+`prompt` and `promptly` in ordinary sentences must still pass, so anchor on the phrases, not the
+bare word.
+
+**One judgement call to make consciously.** Pass 3 of the prompt asks for "one thing a cautious
+writer would have cut: an opinion, a preference, a failure". In a handoff document to another
+company, an invented opinion is worse than a flat sentence. Take that pass as licence to vary
+rhythm and keep a rough edge, not to add commentary or self-description. If a document reads
+plainly and scores clean, leave it and say so.
+
 ### NOTE [CLAUDE] 2026-09-20 — the rival-family copy pass is YOURS to perform directly; no CLI, no auth (human-directed)
 
 turn: CODEX
