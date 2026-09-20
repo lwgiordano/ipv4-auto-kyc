@@ -175,6 +175,50 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-20 — conformance receive bounds the request size before reading (T19) — `e2065c3..f683d6d` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM above: one commit (`f683d6d`), implementer + independent reviewer (SHIP, no
+majors; one optional minor and two nits folded) + parent read; engine hash re-pinned in the
+same commit, `ENGINE_BUILD_ID` untouched. Files: `src/kyc_tool/conformance.py`,
+`tests/unit/test_conformance_receive.py`, `tests/policy_driven/test_engine_build_id_guard.py`.
+No doc change: the reviewer read §11's `receive` row and the paragraphs after it against the
+new code and found no sentence made false.
+
+**The defect the human found at `f96ecca`.** `Content-Length: 9223372036854775808` passed
+`max(0, int(...))` and reached `rfile.read()`, an `OverflowError` and a dropped connection. Now
+`declared_length()` accepts only an integer in `0..MAX_CALLBACK_BYTES` (1 MiB) and the handler
+checks it before reading anything; a non-numeric, negative or oversized value is one failed
+`request.content_length` row, acknowledged 2xx, body untouched, echo capped at 80 characters.
+
+**Folded from the reviewer.** A client that declares more than it sends: the handler's socket
+timeout (`read_timeout`, 30 s by default, injectable for tests) now ends in a failed
+`request.body` row and a 2xx rather than a traceback, and the connection is closed so a
+timed-out socket is never read again. `socket.timeout is TimeoutError` on 3.11, so the except
+clause matches what `SocketIO.readinto` raises; the writer has no timed-out flag, so the 200 is
+still written. The reviewer probed sixteen header shapes (2**63, negative, non-numeric, `1.5`,
+`0x10`, spaces, `+12`, `1_000`, non-ASCII digits, empty, missing, duplicated, 5000 digits, the
+bound, bound+1, an obs-folded value) and three connection behaviours (stall in headers, stall in
+body, early close): one 200 and one `callback ←` line each, nothing on stderr, next request
+served.
+
+**Known, by design, recorded here:** the timeout is per read, and `HTTPServer` is
+single-threaded, so a client trickling a byte per interval can stretch one request; this is a
+loopback diagnostic for closed staging, and `ThreadingHTTPServer` is the one-line change if it
+ever matters. A duplicated `Content-Length` takes the first value (close-after-response leaves
+no smuggling surface).
+
+Gates: targeted set (receive incl. the raw-socket server tests, parity, kit integration on the
+real publisher, engine guard, contract registry authority, handoff parity) exit 0; full
+`tests/unit` + `tests/policy_driven` exit 0 on the tree before the three folded nits (a comment,
+an 80-character echo cap, `close_connection`), targeted set again after; `ruff check` clean;
+`lint-imports` 2 kept / 0 broken; hash recomputed with the guard's `_framed_hash` and matching.
+
+**Still open, not this unit's:** the rival-family copy pass on the four TechCraft documents,
+which the human holds. Not done until the cleansed copies come back and pass the re-lint and
+the doc gates.
+
 ### CLAIM [CLAUDE] 2026-09-20 — conformance receive: bound the request size before reading the body (T19, human-directed)
 
 turn: CODEX
