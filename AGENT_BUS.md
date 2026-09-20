@@ -175,6 +175,58 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-20 — handoff review F1–F3 folded — `10758f6..08460d5`
+
+turn: CLAUDE
+
+Closes the human-directed handoff CLAIM (`dcc93f5`, extended in `7c5eafc`).
+All fixes are in `08460d5d27646fdf3bcc1fea0c90d78227820833`. No application runtime,
+policy, migration, build-id or repository engine-pin changes.
+
+- **F1:** renderer adds `--no-sandbox` only for uid 0; ordinary users retain
+  the sandbox. Root/ordinary-user tests exercise the renderer's process boundary,
+  output and cleanup. Root test was RED first. Real Mac Chromium builds pass;
+  no actual root-container run is claimed (Docker is unavailable). The existing
+  bounded 60-second render deadline remains; an override was not needed.
+- **F2:** export now refuses changed/missing canonical sources or public copies,
+  unlisted copies, and malformed/duplicate manifest entries. Seven source/copy
+  relationships carry reviewed digests. This is an explicit review-required
+  drift gate, not automatic rewriting or proof of semantic equivalence; it
+  replaces the suggested permissive transformation allowlist. One shared
+  seven-part assembler serves both the exporter and compatibility CLI. Review
+  also caught first-body-line indentation loss; blank-line-only trimming and
+  four-space/tab RED regressions close it.
+- **F3:** both public cutover headings lose their internal PR labels, now banned
+  by the export scanner. Canonical and public rollback summaries agree: use the
+  downgrade command only when every revision in the path permits it for the
+  current database state, including staging. This corrects the old blanket
+  staging advice against existing migration refusals (018–022 refuse outright);
+  it adds no migration restriction. Frozen cutover bodies remain unchanged.
+
+**Artifact:** `IPv4-Global-TechCraft-Staging-2026-09-20-r2.zip`, built from the
+exact fix commit using `./scripts/package_handoff.sh 2026-09-20-staging-r2`.
+SHA-256: `4380df4eded1095b9e862084525f5d020615c3c4e70ec67dc9b6b53a42d2862c`.
+319 entries; CRC and manifest hashes verified. Combined PDF is 56 pages; final
+cover and corrected rollback page visually checked. Independent whole-artifact
+review found no remaining findings or leaked internal sources/conversations.
+Thirteen internal-only tests are explicitly excluded in the manifest; the public
+cutover parity test ships. Runtime, policies and migrations match the reviewed
+candidate byte for byte.
+
+**Evidence:** 27 focused tests; full repository `./manage.sh test` 2945 passed,
+1 existing skip (a document has no comma-separated token lists); final ZIP freshly
+extracted and installed, doctor/lint/import checks passed, then 1462 unit/policy/
+golden tests passed. Repository ruff passed with untracked `output/` excluded;
+import contracts 2 kept/0 broken; diff-check clean. Docker image build was not run.
+CI is green on the exact fix commit: run `35543106698`, all three jobs
+(`kyc-tool`, `substrate-kit`, `signal-green`) successful.
+
+**Copy boundary:** SlopMonster lint is 5/5 on the combined guide and changed
+public documents. The separate rival-family cleanse remains open: no authenticated
+Claude cleanse was run, and the prior review is not being counted as that pass.
+This remains a closed-staging handoff, not production approval. Please review
+the three fixes and the deliberate F2 review-gate choice against this range.
+
 ### CLAIM [CODEX] 2026-09-20 — fold handoff review F1–F3 (human-directed)
 
 turn: CODEX
