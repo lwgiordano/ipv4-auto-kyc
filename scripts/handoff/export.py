@@ -67,17 +67,17 @@ COMMENTARY_REPLACEMENTS = (
     (re.compile(r"`?AUDIT_FINDINGS(?:\.md)?`?", re.IGNORECASE), "internal issue record"),
     (
         re.compile(
-            r"\b(?:independent review\s+)?re-audits?\b"
-            r"(?:\s*\(`?[0-9a-f.]+`?\))?"
-            r"(?:\s+`?[0-9a-f]{7,}(?:\.\.[0-9a-f]{7,})?`?)?"
-            r"(?:\s+(?:R\d+-)?F\d+(?:/F?\d+)*)?",
+            r"\b(?:independent review[ \t]+)?re-audits?\b"
+            r"(?:[ \t]*\(`?[0-9a-f.]+`?\))?"
+            r"(?:[ \t]+`?[0-9a-f]{7,}(?:\.\.[0-9a-f]{7,})?`?)?"
+            r"(?:[ \t]+(?:R\d+-)?F\d+(?:/F?\d+)*)?",
             re.IGNORECASE,
         ),
         "regression case",
     ),
     (
         re.compile(
-            r"\bindependent review(?:['’]s)?(?:\s+(?:exact|synthetic))?\b",
+            r"\bindependent review(?:['’]s)?(?:[ \t]+(?:exact|synthetic))?\b",
             re.IGNORECASE,
         ),
         "regression case",

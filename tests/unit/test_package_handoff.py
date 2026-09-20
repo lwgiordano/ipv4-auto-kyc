@@ -115,6 +115,21 @@ def test_export_transformations_are_narrow_and_python_safe(exporter):
     )
 
 
+def test_commentary_cleanup_never_joins_source_lines(exporter):
+    original = (
+        b'"""A bounded operation (re-audit\n'
+        b"    `f2929f8..6a4cd87` F8): malformed input is refused.\n"
+        b'Next paragraph stays on its own line."""\n'
+    )
+
+    packaged, names = exporter.transform_bytes("src/kyc_tool/example.py", original)
+
+    assert len(packaged.splitlines()) == len(original.splitlines())
+    assert b"regression case\n" in packaged
+    assert b"regression case    " not in packaged
+    assert names == ["commentary_attribution_removed"]
+
+
 def test_real_config_defaults_are_rebased_without_other_executable_changes(exporter):
     original = (REPO_ROOT / "src" / "kyc_tool" / "config.py").read_bytes()
 
