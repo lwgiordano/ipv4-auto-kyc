@@ -384,25 +384,60 @@ def verify_callback(path: str, headers, body: bytes, *, outbound_secret: str, ou
     return rows
 
 
-def make_server(port: int, *, outbound_secret: str, outbound_key_id: str,
-                v1_secret: str) -> HTTPServer:
-    """The diagnostic receiver, bound to loopback and not yet serving (tests drive it directly)."""
+# The most a decision callback can be before the receiver refuses to read it. A real one is a few
+# kilobytes; the bound exists so a declared length is checked BEFORE anything is read, because
+# `rfile.read()` on an absurd length is an OverflowError, not a failed check.
+MAX_CALLBACK_BYTES = 1 << 20
+
+
+def declared_length(header: str | None) -> int | None:
+    """The Content-Length a request declares, or None when it is not an integer within
+    0..MAX_CALLBACK_BYTES. A missing or empty header is an empty body."""
+    try:
+        length = int(header or 0)
+    except ValueError:
+        return None
+    return length if 0 <= length <= MAX_CALLBACK_BYTES else None
+
+
+def make_server(port: int, *, outbound_secret: str, outbound_key_id: str, v1_secret: str,
+                read_timeout: float = 30.0) -> HTTPServer:
+    """The diagnostic receiver, bound to loopback and not yet serving (tests drive it directly).
+    `read_timeout` bounds how long one request may take to deliver the body it declared."""
     seen: set = set()
 
     class Handler(BaseHTTPRequestHandler):
+        # An idle timeout per read, so a client that declares more than it sends is reported
+        # rather than waited on indefinitely. (A client trickling a byte per interval can still
+        # stretch one request; this server is single-threaded and for loopback diagnostics.)
+        timeout = read_timeout
+
         def do_POST(self):  # noqa: N802 — BaseHTTPRequestHandler's dispatch name
-            # A malformed Content-Length is a malformed request, not a reason to drop the
-            # connection: a non-numeric or negative value reads an empty body, which then fails
-            # the body rows like any other invalid callback.
+            # A malformed request is a failed check, never a dropped connection. The declared
+            # length is validated before anything is read: a non-numeric, negative or oversized
+            # Content-Length is reported and acknowledged without touching the body.
+            header = self.headers.get("Content-Length")
+            length = declared_length(header)
+            if length is None:
+                # Echo at most 80 characters: an obs-folded header can run to megabytes.
+                rows = [_row("request.content_length", f"an integer 0..{MAX_CALLBACK_BYTES}",
+                             (header or "")[:80], ok=False)]
+                self._report("not read", rows)
+                return
             try:
-                length = max(0, int(self.headers.get("Content-Length") or 0))
-            except ValueError:
-                length = 0
-            body = self.rfile.read(length)
+                body = self.rfile.read(length)
+            except TimeoutError:
+                self.close_connection = True  # never read again from a timed-out socket
+                rows = [_row("request.body", f"{length} bytes within {self.timeout:g} s",
+                             "timed out before the declared length arrived", ok=False)]
+                self._report("not read", rows)
+                return
             rows = verify_callback(self.path, self.headers, body, outbound_secret=outbound_secret,
                                    outbound_key_id=outbound_key_id, v1_secret=v1_secret, seen=seen)
-            dedupe = next(row.got for row in rows if row.check == "dedupe")
-            print(f"callback ← {self.path} [{dedupe}] "
+            self._report(next(row.got for row in rows if row.check == "dedupe"), rows)
+
+        def _report(self, verdict: str, rows: list[Row]) -> None:
+            print(f"callback ← {self.path} [{verdict}] "
                   + " ".join(f"{r.check}={'PASS' if r.ok else 'FAIL'}" for r in rows), flush=True)
             for row in (r for r in rows if not r.ok):
                 print(f"    {row.check}: expected {row.expected} — got {row.got}", flush=True)

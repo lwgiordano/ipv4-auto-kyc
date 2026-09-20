@@ -150,18 +150,76 @@ def _raw_post(port: int, request: bytes) -> bytes:
         return sock.recv(4096)
 
 
-def test_the_receiver_answers_a_malformed_content_length_instead_of_dropping_the_connection(
+def _is_200(reply: bytes) -> bool:
+    return reply.startswith(b"HTTP/1.0 200") or reply.startswith(b"HTTP/1.1 200")
+
+
+def test_the_receiver_reports_a_malformed_content_length_before_reading_anything(
     receiver, capsys
 ):
-    # A non-numeric or negative Content-Length used to raise inside the handler, so the
-    # diagnostic printed a traceback and dropped that connection with no PASS/FAIL line.
-    for value in (b"abc", b"-5", b""):
+    # A non-numeric or negative Content-Length raised inside the handler; an oversized one
+    # (2**63) reached rfile.read() and raised OverflowError. Each dropped the connection with no
+    # PASS/FAIL line. The declared length is now validated before a byte of body is read.
+    too_big = str(conformance.MAX_CALLBACK_BYTES + 1).encode()
+    for value in (b"abc", b"-5", b"9223372036854775808", too_big):
         reply = _raw_post(receiver, b"POST /kyc/decision HTTP/1.1\r\nHost: t\r\n"
                           b"Content-Length: " + value + b"\r\n\r\n")
-        assert reply.startswith(b"HTTP/1.0 200") or reply.startswith(b"HTTP/1.1 200"), reply[:40]
+        assert _is_200(reply), (value, reply[:40])
     out = capsys.readouterr().out
-    assert out.count("callback ← /kyc/decision") == 3
-    assert "body.schema=FAIL" in out and "signature.v2=FAIL" in out
+    assert out.count("callback ← /kyc/decision [not read] request.content_length=FAIL") == 4
+    assert "body.schema" not in out  # nothing was read, so no body row was evaluated
+
+
+def test_the_receiver_treats_an_empty_content_length_as_an_empty_body(receiver, capsys):
+    reply = _raw_post(receiver, b"POST /kyc/decision HTTP/1.1\r\nHost: t\r\nContent-Length: \r\n\r\n")
+    assert _is_200(reply)
+    out = capsys.readouterr().out
+    assert "body.schema=FAIL" in out and "signature.v2=FAIL" in out and "not recorded" in out
+
+
+def test_a_valid_signed_callback_through_the_real_server_passes_every_row(receiver, capsys):
+    raw, stamp = json.dumps(valid_callback_body()).encode(), str(time.time())
+    signature = security.sign_v2(SECRET, key_id=KEY_ID, direction=security.DIRECTION_OUTBOUND,
+                                 method="POST", path_qs="/kyc/decision", timestamp=stamp,
+                                 slot="", body=raw)
+    request = (b"POST /kyc/decision HTTP/1.1\r\nHost: t\r\n"
+               + f"X-KYC-Timestamp: {stamp}\r\nX-KYC-Key-Id: {KEY_ID}\r\n"
+                 f"X-KYC-Signature-V2: {signature}\r\nContent-Length: {len(raw)}\r\n\r\n".encode()
+               + raw)
+    assert _is_200(_raw_post(receiver, request))
+    assert _is_200(_raw_post(receiver, request))  # the same delivery again
+    out = capsys.readouterr().out
+    assert "FAIL" not in out
+    assert "[first delivery]" in out and "[duplicate" in out
+
+
+def test_a_client_that_declares_more_than_it_sends_is_reported_after_the_read_timeout(capsys):
+    server = conformance.make_server(0, outbound_secret=SECRET, outbound_key_id=KEY_ID,
+                                     v1_secret="", read_timeout=0.5)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as sock:
+            sock.sendall(b"POST /kyc/decision HTTP/1.1\r\nHost: t\r\nContent-Length: 10\r\n\r\nabc")
+            reply = sock.recv(4096)  # arrives once the read times out, not never
+        assert _is_200(reply), reply[:40]
+        # the receiver is still serving afterwards
+        assert _is_200(_raw_post(server.server_port,
+                                 b"POST /kyc/decision HTTP/1.1\r\nHost: t\r\nContent-Length: 0\r\n\r\n"))
+    finally:
+        server.shutdown()
+        server.server_close()
+    out = capsys.readouterr().out
+    assert "[not read] request.body=FAIL" in out
+    assert "timed out before the declared length arrived" in out
+
+
+def test_declared_length_bounds():
+    assert conformance.declared_length(None) == 0
+    assert conformance.declared_length("") == 0
+    assert conformance.declared_length("12") == 12
+    assert conformance.declared_length(str(conformance.MAX_CALLBACK_BYTES)) == conformance.MAX_CALLBACK_BYTES
+    for bad in ("abc", "-1", "1.5", str(conformance.MAX_CALLBACK_BYTES + 1), "9223372036854775808"):
+        assert conformance.declared_length(bad) is None, bad
 
 
 def test_the_schema_row_names_the_first_failing_field():
