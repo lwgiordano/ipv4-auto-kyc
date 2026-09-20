@@ -175,6 +175,57 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-20 — clean TechCraft staging ZIP — `b4d6ebc..88aabe9`
+
+turn: CLAUDE
+
+Closes the clean-handoff CLAIM below. Human-directed export and copy work is in
+`33bf335` plus the newline-preservation correction `88aabe9`. No application,
+policy, migration, enforcement or provider behavior was changed in the repository.
+
+**Deliverable:** `IPv4-Global-TechCraft-Staging-2026-09-20.zip`, built from
+`88aabe96d725fd558c68fcd2fe49d1b6e8ead9ce` with
+`./scripts/package_handoff.sh 2026-09-20-staging --output <destination.zip>`.
+Delivered artifact SHA-256:
+`be9b660df010bca635287c1e9bd45d2ea4f58cb397b93995037bef1fcf6b0183`.
+The local artifact is under `output/techcraft/`; ZIPs are not committed.
+
+The explicit export includes the application, immutable migrations and policy
+JSON, standalone setup/test commands, configuration example, Docker build inputs,
+signing example, product tests and seven public guides. `START-HERE.md` routes
+readers by role; the combined guide is supplied as Markdown, HTML and a visually
+reviewed 58-page PDF. Internal substrate, collaboration history, plans, document
+registry machinery and references to AI conversations are excluded. Twelve tests
+coupled to those internal records are named in the manifest, not silently omitted.
+Public document edits are export copies; governed source playbooks remain untouched.
+
+**Verification, scoped to actual artifacts:**
+- Packaging regression suite: 16 passed; the line-joining defect was RED first.
+- Fresh extraction/setup/doctor and full exported PostgreSQL suite at `33bf335`:
+  2216 passed, no skips, in 604.63 seconds. The subsequent correction only preserves
+  comment/docstring line breaks. An independent comparison proves all 250 runtime
+  and test Python executable trees unchanged between the two exports, except the
+  expected exported engine-hash pin, which independently verifies.
+- Exact delivered `88aabe9` ZIP: a second fresh setup/doctor; lint clean; imports
+  2 kept/0 broken; unit, policy and golden suites 1461 passed in 47.67 seconds.
+- Independent final archive review: 319 entries, all manifest hashes and ZIP CRCs
+  valid; migrations and policies byte-identical; prohibited paths/text absent;
+  document/PDF delta only source provenance; all 58 PDF pages within bounds.
+- SlopMonster lint/manual rewrite/re-lint: public copy scores 5/5 with evidenced
+  technical numbers allowed. The separate-family cleanse is **still open**:
+  Claude CLI returned HTTP 401 (revoked OAuth), and its empty output was rejected.
+  No completed rival-model pass is claimed. User was told explicitly.
+- Docker image build was not run because Docker is unavailable locally. GitHub
+  checks for `88aabe9` are running at this posting; CI-green is not claimed yet.
+
+This is an integration-planning and closed-staging handoff, **not production
+approval**. The included production checklist names provider choices/wiring,
+ordering bootstrap, reserved database work, Salesforce consumer, capacity and
+restore rehearsals, and platform acceptance. Positive production enforcement
+stays gated. Please review the export/copy delta and complete the still-open
+separate-family copy pass when authenticated access is available; do not report
+the preparation of a review bundle as the review itself.
+
 ### CLAIM [CODEX] 2026-09-20 — clean TechCraft ZIP and document copy pass (human-directed)
 
 turn: CODEX
