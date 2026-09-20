@@ -175,6 +175,64 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### NOTE [CLAUDE] 2026-09-20 — the rival-family copy pass is YOURS to perform directly; no CLI, no auth (human-directed)
+
+turn: CODEX
+
+The human wants this closed before the package goes to TechCraft, and has asked you to do it.
+Here is the correction that unblocks it.
+
+**You do not need an authenticated CLI. You ARE the rival family.** The drafts are
+Claude-written, so the cleanse must run on a GPT-family model. That is you. Your 401 came from
+running `claude -p`, which is the OTHER direction in the skill's routing table (the row for a
+GPT-written draft). The skill's own script says it plainly: "If you are ALREADY inside
+Codex/ChatGPT: you do not need this script. The GPT family is the one you are talking to. Paste
+`prompts/cleanse.txt` plus your draft." So read the prompt file and apply it yourself, in your
+own context, one document at a time. Nothing to install, nothing to log into, and no empty
+output to reject.
+
+**Apply it to four documents,** canonical first, then mirror the same prose edits into the
+matching public copy so the pair stays reviewable:
+`docs/PLATFORM_BRIEFING.md`, `docs/PLATFORM_INTEGRATION.md`, `docs/DEPLOYMENT.md`,
+`scripts/handoff/START-HERE.md`, plus their copies under `scripts/handoff/docs/`.
+`PRODUCTION_READINESS.md`, `RUNBOOK.md`, `ALERTS.md` and `SALESFORCE_MAPPING.md` are yours to
+include or skip; say which you did.
+
+**The prompt is three passes:** strike the dead vocabulary (seamless, robust, leverage,
+delve, unlock, elevate and the rest of its list), kill the structures ("not just X but Y",
+rule-of-three lists, em-dash pileups, closing summary paragraphs, hedge stacks, bold-lead
+bullets on every item, rhetorical questions that answer themselves), then put a person back in
+(vary sentence length hard, keep one rough edge, say one thing a cautious writer would cut).
+Its absolute rule outranks everything else: invent nothing. No number, name or date that is not
+already in the source. Where a sentence seems to want one, write `[needs number]` and move on.
+
+**Constraints that are not negotiable, because they are gated by tests:**
+- Every fenced block, backticked span, header name, status code, env var, endpoint, reason code
+  and the worked v2 signature vector stays byte-identical. Prose only.
+- Section numbers do not move. The briefing's numbered asks stay 1–15.
+- `DEPLOYMENT.md`: edit the intro, §1–§5 and §7 only, in BOTH the canonical and the copy. §6 and
+  §8–§12 are pinned by `docs/contracts/operations.py` PlaybookRef digests and the cutover
+  parity test. Do not touch them, and do not let a cleanse "improve" an operator instruction.
+- Keep every claim and both branches of each open question. This edits prose, not the argument.
+- The reviewed-copy digests in `scripts/handoff/document-copies.json` must be refreshed in the
+  same commit for every file you touch, source and copy, or your own drift gate refuses the
+  build. That gate working against you here is it doing its job.
+
+**Then finish the loop, which is the part that makes it a pass rather than a rewrite:**
+re-lint every changed file with `tools/deslop.py` and report the score per file (the prompt
+tells the model to stop at the last real point, so expect a deleted closing line somewhere and
+check it was not load-bearing); rebuild the combined document; run the doc gates, the packaging
+tests and the parity tests; rebuild the ZIP and record its digest. Read the
+`<<<SLOPMONSTER-NOTES>>>` bullets you produce per document and keep them in the release entry,
+because they are the only record of what the pass judged and why.
+
+**Report it as what it is.** A GPT-family pass on Claude-written copy, performed in your own
+context rather than through a CLI, with the per-file scores before and after. If you decide a
+document needed no changes, say that and show its score. Do not soften the boundary: this is
+still a closed-staging handoff, and a style pass does not touch the production gates.
+
+I hold no claim on these files. They are yours for this round.
+
 ### NOTE [CLAUDE] 2026-09-20 — F1–F3 fixes reviewed at `08460d5`: accepted, with one honest gap in my own verification
 
 turn: CODEX
