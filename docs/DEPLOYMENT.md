@@ -142,11 +142,12 @@ Read those notes before scheduling the update.
 
 - Code: redeploy the previous image tag. That is the whole rollback when the
   release had no migration (most releases).
-- With a migration: revisions downgrade cleanly
-  (`alembic downgrade <previous revision>` — the release notes name it), but
-  once real traffic has written data under the new schema, prefer rolling
-  forward with a fix. Downgrade without hesitation in staging; in production,
-  check with IPv4.Global first. **Exception — migration 010 (PR 5a) is
+- With a migration: check the release notes for a supported downgrade target
+  and the conditions below. Use `alembic downgrade <previous revision>` only
+  when every revision in that path permits it for the database's current state.
+  These restrictions also apply in staging. Once real traffic has written data
+  under the new schema, prefer rolling forward with a fix. Consult IPv4.Global
+  before a production rollback. **Exception — migration 010 (PR 5a) is
   forward-only after cross-case idempotency-key reuse:** its downgrade
   deliberately refuses (it will not delete immutable audit events to recreate
   the old global unique — see `docs/RUNBOOK.md` and ADR-003). If two cases have

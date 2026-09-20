@@ -88,19 +88,26 @@ def render(root: Path) -> None:
     pdf = md.with_suffix(".pdf")
     pdf.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="handoff-print-") as profile:
-        process = subprocess.Popen(
+        command = [
+            browser,
+            "--headless",
+            "--disable-gpu",
+            "--no-pdf-header-footer",
+            "--no-first-run",
+            "--disable-extensions",
+            "--disable-background-networking",
+        ]
+        if os.geteuid() == 0:
+            command.append("--no-sandbox")
+        command.extend(
             [
-                browser,
-                "--headless",
-                "--disable-gpu",
-                "--no-pdf-header-footer",
-                "--no-first-run",
-                "--disable-extensions",
-                "--disable-background-networking",
                 f"--user-data-dir={profile}",
                 f"--print-to-pdf={pdf}",
                 output.as_uri(),
-            ],
+            ]
+        )
+        process = subprocess.Popen(
+            command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,

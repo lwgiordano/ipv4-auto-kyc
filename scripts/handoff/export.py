@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build the explicit, staging-only TechCraft source handoff ZIP."""
+"""Build the explicit, staging-only TechCraft source handoff ZIP.
+
+Document-copy digests record a completed review; they are not an automatic sync
+mechanism. When a canonical source changes, read its diff, update and review the
+corresponding public copy, then refresh both digests in ``document-copies.json``.
+"""
 
 from __future__ import annotations
 
@@ -51,6 +56,7 @@ NON_OPERATIONAL_TESTS = {
     "tests/unit/test_contract_registry_authority.py",
     "tests/unit/test_contract_rendering.py",
     "tests/unit/test_document_model.py",
+    "tests/unit/test_handoff_renderer.py",
     "tests/unit/test_migration_lineage.py",
     "tests/unit/test_package_handoff.py",
     "tests/unit/test_plan_artifact_static.py",
@@ -61,6 +67,8 @@ NON_OPERATIONAL_TESTS = {
 
 TEXT_SUFFIXES = {".cjs", ".html", ".ini", ".json", ".md", ".py", ".sh", ".toml", ".txt"}
 IMMUTABLE_PREFIXES = ("alembic/", "KYC_Tool_Build_Package/")
+DOC_COPY_MANIFEST_PATH = "scripts/handoff/document-copies.json"
+DOC_COPY_PREFIX = "scripts/handoff/docs/"
 COMMENTARY_REPLACEMENTS = (
     (re.compile(r"\bCodex(?:['’]s)?\b", re.IGNORECASE), "independent review"),
     (re.compile(r"\bClaude(?:['’]s)?\b", re.IGNORECASE), "independent review"),
@@ -281,6 +289,102 @@ def scan_package_text(path: str, data: bytes) -> None:
             raise ValueError(f"internal build-history reference ({kind}: {match.group(0)!r}) found in {path}")
     if not path.startswith("alembic/") and re.search(r"\bAUDIT_FINDINGS(?:\.md)?\b", text, re.I):
         raise ValueError(f"internal build-history reference (issue file) found in {path}")
+    if path.startswith("docs/") and PurePosixPath(path).suffix in {".md", ".html"}:
+        match = re.search(r"\bPR[ \t]+\d+[a-z]?(?:-[a-z0-9]+)?\b", text, re.I)
+        if match:
+            raise ValueError(
+                f"internal build-history reference (PR label: {match.group(0)!r}) found in {path}"
+            )
+
+
+def _parse_document_copy_manifest(data: bytes) -> dict:
+    try:
+        manifest = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid reviewed document-copy manifest: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("reviewed document-copy manifest root must be an object")
+    if manifest.get("schema_version") != 1:
+        raise ValueError("reviewed document-copy manifest must use schema_version 1")
+    if not isinstance(manifest.get("review_workflow"), str) or not manifest["review_workflow"].strip():
+        raise ValueError("reviewed document-copy manifest requires a review_workflow")
+    if not isinstance(manifest.get("documents"), list):
+        raise ValueError("reviewed document-copy manifest requires a documents list")
+    return manifest
+
+
+def _document_copy_manifest_paths(data: bytes) -> set[str]:
+    manifest = _parse_document_copy_manifest(data)
+    paths = {DOC_COPY_MANIFEST_PATH}
+    for row in manifest["documents"]:
+        if not isinstance(row, dict):
+            raise ValueError("reviewed document-copy manifest entries must be objects")
+        copy_path = row.get("copy_path")
+        source_paths = row.get("source_paths")
+        if not isinstance(copy_path, str) or not isinstance(source_paths, list):
+            raise ValueError("reviewed document-copy manifest entry paths are invalid")
+        paths.add(copy_path)
+        paths.update(path for path in source_paths if isinstance(path, str))
+    return paths
+
+
+def validate_document_copies(source_files: Mapping[str, bytes], inventory: Mapping[str, str]) -> None:
+    """Reject stale or unreviewed public document copies before archive output."""
+    public_copies = {
+        source: destination
+        for source, destination in inventory.items()
+        if source.startswith(DOC_COPY_PREFIX) and destination.startswith("docs/")
+    }
+    if not public_copies:
+        return
+    manifest_data = source_files.get(DOC_COPY_MANIFEST_PATH)
+    if manifest_data is None:
+        raise ValueError("reviewed document-copy manifest is missing")
+    manifest = _parse_document_copy_manifest(manifest_data)
+    rows: dict[str, dict] = {}
+    for row in manifest["documents"]:
+        if not isinstance(row, dict):
+            raise ValueError("reviewed document-copy manifest entries must be objects")
+        copy_path = row.get("copy_path")
+        if not isinstance(copy_path, str) or copy_path in rows:
+            raise ValueError("reviewed document-copy manifest has an invalid or duplicate copy_path")
+        rows[copy_path] = row
+
+    if set(rows) != set(public_copies):
+        missing = sorted(set(public_copies) - set(rows))
+        extra = sorted(set(rows) - set(public_copies))
+        raise ValueError(
+            "reviewed document-copy manifest does not cover public document copies: "
+            f"missing={missing}, extra={extra}"
+        )
+
+    for copy_path, public_path in sorted(public_copies.items()):
+        row = rows[copy_path]
+        if row.get("public_path") != public_path:
+            raise ValueError(f"reviewed public path mismatch for {copy_path}")
+        if not isinstance(row.get("rationale"), str) or not row["rationale"].strip():
+            raise ValueError(f"review rationale is missing for {copy_path}")
+        source_paths = row.get("source_paths")
+        source_hashes = row.get("source_sha256")
+        if (
+            not isinstance(source_paths, list)
+            or not source_paths
+            or not all(isinstance(path, str) for path in source_paths)
+        ):
+            raise ValueError(f"source anchors are missing for {copy_path}")
+        if not isinstance(source_hashes, dict) or set(source_hashes) != set(source_paths):
+            raise ValueError(f"source digest inventory is invalid for {copy_path}")
+        for source_path in source_paths:
+            data = source_files.get(source_path)
+            if data is None:
+                raise ValueError(f"canonical source is missing for {copy_path}: {source_path}")
+            if hashlib.sha256(data).hexdigest() != source_hashes[source_path]:
+                raise ValueError(f"canonical source digest drift for {copy_path}: {source_path}")
+        copy_data = source_files.get(copy_path)
+        if copy_data is None:
+            raise ValueError(f"reviewed public copy is missing: {copy_path}")
+        if hashlib.sha256(copy_data).hexdigest() != row.get("copy_sha256"):
+            raise ValueError(f"reviewed public copy digest drift for {copy_path}")
 
 
 def _zip_info(path: str, mode: int) -> zipfile.ZipInfo:
@@ -306,46 +410,16 @@ def _load_renderer(path: Path | None) -> Callable[[Path], None] | None:
 
 
 def _write_combined_handoff(root: Path, *, label: str, commit: str) -> None:
-    documents = (
-        ("Product and integration briefing", "PLATFORM_BRIEFING.md"),
-        ("Platform integration reference", "PLATFORM_INTEGRATION.md"),
-        ("Deployment guide", "DEPLOYMENT.md"),
-        ("Operations runbook", "RUNBOOK.md"),
-        ("Alert reference", "ALERTS.md"),
-        ("Salesforce mapping", "SALESFORCE_MAPPING.md"),
-        ("Production readiness", "PRODUCTION_READINESS.md"),
-    )
     docs = root / "docs"
-    required = documents[:3]
-    if not all((docs / filename).is_file() for _title, filename in required):
+    if not docs.is_dir():
         return
-    sections = [
-        "# TechCraft handoff",
-        "",
-        f"Closed-staging source package `{label}` from commit `{commit}`.",
-        "",
-        "Each part below is also included as a separate Markdown file.",
-        "Section numbers restart in each part.",
-        "",
-        "## Contents",
-        "",
-    ]
-    included = [(title, filename) for title, filename in documents if (docs / filename).is_file()]
-    sections.extend(
-        f"- Part {number}: {title} (`docs/{filename}`)"
-        for number, (title, filename) in enumerate(included, 1)
-    )
-    for number, (title, filename) in enumerate(included, 1):
-        path = docs / filename
-        sections.extend(
-            [
-                "",
-                f"# Part {number}: {title}",
-                "",
-                path.read_text(encoding="utf-8").strip(),
-            ]
-        )
-    (docs / "TECHCRAFT_HANDOFF.md").write_text("\n".join(sections) + "\n", encoding="utf-8")
+    path = Path(__file__).resolve().with_name("assembly.py")
+    spec = importlib.util.spec_from_file_location("handoff_assembly", path)
+    if not spec or not spec.loader:
+        raise RuntimeError(f"cannot load handoff assembly: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.write_combined_handoff(docs, label=label, commit=commit)
 
 
 def _sort_exported_test_imports(root: Path) -> set[str]:
@@ -388,6 +462,7 @@ def write_package(
     label = validate_label(label)
     prefix = f"kyc-tool-{label}"
     inventory = inventory or select_inventory(source_files)
+    validate_document_copies(source_files, inventory)
     packaged: dict[str, bytes] = {}
     modes: dict[str, int] = {}
     sources: dict[str, str] = {}
@@ -516,7 +591,14 @@ def _tracked_commit_files(repo: Path) -> tuple[dict[str, bytes], dict[str, int]]
         mode, kind, _object = metadata.split()
         if kind == "blob" and mode in {"100644", "100755"}:
             tree_modes[path] = int(mode[-3:], 8)
-    selected_sources = sorted(select_inventory(tree_modes))
+    if DOC_COPY_MANIFEST_PATH not in tree_modes:
+        raise RuntimeError(f"reviewed document-copy manifest is not tracked: {DOC_COPY_MANIFEST_PATH}")
+    manifest_data = _git(repo, "show", f"HEAD:{DOC_COPY_MANIFEST_PATH}")
+    validation_sources = _document_copy_manifest_paths(manifest_data)
+    missing_sources = sorted(validation_sources - set(tree_modes))
+    if missing_sources:
+        raise RuntimeError(f"reviewed document-copy inputs are not tracked: {missing_sources}")
+    selected_sources = sorted(set(select_inventory(tree_modes)) | validation_sources)
     if not selected_sources:
         return files, modes
     archive_bytes = _git(repo, "archive", "--format=tar", "HEAD", "--", *selected_sources)

@@ -1,59 +1,21 @@
 # TechCraft handoff
 
-This release is for closed staging, not production. It verifies a registrant's
-connection to a company and returns a decision for the platform to handle.
-
-Start with **Part 1**: what the tool does, what TechCraft builds, and the decisions
-and access needed from each team. Integration developers use **Part 2** for events,
-signatures, callback handling and Salesforce reads. Operators use **Part 3** for
-deployment and recovery. You do not need to read all three parts to answer the
-product questions.
-
-The three source documents are included in full below. Section numbers restart in
-each part: `PLATFORM_INTEGRATION.md` §5 means §5 within Part 2. Older deployment
-procedures are retained for upgrades; they are not a claim that production is ready.
+Checked-in reference assembled from the reviewed public document copies.
+This combined reference is for closed staging, not production.
+Each part below is also included as a separate Markdown file.
+Section numbers restart in each part.
 
 ## Contents
 
-- **Part 1** (`docs/PLATFORM_BRIEFING.md`): KYC Tool — Platform Team Briefing
-  - 1. What it is
-  - 2. What it does
-  - 3. A case, end to end
-  - 4. What your team builds
-  - 5. The open questions
-  - 6. Staging plan
-  - 7. Testing tips
-  - 8. Where things stand, and what we need from you
-  - 9. Doc map
-- **Part 2** (`docs/PLATFORM_INTEGRATION.md`): Platform Integration Guide — MVP
-  - 1. The model
-  - 2. Authentication (both directions)
-  - 3. Sending events
-  - 4. The decision webhook (you build this)
-  - 5. POC verification page (you build this)
-  - 6. Documents (open question: who reads the fields?)
-  - 7. Read API and review tasks
-  - 8. Hosting and deployment (you run this too)
-  - 9. MVP scope and what comes later
-  - 10. Answers we need
-  - 11. Conformance kit
-- **Part 3** (`docs/DEPLOYMENT.md`): Deployment & Releases
-  - 1. One image: services and scheduled jobs
-  - 2. Environments
-  - 3. First-time setup (per environment)
-  - 4. Deploying an update
-  - 5. Post-deploy verification
-  - 6. Rollback
-  - 7. Monitoring and incidents
-  - 8. Rules
-  - 9. PR 5b cutover — brief full maintenance window
-  - 10. PR 6 cutover — bundle-pinning activation
-  - 11. PR 7b-core cutover — drained maintenance window (migration 013)
-  - 12. Live configuration cutover (migration 024)
+- Part 1: Product and integration briefing (`docs/PLATFORM_BRIEFING.md`)
+- Part 2: Platform integration reference (`docs/PLATFORM_INTEGRATION.md`)
+- Part 3: Deployment guide (`docs/DEPLOYMENT.md`)
+- Part 4: Operations runbook (`docs/RUNBOOK.md`)
+- Part 5: Alert reference (`docs/ALERTS.md`)
+- Part 6: Salesforce mapping (`docs/SALESFORCE_MAPPING.md`)
+- Part 7: Production readiness (`docs/PRODUCTION_READINESS.md`)
 
-# Part 1
-
-# KYC Tool — Platform Team Briefing
+# Part 1: Product and integration briefing
 
 This is the working handoff for TechCraft. The tool can be exercised in a
 closed staging environment, but it is not ready for production. Start with §4
@@ -303,7 +265,7 @@ release and redeploys. Nobody edits code on the server.
 | Retention (daily cron) | `python -m kyc_tool.workers.retention` |
 
 - A `Dockerfile` ships in the repo. Migrations are versioned, and several are
-  forward-only once real data exists, starting with migration 010 (PR 5a).
+  forward-only once real data exists, starting with migration 010.
   Follow the stop/start and cutover procedure for each release in
   `docs/DEPLOYMENT.md`; do not assume every update is a rolling restart.
 - `GET /readyz` for the load balancer, which checks the database, the
@@ -329,13 +291,14 @@ adapters, and the platform cutover before automation can be turned on in
 review team confirms, and the flag flips per environment only after that gate
 is complete.
 
-> **Keep staging closed until inbound v1 is actually disabled.** PR 5a adds
+> **Keep staging closed until inbound v1 is actually disabled.** Path-bound
+> HMAC v2 is available,
 > path-bound HMAC v2, but a v1-only request during the dual-accept window is
 > still path-unbound, so a signed event captured inside the skew window could
 > be replayed to a different case. The redirect closes for v2 at deploy. For
 > everyone else it closes only once inbound v1 is disabled, meaning the
 > zero-witness is satisfied and `hmac_v1_inbound_sunset_at` takes effect. Keep
-> staging's perimeter closed until then, not merely until PR 5a ships.
+> staging's perimeter closed until then, not merely until v2 is deployed.
 
 Checklist:
 
@@ -360,7 +323,7 @@ Checklist:
    the pipeline is empty, so a `poc.submitted` in staging cannot pass until the
    live directory is wired in (§8, not built yet). For that day set
    `KYC_EMAIL_PROVIDER=file`, which appends each verification email as a JSON
-   line to a local sink file (`.substrate/state/poc-emails.log` by default,
+   line to a local sink file (`var/poc-emails.log` by default,
    moved with `KYC_EMAIL_FILE_PATH`), so your tests can read the token and the
    reference and finish the round-trip. That sink writes raw tokens to disk,
    so it is for closed staging only and production refuses it at boot. The
@@ -424,8 +387,8 @@ print(r.status_code, r.json())
 
 ## 8. Where things stand, and what we need from you
 
-Nothing here says the service is production-ready. The go/no-go gate is §8 of
-`docs/superpowers/specs/2026-09-12-production-readiness-design.md`. Status at
+Nothing here says the service is production-ready. The go/no-go gate is in
+`PRODUCTION_READINESS.md`. Status at
 this release falls into five states.
 
 **Working now**
@@ -562,17 +525,15 @@ deployment config, never chat)
 
 | Question | Doc |
 |---|---|
-| The three documents in one file, generated from them | `docs/TECHCRAFT_HANDOFF.md` |
 | Full API contract, signatures, payloads, webhook | `docs/PLATFORM_INTEGRATION.md` |
 | Deploying, releasing, rollback, monitoring | `docs/DEPLOYMENT.md` |
 | Operating it: env vars, health, dead letters, console | `docs/RUNBOOK.md` |
-| How scoring and decisions work, in depth | `docs/OVERVIEW.md` |
+| Production go/no-go requirements | `docs/PRODUCTION_READINESS.md` |
 | Salesforce field-by-field mapping and value rules | `docs/SALESFORCE_MAPPING.md` |
-| Normative spec and policy files | `KYC_Tool_Build_Package/` |
+| Alert expressions and scrape requirements | `docs/ALERTS.md` |
+| Machine-readable policy files used by the service | `KYC_Tool_Build_Package/machine_readable/` |
 
-# Part 2
-
-# Platform Integration Guide — MVP
+# Part 2: Platform integration reference
 
 For TechCraft's integration developers. This guide covers the event sender,
 decision receiver, reviewer actions, Salesforce reads, and the proposed POC
@@ -1196,9 +1157,7 @@ never printed, never logged:
 | `KYC_CONFORMANCE_INBOUND_SECRET`, `KYC_CONFORMANCE_INBOUND_KEY_ID` | `send` (v2) |
 | `KYC_CONFORMANCE_OUTBOUND_SECRET`, `KYC_CONFORMANCE_OUTBOUND_KEY_ID` | `receive` (v2) |
 
-# Part 3
-
-# Deployment & Releases
+# Part 3: Deployment guide
 
 For the platform team operating the KYC tool in IPv4.Global's AWS account.
 Ownership: IPv4.Global maintains the code and cuts releases. You pull a
@@ -1246,16 +1205,16 @@ non-HTTPS callback URL), listing the violations. Passing these checks does not
 prove that external services are available or the platform integration works.
 
 Staging's automation-on is safe **only** while staging is closed to untrusted
-callers. PR 5a adds path-bound HMAC v2, but during the dual-accept window a
+callers. Path-bound HMAC v2 is available, but during the dual-accept window a
 **v1-only** request is still path-unbound — a captured signed event could be
 replayed to another case within the skew window. The redirect closes for v2
 traffic at deploy, but for everyone only once **inbound v1 is actually disabled**
 (the zero-witness satisfied AND `hmac_v1_inbound_sunset_at` in effect). Keep
-staging's perimeter closed until that day arrives. Deploying PR 5a is not the
+staging's perimeter closed until that day arrives. Deploying v2 is not the
 moment it can open. Production automation stays off regardless until the M2
 gate is met.
 
-**PR 5a is a non-hot cutover.** Migration 010 drops the global unique that the
+**Migration 010 is a non-hot cutover.** It drops the global unique that the
 old image's ingest still uses, so an old replica serving after the migration
 would fail event inserts. Deploy **stop → migrate → start** (not a rolling
 upgrade): drain all old API replicas, run `alembic upgrade head`, start the new
@@ -1280,7 +1239,7 @@ zero-witness never turns green (by design), so v1 can never be sunset.
    Minimum: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL`,
    `KYC_OBJECT_STORE=s3`, `KYC_S3_BUCKET`, `CH_API_KEY`, the two per-environment
    values from §2, and the full **HMAC credential set**. Production boot refuses without
-   all of it (PR 5a):
+   all of it:
    - v1 legacy secret: `KYC_PLATFORM_HMAC_SECRET`
    - v2 **inbound** (platform→tool): `KYC_HMAC_INBOUND_KEY_ID` +
      `KYC_HMAC_INBOUND_SECRET`
@@ -1342,19 +1301,20 @@ Read those notes before scheduling the update.
 
 - Code: redeploy the previous image tag. That is the whole rollback when the
   release had no migration (most releases).
-- With a migration: revisions downgrade cleanly
-  (`alembic downgrade <previous revision>` — the release notes name it), but
-  once real traffic has written data under the new schema, prefer rolling
-  forward with a fix. Downgrade without hesitation in staging; in production,
-  check with IPv4.Global first. **Exception — migration 010 (PR 5a) is
+- With a migration: check the release notes for a supported downgrade target
+  and the conditions below. Use `alembic downgrade <previous revision>` only
+  when every revision in that path permits it for the database's current state.
+  These restrictions also apply in staging. Once real traffic has written data
+  under the new schema, prefer rolling forward with a fix. Consult IPv4.Global
+  before a production rollback. **Migration 010 is
   forward-only after cross-case idempotency-key reuse:** its downgrade
-  deliberately refuses (it will not delete immutable audit events to recreate
-  the old global unique — see `docs/RUNBOOK.md` and ADR-003). If two cases have
-  shared an idempotency key, roll forward with a fix; do not downgrade 010.
-  **Exception — migrations 013-023 (PR 7b-core) are forward-only after any wire
+  deliberately refuses because it will not delete immutable audit events to
+  recreate the old global unique. See `docs/RUNBOOK.md`. If two cases have
+  shared an idempotency key, roll forward with a fix, do not downgrade 010.
+  **Exception — migrations 013-023 are forward-only after any wire
   witness exists, positive OR negative** (an `attempt_v1` decision callback with no attempt
-  is durable proof nothing was staged, and counts). Their downgrades refuse — with stable
-  sentinels, in execution order — and `018` through `022` refuse UNCONDITIONALLY
+  is durable proof nothing was staged, and counts). Their downgrades refuse with stable
+  sentinels in execution order. Revisions `018` through `022` refuse UNCONDITIONALLY
   (`MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`,
   `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY`,
   `MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY`,
@@ -1376,13 +1336,13 @@ Read those notes before scheduling the update.
   **024-compatible** image — an older publisher lacks the receipt/terminal
   contract and must not run against preserved evidence. Rollback after first
   witness use is a flag/image rollback on that compatible schema, never a
-  schema downgrade; a pre-7b image is permitted only after the entire walk
+  schema downgrade. A pre-7b image is permitted only after the entire walk
   reaches 012 — which is only possible on a schema that never reached `018`. Once
   `018` through `022` ARE installed, the supported rollback is redeploying the prior
-  reviewed `024`-compatible image against the schema it is already on; the schema
+  reviewed `024`-compatible image against the schema it is already on. The schema
   does not move. Do not apply `018` or anything above it in production until that
   bridge image has been reviewed and
-  staged; on this preproduction branch, the safe recovery path is roll-forward.
+  staged. On this preproduction branch, the safe recovery path is roll-forward.
   The UPGRADE side is gated too: `017` and `018` both refuse with
   `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` / `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS`
   while any live (unexpired) outbox claim
@@ -1393,18 +1353,18 @@ Read those notes before scheduling the update.
   when the observable authority surface
   is not the one the prior revision installed. Every other deliberate refusal is
   indexed in `docs/RUNBOOK.md` § "Migration refusal sentinels". Witness writers (the publisher and
-  retention) share one advisory fence with the migrations — writers shared, maintenance
-  exclusive — so maintenance queues behind those writers instead of deadlocking with
+  retention) share one advisory fence with the migrations. Writers hold it shared,
+  and maintenance holds it exclusively, so maintenance queues behind those writers instead of deadlocking with
   them. **The fence does not cover the pipeline's decide transaction**, which locks the
-  case row before inserting the outbox row and takes no fence; a migration run against a
+  case row before inserting the outbox row and takes no fence, a migration run against a
   live pipeline can still deadlock, and the live-claim preflight cannot see a run
   mid-decide because it holds no outbox claim. `022` and `023` sharpen that from "can" to
   "does": they are the first revisions to take `ACCESS EXCLUSIVE` on `decisions` and `cases`,
-  in the opposite order from BOTH decision writers — the pipeline's decide transaction and
+  in the opposite order from BOTH decision writers: the pipeline's decide transaction and
   the API's inline `reviewer.manual_approve` (jobless: no run, no claim, invisible to any
-  job/run drain check) — so a concurrent decide OR inline approval deadlocks them (`40P01`)
-  — see `docs/RUNBOOK.md`. That is what the DRAINED cutover is for —
-  stop the pipeline workers too, not just the publishers.
+  job/run drain check). A concurrent decide OR inline approval therefore deadlocks them (`40P01`).
+  See `docs/RUNBOOK.md`. That is what the DRAINED cutover is for:
+  stop the pipeline workers as well as the publishers.
 
 ## 7. Monitoring and incidents
 
@@ -1429,21 +1389,21 @@ token. Three limits to know:
   re-run the broker screen — after a blocklist update, re-send the original
   evidence event (or `kyb.run_requested`) instead.
 - For a registry outage, inspect the failed source and case reason codes.
-  Some runs complete with partial evidence; a failed job may need recovery.
+  Some runs complete with partial evidence, a failed job may need recovery.
   After the source recovers, send the relevant evidence event to fetch again.
   `recalculate.requested` alone does not refresh the source data.
 
 ## 8. Rules
 
-- No code edits on the server; no schema or data edits outside the runbook
+- No code edits on the server, no schema or data edits outside the runbook
   playbooks. The audit trail assumes the repo is the truth.
 - Packaged policy changes require a release and version-bump guard. After the
   explicit configuration cutover below, scoring points, broker snapshots, and
   Salesforce destination names instead use audited, server-saved revisions.
   Threshold, hard gates, evidence rules, and M2 are not console-editable.
-- Secrets only via environment / Secrets Manager; nothing secret is logged.
+- Secrets only via environment / Secrets Manager, nothing secret is logged.
 - Never set `KYC_AUTH_DISABLED` outside local dev. Production boot refuses it.
-- **ANY change to `KYC_OUTBOX_MAX_ATTEMPTS` — raising OR lowering — is a DRAINED
+- **ANY change to `KYC_OUTBOX_MAX_ATTEMPTS` (raising OR lowering) is a DRAINED
   publisher cutover, not a rolling restart.** Each publisher enforces the ceiling
   it was started with, so during a rolling restart an OLD and a NEW publisher run
   different ceilings against the same rows:
@@ -1454,15 +1414,14 @@ token. Three limits to know:
     irreversible.
 
   So for EITHER direction, in this order: (1) disable autoscaling and rolling
-  restart; (2) stop ALL outbox publishers of EVERY role — both the standalone
-  `outbox_worker` and the embedded `dev_worker`; (3) attest zero publishers are
-  running (the same attested-stop the reset CLI requires); (4) attest every new
-  task definition carries the exact new value; (5) start. This procedure is the
+  restart, (2) stop ALL outbox publishers of EVERY role — both the standalone
+  `outbox_worker` and the embedded `dev_worker`, (3) attest zero publishers are
+  running (the same attested-stop the reset CLI requires), (4) attest every new
+  task definition carries the exact new value, (5) start. This procedure is the
   canonical record `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER`, rendered
-  below and validated by `tests/unit/test_outbox_ceiling_contract.py`; RUNBOOK and
-  `.env.example` embed the SAME rendered block. (A fleet-wide DB-persisted ceiling
+  below. RUNBOOK and `.env.example` embed the same rendered block. (A fleet-wide DB-persisted ceiling
   epoch enforced before claim is the fail-closed alternative if runtime config
-  drift must be impossible — deferred; the drained cutover is the contract today.)
+  drift must be impossible — deferred, the drained cutover is the contract today.)
 
 <!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:start -->
 KYC_OUTBOX_MAX_ATTEMPTS: both-direction DRAINED publisher cutover (NOT a rolling restart)
@@ -1473,12 +1432,12 @@ KYC_OUTBOX_MAX_ATTEMPTS: both-direction DRAINED publisher cutover (NOT a rolling
 5. start publishers of roles: outbox_worker, dev_worker
 <!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:end -->
 
-## 9. PR 5b cutover — brief full maintenance window
+## 9. Reviewer-actor cutover — brief full maintenance window
 
-PR 5b adds the reviewer-actor trust floor that closes the "review completed /
+This cutover adds the reviewer-actor trust floor that closes the "review completed /
 approved by anyone holding the shared secret" forgery: it requires the signed
 envelope's `actor` to identify the reviewer (`docs/PLATFORM_INTEGRATION.md`
-§3), not just the payload. **This is not a rolling deploy.** During any
+§3), rather than relying on the payload alone. **This is not a rolling deploy.** During any
 old/new overlap, an old replica still honors the exact forgery this release
 closes — an old API applies `reviewer.manual_approve` inline with no actor
 floor, and an old pipeline worker (which claims a job purely by kind, with no
@@ -1486,11 +1445,11 @@ event-type filter) can still close a queued `system`-actor website completion
 under the old actorless semantics. There is no way to keep an old replica
 serving *any* traffic while guaranteeing it never touches a sensitive event,
 so this release ships as a **brief full maintenance window** — the same
-non-hot **stop → deploy → start** pattern PR 5a used (§2), extended to workers
+non-hot **stop → deploy → start** pattern used for migration 010 (§2), extended to workers
 as well as the API, which removes old/new overlap entirely. No migration
 ships with this change.
 
-The window is a real interruption, not a seamless roll: `POST
+The window is a real interruption, not a smooth roll: `POST
 /v1/cases/{case_id}/events` is unavailable for its duration, for every event
 type, and the pipeline is stopped. The "no loss" guarantee for that
 interruption is a **platform prerequisite**, not something the current API
@@ -1507,9 +1466,9 @@ the same body/key and a fresh signature.
 
 Steps:
 
-0. **Before the window:** build and publish the reviewed image; record its
-   **digest**. Every step below that runs code — the recovery one-shot, the
-   new API, the new workers — is pinned to that one digest. The recovery
+0. **Before the window:** build and publish the reviewed image, record its
+   **digest**. Every code-running step below is pinned to that digest: the
+   recovery one-shot, new API and new workers. The recovery
    module (`kyc_tool.ops.requeue_interrupted_jobs`) exists only in the new
    image, so running it on the still-current old task definition fails with
    `No module named …`.
@@ -1518,13 +1477,13 @@ Steps:
    outbound events, and the composer route (a `POST` to `/ui/api/send-event`) is
    edge-blocked — or old replicas are flipped to `KYC_UI_ENABLED=false` — so
    an operator on a still-live old replica can't post an inline forged
-   approval. The whole window is a maintenance pause; a partial pause cannot
+   approval. The whole window is a maintenance pause, a partial pause cannot
    guarantee no-loss.
 2. **Stop all old processes together** — the API pool and the pipeline-worker
    pool, as one coordinated action, **no graceful drain**, without awaiting
    either pool before signaling the other. Confirm both pools are at **zero**
    before continuing. A sequenced stop leaves the not-yet-stopped pool live
-   and able to commit a forgery in the gap; the edge block cannot revoke a
+   and able to commit a forgery in the gap, the edge block cannot revoke a
    request already inside an old API's threadpool, so old APIs must be
    *stopped*, not drained. Hard termination is safe here: every transition
    (and every ingest) commits in one transaction, so interrupted work simply
@@ -1551,17 +1510,17 @@ Steps:
    through the edge would let the load balancer's own 403 falsely certify a
    broken app. Use only side-effect-free probes (each is rejected at the
    ingest floor and rolls back, writing no rows) and assert the response
-   **body**, not just the status code:
+   **body** as well as the status code:
    - a signed `system`-actor `website.review_completed` against a valid open
-     task → the app's **422** (a 404/409 would mask a broken actor floor);
-   - a mismatched-actor `reviewer.manual_approve` → the app's **422**;
+     task → the app's **422** (a 404/409 would mask a broken actor floor),
+   - a mismatched-actor `reviewer.manual_approve` → the app's **422**,
    - the composer → the app's **403** for both sensitive event types.
 
    Do not probe the decide-txn guard's live behavior in production this way —
    a real pipeline run there writes a decision and enqueues a callback
    unconditionally, and the outbox publisher (a separate process, not stopped
    in step 2) would deliver it to the platform. That behavior is proven
-   **before the window, in staging**, against the exact §0 digest; attest the
+   **before the window, in staging**, against the exact §0 digest, attest the
    same digest here.
 6. **Start the new workers** (they now claim the recovered queue under the
    new decide-txn actor guard), then **resume** — unpause platform event
@@ -1571,10 +1530,10 @@ Steps:
 
 Rollback mirrors the same window and pins the recovery one-shot to the **last
 image that still contains it**: pause all submission, stop all new processes
-together (same coordinated hard stop; same recovery command, run against a
+together (same coordinated hard stop, same recovery command, run against a
 digest that has the module), redeploy the prior image for API **and**
 workers, verify, start workers, resume — accepting that the prior image
-restores pre-PR-5b behavior.
+restores the previous actor-validation behavior.
 
 **Rollback verification is non-mutating only:** `GET` probes of `/readyz`
 and `/healthz`, and prior-image digest attestation. Do **not** run the step-5
@@ -1586,28 +1545,27 @@ probe would *perform* the forgery it is meant to detect, not find it.
 Exercise that behavior only in staging or an isolated DB. Keep all submission
 and the composer blocked until the safe, non-mutating checks pass.
 
-## 10. PR 6 cutover — bundle-pinning activation
+## 10. Bundle-pinning activation
 
-PR 6 pins the policy bundle (and records the engine build) a run is actually
+This cutover pins the policy bundle, and records the engine build, that a run is actually
 scored and decided under, instead of trusting whatever the worker process
 happened to have loaded. It ships in two parts: a **rolling** part (safe to
 deploy like any other release) and a **drained** part (the flag flip, not
 safe to roll).
 
-**Rolling — migration + provenance, flag stays off.** Migration 011
-(`policy_bundles`, `bundle_pinning_epoch`, and the new nullable provenance
-columns) is additive and hot-compatible — deploy it through the normal §4
-flow. It is hot-compatible precisely because its three provenance-column
-CHECKs land `NOT VALID` (a brief, metadata-only lock, no table scan) and are
-validated by the follow-on migration 012 via `VALIDATE CONSTRAINT` under a
-non-blocking lock, so the rolling `alembic` upgrade-to-head (the §4 one-shot) does not stall
-ingest/decide writers on large `checks`/`decisions` audit tables. On the PR6
+**Rolling migration and provenance, flag stays off.** Migration 011 adds
+`policy_bundles`, `bundle_pinning_epoch`, and the nullable provenance columns.
+It supports live deployment through the normal §4 flow. Its three provenance
+checks land `NOT VALID`, which takes a brief metadata lock and does not scan the
+tables. Migration 012 then uses `VALIDATE CONSTRAINT` under a lock that does not
+block writers, so the rolling `alembic` upgrade-to-head (the §4 one-shot) does not stall
+ingest/decide writers on large `checks`/`decisions` audit tables. On the new
 image, the API and pipeline worker seed and read back the
 on-disk policy bundle at startup (failing closed on a corrupt persisted row)
 and every automatic/manual decision starts recording bundle **and** engine
 provenance immediately — `Settings.enforce_bundle_pinning`
 (`KYC_ENFORCE_BUNDLE_PINNING`) stays `false`, so scoring itself is
-byte-identical to pre-PR6 (a strict no-op; see ADR-005). A `GET` on `/readyz`
+byte-identical to the unpinned behavior. A `GET` on `/readyz`
 unconditionally confirms the process's loaded bundle is durably resolvable
 from the store — watch it like any other readiness check during this
 rollout.
@@ -1623,13 +1581,13 @@ python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>
 `--expect-hash` is the hash an operator names from a reviewed source (the
 release notes / deploy manifest) — the command computes the hash of the
 bundle at `KYC_POLICY_DIR`, compares it to `--expect-hash`, and **only on a
-match** stores it; a mismatch raises and writes nothing, so a wrong policy
+match** stores it, a mismatch raises and writes nothing, so a wrong policy
 directory can never land a row silently.
 
 **Drained cutover — flip the flag.** This is not a rolling deploy: every
 worker that claims a `run_transition` job while `enforce_bundle_pinning` is
 inconsistent across the pool risks resolving a bundle differently from its
-peers. Flip it with the pool fully drained, the same shape PR 5a/5b used:
+peers. Flip it with the pool fully drained, using the same stop/start shape described above:
 
 1. **Preflight.** ``python -m kyc_tool.ops.verify_pinnable_backlog`` — checks
    that every queued/running/dead `run_transition` job's run has a
@@ -1637,20 +1595,20 @@ peers. Flip it with the pool fully drained, the same shape PR 5a/5b used:
    blocks the cutover** — seed the missing bundle(s) (§ above, or historical
    recovery via the same command with the older policy directory) and re-run
    until it exits 0.
-2. **Disable autoscaling/restarts; confirm zero old workers.** At the
+2. **Disable autoscaling/restarts, confirm zero old workers.** At the
    orchestrator (not by row count — a job-table count doesn't prove process
    quiescence), confirm every pipeline-worker replica currently running
    predates this cutover is gone.
 3. **Recover interrupted jobs.** With workers confirmed at zero, run
    ``python -m kyc_tool.ops.requeue_interrupted_jobs`` once — every
-   `status='running'` job at this point is by definition interrupted; it
+   `status='running'` job at this point is by definition interrupted, it
    requeues the whole set without consuming the forced-stop attempt and
    asserts zero `running` rows remain. Its precondition is "all workers
    confirmed stopped" (step 2) — do not run it while any worker is live.
 4. **Start flag-on workers.** Set `KYC_ENFORCE_BUNDLE_PINNING=true` and start
    the pipeline-worker pool. Confirm the startup **attestation** log line on
-   every replica — a structured `bundle_pinning_ready` event carrying
-   `flag=true`, `bundle_hash`, and `engine_build_id` — emitted only after the
+   every replica. The structured `bundle_pinning_ready` event carries
+   `flag=true`, `bundle_hash`, and `engine_build_id`, and is emitted only after the
    worker's own seed-and-verify passes, so a replica that never logs it never
    started claiming jobs.
 5. **Resume.** Unpause whatever was paused for the drain (the API itself
@@ -1666,7 +1624,7 @@ python -m kyc_tool.ops.activate_bundle_pinning_epoch \
 
 This compares the **locally loaded** policy bundle and this process's
 `ENGINE_BUILD_ID` against the `--expect-*` arguments before touching the
-database at all (a valid-but-wrong bundle is refused here, not merely by
+database at all (a valid-but-wrong bundle is refused here, rather than only by
 store-absence later), writes the singleton `bundle_pinning_epoch` row with
 database time, and read-back-fails if a concurrent activation already wrote
 different values — so a skewed operator clock or a mismatched second
@@ -1674,29 +1632,30 @@ activation can never silently move the boundary. From `activated_at`
 onward, `docs/RUNBOOK.md`'s post-epoch alert treats any check/decision
 missing its provenance stamp as an anomaly, not an expected state.
 
-**Rollback — flag-only, no data migration.** Normal rollback for PR 6 never
-means resuming on a pre-PR6 image (that would silently stop writing
+**Rollback — flag-only, no data migration.** Normal rollback never
+means resuming on an image that predates bundle provenance (that would silently stop writing
 provenance and, after the epoch, mint permanent NULLs — a defect, not a
-safe fallback). It means disabling the flag **on the PR6 image**, via the
+safe fallback). It means disabling the flag **on the provenance-capable image**, via the
 same drained shape: stop the worker pool → confirm zero running →
 `ops.requeue_interrupted_jobs` → start workers with
 `KYC_ENFORCE_BUNDLE_PINNING=false` → resume. The creation pin and
-provenance writing are preserved throughout; scoring simply returns to the
+provenance writing are preserved throughout, scoring simply returns to the
 process-loaded bundle. Migration 011 is **retained** — never downgrade it
 once any bundle row, provenance column, or the epoch row is populated (its
 downgrade deliberately refuses, the same forward-only-after-use contract
-migration 010 established in ADR-003).
+migration 010 established).
 
-## 11. PR 7b-core cutover — drained maintenance window (migration 013)
+## 11. Callback cutover — drained maintenance window (migration 013)
 
 **Step 0 — pre-window diagnostic (BEFORE any outage):**
 0.1 Suspend the retention schedule.
 0.2 Terminate and wait for every active retention task.
 0.3 Capture target-orchestrator zero-running evidence. `TODO(integration)`: the exact
-    zero-running listing — the `aws` CLI's `ecs list-tasks` scoped to the cluster and the
-    retention family (or the EC2 equivalent) — and its expected zero-task output MUST be
-    recorded here as a typed operator command once the production substrate is chosen. A
-    pytest does NOT prove this — it is a deployment acceptance. Do not invent a substrate.
+    zero-running listing must use the `aws` CLI's `ecs list-tasks` scoped to the cluster and the
+    retention family, or the EC2 equivalent. Its expected zero-task output MUST be
+    recorded here as a typed operator command once the production deployment target is chosen.
+    A pytest does not prove this. It is a deployment acceptance check and needs evidence from
+    the selected orchestrator.
 0.4 With the schedule still suspended, run the digest-pinned
     ``python -m kyc_tool.ops.verify_pr7b_core_backfill``. The result is valid ONLY while retention stays
     suspended AND the 0.3 attestation holds.
@@ -1705,9 +1664,9 @@ migration 010 established in ADR-003).
     `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`025`) is
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
-    THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE — a pre-window maintenance stop, not the
-    cutover (which 0.4 still gates): FIRST run the prerequisites check (read-only, takes NO
-    lock) and confirm it is GREEN — exact schema phase, correct role, `outbox_id_seq`
+    THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE. It uses a pre-window maintenance stop,
+    not the cutover, which 0.4 still gates. FIRST run the prerequisites check (read-only, takes NO
+    lock) and confirm it is GREEN for the exact schema phase, correct role, `outbox_id_seq`
     ownership, and timeout budgets:
 
 ```operator
@@ -1715,10 +1674,10 @@ python -m kyc_tool.ops.verify_pr7b_ops_prerequisites --expect-revision 012
 ```
 
 A wrong maintenance credential OR wrong phase is caught HERE, not at `ALTER SEQUENCE`
-inside the stop; then pause submissions,
+inside the stop, then pause submissions,
 hard-stop and attest EVERY writer (API,
 pipeline, outbox, `dev_worker`, retention), then run
-the restore CLI (dry-run first; add `--apply` to perform):
+the restore CLI (dry-run first, add `--apply` to perform):
 
 ```operator
 python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
@@ -1728,7 +1687,7 @@ python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
 `--expect-manifest-digest` is MANDATORY and is an INTEGRITY check: the tool recomputes
 the sha256 of the evidence file (``sha256sum <file.json>``) and refuses unless it matches, so a
 tampered or wrong file is rejected before any DB work — the file cannot self-certify by carrying
-its own digest. The tool does NOT verify a cryptographic signature; the digest's authenticity is
+its own digest. The tool does NOT verify a cryptographic signature, the digest's authenticity is
 yours to establish out of band, from a trusted/signed backup manifest (machine-verified signing
 is a future option).
 It validates the whole
@@ -1739,13 +1698,13 @@ sequence together. Then rerun 0.4 (the gate that reopens cutover) and either RES
 proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path — the earlier
 revision of this section prescribed exactly that and was circular: the diagnostic stayed red
 until the restore, while the sequence repair was documented as reachable only after cutover
-step 2 and knew nothing of the id being restored (re-audit `f495de8` F1).
+step 2 and knew nothing of the id being restored.
 0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
     advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
     (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
-        callback: `decision_id` plus **every schema-012 `outbox` column** —
+        callback: `decision_id` plus **every schema-012 `outbox` column**:
         `(id, kind, case_id, run_id, payload_json, status, attempts, next_attempt_at,
-        delivered_at, last_error, created_at)` — with `body_digest` computed ON THE BACKUP ROW as
+        delivered_at, last_error, created_at)`. Compute `body_digest` ON THE BACKUP ROW as
         `encode(sha256(convert_to(payload_json::text,'UTF8')),'hex')`. `md5(...)` is prohibited.
         This procedure runs BEFORE 013, so it must name NO 013-only column: `resolved_at`,
         `ordering_stream`, `decision_sequence` and the claim tuple do not exist yet. Omitting the
@@ -1753,19 +1712,19 @@ step 2 and knew nothing of the id being restored (re-audit `f495de8` F1).
         with a reset `attempts`/`next_attempt_at`/`last_error` is NOT the row that was pruned.
     (b) The restore MUST re-insert the ORIGINAL primary key AND every other recorded column:
         `INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, attempts,
-         next_attempt_at, delivered_at, last_error, created_at) VALUES (<original_outbox_id>, ...)`
-         — every value from the evidence tuple, none defaulted. A
+         next_attempt_at, delivered_at, last_error, created_at) VALUES (<original_outbox_id>, ...)`.
+        Use every value from the evidence tuple, with none defaulted. A
         default-id INSERT is prohibited (it allocates a fresh id and re-ranks the restored older
         callback as newer), and substituting `now()` for `delivered_at` is prohibited (it falsifies
         the audit record). If the original id is unavailable, do NOT restore: remain
         `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012. The evidence tuple is captured into the JSON
-        file the restore CLI's `--evidence` input consumes; `--expect-original-id` must repeat
+        file the restore CLI's `--evidence` input consumes, `--expect-original-id` must repeat
         the id (double entry). The id, body digest and decision linkage are machine-refused on
-        mismatch; the lifecycle fields are ATTESTED inputs from the backup — but the MANDATORY
+        mismatch. The lifecycle fields are ATTESTED inputs from the backup, but the MANDATORY
         `--expect-manifest-digest` (sha256 of the whole evidence file, from the signed manifest)
         binds every one of them, so a falsified backup value cannot pass without also breaking the
         signed digest. The signed manifest and the documented capture query are the sanctioned source.
-    (c) ACCEPTANCE PREDICATE — POSITIVE and fail-closed. Run per restored callback; it MUST return
+    (c) ACCEPTANCE PREDICATE — POSITIVE and fail-closed. Run per restored callback. It MUST return
         EXACTLY ONE row before proceeding. ZERO rows = still blocked. Do NOT invert it into a
         "select the mismatches, expect zero rows" form: an absent row (or one restored under the
         wrong `run_id`) matches nothing and would read as accepted.
@@ -1783,29 +1742,29 @@ step 2 and knew nothing of the id being restored (re-audit `f495de8` F1).
         Every schema-012 column is compared, so dropping any one of them from the restore fails
         the predicate. `IS NOT DISTINCT FROM` is used for nullables so NULL matches NULL.
     (d) THE SEQUENCE IS THE RESTORE CLI'S JOB — there is NO separate precondition to satisfy
-        first (re-audit `8377440` F3: the old text made the restore reachable only after a
-        `next_id > original_outbox_id` check that the documented `max=5`/`missing-id=100` case fails,
-        which is exactly the case the restore exists for). `restore_pr7b_core_callback` floors the
+        first. A `next_id > original_outbox_id` precondition would fail for the documented
+        `max=5`/`missing-id=100` case, which is exactly the case the restore exists for.
+        `restore_pr7b_core_callback` floors the
         sequence to `GREATEST(max(id), original_id) + 1` in the SAME transaction as the row
         insert, under `ACCESS EXCLUSIVE`, with a fail-closed read-back — whether the missing id is
         below OR above the current high-water. It never `setval`s (a read-modify-write on a
-        non-transactional object that can rewind under concurrent `nextval`); `ALTER SEQUENCE …
+        non-transactional object that can rewind under concurrent `nextval`), `ALTER SEQUENCE …
         RESTART WITH` takes a literal and excludes `nextval` for the transaction. Run it (dry-run,
         then `--apply`) as step 0.5 above — the restore and the sequence floor are ONE action, not
         a check-then-repair sequence.
     (e) ``python -m kyc_tool.ops.repair_outbox_sequence`` is the SEPARATE DRAINED action for the
         ONLY case the restore does not cover: a divergent sequence high-water with NO row to
         restore (nothing missing, the counter itself is wrong). Same maintenance-stop
-        preconditions and owner privilege; pass `--floor` with the id when an id above max must stay cleared.
+        preconditions and owner privilege, pass `--floor` with the id when an id above max must stay cleared.
         It is never a prerequisite the restore waits on.
     (f) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
 
 **Cutover (only after 0.4 is green):**
 1. Pause submission, edge-block the composer, disable autoscaling/restarts.
-2. Hard-stop API, pipeline, outbox, `dev_worker` (queue AND outbox), retention, and every writer;
+2. Hard-stop API, pipeline, outbox, `dev_worker` (queue AND outbox), retention, and every writer,
    attest zero at the orchestrator.
 3. Run the shipped ``python -m kyc_tool.ops.requeue_interrupted_jobs``. NO outbox reset here — the
-   pre-013 schema has no claim columns; an interrupted old claim simply waits until its already-
+   pre-013 schema has no claim columns, an interrupted old claim simply waits until its already-
    recorded `next_attempt_at`. Preserve every pending row's `next_attempt_at`.
 4. Run ``python -m alembic -c alembic.ini upgrade head`` (the chain `013`→`014`→…→`022`→`023`) — the deployment image runs its exact
    equivalent. This repeats the §0 parity preflights under the zero-writer boundary and is the
@@ -1821,13 +1780,13 @@ step 2 and knew nothing of the id being restored (re-audit `f495de8` F1).
 end in a full resume — never leave the system stopped or retention frozen:**
 R1. Pause submissions, edge-block the composer, disable autoscaling/restarts.
 R2. Hard-stop and orchestrator-attest zero API, pipeline, outbox, `dev_worker`, retention, every writer.
-R3. While 013 still exists, run ``python -m kyc_tool.ops.reset_interrupted_outbox_claims`` (post-013-only;
+R3. While 013 still exists, run ``python -m kyc_tool.ops.reset_interrupted_outbox_claims`` (post-013-only,
     clears complete claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero) and
     verify zero claim tuples.
 R4. **With `018` or anything above it installed there is no schema-downgrade path**: `018` through
     `022` refuse unconditionally — a walk from the head prints
     `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY` (`023`'s downgrade is a validation-only
-    no-op the walk passes through first; the whole command is ONE transaction, so on refusal
+    no-op the walk passes through first, the whole command is ONE transaction, so on refusal
     even that step rolls back and the schema does not move) — because walking below them would restore
     search-path-vulnerable authority functions, so rollback goes straight to R5 (image-only on
     the schema already installed). The walk below is the HISTORICAL path, reachable only on a
@@ -1835,46 +1794,46 @@ R4. **With `018` or anything above it installed there is no schema-downgrade pat
     REQUIRED positional argument — a bare `alembic` downgrade invocation without it exits with a usage error
     mid-outage). That walk is `017 → 016 → 015 → 014 → 013 → 012`, and EACH revision preflights
     under
-    `LOCK TABLE ... ACCESS EXCLUSIVE` (child-first from `015` on; `017` first takes the shared
+    `LOCK TABLE ... ACCESS EXCLUSIVE` (child-first from `015` on, `017` first takes the shared
     maintenance/writer advisory fence EXCLUSIVE, so it queues behind live witness writers instead
     of reasoning about their lock order). Sentinels in execution order:
-    - `017` refuses — `MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE` — when ANY attempt row,
+    - `017` refuses with `MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE` when ANY attempt row,
       terminal wire digest, or `attempt_v1` decision callback exists. NEGATIVE evidence counts:
       an attempt-regime row with no attempt is the durable proof nothing was staged.
-    - `016` refuses — `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE` — same rule one revision
+    - `016` refuses with `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`: same rule one revision
       down (defense in depth below `017`), including the `attempt_v1` negative-evidence case.
-    - `015` refuses — `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE` — on any attempt row or
-      terminal digest (child-first lock order; cannot deadlock a live writer).
-    - `014` refuses — `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE` — same witness rule.
+    - `015` refuses with `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE` on any attempt row or
+      terminal digest (child-first lock order, cannot deadlock a live writer).
+    - `014` refuses with `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`: same witness rule.
     - `013` refuses on a `superseded` row, a surviving terminal digest
       (`MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`), or the attempt table under a bare `013`
       stamp (`MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`).
-R5. ROLLBACK OUTCOME A — downgrade REFUSED (any sentinel above): the DB stays on the
+R5. ROLLBACK OUTCOME A: downgrade REFUSED (any sentinel above). The DB stays on the
     witness-authority schema, so KEEP or redeploy the reviewed **`024`-COMPATIBLE image** digest —
     an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
-    evidence; PROHIBIT the pre-7b image outright. Rollback after first witness use is a
+    evidence, PROHIBIT the pre-7b image outright. Rollback after first witness use is a
     FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is
     permitted ONLY after the entire walk reaches `012` (outcome B). Verify `/readyz`, start + attest its fenced workers, then
     re-enable retention, autoscaling/restarts, and submissions and remove the composer edge block —
     OR remain in a DELIBERATELY DECLARED maintenance incident while the forward fix is applied. Do
     not end stopped.
-R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image digest; start API, probe
-    `/readyz`, then start + attest its workers; attest image digest + running processes; then re-enable
+R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image digest, start API, probe
+    `/readyz`, then start + attest its workers, attest image digest + running processes, then re-enable
     retention, autoscaling/restarts, and submissions and remove the composer edge block. Redeploying
     the pre-7b image BEFORE 013 is applied is also safe.
 
 ## 12. Live configuration cutover (migration 024)
 
 Installing schema `024` does **not** activate configuration. Core migrations
-`013`–`023` and configuration migration `024` are frozen independently; do not
+`013`–`023` and configuration migration `024` are frozen independently. Do not
 repair either owner's revisions in place. Platform activation `025` remains
-unbuilt/fail-closed; this procedure does not enable M2 or alter callbacks.
+unbuilt and fails closed. This procedure does not enable M2 or alter callbacks.
 
 1. Record a database backup and the exact digest of the configuration-capable
    release image being deployed. Record that same tested image as the recovery
-   image; a pre-configuration image is not a supported rollback after activation.
+   image. A pre-configuration image is not a supported rollback after activation.
    Install schema `024` using the normal migration process. The following CLI
-   requires at least `024`; it is not a schema-`023` preflight.
+   requires at least `024`. It is not a schema-`023` preflight.
 2. Configure `KYC_ENFORCE_BUNDLE_PINNING=true` and a nonempty
    `KYC_UI_ADMIN_TOKEN` in the CLI and every compatible API/pipeline/dev worker
    environment. Supply credentials through the secret store/environment, never
@@ -1888,14 +1847,14 @@ unbuilt/fail-closed; this procedure does not enable M2 or alter callbacks.
 
    Require exit 0 and `ready: true`. Inspect `blocking_jobs`, `blocking_runs`,
    and `problems`. Any job not `done` (including dead/retryable work) and any
-   unfinished legacy run block activation. Drain them under the old behavior;
+   unfinished legacy run block activation. Drain them under the old behavior,
    do not relabel them complete, delete them, or invent historical snapshots.
    Review the entire legacy broker baseline: exact stable IDs, names, policies,
    all identifier classes, and notes. Invalid/oversized baselines refuse rather
    than truncate. The CLI also verifies the packaged/stored policy baseline.
-4. Block new event admissions and stop all relevant writers: API/composer,
-   pipeline and dev workers, retry/recovery tools, publishers, retention, and
-   deployment auto-restarts. Attest their stopped state at the orchestrator.
+4. Block new event admissions and stop all relevant writers: the API and
+   composer, pipeline/dev workers, retry/recovery tools, both publishers and
+   retention, plus deployment auto-restarts. Attest their stopped state at the orchestrator.
    Rerun the read-only preflight, then apply:
 
    ```bash
@@ -1907,28 +1866,875 @@ unbuilt/fail-closed; this procedure does not enable M2 or alter callbacks.
    is operator-supplied, not fleet discovery. Apply rechecks under database
    writer fences, stores/verifies the policy, snapshots the full broker list
    including notes, and creates default mappings and the active revision in
-   one transaction. Lock/statement budgets are 5/30 seconds; refusal writes
+   one transaction. Lock/statement budgets are 5/30 seconds, refusal writes
    no baseline. An already-active invocation verifies it and never resets it.
 5. Start only the recorded compatible processes with pinning enabled. Require
    `/readyz` and `GET /ui/api/configuration` to verify active authority. Enter
-   the admin credential in console Options for this session; read access alone
+   the admin credential in console Options for this session, read access alone
    is not save authority. Confirm authenticated Save and reload on disposable
    test state before claiming the console is editable. A single process's
    readiness does not attest the whole fleet. Then resume admissions.
 
-Configuration requests are bounded at 32 MiB before decoding; configure the
+Configuration requests are bounded at 32 MiB before decoding, configure the
 ingress limit consistently. The local `scripts/devproxy.py` preserves the
 browser-facing Host for same-origin checks and rejects oversized/malformed
 configuration framing before reading the body. It is a loopback development
 proxy, not a production forwarded-header trust policy. Do not restart an existing
 demo via `scripts/dev.sh`: its cleanup deletes its temporary database. Preserve
 the database and replace only compatible processes in a controlled maintenance
-window; never resume a stale destructive watcher.
+window, never resume a stale destructive watcher.
 
 After activation, recover a prior desired configuration by saving its reviewed
 sections as **new revisions**, retaining history. There is no pointer-reset or
 rollback CLI. A missing/corrupt active revision is a maintenance incident:
 restore verified authority from backup or forward-fix with the recorded compatible
-image; do not substitute current packaged values. Downgrade `024` refuses any
-recorded configuration history. Completed legacy runs stay explicitly unversioned;
+image, do not substitute current packaged values. Downgrade `024` refuses any
+recorded configuration history. Completed legacy runs stay explicitly unversioned,
 ordinary requeue must not feed unfinished unversioned work to snapshot-only workers.
+
+# Part 4: Operations runbook
+
+## Processes
+
+| Process | Command | Notes |
+|---|---|---|
+| API | `uvicorn kyc_tool.api.app:create_app --factory` | stateless, scale horizontally |
+| Pipeline worker | `python -m kyc_tool.workers.pipeline_worker` | N processes, per-case FIFO is queue-enforced |
+| Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | delivers decision callbacks + POC emails |
+| Retention | `python -m kyc_tool.workers.retention` | cron (daily), prunes per KYC_RETENTION_DAYS |
+| Migrations | `alembic upgrade head` | before rollout, downgrade clean EXCEPT migration 010 and the 013-023 witness chain (see below). **018 through 022 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`, `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
+| v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, after the migration-010 cutover, idempotent |
+| Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot, before the bundle-pinning cutover (`docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
+| Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot, stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
+| Bundle epoch activation | `python -m kyc_tool.ops.activate_bundle_pinning_epoch --expect-bundle-hash <sha256> --expect-engine <id>` | one-shot, after the bundle-pinning cutover (`docs/DEPLOYMENT.md` §10), idempotent on a matching re-run, fails on a mismatched one |
+| 7b-core pre-window diagnostic | `python -m kyc_tool.ops.verify_pr7b_core_backfill` | one shot, compatible with schema 012, takes a SHARE lock and is read only. Run it before the window with retention suspended and zero activity attested. A nonzero exit plus `BLOCKED_NO_AUTHORITATIVE_MAPPING` blocks the cutover (see the cutover section). |
+| 7b-core ops prerequisites | `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites --expect-revision 012` | one-shot, READ-ONLY, takes NO lock (no writer stop needed) — run BEFORE pausing service to confirm the maintenance credential: refuses unless the schema is exactly `--expect-revision` (the restore path is `012`), then reports current role, `outbox_id_seq` owner, whether they match, and the lock/statement budgets, nonzero unless the current role OWNS the sequence, so a wrong credential OR wrong phase is caught before the outage, not inside it |
+| Outbox claim reset | `python -m kyc_tool.ops.reset_interrupted_outbox_claims` | one-shot, post-013-only, ONLY with every publisher stopped + attested — clears complete claim tuples, preserves `next_attempt_at`, atomic (refuses on any surviving tuple) |
+| Outbox sequence repair | `python -m kyc_tool.ops.repair_outbox_sequence [--floor N]` | one-shot, DRAINED maintenance stop only (takes `ACCESS EXCLUSIVE` on outbox), restarts `outbox_id_seq` at `GREATEST(max(id), floor)+1` with a fail-closed read-back — exit status IS the result |
+| 7b-core callback restore | `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file> --expect-original-id <id> --expect-manifest-digest <sha256> [--apply]` | one shot for schema 012 only, during the maintenance stop before the window. It defaults to dry run. `--expect-manifest-digest` (sha256 of the file, from the signed backup manifest) is MANDATORY. The file cannot certify itself. The command inserts the exact backed-up row, floors the sequence past it in one transaction and performs two fail-closed reads (see cutover step 0.5/0.6). |
+
+> **Migration 010 is a non-hot, forward-only-after-reuse cutover.** It
+> drops the global unique on `events.idempotency_key`, which the *old* image's
+> ingest still references — deploy **stop/migrate/start**, never rolling. Once
+> the tool has admitted the same idempotency key in two different cases, 010's
+> downgrade **refuses** (it will not delete immutable audit events to recreate
+> the old constraint), roll forward instead. After the new replicas are up and
+> readiness-verified, run the activation command above once to start the v1
+> observation clock.
+
+> **Migrations 013-023 are forward-only after any wire witness — positive OR
+> negative** (an `attempt_v1` decision callback with no attempt is durable proof nothing was
+> staged, and counts). **`018` through `022` go further: they refuse downgrade
+> unconditionally** (`MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY`,
+> `MIGRATION_021_DOWNGRADE_REFUSED_FORWARD_ONLY`,
+> `MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY`,
+> `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY`,
+> `MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`) — walking below them would restore
+> search-path-vulnerable or under-validated authority functions, so once `018` is on the schema
+> the ONLY rollback is redeploying the prior reviewed **024-compatible** image against it.
+> `024` first refuses if any configuration history exists. With unused configuration additions,
+> its downgrade removes only those additions, `023` is validation-only and its downgrade is a
+> no-op, so the walk reaches `022` and refuses there. Do not apply `018` or anything above it in production until that bridge
+> image has been reviewed and staged. This preproduction branch otherwise rolls forward. Below
+> `018` the walk still preflights with stable sentinels, in execution order
+> (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> `MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
+> `MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`) once an attempt row, a
+> terminal `callback_wire_sha256`, or a `superseded` row exists — immutable
+> delivery evidence is never destroyed because local status looks terminal,
+> for a pending/dead callback the attempt row is the only proof bytes were
+> staged. On refusal, KEEP or redeploy the reviewed **024-compatible** image — an older
+> publisher lacks the receipt/terminal contract and must not run against preserved evidence,
+> a pre-7b image is permitted only after the entire walk reaches 012.
+
+> **`022` and `023` need EVERY decision writer drained. This includes the pipeline and API,
+> as well as the publishers.** They are the first revisions in the chain to take `ACCESS EXCLUSIVE` on
+> `decisions` and `cases`. Two writers take those locks in the opposite order: the pipeline's
+> decide transaction (case `FOR UPDATE`, then the `decisions` insert), and the **API process
+> itself** — `reviewer.manual_approve` is handled inline in the ingest transaction with the
+> same case-lock-then-decision-insert shape, with no job and no run, so a job/run drain check
+> cannot see it. Running either migration against either writer **deadlocks** (Postgres
+> reports `40P01` and kills one side, reproduced against both a live decide and a live inline
+> manual approval, `021` does not do it). This is not silent corruption: DDL is transactional,
+> so a killed migration rolls back whole and the schema stays where it was. But it costs the
+> window and it can kill the approval instead of the migration, so before applying `022`/`023`
+> pause event submission, stop and attest the API writers AND the pipeline workers (as well as
+> publishers/retention), then re-run. Unlike the live-claim preflight, this one is **not
+> machine-checked** — `022` and `023` are published and cannot be amended to add one, the
+> machine-checked fence ships with `025` (activation blocker O4).
+
+### Migration refusal sentinels
+
+Every deliberate migration refusal raises a **stable sentinel string**, so a refused
+`alembic upgrade`/`downgrade` reads as a designed stop rather than a broken migration.
+Grep the sentinel out of the command's output and find it here. The exception message
+names the offending rows or objects and a remediation — but published migrations are
+frozen, so a frozen message can lag this document: **where the message and this runbook
+disagree, the runbook wins.** Concretely, `022`'s forward-only refusal still names the
+compatible image for the revision it froze at (`022`). The image to keep is always the one
+compatible with the **live head** — `024`-compatible today, kept current in this document
+by a head-derived test that a frozen migration message cannot satisfy.
+
+Release validation checks that every migration refusal sentinel appears in
+this table, so a new refusal cannot ship undocumented.
+
+| Sentinel | Fires when |
+|---|---|
+| `MIGRATION_014_ATTEMPT_AUTHORITY_MISMATCH` | upgrade: the pre-existing `outbox_delivery_attempts` table being adopted is not the exact expected shape (the amended-013 history means 014 adopts-or-creates) |
+| `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` | upgrade: an unexpired outbox claim exists — stop publishers **and** retention, attest zero old processes, let leases expire or run `reset_interrupted_outbox_claims`, retry |
+| `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS` | upgrade: same live-claim preflight as 017 |
+| `MIGRATION_018_AUTHORITY_MANIFEST_MISMATCH` | upgrade: the observable authority surface (columns, named constraints, indexes, trigger set, function-body digests) is not the one the prior revision installed — refuses **before** any DDL |
+| `MIGRATION_019_AUTHORITY_MANIFEST_MISMATCH` | upgrade: same manifest check, pinned to 018's surface |
+| `MIGRATION_020_AUTHORITY_CODE_MISMATCH` | upgrade: an owned function body or `search_path` pin, or an enabled trigger, differs from the canonical code surface |
+| `MIGRATION_021_AUTHORITY_CODE_MISMATCH` | upgrade: same code-surface check, pinned to 020's |
+| `MIGRATION_021_PREFLIGHT_UNSENDABLE_PENDING_ROWS` | upgrade: `pending` rows carry a redacted body and can never be delivered — the message lists their ids and the `UPDATE … SET status='dead'` that retires them. Arming the guard over them would head-of-line block their streams |
+| `MIGRATION_022_AUTHORITY_SURFACE_MISMATCH` | upgrade: 021's exact trigger definitions or origin-enable modes do not validate |
+| `MIGRATION_022_MANUAL_POINTER_MISMATCH` | upgrade: a `cases.latest_manual_decision_row_id` does not reference a same-case **manual** decision, so the guard cannot be installed over the data |
+| `MIGRATION_023_CROSS_TABLE_AUTHORITY_MISMATCH` | upgrade: a cross-table authority constraint (`fk_outbox_decision_triple`, `fk_cases_latest_decision`, `fk_cases_latest_manual_decision`, their unique targets) or a same-case pointer/outbox row does not validate |
+| `MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY` | downgrade: 013's recorded history was amended, so its own downgrade cannot be trusted to be the inverse of what ran |
+| `MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE` | downgrade: wire witness exists (attempt row, terminal `callback_wire_sha256`, or a `superseded` row) |
+| `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE` | downgrade: as 013 |
+| `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE` | downgrade: as 013 |
+| `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE` | downgrade: as 013, and additionally on NEGATIVE evidence (an `attempt_v1` row with no attempt is durable proof nothing was staged) |
+| `MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE` | downgrade: as 016. This is the outermost witness authority, so a walk from above stops here first. |
+| `MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: **unconditional** — walking below 018 restores search-path-vulnerable or under-validated authority functions |
+| `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
+| `MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
+| `MIGRATION_021_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
+| `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional — reached from head only when 024 has no configuration history, 023's downgrade is a validation-only no-op |
+| `MIGRATION_024_CONFIGURATION_DOWNGRADE_REFUSED` | downgrade: any configuration revision, request, active pointer, or versioned run exists, restore a prior configuration through a new reviewed section save, never delete its history |
+| `MIGRATION_024_CONFIGURATION_DOWNGRADE_BUSY` | downgrade: a configuration-authority lock is busy, acquisition uses NOWAIT so it cannot deadlock a concurrent writer. Quiesce writers before retrying, existing configuration history still requires roll-forward recovery |
+
+> **`enforce_bundle_pinning` is a drained, not rolling, flag flip.**
+> Off (default), every worker scores under its own process-loaded policy
+> bundle — today's behavior, unchanged. On, a worker resolves and scores each
+> run under **that run's creation-pin bundle** (`runs.policy_bundle_hash`)
+> loaded from the durable `policy_bundles` store, and refuses the job
+> (dead-letter, zero side effects — no adapter call, check, decision, token,
+> or outbox row) rather than silently falling back if that bundle can't be
+> loaded. An inconsistent flag value across the worker pool risks different
+> workers resolving different rubrics for the same run — flip it only via
+> the drained cutover in `docs/DEPLOYMENT.md` §10, preflighted by the bundle
+> preflight command above.
+
+## Production configuration (startup kill switches)
+
+Every process (`api`, `pipeline_worker`, `outbox_worker`) refuses to boot when
+`KYC_ENVIRONMENT=production` and any of these is unsafe — `ProductionConfigError`
+lists **all** violations at once:
+
+| Variable | Production requirement |
+|---|---|
+| `KYC_AUTH_DISABLED` | `false` |
+| `KYC_PLATFORM_HMAC_SECRET` | ≥ 32 chars (v1 legacy secret) |
+| `KYC_HMAC_INBOUND_KEY_ID` / `KYC_HMAC_INBOUND_SECRET` | non-empty / ≥ 32 chars (v2 inbound) |
+| `KYC_HMAC_OUTBOUND_KEY_ID` / `KYC_HMAC_OUTBOUND_SECRET` | non-empty / ≥ 32 chars (v2 callbacks) |
+| `KYC_HMAC_V1_INBOUND_SUNSET_AT` / `KYC_HMAC_V1_OUTBOUND_SUNSET_AT` | tz-aware ISO-8601, both required (naive/malformed refused at boot) |
+| `KYC_HMAC_V1_OBSERVATION_WINDOW_DAYS` | ≥ 1 |
+| `KYC_PLATFORM_CALLBACK_URL` | HTTPS, not localhost |
+| `KYC_OBJECT_STORE` / `KYC_S3_BUCKET` | `s3` / non-empty |
+| `KYC_OCR_ENGINE` | not the `json_scan` dev stub — required today regardless of the open document-extraction decision (`docs/PLATFORM_INTEGRATION.md` §6) |
+| `KYC_EMAIL_PROVIDER` | not the `logging` dev stub |
+| `KYC_ADAPTERS_PROFILE` | not the `fixture` stub |
+| `KYC_FLOQER_API_KEY` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`, secret manager or `.env` only — never a task definition, a log, or a case snapshot |
+| `KYC_FLOQER_SHORTCUT_ID` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`, the id of the ONE published shortcut the tool runs |
+| `KYC_READ_AUTH_REQUIRED` | `true` (read API requires a signed request) |
+| `KYC_UI_ADMIN_TOKEN` | required when `KYC_UI_ENABLED=true` |
+| `KYC_OUTBOX_LEASE_SECONDS` | must EXCEED `4 × KYC_OUTBOX_HTTP_TIMEOUT_SECONDS + KYC_OUTBOX_LEASE_MARGIN_SECONDS` — the publisher enforces 4 × timeout as a hard per-attempt deadline, and a lease that expires mid-attempt makes every delivery unwitnessable |
+| `KYC_OUTBOX_HTTP_TIMEOUT_SECONDS` | per HTTPX **inactivity** phase (not a total clock), 4 × this is the enforced whole-attempt deadline. Raising it raises the required lease FOUR-fold — move the two together or production refuses to boot |
+| `KYC_OUTBOX_LEASE_MARGIN_SECONDS` | DB commit/processing room added to the deadline in the lease rule above |
+| `KYC_OUTBOX_MAX_ATTEMPTS` | delivery-attempt ceiling (1 ≤ n ≤ int4 max). **It is not hot-swappable. ANY change, raise OR lower, is a DRAINED publisher cutover, never a rolling restart.** Each publisher enforces the ceiling it started with. Overlapping old/new publishers either send once past a lowered value or dead-letter before a raised value takes effect. A POC dead-letter also irreversibly redacts its token. Cutover, in order: disable autoscaling/rolling restart → stop ALL outbox publishers of every role (`outbox_worker` AND `dev_worker`) → attest zero running → attest every new task definition carries the exact new value → start. Canonical record: `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER` (DEPLOYMENT §8) |
+
+`KYC_OUTBOX_MAX_ATTEMPTS` is a both-direction drained publisher cutover — the
+canonical record (rendered from `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER`,
+identical to DEPLOYMENT §8 and `.env.example`):
+
+<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:start -->
+KYC_OUTBOX_MAX_ATTEMPTS: both-direction DRAINED publisher cutover (NOT a rolling restart)
+1. disable autoscaling and rolling restart
+2. stop ALL publishers of roles: outbox_worker, dev_worker
+3. attest zero publishers running of roles: outbox_worker, dev_worker
+4. attest every new task definition carries KYC_OUTBOX_MAX_ATTEMPTS
+5. start publishers of roles: outbox_worker, dev_worker
+<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:end -->
+
+The real OCR/email/adapter providers are not implemented yet (they land with the
+executable-contract work), so a production worker cannot start until they exist —
+that is intentional fail-closed behaviour, not a bug.
+
+> **Temporary safety hold.** Until the approval-grade validators are hardened,
+> `KYC_ENFORCE_POSITIVE_DECISIONS` defaults to `false`: a computed `approve` /
+> `approve_buy_locked` is emitted as `manual_review_insufficient` (the callback
+> carries an `enforcement_held` object with the computed decision, the audit
+> trail records both). Flip to `true` only once the validators fail closed.
+
+## Ops console (`/ui`)
+
+The console covers most of this runbook visually. Overview has health tiles
+and dead-letter tables with one-click requeue. Cases shows the score meter,
+gates, supersession chains, run state and audit trail. Integrations shows
+(stub/live/needs-config per adapter, env presence, reachability probes),
+Field Map (live Salesforce projection per case), Policy, and a Composer that
+sends signed events server-side. **Security**: **off by default**
+(`KYC_UI_ENABLED=false`), when enabled in production it requires
+`KYC_UI_ADMIN_TOKEN`, and every mutating endpoint (composer, requeue, probe)
+demands `Authorization: Bearer <token>`. Local dev: `bash scripts/dev.sh`
+boots the whole stack and prints the console URL.
+
+**Composer production prohibition.** In production
+(`KYC_ENVIRONMENT=production`) the composer endpoint (`POST
+/ui/api/send-event`) refuses `website.review_completed` and
+`reviewer.manual_approve` with **403** — real reviewer actions must arrive as
+signed platform events carrying a genuine reviewer actor (see
+`docs/PLATFORM_INTEGRATION.md` §3, "Reviewer actor requirement"), not be
+typed into the console by an operator. This server-side 403 is the actual
+security boundary, hiding the composer's controls for these two event types
+in the console UI is optional polish on top of it, not a substitute for it. In
+dev/staging the composer still sends both event types, but with a real
+`{"type": "reviewer", "id": <reviewer_id>}` actor instead of the generic
+`system`/`ops-console` actor it uses for everything else, so console testing
+exercises the same binding production enforces rather than bypassing it.
+
+## Health & dashboards
+
+- `GET /healthz` — liveness + the policy bundle hash. **A hash change without a
+  deploy is an incident** (policy files are immutable per release).
+- `GET /readyz` checks config validity in production, DB connectivity,
+  migration head match and S3 access. It also checks **unconditionally, regardless of
+  `enforce_bundle_pinning`**, that this process's own loaded policy bundle
+  is durably resolvable from the `policy_bundles` store. `503` on any
+  failing check, including a missing/corrupt bundle row, wire it to the load
+  balancer so a mis-migrated, misconfigured, or un-seeded instance drains.
+- `GET /v1/metrics` — watch: `jobs_by_status.dead` (alert > 0),
+  `outbox_by_status.dead` (alert > 0), `runs_by_state.FAILED`,
+  `review_tasks_open_by_type` growth, `event_to_decision_seconds.p95`
+  (budget: < 10s adapter-light, < 120s full runs, human waits excluded),
+  `adapter_latency[].error_rate` per upstream.
+
+## Failure playbooks
+
+### Dead-lettered job (`jobs.status = 'dead'`)
+The run is FAILED with the error recorded, the case is untouched (no partial
+writes because transitions are transactional). After fixing the cause, requeue through
+`POST /v1/ops/requeue/job/{id}` with `Authorization: Bearer
+<KYC_UI_ADMIN_TOKEN>`. This ops endpoint is always mounted, and the console
+button calls the same service. It resets both the job and its FAILED run atomically. Hand-written SQL is NOT a
+sanctioned path: the run reset is load-bearing (a requeued job whose run
+is still FAILED completes immediately without doing anything), and a hand
+UPDATE skips the endpoint's audit record. `recalculate.requested` also produces a
+fresh decision from current live checks, but it does **not** re-run the broker
+screen — after a blocklist update, re-send the original evidence event instead.
+
+**Died with `BundleUnavailable` and `enforce_bundle_pinning=true`?** The
+run's creation-pin bundle (`runs.policy_bundle_hash`) isn't in the
+`policy_bundles` store. **Requeuing without seeding it first just fails
+again the same way.** To reprocess the run, you must first seed that exact
+historical bundle: run `ops.seed_policy_bundle --expect-hash
+<runs.policy_bundle_hash>` pointed at a `KYC_POLICY_DIR` containing those
+exact files (the command computes-then-compares-then-stores, so a
+mismatched directory writes nothing) — only then does the requeue above
+succeed.
+
+### Dead outbox row (callback undeliverable)
+The run sits in PUBLISH_DECISION (visible, correct). Confirm the platform
+endpoint + HMAC secret, then requeue via the ops endpoint ONLY
+(`POST /v1/ops/requeue/outbox/{id}`, `Authorization: Bearer <KYC_UI_ADMIN_TOKEN>`,
+ALWAYS mounted — available with the console disabled, the console button calls
+the same service). A hand
+`UPDATE outbox ...` is NOT a sanctioned path: after migration 013 it would
+leave the claim tuple untouched and bypass the 018+ transition-authority
+validation, stranding or corrupting the row's delivery accounting.
+Redelivery of a decision callback is safe — the platform dedupes on
+(case_id, run_id). **A row whose body has been REDACTED is the exception, for
+either kind** (migration 020+): a POC email's payload is scrubbed the moment it
+dies, because the raw token is never retained, and a decision callback's is
+scrubbed by retention once past `KYC_RETENTION_DAYS`. Either way there is
+nothing deliverable left, so the console endpoint returns 409 — and any hand
+`UPDATE ... SET status='pending'` is refused by the database with *"a redacted
+outbox row can never be MADE sendable again"*. Recovery is a fresh `poc.submitted` (which cancels old tokens
+and sends a new email) or, for a callback, `recalculate.requested`, which
+produces a NEW decision under a new `run_id` — it does not restore the old
+body. A pending row that somehow already carries a redacted body is unsendable
+and should be retired, not requeued:
+```sql
+UPDATE outbox SET status='dead', last_error='body redacted; unsendable'
+WHERE status='pending' AND payload_json = '{"redacted": true}'::jsonb;
+```
+
+### RIR / registry outage
+Runs complete as `partial` (upstream_error recorded, prior checks stay live,
+no failing check is invented — G12 semantics). No action needed, when the
+upstream recovers, re-drive affected cases by re-sending the original
+evidence event (fresh idempotency keys). `recalculate.requested` re-decides
+without re-fetching and without the broker screen — use it only when no new
+evidence or blocklist change is in play.
+
+### Review queue growing
+`GET /v1/review-tasks?status=open`. Website tasks award +10 on pass,
+`poc_email_unavailable` needs an alternate-proof decision by compliance
+(v1: resolve on the platform, the tool records outcomes via events).
+
+### Latency
+Adapter p95 in `/v1/metrics`, per-upstream rate caps via
+`KYC_ADAPTER_RATE_LIMITS` (requests/sec, process-local — divide by worker
+count). Queue depth is `jobs_by_status.queued`, scale pipeline workers
+horizontally (SKIP LOCKED makes them safe, per-case processing order is
+preserved. Callback delivery order is a separate contract,
+`docs/PLATFORM_INTEGRATION.md` §4).
+
+**Floqer.** The documented limits are 200 requests/minute and 10,000/day per
+key. One case costs one run request plus its polls, about 12, and 1.6-9.6 credits.
+The 180 s client deadline caps requests near 45. Set
+`KYC_ADAPTER_RATE_LIMITS={"floqer_company_enrichment": <n>}` per worker so the
+whole fleet stays under 200/minute, and remember credits and requests are
+separate budgets. A run ending `outOfCredits` is a billing stop, not a fault to
+retry: top the account up, do not re-drive the cases.
+
+## Callback cutover — drained maintenance window (migration 013)
+
+**Step 0 — pre-window diagnostic (BEFORE any outage):**
+0.1 Suspend the retention schedule.
+0.2 Terminate and wait for every active retention task.
+0.3 Capture target-orchestrator zero-running evidence. `TODO(integration)`: the exact
+    zero-running listing must use the `aws` CLI's `ecs list-tasks` scoped to the cluster and the
+    retention family, or the EC2 equivalent. Its expected zero-task output MUST be
+    recorded here as a typed operator command once the production deployment target is chosen.
+    A pytest does not prove this. It is a deployment acceptance check and needs evidence from
+    the selected orchestrator.
+0.4 With the schedule still suspended, run the digest-pinned
+    ``python -m kyc_tool.ops.verify_pr7b_core_backfill``. The result is valid ONLY while retention stays
+    suspended AND the 0.3 attestation holds.
+0.5 On failure, ABORT here — before stopping service (no outage begun). Recovery is restore-or-block:
+    restore from authoritative backup the EXACT callback row, OR remain on 012 in
+    `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`025`) is
+    downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
+    `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
+    THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE. It uses a pre-window maintenance stop,
+    not the cutover, which 0.4 still gates. FIRST run the prerequisites check (read-only, takes NO
+    lock) and confirm it is GREEN for the exact schema phase, correct role, `outbox_id_seq`
+    ownership, and timeout budgets:
+
+```operator
+python -m kyc_tool.ops.verify_pr7b_ops_prerequisites --expect-revision 012
+```
+
+A wrong maintenance credential OR wrong phase is caught HERE, not at `ALTER SEQUENCE`
+inside the stop, then pause submissions,
+hard-stop and attest EVERY writer (API,
+pipeline, outbox, `dev_worker`, retention), then run
+the restore CLI (dry-run first, add `--apply` to perform):
+
+```operator
+python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file.json> \
+    --expect-original-id <id> --expect-manifest-digest <sha256>
+```
+
+`--expect-manifest-digest` is MANDATORY and is an INTEGRITY check: the tool recomputes
+the sha256 of the evidence file (``sha256sum <file.json>``) and refuses unless it matches, so a
+tampered or wrong file is rejected before any DB work — the file cannot self-certify by carrying
+its own digest. The tool does NOT verify a cryptographic signature, the digest's authenticity is
+yours to establish out of band, from a trusted/signed backup manifest (machine-verified signing
+is a future option).
+It validates the whole
+contract below, inserts the exact original row, floors the sequence past the restored id
+(`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
+the acceptance predicate and the sequence before committing — any mismatch rolls back row and
+sequence together. Then rerun 0.4 (the gate that reopens cutover) and either RESUME service or
+proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path — the earlier
+revision of this section prescribed exactly that and was circular: the diagnostic stayed red
+until the restore, while the sequence repair was documented as reachable only after cutover
+step 2 and knew nothing of the id being restored.
+0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
+    advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
+    (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
+        callback: `decision_id` plus **every schema-012 `outbox` column**:
+        `(id, kind, case_id, run_id, payload_json, status, attempts, next_attempt_at,
+        delivered_at, last_error, created_at)`. Compute `body_digest` ON THE BACKUP ROW as
+        `encode(sha256(convert_to(payload_json::text,'UTF8')),'hex')`. `md5(...)` is prohibited.
+        This procedure runs BEFORE 013, so it must name NO 013-only column: `resolved_at`,
+        `ordering_stream`, `decision_sequence` and the claim tuple do not exist yet. Omitting the
+        retry/audit columns is what makes "exact" false — a previously retried callback restored
+        with a reset `attempts`/`next_attempt_at`/`last_error` is NOT the row that was pruned.
+    (b) The restore MUST re-insert the ORIGINAL primary key AND every other recorded column:
+        `INSERT INTO outbox (id, kind, case_id, run_id, payload_json, status, attempts,
+         next_attempt_at, delivered_at, last_error, created_at) VALUES (<original_outbox_id>, ...)`.
+        Use every value from the evidence tuple, with none defaulted. A
+        default-id INSERT is prohibited (it allocates a fresh id and re-ranks the restored older
+        callback as newer), and substituting `now()` for `delivered_at` is prohibited (it falsifies
+        the audit record). If the original id is unavailable, do NOT restore: remain
+        `BLOCKED_NO_AUTHORITATIVE_MAPPING` on 012. The evidence tuple is captured into the JSON
+        file the restore CLI's `--evidence` input consumes, `--expect-original-id` must repeat
+        the id (double entry). The id, body digest and decision linkage are machine-refused on
+        mismatch. The lifecycle fields are ATTESTED inputs from the backup, but the MANDATORY
+        `--expect-manifest-digest` (sha256 of the whole evidence file, from the signed manifest)
+        binds every one of them, so a falsified backup value cannot pass without also breaking the
+        signed digest. The signed manifest and the documented capture query are the sanctioned source.
+    (c) ACCEPTANCE PREDICATE — POSITIVE and fail-closed. Run per restored callback. It MUST return
+        EXACTLY ONE row before proceeding. ZERO rows = still blocked. Do NOT invert it into a
+        "select the mismatches, expect zero rows" form: an absent row (or one restored under the
+        wrong `run_id`) matches nothing and would read as accepted.
+        `SELECT 1 AS accepted FROM outbox o JOIN decisions d ON d.id = :decision_id
+         WHERE o.id = :original_outbox_id AND o.kind = :original_kind
+           AND o.case_id = :case_id AND o.run_id = :run_id
+           AND d.case_id = o.case_id AND d.run_id = o.run_id
+           AND encode(sha256(convert_to(o.payload_json::text,'UTF8')),'hex') = :body_digest
+           AND o.status = :original_status
+           AND o.delivered_at IS NOT DISTINCT FROM :original_delivered_at
+           AND o.attempts = :original_attempts
+           AND o.next_attempt_at IS NOT DISTINCT FROM :original_next_attempt_at
+           AND o.last_error IS NOT DISTINCT FROM :original_last_error
+           AND o.created_at IS NOT DISTINCT FROM :original_created_at;`
+        Every schema-012 column is compared, so dropping any one of them from the restore fails
+        the predicate. `IS NOT DISTINCT FROM` is used for nullables so NULL matches NULL.
+    (d) THE SEQUENCE IS THE RESTORE CLI'S JOB — there is NO separate precondition to satisfy
+        first. A `next_id > original_outbox_id` precondition would fail for the documented
+        `max=5`/`missing-id=100` case, which is exactly the case the restore exists for.
+        `restore_pr7b_core_callback` floors the
+        sequence to `GREATEST(max(id), original_id) + 1` in the SAME transaction as the row
+        insert, under `ACCESS EXCLUSIVE`, with a fail-closed read-back — whether the missing id is
+        below OR above the current high-water. It never `setval`s (a read-modify-write on a
+        non-transactional object that can rewind under concurrent `nextval`), `ALTER SEQUENCE …
+        RESTART WITH` takes a literal and excludes `nextval` for the transaction. Run it (dry-run,
+        then `--apply`) as step 0.5 above — the restore and the sequence floor are ONE action, not
+        a check-then-repair sequence.
+    (e) ``python -m kyc_tool.ops.repair_outbox_sequence`` is the SEPARATE DRAINED action for the
+        ONLY case the restore does not cover: a divergent sequence high-water with NO row to
+        restore (nothing missing, the counter itself is wrong). Same maintenance-stop
+        preconditions and owner privilege, pass `--floor` with the id when an id above max must stay cleared.
+        It is never a prerequisite the restore waits on.
+    (f) Only then rerun 0.4 (it must be clean — it also proves existence/1:1 of every mapping).
+
+**Cutover (only after 0.4 is green):**
+1. Pause submission, edge-block the composer, disable autoscaling/restarts.
+2. Hard-stop API, pipeline, outbox, `dev_worker` (queue AND outbox), retention, and every writer,
+   attest zero at the orchestrator.
+3. Run the shipped ``python -m kyc_tool.ops.requeue_interrupted_jobs``. NO outbox reset here — the
+   pre-013 schema has no claim columns, an interrupted old claim simply waits until its already-
+   recorded `next_attempt_at`. Preserve every pending row's `next_attempt_at`.
+4. Run ``python -m alembic -c alembic.ini upgrade head`` (the chain `013`→`014`→…→`022`→`023`) — the deployment image runs its exact
+   equivalent. This repeats the §0 parity preflights under the zero-writer boundary and is the
+   authoritative fail-closed check (the pre-window diagnostic is an early detector, not a substitute).
+   `017` additionally machine-checks the drain: it refuses with `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`
+   while any live (unexpired) outbox claim exists — leases must expire or be reset first.
+5. Start API only, probe `/readyz`, then start + attest the fenced workers. No mutating prod smoke.
+6. RESUME (forward completion): re-enable retention, autoscaling/restarts, and submissions, and
+   remove the composer edge block. The window is NOT closed until all five paused controls
+   (retention, autoscaling, restarts, submissions, composer edge block) are restored or removed.
+
+**Rollback — a two-branch maintenance state machine (as drained as the forward cutover). BOTH branches
+end in a full resume — never leave the system stopped or retention frozen:**
+R1. Pause submissions, edge-block the composer, disable autoscaling/restarts.
+R2. Hard-stop and orchestrator-attest zero API, pipeline, outbox, `dev_worker`, retention, every writer.
+R3. While 013 still exists, run ``python -m kyc_tool.ops.reset_interrupted_outbox_claims`` (post-013-only,
+    clears complete claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero) and
+    verify zero claim tuples.
+R4. **With `018` or anything above it installed there is no schema-downgrade path**: `018` through
+    `022` refuse unconditionally — a walk from the head prints
+    `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY` (`023`'s downgrade is a validation-only
+    no-op the walk passes through first, the whole command is ONE transaction, so on refusal
+    even that step rolls back and the schema does not move) — because walking below them would restore
+    search-path-vulnerable authority functions, so rollback goes straight to R5 (image-only on
+    the schema already installed). The walk below is the HISTORICAL path, reachable only on a
+    schema that never reached `018`: run ``python -m alembic -c alembic.ini downgrade 012`` (the revision is a
+    REQUIRED positional argument — a bare `alembic` downgrade invocation without it exits with a usage error
+    mid-outage). That walk is `017 → 016 → 015 → 014 → 013 → 012`, and EACH revision preflights
+    under
+    `LOCK TABLE ... ACCESS EXCLUSIVE` (child-first from `015` on, `017` first takes the shared
+    maintenance/writer advisory fence EXCLUSIVE, so it queues behind live witness writers instead
+    of reasoning about their lock order). Sentinels in execution order:
+    - `017` refuses with `MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE` when ANY attempt row,
+      terminal wire digest, or `attempt_v1` decision callback exists. NEGATIVE evidence counts:
+      an attempt-regime row with no attempt is the durable proof nothing was staged.
+    - `016` refuses with `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`: same rule one revision
+      down (defense in depth below `017`), including the `attempt_v1` negative-evidence case.
+    - `015` refuses with `MIGRATION_015_DOWNGRADE_REFUSED_WITNESS_IN_USE` on any attempt row or
+      terminal digest (child-first lock order, cannot deadlock a live writer).
+    - `014` refuses with `MIGRATION_014_DOWNGRADE_REFUSED_WITNESS_IN_USE`: same witness rule.
+    - `013` refuses on a `superseded` row, a surviving terminal digest
+      (`MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`), or the attempt table under a bare `013`
+      stamp (`MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`).
+R5. ROLLBACK OUTCOME A: downgrade REFUSED (any sentinel above). The DB stays on the
+    witness-authority schema, so KEEP or redeploy the reviewed **`024`-COMPATIBLE image** digest —
+    an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
+    evidence, PROHIBIT the pre-7b image outright. Rollback after first witness use is a
+    FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is
+    permitted ONLY after the entire walk reaches `012` (outcome B). Verify `/readyz`, start + attest its fenced workers, then
+    re-enable retention, autoscaling/restarts, and submissions and remove the composer edge block —
+    OR remain in a DELIBERATELY DECLARED maintenance incident while the forward fix is applied. Do
+    not end stopped.
+R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image digest, start API, probe
+    `/readyz`, then start + attest its workers, attest image digest + running processes, then re-enable
+    retention, autoscaling/restarts, and submissions and remove the composer edge block. Redeploying
+    the pre-7b image BEFORE 013 is applied is also safe.
+
+## Retention & compliance
+
+`workers.retention` prunes audit rows, delivered **`poc_email`** outbox rows,
+and expired unverified POC tokens past `KYC_RETENTION_DAYS` (default 7y).
+Checks, decisions, and raw evidence are NOT auto-pruned — deleting the
+decision record requires compliance sign-off, do it as a supervised one-off.
+
+**`decision_callback` outbox rows are not pruned, but their
+bodies are destroyed past the window.** The row is the durable ordering
+authority the platform reconciliation is built from. Its `id` records order and
+`status` records the local delivery outcome, so the row is kept indefinitely. `payload_json`, which
+carries `checks[].source` (can be reviewer-derived), is a different matter:
+`workers.retention` redacts it to `{"redacted": true}` once
+`COALESCE(delivered_at, resolved_at, created_at)` is past
+`KYC_RETENTION_DAYS`, for any row whose `status` is `delivered`, `superseded`
+**or `dead`** (migration 020 — a callback that exhausted its attempts during a
+platform outage carries the same reviewer-derived body as any other, and
+keeping it forever inverted this policy, a dead row has neither `delivered_at`
+nor `resolved_at`, so it ages on `created_at`). Redaction **never** touches a
+`pending` row: that body is still sendable, and the database refuses the write.
+A redacted row can no longer be requeued. The console returns 409 and names
+the remedy per kind. This is the intended trade: the body is destroyed on
+schedule, and nothing is left able to transmit a `{"redacted": true}` payload
+to the platform.
+
+What survives redaction is pseudonymous, not out of scope: `case_id`, `run_id`,
+`decision_sequence`, `status`, `delivered_at`/`resolved_at`, and the recorded
+wire digest (`callback_wire_sha256`, `wire_version`). The surviving data is a
+hash plus internal ordinals, still joinable back to a case. Retaining that
+remainder past the window is a governed retention decision, not a claim that
+it falls outside backup, erasure, privacy, or compliance review. Accountability
+for it is the **deployer's data
+controller's** — this repo cannot name that owner and does not discharge the
+controller's obligations. It only bounds what it keeps and documents the
+bound. Two things this repo does NOT reach: (1) an erasure request landing
+**inside** the window must still reach the live callback snapshot (its body is
+not yet redacted) as well as the decision record, (2) **backups taken before
+redaction** are a separate durable copy and still contain the pre-redaction
+body until they age out on the backup retention schedule, independent of
+`KYC_RETENTION_DAYS`.
+
+## Policy changes
+
+After the explicit migration-024 activation in `docs/DEPLOYMENT.md` §12,
+authorized console saves publish shared, durable revisions of scoring points,
+the complete Allowed/Blocked broker list, and Salesforce destination names.
+Points must be exact integers 0–1000. Broker limits are 200 entries, 1–200
+characters per name, 100 entries per identifier class, 1–256 characters per
+identifier, and at most 2000 characters of notes, Blocked wins on exact matches.
+Allowed never bypasses another gate. New review runs, including new runs for
+existing companies, use the saved revision. Existing runs and event replays keep
+their creation revision, Save does not recalculate, rewrite evidence/decisions,
+send events, write Salesforce, or enable automatic positive enforcement.
+
+Saving requires a nonempty configured admin credential in **every environment**,
+including development, and same-origin browser requests. A shared token proves
+the authentication mechanism, not the operator label's personal identity.
+Conflicts preserve the draft: reload/review the latest revision before resaving.
+An uncertain result is not cancellation: keep the exact payload/request ID for
+identical retry and check the returned current revision. Cancel discards only
+unsent edits. Never automatically publish old browser-local previews.
+
+Recover prior settings through new reviewed revisions, never by editing history
+or resetting the active pointer. After activation `broker_entities` is only the
+legacy/bootstrap source, not a second live editing interface. If active authority
+is missing/corrupt, new admissions/saves fail closed and the console company
+`/full` response can return 503 even when an old run snapshot is intact. For
+read-only historical inspection use `GET /v1/cases/{case_id}` and
+`GET /v1/cases/{case_id}/checks` under their existing read authorization.
+
+Threshold, hard gates, evidence rules, identity invalidation, manual record-only
+semantics, callback schema, and M2 remain unchanged. Changes to non-editable
+packaged policy still ship as a deploy: bump `version`, update
+`tests/policy_driven/policy_baseline.json` in the same release, and redeploy.
+Every run and decision records the policy hash that produced it. The 0–1000
+point cap is an approved operational exception to the base policy format.
+
+## Policy bundle pinning and provenance
+
+Full cutover procedure: `docs/DEPLOYMENT.md` §10. Summary of the ongoing
+operator surface once it's live:
+
+- **The flag.** `enforce_bundle_pinning` (default off) — see the callout
+  under Processes above. Flip it only via a drained cutover, never a rolling
+  toggle.
+- **`ops.verify_pinnable_backlog`** — preflight before enabling the flag,
+  prints the run ids whose creation-pin bundle wouldn't resolve and exits
+  nonzero if any exist.
+- **`ops.seed_policy_bundle --expect-hash <sha256>`** — the only way to add
+  a bundle to the durable store by hand (compute → compare to
+  `--expect-hash` → store, a mismatch writes nothing). Every process also
+  self-seeds its own on-disk bundle at startup, so day-to-day this command
+  is for the preflight gap case above and for **historical recovery** — see
+  the reprocess note below.
+- **`GET /readyz`** — 503 when the process's own policy bundle isn't in the
+  store (unconditional, both flag states).
+- **Post-epoch NULL-provenance check.** Once
+  `ops.activate_bundle_pinning_epoch` has run, any `checks` row with `NULL
+  policy_bundle_hash`, or any `decisions`/`runs` row with `NULL
+  engine_build_id`, created **after** `bundle_pinning_epoch.activated_at` is
+  an anomaly — a rollover gap or a bypassed write path, never an expected
+  state (a legitimately still-queued run is not flagged). The check is
+  `kyc_tool.ops.activate_bundle_pinning_epoch.post_epoch_null_provenance(session)`
+  — it returns `{"decisions": [...], "checks": [...], "runs": [...]}` of the
+  offending ids. It is not yet wired to `/v1/metrics` or a CLI, so run it
+  ad hoc (a Python shell against the production DB) or wire it into your own
+  alerting.
+- **To reprocess a run, you must first seed its bundle.** Whether via
+  `enforce_bundle_pinning` at the time (a live `BundleUnavailable`
+  dead-letter — see the failure playbook above) or later, historical
+  reprocessing under a run's original rubric requires that exact bundle to
+  be in `policy_bundles` first, `ops.seed_policy_bundle --expect-hash
+  <hash>` against the matching historical policy directory is the only
+  supported path to add it back.
+
+## Secrets
+
+All via environment (see `.env.example`): platform HMAC, CH/ARIN keys,
+email provider, S3. Nothing is ever logged, POC token emails log only a
+recipient hash.
+
+> **Upgrade preflight (`017`, `018`).** Both refuse with
+> `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` / `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS`
+> while any unexpired outbox claim exists — the
+> database checks live outbox claims, but it cannot prove that no API, publisher, pipeline,
+> dev worker, or retention process is still running. Stop those processes, attest zero old
+> processes at the orchestrator, then either let the leases expire
+> (`KYC_OUTBOX_LEASE_SECONDS` bounds how long that takes) or run the shipped
+> `python -m kyc_tool.ops.reset_interrupted_outbox_claims` (post-013-only, clears complete
+> claim tuples, preserves `next_attempt_at`, atomically read-back-asserts zero — it refuses
+> rather than partially resetting if any tuple survives), then retry. It MUST NOT run while
+> any publisher is live. `018` and `019` additionally refuse with
+> `MIGRATION_018_AUTHORITY_MANIFEST_MISMATCH` / `MIGRATION_019_AUTHORITY_MANIFEST_MISMATCH`
+> when the
+> observable authority surface (columns, constraints, indexes, trigger definitions, authority
+> function bodies, pinned `search_path`) is not the one `017` installed — reconcile the
+> environment, or restore from the reviewed image, before retrying. Every refusal happens BEFORE
+> any DDL: the schema and the alembic head are left exactly as they were.
+
+# Part 5: Alert reference
+
+Scrape `GET /v1/metrics.prom` (signed read access — same auth as `/v1/metrics`; see the scrape-identity
+note below). Latency series aggregate the declared 24h window.
+
+| Alert | Expression | For | Why |
+|---|---|---|---|
+| KycDeadJobs | `kyc_jobs{status="dead"} > 0` | 5m | A dead-lettered job means a failed run that a human must requeue. See RUNBOOK and `/v1/ops/requeue/job/{id}`. |
+| KycFailedRuns | `kyc_runs{state="FAILED"} > 0` | 5m | This zero-safe series identifies failed runs that need the same requeue attention. |
+| KycDeadOutbox | `kyc_outbox{status="dead"} > 0` | 5m | An undeliverable callback or email usually indicates a platform endpoint or HMAC secret problem. Use `/v1/ops/requeue/outbox/{id}` after fixing the cause. |
+| KycOutboxBacklogLevel | `kyc_outbox{status="pending"} > 100` | 15m | This is a level threshold, not a growth rule. The endpoint exposes gauges, not counters. A `rate()` rule needs a counter series that is not available yet. |
+| KycDecisionLatency | `kyc_event_to_decision_seconds_p95 > 120` | 15m | This enforces the DEPLOYMENT §5 budget for full runs. The exporter currently ships one latency aggregate. It cannot alert separately on the light-run budget below 10 seconds until run classes are persisted and exported as separate series. |
+| KycAdapterErrors | `kyc_adapter_error_rate > 0.2` | 15m | Sustained upstream error rate after in-adapter transient retry |
+| KycReadyzDown | `probe_success{job="kyc-readyz"} == 0` | 5m | `/readyz` is the DB/migration/storage gate (blackbox-probe it) |
+
+## Scrape identity (production)
+
+Production requires a current path-bound signed request. A stock Prometheus cannot produce one, and
+scraping with the legacy v1 scheme is prohibited because every accepted v1 request records v1 traffic in
+the durable witness and would stall the v1 sunset forever. Until the dedicated least-privilege scrape
+identity ships (scheduled: a scoped read-only bearer for `/v1/metrics.prom` only), run the scrape
+through a sidecar that v2-signs each request, or scrape from a network position where
+`KYC_READ_AUTH_REQUIRED` staging rules apply. Do NOT wire a v1 signer into a scraper.
+
+# Part 6: Salesforce mapping
+
+The KYC Tool **never** reads from or writes to Salesforce. The platform mirrors
+tool state one-way after every enforced decision and material check change.
+This document translates the tool's callback and read APIs into the
+`salesforce_sync_fields.json` field set. It also defines the value for
+`approved_manual`, which the base field list leaves unspecified.
+
+Sources for every value below: the decision callback (`POST …/kyc/decision`),
+`GET /v1/cases/{case_id}` and `GET /v1/cases/{case_id}/checks?all=1`. The
+mapped, destination-keyed view of all of them is
+`GET /v1/cases/{case_id}/salesforce-projection` (`PLATFORM_INTEGRATION.md` §7).
+
+After explicit live-configuration activation, the field names below remain the
+default destinations and stable source identities. The console edits destination
+names only (1–80 ASCII identifier characters, case-insensitively unique), not
+sources, types, or company values. Saves are shared server revisions, not previews.
+The platform reads the destination-keyed values, `mapping_revision`, and source
+identities from `GET /v1/cases/{case_id}/salesforce-projection`. The console's
+own case view shows the same mapping to operators. Subsequent projection reads
+use the saved mapping without rewriting old decisions or callback bytes. The
+platform must explicitly consume the projection for a mapping change to reach
+Salesforce.
+A mapping save neither writes Salesforce nor proves that the platform adopted it.
+
+## KYC_Case__c fields
+
+| Salesforce field | Source in tool output | Mapping |
+|---|---|---|
+| `KYC_Status__c` | case `status` | `registered`* / `email_verification_pending`* / `email_verified`* / `enrichment_running`* → their labels. `kyc_pending` → "KYC Pending". `manual_review_insufficient` → "Manual Review - Insufficient Score". `account_approved` → "Account Approved". **`approved_manual` → "Account Approved"** (see `Platform_Action_Taken__c`). `rejected` → "Rejected". *Pre-tool statuses are platform-owned by contract. |
+| `KYC_Score__c` | the pointed latest-decision row's `score` (what was decided — never the live recomputed case score. Blank while the pre-014 decision order is unresolved) | integer, as-is |
+| `Buy_Enablement_Status__c` | case `buy_status` | `not_applicable` → "Not Applicable". `buy_locked_org_id_required` → "Buy Locked - ORG-ID Required". `org_id_validation_pending`† → "ORG-ID Validation Pending". `org_id_failed`† → "ORG-ID Failed". `buy_enabled` → "Buy Enabled". `buy_suspended` → "Buy Suspended". †Platform-derived transient states — the tool's callback only ever asserts `enabled` / `locked_org_id_required`. The platform may show finer-grained transitions between callbacks. |
+| `Platform_Action_Taken__c` | callback `decision` + manual-approve event | `approve` → "Approve Account". `approve_buy_locked` → "Approve Account - Buy Locked". `reject` → "Reject" (or "Suspend" per platform policy). Manual approve (no callback — the platform initiated it) → "Manual Approve" |
+| `ORG_ID__c` / `ORG_ID_Status__c` | live `org_id_match` check | Handle from check detail. Status: none → "Pending". `pass` → "Pass". `fail` → "Fail". Superseded rows → "Superseded" |
+| `POC_Handle__c` / `POC_Verification_Status__c` | live `poc_verified` check + review state | No check, no token → "Pending". Token sent (`poc_tokens` outstanding) → "Token Sent". `pass` → "Verified". `fail` → "Failed". Superseded → "Superseded" |
+| `Business_Document_Status__c` | live `business_document_verified` check | None → "None". Uploaded but unprocessed → "Uploaded". `pass` → "Verified". `fail` → "Failed" |
+| `Website_Review_Status__c` | review task / check | Open task → "Open". Check `pass` → "Pass". Check `fail` → "Fail" |
+| `Broker_Status__c` | case `broker_status` | `clear` → "Clear". `allowed_broker` → "Allowed Broker". `blocked` → "Blocked" |
+| `Hard_Conflict__c` | callback `gates.no_hard_conflict` | **Nullable boolean**, negated when present (`no_hard_conflict: false` ⇒ `true`). NULL occurs in exactly two conditions: there is no authoritative decision tuple because the pointer or legacy order is unresolved, or a manual approval bypassed the gates and they were never evaluated. The platform sync must carry NULL through and must not coerce it to `false`. Doing so would assert "no hard conflict" when no gate ran. The base `salesforce_sync_fields.json` type is `boolean`. This mapping adds the required nullable behavior. |
+| `Review_Reason_Codes__c` | union of live checks' `reason_codes` | delimited text / multi-select |
+| `Manual_Approved_By__c` / `Manual_Approved_At__c` | latest MANUAL decision row (sticky: a later automatic decision moves the latest-decision pointer but never blanks the manual attribution while the case stays `approved_manual`). Platform initiated it. Also in tool audit log. | reviewer id, timestamp |
+
+## KYC_Check__c child records
+
+One record per row of `GET /v1/cases/{id}/checks?all=1`:
+`Check_Type__c` ← `type` · `Status__c` ← `status` · `Points__c` ← `points` ·
+`Category__c` ← `category` · `Source__c` ← `source` · `Superseded__c` ←
+`superseded_by_check_id IS NOT NULL` · `Reason_Codes__c` ← `reason_codes` ·
+`Created_At__c` ← `created_at`.
+
+## Delivery rules
+
+- Upsert by external ID = platform case id. Never duplicate KYC Cases.
+- The callback is at-least-once: **dedupe on (`case_id`, `run_id`)** — both are
+  stable across redeliveries (verified by the tool's test suite).
+- Until ordered delivery is activated in migration `025`, the wire provides no
+  callback-order authority. Keep a manual approval authoritative. Acknowledge
+  and record subsequent valid automatic callbacks, but hold unordered callbacks
+  for review instead of applying them. If automatic callbacks conflict, use an
+  ordering authority the platform owns or hold them for review. Never infer
+  order from `decided_at` or `event_sequence`.
+- After migration `025` is governed, bootstrapped and activated, apply its
+  `decision_sequence` rules exactly as defined by the platform contract.
+- A Salesforce outage must never block platform enforcement.
+- Salesforce KYC fields are read-only for non-integration users. No Salesforce
+  automation may call back into the tool or platform KYC actions.
+
+# Part 7: Production readiness
+
+This package supports a closed staging handoff. It is not approval to run the
+service in production. Production remains **no-go** until every gate in this
+document is supported by recorded evidence.
+
+`PLATFORM_BRIEFING.md` §8 owns the 15 numbered inputs and decisions. The
+integration, deployment and runbook documents own their respective wire and
+operating procedures. If a checklist summary here conflicts with one of those
+procedures, follow the procedure and resolve the conflict before deployment.
+
+## Current boundary
+
+The staging package includes signed event ingestion, scoring, read APIs,
+decision callbacks, retries, dead-letter handling, an operator console, live
+registry clients, S3-compatible evidence storage, Salesforce projection and a
+conformance kit. Positive-decision enforcement may be exercised only in a
+closed staging environment.
+
+Production work is still open in these areas:
+
+- Select and wire the production POC directory and delivery path. The open
+  choice is platform-owned delivery through a typed contract or tool-owned SES.
+- Select and wire the production document path. The open choice is
+  platform-extracted JSON or tool-side OCR with an approved provider.
+- Build the production provider profile. Production must not select fixtures,
+  empty directories, file sinks or development stand-ins.
+- Build and activate migration `025` with the platform-owned ordering bootstrap.
+  Until then, callbacks have no wire ordering authority. The receiver must keep
+  manual approvals authoritative, record later valid automatic callbacks and
+  hold unordered or conflicting results for review.
+- Publish the versioned contract bundle used by both sides.
+- Run load and soak tests against agreed capacity and latency targets, plus the
+  recovery objectives.
+- Build the platform consumer that reads the public Salesforce projection and
+  writes to the Salesforce sandbox and production orgs.
+
+### Remaining tool-side database work
+
+The current migration head is `024`. After the ordering work in `025`, the
+following reserved revisions must be completed in order. These are remaining
+IPv4.Global delivery work, not migrations TechCraft should attempt to run now.
+
+| Reserved revision | Work still required |
+|---|---|
+| `026` | Revalidate existing evidence when validation policy changes, with staged rollout controls. |
+| `027` | Add the durable lease token and single-runner backstop for background jobs. |
+| `028` | Adopt structured object references and immutable source-evidence metadata before production document processing. |
+| `029` | Add durable retry-limit checks and the shared cutover-attestation record. Complete the remaining operational controls, including rollout observation and bounded external-call execution. |
+
+The current runtime protections do not mean these database and operating
+requirements are finished. All of them belong to the production backlog that
+must close before automatic positive decisions are enabled.
+
+## Production go/no-go gate
+
+Production is **no-go** if any item below is false:
+
+- Pull-request CI and the full PostgreSQL suite are green for the release
+  artifact.
+- A fresh database migrates to the declared production head.
+- Every production process boots with no fixture-selected capability.
+- All event variants pass the TechCraft conformance suite.
+- The platform receiver commits before returning 2xx and passes replay tests.
+- POC verification works end to end with the selected live directory and
+  sender.
+- Salesforce mapping changes reach the sandbox through the public projection.
+- Migration `025` is bootstrapped and active before production automatic
+  decisions depend on callback order.
+- The full production backlog and platform cutover are complete before
+  positive-decision enforcement is enabled. A human-review pilot keeps that
+  enforcement off and does not complete the production program.
+- Real-provider staging and the signed capacity targets pass.
+- Full restore and interrupted-cutover rehearsals pass.
+- Executable contracts, public schemas, deployed behavior and handoff documents
+  agree.
+
+## Required platform evidence
+
+Before the go/no-go review, TechCraft must provide or confirm:
+
+1. Staging and production callback base URLs.
+2. Key identifiers and signing ownership for each wire direction. Secrets stay
+   in the deployment secret manager.
+3. The accepted-run ledger schema, including effective-source rules for manual
+   approvals and reverted decisions.
+4. S3 bucket and key conventions, plus IAM ownership.
+5. Salesforce sandbox access and the service that consumes the public
+   projection, including retry and backfill reconciliation.
+6. The review-task integration: the default change webhook, or a polling
+   contract with its cursor, freshness and missed-poll recovery rules.
+7. The document-extraction choice and its production provider contract.
+8. The POC-email choice and its production delivery contract.
+9. Expected daily volume, peak concurrency, soak duration, maintenance-window
+   limits and recovery objectives.
+
+The complete decision list remains `PLATFORM_BRIEFING.md` §8 items 1–15.
+
+## Evidence package for approval
+
+The production review needs the exact image digest and policy-bundle hash, the
+declared migration head, CI results, database migration output, process startup
+attestations, conformance output, receiver replay results, real-provider staging
+results, Salesforce sandbox evidence, capacity results, restore results and the
+signed platform cutover artifacts.
+
+The runbook must have been executed against staging. A document review is not a
+substitute. A full database plus object-store restore must prove consistency and
+record recovery time and data loss against the agreed objectives. Repairing one
+row is not a disaster-recovery rehearsal.
+
+## Controls that stay in force
+
+- Production launches with positive-decision enforcement off. Enable it only
+  after every gate above passes.
+- Do not turn a drained flag flip or maintenance cutover into a rolling change.
+  Follow `DEPLOYMENT.md` for migration `010`, bundle pinning, migration `013`
+  and migration `024`.
+- Do not downgrade through a migration refusal or delete immutable evidence to
+  make a downgrade possible. Use the documented roll-forward or compatible-image
+  recovery path.
+- Do not retire inbound HMAC v1 until the configured inbound sunset date and
+  required inbound zero-traffic witness both pass. Keep staging closed while
+  inbound v1 remains accepted. Outbound v1 follows its separately configured
+  outbound sunset and does not use the inbound zero-traffic witness.
+- Do not infer callback order from timestamps, `event_sequence` or a local
+  database sequence that is not present on the wire.
+- Do not substitute the diagnostic conformance receiver for TechCraft's own
+  durable receiver.
+- Do not enable production with a stub provider, file email sink or missing
+  authority artifact.
+
+## Deliberate exclusions
+
+This program does not replace the platform console, let the tool write to
+Salesforce, automate website judgment, add fuzzy broker matching, add new paid
+enrichment sources without approval, split the service into microservices or
+rewrite historical decisions when configuration changes.

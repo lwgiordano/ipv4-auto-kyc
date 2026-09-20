@@ -1,15 +1,15 @@
-"""The PR 7b-core cutover/rollback procedure must be byte-identical in RUNBOOK.md and
+"""The migration-013 cutover/rollback procedure must be byte-identical in RUNBOOK.md and
 DEPLOYMENT.md (only the section-header line may differ), including wrapped continuation lines."""
 
 from pathlib import Path
 
 from kyc_tool.config import REPO_ROOT
 
-_HEADING = "PR 7b-core cutover"
+_HEADING = "cutover — drained maintenance window (migration 013)"
 
 
 def _body(path: Path) -> str:
-    """Section body from the '## ... PR 7b-core cutover ...' heading (EXCLUSIVE of the heading
+    """Section body from the migration-013 cutover heading (EXCLUSIVE of the heading
     line) to the next top-level '## ' — every wrapped continuation line included."""
     lines = path.read_text().splitlines()
     start = next(i for i, ln in enumerate(lines) if ln.startswith("## ") and _HEADING in ln)
@@ -63,3 +63,11 @@ def test_runbook_and_deployment_cutover_bodies_identical():
     assert "confirm the id the sequence would hand the next writer is already past it" not in rb
     assert rb.count("edge-block the composer") == 2  # forward + rollback both establish the fence
     assert rb.count("remove the composer edge block") == 3  # forward + both rollback outcomes clear it
+
+
+def test_public_cutover_bodies_remain_identical_without_internal_project_labels():
+    public_docs = REPO_ROOT / "scripts" / "handoff" / "docs"
+    if not public_docs.is_dir():
+        # The external archive includes the already-projected docs only.
+        public_docs = REPO_ROOT / "docs"
+    assert _body(public_docs / "RUNBOOK.md") == _body(public_docs / "DEPLOYMENT.md")

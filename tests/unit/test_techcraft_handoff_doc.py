@@ -1,8 +1,4 @@
-"""The checked-in combined TechCraft document must be what the generator produces now.
-
-It is assembled from three sources that people edit, so the shipped copy goes stale in
-silence. This is the one check that notices.
-"""
+"""The checked-in combined handoff must match the seven reviewed public documents."""
 
 import runpy
 from pathlib import Path

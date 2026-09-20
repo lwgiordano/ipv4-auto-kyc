@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import runpy
 import stat
 import subprocess
 import zipfile
@@ -176,9 +177,16 @@ def test_rebased_test_imports_are_sorted_without_touching_application_source(tmp
 def test_combined_handoff_uses_the_part_names_referenced_by_start_here(tmp_path, exporter):
     docs = tmp_path / "docs"
     docs.mkdir()
-    (docs / "PLATFORM_BRIEFING.md").write_text("# Briefing\n\n## Decisions\n")
-    (docs / "PLATFORM_INTEGRATION.md").write_text("# Integration\n\n## Events\n")
-    (docs / "DEPLOYMENT.md").write_text("# Deployment\n\n## Setup\n")
+    for name in (
+        "PLATFORM_BRIEFING.md",
+        "PLATFORM_INTEGRATION.md",
+        "DEPLOYMENT.md",
+        "RUNBOOK.md",
+        "ALERTS.md",
+        "SALESFORCE_MAPPING.md",
+        "PRODUCTION_READINESS.md",
+    ):
+        (docs / name).write_text(f"# {name}\n\n## Section\n")
 
     exporter._write_combined_handoff(tmp_path, label="v1-staging", commit="abc123")
 
@@ -188,6 +196,149 @@ def test_combined_handoff_uses_the_part_names_referenced_by_start_here(tmp_path,
     assert "# Part 3: Deployment guide" in combined
     assert "## Contents" in combined
     assert "Section numbers restart in each part" in combined
+
+
+def test_reviewed_public_document_manifest_matches_current_tree(exporter):
+    manifest_path = REPO_ROOT / exporter.DOC_COPY_MANIFEST_PATH
+    source_files = {
+        path: (REPO_ROOT / path).read_bytes()
+        for path in exporter._document_copy_manifest_paths(manifest_path.read_bytes())
+    }
+
+    exporter.validate_document_copies(source_files, exporter.select_inventory(source_files))
+
+
+def test_combined_handoff_builders_share_all_seven_public_parts(tmp_path, exporter):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    for name in (
+        "PLATFORM_BRIEFING.md",
+        "PLATFORM_INTEGRATION.md",
+        "DEPLOYMENT.md",
+        "RUNBOOK.md",
+        "ALERTS.md",
+        "SALESFORCE_MAPPING.md",
+        "PRODUCTION_READINESS.md",
+    ):
+        (docs / name).write_text(f"# {name}\n\nPublic content for {name}.\n")
+
+    exporter._write_combined_handoff(tmp_path, label="v1-staging", commit="abc123")
+    packaged = (docs / "TECHCRAFT_HANDOFF.md").read_text()
+    build = runpy.run_path(str(REPO_ROOT / "scripts" / "build_techcraft_handoff.py"))["build"]
+
+    assert build(tmp_path, docs_dir=docs, label="v1-staging", commit="abc123") == packaged
+    assert "# Part 7: Production readiness" in packaged
+    assert "# PLATFORM_BRIEFING.md" not in packaged
+
+
+def test_combined_handoff_preserves_indented_code_immediately_after_title(tmp_path, exporter):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    for name in (
+        "PLATFORM_BRIEFING.md",
+        "PLATFORM_INTEGRATION.md",
+        "DEPLOYMENT.md",
+        "RUNBOOK.md",
+        "ALERTS.md",
+        "SALESFORCE_MAPPING.md",
+        "PRODUCTION_READINESS.md",
+    ):
+        (docs / name).write_text(f"# {name}\n\nPublic content.\n")
+    (docs / "PLATFORM_BRIEFING.md").write_text(
+        "# Briefing\n\n    python -m kyc_tool\n\tpython -m kyc_worker\n",
+        encoding="utf-8",
+    )
+
+    exporter._write_combined_handoff(tmp_path, label="v1-staging", commit="abc123")
+
+    combined = (docs / "TECHCRAFT_HANDOFF.md").read_text(encoding="utf-8")
+    assert "\n    python -m kyc_tool\n" in combined
+    assert "\n\tpython -m kyc_worker\n" in combined
+    assert "\npython -m kyc_tool\n" not in combined
+
+
+def test_archive_build_rejects_stale_reviewed_source_before_output(tmp_path, exporter):
+    source_path = "docs/PLATFORM_BRIEFING.md"
+    copy_path = "scripts/handoff/docs/PLATFORM_BRIEFING.md"
+    public_path = "docs/PLATFORM_BRIEFING.md"
+    approved_source = b"# Canonical briefing\n"
+    approved_copy = b"# Reviewed public briefing\n"
+    manifest = {
+        "schema_version": 1,
+        "review_workflow": "Review source and public copy together, then update both digests.",
+        "documents": [
+            {
+                "public_path": public_path,
+                "copy_path": copy_path,
+                "source_paths": [source_path],
+                "source_sha256": {source_path: hashlib.sha256(approved_source).hexdigest()},
+                "copy_sha256": hashlib.sha256(approved_copy).hexdigest(),
+                "rationale": "Public wording removes internal-only context.",
+            }
+        ],
+    }
+    source_files = {
+        exporter.DOC_COPY_MANIFEST_PATH: (json.dumps(manifest) + "\n").encode(),
+        source_path: approved_source + b"A later canonical correction.\n",
+        copy_path: approved_copy,
+    }
+    output = tmp_path / "handoff.zip"
+
+    with pytest.raises(ValueError, match="canonical source digest drift"):
+        exporter.write_package(
+            source_files=source_files,
+            source_modes={path: 0o644 for path in source_files},
+            inventory={copy_path: public_path},
+            output=output,
+            label="v1-staging",
+            commit="a" * 40,
+        )
+
+    assert not output.exists()
+
+
+def test_archive_build_requires_review_manifest_closure_over_public_copies(tmp_path, exporter):
+    briefing_source = "docs/PLATFORM_BRIEFING.md"
+    briefing_copy = "scripts/handoff/docs/PLATFORM_BRIEFING.md"
+    readiness_copy = "scripts/handoff/docs/PRODUCTION_READINESS.md"
+    source_data = b"# Canonical briefing\n"
+    copy_data = b"# Reviewed public briefing\n"
+    manifest = {
+        "schema_version": 1,
+        "review_workflow": "Review source and public copy together, then update both digests.",
+        "documents": [
+            {
+                "public_path": "docs/PLATFORM_BRIEFING.md",
+                "copy_path": briefing_copy,
+                "source_paths": [briefing_source],
+                "source_sha256": {briefing_source: hashlib.sha256(source_data).hexdigest()},
+                "copy_sha256": hashlib.sha256(copy_data).hexdigest(),
+                "rationale": "Public wording removes internal-only context.",
+            }
+        ],
+    }
+    source_files = {
+        exporter.DOC_COPY_MANIFEST_PATH: (json.dumps(manifest) + "\n").encode(),
+        briefing_source: source_data,
+        briefing_copy: copy_data,
+        readiness_copy: b"# Production readiness\n",
+    }
+    output = tmp_path / "handoff.zip"
+
+    with pytest.raises(ValueError, match="does not cover public document copies"):
+        exporter.write_package(
+            source_files=source_files,
+            source_modes={path: 0o644 for path in source_files},
+            inventory={
+                briefing_copy: "docs/PLATFORM_BRIEFING.md",
+                readiness_copy: "docs/PRODUCTION_READINESS.md",
+            },
+            output=output,
+            label="v1-staging",
+            commit="a" * 40,
+        )
+
+    assert not output.exists()
 
 
 def test_zip_has_hash_manifest_stable_metadata_and_executable_permissions(tmp_path, exporter):
@@ -262,6 +413,14 @@ def test_archive_content_scan_rejects_internal_history_and_private_keys(exporter
     with pytest.raises(ValueError, match="private key"):
         exporter.scan_package_text(
             "secret.pem", b"-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----\n"
+        )
+
+
+def test_archive_content_scan_rejects_internal_pr_labels_in_public_documents(exporter):
+    with pytest.raises(ValueError, match="internal build-history reference .*PR 7b-core"):
+        exporter.scan_package_text(
+            "docs/RUNBOOK.md",
+            b"## PR 7b-core cutover: drained maintenance window\n",
         )
 
 

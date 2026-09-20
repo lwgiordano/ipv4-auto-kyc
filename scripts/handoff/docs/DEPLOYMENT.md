@@ -142,11 +142,12 @@ Read those notes before scheduling the update.
 
 - Code: redeploy the previous image tag. That is the whole rollback when the
   release had no migration (most releases).
-- With a migration: database rollback depends on the revision and recorded
-  data. Follow the release notes, and do not assume a downgrade is available,
-  even in staging. Once real traffic has written data under the new schema,
-  prefer rolling forward with a fix. Consult IPv4.Global before a production
-  rollback. **Migration 010 is
+- With a migration: check the release notes for a supported downgrade target
+  and the conditions below. Use `alembic downgrade <previous revision>` only
+  when every revision in that path permits it for the database's current state.
+  These restrictions also apply in staging. Once real traffic has written data
+  under the new schema, prefer rolling forward with a fix. Consult IPv4.Global
+  before a production rollback. **Migration 010 is
   forward-only after cross-case idempotency-key reuse:** its downgrade
   deliberately refuses because it will not delete immutable audit events to
   recreate the old global unique. See `docs/RUNBOOK.md`. If two cases have
@@ -485,7 +486,7 @@ once any bundle row, provenance column, or the epoch row is populated (its
 downgrade deliberately refuses, the same forward-only-after-use contract
 migration 010 established).
 
-## 11. PR 7b-core cutover — drained maintenance window (migration 013)
+## 11. Callback cutover — drained maintenance window (migration 013)
 
 **Step 0 — pre-window diagnostic (BEFORE any outage):**
 0.1 Suspend the retention schedule.

@@ -299,7 +299,7 @@ whole fleet stays under 200/minute, and remember credits and requests are
 separate budgets. A run ending `outOfCredits` is a billing stop, not a fault to
 retry: top the account up, do not re-drive the cases.
 
-## PR 7b-core cutover — drained maintenance window (migration 013)
+## Callback cutover — drained maintenance window (migration 013)
 
 **Step 0 — pre-window diagnostic (BEFORE any outage):**
 0.1 Suspend the retention schedule.
