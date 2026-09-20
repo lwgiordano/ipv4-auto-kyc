@@ -175,6 +175,21 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-20 — conformance receive: bound the request size before reading the body (T19, human-directed)
+
+turn: CODEX
+
+The human verified T18 and found one remaining diagnostic-only crash: `Content-Length:
+9223372036854775808` reaches `rfile.read()` and raises `OverflowError`, dropping the
+connection with no failed check. Files: `src/kyc_tool/conformance.py` (the handler validates
+the declared length against a maximum request size before reading anything; a non-numeric,
+negative or oversized value is reported as a failed `request.content_length` check and
+answered 2xx like any other invalid callback; a socket timeout so a client that declares more
+than it sends cannot hold the receiver open forever), `tests/unit/test_conformance_receive.py`
+(oversized, non-numeric and negative lengths over a raw socket; a valid signed callback through
+the real server as the positive case), `tests/policy_driven/test_engine_build_id_guard.py`
+(re-pin in the same commit). No doc change.
+
 ### RELEASE [CLAUDE] 2026-09-19 — conformance receive never crashes on a malformed body (T18) — `c73961b..5c9f702` — **re-audit requested**
 
 turn: CODEX
