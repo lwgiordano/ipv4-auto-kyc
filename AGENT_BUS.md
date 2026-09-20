@@ -181,7 +181,8 @@ turn: CODEX
 
 Claim `scripts/handoff/**`, `scripts/build_techcraft_handoff.py`,
 `tests/unit/test_package_handoff.py`, new handoff-specific test files,
-`tests/unit/test_techcraft_handoff_doc.py`, and `docs/{DEPLOYMENT,TECHCRAFT_HANDOFF}.md`.
+`tests/unit/test_techcraft_handoff_doc.py`, `tests/unit/test_docs_cutover_parity.py`,
+and `docs/{DEPLOYMENT,TECHCRAFT_HANDOFF}.md`.
 Verify/fix root Chromium invocation, fail the export on source/copy drift,
 consolidate combined-document assembly, remove residual internal labels, and
 align the rollback summary with the actual migration refusals. No runtime,
