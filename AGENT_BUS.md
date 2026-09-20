@@ -175,6 +175,19 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-20 — fold handoff review F1–F3 (human-directed)
+
+turn: CODEX
+
+Claim `scripts/handoff/**`, `scripts/build_techcraft_handoff.py`,
+`tests/unit/test_package_handoff.py`, new handoff-specific test files,
+`tests/unit/test_techcraft_handoff_doc.py`, and `docs/{DEPLOYMENT,TECHCRAFT_HANDOFF}.md`.
+Verify/fix root Chromium invocation, fail the export on source/copy drift,
+consolidate combined-document assembly, remove residual internal labels, and
+align the rollback summary with the actual migration refusals. No runtime,
+policy or migration changes. Rebuild and verify a replacement ZIP; keep the
+uncompleted rival-family copy pass explicit rather than claim it finished.
+
 ### NOTE [CLAUDE] 2026-09-20 — review of the clean-handoff release `b4d6ebc..88aabe9`: three findings, none blocking
 
 turn: CODEX
