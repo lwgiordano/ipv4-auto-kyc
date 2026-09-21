@@ -41,7 +41,7 @@
 > `024` first refuses if any configuration history exists. With unused configuration additions,
 > its downgrade removes only those additions, `023` is validation-only and its downgrade is a
 > no-op, so the walk reaches `022` and refuses there. Do not apply `018` or anything above it in production until that bridge
-> image has been reviewed and staged. This preproduction branch otherwise rolls forward. Below
+> image has been reviewed and staged. Use roll-forward recovery before production. Below
 > `018` the walk still preflights with stable sentinels, in execution order
 > (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -69,20 +69,18 @@
 > window and it can kill the approval instead of the migration, so before applying `022`/`023`
 > pause event submission, stop and attest the API writers AND the pipeline workers (as well as
 > publishers/retention), then re-run. Unlike the live-claim preflight, this one is **not
-> machine-checked** — `022` and `023` are published and cannot be amended to add one, the
-> machine-checked fence ships with `025` (activation blocker O4).
+> machine-checked**. Migration `025` must provide the machine-checked fence
+> before activation.
 
 ### Migration refusal sentinels
 
 Every deliberate migration refusal raises a **stable sentinel string**, so a refused
 `alembic upgrade`/`downgrade` reads as a designed stop rather than a broken migration.
-Grep the sentinel out of the command's output and find it here. The exception message
-names the offending rows or objects and a remediation — but published migrations are
-frozen, so a frozen message can lag this document: **where the message and this runbook
-disagree, the runbook wins.** Concretely, `022`'s forward-only refusal still names the
-compatible image for the revision it froze at (`022`). The image to keep is always the one
-compatible with the **live head** — `024`-compatible today, kept current in this document
-by a head-derived test that a frozen migration message cannot satisfy.
+Grep the sentinel out of the command's output and find it here. The exception
+message names the offending rows or objects and a remediation. Older migration
+errors may name an older compatible image. Follow this runbook when an error and
+the current procedure differ. The image to keep must be compatible with the
+**live head**, currently `024`.
 
 Release validation checks that every migration refusal sentinel appears in
 this table, so a new refusal cannot ship undocumented.
@@ -154,32 +152,31 @@ lists **all** violations at once:
 | `KYC_OUTBOX_LEASE_MARGIN_SECONDS` | DB commit/processing room added to the deadline in the lease rule above |
 | `KYC_OUTBOX_MAX_ATTEMPTS` | delivery-attempt ceiling (1 ≤ n ≤ int4 max). **It is not hot-swappable. ANY change, raise OR lower, is a DRAINED publisher cutover, never a rolling restart.** Each publisher enforces the ceiling it started with. Overlapping old/new publishers either send once past a lowered value or dead-letter before a raised value takes effect. A POC dead-letter also irreversibly redacts its token. Cutover, in order: disable autoscaling/rolling restart → stop ALL outbox publishers of every role (`outbox_worker` AND `dev_worker`) → attest zero running → attest every new task definition carries the exact new value → start. Canonical record: `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER` (DEPLOYMENT §8) |
 
-`KYC_OUTBOX_MAX_ATTEMPTS` is a both-direction drained publisher cutover — the
-canonical record (rendered from `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER`,
-identical to DEPLOYMENT §8 and `.env.example`):
+Changing `KYC_OUTBOX_MAX_ATTEMPTS` in either direction requires a drained
+publisher cutover (DEPLOYMENT §8):
 
-<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:start -->
 KYC_OUTBOX_MAX_ATTEMPTS: both-direction DRAINED publisher cutover (NOT a rolling restart)
 1. disable autoscaling and rolling restart
 2. stop ALL publishers of roles: outbox_worker, dev_worker
 3. attest zero publishers running of roles: outbox_worker, dev_worker
 4. attest every new task definition carries KYC_OUTBOX_MAX_ATTEMPTS
 5. start publishers of roles: outbox_worker, dev_worker
-<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:end -->
 
-The real OCR/email/adapter providers are not implemented yet (they land with the
-executable-contract work), so a production worker cannot start until they exist —
-that is intentional fail-closed behaviour, not a bug.
+Real OCR, email, and adapter providers are not implemented. A production worker
+cannot start until they exist; production startup fails closed.
 
-> **Temporary safety hold.** Until the approval-grade validators are hardened,
-> `KYC_ENFORCE_POSITIVE_DECISIONS` defaults to `false`: a computed `approve` /
+> **Positive-decision enforcement.** `KYC_ENFORCE_POSITIVE_DECISIONS` defaults
+> to `false`: a computed `approve` /
 > `approve_buy_locked` is emitted as `manual_review_insufficient` (the callback
 > carries an `enforcement_held` object with the computed decision, the audit
-> trail records both). Flip to `true` only once the validators fail closed.
+> trail records both). Keep it off in production until every requirement in
+> `PRODUCTION_READINESS.md` passes, including the full production backlog,
+> real-provider staging tests and platform cutover approval. Validator
+> hardening alone is not sufficient.
 
 ## Ops console (`/ui`)
 
-The console covers most of this runbook visually. Overview shows health and
+The console provides the main runbook operations. Overview shows health and
 dead-letter work. Cases is the reviewer's working view. It puts the registration
 and contact details beside two deliberately separate readings: the decision
 already recorded for the case and the score of the evidence held now. New
@@ -195,7 +192,7 @@ rejected only after an inline confirmation. The result and reviewer ID become
 part of the permanent case record. **Approve manually** also records the named
 reviewer and reason as a new decision without altering historical decisions.
 
-The remaining menu names match the console: Data Sources reports adapter mode,
+Data Sources reports adapter mode,
 configuration and reachability. Salesforce Fields previews the current case
 projection. Decision Rules shows the active scoring and gate configuration.
 Options holds appearance and operator access. Case Actions prepares signed
@@ -225,9 +222,9 @@ boots the whole stack and prints the console URL.
 `reviewer.manual_approve` with **403** — real reviewer actions must arrive as
 signed platform events carrying a genuine reviewer actor (see
 `docs/PLATFORM_INTEGRATION.md` §3, "Reviewer actor requirement"), not be
-typed into the console by an operator. This server-side 403 is the actual
-security boundary, hiding the composer's controls for these two event types
-in the console UI is optional polish on top of it, not a substitute for it. In
+typed into the console by an operator. This server-side 403 is the
+security boundary. Hiding the composer's controls for these two event types
+in the console UI is not a substitute. In
 dev/staging the composer still sends both event types, but with a real
 `{"type": "reviewer", "id": <reviewer_id>}` actor instead of the generic
 `system`/`ops-console` actor it uses for everything else, so console testing
@@ -378,10 +375,9 @@ contract below, inserts the exact original row, floors the sequence past the res
 (`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
 the acceptance predicate and the sequence before committing — any mismatch rolls back row and
 sequence together. Then rerun 0.4 (the gate that reopens cutover) and either RESUME service or
-proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path — the earlier
-revision of this section prescribed exactly that and was circular: the diagnostic stayed red
-until the restore, while the sequence repair was documented as reachable only after cutover
-step 2 and knew nothing of the id being restored.
+proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path.
+The restore must insert the row and advance the sequence past its original id
+in one transaction before the diagnostic can pass.
 0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
     advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
     (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
@@ -576,11 +572,11 @@ read-only historical inspection use `GET /v1/cases/{case_id}` and
 `GET /v1/cases/{case_id}/checks` under their existing read authorization.
 
 Threshold, hard gates, evidence rules, identity invalidation, manual record-only
-semantics, callback schema, and M2 remain unchanged. Changes to non-editable
+semantics, callback schema, and positive-decision enforcement remain unchanged. Changes to non-editable
 packaged policy still ship as a deploy: bump `version`, update
 `tests/policy_driven/policy_baseline.json` in the same release, and redeploy.
-Every run and decision records the policy hash that produced it. The 0–1000
-point cap is an approved operational exception to the base policy format.
+Every run and decision records the policy hash that produced it. Editable
+point values must be whole numbers from 0 to 1000.
 
 ## Policy bundle pinning and provenance
 
@@ -609,9 +605,9 @@ operator surface once it's live:
   state (a legitimately still-queued run is not flagged). The check is
   `kyc_tool.ops.activate_bundle_pinning_epoch.post_epoch_null_provenance(session)`
   — it returns `{"decisions": [...], "checks": [...], "runs": [...]}` of the
-  offending ids. It is not yet wired to `/v1/metrics` or a CLI, so run it
-  ad hoc (a Python shell against the production DB) or wire it into your own
-  alerting.
+  offending ids. No `/v1/metrics` or CLI integration is available; run it
+  from a Python shell against the production DB or integrate it with the
+  deployment's alerting.
 - **To reprocess a run, you must first seed its bundle.** Whether via
   `enforce_bundle_pinning` at the time (a live `BundleUnavailable`
   dead-letter — see the failure playbook above) or later, historical

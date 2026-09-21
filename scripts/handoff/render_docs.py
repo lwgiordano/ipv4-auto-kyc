@@ -65,13 +65,12 @@ def render(root: Path) -> None:
     source = md.read_text(encoding="utf-8")
     parser = MarkdownIt("commonmark", {"html": False}).enable("table")
     body = parser.render(source)
-    title = "IPv4.Global KYC/KYB — TechCraft handoff"
+    title = "IPv4.Global KYC/KYB — Integration and Operations Reference"
     page = (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{html.escape(title)}</title><style>{CSS}</style></head><body>"
-        '<p class="release">Closed-staging integration handoff · '
-        "See START-HERE.md and MANIFEST.json for release identification.</p>"
+        '<p class="release">IPv4.Global KYC/KYB · Closed staging</p>'
         f"{body}</body></html>"
     )
     output = md.with_suffix(".html")

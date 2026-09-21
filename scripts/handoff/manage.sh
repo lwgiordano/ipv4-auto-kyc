@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# kyc-tool — project entry point (source-handoff edition).
-#
-# This is the self-contained version of the repository's developer dispatcher,
-# shipped in the handoff package by scripts/package_handoff.sh. Same commands,
-# no external tooling kit. Written for bash 3.2 so a stock macOS shell runs it.
+# kyc-tool setup, diagnostics and tests. Requires bash 3.2 or later.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
@@ -91,8 +87,8 @@ usage: ./manage.sh <command>
   lint       run the linter (extra args go to ruff check)
   help       this text
 
-The local demo stack (API + ops console + worker + throwaway Postgres) is
-`bash scripts/dev.sh`; START-HERE.md is the map of the whole package.
+Start the local API, console and workers with `bash scripts/dev.sh`.
+Installation instructions: START-HERE.txt.
 EOF
 }
 

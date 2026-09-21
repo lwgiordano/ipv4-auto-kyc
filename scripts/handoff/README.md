@@ -2,20 +2,21 @@
 
 Release `__VERSION__` · source commit `__COMMIT__`
 
-Start with [START-HERE.md](START-HERE.md). This is a source package for
-TechCraft's integration planning and closed-staging tests, not production use.
+Supported environment: closed staging. Production use is not supported until
+the provider, callback-ordering and production-readiness requirements in
+[START-HERE.md](START-HERE.md) are complete.
 
 The platform sends signed company-verification events. The tool gathers
 evidence, records checks and returns a decision. TechCraft owns the platform
 screens, applies the decision and writes the supplied values into Salesforce.
 The tool does not write Salesforce or replace the platform.
 
-The [combined handoff](docs/TECHCRAFT_HANDOFF.md) contains the product briefing,
+The [combined guide](docs/TECHCRAFT_HANDOFF.md) contains the product briefing,
 technical integration contract and deployment procedures. The
 [production checklist](docs/PRODUCTION_READINESS.md) names the unfinished work
 and the evidence required before launch.
 
-The handoff is also available as [PDF](docs/TECHCRAFT_HANDOFF.pdf) and
+The guide is also available as [PDF](docs/TECHCRAFT_HANDOFF.pdf) and
 [HTML](docs/TECHCRAFT_HANDOFF.html).
 
 ## Local commands

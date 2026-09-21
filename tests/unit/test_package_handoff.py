@@ -48,6 +48,10 @@ def test_inventory_is_allowlisted_and_overrides_external_documents(exporter):
         "scripts/handoff/docs/RUNBOOK.md",
         "tests/golden/test_golden_logic.py",
         "tests/unit/test_contract_rendering.py",
+        "tests/unit/test_docs_cutover_parity.py",
+        "tests/unit/test_outbox_ceiling_contract.py",
+        "tests/unit/test_restore_wording_parity.py",
+        "tests/unit/test_runbook_requeue_governance.py",
         ".agents/ROADMAP.md",
         ".github/workflows/ci.yml",
         "AGENT_BUS.md",
@@ -82,6 +86,10 @@ def test_inventory_is_allowlisted_and_overrides_external_documents(exporter):
         "docs/superpowers/plans/internal.md",
         "KYC_Tool_Build_Package/00_AGENT_BRIEF.md",
         "tests/unit/test_contract_rendering.py",
+        "tests/unit/test_docs_cutover_parity.py",
+        "tests/unit/test_outbox_ceiling_contract.py",
+        "tests/unit/test_restore_wording_parity.py",
+        "tests/unit/test_runbook_requeue_governance.py",
     }
 
 
@@ -378,10 +386,11 @@ def test_zip_has_hash_manifest_stable_metadata_and_executable_permissions(tmp_pa
         docker = archive.read(prefix + "Dockerfile")
         assert rows["Dockerfile"]["sha256"] == hashlib.sha256(docker).hexdigest()
         assert rows["manage.sh"]["source_path"] == "scripts/handoff/manage.sh"
-        assert (
-            "engine_source_hash_rebased"
-            in rows["tests/policy_driven/test_engine_build_id_guard.py"]["transformations"]
-        )
+        assert all("transformations" not in row for row in rows.values())
+        assert "declared_residuals" not in manifest
+        assert "source_tests_not_packaged" not in manifest
+        guard = archive.read(prefix + "tests/policy_driven/test_engine_build_id_guard.py")
+        assert b'EXPECTED_ENGINE_SOURCE_HASH = "' + b"0" * 64 not in guard
 
 
 @pytest.mark.parametrize("label", ["production", "v1-prod", "release", "../staging"])
@@ -523,7 +532,7 @@ def test_archive_build_allows_prompt_words_and_unrelated_substrings(tmp_path, ex
     )
 
     with zipfile.ZipFile(output) as archive:
-        assert archive.read("kyc-tool-v1-staging/README.md") == text
+        assert archive.read("kyc-tool-v1-staging/README.txt") == text
 
 
 def test_archive_content_scan_rejects_internal_pr_labels_in_public_documents(exporter):
@@ -532,6 +541,13 @@ def test_archive_content_scan_rejects_internal_pr_labels_in_public_documents(exp
             "docs/RUNBOOK.md",
             b"## PR 7b-core cutover: drained maintenance window\n",
         )
+
+
+@pytest.mark.parametrize("path", ["README.txt", "docs/RUNBOOK.txt", "docs/guide.html"])
+@pytest.mark.parametrize("phrase", ["This is the handoff for TechCraft.", "PR 7b-core cutover"])
+def test_public_prose_scan_covers_text_format_and_self_description(exporter, path, phrase):
+    with pytest.raises(ValueError, match="internal build-history reference"):
+        exporter.scan_package_text(path, phrase.encode())
 
 
 def test_excluded_junk_names_never_enter_the_archive(exporter):
@@ -544,6 +560,57 @@ def test_excluded_junk_names_never_enter_the_archive(exporter):
         "private.pem",
     ):
         assert not exporter.is_safe_archive_path(path)
+
+
+def test_plain_text_documents_preserve_commands_tables_and_links(tmp_path, exporter):
+    source = (
+        "# Product reference\n\nRead [setup](START-HERE.md).\n\n"
+        "| Field | Meaning |\n|---|---|\n| `case_id` | Company identifier |\n\n"
+        "1. Configure credentials.\n2. Run the check.\n\n"
+        '```sh\nprintf "**literal**\\n" \\\n  --flag\n```\n'
+    )
+    output = tmp_path / "product.zip"
+    exporter.write_package(
+        source_files={"README.md": source.encode(), "START-HERE.md": b"# Setup\n"},
+        source_modes={},
+        inventory={"README.md": "README.md", "START-HERE.md": "START-HERE.md"},
+        output=output,
+        label="v1-staging",
+        commit="a" * 40,
+    )
+    with zipfile.ZipFile(output) as archive:
+        assert not any(name.endswith(".md") for name in archive.namelist())
+        content = archive.read("kyc-tool-v1-staging/README.txt").decode()
+        assert "setup (START-HERE.txt)" in content
+        assert "Field: case_id" in content
+        assert "Meaning: Company identifier" in content
+        assert "1. Configure credentials." in content
+        assert "2. Run the check." in content
+        assert 'printf "**literal**\\n" \\\n  --flag\n' in content
+        assert "```" not in content
+        assert "# Product" not in content
+        manifest = json.loads(archive.read("kyc-tool-v1-staging/MANIFEST.json"))
+        rows = {row["path"]: row for row in manifest["files"]}
+        assert rows["README.txt"]["sha256"] == hashlib.sha256(content.encode()).hexdigest()
+
+
+def test_renderer_receives_updated_public_references_before_plain_text_conversion(tmp_path, exporter):
+    def render(root):
+        assert "START-HERE.txt" in (root / "README.md").read_text()
+        (root / "guide.html").write_text('<a href="START-HERE.txt">Setup</a>')
+
+    output = tmp_path / "product.zip"
+    exporter.write_package(
+        source_files={"README.md": b"Read START-HERE.md.\n", "START-HERE.md": b"Setup.\n"},
+        source_modes={},
+        inventory={"README.md": "README.md", "START-HERE.md": "START-HERE.md"},
+        renderer=render,
+        output=output,
+        label="v1-staging",
+        commit="a" * 40,
+    )
+    with zipfile.ZipFile(output) as archive:
+        assert b"START-HERE.txt" in archive.read("kyc-tool-v1-staging/guide.html")
 
 
 def test_exported_dockerignore_blocks_local_secrets_and_build_junk():

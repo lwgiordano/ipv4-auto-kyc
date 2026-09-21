@@ -26,6 +26,8 @@ import zipfile
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
 
+from markdown_it import MarkdownIt
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 
@@ -56,12 +58,16 @@ NON_OPERATIONAL_TESTS = {
     "tests/unit/test_contract_registry_authority.py",
     "tests/unit/test_contract_rendering.py",
     "tests/unit/test_document_model.py",
+    "tests/unit/test_docs_cutover_parity.py",
     "tests/unit/test_handoff_renderer.py",
     "tests/unit/test_migration_lineage.py",
     "tests/unit/test_package_handoff.py",
     "tests/unit/test_plan_artifact_static.py",
+    "tests/unit/test_outbox_ceiling_contract.py",
     "tests/unit/test_receiver_state_machine.py",
     "tests/unit/test_restore_cli_contract.py",
+    "tests/unit/test_restore_wording_parity.py",
+    "tests/unit/test_runbook_requeue_governance.py",
     "tests/unit/test_techcraft_handoff_doc.py",
 }
 
@@ -305,12 +311,14 @@ def scan_package_text(path: str, data: bytes) -> None:
             raise ValueError(f"internal build-history reference ({kind}: {match.group(0)!r}) found in {path}")
     if not path.startswith("alembic/") and re.search(r"\bAUDIT_FINDINGS(?:\.md)?\b", text, re.I):
         raise ValueError(f"internal build-history reference (issue file) found in {path}")
-    if path.startswith("docs/") and PurePosixPath(path).suffix in {".md", ".html"}:
+    if PurePosixPath(path).suffix in {".md", ".txt", ".html"}:
         match = re.search(r"\bPR[ \t]+\d+[a-z]?(?:-[a-z0-9]+)?\b", text, re.I)
         if match:
             raise ValueError(
                 f"internal build-history reference (PR label: {match.group(0)!r}) found in {path}"
             )
+        if re.search(r"\bthis\s+is\s+(?:the|a)\s+handoff\b", text, re.I):
+            raise ValueError(f"internal build-history reference (handoff narration) found in {path}")
 
 
 def _parse_document_copy_manifest(data: bytes) -> dict:
@@ -438,6 +446,99 @@ def _write_combined_handoff(root: Path, *, label: str, commit: str) -> None:
     module.write_combined_handoff(docs, label=label, commit=commit)
 
 
+def plain_text_document(source: str) -> str:
+    """Render headings, lists and labelled table records without Markdown markup."""
+    tokens = MarkdownIt("commonmark", {"html": False}).enable("table").parse(source)
+
+    def inline(children):
+        result = []
+        links = []
+        for token in children or []:
+            if token.type in {"text", "code_inline"}:
+                result.append(token.content)
+            elif token.type in {"softbreak", "hardbreak"}:
+                result.append(" " if token.type == "softbreak" else "\n")
+            elif token.type == "link_open":
+                links.append((token.attrGet("href"), len(result)))
+            elif token.type == "link_close":
+                url, start = links.pop()
+                if url != "".join(result[start:]):
+                    result.append(f" ({url})")
+            elif token.type == "image":
+                result.append(f"{inline(token.children)} ({token.attrGet('src')})")
+        return "".join(result)
+
+    chunks = []
+    lists = []
+    item_prefix = ""
+    headers = []
+    row = None
+    in_header = False
+    heading = None
+    for token in tokens:
+        kind = token.type
+        if kind == "heading_open":
+            heading = token.tag
+        elif kind == "table_open":
+            headers = []
+        elif kind == "thead_open":
+            in_header = True
+        elif kind == "thead_close":
+            in_header = False
+        elif kind == "tr_open":
+            row = []
+        elif kind == "tr_close":
+            if in_header:
+                headers = row
+            else:
+                chunks.append(
+                    "\n".join(
+                        f"{label}: {value}" if label else value
+                        for label, value in zip(headers, row, strict=True)
+                    )
+                )
+            row = None
+        elif kind in {"bullet_list_open", "ordered_list_open"}:
+            lists.append(int(token.attrGet("start") or 1) if kind == "ordered_list_open" else None)
+        elif kind in {"bullet_list_close", "ordered_list_close"}:
+            lists.pop()
+        elif kind == "list_item_open":
+            number = lists[-1]
+            item_prefix = "  " * (len(lists) - 1) + (f"{number}. " if number is not None else "- ")
+            if number is not None:
+                lists[-1] += 1
+        elif kind == "list_item_close":
+            item_prefix = ""
+        elif kind == "inline":
+            content = inline(token.children)
+            if row is not None:
+                row.append(content)
+            elif heading:
+                chunks.append(content + "\n" + ("=" if heading == "h1" else "-") * len(content))
+                heading = None
+            else:
+                chunks.append(item_prefix + content)
+                item_prefix = ""
+        elif kind in {"fence", "code_block"}:
+            # Preserve shell continuations, indentation and literal markup exactly.
+            chunks.append(token.content.removesuffix("\n"))
+        elif kind == "hr":
+            chunks.append("----------------------------------------")
+    return "\n\n".join(chunks) + "\n"
+
+
+def _prepare_public_documents(root: Path) -> None:
+    names = {path.name for path in root.rglob("*.md")}
+    # Only known document names, never a broad extension substitution in code.
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix not in {".md", ".sh", ".toml"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for name in sorted(names, key=len, reverse=True):
+            text = re.sub(rf"(?<![\w.-]){re.escape(name)}(?![\w-])", name[:-3] + ".txt", text)
+        path.write_text(text, encoding="utf-8")
+
+
 def _sort_exported_test_imports(root: Path) -> set[str]:
     tests = root / "tests"
     if not tests.is_dir():
@@ -511,6 +612,7 @@ def write_package(
             target.chmod(stat.S_IMODE(modes[path]))
 
         _write_combined_handoff(root, label=label, commit=commit)
+        _prepare_public_documents(root)
         sorted_test_paths: set[str] = set()
         if any("test_support_import_rebased" in changes for changes in transformations.values()):
             sorted_test_paths = _sort_exported_test_imports(root)
@@ -527,19 +629,25 @@ def write_package(
                 modes[path] = stat.S_IMODE(target.stat().st_mode)
                 if path in sorted_test_paths:
                     transformations[path].append("test_imports_sorted")
+                elif path in sources:
+                    transformations[path].append("public_document_references_updated")
                 else:
                     sources[path] = "generated:release-documents"
                     transformations[path] = ["generated_from_export_documents"]
 
-    immutable_residuals = [
-        {
-            "path": path,
-            "classification": "byte-exact migration commentary",
-        }
-        for path, data in packaged.items()
-        if path.startswith("alembic/")
-        and (b"AUDIT_FINDINGS" in data or re.search(rb"re-audits?", data, re.IGNORECASE))
-    ]
+    # Markdown is an authoring input only. Rendered guides have already been
+    # built from it; the archive contains readable plain text instead.
+    for path in list(packaged):
+        if not path.endswith(".md"):
+            continue
+        destination = path[:-3] + ".txt"
+        if destination in packaged:
+            raise ValueError(f"plain-text document destination already exists: {destination}")
+        packaged[destination] = plain_text_document(packaged.pop(path).decode("utf-8")).encode("utf-8")
+        modes[destination] = modes.pop(path)
+        sources[destination] = sources.pop(path)
+        transformations[destination] = transformations.pop(path) + ["plain_text_document"]
+
     for path, data in packaged.items():
         if not is_safe_archive_path(path):
             raise ValueError(f"unsafe archive path: {path}")
@@ -558,20 +666,14 @@ def write_package(
                 "mode": f"{stat.S_IMODE(modes[path]):04o}",
                 "source_path": source,
                 "source_sha256": hashlib.sha256(source_data).hexdigest() if source_data is not None else None,
-                "transformations": transformations[path],
             }
         )
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "package": prefix,
         "release_stage": "staging",
         "source_commit": commit,
         "files": rows,
-        "declared_residuals": immutable_residuals,
-        "source_tests_not_packaged": {
-            "reason": "requires development-only document or planning inputs",
-            "paths": sorted(NON_OPERATIONAL_TESTS),
-        },
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     scan_package_text("MANIFEST.json", manifest_bytes)

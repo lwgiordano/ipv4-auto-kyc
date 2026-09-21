@@ -39,16 +39,15 @@ def build_combined_handoff(docs_dir: Path, *, label: str | None = None, commit: 
         bodies.append((part_title, filename, path.read_text(encoding="utf-8")))
 
     provenance = (
-        f"Closed-staging source package `{label}` from commit `{commit}`."
+        f"Release: `{label}`\n\nSource revision: `{commit}`"
         if label and commit
-        else "Checked-in reference assembled from the reviewed public document copies."
+        else "Supported environment: closed staging."
     )
     sections = [
-        "# TechCraft handoff",
+        "# IPv4.Global KYC/KYB — Integration and Operations Reference",
         "",
         provenance,
-        "This combined reference is for closed staging, not production.",
-        "Each part below is also included as a separate Markdown file.",
+        "Production use is not supported by this release.",
         "Section numbers restart in each part.",
         "",
         "## Contents",

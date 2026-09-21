@@ -1,8 +1,7 @@
-# TechCraft handoff
+# IPv4.Global KYC/KYB — Integration and Operations Reference
 
-Checked-in reference assembled from the reviewed public document copies.
-This combined reference is for closed staging, not production.
-Each part below is also included as a separate Markdown file.
+Supported environment: closed staging.
+Production use is not supported by this release.
 Section numbers restart in each part.
 
 ## Contents
@@ -17,31 +16,30 @@ Section numbers restart in each part.
 
 # Part 1: Product and integration briefing
 
-This is the handoff for TechCraft. The tool can be tested in a
-closed staging environment, but it is not ready for production. Start with §4
-for the platform work, §5 for the two provider decisions, §6 for staging, and
-§8 for the remaining delivery gaps and numbered asks. Engineers should build
-against `PLATFORM_INTEGRATION.md`, which owns the signatures and payloads,
-including status codes.
+The tool supports testing in a closed staging environment. It is not ready for
+production. Section 4 defines platform responsibilities, §5 defines the two
+required provider decisions, §6 defines staging, and §8 records the remaining
+delivery gaps and numbered inputs. `PLATFORM_INTEGRATION.md` is the authority
+for the complete wire request and response contract.
 
 ## 1. What it is
 
-The tool answers one question about one person: does this registrant really
-speak for the company they claim? It never drives your screens and never
+The tool determines whether a registrant represents the company they claim.
+It never drives platform screens and never
 changes platform state. It gathers evidence, scores it and answers. The
 platform acts.
 
-The work happens in the background. Your platform POSTs an event (a
+The work happens in the background. The platform POSTs an event (a
 registration, a verified email, an uploaded document, an RIR org handle) and
 gets an acknowledgment straight away. The tool then looks the claimed company
 up in Companies House, GLEIF and the five regional internet registries (ARIN,
 RIPE, APNIC, LACNIC, AFRINIC). It screens the broker blocklist. It scores what
-it found and POSTs the verdict to a webhook your team hosts.
+it found and POSTs the verdict to a platform-hosted webhook.
 
 The design has one message that may go directly to a person: the POC
 verification email, sent only to the address the registry lists for that
 contact. Nothing sends that message in the production path yet. Whether the
-tool sends it or your platform does is one of the two open questions (§5 and
+tool sends it or the platform does is one of the two required decisions (§5 and
 §8 item 10).
 
 ## 2. What it does
@@ -86,7 +84,7 @@ Four verdicts come back: `approve`, `approve_buy_locked` (the account is fine,
 buying stays locked until an ORG-ID verifies), `manual_review_insufficient`
 and `reject`. That second one is how "ORG-ID optional at registration" works
 in practice. Every check that does not pass carries a stable reason code
-naming what is missing or wrong, and that code is what your review team acts
+naming what is missing or wrong, and that code is what the review team acts
 on.
 
 Only a broker-blocklist match rejects a case on its own. Everything else that
@@ -110,7 +108,7 @@ A case is one registrant: the person signing up on behalf of a company.
 Approving the case approves that person, not the company, so the sign-up event
 has to say who they are. It carries `contact.name` and `contact.email` (the
 address they signed up with, and the one `email.verified` confirms later) plus
-the `platform_account_id` you hold for them. A second registrant at the same
+the `platform_account_id` held for them. A second registrant at the same
 company is a second case with its own id.
 
 Send the RIR org handle whenever the registrant has one. That means
@@ -127,7 +125,7 @@ table above.
    compares its identity domain; when LinkedIn supplies no domain, the
    legal-name or alias fallback can still match. The platform gets back
    `202 {"run_id": "…"}`.
-2. When that run finishes, the first verdict reaches your webhook: the registry matched
+2. When that run finishes, the first verdict reaches the platform webhook: the registry matched
    (25) and LinkedIn put the contact at that company (20), so the score is 45.
    The decision is `manual_review_insufficient`, with reason codes for what is
    still missing.
@@ -138,7 +136,7 @@ table above.
    `org_id.submitted`, the RIR lookup passes (25), and the score reaches
    105 with all five gates green.
 5. The computed decision is `approve`. While enforcement is off it arrives as
-   `manual_review_insufficient` with that computed decision attached, and your
+   `manual_review_insufficient` with that computed decision attached, and the
    registration team confirms it in the platform admin.
 
 A document can add another 25 in closed staging through the JSON path. It can
@@ -159,7 +157,7 @@ a user later adds or changes something that matters, the platform re-sends the
 matching event and verification runs again by itself. The full trigger table
 is `PLATFORM_INTEGRATION.md` §3.
 
-## 4. What your team builds
+## 4. Platform responsibilities
 
 Five work areas:
 
@@ -173,14 +171,14 @@ Five work areas:
    automatic callbacks, and hold unordered results for review. See
    `PLATFORM_INTEGRATION.md` §4.
 2. **The POC confirmation page.** The user types in the code and the reference
-   from the verification email, and the platform posts both back to us. Codes
+   from the verification email, and the platform posts both back to the tool. Codes
    are single-use, they expire after 72 hours, and they die if the user edits
    the identity details behind them. Recovery is always the same: submit the
    POC again. See `PLATFORM_INTEGRATION.md` §5.
-3. **Admin views for held cases.** Your review team works in the platform
+3. **Admin views for held cases.** The review team works in the platform
    admin, so each held case needs its decision, its score, its checks and its
    reason codes on screen. They come from the webhook body, or from
-   `GET /v1/cases/{id}` if you would rather pull. Keep score and reason codes
+   `GET /v1/cases/{id}` through a pull integration. Keep score and reason codes
    admin-only. Users see their status and the next useful step. See
    `PLATFORM_INTEGRATION.md` §7.
 4. **Status notifications and reviewer assignment.** Emails to users, alerts
@@ -189,49 +187,49 @@ Five work areas:
    `PLATFORM_INTEGRATION.md` §4.
 5. **The Salesforce pull consumer.** The tool exposes
    `GET /v1/cases/{case_id}/salesforce-projection`; it does not push to
-   Salesforce. Your service must call that endpoint, apply the returned field
+   Salesforce. The platform service must call that endpoint, apply the returned field
    mapping to the sandbox and production orgs, and own retries and
    reconciliation, including backfills. See `PLATFORM_INTEGRATION.md` §7.
 
-## 5. The open questions
+## 5. Required provider decisions
 
-Two questions are open, and both are about work your platform may already do.
-Either answer works for us. Neither blocks closed staging. Both block
-production because each answer still needs a real provider wired into the
-production profile. They are not the only production blockers; §8 lists the
-rest.
+Two provider decisions remain open. Either option supports the product design,
+and neither blocks closed staging. Both block production until the selected
+provider is wired into the production profile. Section 8 lists the other
+production blockers.
 
-**Question 1. Can your platform send the POC verification email?**
+**Decision 1. POC verification email owner**
 
 Proving control of IP resources means sending a token to the address the
 regional registry lists for that contact, never to an address the user typed.
 The live RDAP-backed directory that can find that address is implemented, but
 the production pipeline does not select it yet.
 
-- **If yes:** your transactional email sends the message. We still have to
-  agree and build the message that gives your service the token, the
+- **Platform-owned:** the platform transactional-email service sends the
+  message. A typed delivery contract must provide that service with the token, the
   registry-listed recipient and the case reference.
-- **If no:** we still have to build and wire an email provider for the tool.
+- **Tool-owned:** an email provider must be built and wired for the tool.
   It will use an Amazon SES identity and sending domain that IPv4.Global
   provisions.
 
-Either way the token rules stay ours. §4 item 2 lists them and
+Token creation, expiry, identity binding and consumption remain tool
+responsibilities. Section 4 item 2 lists the rules and
 `PLATFORM_INTEGRATION.md` §5 has them in full. The POC check cannot award its
 25 points in production until the chosen path is built and wired.
 
-**Question 2. Can your platform read the fields off an uploaded document?**
+**Decision 2. Document-field extraction owner**
 
 The fields are the legal name, the registered address, the registration number
 and the issuing jurisdiction, each as printed on the document rather than as
 the user typed it.
 
-- **If yes:** the platform writes them into the shared bucket as a small JSON
+- **Platform-owned:** the platform writes them into the shared bucket as a small JSON
   object and posts `document.uploaded` pointing at it. The tool reads that
   JSON and compares it against the registries; the tool runs no OCR on this
   path. The JSON reader works in development and staging today, but production
-  refuses that development setup. We still need a production implementation
-  that accepts and validates the agreed extracted fields.
-- **If no:** the platform posts `document.uploaded` pointing at the original
+  refuses that development setup. A production implementation must accept and
+  validate the agreed extracted fields.
+- **Tool-owned:** the platform posts `document.uploaded` pointing at the original
   PDF or image, and the tool runs OCR itself. That path is not built. It needs
   an OCR provider chosen and contracted by IPv4.Global, provider wiring, and
   agreed limits on file type and size.
@@ -243,9 +241,10 @@ describes both options.
 The document check cannot award its 25 points in production until the chosen
 path is wired into the production profile.
 
-**Agreed at kickoff: your team hosts and operates it.**
+### Hosting and operations ownership
 
-IPv4.Global maintains the code and publishes releases. Your team pulls a
+TechCraft hosts and operates the tool in IPv4.Global's AWS account. IPv4.Global
+maintains the code and publishes releases. TechCraft pulls a
 release and redeploys. Do not edit code on the server.
 
 - Python 3.11 and FastAPI. The automated suite currently tests
@@ -283,10 +282,10 @@ release and redeploys. Do not edit code on the server.
 
 Staging runs with **automation on** (`KYC_ENFORCE_POSITIVE_DECISIONS=true`) so
 that the real end state gets a rehearsal. That is safe **only** because
-staging is closed: reachable by our own tests, never by an untrusted caller.
-It is a rehearsal and not the production go-live. The M2 gate still requires
-the full production-readiness backlog, an end-to-end staging run on real
-adapters, and the platform cutover before automation can be turned on in
+staging is closed: reachable by authorized tests, never by an untrusted caller.
+It is a rehearsal and not the production go-live. Production approval requires
+the full `PRODUCTION_READINESS.md` backlog, an end-to-end staging run on real
+adapters, and platform cutover approval before automation can be turned on in
 **production**. Production launches with it off. The tool investigates, the
 review team confirms, and the flag flips per environment only after that gate
 is complete.
@@ -311,7 +310,7 @@ Checklist:
    (`PLATFORM_INTEGRATION.md` §2 and §4). Staging boots in development mode
    without the v2 set, but dual-accept is the thing staging exists to
    rehearse, so configure it on both sides.
-4. Core env vars: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL` (your
+4. Core env vars: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL` (the
    staging receiver), `KYC_OBJECT_STORE=s3` with `KYC_S3_BUCKET`,
    `KYC_ENFORCE_POSITIVE_DECISIONS=true`, and `CH_API_KEY` (§8 item 14),
    because the registry lookups are live.
@@ -323,13 +322,13 @@ Checklist:
    live directory is wired in (§8, not built yet). For that day set
    `KYC_EMAIL_PROVIDER=file`, which appends each verification email as a JSON
    line to a local sink file (`var/poc-emails.log` by default,
-   moved with `KYC_EMAIL_FILE_PATH`), so your tests can read the token and the
+   moved with `KYC_EMAIL_FILE_PATH`), so staging tests can read the token and the
    reference and finish the round-trip. That sink writes raw tokens to disk,
    so it is for closed staging only and production refuses it at boot. The
    production email and document paths still need the agreements in §5.
 6. `alembic upgrade head`, start the processes, check `/readyz`.
 7. Smoke test: send a signed `kyb.run_requested` and watch the verdict arrive.
-   Until your receiver exists, `scripts/dev_receiver.py` is a stub that prints
+   Until the platform receiver exists, `scripts/dev_receiver.py` is a stub that prints
    incoming callbacks.
 
 ## 7. Testing tips
@@ -384,7 +383,7 @@ print(r.status_code, r.json())
   shows every case with its score, its gates and its run state, and it can
   compose signed test events from the browser.
 
-## 8. Where things stand, and what we need from you
+## 8. Release status and required inputs
 
 The service is not production-ready. The go/no-go gate is in
 `PRODUCTION_READINESS.md`. Status at
@@ -408,11 +407,11 @@ this release falls into five states.
 - Reviewer information requests. A reviewer can record what a stalled case
   needs, most often the RIR org handle, and `GET /v1/cases/{id}` serves it as
   `information_requested`.
-- The conformance kit you can run against staging.
+- The conformance kit for staging checks.
   `python -m kyc_tool.conformance` runs the repository's reference signer,
   client and callback receiver against the published contract. It checks the
   tool side; it does not test TechCraft's sender or receiver. Use its published
-  vectors as inputs to separate tests of your implementation
+  vectors as inputs to separate platform-implementation tests
   (`PLATFORM_INTEGRATION.md` §11).
 - S3-compatible evidence storage, and the boot check that refuses stand-in
   providers and unsafe configuration in production.
@@ -429,16 +428,16 @@ this release falls into five states.
 
 - The POC verification flow. Token creation and validation work. The
   production pipeline still needs the live RDAP-backed directory and either
-  the platform handoff or the tool-side email provider. Nothing sends the
+  the platform delivery contract or the tool-side email provider. Nothing sends the
   message yet.
 - The document check. The development JSON reader works, but production
-  refuses that stub. Tool-side OCR is not built. Either answer needs a real
+  refuses that stub. Tool-side OCR is not built. Either option needs a real
   provider and production-profile wiring.
 
-**Not built yet, for reasons of our own**
+**Not built in this release**
 
 - The production provider profile: the switch that hands the pipeline the
-  built POC directory, and whichever providers your two answers call for. The
+  built POC directory, and the providers selected by the two required decisions. The
   live Floqer client already exists and carries over.
 - Migration 025 and platform-authoritative callback ordering. The database
   assigns an internal decision number today and can suppress some older local
@@ -452,14 +451,13 @@ this release falls into five states.
 **Out of scope by design**
 
 - The tool never writes Salesforce, never judges a website automatically,
-  never replaces your platform UI and never changes a historical decision when
+  never replaces the platform UI and never changes a historical decision when
   configuration or mappings change.
 
-The rest of this section is numbered so that either side can cite an item by
-number: five configuration values from you, eight answers we need, and two
-things IPv4.Global owes.
+The remaining requirements use stable item numbers: five platform
+configuration values, eight required decisions, and two IPv4.Global inputs.
 
-**Your configuration** (through the deployment secret manager or written
+**Platform configuration** (through the deployment secret manager or written
 deployment config, never chat)
 
 1. Callback base URLs, staging and production.
@@ -469,34 +467,34 @@ deployment config, never chat)
 4. The Salesforce sandbox and the platform service that will consume the
    projection: its owner, when it pulls, how it authenticates, and how it
    handles failed writes, including retry and backfill reconciliation.
-5. AWS deployment access for whoever on your side deploys.
+5. AWS deployment access for the TechCraft deployment owner.
 
-**Your answers** (write each one down and we turn it into a tested contract)
+**Required decisions** (record each decision as an input to the tested contract)
 
-6. Your callback receiver's behaviour: that one database transaction records
+6. Platform callback receiver behavior: one database transaction records
    the valid callback and dedupe key, commits before returning 2xx, and treats
    an exact duplicate as already processed.
 7. The ordering bootstrap, which migration 025 cannot be built and activated
    without:
    - where the platform's accepted-run ledger lives
-   - how we query the accepted decision for any case
+   - how IPv4.Global queries the accepted decision for any case
    - how manual approvals and reverted decisions appear in it
    - who signs the bootstrap response, and how that signer is identified
    - the maximum bootstrap size, and the recovery procedure
-8. Review-task changes. The default is a webhook you host for a task opened,
-   completed or cancelled. If you would rather poll
-   `GET /v1/review-tasks?status=open`, say so, and tell us the cursor rule,
-   the freshness you need and what should happen after a missed poll.
-9. Document extraction. Can your platform extract the four fields and send
-   them as JSON? If it cannot, the tool runs OCR and IPv4.Global contracts an
+8. Review-task changes. The default is a platform-hosted webhook for a task
+   opened, completed or cancelled. If polling
+   `GET /v1/review-tasks?status=open` is selected instead, record the cursor
+   rule, required freshness and missed-poll recovery behavior.
+9. Document extraction. Record whether the platform will extract the four fields and send
+   them as JSON. Otherwise, the tool runs OCR and IPv4.Global contracts an
    OCR provider. Either choice also needs its production provider and profile
    wired. §5 asks the question in full, and `PLATFORM_INTEGRATION.md` §6 has
    both wire paths.
-10. POC verification email. Can your platform send it from its own
+10. POC verification email. Record whether the platform will send it from its own
     transactional email, given the token and the registry-listed recipient
-    over a typed contract? If it cannot, the tool sends through an SES
+    over a typed contract. Otherwise, the tool sends through an SES
     identity that IPv4.Global provisions. Either choice needs its provider
-    built and wired. Confirm as well that you host the POC page and echo back
+    built and wired. Confirm that TechCraft hosts the POC page and echoes back
     both `token` and `token_id`. §5 asks the question,
     `PLATFORM_INTEGRATION.md` §5 has the wire detail.
 11. Floqer. The contract is in place, and the tool calls a published shortcut
@@ -505,13 +503,13 @@ deployment config, never chat)
 12. Operating targets: expected daily and peak case volume, concurrent runs,
     acceptable latency for light and full checks, soak duration, deployment
     region, maintenance-window constraints, and the availability and recovery
-    objectives you hold us to.
+    objectives that apply to IPv4.Global.
 13. Reviewer information requests. When a case stalls for evidence the
     registrant never supplied, most often the RIR org handle, a reviewer
     records the ask in the console and `GET /v1/cases/{id}` serves it as
-    `information_requested` (`PLATFORM_INTEGRATION.md` §7). How would you
-    rather hear about one: poll that field, or a new webhook message we send
-    you? We build the webhook only once you answer. The ask is recorded either
+    `information_requested` (`PLATFORM_INTEGRATION.md` §7). Select either
+    polling that field or a new outbound webhook message. The webhook is built
+    only after that decision is recorded. The request is recorded either
     way.
 
 **From IPv4.Global**
@@ -522,7 +520,7 @@ deployment config, never chat)
 
 ## 9. Doc map
 
-| Question | Doc |
+| Topic | Document |
 |---|---|
 | Full API contract, signatures, payloads, webhook | `docs/PLATFORM_INTEGRATION.md` |
 | Deploying, releasing, rollback, monitoring | `docs/DEPLOYMENT.md` |
@@ -534,48 +532,49 @@ deployment config, never chat)
 
 # Part 2: Platform integration reference
 
-For TechCraft's integration developers. This guide covers the event sender,
+This guide covers the TechCraft event sender,
 decision receiver, reviewer actions, Salesforce reads, and the proposed POC
 confirmation page. Product decisions and the numbered delivery checklist are
 in `PLATFORM_BRIEFING.md` §5 and §8.
 
 This release is for closed staging, not a production launch. Production provider
 wiring and ordered callback delivery are unfinished. The email and document
-options in §5–§6 need agreement before their production paths can be built.
+options in §5–§6 require recorded decisions before their production paths can
+be built.
 
 ## 1. The model
 
-A case is one registrant: the person signing up on your platform on behalf of a
-company. You send us what they told you, we check it against public registries,
-and we send back a verdict your registration team can act on.
+A case is one registrant: the person signing up on the platform on behalf of a
+company. The platform sends the submitted data, the tool checks it against
+public registries, and the tool returns a verdict for the registration team.
 
-You POST events such as registration data, a verified email or an ORG-ID.
-Accepted new events normally queue background work: the tool gathers evidence,
-scores it, and POSTs a decision to your webhook. Manual approval is handled
+The platform POSTs events such as registration data, a verified email or an
+ORG-ID. Accepted new events normally queue background work: the tool gathers
+evidence, scores it, and POSTs a decision to the platform webhook. Manual approval is handled
 inline. Replaying an accepted event does not create another run (§3).
 
 Decisions: `approve`, `approve_buy_locked` (account OK, purchasing held until
 ORG-ID verifies), `manual_review_insufficient`, `reject`.
 
-`platform_account_id` on the sign-up event is your id for that person, and
-every decision we send back is about that case, so about that contact. Company
+`platform_account_id` on the sign-up event is the platform id for that person,
+and every returned decision concerns that case and contact. Company
 evidence (registry records, ORG-ID, website) is about the company they claim.
 Contact evidence ties the person to it: an inbox at the company's domain, a
 LinkedIn profile showing them at that company, later the RIR contact token.
 Approving a case approves the contact, not the company. A second registrant at
 the same company is a second case, with its own `case_id`.
 
-**MVP posture:** auto-enforcement is off. A computed `approve` /
+**Enforcement posture:** auto-enforcement is off. A computed `approve` /
 `approve_buy_locked` is delivered as `manual_review_insufficient` with an
-`enforcement_held` marker (§4), and the registration team confirms it. Flipping
-enforcement requires the full M2 prerequisites, including completion of the
-remediation backlog, real-provider staging tests and platform cutover approval.
-This guide is not permission to enable it.
+`enforcement_held` marker (§4), and the registration team confirms it.
+Production enforcement requires completion of the full backlog in
+`PRODUCTION_READINESS.md`, real-provider staging tests and platform cutover
+approval. This guide is not permission to enable it.
 
 ## 2. Authentication (both directions)
 
-Nothing is accepted unsigned, in either direction. Your requests to us and our
-webhook to you carry the same two headers:
+Nothing is accepted unsigned in either direction. Platform requests and tool
+webhooks carry the same two headers:
 
 ```
 X-KYC-Timestamp: <unix seconds, e.g. "1752681600">
@@ -663,8 +662,8 @@ migrate whenever it is ready.
 
 ## 3. Sending events
 
-Everything you tell us arrives as an event on one endpoint. There is no
-registration call and no re-verify call: you post what happened, and the tool
+Every platform update arrives as an event on one endpoint. There is no
+registration call and no re-verify call: post what happened, and the tool
 decides again.
 
 ```
@@ -766,9 +765,10 @@ verdict, so there is no separate "retry" or "re-verify" call.
 Changing identity details (ORG-ID, POC) suspends previously earned proof until
 re-verified, so a score can drop after an edit (§5). That decrease is expected.
 
-## 4. The decision webhook (you build this)
+## 4. Platform decision webhook
 
-This is the endpoint we POST every verdict to, and the first thing to build.
+The tool POSTs every verdict to this endpoint. It is the first required
+platform integration.
 One body carries the decision, the score behind it and the reason codes for
 each check.
 
@@ -777,7 +777,7 @@ v1 (the legacy shared secret) and v2 (the dedicated **outbound** secret + key id
 until the outbound sunset, then v2 only. Two lines of the §2 canonical differ
 on this direction: it reads `tool->platform`, and the idempotency-key line is
 empty. The v2 signature binds the **literal** request path, so if
-`{your_base_url}` has a path prefix (e.g. `…/hooks`), we sign
+`{your_base_url}` has a path prefix (e.g. `…/hooks`), the tool signs
 `/hooks/kyc/decision` rather than `/kyc/decision`. Verify against the full path
 you received.
 
@@ -831,7 +831,7 @@ Body:
   decision the tool computed. Treat the case as pending human review.
 - **Delivery is at-least-once.** Dedupe on `(case_id, run_id)`. Retries back
   off exponentially (defaults: base 10 s, 8 attempts) before dead-lettering on
-  our side. Delivery failures then need operator recovery (§8). Retries are
+  the tool side. Delivery failures then need operator recovery (§8). Retries are
   not unlimited.
   Acknowledge every exact valid duplicate as processed. Acknowledging a
   callback is a different act from applying it to the case.
@@ -881,11 +881,12 @@ the gate booleans and the reason codes in admin views, because publishing
 exactly why a check fails makes it easier to game. Wording is yours, and the
 reason codes are stable strings safe to key copy on.
 
-## 5. POC verification page (you build this)
+## 5. Platform POC verification page
 
 Proving that a registrant controls IP resources means sending a code to the
-address their regional registry lists, and having them type it back. You host
-the page they type it into. Who sends that email is the first open question.
+address their regional registry lists, and having them type it back. The
+platform hosts the confirmation page. Email ownership is a required provider
+decision.
 
 1. You post `poc.submitted`.
 2. Once the live directory is wired into the worker, the tool looks up the POC over RDAP: the
@@ -913,12 +914,12 @@ Rules your page must respect:
   scores to drop after an ORG-ID/POC edit until re-verified
   (`org_id_revalidation_pending`, `poc_not_associated`). Not a bug.
 
-**Open question: can your platform send that email?**
+**Required decision: POC verification email owner**
 
-- **If yes** — the platform sends it through its existing transactional email.
-  We hand you the token, the registry-listed recipient and the case reference
-  over a typed delivery contract still to be written, and we host no mail.
-- **If no** — the tool sends it through an Amazon SES sender that IPv4.Global
+- **Platform-owned** — the platform sends it through its existing transactional
+  email. A typed delivery contract, still to be written, must carry the token,
+  registry-listed recipient and case reference. The tool hosts no mail.
+- **Tool-owned** — the tool sends it through an Amazon SES sender that IPv4.Global
   provisions with an identity and a sending domain. That sender is not built,
   and a production process refuses to boot while the email provider is the dev
   stub.
@@ -928,21 +929,21 @@ directory, so staging cannot complete this flow until the built live directory
 is wired in. Production also needs the agreed email path. A file email sink
 can support closed-staging tests. It is not a production sender.
 
-## 6. Documents (open question: who reads the fields?)
+## 6. Documents and extraction ownership
 
 A registrant can upload a formation document. Before the tool can compare it
 against what the user typed, someone has to read four fields off it: legal
 name, address, registration number, jurisdiction. Which side reads them is the
-second open question. The kickoff call leaned toward the platform.
+second required provider decision.
 
-**Open question: can your platform extract those four fields?**
+**Required decision: document-field extraction owner**
 
-- **If yes** — the platform stores the upload (your existing virus scanning
+- **Platform-owned** — the platform stores the upload (with existing virus scanning
   and quarantine unchanged), writes the four fields as a JSON object to the
   shared object store, and posts `document.uploaded` with `object_ref`
   pointing at that JSON. The tool runs no OCR and reads that JSON as posted.
   The numbered steps below are this path's contract.
-- **If no** — the platform stores the upload and posts `document.uploaded`
+- **Tool-owned** — the platform stores the upload and posts `document.uploaded`
   with `object_ref` pointing at the **original file** (PDF or image) in the
   shared object store. The tool runs an OCR engine and extracts the same four
   fields itself. That path needs an OCR provider chosen and contracted by
@@ -1015,11 +1016,11 @@ reaches the contact. An entry drops off by itself once the case receives that
 evidence, so there is nothing to close and nothing to acknowledge. `org_id`
 clears when `org_id.submitted` arrives, and the other three clear the same way.
 
-You do not need this field to identify a missing ORG-ID today. The decision
+This field is not required to identify a missing ORG-ID. The decision
 webhook's `checks[].reason_codes` already carry `org_id_submission_incomplete`,
-which is the same fact at decision time. How you would rather learn of a
-reviewer's request is `PLATFORM_BRIEFING.md` §8 item 13: poll this field, or
-have us send you a message. Nothing outbound is built until you answer.
+which is the same fact at decision time. The delivery method for a reviewer's
+request is `PLATFORM_BRIEFING.md` §8 item 13: poll this field or select a new
+outbound message. Nothing outbound is built until that decision is recorded.
 
 ### Salesforce projection (pull)
 
@@ -1057,7 +1058,7 @@ In production these reads also require the §2 signature headers. The
 registration team also has an operator console at `/ui` (dashboards, case
 detail, review queue), independent of this API.
 
-## 8. Hosting and deployment (you run this too)
+## 8. Hosting and deployment
 
 TechCraft hosts and operates the tool in IPv4.Global's AWS account. IPv4.Global
 maintains the code and cuts releases. Follow each release's migration and
@@ -1083,11 +1084,9 @@ is edited on the server. A `Dockerfile` ships in the repo, and
   `docs/RUNBOOK.md`). With `KYC_ENVIRONMENT=production` a misconfigured process
   refuses to boot and lists every violation — intentional fail-closed.
 
-## 9. MVP scope and what comes later
+## 9. Release scope and production dependencies
 
-What is built today, and what each missing piece waits on.
-
-Works now: the full event flow, the registry, ORG-ID, broker, LinkedIn,
+This release includes the full event flow, the registry, ORG-ID, broker, LinkedIn,
 document (extracted-fields) and email checks, scoring, webhooks, the review
 queue, the audit trail and idempotent replays.
 
@@ -1100,16 +1099,16 @@ queue, the audit trail and idempotent replays.
 | `event_sequence` in callbacks | your confirmation |
 | v1 signature retirement (v2 path-bound signing is live now, §2) | agreed dates and the recorded inbound zero-v1 observation window |
 | Ordered callback delivery (`decision_sequence`) | migration `025` and the platform bootstrap/receiver agreement; not built in this release |
-| Auto-enforcement | the full M2 gate: completed remediation backlog, real-provider staging end-to-end tests and platform cutover sign-off |
+| Auto-enforcement | the full `PRODUCTION_READINESS.md` backlog, real-provider staging end-to-end tests and platform cutover sign-off |
 
 The two provider decisions and ordering activation require additional contracts.
 Do not treat proposed fields or delivery paths as available API features.
 
-## 10. Answers we need
+## 10. Required inputs and decisions
 
-Every answer we still need from the platform team and from IPv4.Global is in
-`docs/PLATFORM_BRIEFING.md` §8. Its §4 lists what your team builds, and its §5
-holds the two questions still open.
+All remaining platform and IPv4.Global inputs are listed in
+`docs/PLATFORM_BRIEFING.md` §8. Section 4 defines platform responsibilities,
+and §5 defines the two required provider decisions.
 
 Secrets never travel in chat, email, tickets, or documents: use the deployment
 secret manager.
@@ -1158,15 +1157,15 @@ never printed, never logged:
 
 # Part 3: Deployment guide
 
-For the platform team operating the KYC tool in IPv4.Global's AWS account.
-IPv4.Global maintains the code and publishes releases. You pull a release and
-redeploy. Do not edit code on the server. Make changes in the repo and deploy
-them in the next release.
+The platform team operates the KYC tool in IPv4.Global's AWS account.
+IPv4.Global maintains the code and publishes releases. Deploy only a
+published release. Do not edit code on the server; make changes in the repo and
+include them in a later release.
 
-This is a closed-staging release. Production startup is blocked by unfinished
-provider wiring. Choosing who extracts documents and sends POC email does not
-by itself remove that block. See `PLATFORM_BRIEFING.md` §8 for the remaining
-work and approvals. These instructions do not authorize a production launch.
+This release is limited to closed staging. Production startup remains blocked
+by unfinished provider wiring. Selecting the document-extraction and POC-email
+owners does not remove that block. Production launch requires the work and
+approvals in `PLATFORM_BRIEFING.md` §8.
 
 ## 1. One image: services and scheduled jobs
 
@@ -1193,8 +1192,8 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 
 | | Staging | Production |
 |---|---|---|
-| `KYC_ENVIRONMENT` | `development` (until real providers land) | `production` |
-| `KYC_ENFORCE_POSITIVE_DECISIONS` | `true` — rehearse full automation | `false` at launch, flipped after staging proves out |
+| `KYC_ENVIRONMENT` | `development` (until real providers are available) | `production` |
+| `KYC_ENFORCE_POSITIVE_DECISIONS` | `true` — rehearse full automation | `false`; enable only after all `PRODUCTION_READINESS.md` requirements pass |
 | Providers | live registry lookups (`CH_API_KEY` set), with stand-ins for the POC directory, document extraction and email (file sink) | real registry providers, required. Real OCR and email providers are needed only if the tool extracts documents or sends the POC email, which are the two open questions in `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
 | Secret | staging secret | separate production secret |
 
@@ -1210,8 +1209,8 @@ replayed to another case within the skew window. The redirect closes for v2
 traffic at deploy, but for everyone only once **inbound v1 is actually disabled**
 (the zero-witness satisfied AND `hmac_v1_inbound_sunset_at` in effect). Keep
 staging's perimeter closed until that day arrives. Deploying v2 is not the
-moment it can open. Production automation stays off regardless until the M2
-gate is met.
+moment it can open. Production automation stays off until every requirement
+in `PRODUCTION_READINESS.md` passes.
 
 **Migration 010 is a non-hot cutover.** It drops the global unique that the
 old image's ingest still uses, so an old replica serving after the migration
@@ -1264,7 +1263,7 @@ zero-witness never turns green (by design), so v1 can never be sunset.
 
 ## 4. Deploying an update
 
-Each release from IPv4.Global is a tagged version with release notes stating
+Each IPv4.Global release is a tagged version with release notes stating
 whether it includes a migration, new environment variables or a contract change.
 Read those notes before scheduling the update.
 
@@ -1341,7 +1340,7 @@ Read those notes before scheduling the update.
   reviewed `024`-compatible image against the schema it is already on. The schema
   does not move. Do not apply `018` or anything above it in production until that
   bridge image has been reviewed and
-  staged. On this preproduction branch, the safe recovery path is roll-forward.
+  staged. Use roll-forward recovery before production.
   The UPGRADE side is gated too: `017` and `018` both refuse with
   `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` / `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS`
   while any live (unexpired) outbox claim
@@ -1380,7 +1379,7 @@ requeue endpoints, which reset both the job and its failed run. The ops
 console offers them as buttons (`/ui/api/requeue/...`) wherever
 `KYC_UI_ENABLED` is on, and `POST /v1/ops/requeue/job/{job_id}` and
 `/v1/ops/requeue/outbox/{outbox_id}` are always mounted behind the operator
-token. Three limits to know:
+token. Recovery limits:
 
 - A dead `poc_email` row cannot be requeued: its token was scrubbed when it
   died (the endpoint refuses it). Recovery is a fresh `poc.submitted`.
@@ -1399,7 +1398,8 @@ token. Three limits to know:
 - Packaged policy changes require a release and version-bump guard. After the
   explicit configuration cutover below, scoring points, broker snapshots, and
   Salesforce destination names instead use audited, server-saved revisions.
-  Threshold, hard gates, evidence rules, and M2 are not console-editable.
+  Threshold, hard gates, evidence rules, and positive-decision enforcement are
+  not console-editable.
 - Secrets only via environment / Secrets Manager, nothing secret is logged.
 - Never set `KYC_AUTH_DISABLED` outside local dev. Production boot refuses it.
 - **ANY change to `KYC_OUTBOX_MAX_ATTEMPTS` (raising OR lowering) is a DRAINED
@@ -1408,7 +1408,7 @@ token. Three limits to know:
   different ceilings against the same rows:
   - Lowering: the OLD (higher) publisher can make one more send past the new value.
   - Raising: the OLD (lower) publisher can dead-letter a row at its lower ceiling
-    before the NEW (higher) publisher ever supplies the extra attempts — and for a
+    before the NEW (higher) publisher supplies the extra attempts. For a
     POC email the terminal transition redacts the token, so those lost retries are
     irreversible.
 
@@ -1416,43 +1416,34 @@ token. Three limits to know:
   restart, (2) stop ALL outbox publishers of EVERY role — both the standalone
   `outbox_worker` and the embedded `dev_worker`, (3) attest zero publishers are
   running (the same attested-stop the reset CLI requires), (4) attest every new
-  task definition carries the exact new value, (5) start. This procedure is the
-  canonical record `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER`, rendered
-  below. RUNBOOK and `.env.example` embed the same rendered block. (A fleet-wide DB-persisted ceiling
-  epoch enforced before claim is the fail-closed alternative if runtime config
-  drift must be impossible — deferred, the drained cutover is the contract today.)
+  task definition carries the exact new value, (5) start.
 
-<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:start -->
 KYC_OUTBOX_MAX_ATTEMPTS: both-direction DRAINED publisher cutover (NOT a rolling restart)
 1. disable autoscaling and rolling restart
 2. stop ALL publishers of roles: outbox_worker, dev_worker
 3. attest zero publishers running of roles: outbox_worker, dev_worker
 4. attest every new task definition carries KYC_OUTBOX_MAX_ATTEMPTS
 5. start publishers of roles: outbox_worker, dev_worker
-<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:end -->
 
 ## 9. Reviewer-actor cutover — brief full maintenance window
 
-This cutover adds the reviewer-actor trust floor that closes the "review completed /
-approved by anyone holding the shared secret" forgery: it requires the signed
+This cutover requires the signed
 envelope's `actor` to identify the reviewer (`docs/PLATFORM_INTEGRATION.md`
 §3), rather than relying on the payload alone. **This is not a rolling deploy.** During any
-old/new overlap, an old replica still honors the exact forgery this release
-closes — an old API applies `reviewer.manual_approve` inline with no actor
+old/new overlap, an old API applies `reviewer.manual_approve` inline with no actor
 floor, and an old pipeline worker (which claims a job purely by kind, with no
 event-type filter) can still close a queued `system`-actor website completion
 under the old actorless semantics. There is no way to keep an old replica
 serving *any* traffic while guaranteeing it never touches a sensitive event,
-so this release ships as a **brief full maintenance window** — the same
-non-hot **stop → deploy → start** pattern used for migration 010 (§2), extended to workers
-as well as the API, which removes old/new overlap entirely. No migration
-ships with this change.
+so use a **brief full maintenance window** with a non-hot
+**stop → deploy → start** pattern across the API and workers. This change has
+no migration.
 
 The window is a real interruption, not a smooth roll: `POST
 /v1/cases/{case_id}/events` is unavailable for its duration, for every event
 type, and the pipeline is stopped. The "no loss" guarantee for that
-interruption is a **platform prerequisite**, not something the current API
-contract provides on its own — today the contract only directs retry on a
+interruption is a **platform prerequisite**, not something the API contract
+provides on its own. The contract directs retry on a
 *network failure* (`docs/PLATFORM_INTEGRATION.md` §3), but a load balancer
 with every API target down instead returns 502/503/504, and a delayed retry
 that reuses the original signature can blow the 300-second HMAC skew. Before
@@ -1536,21 +1527,19 @@ restores the previous actor-validation behavior.
 
 **Rollback verification is non-mutating only:** `GET` probes of `/readyz`
 and `/healthz`, and prior-image digest attestation. Do **not** run the step-5
-sensitive-mutation probes against the prior image — that image is the current
-vulnerable code with no actor floor, so a mismatched-actor `manual_approve`
+sensitive-mutation probes against the prior image. It has no actor floor, so a
+mismatched-actor `manual_approve`
 probe would actually `approve` the case inline, and a `system`-actor
 completion probe would queue a run the restored old worker can honor: the
-probe would *perform* the forgery it is meant to detect, not find it.
+probe would perform the unauthorized mutation it is meant to detect.
 Exercise that behavior only in staging or an isolated DB. Keep all submission
 and the composer blocked until the safe, non-mutating checks pass.
 
 ## 10. Bundle-pinning activation
 
-This cutover pins the policy bundle, and records the engine build, that a run is actually
-scored and decided under, instead of trusting whatever the worker process
-happened to have loaded. It ships in two parts: a **rolling** part (safe to
-deploy like any other release) and a **drained** part (the flag flip, not
-safe to roll).
+This cutover pins the policy bundle and records the engine build used to score
+and decide a run. It has a **rolling** part and a **drained** part. The flag
+flip is not safe for a rolling deployment.
 
 **Rolling migration and provenance, flag stays off.** Migration 011 adds
 `policy_bundles`, `bundle_pinning_epoch`, and the nullable provenance columns.
@@ -1694,10 +1683,9 @@ contract below, inserts the exact original row, floors the sequence past the res
 (`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
 the acceptance predicate and the sequence before committing — any mismatch rolls back row and
 sequence together. Then rerun 0.4 (the gate that reopens cutover) and either RESUME service or
-proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path — the earlier
-revision of this section prescribed exactly that and was circular: the diagnostic stayed red
-until the restore, while the sequence repair was documented as reachable only after cutover
-step 2 and knew nothing of the id being restored.
+proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path.
+The restore must insert the row and advance the sequence past its original id
+in one transaction before the diagnostic can pass.
 0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
     advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
     (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
@@ -1826,7 +1814,8 @@ R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image 
 Installing schema `024` does **not** activate configuration. Core migrations
 `013`–`023` and configuration migration `024` are frozen independently. Do not
 repair either owner's revisions in place. Platform activation `025` remains
-unbuilt and fails closed. This procedure does not enable M2 or alter callbacks.
+unbuilt and fails closed. This procedure does not enable positive-decision
+enforcement or alter callbacks.
 
 1. Record a database backup and the exact digest of the configuration-capable
    release image being deployed. Record that same tested image as the recovery
@@ -1934,7 +1923,7 @@ ordinary requeue must not feed unfinished unversioned work to snapshot-only work
 > `024` first refuses if any configuration history exists. With unused configuration additions,
 > its downgrade removes only those additions, `023` is validation-only and its downgrade is a
 > no-op, so the walk reaches `022` and refuses there. Do not apply `018` or anything above it in production until that bridge
-> image has been reviewed and staged. This preproduction branch otherwise rolls forward. Below
+> image has been reviewed and staged. Use roll-forward recovery before production. Below
 > `018` the walk still preflights with stable sentinels, in execution order
 > (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
 > `MIGRATION_016_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -1962,20 +1951,18 @@ ordinary requeue must not feed unfinished unversioned work to snapshot-only work
 > window and it can kill the approval instead of the migration, so before applying `022`/`023`
 > pause event submission, stop and attest the API writers AND the pipeline workers (as well as
 > publishers/retention), then re-run. Unlike the live-claim preflight, this one is **not
-> machine-checked** — `022` and `023` are published and cannot be amended to add one, the
-> machine-checked fence ships with `025` (activation blocker O4).
+> machine-checked**. Migration `025` must provide the machine-checked fence
+> before activation.
 
 ### Migration refusal sentinels
 
 Every deliberate migration refusal raises a **stable sentinel string**, so a refused
 `alembic upgrade`/`downgrade` reads as a designed stop rather than a broken migration.
-Grep the sentinel out of the command's output and find it here. The exception message
-names the offending rows or objects and a remediation — but published migrations are
-frozen, so a frozen message can lag this document: **where the message and this runbook
-disagree, the runbook wins.** Concretely, `022`'s forward-only refusal still names the
-compatible image for the revision it froze at (`022`). The image to keep is always the one
-compatible with the **live head** — `024`-compatible today, kept current in this document
-by a head-derived test that a frozen migration message cannot satisfy.
+Grep the sentinel out of the command's output and find it here. The exception
+message names the offending rows or objects and a remediation. Older migration
+errors may name an older compatible image. Follow this runbook when an error and
+the current procedure differ. The image to keep must be compatible with the
+**live head**, currently `024`.
 
 Release validation checks that every migration refusal sentinel appears in
 this table, so a new refusal cannot ship undocumented.
@@ -2047,32 +2034,31 @@ lists **all** violations at once:
 | `KYC_OUTBOX_LEASE_MARGIN_SECONDS` | DB commit/processing room added to the deadline in the lease rule above |
 | `KYC_OUTBOX_MAX_ATTEMPTS` | delivery-attempt ceiling (1 ≤ n ≤ int4 max). **It is not hot-swappable. ANY change, raise OR lower, is a DRAINED publisher cutover, never a rolling restart.** Each publisher enforces the ceiling it started with. Overlapping old/new publishers either send once past a lowered value or dead-letter before a raised value takes effect. A POC dead-letter also irreversibly redacts its token. Cutover, in order: disable autoscaling/rolling restart → stop ALL outbox publishers of every role (`outbox_worker` AND `dev_worker`) → attest zero running → attest every new task definition carries the exact new value → start. Canonical record: `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER` (DEPLOYMENT §8) |
 
-`KYC_OUTBOX_MAX_ATTEMPTS` is a both-direction drained publisher cutover — the
-canonical record (rendered from `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER`,
-identical to DEPLOYMENT §8 and `.env.example`):
+Changing `KYC_OUTBOX_MAX_ATTEMPTS` in either direction requires a drained
+publisher cutover (DEPLOYMENT §8):
 
-<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:start -->
 KYC_OUTBOX_MAX_ATTEMPTS: both-direction DRAINED publisher cutover (NOT a rolling restart)
 1. disable autoscaling and rolling restart
 2. stop ALL publishers of roles: outbox_worker, dev_worker
 3. attest zero publishers running of roles: outbox_worker, dev_worker
 4. attest every new task definition carries KYC_OUTBOX_MAX_ATTEMPTS
 5. start publishers of roles: outbox_worker, dev_worker
-<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:end -->
 
-The real OCR/email/adapter providers are not implemented yet (they land with the
-executable-contract work), so a production worker cannot start until they exist —
-that is intentional fail-closed behaviour, not a bug.
+Real OCR, email, and adapter providers are not implemented. A production worker
+cannot start until they exist; production startup fails closed.
 
-> **Temporary safety hold.** Until the approval-grade validators are hardened,
-> `KYC_ENFORCE_POSITIVE_DECISIONS` defaults to `false`: a computed `approve` /
+> **Positive-decision enforcement.** `KYC_ENFORCE_POSITIVE_DECISIONS` defaults
+> to `false`: a computed `approve` /
 > `approve_buy_locked` is emitted as `manual_review_insufficient` (the callback
 > carries an `enforcement_held` object with the computed decision, the audit
-> trail records both). Flip to `true` only once the validators fail closed.
+> trail records both). Keep it off in production until every requirement in
+> `PRODUCTION_READINESS.md` passes, including the full production backlog,
+> real-provider staging tests and platform cutover approval. Validator
+> hardening alone is not sufficient.
 
 ## Ops console (`/ui`)
 
-The console covers most of this runbook visually. Overview shows health and
+The console provides the main runbook operations. Overview shows health and
 dead-letter work. Cases is the reviewer's working view. It puts the registration
 and contact details beside two deliberately separate readings: the decision
 already recorded for the case and the score of the evidence held now. New
@@ -2088,7 +2074,7 @@ rejected only after an inline confirmation. The result and reviewer ID become
 part of the permanent case record. **Approve manually** also records the named
 reviewer and reason as a new decision without altering historical decisions.
 
-The remaining menu names match the console: Data Sources reports adapter mode,
+Data Sources reports adapter mode,
 configuration and reachability. Salesforce Fields previews the current case
 projection. Decision Rules shows the active scoring and gate configuration.
 Options holds appearance and operator access. Case Actions prepares signed
@@ -2118,9 +2104,9 @@ boots the whole stack and prints the console URL.
 `reviewer.manual_approve` with **403** — real reviewer actions must arrive as
 signed platform events carrying a genuine reviewer actor (see
 `docs/PLATFORM_INTEGRATION.md` §3, "Reviewer actor requirement"), not be
-typed into the console by an operator. This server-side 403 is the actual
-security boundary, hiding the composer's controls for these two event types
-in the console UI is optional polish on top of it, not a substitute for it. In
+typed into the console by an operator. This server-side 403 is the
+security boundary. Hiding the composer's controls for these two event types
+in the console UI is not a substitute. In
 dev/staging the composer still sends both event types, but with a real
 `{"type": "reviewer", "id": <reviewer_id>}` actor instead of the generic
 `system`/`ops-console` actor it uses for everything else, so console testing
@@ -2271,10 +2257,9 @@ contract below, inserts the exact original row, floors the sequence past the res
 (`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
 the acceptance predicate and the sequence before committing — any mismatch rolls back row and
 sequence together. Then rerun 0.4 (the gate that reopens cutover) and either RESUME service or
-proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path — the earlier
-revision of this section prescribed exactly that and was circular: the diagnostic stayed red
-until the restore, while the sequence repair was documented as reachable only after cutover
-step 2 and knew nothing of the id being restored.
+proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path.
+The restore must insert the row and advance the sequence past its original id
+in one transaction before the diagnostic can pass.
 0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
     advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
     (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
@@ -2469,11 +2454,11 @@ read-only historical inspection use `GET /v1/cases/{case_id}` and
 `GET /v1/cases/{case_id}/checks` under their existing read authorization.
 
 Threshold, hard gates, evidence rules, identity invalidation, manual record-only
-semantics, callback schema, and M2 remain unchanged. Changes to non-editable
+semantics, callback schema, and positive-decision enforcement remain unchanged. Changes to non-editable
 packaged policy still ship as a deploy: bump `version`, update
 `tests/policy_driven/policy_baseline.json` in the same release, and redeploy.
-Every run and decision records the policy hash that produced it. The 0–1000
-point cap is an approved operational exception to the base policy format.
+Every run and decision records the policy hash that produced it. Editable
+point values must be whole numbers from 0 to 1000.
 
 ## Policy bundle pinning and provenance
 
@@ -2502,9 +2487,9 @@ operator surface once it's live:
   state (a legitimately still-queued run is not flagged). The check is
   `kyc_tool.ops.activate_bundle_pinning_epoch.post_epoch_null_provenance(session)`
   — it returns `{"decisions": [...], "checks": [...], "runs": [...]}` of the
-  offending ids. It is not yet wired to `/v1/metrics` or a CLI, so run it
-  ad hoc (a Python shell against the production DB) or wire it into your own
-  alerting.
+  offending ids. No `/v1/metrics` or CLI integration is available; run it
+  from a Python shell against the production DB or integrate it with the
+  deployment's alerting.
 - **To reprocess a run, you must first seed its bundle.** Whether via
   `enforce_bundle_pinning` at the time (a live `BundleUnavailable`
   dead-letter — see the failure playbook above) or later, historical
@@ -2547,8 +2532,8 @@ note below). Latency series aggregate the declared 24h window.
 | KycDeadJobs | `kyc_jobs{status="dead"} > 0` | 5m | A dead-lettered job means a failed run that a human must requeue. See RUNBOOK and `/v1/ops/requeue/job/{id}`. |
 | KycFailedRuns | `kyc_runs{state="FAILED"} > 0` | 5m | This zero-safe series identifies failed runs that need the same requeue attention. |
 | KycDeadOutbox | `kyc_outbox{status="dead"} > 0` | 5m | An undeliverable callback or email usually indicates a platform endpoint or HMAC secret problem. Use `/v1/ops/requeue/outbox/{id}` after fixing the cause. |
-| KycOutboxBacklogLevel | `kyc_outbox{status="pending"} > 100` | 15m | This is a level threshold, not a growth rule. The endpoint exposes gauges, not counters. A `rate()` rule needs a counter series that is not available yet. |
-| KycDecisionLatency | `kyc_event_to_decision_seconds_p95 > 120` | 15m | This enforces the DEPLOYMENT §5 budget for full runs. The exporter currently ships one latency aggregate. It cannot alert separately on the light-run budget below 10 seconds until run classes are persisted and exported as separate series. |
+| KycOutboxBacklogLevel | `kyc_outbox{status="pending"} > 100` | 15m | Level threshold, not a growth rule. The endpoint exposes gauges, not counters; no counter series is available for a `rate()` rule. |
+| KycDecisionLatency | `kyc_event_to_decision_seconds_p95 > 120` | 15m | Enforces the DEPLOYMENT §5 budget for full runs. The exporter provides one latency aggregate. Separate alerting for the light-run budget below 10 seconds requires persisted run classes and separate exported series. |
 | KycAdapterErrors | `kyc_adapter_error_rate > 0.2` | 15m | Sustained upstream error rate after in-adapter transient retry |
 | KycReadyzDown | `probe_success{job="kyc-readyz"} == 0` | 5m | `/readyz` is the DB/migration/storage gate (blackbox-probe it) |
 
@@ -2557,7 +2542,7 @@ note below). Latency series aggregate the declared 24h window.
 Production requires a current path-bound signed request. A stock Prometheus cannot produce one, and
 scraping with the legacy v1 scheme is prohibited because every accepted v1 request records v1 traffic in
 the durable witness and would stall the v1 sunset forever. Until the dedicated least-privilege scrape
-identity ships (scheduled: a scoped read-only bearer for `/v1/metrics.prom` only), run the scrape
+identity is available, scoped as a read-only bearer for `/v1/metrics.prom` only, run the scrape
 through a sidecar that v2-signs each request, or scrape from a network position where
 `KYC_READ_AUTH_REQUIRED` staging rules apply. Do NOT wire a v1 signer into a scraper.
 
@@ -2565,8 +2550,8 @@ through a sidecar that v2-signs each request, or scrape from a network position 
 
 The KYC Tool **never** reads from or writes to Salesforce. The platform mirrors
 tool state one-way after every enforced decision and material check change.
-This document translates the tool's callback and read APIs into the
-`salesforce_sync_fields.json` field set. It also defines the value for
+The mapping translates the tool's callback and read APIs into the
+`salesforce_sync_fields.json` field set and defines the value for
 `approved_manual`, which the base field list leaves unspecified.
 
 Sources for every value below: the decision callback (`POST …/kyc/decision`),
@@ -2630,11 +2615,11 @@ One record per row of `GET /v1/cases/{id}/checks?all=1`:
 
 # Part 7: Production readiness
 
-This package supports a closed staging handoff. It is not approval to run the
+This package supports closed staging. It is not approval to run the
 service in production. Production remains **no-go** until every gate in this
 document is supported by recorded evidence.
 
-`PLATFORM_BRIEFING.md` §8 owns the 15 numbered inputs and decisions. The
+`PLATFORM_BRIEFING.md` §8 defines the 15 numbered inputs and decisions. The
 integration, deployment and runbook documents own their respective wire and
 operating procedures. If a checklist summary here conflicts with one of those
 procedures, follow the procedure and resolve the conflict before deployment.
@@ -2702,7 +2687,7 @@ Production is **no-go** if any item below is false:
   enforcement off and does not complete the production program.
 - Real-provider staging and the signed capacity targets pass.
 - Full restore and interrupted-cutover rehearsals pass.
-- Executable contracts, public schemas, deployed behavior and handoff documents
+- Executable contracts, public schemas, deployed behavior and product documents
   agree.
 
 ## Required platform evidence

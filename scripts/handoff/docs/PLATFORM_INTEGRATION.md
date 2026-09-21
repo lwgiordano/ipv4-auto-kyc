@@ -1,47 +1,48 @@
-# Platform Integration Guide — MVP
+# Platform Integration Guide
 
-For TechCraft's integration developers. This guide covers the event sender,
+This guide covers the TechCraft event sender,
 decision receiver, reviewer actions, Salesforce reads, and the proposed POC
 confirmation page. Product decisions and the numbered delivery checklist are
 in `PLATFORM_BRIEFING.md` §5 and §8.
 
 This release is for closed staging, not a production launch. Production provider
 wiring and ordered callback delivery are unfinished. The email and document
-options in §5–§6 need agreement before their production paths can be built.
+options in §5–§6 require recorded decisions before their production paths can
+be built.
 
 ## 1. The model
 
-A case is one registrant: the person signing up on your platform on behalf of a
-company. You send us what they told you, we check it against public registries,
-and we send back a verdict your registration team can act on.
+A case is one registrant: the person signing up on the platform on behalf of a
+company. The platform sends the submitted data, the tool checks it against
+public registries, and the tool returns a verdict for the registration team.
 
-You POST events such as registration data, a verified email or an ORG-ID.
-Accepted new events normally queue background work: the tool gathers evidence,
-scores it, and POSTs a decision to your webhook. Manual approval is handled
+The platform POSTs events such as registration data, a verified email or an
+ORG-ID. Accepted new events normally queue background work: the tool gathers
+evidence, scores it, and POSTs a decision to the platform webhook. Manual approval is handled
 inline. Replaying an accepted event does not create another run (§3).
 
 Decisions: `approve`, `approve_buy_locked` (account OK, purchasing held until
 ORG-ID verifies), `manual_review_insufficient`, `reject`.
 
-`platform_account_id` on the sign-up event is your id for that person, and
-every decision we send back is about that case, so about that contact. Company
+`platform_account_id` on the sign-up event is the platform id for that person,
+and every returned decision concerns that case and contact. Company
 evidence (registry records, ORG-ID, website) is about the company they claim.
 Contact evidence ties the person to it: an inbox at the company's domain, a
 LinkedIn profile showing them at that company, later the RIR contact token.
 Approving a case approves the contact, not the company. A second registrant at
 the same company is a second case, with its own `case_id`.
 
-**MVP posture:** auto-enforcement is off. A computed `approve` /
+**Enforcement posture:** auto-enforcement is off. A computed `approve` /
 `approve_buy_locked` is delivered as `manual_review_insufficient` with an
-`enforcement_held` marker (§4), and the registration team confirms it. Flipping
-enforcement requires the full M2 prerequisites, including completion of the
-remediation backlog, real-provider staging tests and platform cutover approval.
-This guide is not permission to enable it.
+`enforcement_held` marker (§4), and the registration team confirms it.
+Production enforcement requires completion of the full backlog in
+`PRODUCTION_READINESS.md`, real-provider staging tests and platform cutover
+approval. This guide is not permission to enable it.
 
 ## 2. Authentication (both directions)
 
-Nothing is accepted unsigned, in either direction. Your requests to us and our
-webhook to you carry the same two headers:
+Nothing is accepted unsigned in either direction. Platform requests and tool
+webhooks carry the same two headers:
 
 ```
 X-KYC-Timestamp: <unix seconds, e.g. "1752681600">
@@ -129,8 +130,8 @@ migrate whenever it is ready.
 
 ## 3. Sending events
 
-Everything you tell us arrives as an event on one endpoint. There is no
-registration call and no re-verify call: you post what happened, and the tool
+Every platform update arrives as an event on one endpoint. There is no
+registration call and no re-verify call: post what happened, and the tool
 decides again.
 
 ```
@@ -232,9 +233,10 @@ verdict, so there is no separate "retry" or "re-verify" call.
 Changing identity details (ORG-ID, POC) suspends previously earned proof until
 re-verified, so a score can drop after an edit (§5). That decrease is expected.
 
-## 4. The decision webhook (you build this)
+## 4. Platform decision webhook
 
-This is the endpoint we POST every verdict to, and the first thing to build.
+The tool POSTs every verdict to this endpoint. It is the first required
+platform integration.
 One body carries the decision, the score behind it and the reason codes for
 each check.
 
@@ -243,7 +245,7 @@ v1 (the legacy shared secret) and v2 (the dedicated **outbound** secret + key id
 until the outbound sunset, then v2 only. Two lines of the §2 canonical differ
 on this direction: it reads `tool->platform`, and the idempotency-key line is
 empty. The v2 signature binds the **literal** request path, so if
-`{your_base_url}` has a path prefix (e.g. `…/hooks`), we sign
+`{your_base_url}` has a path prefix (e.g. `…/hooks`), the tool signs
 `/hooks/kyc/decision` rather than `/kyc/decision`. Verify against the full path
 you received.
 
@@ -297,7 +299,7 @@ Body:
   decision the tool computed. Treat the case as pending human review.
 - **Delivery is at-least-once.** Dedupe on `(case_id, run_id)`. Retries back
   off exponentially (defaults: base 10 s, 8 attempts) before dead-lettering on
-  our side. Delivery failures then need operator recovery (§8). Retries are
+  the tool side. Delivery failures then need operator recovery (§8). Retries are
   not unlimited.
   Acknowledge every exact valid duplicate as processed. Acknowledging a
   callback is a different act from applying it to the case.
@@ -347,11 +349,12 @@ the gate booleans and the reason codes in admin views, because publishing
 exactly why a check fails makes it easier to game. Wording is yours, and the
 reason codes are stable strings safe to key copy on.
 
-## 5. POC verification page (you build this)
+## 5. Platform POC verification page
 
 Proving that a registrant controls IP resources means sending a code to the
-address their regional registry lists, and having them type it back. You host
-the page they type it into. Who sends that email is the first open question.
+address their regional registry lists, and having them type it back. The
+platform hosts the confirmation page. Email ownership is a required provider
+decision.
 
 1. You post `poc.submitted`.
 2. Once the live directory is wired into the worker, the tool looks up the POC over RDAP: the
@@ -379,12 +382,12 @@ Rules your page must respect:
   scores to drop after an ORG-ID/POC edit until re-verified
   (`org_id_revalidation_pending`, `poc_not_associated`). Not a bug.
 
-**Open question: can your platform send that email?**
+**Required decision: POC verification email owner**
 
-- **If yes** — the platform sends it through its existing transactional email.
-  We hand you the token, the registry-listed recipient and the case reference
-  over a typed delivery contract still to be written, and we host no mail.
-- **If no** — the tool sends it through an Amazon SES sender that IPv4.Global
+- **Platform-owned** — the platform sends it through its existing transactional
+  email. A typed delivery contract, still to be written, must carry the token,
+  registry-listed recipient and case reference. The tool hosts no mail.
+- **Tool-owned** — the tool sends it through an Amazon SES sender that IPv4.Global
   provisions with an identity and a sending domain. That sender is not built,
   and a production process refuses to boot while the email provider is the dev
   stub.
@@ -394,21 +397,21 @@ directory, so staging cannot complete this flow until the built live directory
 is wired in. Production also needs the agreed email path. A file email sink
 can support closed-staging tests. It is not a production sender.
 
-## 6. Documents (open question: who reads the fields?)
+## 6. Documents and extraction ownership
 
 A registrant can upload a formation document. Before the tool can compare it
 against what the user typed, someone has to read four fields off it: legal
 name, address, registration number, jurisdiction. Which side reads them is the
-second open question. The kickoff call leaned toward the platform.
+second required provider decision.
 
-**Open question: can your platform extract those four fields?**
+**Required decision: document-field extraction owner**
 
-- **If yes** — the platform stores the upload (your existing virus scanning
+- **Platform-owned** — the platform stores the upload (with existing virus scanning
   and quarantine unchanged), writes the four fields as a JSON object to the
   shared object store, and posts `document.uploaded` with `object_ref`
   pointing at that JSON. The tool runs no OCR and reads that JSON as posted.
   The numbered steps below are this path's contract.
-- **If no** — the platform stores the upload and posts `document.uploaded`
+- **Tool-owned** — the platform stores the upload and posts `document.uploaded`
   with `object_ref` pointing at the **original file** (PDF or image) in the
   shared object store. The tool runs an OCR engine and extracts the same four
   fields itself. That path needs an OCR provider chosen and contracted by
@@ -481,11 +484,11 @@ reaches the contact. An entry drops off by itself once the case receives that
 evidence, so there is nothing to close and nothing to acknowledge. `org_id`
 clears when `org_id.submitted` arrives, and the other three clear the same way.
 
-You do not need this field to identify a missing ORG-ID today. The decision
+This field is not required to identify a missing ORG-ID. The decision
 webhook's `checks[].reason_codes` already carry `org_id_submission_incomplete`,
-which is the same fact at decision time. How you would rather learn of a
-reviewer's request is `PLATFORM_BRIEFING.md` §8 item 13: poll this field, or
-have us send you a message. Nothing outbound is built until you answer.
+which is the same fact at decision time. The delivery method for a reviewer's
+request is `PLATFORM_BRIEFING.md` §8 item 13: poll this field or select a new
+outbound message. Nothing outbound is built until that decision is recorded.
 
 ### Salesforce projection (pull)
 
@@ -523,7 +526,7 @@ In production these reads also require the §2 signature headers. The
 registration team also has an operator console at `/ui` (dashboards, case
 detail, review queue), independent of this API.
 
-## 8. Hosting and deployment (you run this too)
+## 8. Hosting and deployment
 
 TechCraft hosts and operates the tool in IPv4.Global's AWS account. IPv4.Global
 maintains the code and cuts releases. Follow each release's migration and
@@ -549,11 +552,9 @@ is edited on the server. A `Dockerfile` ships in the repo, and
   `docs/RUNBOOK.md`). With `KYC_ENVIRONMENT=production` a misconfigured process
   refuses to boot and lists every violation — intentional fail-closed.
 
-## 9. MVP scope and what comes later
+## 9. Release scope and production dependencies
 
-What is built today, and what each missing piece waits on.
-
-Works now: the full event flow, the registry, ORG-ID, broker, LinkedIn,
+This release includes the full event flow, the registry, ORG-ID, broker, LinkedIn,
 document (extracted-fields) and email checks, scoring, webhooks, the review
 queue, the audit trail and idempotent replays.
 
@@ -566,16 +567,16 @@ queue, the audit trail and idempotent replays.
 | `event_sequence` in callbacks | your confirmation |
 | v1 signature retirement (v2 path-bound signing is live now, §2) | agreed dates and the recorded inbound zero-v1 observation window |
 | Ordered callback delivery (`decision_sequence`) | migration `025` and the platform bootstrap/receiver agreement; not built in this release |
-| Auto-enforcement | the full M2 gate: completed remediation backlog, real-provider staging end-to-end tests and platform cutover sign-off |
+| Auto-enforcement | the full `PRODUCTION_READINESS.md` backlog, real-provider staging end-to-end tests and platform cutover sign-off |
 
 The two provider decisions and ordering activation require additional contracts.
 Do not treat proposed fields or delivery paths as available API features.
 
-## 10. Answers we need
+## 10. Required inputs and decisions
 
-Every answer we still need from the platform team and from IPv4.Global is in
-`docs/PLATFORM_BRIEFING.md` §8. Its §4 lists what your team builds, and its §5
-holds the two questions still open.
+All remaining platform and IPv4.Global inputs are listed in
+`docs/PLATFORM_BRIEFING.md` §8. Section 4 defines platform responsibilities,
+and §5 defines the two required provider decisions.
 
 Secrets never travel in chat, email, tickets, or documents: use the deployment
 secret manager.

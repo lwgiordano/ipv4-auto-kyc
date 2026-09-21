@@ -1,10 +1,10 @@
 # Production Readiness
 
-This package supports a closed staging handoff. It is not approval to run the
+This package supports closed staging. It is not approval to run the
 service in production. Production remains **no-go** until every gate in this
 document is supported by recorded evidence.
 
-`PLATFORM_BRIEFING.md` §8 owns the 15 numbered inputs and decisions. The
+`PLATFORM_BRIEFING.md` §8 defines the 15 numbered inputs and decisions. The
 integration, deployment and runbook documents own their respective wire and
 operating procedures. If a checklist summary here conflicts with one of those
 procedures, follow the procedure and resolve the conflict before deployment.
@@ -72,7 +72,7 @@ Production is **no-go** if any item below is false:
   enforcement off and does not complete the production program.
 - Real-provider staging and the signed capacity targets pass.
 - Full restore and interrupted-cutover rehearsals pass.
-- Executable contracts, public schemas, deployed behavior and handoff documents
+- Executable contracts, public schemas, deployed behavior and product documents
   agree.
 
 ## Required platform evidence

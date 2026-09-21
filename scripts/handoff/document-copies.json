@@ -9,7 +9,7 @@
       "source_sha256": {
         "docs/ALERTS.md": "9bda157cba3c026aa746b1d819df8e7877a8f30c2d7082d76803a33b3ed44996"
       },
-      "copy_sha256": "05628f953ca5d535178929b2ce5c3b637479789915300e23c82d0253ef495f22",
+      "copy_sha256": "7fe3ba17667cc428f783f8ed709f8e709d0a166df5b05f9c467f4a7739ceb2ec",
       "rationale": "Publishes the operational alerts while removing internal release-history labels."
     },
     {
@@ -19,7 +19,7 @@
       "source_sha256": {
         "docs/DEPLOYMENT.md": "616eb80bd7689159ca5d75c7d5c6903af8a22a7aa4c9775592a7719e5e25dcc4"
       },
-      "copy_sha256": "47bd8513ce1e293b555e8199d141faca164050146ab816583d68dbcab16a960c",
+      "copy_sha256": "159fcb3ec28db463c1c7200129d18cbcd994dde0495c75a91d6af49a489baf05",
       "rationale": "Keeps the complete deployment and cutover procedures while removing internal review history."
     },
     {
@@ -29,7 +29,7 @@
       "source_sha256": {
         "docs/PLATFORM_BRIEFING.md": "70aba0510c62f13985204f96954f3d364087fa07351da7bab5b0adc6ddb4907a"
       },
-      "copy_sha256": "b348533ed97790919938a83b7aa71dae76e77da20579a7446fdf228ae563baa1",
+      "copy_sha256": "c8d248e13618ced91cda54de9c237cffc2b3707ae31d8e0ed7cc32055d7f2378",
       "rationale": "Publishes a self-contained platform briefing with package-local paths and references."
     },
     {
@@ -39,8 +39,8 @@
       "source_sha256": {
         "docs/PLATFORM_INTEGRATION.md": "6d3790bd2e0f6578c636e0244ff265971bac92b22a6a1f08aea516e2f6ce1076"
       },
-      "copy_sha256": "6d3790bd2e0f6578c636e0244ff265971bac92b22a6a1f08aea516e2f6ce1076",
-      "rationale": "The public integration contract is intentionally byte-identical to its canonical source."
+      "copy_sha256": "127540cf447f43de69ad2a3becddc6ebd4e8167456fd58e7a38f745f3ec9c462",
+      "rationale": "Preserves the integration contract while using neutral product wording and removing conversational narration."
     },
     {
       "public_path": "docs/RUNBOOK.md",
@@ -49,7 +49,7 @@
       "source_sha256": {
         "docs/RUNBOOK.md": "e1cc82b6500d63d9d0431931cc1eb0e06a7f4f49e6ae437dcd1813b7b42de136"
       },
-      "copy_sha256": "c62ac791e6411dd361fedba24159918ad1c4aac00b83555e35b1f64aedefd093",
+      "copy_sha256": "4614851a0080814783f66c3a2c8d8486b80403a05492c903407c471777354db0",
       "rationale": "Keeps the full operator procedure while replacing internal governance references with self-contained rules."
     },
     {
@@ -59,7 +59,7 @@
       "source_sha256": {
         "docs/SALESFORCE_MAPPING.md": "539ae0aa4abffa1328a8439dc41c7bc7c48d1091fb9892ce9f3eb48e3ee505bc"
       },
-      "copy_sha256": "48cbbb59e84ca63cd48aae884ecd531bbddf2a8603dcb3c19350745f25d8bd76",
+      "copy_sha256": "1adc4baa1ba8920859a89942261e2d18b83643743772aa89e25a2f4632903bbe",
       "rationale": "Publishes the corrected nullable-field and interim ordering rules without internal issue labels."
     },
     {
@@ -73,7 +73,7 @@
         "docs/PLATFORM_BRIEFING.md": "70aba0510c62f13985204f96954f3d364087fa07351da7bab5b0adc6ddb4907a",
         "docs/superpowers/specs/2026-09-12-production-readiness-design.md": "4242f0b3e9e63ea295e3afbd3b0328a48f506e4e5854d0c528556c024be535cf"
       },
-      "copy_sha256": "dc96eef4cc88324f5f8bc48d5db11470fb2cb11c6ae6932bae6f822ec6caf65e",
+      "copy_sha256": "0f03753d7558bcc5505ba21a0e1b2f2c7676c781cd97121aa5900f3c1e1dc418",
       "rationale": "Combines the production gate with the current platform gaps into a neutral public readiness checklist."
     }
   ]

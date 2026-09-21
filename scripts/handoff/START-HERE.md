@@ -1,17 +1,15 @@
-# IPv4.Global KYC/KYB: TechCraft handoff
+# IPv4.Global KYC/KYB Tool
 
 Release `__VERSION__` · source commit `__COMMIT__`
 
-This package is for integration planning and closed staging. It is not a
-production launch release. The application can be tested now, but production
-provider wiring and callback ordering still need work. Automatic approval must
-remain off in production.
+Supported environment: closed staging. Production use is not supported.
+Production provider wiring and callback ordering remain incomplete, and
+automatic approval must remain off in production.
 
 ## Start here
 
-1. Product and integration leads: read Part 1 of `docs/TECHCRAFT_HANDOFF.md`.
-   Answer its two provider questions and assign the numbered requests in §8.
-   You do not need to read the deployment procedures to answer those questions.
+1. Product and integration leads: Part 1 of `docs/TECHCRAFT_HANDOFF.md` defines
+   two required provider decisions and the numbered responsibilities in §8.
 2. Developers: use Part 2 for the event and callback contracts, including
    signatures and read APIs.
    The platform must commit a callback and its deduplication record before
@@ -25,14 +23,14 @@ remain off in production.
 
 ## Files to use
 
-For reading, open `docs/TECHCRAFT_HANDOFF.pdf` or the browser-friendly
-`docs/TECHCRAFT_HANDOFF.html`. The Markdown files contain the same instructions
-and are easier to copy commands from.
+`docs/TECHCRAFT_HANDOFF.pdf` and `docs/TECHCRAFT_HANDOFF.html` contain the
+combined guide. The plain-text files contain the same instructions and support
+direct command copying.
 
 | File or folder | Purpose |
 |---|---|
 | `docs/TECHCRAFT_HANDOFF.md` | Combined briefing, integration guide and deployment instructions |
-| `docs/PLATFORM_BRIEFING.md` | Product overview, team responsibilities and questions for TechCraft |
+| `docs/PLATFORM_BRIEFING.md` | Product overview, team responsibilities and required provider decisions |
 | `docs/PLATFORM_INTEGRATION.md` | Technical integration contract and staging test commands |
 | `docs/DEPLOYMENT.md` | Installation and upgrade procedures |
 | `docs/RUNBOOK.md` and `docs/ALERTS.md` | Recovery procedures and monitoring |
@@ -43,7 +41,7 @@ and are easier to copy commands from.
 | `KYC_Tool_Build_Package/machine_readable/` | Runtime policy files, preserved from the release |
 | `Dockerfile`, `requirements.lock`, `.env.example` | Image build, pinned runtime dependencies and configuration template |
 | `tests/` and `manage.sh` | Product tests and local setup commands |
-| `MANIFEST.json` | Package provenance, export adjustments and file checksums |
+| `MANIFEST.json` | Release identification, source provenance and file checksums |
 
 ## Try it locally
 

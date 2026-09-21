@@ -1,14 +1,14 @@
 # Deployment & Releases
 
-For the platform team operating the KYC tool in IPv4.Global's AWS account.
-IPv4.Global maintains the code and publishes releases. You pull a release and
-redeploy. Do not edit code on the server. Make changes in the repo and deploy
-them in the next release.
+The platform team operates the KYC tool in IPv4.Global's AWS account.
+IPv4.Global maintains the code and publishes releases. Deploy only a
+published release. Do not edit code on the server; make changes in the repo and
+include them in a later release.
 
-This is a closed-staging release. Production startup is blocked by unfinished
-provider wiring. Choosing who extracts documents and sends POC email does not
-by itself remove that block. See `PLATFORM_BRIEFING.md` §8 for the remaining
-work and approvals. These instructions do not authorize a production launch.
+This release is limited to closed staging. Production startup remains blocked
+by unfinished provider wiring. Selecting the document-extraction and POC-email
+owners does not remove that block. Production launch requires the work and
+approvals in `PLATFORM_BRIEFING.md` §8.
 
 ## 1. One image: services and scheduled jobs
 
@@ -35,8 +35,8 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 
 | | Staging | Production |
 |---|---|---|
-| `KYC_ENVIRONMENT` | `development` (until real providers land) | `production` |
-| `KYC_ENFORCE_POSITIVE_DECISIONS` | `true` — rehearse full automation | `false` at launch, flipped after staging proves out |
+| `KYC_ENVIRONMENT` | `development` (until real providers are available) | `production` |
+| `KYC_ENFORCE_POSITIVE_DECISIONS` | `true` — rehearse full automation | `false`; enable only after all `PRODUCTION_READINESS.md` requirements pass |
 | Providers | live registry lookups (`CH_API_KEY` set), with stand-ins for the POC directory, document extraction and email (file sink) | real registry providers, required. Real OCR and email providers are needed only if the tool extracts documents or sends the POC email, which are the two open questions in `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
 | Secret | staging secret | separate production secret |
 
@@ -52,8 +52,8 @@ replayed to another case within the skew window. The redirect closes for v2
 traffic at deploy, but for everyone only once **inbound v1 is actually disabled**
 (the zero-witness satisfied AND `hmac_v1_inbound_sunset_at` in effect). Keep
 staging's perimeter closed until that day arrives. Deploying v2 is not the
-moment it can open. Production automation stays off regardless until the M2
-gate is met.
+moment it can open. Production automation stays off until every requirement
+in `PRODUCTION_READINESS.md` passes.
 
 **Migration 010 is a non-hot cutover.** It drops the global unique that the
 old image's ingest still uses, so an old replica serving after the migration
@@ -106,7 +106,7 @@ zero-witness never turns green (by design), so v1 can never be sunset.
 
 ## 4. Deploying an update
 
-Each release from IPv4.Global is a tagged version with release notes stating
+Each IPv4.Global release is a tagged version with release notes stating
 whether it includes a migration, new environment variables or a contract change.
 Read those notes before scheduling the update.
 
@@ -183,7 +183,7 @@ Read those notes before scheduling the update.
   reviewed `024`-compatible image against the schema it is already on. The schema
   does not move. Do not apply `018` or anything above it in production until that
   bridge image has been reviewed and
-  staged. On this preproduction branch, the safe recovery path is roll-forward.
+  staged. Use roll-forward recovery before production.
   The UPGRADE side is gated too: `017` and `018` both refuse with
   `MIGRATION_017_PREFLIGHT_LIVE_CLAIMS` / `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS`
   while any live (unexpired) outbox claim
@@ -222,7 +222,7 @@ requeue endpoints, which reset both the job and its failed run. The ops
 console offers them as buttons (`/ui/api/requeue/...`) wherever
 `KYC_UI_ENABLED` is on, and `POST /v1/ops/requeue/job/{job_id}` and
 `/v1/ops/requeue/outbox/{outbox_id}` are always mounted behind the operator
-token. Three limits to know:
+token. Recovery limits:
 
 - A dead `poc_email` row cannot be requeued: its token was scrubbed when it
   died (the endpoint refuses it). Recovery is a fresh `poc.submitted`.
@@ -241,7 +241,8 @@ token. Three limits to know:
 - Packaged policy changes require a release and version-bump guard. After the
   explicit configuration cutover below, scoring points, broker snapshots, and
   Salesforce destination names instead use audited, server-saved revisions.
-  Threshold, hard gates, evidence rules, and M2 are not console-editable.
+  Threshold, hard gates, evidence rules, and positive-decision enforcement are
+  not console-editable.
 - Secrets only via environment / Secrets Manager, nothing secret is logged.
 - Never set `KYC_AUTH_DISABLED` outside local dev. Production boot refuses it.
 - **ANY change to `KYC_OUTBOX_MAX_ATTEMPTS` (raising OR lowering) is a DRAINED
@@ -250,7 +251,7 @@ token. Three limits to know:
   different ceilings against the same rows:
   - Lowering: the OLD (higher) publisher can make one more send past the new value.
   - Raising: the OLD (lower) publisher can dead-letter a row at its lower ceiling
-    before the NEW (higher) publisher ever supplies the extra attempts — and for a
+    before the NEW (higher) publisher supplies the extra attempts. For a
     POC email the terminal transition redacts the token, so those lost retries are
     irreversible.
 
@@ -258,43 +259,34 @@ token. Three limits to know:
   restart, (2) stop ALL outbox publishers of EVERY role — both the standalone
   `outbox_worker` and the embedded `dev_worker`, (3) attest zero publishers are
   running (the same attested-stop the reset CLI requires), (4) attest every new
-  task definition carries the exact new value, (5) start. This procedure is the
-  canonical record `kyc_tool.ops.cutover.OUTBOX_MAX_ATTEMPTS_CUTOVER`, rendered
-  below. RUNBOOK and `.env.example` embed the same rendered block. (A fleet-wide DB-persisted ceiling
-  epoch enforced before claim is the fail-closed alternative if runtime config
-  drift must be impossible — deferred, the drained cutover is the contract today.)
+  task definition carries the exact new value, (5) start.
 
-<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:start -->
 KYC_OUTBOX_MAX_ATTEMPTS: both-direction DRAINED publisher cutover (NOT a rolling restart)
 1. disable autoscaling and rolling restart
 2. stop ALL publishers of roles: outbox_worker, dev_worker
 3. attest zero publishers running of roles: outbox_worker, dev_worker
 4. attest every new task definition carries KYC_OUTBOX_MAX_ATTEMPTS
 5. start publishers of roles: outbox_worker, dev_worker
-<!-- cutover:KYC_OUTBOX_MAX_ATTEMPTS:end -->
 
 ## 9. Reviewer-actor cutover — brief full maintenance window
 
-This cutover adds the reviewer-actor trust floor that closes the "review completed /
-approved by anyone holding the shared secret" forgery: it requires the signed
+This cutover requires the signed
 envelope's `actor` to identify the reviewer (`docs/PLATFORM_INTEGRATION.md`
 §3), rather than relying on the payload alone. **This is not a rolling deploy.** During any
-old/new overlap, an old replica still honors the exact forgery this release
-closes — an old API applies `reviewer.manual_approve` inline with no actor
+old/new overlap, an old API applies `reviewer.manual_approve` inline with no actor
 floor, and an old pipeline worker (which claims a job purely by kind, with no
 event-type filter) can still close a queued `system`-actor website completion
 under the old actorless semantics. There is no way to keep an old replica
 serving *any* traffic while guaranteeing it never touches a sensitive event,
-so this release ships as a **brief full maintenance window** — the same
-non-hot **stop → deploy → start** pattern used for migration 010 (§2), extended to workers
-as well as the API, which removes old/new overlap entirely. No migration
-ships with this change.
+so use a **brief full maintenance window** with a non-hot
+**stop → deploy → start** pattern across the API and workers. This change has
+no migration.
 
 The window is a real interruption, not a smooth roll: `POST
 /v1/cases/{case_id}/events` is unavailable for its duration, for every event
 type, and the pipeline is stopped. The "no loss" guarantee for that
-interruption is a **platform prerequisite**, not something the current API
-contract provides on its own — today the contract only directs retry on a
+interruption is a **platform prerequisite**, not something the API contract
+provides on its own. The contract directs retry on a
 *network failure* (`docs/PLATFORM_INTEGRATION.md` §3), but a load balancer
 with every API target down instead returns 502/503/504, and a delayed retry
 that reuses the original signature can blow the 300-second HMAC skew. Before
@@ -378,21 +370,19 @@ restores the previous actor-validation behavior.
 
 **Rollback verification is non-mutating only:** `GET` probes of `/readyz`
 and `/healthz`, and prior-image digest attestation. Do **not** run the step-5
-sensitive-mutation probes against the prior image — that image is the current
-vulnerable code with no actor floor, so a mismatched-actor `manual_approve`
+sensitive-mutation probes against the prior image. It has no actor floor, so a
+mismatched-actor `manual_approve`
 probe would actually `approve` the case inline, and a `system`-actor
 completion probe would queue a run the restored old worker can honor: the
-probe would *perform* the forgery it is meant to detect, not find it.
+probe would perform the unauthorized mutation it is meant to detect.
 Exercise that behavior only in staging or an isolated DB. Keep all submission
 and the composer blocked until the safe, non-mutating checks pass.
 
 ## 10. Bundle-pinning activation
 
-This cutover pins the policy bundle, and records the engine build, that a run is actually
-scored and decided under, instead of trusting whatever the worker process
-happened to have loaded. It ships in two parts: a **rolling** part (safe to
-deploy like any other release) and a **drained** part (the flag flip, not
-safe to roll).
+This cutover pins the policy bundle and records the engine build used to score
+and decide a run. It has a **rolling** part and a **drained** part. The flag
+flip is not safe for a rolling deployment.
 
 **Rolling migration and provenance, flag stays off.** Migration 011 adds
 `policy_bundles`, `bundle_pinning_epoch`, and the nullable provenance columns.
@@ -536,10 +526,9 @@ contract below, inserts the exact original row, floors the sequence past the res
 (`GREATEST(max(id), original_id) + 1`) in the SAME transaction, and fail-closed read-backs both
 the acceptance predicate and the sequence before committing — any mismatch rolls back row and
 sequence together. Then rerun 0.4 (the gate that reopens cutover) and either RESUME service or
-proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path — the earlier
-revision of this section prescribed exactly that and was circular: the diagnostic stayed red
-until the restore, while the sequence repair was documented as reachable only after cutover
-step 2 and knew nothing of the id being restored.
+proceed to the window. Pasting the SQL below by hand is NOT a sanctioned path.
+The restore must insert the row and advance the sequence past its original id
+in one transaction before the diagnostic can pass.
 0.6 RESTORE ACCEPTANCE CONTRACT (the restore in 0.5 is an executable identity requirement, not
     advice — the backfill ranks by `outbox.id`, so a wrong id silently reverses the legacy order):
     (a) BEFORE restoring, record from the backup the authoritative evidence tuple per missing
@@ -668,7 +657,8 @@ R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image 
 Installing schema `024` does **not** activate configuration. Core migrations
 `013`–`023` and configuration migration `024` are frozen independently. Do not
 repair either owner's revisions in place. Platform activation `025` remains
-unbuilt and fails closed. This procedure does not enable M2 or alter callbacks.
+unbuilt and fails closed. This procedure does not enable positive-decision
+enforcement or alter callbacks.
 
 1. Record a database backup and the exact digest of the configuration-capable
    release image being deployed. Record that same tested image as the recovery

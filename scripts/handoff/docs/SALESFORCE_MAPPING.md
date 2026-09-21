@@ -2,8 +2,8 @@
 
 The KYC Tool **never** reads from or writes to Salesforce. The platform mirrors
 tool state one-way after every enforced decision and material check change.
-This document translates the tool's callback and read APIs into the
-`salesforce_sync_fields.json` field set. It also defines the value for
+The mapping translates the tool's callback and read APIs into the
+`salesforce_sync_fields.json` field set and defines the value for
 `approved_manual`, which the base field list leaves unspecified.
 
 Sources for every value below: the decision callback (`POST …/kyc/decision`),

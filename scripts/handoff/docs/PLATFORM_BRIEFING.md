@@ -1,30 +1,29 @@
 # KYC Tool — Platform Team Briefing
 
-This is the handoff for TechCraft. The tool can be tested in a
-closed staging environment, but it is not ready for production. Start with §4
-for the platform work, §5 for the two provider decisions, §6 for staging, and
-§8 for the remaining delivery gaps and numbered asks. Engineers should build
-against `PLATFORM_INTEGRATION.md`, which owns the signatures and payloads,
-including status codes.
+The tool supports testing in a closed staging environment. It is not ready for
+production. Section 4 defines platform responsibilities, §5 defines the two
+required provider decisions, §6 defines staging, and §8 records the remaining
+delivery gaps and numbered inputs. `PLATFORM_INTEGRATION.md` is the authority
+for the complete wire request and response contract.
 
 ## 1. What it is
 
-The tool answers one question about one person: does this registrant really
-speak for the company they claim? It never drives your screens and never
+The tool determines whether a registrant represents the company they claim.
+It never drives platform screens and never
 changes platform state. It gathers evidence, scores it and answers. The
 platform acts.
 
-The work happens in the background. Your platform POSTs an event (a
+The work happens in the background. The platform POSTs an event (a
 registration, a verified email, an uploaded document, an RIR org handle) and
 gets an acknowledgment straight away. The tool then looks the claimed company
 up in Companies House, GLEIF and the five regional internet registries (ARIN,
 RIPE, APNIC, LACNIC, AFRINIC). It screens the broker blocklist. It scores what
-it found and POSTs the verdict to a webhook your team hosts.
+it found and POSTs the verdict to a platform-hosted webhook.
 
 The design has one message that may go directly to a person: the POC
 verification email, sent only to the address the registry lists for that
 contact. Nothing sends that message in the production path yet. Whether the
-tool sends it or your platform does is one of the two open questions (§5 and
+tool sends it or the platform does is one of the two required decisions (§5 and
 §8 item 10).
 
 ## 2. What it does
@@ -69,7 +68,7 @@ Four verdicts come back: `approve`, `approve_buy_locked` (the account is fine,
 buying stays locked until an ORG-ID verifies), `manual_review_insufficient`
 and `reject`. That second one is how "ORG-ID optional at registration" works
 in practice. Every check that does not pass carries a stable reason code
-naming what is missing or wrong, and that code is what your review team acts
+naming what is missing or wrong, and that code is what the review team acts
 on.
 
 Only a broker-blocklist match rejects a case on its own. Everything else that
@@ -93,7 +92,7 @@ A case is one registrant: the person signing up on behalf of a company.
 Approving the case approves that person, not the company, so the sign-up event
 has to say who they are. It carries `contact.name` and `contact.email` (the
 address they signed up with, and the one `email.verified` confirms later) plus
-the `platform_account_id` you hold for them. A second registrant at the same
+the `platform_account_id` held for them. A second registrant at the same
 company is a second case with its own id.
 
 Send the RIR org handle whenever the registrant has one. That means
@@ -110,7 +109,7 @@ table above.
    compares its identity domain; when LinkedIn supplies no domain, the
    legal-name or alias fallback can still match. The platform gets back
    `202 {"run_id": "…"}`.
-2. When that run finishes, the first verdict reaches your webhook: the registry matched
+2. When that run finishes, the first verdict reaches the platform webhook: the registry matched
    (25) and LinkedIn put the contact at that company (20), so the score is 45.
    The decision is `manual_review_insufficient`, with reason codes for what is
    still missing.
@@ -121,7 +120,7 @@ table above.
    `org_id.submitted`, the RIR lookup passes (25), and the score reaches
    105 with all five gates green.
 5. The computed decision is `approve`. While enforcement is off it arrives as
-   `manual_review_insufficient` with that computed decision attached, and your
+   `manual_review_insufficient` with that computed decision attached, and the
    registration team confirms it in the platform admin.
 
 A document can add another 25 in closed staging through the JSON path. It can
@@ -142,7 +141,7 @@ a user later adds or changes something that matters, the platform re-sends the
 matching event and verification runs again by itself. The full trigger table
 is `PLATFORM_INTEGRATION.md` §3.
 
-## 4. What your team builds
+## 4. Platform responsibilities
 
 Five work areas:
 
@@ -156,14 +155,14 @@ Five work areas:
    automatic callbacks, and hold unordered results for review. See
    `PLATFORM_INTEGRATION.md` §4.
 2. **The POC confirmation page.** The user types in the code and the reference
-   from the verification email, and the platform posts both back to us. Codes
+   from the verification email, and the platform posts both back to the tool. Codes
    are single-use, they expire after 72 hours, and they die if the user edits
    the identity details behind them. Recovery is always the same: submit the
    POC again. See `PLATFORM_INTEGRATION.md` §5.
-3. **Admin views for held cases.** Your review team works in the platform
+3. **Admin views for held cases.** The review team works in the platform
    admin, so each held case needs its decision, its score, its checks and its
    reason codes on screen. They come from the webhook body, or from
-   `GET /v1/cases/{id}` if you would rather pull. Keep score and reason codes
+   `GET /v1/cases/{id}` through a pull integration. Keep score and reason codes
    admin-only. Users see their status and the next useful step. See
    `PLATFORM_INTEGRATION.md` §7.
 4. **Status notifications and reviewer assignment.** Emails to users, alerts
@@ -172,49 +171,49 @@ Five work areas:
    `PLATFORM_INTEGRATION.md` §4.
 5. **The Salesforce pull consumer.** The tool exposes
    `GET /v1/cases/{case_id}/salesforce-projection`; it does not push to
-   Salesforce. Your service must call that endpoint, apply the returned field
+   Salesforce. The platform service must call that endpoint, apply the returned field
    mapping to the sandbox and production orgs, and own retries and
    reconciliation, including backfills. See `PLATFORM_INTEGRATION.md` §7.
 
-## 5. The open questions
+## 5. Required provider decisions
 
-Two questions are open, and both are about work your platform may already do.
-Either answer works for us. Neither blocks closed staging. Both block
-production because each answer still needs a real provider wired into the
-production profile. They are not the only production blockers; §8 lists the
-rest.
+Two provider decisions remain open. Either option supports the product design,
+and neither blocks closed staging. Both block production until the selected
+provider is wired into the production profile. Section 8 lists the other
+production blockers.
 
-**Question 1. Can your platform send the POC verification email?**
+**Decision 1. POC verification email owner**
 
 Proving control of IP resources means sending a token to the address the
 regional registry lists for that contact, never to an address the user typed.
 The live RDAP-backed directory that can find that address is implemented, but
 the production pipeline does not select it yet.
 
-- **If yes:** your transactional email sends the message. We still have to
-  agree and build the message that gives your service the token, the
+- **Platform-owned:** the platform transactional-email service sends the
+  message. A typed delivery contract must provide that service with the token, the
   registry-listed recipient and the case reference.
-- **If no:** we still have to build and wire an email provider for the tool.
+- **Tool-owned:** an email provider must be built and wired for the tool.
   It will use an Amazon SES identity and sending domain that IPv4.Global
   provisions.
 
-Either way the token rules stay ours. §4 item 2 lists them and
+Token creation, expiry, identity binding and consumption remain tool
+responsibilities. Section 4 item 2 lists the rules and
 `PLATFORM_INTEGRATION.md` §5 has them in full. The POC check cannot award its
 25 points in production until the chosen path is built and wired.
 
-**Question 2. Can your platform read the fields off an uploaded document?**
+**Decision 2. Document-field extraction owner**
 
 The fields are the legal name, the registered address, the registration number
 and the issuing jurisdiction, each as printed on the document rather than as
 the user typed it.
 
-- **If yes:** the platform writes them into the shared bucket as a small JSON
+- **Platform-owned:** the platform writes them into the shared bucket as a small JSON
   object and posts `document.uploaded` pointing at it. The tool reads that
   JSON and compares it against the registries; the tool runs no OCR on this
   path. The JSON reader works in development and staging today, but production
-  refuses that development setup. We still need a production implementation
-  that accepts and validates the agreed extracted fields.
-- **If no:** the platform posts `document.uploaded` pointing at the original
+  refuses that development setup. A production implementation must accept and
+  validate the agreed extracted fields.
+- **Tool-owned:** the platform posts `document.uploaded` pointing at the original
   PDF or image, and the tool runs OCR itself. That path is not built. It needs
   an OCR provider chosen and contracted by IPv4.Global, provider wiring, and
   agreed limits on file type and size.
@@ -226,9 +225,10 @@ describes both options.
 The document check cannot award its 25 points in production until the chosen
 path is wired into the production profile.
 
-**Agreed at kickoff: your team hosts and operates it.**
+### Hosting and operations ownership
 
-IPv4.Global maintains the code and publishes releases. Your team pulls a
+TechCraft hosts and operates the tool in IPv4.Global's AWS account. IPv4.Global
+maintains the code and publishes releases. TechCraft pulls a
 release and redeploys. Do not edit code on the server.
 
 - Python 3.11 and FastAPI. The automated suite currently tests
@@ -266,10 +266,10 @@ release and redeploys. Do not edit code on the server.
 
 Staging runs with **automation on** (`KYC_ENFORCE_POSITIVE_DECISIONS=true`) so
 that the real end state gets a rehearsal. That is safe **only** because
-staging is closed: reachable by our own tests, never by an untrusted caller.
-It is a rehearsal and not the production go-live. The M2 gate still requires
-the full production-readiness backlog, an end-to-end staging run on real
-adapters, and the platform cutover before automation can be turned on in
+staging is closed: reachable by authorized tests, never by an untrusted caller.
+It is a rehearsal and not the production go-live. Production approval requires
+the full `PRODUCTION_READINESS.md` backlog, an end-to-end staging run on real
+adapters, and platform cutover approval before automation can be turned on in
 **production**. Production launches with it off. The tool investigates, the
 review team confirms, and the flag flips per environment only after that gate
 is complete.
@@ -294,7 +294,7 @@ Checklist:
    (`PLATFORM_INTEGRATION.md` §2 and §4). Staging boots in development mode
    without the v2 set, but dual-accept is the thing staging exists to
    rehearse, so configure it on both sides.
-4. Core env vars: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL` (your
+4. Core env vars: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL` (the
    staging receiver), `KYC_OBJECT_STORE=s3` with `KYC_S3_BUCKET`,
    `KYC_ENFORCE_POSITIVE_DECISIONS=true`, and `CH_API_KEY` (§8 item 14),
    because the registry lookups are live.
@@ -306,13 +306,13 @@ Checklist:
    live directory is wired in (§8, not built yet). For that day set
    `KYC_EMAIL_PROVIDER=file`, which appends each verification email as a JSON
    line to a local sink file (`var/poc-emails.log` by default,
-   moved with `KYC_EMAIL_FILE_PATH`), so your tests can read the token and the
+   moved with `KYC_EMAIL_FILE_PATH`), so staging tests can read the token and the
    reference and finish the round-trip. That sink writes raw tokens to disk,
    so it is for closed staging only and production refuses it at boot. The
    production email and document paths still need the agreements in §5.
 6. `alembic upgrade head`, start the processes, check `/readyz`.
 7. Smoke test: send a signed `kyb.run_requested` and watch the verdict arrive.
-   Until your receiver exists, `scripts/dev_receiver.py` is a stub that prints
+   Until the platform receiver exists, `scripts/dev_receiver.py` is a stub that prints
    incoming callbacks.
 
 ## 7. Testing tips
@@ -367,7 +367,7 @@ print(r.status_code, r.json())
   shows every case with its score, its gates and its run state, and it can
   compose signed test events from the browser.
 
-## 8. Where things stand, and what we need from you
+## 8. Release status and required inputs
 
 The service is not production-ready. The go/no-go gate is in
 `PRODUCTION_READINESS.md`. Status at
@@ -391,11 +391,11 @@ this release falls into five states.
 - Reviewer information requests. A reviewer can record what a stalled case
   needs, most often the RIR org handle, and `GET /v1/cases/{id}` serves it as
   `information_requested`.
-- The conformance kit you can run against staging.
+- The conformance kit for staging checks.
   `python -m kyc_tool.conformance` runs the repository's reference signer,
   client and callback receiver against the published contract. It checks the
   tool side; it does not test TechCraft's sender or receiver. Use its published
-  vectors as inputs to separate tests of your implementation
+  vectors as inputs to separate platform-implementation tests
   (`PLATFORM_INTEGRATION.md` §11).
 - S3-compatible evidence storage, and the boot check that refuses stand-in
   providers and unsafe configuration in production.
@@ -412,16 +412,16 @@ this release falls into five states.
 
 - The POC verification flow. Token creation and validation work. The
   production pipeline still needs the live RDAP-backed directory and either
-  the platform handoff or the tool-side email provider. Nothing sends the
+  the platform delivery contract or the tool-side email provider. Nothing sends the
   message yet.
 - The document check. The development JSON reader works, but production
-  refuses that stub. Tool-side OCR is not built. Either answer needs a real
+  refuses that stub. Tool-side OCR is not built. Either option needs a real
   provider and production-profile wiring.
 
-**Not built yet, for reasons of our own**
+**Not built in this release**
 
 - The production provider profile: the switch that hands the pipeline the
-  built POC directory, and whichever providers your two answers call for. The
+  built POC directory, and the providers selected by the two required decisions. The
   live Floqer client already exists and carries over.
 - Migration 025 and platform-authoritative callback ordering. The database
   assigns an internal decision number today and can suppress some older local
@@ -435,14 +435,13 @@ this release falls into five states.
 **Out of scope by design**
 
 - The tool never writes Salesforce, never judges a website automatically,
-  never replaces your platform UI and never changes a historical decision when
+  never replaces the platform UI and never changes a historical decision when
   configuration or mappings change.
 
-The rest of this section is numbered so that either side can cite an item by
-number: five configuration values from you, eight answers we need, and two
-things IPv4.Global owes.
+The remaining requirements use stable item numbers: five platform
+configuration values, eight required decisions, and two IPv4.Global inputs.
 
-**Your configuration** (through the deployment secret manager or written
+**Platform configuration** (through the deployment secret manager or written
 deployment config, never chat)
 
 1. Callback base URLs, staging and production.
@@ -452,34 +451,34 @@ deployment config, never chat)
 4. The Salesforce sandbox and the platform service that will consume the
    projection: its owner, when it pulls, how it authenticates, and how it
    handles failed writes, including retry and backfill reconciliation.
-5. AWS deployment access for whoever on your side deploys.
+5. AWS deployment access for the TechCraft deployment owner.
 
-**Your answers** (write each one down and we turn it into a tested contract)
+**Required decisions** (record each decision as an input to the tested contract)
 
-6. Your callback receiver's behaviour: that one database transaction records
+6. Platform callback receiver behavior: one database transaction records
    the valid callback and dedupe key, commits before returning 2xx, and treats
    an exact duplicate as already processed.
 7. The ordering bootstrap, which migration 025 cannot be built and activated
    without:
    - where the platform's accepted-run ledger lives
-   - how we query the accepted decision for any case
+   - how IPv4.Global queries the accepted decision for any case
    - how manual approvals and reverted decisions appear in it
    - who signs the bootstrap response, and how that signer is identified
    - the maximum bootstrap size, and the recovery procedure
-8. Review-task changes. The default is a webhook you host for a task opened,
-   completed or cancelled. If you would rather poll
-   `GET /v1/review-tasks?status=open`, say so, and tell us the cursor rule,
-   the freshness you need and what should happen after a missed poll.
-9. Document extraction. Can your platform extract the four fields and send
-   them as JSON? If it cannot, the tool runs OCR and IPv4.Global contracts an
+8. Review-task changes. The default is a platform-hosted webhook for a task
+   opened, completed or cancelled. If polling
+   `GET /v1/review-tasks?status=open` is selected instead, record the cursor
+   rule, required freshness and missed-poll recovery behavior.
+9. Document extraction. Record whether the platform will extract the four fields and send
+   them as JSON. Otherwise, the tool runs OCR and IPv4.Global contracts an
    OCR provider. Either choice also needs its production provider and profile
    wired. §5 asks the question in full, and `PLATFORM_INTEGRATION.md` §6 has
    both wire paths.
-10. POC verification email. Can your platform send it from its own
+10. POC verification email. Record whether the platform will send it from its own
     transactional email, given the token and the registry-listed recipient
-    over a typed contract? If it cannot, the tool sends through an SES
+    over a typed contract. Otherwise, the tool sends through an SES
     identity that IPv4.Global provisions. Either choice needs its provider
-    built and wired. Confirm as well that you host the POC page and echo back
+    built and wired. Confirm that TechCraft hosts the POC page and echoes back
     both `token` and `token_id`. §5 asks the question,
     `PLATFORM_INTEGRATION.md` §5 has the wire detail.
 11. Floqer. The contract is in place, and the tool calls a published shortcut
@@ -488,13 +487,13 @@ deployment config, never chat)
 12. Operating targets: expected daily and peak case volume, concurrent runs,
     acceptable latency for light and full checks, soak duration, deployment
     region, maintenance-window constraints, and the availability and recovery
-    objectives you hold us to.
+    objectives that apply to IPv4.Global.
 13. Reviewer information requests. When a case stalls for evidence the
     registrant never supplied, most often the RIR org handle, a reviewer
     records the ask in the console and `GET /v1/cases/{id}` serves it as
-    `information_requested` (`PLATFORM_INTEGRATION.md` §7). How would you
-    rather hear about one: poll that field, or a new webhook message we send
-    you? We build the webhook only once you answer. The ask is recorded either
+    `information_requested` (`PLATFORM_INTEGRATION.md` §7). Select either
+    polling that field or a new outbound webhook message. The webhook is built
+    only after that decision is recorded. The request is recorded either
     way.
 
 **From IPv4.Global**
@@ -505,7 +504,7 @@ deployment config, never chat)
 
 ## 9. Doc map
 
-| Question | Doc |
+| Topic | Document |
 |---|---|
 | Full API contract, signatures, payloads, webhook | `docs/PLATFORM_INTEGRATION.md` |
 | Deploying, releasing, rollback, monitoring | `docs/DEPLOYMENT.md` |
