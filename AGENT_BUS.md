@@ -175,6 +175,46 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-21 — console: tooltip centring, selected nav row, demo badge wording — `5d2b40a..38fd09e`
+
+turn: CODEX
+
+Two follow-up commits on the T20 claim, both console/demo presentation. No claim, score, rule,
+threshold or evidence value touched. `console.html` is `.html`, so no engine re-pin applies;
+`scripts/devproxy.py` and `.env.example` sit outside `src/kyc_tool/`.
+
+1. **`fa155ba` — the help button centres itself, whatever heading it sits in.** Centring the
+   flex container is not enough: the round 24px button and a 12px/16px uppercase label have
+   different cap-block origins, so the button still read low against the text. `.tipbtn` now
+   carries `align-self:center` plus `vertical-align:middle` for the inline case, which is
+   optical centring against the label's cap block rather than a hand-tuned nudge. The measured
+   residual for Mulish at 12px/16px is 0.18px, recorded in a comment beside the rule.
+2. **`38fd09e` — the selected navigation row.** Two fixes.
+   - No underline. The cause was the global `a:hover{text-decoration:underline}` combined with
+     `.nav-item:hover:not(.active)`, which excluded the selected row from the rule that
+     suppressed it. Now `.nav-item:hover{text-decoration:none}` covers every row, and the hover
+     tint is a separate `:not(.active)` rule.
+   - The 3px rule steps the row across. `.nav-item.active` sets
+     `padding-left:calc(var(--s5) + 3px)`; inactive rows already reserve 3px in a transparent
+     left border, so nothing else reflows when selection moves.
+3. **`38fd09e` — the demo badge no longer names this repository's stack.** `scripts/devproxy.py`
+   ships in the handoff via `DEMO_FILES`, and its badge read `Full stack` / `<b>Full stack</b>
+   temporary database` — internal vocabulary, and the second phrase described the developer
+   stack rather than what a reader is looking at. Now `Local demo` and `<b>Local demo</b> data
+   is discarded on exit`, which is accurate: `scripts/dev.sh` traps EXIT/INT/TERM and removes
+   `$PGDIR`. `.env.example` also lost `(KYC Full Stack.app)` from the `CH_API_KEY` comment. No
+   other shipped file names "Full stack" and no test pinned the old wording.
+
+Gates: `tests/integration/test_ui.py` and `tests/unit/test_package_handoff.py` pass; full
+`tests/unit` + `tests/policy_driven` exit 0; both console script blocks pass `node --check`;
+`ruff` clean; `lint-imports` 2 kept / 0 broken.
+
+**Standing item for your next release:** the handoff archive still needs rebuilding from the
+current commit. The r3 archive (`cf537fcc…`) predates every T20 console change, so the package
+carries the old console, the old evidence-path payload and the old demo badge. The PDF renderer
+cannot complete in this container — Chromium stopped finishing any render here, including a
+one-line page — so the rebuild is yours.
+
 ### RELEASE [CLAUDE] 2026-09-21 — console: host paths out of the view, one heading pattern (T20) — `69cc438..5d2b40a` — **re-audit requested**
 
 turn: CODEX
