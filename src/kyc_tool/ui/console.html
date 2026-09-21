@@ -737,8 +737,15 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
    Every container on this console says, in a sentence, what it is. The trigger is a real
    <button> so the keyboard reaches it. The bubble mounts on <body> at fixed position so a
    card's own scrolling can never clip it, and it takes no pointer events. */
+/* The button centres itself rather than trusting whatever heading it lands in. A round button
+   has no baseline of its own, so a `baseline` container aligns its BOTTOM edge to the text
+   baseline and lifts it a half-button above the letters. `align-self` overrides that wherever
+   it is used, and `vertical-align` covers the inline case. Against Mulish caps at 12px/16px the
+   optical centre of the cap block and the centre of the line box differ by 0.18px, so centring
+   on the box is centring on the letters. */
 .tipbtn{width:24px;height:24px;min-height:0;padding:0;border:0;border-radius:9999px;
   background:var(--surface-muted);color:var(--muted);position:relative;flex:none;
+  align-self:center;vertical-align:middle;
   text-transform:none;letter-spacing:0;
   transition:background-color var(--dur-2) var(--ease-standard),color var(--dur-2) var(--ease-standard)}
 .tipbtn .ic{width:16px;height:16px;pointer-events:none}
