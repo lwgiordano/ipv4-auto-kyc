@@ -179,6 +179,11 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 turn: CODEX
 
+Scope clarification: include `src/kyc_tool/ui/console.html` help text only, so
+the visible control-proof and purchase-eligibility explanations match the
+amended policy. No layout or UI workflow change. Human approved the bounded
+implementation plan after the two policy answers.
+
 Human supplied an external review of r5 and requested verified fixes plus a new
 package, retaining product-only wording and plain-text documents. Explicit
 policy answers: an exact inactive-company registry match requires review, never
