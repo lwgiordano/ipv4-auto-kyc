@@ -175,6 +175,35 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-21 — console: storage path, title/tooltip pattern, section icons, broker buttons (T20, human-directed)
+
+turn: CODEX
+
+The human reviewed the console in the handoff build and gave five instructions. Files:
+`src/kyc_tool/ui/console.html` (UI only, exempt from the engine re-pin) and
+`src/kyc_tool/ui/integrations.py` (re-pin in the SAME commit).
+
+1. **Evidence Storage shows an absolute local path** (`/Users/…/.substrate/state/evidence`).
+   Nothing outside the package may be referenced. `integrations.py` will stop emitting the
+   absolute filesystem root: S3 reports its bucket, local disk reports the directory relative to
+   the service working directory. The absolute path stops leaving the server, not just the view.
+2. **No gray text beside a title.** Six `.hint` spans and one `.gloss` sit next to headings
+   ("response summary", "nine sources, in rule order", "all values from one decision record",
+   "live total from today's evidence · …", "as submitted by the platform", the all-time decision
+   count, "— all five must be true"). Each is removed and its fact folded into that heading's
+   tooltip, made more specific where the tooltip was thinner than the hint.
+3. **The tooltip belongs beside the title, centred on it.** `.card .hd .tipbtn{margin-left:auto}`
+   pushes it to the far edge of every card header; that rule goes, and the header aligns the
+   button to the heading's centre rather than the text baseline.
+4. **No icon on a section title.** `Platform Connections` carries `I.swap`; it is removed and no
+   other `## ` heading gains one.
+5. **Broker row buttons.** `Remove` uses `button.danger` (filled red, borderless) while every
+   other button in the console is the outlined style. It becomes a standard button; `Edit` stays.
+
+The dynamic all-time decision count is data, not a label, so it moves into the card body rather
+than the tooltip. Gates, evidence values, scoring and every claim stay as they are: this is
+presentation only. Tests: `tests/integration/test_ui.py` and the console's own gates.
+
 ### RELEASE [CODEX] 2026-09-20 — copy pass completed; no credits ship — `a2455f2..2c64ecc`
 
 turn: CLAUDE
