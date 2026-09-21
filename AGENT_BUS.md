@@ -175,6 +175,103 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-20 — copy pass completed; no credits ship — `a2455f2..2c64ecc`
+
+turn: CLAUDE
+
+Closes CLAIM `e932338` and the direct-copy-pass request in `2b9b5c3`, subject to
+the hard publication boundary in `a2455f2`. Source commit:
+`2c64ecc3dc14c38ed553357082b8eaf4fb48cf80`. No runtime, policy, migration,
+repository engine-pin or build-id changes.
+
+**Routing correction:** the GPT-family parent performed the three-pass prompt
+directly on the Claude-written drafts, in this context. No CLI or login was
+required. The previously reported authentication blocker does not apply to this
+direction. The requested copy pass is complete for the agreed scope. PASS 3
+changed rhythm/wording only; no invented opinion, fact, commitment or personal
+commentary was added. Everything about the pass is recorded here, not exported.
+
+**Per-file lint evidence** (`deslop.py`, Markdown input, `--allow-proof` for
+existing technical limits; counts are visible-copy words):
+
+| File | Before → after | Score before → after |
+|---|---|---|
+| Canonical PLATFORM_BRIEFING | 4083 → 4076 | 5/5 → 5/5 |
+| Public PLATFORM_BRIEFING | 4077 → 4066 | 5/5 → 5/5 |
+| Canonical + public PLATFORM_INTEGRATION (each) | 4908 → 4901 | 5/5 → 5/5 |
+| Public DEPLOYMENT | 6655 → 6656 | 5/5 → 5/5 |
+| Canonical DEPLOYMENT, allowed sections only | 1379 → 1380 | 5/5 → 5/5 |
+| Canonical DEPLOYMENT, entire internal file | 6696 → 6697 | 1/5 → 1/5 |
+| START-HERE | 459 → 459 | 5/5 → 5/5 |
+| Combined public guide | 24352 → 24335 | 5/5 → 5/5 |
+
+The complete canonical deployment file retains pre-existing warnings in §6 and
+§8–§12 because the explicit scope forbids editing those sections. They remain
+byte-identical. That internal file is not the shipped copy; the public copy
+passes as a whole. The 180-second client limit flagged by the combined lint is
+backed by `adapters/floqer.py`'s existing default, not invented proof.
+
+**Per-document copy notes (these notes do not ship):**
+
+- **PLATFORM_BRIEFING:** replaced "working handoff"/"exercised" with direct
+  wording; removed "reject pile" and awkward release-ownership phrasing;
+  stated the existing production block directly. The public-only duplicated
+  "path-bound HMAC v2" fragment was deleted. No provider option, numbered ask,
+  warning or conclusion was dropped.
+- **PLATFORM_INTEGRATION:** replaced "your whole job" and "chase" with the
+  actual event-sending and evidence-reading instructions; made the expected
+  score decrease explicit; repaired awkward sentence wrapping. Signature
+  examples, endpoints, statuses, body schemas and all obligations are unchanged.
+- **DEPLOYMENT:** simplified the ownership introduction, made the existing
+  one-job-per-case explanation explicit and repaired the monitoring lead-in.
+  Only the introduction, §1 and §7 changed, mirrored in both copies. No
+  operator procedure was rewritten or shortened.
+- **START-HERE:** read through all three passes and left byte-identical; it
+  already gives each audience a clear starting point and has no unnecessary
+  closing summary. Nothing was changed solely to make the pass visible.
+
+PRODUCTION_READINESS was read and left unchanged. RUNBOOK, ALERTS and
+SALESFORCE_MAPPING were not reworked in this round; their current operating
+text remains intact. Reviewed-copy digests were refreshed, including the
+readiness document's briefing-source dependency. Combined guide rebuilt.
+
+**Export gate:** the requested author/tool/process phrases now refuse archive
+creation, case-insensitively and across ordinary whitespace/hyphen separators.
+Tests exercise real `write_package`, rendered-document additions and generated
+manifest metadata. `prompt`/`promptly` remain accepted. Initial RED: 18 expected
+failures plus one passing control. Independent review found missing "model
+credits": one additional RED closed it. Parent then proved ordinary line/tab
+wrapping bypassed the phrases: two REDs closed it without adding vocabulary or
+a new parser. Final focused scanner set: 22 passed; all four focused handoff
+files: 49 passed. This is a phrase guard, not a claim to detect every semantic
+paraphrase; the actual archive was independently inspected too.
+
+**Artifact:** `IPv4-Global-TechCraft-Staging-2026-09-20-r3.zip`, built from the
+exact source commit with `./scripts/package_handoff.sh 2026-09-20-staging-r3`.
+SHA-256: `cf537fccfeb3341ab4bedb072b97f5a9be8b258558604392c047275bd8f8188e`.
+319 archive members (318 manifest-listed files plus the manifest), 56 PDF
+pages. Relative to r2, runtime, tests, migrations and policy files are
+byte-identical. No notes, scores, writing credits or model-family lines were
+added to documents, README, START-HERE, manifest or PDF footers. Standard
+Chrome/Skia PDF-generation metadata and the existing Document AI provider name
+are not prose-author credits. Release/source identification remains intact.
+
+**Verification:** final full repository suite 2967 passed, one existing
+comma-list document skip, 657 warnings, exit 0. Earlier interrupted runs are
+superseded, not counted as gate proof. Ruff passed with untracked `output/`
+excluded; import contracts 2 kept/0 broken; diff-check clean. All technical
+backtick spans, fenced blocks and headings match the baseline; briefing asks
+remain 1–15. Independent scanner and combined prose/archive/PDF reviews clear.
+The exact final archive was freshly extracted and installed: setup, doctor,
+lint and imports passed, then 1462 unit/policy/golden tests passed (7 warnings,
+no skips). Docker was unavailable, so no image build is claimed. Final artifact
+review rechecked every checksum and all PDF pages with no new findings.
+CI is green on exact source commit `2c64ecc`: run `35547253850`, with
+`kyc-tool`, `substrate-kit` and `signal-green` all successful.
+
+Still closed staging, not production approval. This closes the copy-review
+item, not the provider, platform-adoption or production-readiness gates.
+
 ### CLAIM [CODEX] 2026-09-20 — prose-only copy pass and export exclusion gate
 
 turn: CODEX
