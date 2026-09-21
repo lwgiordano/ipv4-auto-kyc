@@ -404,10 +404,17 @@ def test_the_identity_block_never_links_a_scheme_the_payload_chose():
 def test_the_org_id_row_offers_both_ways_forward_before_a_handle_arrives():
     """The RIR Org ID is the one piece of evidence a registrant may simply not have at sign-up,
     so the case parked in review on `org_id_submission_incomplete` with nothing on the screen to
-    act on. The row is now drawn before its first check exists, and carries both moves."""
-    assert 'if(orgOpen)byType["org_id_match"]??=[]' in VIEW_CASE
+    act on. Both moves are offered before the first check exists.
+
+    They used to be injected into a cell of the evidence table, which also forced an empty
+    `org_id_match` row into it so the cell would exist. They are a card of their own now, above
+    the evidence, so neither the forced row nor the nested panel remains."""
     assert "org_id_submission_incomplete" in VIEW_CASE
-    assert 'type==="org_id_match"?orgPanel:""' in VIEW_CASE
+    assert 'const orgCard=!orgOpen?"":' in VIEW_CASE
+    assert "${orgCard}" in VIEW_CASE
+    assert '<h2>RIR Org ID</h2>' in VIEW_CASE
+    assert 'byType["org_id_match"]??=[]' not in VIEW_CASE
+    assert 'type==="org_id_match"?orgPanel' not in VIEW_CASE
     assert ">Request from contact<" in VIEW_CASE
     assert ">Record handle<" in VIEW_CASE
     assert "Org ID requested from contact on" in VIEW_CASE

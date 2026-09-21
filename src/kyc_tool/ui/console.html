@@ -59,7 +59,7 @@ window.KYCTheme=(()=>{const valid=new Set(["system","light","dark"]);
   --red-soft:#fadfd6; --red-ink:#7a2a12;
   --blue-soft:#add4e4; --blue-ink:#183b49;
   --r:4px; --pill:16px; --radius-inner:4px;
-  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:64px;
+  --s0:2px; --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:64px;
   /* the marketplace's three elevations: card, raised control, floating panel */
   /* The edge a clipping table paints. It is the ONLY thing satisfying rule 11 for up to
      545px of hidden columns, and at rgba(0,0,0,.12) it measured 1.30:1 in light and 1.05:1
@@ -83,7 +83,9 @@ window.KYCTheme=(()=>{const valid=new Set(["system","light","dark"]);
   --t-subhd:700 14px/20px var(--font);     /* heading inside a card body — rank C */
   --t-body:400 14px/20px var(--font);      /* body, table cells, list rows */
   --t-strong:700 14px/20px var(--font);    /* the same body line, emphasised */
-  --t-chip:600 13px/18px var(--font);      /* status pills only */
+  --t-chip:600 13px/18px var(--font);      /* status pills, and buttons -- which add the caps
+                                              treatment. The chips stay sentence-cased for
+                                              sentences, so the token sets neither. */
   --t-label:600 12px/16px var(--font);     /* uppercase labels — rank A, th, kpi label */
   --t-meta:400 12px/16px var(--font);      /* muted secondary, raw identifiers, hints */
   --track-caps:.05em;                      /* every uppercase run, no exceptions */
@@ -288,6 +290,17 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
    and the heading grid's own 12px is already the right gap. */
 .tbar .desc .sub+.chips{margin-top:var(--s2)}
 .tbar .legend{margin:0}
+/* The only Approve button lives in this bar, and a case page runs to roughly 4,000px: a reviewer
+   read the evidence at the bottom and scrolled the whole way back to act on it. Where the
+   viewport can spare the height, the bar stays put. Narrow viewports keep the scrolling bar --
+   there the 90px it occupies costs more than the reach it saves. */
+@media(min-width:1181px){
+  /* The padding is the lane the bar keeps above itself once it is stuck. It was cancelled with a
+     matching negative margin to hold the old rhythm, which pulled the box up over the breadcrumb
+     and clipped it at rest -- so the lane is real, and every page gains the same 12px. */
+  .page>.tbar{position:sticky;top:0;z-index:40;background:var(--surface-page);
+    padding-top:var(--s3)}
+}
 .tbar .actions{margin-left:auto;display:flex;gap:var(--s2);align-items:center;max-width:100%}
 .crumb{font:var(--t-meta);color:var(--muted);margin-bottom:var(--s1)}
 .crumb a{color:var(--muted)}
@@ -358,14 +371,20 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
      .pipe .st  one STEP in a fixed ten-step track — square, joined, never free-floating.
      .gate      one row of a five-item CHECKLIST — a grid cell, not a chip.
    Anything a reviewer reads as a status is a .pill, in every context, with no exceptions. */
-.pill{display:inline-flex;align-items:center;gap:var(--s1);padding:2px var(--s3);min-height:24px;
+.pill{display:inline-flex;align-items:center;gap:var(--s1);padding:var(--s0) var(--s3);min-height:24px;
       border-radius:var(--pill);font:var(--t-chip);white-space:nowrap}
 .p-green{background:var(--green-soft);color:var(--green-ink)}
 .p-amber{background:var(--amber-soft);color:var(--amber-ink)}
 .p-red{background:var(--red-soft);color:var(--red-ink)}
 .p-blue{background:var(--blue-soft);color:var(--blue-ink)}
 .p-accent{background:var(--accent-soft);color:var(--accent-ink)}
-.p-neutral{background:var(--surface-muted);color:var(--text)}
+/* The only chip whose ground is the surface it sits on, so without a boundary it had no shape
+   at all -- and "Not Yet Available" is the state where the shape is doing the work. Inset, so the
+   chip's tuned padding and height do not move, and `--border-input` rather than `--line-strong`
+   because a boundary has to clear 3:1: the line tokens measure 1.51:1 light and 2.08:1 dark
+   against the card, this one 3.69:1 and 5.15:1. */
+.p-neutral{background:var(--surface-muted);color:var(--text);
+  box-shadow:inset 0 0 0 1px var(--border-input)}
 /* Outlined rather than filled: a tag quotes a machine value, and a filled pastel ground made it
    read as a status the reader was meant to act on. The edge IS the component, so it takes the
    3:1 control-boundary token, not the 1.51:1 hairline used for dividers. */
@@ -399,7 +418,7 @@ tr.hl td{background:var(--accent-soft)}
 tr.hl:focus-visible{outline-offset:-2px}
 .sub{font:var(--t-meta);color:var(--muted)}
 /* margin only where it can apply: it is inert on a <td class="sub"> and was declared on 59 of them */
-div.sub,p.sub{margin-top:2px}
+div.sub,p.sub{margin-top:var(--s0)}
 .empty{padding:var(--s6) var(--s4);text-align:center;color:var(--muted);font:var(--t-body)}
 .empty b{color:var(--ink);font:var(--t-title);display:block;margin-bottom:var(--s1)}
 
@@ -417,10 +436,6 @@ button.primary:hover{background:var(--accent-hover);border-color:var(--accent-ho
 button.primary:active{background:var(--accent-pressed);border-color:var(--accent-pressed);box-shadow:none}
 button.sm{padding:0 var(--s3);font:var(--t-label);text-transform:uppercase;
   letter-spacing:var(--track-caps);min-height:32px}
-button.good{background:var(--green-soft);border-color:transparent;color:var(--green-ink)}
-button.good:hover{background:color-mix(in oklab,var(--green-soft),black 6%)}
-button.danger{background:var(--red-soft);border-color:transparent;color:var(--red-ink)}
-button.danger:hover{background:color-mix(in oklab,var(--red-soft),black 6%)}
 /* Neutral outline: a control whose consequence is the opposite of the accent's, so it must not
    wear the system's affirmative colour. The approve dialog's Cancel held this as an id rule; the
    website Reject needs exactly the same treatment, so it is a class the two of them share. */
@@ -625,7 +640,8 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .sdot.g{background:var(--green-soft);color:var(--green-ink)}
 .sdot.r{background:var(--red-soft);color:var(--red-ink)}
 .sdot.a{background:var(--amber-soft);color:var(--amber-ink)}
-.sdot.n{background:var(--surface-muted);color:var(--muted)}
+.sdot.n{background:var(--surface-muted);color:var(--muted);
+  box-shadow:inset 0 0 0 1px var(--border-input)}
 
 /* ── Registration details: who is being approved ── */
 /* This block exists because the page did not contain the company. Nine sections described what
@@ -778,7 +794,10 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
   transform:translate(-50%,-50%)}
 .tip{position:fixed;z-index:600;max-width:300px;background:var(--surface-inverse);
   color:var(--text-inverse);border-radius:var(--r);padding:var(--s3) var(--s4);
-  box-shadow:var(--e3);font:var(--t-meta);pointer-events:none;
+  box-shadow:var(--e3);font:var(--t-meta);
+  /* It was `pointer-events:none`, so a long explainer could be read only at whatever size the
+     viewport gave it: anyone using a magnifier could never move the pointer into the bubble
+     without dismissing it. The handlers below keep it open while the pointer is inside. */
   animation:tipin var(--dur-1) var(--ease-standard)}
 .tip b{display:block;font:var(--t-strong);margin-bottom:var(--s2)}
 .tip p{margin:0 0 var(--s2)}
@@ -795,8 +814,8 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
 .toolbar .tipbtn{margin-left:var(--s2)}
 /* Status panels are TINTED PAPER in the chip colours, never a coloured spine. */
 .banner{display:flex;gap:var(--s3);align-items:center;background:var(--red-soft);
-  color:var(--red-ink);border-radius:var(--r);padding:var(--s3) var(--s4);font-size:14px;line-height:20px;
-  font-weight:600;margin-bottom:var(--s4)}
+  color:var(--red-ink);border-radius:var(--r);padding:var(--s3) var(--s4);font:var(--t-strong);
+  margin-bottom:var(--s4)}
 .banner .ic{width:16px;height:16px}
 .banner a{color:inherit;font-weight:700;text-decoration:underline}
 .callout{display:flex;gap:var(--s3);align-items:flex-start;border-radius:var(--r);
@@ -822,6 +841,18 @@ h2.sec.tight{margin-top:0}
 .chiprow.end[data-review]{flex-wrap:wrap}
 .chiprow.end[data-review]>[data-review-q]{flex:1 0 100%;text-align:right;margin-bottom:var(--s1)}
 .chev{color:var(--muted);text-align:right}
+/* Four attributes the case page used to emit inline carried no data and belong here: a failed
+   round's message, a check the case does not hold, the divider under the Salesforce table, and
+   the line that replaces the approve button once a case has been approved by hand. */
+.run-error{color:var(--red)}
+.crow .nm.missing{color:var(--muted)}
+.bd.ruled{border-top:1px solid var(--line)}
+.approved-by{display:inline-flex;align-items:center;gap:var(--s2);font:var(--t-meta);
+  color:var(--muted)}
+/* A review task's stored context was a 280px window onto ~1,360px of JSON, readable only by
+   hovering: not selectable, not copyable, not reachable by keyboard. It opens in place now. */
+.ctx summary{cursor:pointer;color:var(--accent-text)}
+.ctx pre{margin:var(--s2) 0 0;max-width:420px}
 /* A key, not a sentence: each pill and its gloss are one unit, and the units are separated by
    space alone. The literal middots doubled up with the flex gap and stranded one at every wrap. */
 .legend{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--s3) var(--s5);
@@ -869,6 +900,10 @@ dialog.modal p{margin:0 0 var(--s3)}
    a 14px `.flab` the same class was legal, which is how it survived. */
 .req{color:var(--red)}
 dialog.modal textarea{min-height:88px}
+/* `textarea` sets mono 12/16 for the composer's JSON payload. The reviewer's written reason for
+   bypassing every rule is prose, and was the only monospace field in a 14px sans dialog. */
+#ap-why{font:var(--t-body)}
+.modal .toolbar{margin:0;justify-content:flex-end}
 dialog.modal .banner{margin-top:var(--s3)}
 /* The only coloured control in this dialog is the one that commits. Cancel was the accent-blue
    outlined button -- the system's affirmative colour -- sitting beside a peach confirm; it now
@@ -1371,6 +1406,11 @@ const TIPS={
   activity:{t:"Activity Log",b:`<p>The complete record of activity for this case, oldest first.
     Highlighted entries changed the outcome.</p>
     <p>Open Record under any entry to view the stored details.</p>`},
+  orgid:{t:"RIR Org ID",b:`<p>A registrant may simply not have an Org ID when they sign up, so a
+    case can sit in review with nothing else on this page to act on.</p>
+    <p>Two ways forward, both recorded under your name: ask the contact for it — the platform
+    sends the message, this tool records the ask — or enter a handle the contact has already sent
+    you by other means. The ask clears itself when the handle arrives.</p>`},
   identity:{t:"Registration Details",b:`<p>The registrant, and the company they applied on
     behalf of, exactly as the platform submitted them. Every check on this page compares evidence against
     these values, so an error here explains a failed rule faster than anything else on the
@@ -1465,7 +1505,14 @@ function showTip(btn){
 }
 document.addEventListener("pointerover",e=>{const b=e.target.closest?.(".tipbtn");
   if(b&&b!==tipFor){hideTip();showTip(b)}});
-document.addEventListener("pointerout",e=>{if(e.target.closest?.(".tipbtn")===tipFor)hideTip()});
+document.addEventListener("pointerout",e=>{
+  const leaving=e.target.closest?.(".tipbtn")===tipFor||tipEl.contains(e.target);
+  if(!leaving)return;
+  // Moving from the trigger into the bubble, or back out to it, is still reading the same
+  // explainer. Only a pointer that has left both closes it.
+  const to=e.relatedTarget;
+  if(to&&(tipEl.contains(to)||to.closest?.(".tipbtn")===tipFor))return;
+  hideTip()});
 document.addEventListener("focusin",e=>{const b=e.target.closest?.(".tipbtn");
   if(b){hideTip();showTip(b)}else hideTip()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape")hideTip()});
@@ -1549,7 +1596,7 @@ const tbar=(title,desc,actions="",tk="",legend="")=>`<div class="tbar"><div clas
   actions?`<div class="actions">${actions}</div>`:""}</div>`;
 /* No gloss slot: a heading carries its title and its help button, and the explanation lives in
    the tooltip where it can be a sentence rather than a fragment. */
-const sec=(title,tk="",cls="")=>`<h2 class="sec ${cls}">${title}${tip(tk)}</h2>`;
+const sec=(title,tk="",cls="")=>`<h2 class="sec${cls?` ${cls}`:""}">${title}${tip(tk)}</h2>`;
 const emptyRow=(cols,head,body)=>`<tr><td colspan="${cols}"><div class="empty"><b>${head}</b>${body}</div></td></tr>`;
 
 async function sidebarBadge(){try{
@@ -1879,10 +1926,18 @@ function identityCard(c){
 
 async function viewCase(id){
   const generation=renderGeneration;
+  /* The fetch used to run before anything was written, so a reviewer clicking from one case to
+     the next read the PREVIOUS company's record until the response landed -- no spinner, no dim,
+     nothing to say the page was stale. Claim it first. Only on a navigation: the refresh tick
+     must not blank a page someone is reading. */
+  if(navigated)page.innerHTML=`<div class="card"><div class="loading">Loading case…</div></div>`;
   const{status,body:d}=await j(`/ui/api/cases/${encodeURIComponent(id)}/full`);
   if(generation!==renderGeneration)return;
   if(status===404){document.title="KYC Tool · Console";
-    page.innerHTML=`<div class="empty card"><b>No case with this ID</b><code>${esc(id)}</code></div>`;return}
+    // It dropped the breadcrumb too, so this state was the one page with no way back to Cases.
+    page.innerHTML=`<div class="crumb"><a href="#/cases">Cases</a> / <span class="mono">${esc(id)}</span></div>
+      <div class="empty card"><b>No case with this ID</b><code>${esc(id)}</code><br><br>
+      <a href="#/cases">Back to Cases</a></div>`;return}
   const c=d.case;
   // Several case tabs open at once all read "KYC Tool · Console" otherwise.
   document.title=`${caseHeadline(c)} · KYC Tool`;
@@ -1901,7 +1956,7 @@ async function viewCase(id){
   const liveGap=s.threshold-live;
   const liveNote=liveGap>0?`${liveGap} points below threshold`:`Threshold met`;
   const decisionColor=decision==="approve"||decision==="approve_buy_locked"?"var(--green)":
-                      decision==="reject"?"var(--red)":decision?"var(--amber)":"var(--faint)";
+                      decision==="reject"?"var(--red)":"var(--amber)";
   // The dot is decoration: the row's real status is the .vh text beside it. The two glyph states
   // that are TEXT rather than an svg ("!" and "·") get read out otherwise, so the row announced
   // "·Not Yet Available: Company email verified".
@@ -1911,8 +1966,8 @@ async function viewCase(id){
   const sdot=st=>st==="pass"?`<span class="sdot g" aria-hidden="true">${I.check}</span>`:st==="fail"?`<span class="sdot r" aria-hidden="true">${I.cross}</span>`:
     st==="needs_review"?`<span class="sdot a" aria-hidden="true">${I.warn}</span>`:`<span class="sdot n" aria-hidden="true">${I.absent}</span>`;
   const contrib=s.items.map(it=>`<div class="crow">${sdot(it.status)}<span class="vh">${esc(say("status",it.status))}: </span>
-      <span class="nm" title="${esc(it.check_type)}"
-        ${it.status==="missing"?'style="color:var(--muted)"':""}>${esc(say("check",it.check_type))}</span>
+      <span class="nm${it.status==="missing"?" missing":""}" title="${esc(it.check_type)}"
+        >${esc(say("check",it.check_type))}</span>
       <span class="pts ${it.awarded?"":"zero"}">${it.awarded?`+${it.awarded}`:"0"}</span>
       <span class="cap">/ ${it.points}</span></div>`).join("");
 
@@ -1932,7 +1987,8 @@ async function viewCase(id){
       <label class="vh" for="org-ask-note">Note for the contact</label>
       <input id="org-ask-note" placeholder="Optional note">
       <button class="sm" type="submit">Request from contact</button>
-      <button class="sm" type="button" id="org-record-toggle">Record handle</button></form>
+      <button class="sm" type="button" id="org-record-toggle"
+        aria-expanded="false" aria-controls="org-record-form">Record handle</button></form>
     <form class="chiprow" id="org-record-form" hidden>
       <label class="vh" for="org-rir">RIR</label>
       <span class="select-wrap"><select id="org-rir">${["arin","ripe","apnic","lacnic","afrinic"]
@@ -1942,8 +1998,9 @@ async function viewCase(id){
       <button class="sm" type="submit">Record</button></form>`;
 
   const byType={};d.checks.forEach(ch=>(byType[ch.check_type]??=[]).push(ch));
-  // The Org ID row is drawn before its first check exists, because it is where the reviewer acts.
-  if(orgOpen)byType["org_id_match"]??=[];
+  /* This used to force an empty Org ID row into the evidence table, because that cell was where
+     the reviewer acted. The action has its own card now, so a row with no evidence in it is just
+     an empty row. */
   const chains=Object.entries(byType).map(([type,list])=>{
     const chain=list.map((ch,i)=>{
       const live=!ch.superseded_by_check_id;
@@ -1952,17 +2009,23 @@ async function viewCase(id){
         title="${esc(ch.id)} · ${esc(fmtExact(ch.created_at))}">${pill(ch.status)}${live&&ch.points_awarded?`<b class="strong">+${ch.points_awarded}</b>`:""}</span>${reasons}`;
     }).join("");
     return`<tr><td><span class="strong">${esc(say("check",type))}</span>
-        <div class="sub mono">${esc(type)}</div></td><td><div class="chiprow haspill">${chain}</div>${
-        type==="org_id_match"?orgPanel:""}</td>
+        <div class="sub mono">${esc(type)}</div></td><td><div class="chiprow haspill">${chain}</div></td>
       <td class="sub">${esc(say("adapter",(list.at(-1)||{}).source||""))}</td></tr>`;
   }).join("")||emptyRow(3,"No evidence yet","Evidence arrives with platform messages. Use <a href='#/composer'>Case actions</a> to submit one.");
+
+  /* The panel was injected into one cell of the Evidence History table: two forms and six
+     controls inside a single `<td>`, several screens down, for the one thing a reviewer can
+     actually DO about a case stuck on a missing Org ID. It is a card of its own now, and it sits
+     above the evidence rather than inside it. */
+  const orgCard=!orgOpen?"":`<div class="card"><div class="hd"><h2>RIR Org ID</h2>${tip("orgid")}</div>
+    <div class="bd">${orgPanel}</div></div>`;
 
   const runRows=d.runs.map(r=>{
     const ads=d.adapter_results.filter(a=>a.run_id===r.id).map(a=>
       `<span class="tag ${a.status==="upstream_error"?"err":""}" title="${esc(a.adapter_id)} · ${esc(a.status)}"
         >${esc(say("adapter",a.adapter_id))} · ${esc(a.status==="ok"?"responded":a.status==="upstream_error"?"failed":"not required")}</span>`).join("");
     return`<tr><td class="mono" title="${esc(r.id)}">${esc(r.id.slice(0,8))}…${r.partial?` ${pill("needs_review","Partial")}`:""}</td>
-      <td>${pipe(r.state)}${r.error?`<div class="sub" style="color:var(--red)">${esc(r.error)}</div>`:""}</td>
+      <td>${pipe(r.state)}${r.error?`<div class="sub run-error">${esc(r.error)}</div>`:""}</td>
       <td>${ads?`<div class="chiprow">${ads}</div>`:`<span class="sub">No sources queried; the broker check ended the round.</span>`}</td>
       <td class="num">${exact(r.started_at)}</td></tr>`}).join("")
     ||emptyRow(4,"No verification rounds yet","Each platform message starts one verification round.");
@@ -1971,8 +2034,8 @@ async function viewCase(id){
     <td class="mono" title="${esc(t.id)}">${esc(t.id.slice(0,8))}…</td>
     <td title="${esc(t.task_type)}">${esc(say("task",t.task_type))}</td><td>${pill(t.status)}</td>
     <td>${t.result?pill(t.result):"—"}${t.reviewer_id?` <span class="sub">by ${esc(t.reviewer_id)}</span>`:""}</td>
-    <td class="sub mono" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-        title="${esc(JSON.stringify(t.context_json,null,2))}">${esc(JSON.stringify(t.context_json))}</td>
+    <td class="sub"><details class="ctx"><summary>Details</summary>
+      <pre>${esc(JSON.stringify(t.context_json,null,2))}</pre></details></td>
     <td>${t.status==="open"&&t.task_type==="website"?`<div class="chiprow end" data-review>
       <span class="sub" data-review-q hidden></span>
       <button class="sm neutral" data-review-keep hidden>Keep Open</button>
@@ -1997,14 +2060,15 @@ async function viewCase(id){
     return`<div class="fitem ${HOT.has(a.action)?"hot":""}">
       <span class="obj">${line}</span>
       ${a.actor&&a.actor!=="system"?`<span class="who">${esc(a.actor)}</span>`:""}
-      <details><summary>Record</summary><pre>${esc(JSON.stringify(a.detail_json,null,2))}</pre></details>
+      <details><summary>Record<span class="vh"> for ${esc(a.action)} at ${esc(fmtExact(a.at))}</span></summary
+        ><pre>${esc(JSON.stringify(a.detail_json,null,2))}</pre></details>
       ${when(a.at)}
     </div>`}).filter(Boolean);
   const FEED_TAIL=15;
   const feed=fitems.length===0?`<div class="empty"><b>No activity</b></div>`
     :fitems.length<=FEED_TAIL+5?fitems.join("")
     :`<div class="feed-earlier"><button class="sm" id="feedmore">Show ${fitems.length-FEED_TAIL} Earlier Entries</button></div>
-      <div id="feedhead" hidden>${fitems.slice(0,-FEED_TAIL).join("")}</div>
+      <div id="feedhead" role="group" aria-label="Earlier activity" hidden>${fitems.slice(0,-FEED_TAIL).join("")}</div>
       ${fitems.slice(-FEED_TAIL).join("")}`;
 
   page.innerHTML=`
@@ -2027,7 +2091,14 @@ async function viewCase(id){
          ?provPill(d.manual_decision_provenance,true):""}
        ${decision&&c.status===decision?"":casePill(c,hold)}
        ${statePill(BUY_PILL,"buy_status",c.buy_status)}${pill(c.broker_status)}</span>`,
-      `${c.status==="approved_manual"?"":`<button class="warn" id="approvebtn">${I.person}Approve Manually</button>`}
+      `${c.status==="approved_manual"
+         /* It rendered an empty string here, so the only confirmation a reviewer ever got that
+            the case was approved by hand was a toast that had already gone. */
+         ?(()=>{const m=(latest.manual&&latest)||d.decisions.find(x=>x.manual)||{};
+            return`<span class="approved-by">${I.person}<span>Approved manually${
+              m.reviewer_id?` by <b class="strong">${esc(m.reviewer_id)}</b>`:""}${
+              m.decided_at?` · ${esc(fmtExact(m.decided_at))}`:""}</span></span>`})()
+         :`<button class="warn" id="approvebtn">${I.person}Approve Manually</button>`}
        <button id="sendbtn">Case Actions</button>`)}
     ${identityCard(c)}
     <div class="card"><div class="hd"><h2>Decision Sent to Platform</h2>
@@ -2063,35 +2134,42 @@ async function viewCase(id){
               <span class="btick" style="left:${s.threshold/max*100}%"><span>Threshold ${s.threshold}</span></span></span>
           </div>
         </div>
-        ${s.items.length?`<p class="sub">Rubric: ${esc(s.rubric_scope||"Recorded evidence")} · ${s.configuration_revision?`configuration revision ${esc(s.configuration_revision)}`:esc(s.rubric_provenance||"Legacy policy")}</p><div class="contrib" style="--rows:${Math.ceil(s.items.length/2)}">${contrib}</div>`:`<p class="callout amber" role="status">The rubric this case was scored against is no longer on file. The published score and today's evidence score are both still shown, separately — this case is not re-scored with today's weights.</p>`}
+        ${s.items.length?`<p class="sub">Rubric: ${esc(s.rubric_scope||"Recorded evidence")} · ${s.configuration_revision?`configuration revision ${esc(s.configuration_revision)}`:esc(s.rubric_provenance||"Legacy policy")}</p><div class="contrib" style="--rows:${Math.ceil(s.items.length/2)}">${contrib}</div>`:`<div class="callout amber" role="note">${I.warn}<div><b>Rubric not on file.</b> The rubric this case was scored against is no longer held. The published score and today's evidence score are both still shown, separately — this case is not re-scored with today's weights.</div></div>`}
       </div></div>
+    ${orgCard}
     <div class="card"><div class="hd"><h2>Evidence History</h2>${tip("checks")}</div>
       <div class="bd flush"><table>
+      <caption class="vh">Evidence History</caption>
       <thead><tr><th>Evidence</th><th>History</th><th>Source</th></tr></thead>
       <tbody>${chains}</tbody></table></div></div>
     <div class="card"><div class="hd"><h2>Verification Rounds</h2>${tip("runs")}</div>
       <div class="bd flush"><table>
-      <thead><tr><th>Round</th><th>Progress</th><th>Sources Queried</th><th class="num">Started</th></tr></thead>
+      <caption class="vh">Verification Rounds</caption>
+      <thead><tr><th>Round ID</th><th>Progress</th><th>Sources Queried</th><th class="num">Started</th></tr></thead>
       <tbody>${runRows}</tbody></table></div></div>
     <div class="card"><div class="hd"><h2>Manual Review Tasks</h2>${tip("tasks")}</div>
       <div class="bd flush"><table>
-      <thead><tr><th>Task</th><th>Type</th><th>Status</th><th>Result</th><th>Details</th><th></th></tr></thead>
+      <caption class="vh">Manual Review Tasks</caption>
+      <thead><tr><th>Task ID</th><th>Type</th><th>Status</th><th>Result</th><th>Details</th><th></th></tr></thead>
       <tbody>${taskRows}</tbody></table></div></div>
     <div class="card"><div class="hd"><h2>Verification Codes</h2>${tip("tokens")}</div>
       <div class="bd flush"><table>
+      <caption class="vh">Verification Codes</caption>
       <thead><tr><th>RIR Contact</th><th>Sent To</th><th>Status</th><th class="num">Sent</th></tr></thead>
       <tbody>${tokenRows||emptyRow(4,"No verification codes sent",
         "A code goes to each RIR-listed contact during a full verification round.")}</tbody></table></div></div>
     <div class="card"><div class="hd"><h2>Salesforce Fields</h2>${tip("salesforce")}</div>
       <div class="bd flush"><table>
+      <caption class="vh">Salesforce Fields</caption>
       <thead><tr><th>Salesforce Field</th><th>Value</th><th>Source</th></tr></thead>
       <tbody>${sfRows}</tbody></table></div>
-      <div class="bd" style="border-top:1px solid var(--line)">
+      <div class="bd ruled">
         <details><summary>
           KYC_Check__c records (${d.salesforce.KYC_Check__c.length})</summary>
         <pre>${esc(JSON.stringify(d.salesforce.KYC_Check__c,null,2))}</pre></details></div></div>
     <div class="card"><div class="hd"><h2>Decision History</h2>${tip("history")}</div>
       <div class="bd flush"><table>
+      <caption class="vh">Decision History</caption>
       <thead><tr><th>Decision</th><th class="num">Score</th><th>Buying</th><th>Manual Approver</th>
       <th class="num">Decided</th><th class="num">Delivered</th></tr></thead>
       <tbody>${d.decisions.map(x=>`<tr><td>${x.enforcement_held?pill("held_for_approval"):pill(x.decision)}</td><td class="num strong">${x.score}</td>
@@ -2108,7 +2186,11 @@ async function viewCase(id){
   $("#sendbtn").onclick=()=>{composerSession.requestedCase=c.id;
     composerSession.caseMode="existing";composerSession.selectedCase=c.id;location.hash="#/composer"};
   const ab=$("#approvebtn");if(ab)ab.onclick=()=>openApprove(d,hold);
-  const fm=$("#feedmore");if(fm)fm.onclick=()=>{$("#feedhead").hidden=false;fm.parentElement.remove()};
+  /* The button removes its own parent, so the focus it was holding used to fall to <body>:
+     nothing announced, and a keyboard reviewer tabbed again from the top of the page. Hand focus
+     to the entries it just revealed. */
+  const fm=$("#feedmore");if(fm)fm.onclick=()=>{const head=$("#feedhead");
+    head.hidden=false;head.tabIndex=-1;fm.parentElement.remove();head.focus()};
   /* Both Org ID actions name the reviewer, because both land on the case record under a person:
      the ask as an audit row of its own, the handle as the actor on the submitted evidence. */
   const askForm=$("#org-ask-form");
@@ -2121,7 +2203,8 @@ async function viewCase(id){
     if(r.status<300){toast(`${I.check}<span>Org ID requested from the contact. The platform sends the message; this is the record of the ask.</span>`);setTimeout(route,700);return}
     toast(`${I.cross}<span>${esc(errText(r.body))}</span>`)};
   const recordToggle=$("#org-record-toggle");
-  if(recordToggle)recordToggle.onclick=()=>{$("#org-record-form").hidden=false;$("#org-handle").focus()};
+  if(recordToggle)recordToggle.onclick=()=>{$("#org-record-form").hidden=false;
+    recordToggle.setAttribute("aria-expanded","true");$("#org-handle").focus()};
   const recordForm=$("#org-record-form");
   if(recordForm)recordForm.onsubmit=async e=>{
     e.preventDefault();
@@ -2716,6 +2799,19 @@ const routes=[
 ];
 const main=$("#main");
 let navigated=false;   // set by a hash change; cleared once the new page has taken focus
+/* The five-second tick rebuilds the page wholesale, which threw away a half-typed note to a
+   contact, an armed confirm, a revealed form and the expanded activity feed -- every five
+   seconds, for as long as the box stayed ticked. A refresh that waits is better than a refresh
+   that destroys work, so the tick skips while any of those is true and resumes on the next one.
+   Navigation still re-renders immediately; this guards the timer only. */
+function pageHoldsWork(){
+  const a=document.activeElement;
+  if(a&&page.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))return true;
+  if(page.querySelector("[data-armed]"))return true;
+  if(page.querySelector(".feed details[open]"))return true;
+  const rec=$("#org-record-form"),head=$("#feedhead");
+  return Boolean((rec&&!rec.hidden)||(head&&!head.hidden));
+}
 async function route(){
   const generation=++renderGeneration;
   // a re-render (navigation, or the 5s refresh) throws away the button the bubble is anchored to
@@ -2734,6 +2830,9 @@ async function route(){
       try{await fn(m)}catch(e){if(generation!==renderGeneration)return;page.innerHTML=
         `<div class="card"><div class="empty"><b>This page did not load</b>${esc(e.message)}<br><br>
         <button class="sm" onclick="route()">Try again</button></div></div>`}
+      /* A column header is announced as one only when it says which cells it heads. Set here
+         rather than on the forty-odd `<th>` literals, so a table added later cannot forget. */
+      page.querySelectorAll("thead th").forEach(th=>th.setAttribute("scope","col"));
       // On a navigation the old page's scroll position and focus are both stale: start the new
       // page at the top and put focus on its title, so it is announced and the tab order starts
       // inside it. Not on first load (nothing to move from) and not on the refresh tick (that
@@ -2768,7 +2867,7 @@ $("#ap-warn").insertAdjacentHTML("afterbegin",I.person);
 $("#skip").addEventListener("click",e=>{e.preventDefault();main.focus()});
 $("#autorefresh").addEventListener("change",e=>{
   clearInterval(refreshTimer);
-  if(e.target.checked)refreshTimer=setInterval(route,5000)});
+  if(e.target.checked)refreshTimer=setInterval(()=>{if(!pageHoldsWork())route()},5000)});
 route();
 </script>
 </body>
