@@ -416,6 +416,116 @@ def test_archive_content_scan_rejects_internal_history_and_private_keys(exporter
         )
 
 
+@pytest.mark.parametrize(
+    "prohibited",
+    [
+        "GPT",
+        "llm",
+        "language model",
+        "AI-generated",
+        "ai assisted",
+        "AI-written",
+        "machine generated",
+        "SlopMonster",
+        "de-slop",
+        "cleanse",
+        "copy pass",
+        "rival model",
+        "reviewed-by",
+        "style checked",
+        "tool credits",
+        "model credits",
+        "review notes",
+    ],
+)
+def test_archive_build_refuses_authorship_and_copy_process_terms(tmp_path, exporter, prohibited):
+    output = tmp_path / "handoff.zip"
+
+    with pytest.raises(ValueError, match="internal build-history reference"):
+        exporter.write_package(
+            source_files={"README.md": f"Release text: {prohibited}.\n".encode()},
+            source_modes={"README.md": 0o644},
+            inventory={"README.md": "README.md"},
+            output=output,
+            label="v1-staging",
+            commit="a" * 40,
+        )
+
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("prohibited", ["language\nmodel", "copy\tpass"])
+def test_archive_build_refuses_authorship_terms_split_by_whitespace(tmp_path, exporter, prohibited):
+    output = tmp_path / "handoff.zip"
+
+    with pytest.raises(ValueError, match="internal build-history reference"):
+        exporter.write_package(
+            source_files={"README.md": f"Release text: {prohibited}.\n".encode()},
+            source_modes={"README.md": 0o644},
+            inventory={"README.md": "README.md"},
+            output=output,
+            label="v1-staging",
+            commit="a" * 40,
+        )
+
+    assert not output.exists()
+
+
+def test_archive_build_refuses_authorship_terms_added_by_document_renderer(tmp_path, exporter):
+    def render(root):
+        generated = root / "docs" / "rendered.html"
+        generated.parent.mkdir(parents=True, exist_ok=True)
+        generated.write_text("<p>AI-assisted release notes</p>\n")
+
+    output = tmp_path / "handoff.zip"
+
+    with pytest.raises(ValueError, match=r"AI-assisted.*docs/rendered\.html"):
+        exporter.write_package(
+            source_files={"README.md": b"Public release.\n"},
+            source_modes={"README.md": 0o644},
+            inventory={"README.md": "README.md"},
+            renderer=render,
+            output=output,
+            label="v1-staging",
+            commit="a" * 40,
+        )
+
+    assert not output.exists()
+
+
+def test_archive_build_scans_generated_manifest_metadata(tmp_path, exporter):
+    output = tmp_path / "handoff.zip"
+
+    with pytest.raises(ValueError, match=r"copy pass.*MANIFEST\.json"):
+        exporter.write_package(
+            source_files={"internal/copy pass.txt": b"Public release.\n"},
+            source_modes={"internal/copy pass.txt": 0o644},
+            inventory={"internal/copy pass.txt": "release.txt"},
+            output=output,
+            label="v1-staging",
+            commit="a" * 40,
+        )
+
+    assert not output.exists()
+
+
+def test_archive_build_allows_prompt_words_and_unrelated_substrings(tmp_path, exporter):
+    output = tmp_path / "handoff.zip"
+    text = b"Prompt the user promptly about the cleaning cycle and copied passages.\n"
+
+    exporter.write_package(
+        source_files={"README.md": text},
+        source_modes={"README.md": 0o644},
+        inventory={"README.md": "README.md"},
+        output=output,
+        label="v1-staging",
+        commit="a" * 40,
+    )
+
+    with zipfile.ZipFile(output) as archive:
+        assert archive.read("kyc-tool-v1-staging/README.md") == text
+
+
 def test_archive_content_scan_rejects_internal_pr_labels_in_public_documents(exporter):
     with pytest.raises(ValueError, match="internal build-history reference .*PR 7b-core"):
         exporter.scan_package_text(

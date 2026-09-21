@@ -212,9 +212,9 @@ reviewer.
 
 ### When to send each event
 
-Evidence is optional at every step, and the tool scores whatever exists. Your
-whole job is this: when verification-relevant information is added **or
-changed**, send the matching event. The tool re-runs and returns a fresh
+Evidence is optional at every step, and the tool scores whatever exists. When
+verification-relevant information is added **or changed**, send the matching
+event. The tool re-runs and returns a fresh
 verdict, so there is no separate "retry" or "re-verify" call.
 
 | Moment on the platform | Send |
@@ -230,7 +230,7 @@ verdict, so there is no separate "retry" or "re-verify" call.
 | Fresh verdict wanted, nothing new | `recalculate.requested` |
 
 Changing identity details (ORG-ID, POC) suspends previously earned proof until
-re-verified, so a score can drop after an edit (§5). Expected, not a bug.
+re-verified, so a score can drop after an edit (§5). That decrease is expected.
 
 ## 4. The decision webhook (you build this)
 
@@ -446,7 +446,7 @@ and its wiring still need to replace the development JSON-scan configuration.
 ## 7. Read API and review tasks
 
 Everything the tool knows about a case is readable over signed GETs. Use them
-to chase what is missing and to mirror a case into Salesforce.
+to identify missing evidence and to mirror a case into Salesforce.
 
 - `GET /v1/cases/{id}` — status, score, latest decision, live checks with
   reason codes ("what's missing" for follow-up), and `information_requested`
@@ -475,13 +475,13 @@ retired — it duplicated this event.)
 `information_requested`: one entry per outstanding ask, shaped `{"field":
 "org_id" | "registration_number" | "address" | "poc", "requested_at": …,
 "requested_by": …, "note": … or null}`. A reviewer raises one from the operator
-console when a case is stuck for want of evidence the registrant never
+console when a case is waiting for evidence the registrant has not
 supplied. The tool records the ask, and the platform owns the message that
 reaches the contact. An entry drops off by itself once the case receives that
 evidence, so there is nothing to close and nothing to acknowledge. `org_id`
 clears when `org_id.submitted` arrives, and the other three clear the same way.
 
-You do not need this field to chase a missing ORG-ID today. The decision
+You do not need this field to identify a missing ORG-ID today. The decision
 webhook's `checks[].reason_codes` already carry `org_id_submission_incomplete`,
 which is the same fact at decision time. How you would rather learn of a
 reviewer's request is `PLATFORM_BRIEFING.md` §8 item 13: poll this field, or
@@ -528,8 +528,8 @@ detail, review queue), independent of this API.
 TechCraft hosts and operates the tool in IPv4.Global's AWS account. IPv4.Global
 maintains the code and cuts releases. Follow each release's migration and
 stop/start instructions rather than assuming a rolling update is safe. No code
-is edited on the server. A
-`Dockerfile` ships in the repo, and `docs/RUNBOOK.md` is the operator guide
+is edited on the server. A `Dockerfile` ships in the repo, and
+`docs/RUNBOOK.md` is the operator guide
 (every env var, health checks, dead-letter recovery).
 
 - **Stack:** Python 3.11, FastAPI and PostgreSQL. CI tests PostgreSQL 16.

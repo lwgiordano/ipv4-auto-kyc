@@ -1,6 +1,6 @@
 # KYC Tool — Platform Team Briefing
 
-This is the working handoff for TechCraft. The tool can be exercised in a
+This is the handoff for TechCraft. The tool can be tested in a
 closed staging environment, but it is not ready for production. Start with §4
 for the platform work, §5 for the two provider decisions, §6 for staging, and
 §8 for the remaining delivery gaps and numbered asks. Engineers should build
@@ -73,8 +73,8 @@ naming what is missing or wrong, and that code is what your review team acts
 on.
 
 Only a broker-blocklist match rejects a case on its own. Everything else that
-falls short goes to manual review, so expect the review queue rather than the
-reject pile to carry the volume. The tool does not implement sanctions
+falls short goes to manual review, so expect more cases in the review queue
+than among rejections. The tool does not implement sanctions
 screening. That is a platform responsibility and must be completed before the
 platform calls the tool.
 
@@ -226,10 +226,10 @@ describes both options.
 The document check cannot award its 25 points in production until the chosen
 path is wired into the production profile.
 
-**Settled at kickoff: your team hosts it and runs it.**
+**Agreed at kickoff: your team hosts and operates it.**
 
-IPv4.Global keeps maintaining the code and cutting releases. Your team pulls a
-release and redeploys. Nobody edits code on the server.
+IPv4.Global maintains the code and publishes releases. Your team pulls a
+release and redeploys. Do not edit code on the server.
 
 - Python 3.11 and FastAPI. The automated suite currently tests
   **PostgreSQL 16**. Compatibility with older server versions is not
@@ -275,8 +275,7 @@ review team confirms, and the flag flips per environment only after that gate
 is complete.
 
 > **Keep staging closed until inbound v1 is actually disabled.** Path-bound
-> HMAC v2 is available,
-> path-bound HMAC v2, but a v1-only request during the dual-accept window is
+> HMAC v2 is available, but a v1-only request during the dual-accept window is
 > still path-unbound, so a signed event captured inside the skew window could
 > be replayed to a different case. The redirect closes for v2 at deploy. For
 > everyone else it closes only once inbound v1 is disabled, meaning the
@@ -370,7 +369,7 @@ print(r.status_code, r.json())
 
 ## 8. Where things stand, and what we need from you
 
-Nothing here says the service is production-ready. The go/no-go gate is in
+The service is not production-ready. The go/no-go gate is in
 `PRODUCTION_READINESS.md`. Status at
 this release falls into five states.
 

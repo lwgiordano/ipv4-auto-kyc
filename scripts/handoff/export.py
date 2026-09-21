@@ -94,6 +94,22 @@ COMMENTARY_REPLACEMENTS = (
 PROHIBITED_TEXT = (
     (re.compile(r"\b(?:Codex|Claude|ChatGPT)\b", re.IGNORECASE), "model name"),
     (
+        re.compile(
+            r"\b(?:GPT|LLM|language[\s-]+model|(?:AI|machine)[\s-]+generated|"
+            r"AI[\s-]+(?:assisted|written)|rival[\s-]+model)\b",
+            re.IGNORECASE,
+        ),
+        "authorship attribution",
+    ),
+    (
+        re.compile(
+            r"\b(?:slopmonster|de[\s-]+slop|cleanse|copy[\s-]+pass|reviewed[\s-]+by|"
+            r"style[\s-]+checked|(?:tool|model)[\s-]+credits?|review[\s-]+notes?)\b",
+            re.IGNORECASE,
+        ),
+        "copy process",
+    ),
+    (
         re.compile(r"\.(?:agents|claude|substrate)(?=[/'\"`\s]|$)", re.IGNORECASE),
         "internal path",
     ),

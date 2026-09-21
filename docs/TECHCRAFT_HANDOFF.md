@@ -17,7 +17,7 @@ Section numbers restart in each part.
 
 # Part 1: Product and integration briefing
 
-This is the working handoff for TechCraft. The tool can be exercised in a
+This is the handoff for TechCraft. The tool can be tested in a
 closed staging environment, but it is not ready for production. Start with §4
 for the platform work, §5 for the two provider decisions, §6 for staging, and
 §8 for the remaining delivery gaps and numbered asks. Engineers should build
@@ -90,8 +90,8 @@ naming what is missing or wrong, and that code is what your review team acts
 on.
 
 Only a broker-blocklist match rejects a case on its own. Everything else that
-falls short goes to manual review, so expect the review queue rather than the
-reject pile to carry the volume. The tool does not implement sanctions
+falls short goes to manual review, so expect more cases in the review queue
+than among rejections. The tool does not implement sanctions
 screening. That is a platform responsibility and must be completed before the
 platform calls the tool.
 
@@ -243,10 +243,10 @@ describes both options.
 The document check cannot award its 25 points in production until the chosen
 path is wired into the production profile.
 
-**Settled at kickoff: your team hosts it and runs it.**
+**Agreed at kickoff: your team hosts and operates it.**
 
-IPv4.Global keeps maintaining the code and cutting releases. Your team pulls a
-release and redeploys. Nobody edits code on the server.
+IPv4.Global maintains the code and publishes releases. Your team pulls a
+release and redeploys. Do not edit code on the server.
 
 - Python 3.11 and FastAPI. The automated suite currently tests
   **PostgreSQL 16**. Compatibility with older server versions is not
@@ -292,8 +292,7 @@ review team confirms, and the flag flips per environment only after that gate
 is complete.
 
 > **Keep staging closed until inbound v1 is actually disabled.** Path-bound
-> HMAC v2 is available,
-> path-bound HMAC v2, but a v1-only request during the dual-accept window is
+> HMAC v2 is available, but a v1-only request during the dual-accept window is
 > still path-unbound, so a signed event captured inside the skew window could
 > be replayed to a different case. The redirect closes for v2 at deploy. For
 > everyone else it closes only once inbound v1 is disabled, meaning the
@@ -387,7 +386,7 @@ print(r.status_code, r.json())
 
 ## 8. Where things stand, and what we need from you
 
-Nothing here says the service is production-ready. The go/no-go gate is in
+The service is not production-ready. The go/no-go gate is in
 `PRODUCTION_READINESS.md`. Status at
 this release falls into five states.
 
@@ -747,9 +746,9 @@ reviewer.
 
 ### When to send each event
 
-Evidence is optional at every step, and the tool scores whatever exists. Your
-whole job is this: when verification-relevant information is added **or
-changed**, send the matching event. The tool re-runs and returns a fresh
+Evidence is optional at every step, and the tool scores whatever exists. When
+verification-relevant information is added **or changed**, send the matching
+event. The tool re-runs and returns a fresh
 verdict, so there is no separate "retry" or "re-verify" call.
 
 | Moment on the platform | Send |
@@ -765,7 +764,7 @@ verdict, so there is no separate "retry" or "re-verify" call.
 | Fresh verdict wanted, nothing new | `recalculate.requested` |
 
 Changing identity details (ORG-ID, POC) suspends previously earned proof until
-re-verified, so a score can drop after an edit (§5). Expected, not a bug.
+re-verified, so a score can drop after an edit (§5). That decrease is expected.
 
 ## 4. The decision webhook (you build this)
 
@@ -981,7 +980,7 @@ and its wiring still need to replace the development JSON-scan configuration.
 ## 7. Read API and review tasks
 
 Everything the tool knows about a case is readable over signed GETs. Use them
-to chase what is missing and to mirror a case into Salesforce.
+to identify missing evidence and to mirror a case into Salesforce.
 
 - `GET /v1/cases/{id}` — status, score, latest decision, live checks with
   reason codes ("what's missing" for follow-up), and `information_requested`
@@ -1010,13 +1009,13 @@ retired — it duplicated this event.)
 `information_requested`: one entry per outstanding ask, shaped `{"field":
 "org_id" | "registration_number" | "address" | "poc", "requested_at": …,
 "requested_by": …, "note": … or null}`. A reviewer raises one from the operator
-console when a case is stuck for want of evidence the registrant never
+console when a case is waiting for evidence the registrant has not
 supplied. The tool records the ask, and the platform owns the message that
 reaches the contact. An entry drops off by itself once the case receives that
 evidence, so there is nothing to close and nothing to acknowledge. `org_id`
 clears when `org_id.submitted` arrives, and the other three clear the same way.
 
-You do not need this field to chase a missing ORG-ID today. The decision
+You do not need this field to identify a missing ORG-ID today. The decision
 webhook's `checks[].reason_codes` already carry `org_id_submission_incomplete`,
 which is the same fact at decision time. How you would rather learn of a
 reviewer's request is `PLATFORM_BRIEFING.md` §8 item 13: poll this field, or
@@ -1063,8 +1062,8 @@ detail, review queue), independent of this API.
 TechCraft hosts and operates the tool in IPv4.Global's AWS account. IPv4.Global
 maintains the code and cuts releases. Follow each release's migration and
 stop/start instructions rather than assuming a rolling update is safe. No code
-is edited on the server. A
-`Dockerfile` ships in the repo, and `docs/RUNBOOK.md` is the operator guide
+is edited on the server. A `Dockerfile` ships in the repo, and
+`docs/RUNBOOK.md` is the operator guide
 (every env var, health checks, dead-letter recovery).
 
 - **Stack:** Python 3.11, FastAPI and PostgreSQL. CI tests PostgreSQL 16.
@@ -1160,9 +1159,9 @@ never printed, never logged:
 # Part 3: Deployment guide
 
 For the platform team operating the KYC tool in IPv4.Global's AWS account.
-Ownership: IPv4.Global maintains the code and cuts releases. You pull a
-release and redeploy. No code is edited on the server. Anything that needs
-changing changes in the repo and ships as the next release.
+IPv4.Global maintains the code and publishes releases. You pull a release and
+redeploy. Do not edit code on the server. Make changes in the repo and deploy
+them in the next release.
 
 This is a closed-staging release. Production startup is blocked by unfinished
 provider wiring. Choosing who extracts documents and sends POC email does not
@@ -1185,8 +1184,8 @@ with a different command:
 Run the API, pipeline worker and outbox publisher as services. Run migrations
 once per deployment when required, and retention as a daily scheduled job.
 Scale the API and pipeline workers horizontally as needed. The job queue keeps
-each case's jobs in order (oldest first, one at a
-time), which is what makes extra workers safe. Callback delivery order is a
+each case's jobs in order (oldest first, one at a time), so extra workers do
+not run the same case's jobs concurrently. Callback delivery order is a
 separate contract: `docs/PLATFORM_INTEGRATION.md` §4.
 Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 
@@ -1368,7 +1367,7 @@ Read those notes before scheduling the update.
 
 ## 7. Monitoring and incidents
 
-Alert on, from `GET /v1/metrics`:
+Use `GET /v1/metrics` to alert on:
 
 - `jobs_by_status.dead` > 0 — a run gave up after retries
 - `outbox_by_status.dead` > 0 — a callback or email became undeliverable

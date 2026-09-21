@@ -1,9 +1,9 @@
 # Deployment & Releases
 
 For the platform team operating the KYC tool in IPv4.Global's AWS account.
-Ownership: IPv4.Global maintains the code and cuts releases. You pull a
-release and redeploy. No code is edited on the server. Anything that needs
-changing changes in the repo and ships as the next release.
+IPv4.Global maintains the code and publishes releases. You pull a release and
+redeploy. Do not edit code on the server. Make changes in the repo and deploy
+them in the next release.
 
 This is a closed-staging release. Production startup is blocked by unfinished
 provider wiring. Choosing who extracts documents and sends POC email does not
@@ -26,8 +26,8 @@ with a different command:
 Run the API, pipeline worker and outbox publisher as services. Run migrations
 once per deployment when required, and retention as a daily scheduled job.
 Scale the API and pipeline workers horizontally as needed. The job queue keeps
-each case's jobs in order (oldest first, one at a
-time), which is what makes extra workers safe. Callback delivery order is a
+each case's jobs in order (oldest first, one at a time), so extra workers do
+not run the same case's jobs concurrently. Callback delivery order is a
 separate contract: `docs/PLATFORM_INTEGRATION.md` §4.
 Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 
@@ -209,7 +209,7 @@ Read those notes before scheduling the update.
 
 ## 7. Monitoring and incidents
 
-Alert on, from `GET /v1/metrics`:
+Use `GET /v1/metrics` to alert on:
 
 - `jobs_by_status.dead` > 0 — a run gave up after retries
 - `outbox_by_status.dead` > 0 — a callback or email became undeliverable
