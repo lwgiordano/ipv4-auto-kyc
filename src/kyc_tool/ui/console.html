@@ -1319,7 +1319,7 @@ const TIPS={
       indicates a stalled sender.</dd>
     <dt>Awaiting Review</dt><dd>Manual review tasks not yet completed.</dd>
     <dt>Time to Decision</dt><dd>95th percentile, from the platform message to the decision.</dd></dl>`},
-  decisions:{t:"Decisions to Date",b:`<p>All decisions sent to the platform, counted by outcome.</p><dl>
+  decisions:{t:"Decisions to Date",b:`<p>All recorded decisions, counted by outcome.</p><dl>
     <dt>Approved</dt><dd>Sufficient evidence. The platform opens the account.</dd>
     <dt>Approved, Buying Locked</dt><dd>The case is verified but the Org ID is not, so
       buying remains locked until it is.</dd>
@@ -1348,15 +1348,15 @@ const TIPS={
     on behalf of a company. Records are created by platform messages only.</p>
     <p>Select a row to open the case.</p>`},
   caselist:{t:"Reading This Table",b:`<dl>
-    <dt>Decision Score</dt><dd>The score at the time the decision was sent.</dd>
+    <dt>Decision Score</dt><dd>The score recorded with the decision.</dd>
     <dt>Current Score</dt><dd>Today's evidence total. It can exceed the decision score when new
       evidence arrived after the decision; a new decision follows.</dd>
     <dt>Buying</dt><dd>Whether the registrant may purchase addresses.</dd>
     <dt>Broker Status</dt><dd>Result of the Blocked Broker List check.</dd></dl>`},
   /* Case page */
-  published:{t:"Decision Sent to Platform",b:`<p>The decision delivered to the platform and the
-    values it was based on. The score, buying status and rule results are all read from one
-    decision record, so they agree with each other and with what the platform received.</p>
+  published:{t:"Recorded Decision",b:`<p>The recorded decision and the values it was based on.
+    The score, buying status and rule results are all read from one decision record, so they
+    agree with each other. Delivery is stated separately from the record.</p>
     <p>The buying value reflects this decision only. A held account cannot buy regardless of it.</p>
     <p>Held for Approval means the rules returned an approval but automatic approval is not
     enabled on this installation. The panel below the decision states what is required.</p>
@@ -1370,11 +1370,9 @@ const TIPS={
     <dt>No broker block</dt><dd>No exact match on the Blocked Broker List.</dd>
     <dt>No conflicting evidence</dt><dd>No two items of evidence contradict each other.</dd></dl>
     <p>A rule marked not evaluated was bypassed by a manual approval.</p>`},
-  live:{t:"Current Evidence Score",b:`<p>Every piece of evidence held for this case today,
-    scored against the current rubric. It is a live total, not a decision: it has not been sent to
-    the platform, and the platform acts on the decision above, not on this number.</p>
-    <p>If it exceeds the threshold while the sent decision has not caught up, a verification
-    round is pending. The bar is grey so it is not mistaken for a decision.</p>`},
+  live:{t:"Current Evidence Score",b:`<p>Current evidence total using the rubric shown below;
+    it is not a new decision. A new decision is recorded only when a verification round
+    completes.</p><p>The bar is grey so it is not mistaken for a decision.</p>`},
   latestcases:{t:"Latest Decisions by Case",b:`<p>The most recently updated cases, newest
     first, up to one hundred of them. Each row shows that case's latest decision, so a case with
     no decision yet does not appear here.</p>`},
@@ -1396,8 +1394,9 @@ const TIPS={
     records the result without points. Either result is recorded under the reviewer ID in the
     sidebar, which must be entered first.</p>`},
   tokens:{t:"Verification Codes",b:`<p>To confirm control of an address block, a one-time code is
-    emailed to the contact on the public RIR record, not to an address supplied by the
-    applicant.</p><p>Sent means the code has not yet been used. Codes expire.</p>`},
+    created for the contact on the public RIR record, not for an address supplied by the
+    applicant. Delivery depends on the configured email sender; staging sinks do not email the
+    contact.</p><p>Created means the code has not yet been used. Codes expire.</p>`},
   salesforce:{t:"Salesforce Fields",b:`<p>The values this case would produce for Salesforce,
     under the destination names currently saved.</p>
     <p>These are the values the platform is expected to write. This console does not write to
@@ -1780,7 +1779,7 @@ function humanizeAudit(a){
     case"check.superseded":return`<b>${esc(say("check",d.check_type))}</b> replaced by newer evidence`;
     case"review_task.created":return`Manual review task opened: <b>${esc(say("task",d.task_type))}</b>`;
     case"review_task.completed":return`Manual review completed · <b>${esc(say("status",d.result,d.result))}</b>`;
-    case"poc.token_sent":return`Verification code emailed to the RIR contact for <b>${esc(d.poc_handle)}</b>`;
+    case"poc.token_sent":return`Verification code created for the RIR contact <b>${esc(d.poc_handle)}</b>`;
     case"run.decided":return d.enforcement_held
       ?`Decision: <b>Held for Approval</b> · ${d.score} points · rules returned ${esc(say("decision",d.computed_decision))}; automatic approval is not enabled`
       :`Decision: <b>${esc(say("decision",d.decision))}</b> · ${d.score} points`;
@@ -1810,13 +1809,13 @@ function holdCallout(hold,latest,threshold,manual){
     <b>${esc(manual.reviewer_id||"A reviewer")} approved this case manually on
       ${esc(fmtExact(manual.decided_at))}. That approval stands.</b>
     This later round also returned <a href="#/policy?rule=${encodeURIComponent(hold.computed_decision)}">${esc(say("decision",hold.computed_decision))}</a>;
-    the platform received On Hold because automatic approval is not enabled on this
+    the recorded decision is On Hold because automatic approval is not enabled on this
     installation. No action is required.
   </div></div>`;
   return`<div class="callout amber" role="note">${I.person}<div>
     <b>All five rules passed and the score ${margin}. The decision rules return
       <a href="#/policy?rule=${encodeURIComponent(hold.computed_decision)}">${esc(say("decision",hold.computed_decision))}</a>.</b>
-    Automatic approval is not enabled on this installation, so the platform received On Hold.
+    Automatic approval is not enabled on this installation, so the recorded decision is On Hold.
     This is an exception to the rule, not a result of it. A named reviewer can lift the hold by
     approving manually; the approval is recorded under their name. Enabling automatic approval is
     a release decision and is not controlled from this console.
@@ -1835,20 +1834,20 @@ function openApprove(d,hold){
   let now;
   if(hold)now=`This case is currently <b>held for approval</b>: all five rules passed with a
     score of ${latest.score} of ${s.threshold}. The decision rules already return Approved;
-    approving manually publishes that decision under your name.`;
+    approving manually records that approval under your name.`;
   else if(latest.decision==="reject")now=`This case is currently <b>rejected</b>: exact match on
     the Blocked Broker List. Manual approval overrides that rejection.`;
   else if(latest.decision)now=`This case is currently <b>${esc(say("decision",latest.decision))}</b>
     with a score of ${latest.score} of ${s.threshold}${unmet.length?`, and ${unmet.length===1?"one rule is":`${unmet.length} rules are`}
     not met: ${esc(unmet.map(k=>say("gate",k)).join(", "))}`:""}. Manual approval bypasses the
     score and all five rules.`;
-  else now=`No decision has been sent for this case yet. Manual approval bypasses the score
+  else now=`No decision has been recorded for this case yet. Manual approval bypasses the score
     and all five rules.`;
   $("#ap-co").textContent=caseSubject(c);
   $("#ap-body").innerHTML=`<p>${now}</p>
-    <p>The platform will be notified that the account is approved. ${orgOk
-      ?"Buying will be enabled; the Org ID has been verified."
-      :"Buying remains locked pending Org ID verification; manual approval does not change that."}
+    <p>This records a named manual approval; platform enforcement is handled separately. ${orgOk
+      ?"The decision will record buying as enabled; the Org ID has been verified."
+      :"The decision will keep buying locked pending Org ID verification; manual approval does not change that."}
     The decision record and the activity log will name you as the approving reviewer, with your
     reason.</p>`;
   $("#ap-who").value=reviewer();$("#ap-why").value="";$("#ap-err").hidden=true;
@@ -1925,8 +1924,17 @@ function identityCard(c){
       ${tip("identity")}</div>
     <div class="bd"><div class="idgrid">${rows.map(cell).join("")}</div></div></div>`}
 
-async function viewCase(id){
+async function viewCase(id,{background=false}={}){
   const generation=renderGeneration;
+  const captureDraft=()=>page.dataset.caseId===id?{
+    ask:$("#org-ask-note")?.value||"",handle:$("#org-handle")?.value||"",
+    rir:$("#org-rir")?.value||"arin",recordOpen:$("#org-record-form")?.hidden===false,
+    askDirty:$("#org-ask-note")?.hasAttribute("data-dirty")||false,
+    handleDirty:$("#org-handle")?.hasAttribute("data-dirty")||false,
+    inflight:Boolean($("#org-ask-form")?.hasAttribute("data-inflight")||
+      $("#org-record-form")?.hasAttribute("data-inflight")),
+  }:null;
+  let priorDraft=captureDraft();
   /* The fetch used to run before anything was written, so a reviewer clicking from one case to
      the next read the PREVIOUS company's record until the response landed -- no spinner, no dim,
      nothing to say the page was stale. Claim it first. Only on a navigation: the refresh tick
@@ -1934,6 +1942,9 @@ async function viewCase(id){
   if(navigated)page.innerHTML=`<div class="card"><div class="loading">Loading case…</div></div>`;
   const{status,body:d}=await j(`/ui/api/cases/${encodeURIComponent(id)}/full`);
   if(generation!==renderGeneration)return;
+  const currentDraft=captureDraft();
+  if(background&&currentDraft&&pageHoldsWork())return;
+  priorDraft=currentDraft||priorDraft;
   if(status===404){document.title="KYC Tool · Console";
     // It dropped the breadcrumb too, so this state was the one page with no way back to Cases.
     page.innerHTML=`<div class="crumb"><a href="#/cases">Cases</a> / <span class="mono">${esc(id)}</span></div>
@@ -2027,7 +2038,7 @@ async function viewCase(id){
         >${esc(say("adapter",a.adapter_id))} · ${esc(a.status==="ok"?"responded":a.status==="upstream_error"?"failed":"not required")}</span>`).join("");
     return`<tr><td class="mono" title="${esc(r.id)}">${esc(r.id.slice(0,8))}…${r.partial?` ${pill("needs_review","Partial")}`:""}</td>
       <td>${pipe(r.state)}${r.error?`<div class="sub run-error">${esc(r.error)}</div>`:""}</td>
-      <td>${ads?`<div class="chiprow">${ads}</div>`:`<span class="sub">No sources queried; the broker check ended the round.</span>`}</td>
+      <td>${ads?`<div class="chiprow">${ads}</div>`:`<span class="sub">No external sources were queried in this round.</span>`}</td>
       <td class="num">${exact(r.started_at)}</td></tr>`}).join("")
     ||emptyRow(4,"No verification rounds yet","Each platform message starts one verification round.");
 
@@ -2046,7 +2057,7 @@ async function viewCase(id){
 
   const tokenRows=d.poc_tokens.map(t=>{
     const state=t.verified_at?pill("pass","Verified"):
-      (new Date(t.expired_at)<new Date()?pill("fail","Expired"):pill("pending","Sent"));
+      (new Date(t.expired_at)<new Date()?pill("fail","Expired"):pill("pending","Created"));
     return`<tr><td class="mono">${esc(t.poc_handle)}</td><td class="mono">${esc(t.rir_listed_email)}</td>
       <td>${state}</td><td class="num">${exact(t.sent_at)}</td></tr>`}).join("");
 
@@ -2095,21 +2106,23 @@ async function viewCase(id){
       `${c.status==="approved_manual"
          /* It rendered an empty string here, so the only confirmation a reviewer ever got that
             the case was approved by hand was a toast that had already gone. */
-         ?(()=>{const m=(latest.manual&&latest)||d.decisions.find(x=>x.manual)||{};
+         ?(()=>{const m=(latest.manual&&latest)||d.latest_manual_decision||{};
             return`<span class="approved-by">${I.person}<span>Approved manually${
               m.reviewer_id?` by <b class="strong">${esc(m.reviewer_id)}</b>`:""}${
               m.decided_at?` · ${esc(fmtExact(m.decided_at))}`:""}</span></span>`})()
          :`<button class="warn" id="approvebtn">${I.person}Approve Manually</button>`}
        <button id="sendbtn">Case Actions</button>`)}
     ${identityCard(c)}
-    <div class="card"><div class="hd"><h2>Decision Sent to Platform</h2>
+    <div class="card"><div class="hd"><h2>Recorded Decision</h2>
         ${tip("published")}</div>
       <div class="bd">
         ${latest.decision?`<div class="bullet"><div class="val">
             <b style="color:${decisionColor}" title="${esc(latest.decision)}${hold?` — the rules computed ${esc(hold.computed_decision)}`:""}">${hold?"Held for Approval":esc(say("decision",latest.decision))}</b>
-            <span class="of">Sent with ${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"Buying not recorded"))}</span>${
+            <span class="of">Recorded with ${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"Buying not recorded"))}</span>${
               latest.manual&&latest.reviewer_id?`<span class="of">Approved by <b class="strong">${esc(latest.reviewer_id)}</b></span>`:""}
-            <span class="verdict sub">Decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
+            <span class="verdict sub">Decided ${esc(fmtExact(latest.decided_at))}</span>
+            <span class="verdict sub" data-decision-delivery>${latest.published_at
+              ?`Delivery recorded ${esc(fmtExact(latest.published_at))}`:"Delivery not recorded"}</span></div></div>
           ${hold?holdCallout(hold,latest,s.threshold,d.latest_manual_decision):""}
           <div class="subsection"><h3 class="sub-hd">Decision Rules${tip("gates")}</h3>
           <div class="gates published-gates">${GATE_KEYS
@@ -2122,7 +2135,7 @@ async function viewCase(id){
               // a 2.89px text middot, which shifted its label origin 12.11px in the same slot.
               :`<div class="gate na" title="${esc(g0)} — bypassed by manual approval">${I.absent}<span
                   class="g-s">${esc(say("gate",g0))}</span> <span class="g-r">Not evaluated</span></div>`).join("")}</div></div>`
-          :`<div class="sub"${d.decision_provenance==="unresolved_pointer_drift"?` title="The database has prohibited this state since migration 022"`:""}>${d.decision_provenance==="unresolved_pointer_drift"?`<b>Record conflict.</b> This case points at a decision that is not its own — it belongs to another case, or it no longer exists. Nothing can be shown here until someone looks at it. Do not approve this case from this page in the meantime; raise it with whoever operates the tool.`:d.decision_provenance==="unresolved_legacy_order"?`<b>No decision can be shown.</b> These records were written before the ordering was fixed, so which of them is the most recent cannot be established. The next decision on this case settles it.`:`No decision has been sent for this case.`}</div>`}
+          :`<div class="sub"${d.decision_provenance==="unresolved_pointer_drift"?` title="The database has prohibited this state since migration 022"`:""}>${d.decision_provenance==="unresolved_pointer_drift"?`<b>Record conflict.</b> This case points at a decision that is not its own — it belongs to another case, or it no longer exists. Nothing can be shown here until someone looks at it. Do not approve this case from this page in the meantime; raise it with whoever operates the tool.`:d.decision_provenance==="unresolved_legacy_order"?`<b>No decision can be shown.</b> These records were written before the ordering was fixed, so which of them is the most recent cannot be established. The next decision on this case settles it.`:`No decision has been recorded for this case.`}</div>`}
       </div></div>
     <div class="card"><div class="hd"><h2>Current Evidence Score</h2>
         ${tip("live")}</div>
@@ -2156,9 +2169,9 @@ async function viewCase(id){
     <div class="card"><div class="hd"><h2>Verification Codes</h2>${tip("tokens")}</div>
       <div class="bd flush"><table>
       <caption class="vh">Verification Codes</caption>
-      <thead><tr><th>RIR Contact</th><th>Sent To</th><th>Status</th><th class="num">Sent</th></tr></thead>
-      <tbody>${tokenRows||emptyRow(4,"No verification codes sent",
-        "A code goes to each RIR-listed contact during a full verification round.")}</tbody></table></div></div>
+      <thead><tr><th>RIR Contact</th><th>Recipient</th><th>Status</th><th class="num">Created</th></tr></thead>
+      <tbody>${tokenRows||emptyRow(4,"No verification codes created",
+        "Codes appear here when a verification round creates one for a public RIR contact.")}</tbody></table></div></div>
     <div class="card"><div class="hd"><h2>Salesforce Fields</h2>${tip("salesforce")}</div>
       <div class="bd flush"><table>
       <caption class="vh">Salesforce Fields</caption>
@@ -2197,25 +2210,56 @@ async function viewCase(id){
   const askForm=$("#org-ask-form");
   if(askForm)askForm.onsubmit=async e=>{
     e.preventDefault();
+    if(askForm.dataset.inflight)return;
     if(!needReviewer())return;
-    const r=await j(`/ui/api/cases/${encodeURIComponent(c.id)}/information-request`,{method:"POST",
+    askForm.dataset.inflight="1";
+    askForm.querySelectorAll("button,input").forEach(control=>control.disabled=true);
+    const askInput=askForm.querySelector("#org-ask-note");
+    let r;
+    try{r=await j(`/ui/api/cases/${encodeURIComponent(c.id)}/information-request`,{method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({fields:["org_id"],note:$("#org-ask-note").value.trim()||null,reviewer:reviewer()})});
-    if(r.status<300){toast(`${I.check}<span>Org ID requested from the contact. The platform sends the message; this is the record of the ask.</span>`);setTimeout(route,700);return}
+      body:JSON.stringify({fields:["org_id"],note:askInput.value.trim()||null,reviewer:reviewer()})})}
+    catch(ex){r={status:500,body:{detail:ex.message}}}
+    if(!askForm.isConnected||page.dataset.caseId!==c.id)return;
+    if(r.status<300){delete askForm.dataset.inflight;askInput.value="";askInput.removeAttribute("data-dirty");
+      toast(`${I.check}<span>Org ID request recorded. The platform handles contact messaging separately.</span>`);setTimeout(route,700);return}
+    delete askForm.dataset.inflight;
+    askForm.querySelectorAll("button,input").forEach(control=>control.disabled=false);
     toast(`${I.cross}<span>${esc(errText(r.body))}</span>`)};
   const recordToggle=$("#org-record-toggle");
   if(recordToggle)recordToggle.onclick=()=>{$("#org-record-form").hidden=false;
     recordToggle.setAttribute("aria-expanded","true");$("#org-handle").focus()};
   const recordForm=$("#org-record-form");
+  if(priorDraft){
+    const ask=$("#org-ask-note"),handle=$("#org-handle"),rir=$("#org-rir");
+    if(ask){ask.value=priorDraft.ask;if(priorDraft.askDirty)ask.dataset.dirty="1"}
+    if(handle){handle.value=priorDraft.handle;if(priorDraft.handleDirty)handle.dataset.dirty="1"}
+    if(rir)rir.value=priorDraft.rir;
+    if(recordForm&&priorDraft.recordOpen){recordForm.hidden=false;
+      recordToggle?.setAttribute("aria-expanded","true")}
+  }
+  page.dataset.caseId=id;
   if(recordForm)recordForm.onsubmit=async e=>{
     e.preventDefault();
+    if(recordForm.dataset.inflight)return;
     if(!needReviewer())return;
-    const handle=$("#org-handle").value.trim();
-    if(!handle){toast(`${I.cross}<span>Enter the Org handle the contact sent you.</span>`);$("#org-handle").focus();return}
-    const r=await j("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},
+    const handleInput=recordForm.querySelector("#org-handle"),handle=handleInput.value.trim();
+    if(!handle){toast(`${I.cross}<span>Enter the Org handle the contact sent you.</span>`);handleInput.focus();return}
+    recordForm.dataset.inflight="1";
+    recordForm.querySelectorAll("button,input,select").forEach(control=>control.disabled=true);
+    let r;
+    try{r=await j("/ui/api/send-event",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({case_id:c.id,event_type:"org_id.submitted",reviewer_id:reviewer(),
-        payload:{rir:$("#org-rir").value,org_handle:handle}})});
-    if(r.status<300){toast(`${I.check}<span>Org ID recorded under your name. The case will be re-scored shortly.</span>`);setTimeout(route,700);return}
+        payload:{rir:recordForm.querySelector("#org-rir").value,org_handle:handle}})})}
+    catch(ex){r={status:500,body:{detail:ex.message}}}
+    if(!recordForm.isConnected||page.dataset.caseId!==c.id)return;
+    if(r.status<300){delete recordForm.dataset.inflight;handleInput.value="";
+      recordForm.querySelectorAll("[data-dirty]").forEach(control=>control.removeAttribute("data-dirty"));
+      recordForm.hidden=true;
+      recordToggle?.setAttribute("aria-expanded","false");
+      toast(`${I.check}<span>Org ID recorded under your name. The case will be re-scored shortly.</span>`);setTimeout(route,700);return}
+    delete recordForm.dataset.inflight;
+    recordForm.querySelectorAll("button,input,select").forEach(control=>control.disabled=false);
     toast(`${I.cross}<span>${esc(errText(r.body))}</span>`)};
   /* A website verdict is a named person's judgement, appended to the case permanently. It used to
      commit on the first click, from a button that was the same accent blue as its opposite. The
@@ -2791,7 +2835,7 @@ async function viewComposer(){
 const routes=[
   [/^#\/overview$/,()=>viewOverview(),"overview","Overview"],
   [/^#\/cases$/,()=>viewCases(),"cases","Cases"],
-  [/^#\/case\/(.+)$/,m=>viewCase(decodeURIComponent(m[1])),"cases",null],
+  [/^#\/case\/(.+)$/,(m,options)=>viewCase(decodeURIComponent(m[1]),options),"cases",null],
   [/^#\/integrations$/,()=>viewIntegrations(),"integrations","Data Sources"],
   [/^#\/fieldmap$/,()=>viewFieldMap(),"fieldmap","Salesforce Fields"],
   [/^#\/policy(?:\?rule=([^&]*))?$/,m=>viewPolicy(m[1]?decodeURIComponent(m[1]):""),"policy","Decision Rules"],
@@ -2808,13 +2852,17 @@ let navigated=false;   // set by a hash change; cleared once the new page has ta
 function pageHoldsWork(){
   const a=document.activeElement;
   if(a&&page.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))return true;
+  if(page.querySelector("[data-dirty],[data-inflight]"))return true;
   if(page.querySelector("[data-armed]"))return true;
   if(page.querySelector(".feed details[open]"))return true;
   const rec=$("#org-record-form"),head=$("#feedhead");
   return Boolean((rec&&!rec.hidden)||(head&&!head.hidden));
 }
-async function route(){
+page.addEventListener("input",event=>{
+  if(event.target.matches("input,textarea,select"))event.target.dataset.dirty="1"});
+async function route({background=false}={}){
   const generation=++renderGeneration;
+  const navigation=navigated;
   // a re-render (navigation, or the 5s refresh) throws away the button the bubble is anchored to
   hideTip();
   const h=location.hash||"#/overview";
@@ -2828,9 +2876,10 @@ async function route(){
         const here=a.dataset.r===nav;a.classList.toggle("active",here);
         // the tint is one cue; "current page" is the one a screen reader gets
         if(here)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current")});
-      try{await fn(m)}catch(e){if(generation!==renderGeneration)return;page.innerHTML=
+      try{await fn(m,{background})}catch(e){if(generation!==renderGeneration||(background&&pageHoldsWork()))return;page.innerHTML=
         `<div class="card"><div class="empty"><b>This page did not load</b>${esc(e.message)}<br><br>
         <button class="sm" onclick="route()">Try again</button></div></div>`}
+      if(generation!==renderGeneration)return;
       /* A column header is announced as one only when it says which cells it heads. Set here
          rather than on the forty-odd `<th>` literals, so a table added later cannot forget. */
       page.querySelectorAll("thead th").forEach(th=>th.setAttribute("scope","col"));
@@ -2840,7 +2889,7 @@ async function route(){
       // would yank a person out of whatever they were reading or typing). A renderer that has
       // already placed focus itself -- the policy row a case linked to -- keeps it, and keeps
       // the scroll position it chose for it.
-      if(navigated){navigated=false;closeMenu();
+      if(navigation){navigated=false;closeMenu();
         if(!page.contains(document.activeElement)){main.scrollTop=0;window.scrollTo(0,0);
           const t=page.querySelector("h1");if(t){t.tabIndex=-1;t.focus({preventScroll:true})}}}
       sidebarBadge();
@@ -2868,7 +2917,7 @@ $("#ap-warn").insertAdjacentHTML("afterbegin",I.person);
 $("#skip").addEventListener("click",e=>{e.preventDefault();main.focus()});
 $("#autorefresh").addEventListener("change",e=>{
   clearInterval(refreshTimer);
-  if(e.target.checked)refreshTimer=setInterval(()=>{if(!pageHoldsWork())route()},5000)});
+  if(e.target.checked)refreshTimer=setInterval(()=>{if(!pageHoldsWork())route({background:true})},5000)});
 route();
 </script>
 </body>

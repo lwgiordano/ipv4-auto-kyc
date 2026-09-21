@@ -75,7 +75,7 @@ def test_case_detail_labels_live_evidence_as_not_the_decision():
 def test_case_detail_decision_card_sources_the_whole_tuple_from_one_row():
     """decision, score and buy enablement all read off `latest` (the pointed row) — never off
     the case projection or the live score (re-audit `cbb783b` F6)."""
-    card = VIEW_CASE[VIEW_CASE.index("Decision Sent to Platform"):]
+    card = VIEW_CASE[VIEW_CASE.index("Recorded Decision"):]
     card = card[: card.index("Current Evidence Score")]
     for expr in ("latest.decision", "latest.score", "latest.buy_enablement"):
         assert expr in card, f"the published-decision card must render {expr}"
@@ -139,7 +139,7 @@ def test_case_detail_takes_the_hold_from_the_api():
     five gates against the threshold itself."""
     assert "d.enforcement_hold" in VIEW_CASE
     assert 'pill("held_for_approval")' in VIEW_CASE
-    card = VIEW_CASE[VIEW_CASE.index("Decision Sent to Platform"):]
+    card = VIEW_CASE[VIEW_CASE.index("Recorded Decision"):]
     card = card[: card.index("Current Evidence Score")]
     assert "holdCallout(hold" in card, "the hold panel lives inside the published-decision card"
 
@@ -199,9 +199,10 @@ def test_options_page_uses_native_theme_controls_and_applies_saved_theme_before_
 
 
 def test_router_marks_the_current_page_and_moves_focus_on_navigation():
-    router = CONSOLE[CONSOLE.index("async function route()"):]
+    router = CONSOLE[CONSOLE.index("async function route("):]
     assert 'setAttribute("aria-current","page")' in router
-    assert "if(navigated)" in router and 't.focus({preventScroll:true})' in router
+    assert "const navigation=navigated" in router
+    assert "if(navigation)" in router and 't.focus({preventScroll:true})' in router
 
 
 # --- the frame folds below 1024px, and wide content scrolls inside its own card --------------

@@ -57,9 +57,9 @@ sub_doctor() {
     echo "FAIL  .venv missing — run ./manage.sh setup"; fails=1
   fi
   if pgbin="$(find_pgbin)"; then
-    echo "ok    postgres binaries: $pgbin (needed only for the local demo stack, scripts/dev.sh)"
+    echo "ok    postgres binaries: $pgbin (local demo and PostgreSQL integration tests)"
   else
-    echo "warn  postgres binaries not found — only scripts/dev.sh needs them" \
+    echo "warn  postgres binaries not found — needed for the local demo and PostgreSQL integration tests" \
          "(brew install postgresql@16 / apt install postgresql)"
   fi
   if command -v docker >/dev/null 2>&1; then

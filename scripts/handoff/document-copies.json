@@ -47,9 +47,9 @@
       "copy_path": "scripts/handoff/docs/RUNBOOK.md",
       "source_paths": ["docs/RUNBOOK.md"],
       "source_sha256": {
-        "docs/RUNBOOK.md": "65bf95a3eb8ba028ece8f241f7fbfd0a44e4a6341423621961361063f4e55c2c"
+        "docs/RUNBOOK.md": "e1cc82b6500d63d9d0431931cc1eb0e06a7f4f49e6ae437dcd1813b7b42de136"
       },
-      "copy_sha256": "4507ee3bf0061447b77c05a046b288e6654e7db26825548a1d623e0c8acc06f9",
+      "copy_sha256": "c62ac791e6411dd361fedba24159918ad1c4aac00b83555e35b1f64aedefd093",
       "rationale": "Keeps the full operator procedure while replacing internal governance references with self-contained rules."
     },
     {

@@ -228,31 +228,51 @@ def integration_report(settings: Settings, session: Session, adapters: dict) -> 
         "adapters": rows,
         "platform_callback": platform,
         "object_store": {"kind": settings.object_store, "root": _store_location(settings)},
-        "email_sender": {
+        "email_sender": _email_sender_report(settings),
+    }
+
+
+def _email_sender_report(settings) -> dict[str, str]:
+    """Describe the configured sender without constructing it or touching its sink."""
+    if settings.email_provider == "logging":
+        return {
             "status": "stub",
             "detail": "LoggingEmailSender — POC token emails are logged, not sent",
             "todo": "TODO(integration): outbound email provider (AUDIT:C4)",
-        },
+        }
+    if settings.email_provider == "file":
+        return {
+            "status": "dev",
+            "detail": "Closed staging: messages are written to a file, not emailed.",
+            "todo": "TODO(integration): production outbound email provider (AUDIT:C4)",
+        }
+    return {
+        "status": "needs-config",
+        "detail": "Configured email provider is not implemented",
+        "todo": "TODO(integration): implement the configured outbound email provider (AUDIT:C4)",
     }
 
 
 def _store_location(settings) -> str:
-    """Where evidence files land, as an operator needs to read it.
+    """Return a safe display hint for the configured evidence store.
 
-    S3 reports its bucket. Local disk reports the directory relative to the service working
-    directory: an absolute path carries the host's account and layout off the machine, and a
-    hidden directory is internal scaffolding, so neither is published. Either case falls back to
-    the directory's own name, which is what an operator looking for the files actually needs.
+    S3 reports its bucket. Local disk reports an ordinary path beneath the service working
+    directory. Paths outside it, filesystem roots and paths with hidden components are concealed;
+    ``KYC_OBJECT_STORE_ROOT`` remains the authority for the precise configured location.
     """
     if settings.object_store == "s3":
         return f"bucket {settings.s3_bucket}" if settings.s3_bucket else "bucket not configured"
     root = Path(settings.object_store_root)
+    resolved = root.resolve()
+    hidden = "Local directory (path hidden)"
+    if resolved == Path(resolved.anchor):
+        return hidden
     try:
-        relative = root.resolve().relative_to(Path.cwd().resolve())
+        relative = resolved.relative_to(Path.cwd().resolve())
     except ValueError:
-        return root.name
+        return hidden
     if any(part.startswith(".") for part in relative.parts):
-        return root.name
+        return hidden
     return str(relative)
 
 

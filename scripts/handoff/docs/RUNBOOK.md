@@ -179,12 +179,41 @@ that is intentional fail-closed behaviour, not a bug.
 
 ## Ops console (`/ui`)
 
-The console covers most of this runbook visually. Overview has health tiles
-and dead-letter tables with one-click requeue. Cases shows the score meter,
-gates, supersession chains, run state and audit trail. Integrations shows
-(stub/live/needs-config per adapter, env presence, reachability probes),
-Field Map (live Salesforce projection per case), Policy, and a Composer that
-sends signed events server-side. **Security**: **off by default**
+The console covers most of this runbook visually. Overview shows health and
+dead-letter work. Cases is the reviewer's working view. It puts the registration
+and contact details beside two deliberately separate readings: the decision
+already recorded for the case and the score of the evidence held now. New
+evidence can change the latter. It never rewrites an earlier decision. The next
+verification round appends another decision to the case history.
+
+On a case, a reviewer can record that the contact was asked for a missing RIR
+Org ID. That button records the request and who made it. It does **not** send an
+email. The platform owns the contact message. If the contact supplies a handle
+through another channel, **Record handle** saves it under the reviewer's name
+and queues the case to be scored again. An open website task can be approved or
+rejected only after an inline confirmation. The result and reviewer ID become
+part of the permanent case record. **Approve manually** also records the named
+reviewer and reason as a new decision without altering historical decisions.
+
+The remaining menu names match the console: Data Sources reports adapter mode,
+configuration and reachability. Salesforce Fields previews the current case
+projection. Decision Rules shows the active scoring and gate configuration.
+Options holds appearance and operator access. Case Actions prepares signed
+events for review before they are sent server-side. Treat an unsent Case Actions
+entry as browser-page working state, not a durable record. The five-second
+refresh waits while a person is typing, has armed a confirmation, or has a case
+form open. Navigation still re-renders the page, so unsent case edits can be
+lost when the reviewer leaves it.
+
+Data Sources may hide a local evidence-storage path. Check
+`KYC_OBJECT_STORE_ROOT` in the deployment configuration for the actual location.
+The email status distinguishes log-only testing from the closed-staging file
+sink; neither sends an email to the contact.
+
+Options saves the System, Light or Dark theme in that browser. The admin
+credential is kept only in memory for the current page session, is checked by
+the server on every protected action, and is cleared by a reload. **Security**:
+**off by default**
 (`KYC_UI_ENABLED=false`), when enabled in production it requires
 `KYC_UI_ADMIN_TOKEN`, and every mutating endpoint (composer, requeue, probe)
 demands `Authorization: Bearer <token>`. Local dev: `bash scripts/dev.sh`
