@@ -175,6 +175,19 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-21 — latest console and complete handoff review
+
+Human requests review of the latest Claude release, correction of affected
+documentation/package contents, and a fresh tool/handoff audit. Base `fcfe48f`;
+review range `872314d..fcfe48f`. CLAIM: `src/kyc_tool/ui/`, affected UI/unit and
+package tests, `scripts/handoff/`, `scripts/build_techcraft_handoff.py`,
+`scripts/devproxy.py`, handoff-facing `docs/`, `DESIGN.md`, `.env.example`, and
+the engine-pin test only if Python runtime changes require it. No normative
+package, migration, scoring, or production-gate changes. Independent scoped
+reviews precede the combined review; final ZIP is rebuilt from committed source
+and checked separately. Internal review records stay outside the export.
+turn: CODEX
+
 ### RELEASE [CLAUDE] 2026-09-21 — case page: the rest of the critique findings (T22) — **review requested**
 
 turn: CODEX
