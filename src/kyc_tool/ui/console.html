@@ -284,11 +284,6 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
   display:flex;align-items:center;gap:var(--s2)}
 /* A full 12px rhythm keeps descriptions and optional legends visibly attached but distinct. */
 .tbar .desc{font:var(--t-body);color:var(--muted)}
-/* The case header puts the contact line and the chip row in one `.desc`, and `.chips` is a flex
-   block with no margin of its own, so a row of 24px pills butted against the 16px line at 0px.
-   Scoped to the pair: when the registrant sent neither email nor title there is no line to clear,
-   and the heading grid's own 12px is already the right gap. */
-.tbar .desc .sub+.chips{margin-top:var(--s2)}
 .tbar .legend{margin:0}
 /* The only Approve button lives in this bar, and a case page runs to roughly 4,000px: a reviewer
    read the evidence at the bottom and scrolled the whole way back to act on it. Where the
@@ -431,9 +426,17 @@ button{font:var(--t-chip);text-transform:uppercase;letter-spacing:var(--track-ca
   transition:background-color var(--dur-2) var(--ease-standard),
   border-color var(--dur-2) var(--ease-standard),box-shadow var(--dur-2) var(--ease-standard)}
 button:hover{background:var(--accent-soft)}
-button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);box-shadow:var(--e2)}
-button.primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
-button.primary:active{background:var(--accent-pressed);border-color:var(--accent-pressed);box-shadow:none}
+/* `.warn` renders as `.primary`, by human decision: the reviewer's action is the page's primary
+   and wears the filled accent, not the peach an earlier pass specified for it. They are ONE rule
+   rather than two identical ones, so they cannot silently drift apart again -- which is exactly
+   what happened when `.warn` was declared separately while its comments went on describing a
+   peach that was not there. The weight the colour no longer carries is carried by the steps
+   instead: the approval dialog confirms, and the website pair arms before it commits. */
+button.primary,button.warn{background:var(--accent);border-color:var(--accent);
+  color:var(--on-accent);box-shadow:var(--e2)}
+button.primary:hover,button.warn:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+button.primary:active,button.warn:active{background:var(--accent-pressed);
+  border-color:var(--accent-pressed);box-shadow:none}
 button.sm{padding:0 var(--s3);font:var(--t-label);text-transform:uppercase;
   letter-spacing:var(--track-caps);min-height:32px}
 /* Neutral outline: a control whose consequence is the opposite of the accent's, so it must not
@@ -441,19 +444,6 @@ button.sm{padding:0 var(--s3);font:var(--t-label);text-transform:uppercase;
    website Reject needs exactly the same treatment, so it is a class the two of them share. */
 button.neutral{border-color:var(--border-input);color:var(--text)}
 button.neutral:hover{background:var(--surface-muted)}
-/* Peach for the action that bypasses the rulebook: the same tint as the hold it lifts, and
-   deliberately NOT the filled blue that sends a test message. */
-/* The reviewer's own action. It is peach rather than accent-blue because it bypasses the
-   rulebook and must never look like the routine send — but it is the page's primary, so it
-   carries the raised elevation, and the dialog it opens confirms in the same colour. */
-/* It declared exactly `button.primary`'s four properties, so every word above this was true of
-   the intent and false of the render: the rulebook bypass was a second filled accent-blue primary.
-   The border is `--amber` rather than transparent, because a tinted ground alone is 1.4:1 against
-   white and the control would have had no boundary in the light theme. */
-button.warn{background:var(--amber-soft);border-color:var(--amber);color:var(--amber-ink);
-  box-shadow:var(--e2)}
-button.warn:active{box-shadow:none}
-button.warn:hover{background:color-mix(in oklab,var(--amber-soft),black 6%)}
 /* Rule 9, in the place the pattern was first written. `opacity:.45` on the peach commit button
    rendered its label at 2.08:1 for the whole duration of the POST -- a worse ratio than the
    "not evaluated" state the rule was written about, on the control that commits an irreversible
@@ -542,6 +532,14 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .tbar .actions{flex-wrap:wrap}
 .config-feedback{display:grid;gap:var(--s2);padding:var(--s3) var(--s4)}
 .config-feedback:empty{display:none}
+/* Two of the three lines here are status slots that are empty most of the time, and an empty grid
+   row still costs its gap -- which is why the broker search sat a long way below the sentence
+   above it. With them collapsed, this block's own bottom padding is the whole lane the tools
+   need, so the container after it does not add a second one. */
+.config-feedback>p:empty{display:none}
+/* The broker editor puts its entry slot between the two; it is empty except while a row is being
+   edited, and while it holds a form the container below keeps its normal lane. */
+.config-feedback+.bd,.config-feedback+#broker-entry-slot:empty+.bd{padding-top:0}
 .config-access{font:var(--t-meta);color:var(--muted)}
 .operator-form{display:grid;gap:var(--s3);max-width:520px}
 .operator-form .toolbar{margin:0}
@@ -870,7 +868,10 @@ h2.sec.tight{margin-top:0}
 .policy-hash-row code{overflow-wrap:anywhere;color:var(--ink)}
 .policy-hash-status{font:var(--t-meta);color:var(--muted);min-height:16px}
 @media(max-width:720px){
+  /* The actions already wrapped below the heading and its chips, but huddled at the left edge at
+     content width. Each takes the full row instead, so the primary is a real thumb target. */
   .tbar .actions{width:100%;margin-left:0}
+  .tbar .actions>*{flex:1 1 100%}
   .policy-hash-row{align-items:flex-start}
 }
 .mb-4{margin-bottom:var(--s4)}
@@ -1112,7 +1113,9 @@ async function saveConfiguration(kind,s,value,paint){
     const body=await r.json().catch(()=>null);
     if(r.ok&&body?.configuration?.revision===body?.current_revision&&typeof body.current_revision==="string"){
       s.configuration=clone(body.configuration);s.working=clone(body.configuration[kind]);s.request=null;s.editing=false;s.mode="read";
-      s.message=body.replayed&&body.revision!==body.current_revision?"Earlier save confirmed. Showing current revision "+body.current_revision+".":"Saved. Configuration revision "+body.current_revision+".";
+      // The revision id belongs in the Configuration Version panel, which prints it; after an
+      // edit a person needs to know the save landed, not which number it landed as.
+      s.message=body.replayed&&body.revision!==body.current_revision?"Earlier save confirmed. This page is showing the current configuration.":"Saved.";
       for(const [other,state]of Object.entries(configEdits))if(other!==kind&&!state.editing&&!state.request){state.configuration=clone(body.configuration);state.working=clone(body.configuration[other]);state.paint?.(true)}
       if($("#rules-hash")){$("#rules-hash").textContent=body.configuration.bundle_hash;$("#configuration-revision").textContent=body.current_revision}
       paint(true);return;
@@ -1893,8 +1896,6 @@ $("#ap-form").addEventListener("submit",async e=>{
 const caseContact=c=>(c.submitted_json||{}).contact||{};
 const caseSubject=c=>caseContact(c).name||c.company_name||c.id;
 const caseHeadline=c=>[caseContact(c).name,c.company_name||c.id].filter(Boolean).join(" · ");
-const caseContactLine=c=>{const parts=[caseContact(c).email,caseContact(c).title].filter(Boolean);
-  return parts.length?`<div class="sub">${parts.map(esc).join(" · ")}</div>`:""};
 function identityFields(c){
   const p=c.submitted_json||{},contact=p.contact||{},row=[];
   const add=(k,v,sub)=>{if(v!==null&&v!==undefined&&String(v).trim()!=="")row.push([k,String(v),sub||""])};
@@ -2038,9 +2039,9 @@ async function viewCase(id){
       <pre>${esc(JSON.stringify(t.context_json,null,2))}</pre></details></td>
     <td>${t.status==="open"&&t.task_type==="website"?`<div class="chiprow end" data-review>
       <span class="sub" data-review-q hidden></span>
-      <button class="sm neutral" data-review-keep hidden>Keep Open</button>
+      <button class="sm" data-review-keep hidden>Keep Open</button>
       <button class="sm" data-complete="${esc(t.id)}:pass">${I.check}<span data-label>Approve Website</span></button>
-      <button class="sm neutral" data-complete="${esc(t.id)}:fail">${I.cross}<span data-label>Reject Website</span></button></div>`:""}</td></tr>`).join("")
+      <button class="sm" data-complete="${esc(t.id)}:fail">${I.cross}<span data-label>Reject Website</span></button></div>`:""}</td></tr>`).join("")
     ||emptyRow(6,"No open review tasks","A website review task opens during a full verification round.");
 
   const tokenRows=d.poc_tokens.map(t=>{
@@ -2074,7 +2075,7 @@ async function viewCase(id){
   page.innerHTML=`
     <div class="crumb"><a href="#/cases">Cases</a> / <span class="mono">${esc(c.id)}</span></div>
     ${tbar(esc(caseHeadline(c)),
-      `${caseContactLine(c)}<span class="chips">${
+      `<span class="chips">${
        // One chip per fact. When the case status is a MORE SPECIFIC form of the decision --
        // "Approved Manually" against "Approved" -- the status is the one worth keeping, and the
        // decision chip is the one that goes. When they are the same fact, the decision stays.

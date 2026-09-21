@@ -363,11 +363,16 @@ def test_only_a_missing_value_renders_as_a_dash():
 
 def test_one_raised_button_per_screen():
     """Approving by hand is this screen's primary action; sending a test message is a utility. The
-    elevation used to say the opposite."""
+    elevation used to say the opposite.
+
+    `.warn` and `.primary` render identically by human decision, and share ONE rule so they cannot
+    drift apart again -- which is what happened when `.warn` was declared separately and its
+    comments went on describing a peach that was not there. The rule still has to raise it."""
     assert '<button id="sendbtn">' in VIEW_CASE
     css = CONSOLE[: CONSOLE.index("</style>")]
-    warn = re.search(r"^button\.warn\{([^}]*)\}", css, re.MULTILINE)
+    warn = re.search(r"^button\.primary,button\.warn\{([^}]*)\}", css, re.MULTILINE)
     assert warn and "box-shadow:var(--e2)" in warn.group(1)
+    assert not re.search(r"^button\.warn\{", css, re.MULTILINE), "one rule, not two"
     dialog = CONSOLE[CONSOLE.index('<dialog id="approve"'):]
     dialog = dialog[: dialog.index("</dialog>")]
     assert 'class="warn" id="ap-go"' in dialog, "the confirm keeps the trigger's colour"
