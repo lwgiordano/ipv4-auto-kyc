@@ -39,7 +39,7 @@ def build_combined_handoff(docs_dir: Path, *, label: str | None = None, commit: 
         bodies.append((part_title, filename, path.read_text(encoding="utf-8")))
 
     provenance = (
-        f"Release: `{label}`\n\nSource revision: `{commit}`"
+        f"Release: `{label}`"
         if label and commit
         else "Supported environment: closed staging."
     )
@@ -47,7 +47,9 @@ def build_combined_handoff(docs_dir: Path, *, label: str | None = None, commit: 
         "# IPv4.Global KYC/KYB — Integration and Operations Reference",
         "",
         provenance,
+        "",
         "Production use is not supported by this release.",
+        "",
         "Section numbers restart in each part.",
         "",
         "## Contents",

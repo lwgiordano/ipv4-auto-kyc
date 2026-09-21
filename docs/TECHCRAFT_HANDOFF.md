@@ -1,7 +1,9 @@
 # IPv4.Global KYC/KYB — Integration and Operations Reference
 
 Supported environment: closed staging.
+
 Production use is not supported by this release.
+
 Section numbers restart in each part.
 
 ## Contents
