@@ -179,6 +179,12 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 turn: CODEX
 
+Scope clarification: the semantic policy change requires `eng-2`, correcting
+the plan's unchanged-id line. Include `docs/DEPLOYMENT.md` and its typed
+bundle-pinning procedure sources/pins under `docs/contracts/**` to keep the
+operator's expected-engine argument current. Historical epoch rows remain
+immutable; this does not authorize resetting an existing activation record.
+
 Scope clarification: include `src/kyc_tool/ui/console.html` help text only, so
 the visible control-proof and purchase-eligibility explanations match the
 amended policy. No layout or UI workflow change. Human approved the bounded
