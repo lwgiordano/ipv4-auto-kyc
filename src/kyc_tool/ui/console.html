@@ -215,13 +215,20 @@ nav{padding:var(--s2) 0;flex:1}
 .nav-item{display:flex;align-items:center;gap:var(--s3);padding:0 var(--s4) 0 var(--s5);
      border-left:3px solid transparent;color:var(--text);font:600 14px/20px var(--font);
      min-height:40px;transition:background-color var(--dur-2) var(--ease-standard)}
-.nav-item:hover:not(.active){background:var(--nav-hover);text-decoration:none}
+/* Never underlined: the global `a:hover` rule would otherwise underline the selected item,
+   which already carries tint, ink and the rule. */
+.nav-item:hover{text-decoration:none}
+.nav-item:hover:not(.active){background:var(--nav-hover)}
 .nav-item:focus-visible:not(.active){background:var(--nav-focus)}
 /* Every icon is drawn in a 16-unit box at 1.25 stroke, so scaling the box scales the stroke. A
    larger icon is re-thinned to hold one apparent weight across the console. */
 .nav-item svg{width:18px;height:18px;flex:none;color:var(--text);stroke-width:1.11}
-/* "You are here" carries three redundant cues, as the marketplace does: tint, ink and the rule. */
-.nav-item.active{background:var(--nav-active);color:var(--accent-text);border-left-color:var(--accent)}
+/* "You are here" carries three redundant cues, as the marketplace does: tint, ink and the rule.
+   The 3px rule also steps the icon and label 3px in, so the selected row reads as pushed across
+   rather than merely tinted. Inactive rows reserve the same 3px in a transparent border, so only
+   the selected row moves and nothing reflows around it. */
+.nav-item.active{background:var(--nav-active);color:var(--accent-text);border-left-color:var(--accent);
+     padding-left:calc(var(--s5) + 3px)}
 .nav-item.active svg{color:inherit}
 .nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);font:var(--t-label);
      border-radius:var(--pill);padding:2px var(--s2);min-width:22px;text-align:center}

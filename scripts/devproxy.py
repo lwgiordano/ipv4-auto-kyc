@@ -66,7 +66,7 @@ MARK = r"""<style>
 </style>
 <script>
 (function(){
-  var TAG="Full stack", LINE="<b>Full stack<\/b> temporary database";
+  var TAG="Local demo", LINE="<b>Local demo<\/b> data is discarded on exit";
   /* The router retitles the page per company, so the tag is reapplied on every set rather than
      written once into <title>. It goes first because the Dock and the window frame truncate
      from the right. */
