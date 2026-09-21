@@ -282,6 +282,11 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
   display:flex;align-items:center;gap:var(--s2)}
 /* A full 12px rhythm keeps descriptions and optional legends visibly attached but distinct. */
 .tbar .desc{font:var(--t-body);color:var(--muted)}
+/* The case header puts the contact line and the chip row in one `.desc`, and `.chips` is a flex
+   block with no margin of its own, so a row of 24px pills butted against the 16px line at 0px.
+   Scoped to the pair: when the registrant sent neither email nor title there is no line to clear,
+   and the heading grid's own 12px is already the right gap. */
+.tbar .desc .sub+.chips{margin-top:var(--s2)}
 .tbar .legend{margin:0}
 .tbar .actions{margin-left:auto;display:flex;gap:var(--s2);align-items:center;max-width:100%}
 .crumb{font:var(--t-meta);color:var(--muted);margin-bottom:var(--s1)}
@@ -416,15 +421,24 @@ button.good{background:var(--green-soft);border-color:transparent;color:var(--gr
 button.good:hover{background:color-mix(in oklab,var(--green-soft),black 6%)}
 button.danger{background:var(--red-soft);border-color:transparent;color:var(--red-ink)}
 button.danger:hover{background:color-mix(in oklab,var(--red-soft),black 6%)}
+/* Neutral outline: a control whose consequence is the opposite of the accent's, so it must not
+   wear the system's affirmative colour. The approve dialog's Cancel held this as an id rule; the
+   website Reject needs exactly the same treatment, so it is a class the two of them share. */
+button.neutral{border-color:var(--border-input);color:var(--text)}
+button.neutral:hover{background:var(--surface-muted)}
 /* Peach for the action that bypasses the rulebook: the same tint as the hold it lifts, and
    deliberately NOT the filled blue that sends a test message. */
 /* The reviewer's own action. It is peach rather than accent-blue because it bypasses the
    rulebook and must never look like the routine send — but it is the page's primary, so it
    carries the raised elevation, and the dialog it opens confirms in the same colour. */
-button.warn{background:var(--accent);border-color:var(--accent);color:var(--on-accent);
+/* It declared exactly `button.primary`'s four properties, so every word above this was true of
+   the intent and false of the render: the rulebook bypass was a second filled accent-blue primary.
+   The border is `--amber` rather than transparent, because a tinted ground alone is 1.4:1 against
+   white and the control would have had no boundary in the light theme. */
+button.warn{background:var(--amber-soft);border-color:var(--amber);color:var(--amber-ink);
   box-shadow:var(--e2)}
 button.warn:active{box-shadow:none}
-button.warn:hover{background:color-mix(in oklab,var(--accent),black 6%)}
+button.warn:hover{background:color-mix(in oklab,var(--amber-soft),black 6%)}
 /* Rule 9, in the place the pattern was first written. `opacity:.45` on the peach commit button
    rendered its label at 2.08:1 for the whole duration of the POST -- a worse ratio than the
    "not evaluated" state the rule was written about, on the control that commits an irreversible
@@ -564,8 +578,10 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .bullet .val b{font:var(--t-page);
   color:var(--ink);font-variant-numeric:tabular-nums}
 .bullet .val .of{font:var(--t-body);color:var(--muted)}
-.bullet .val .verdict{font:var(--t-label);text-transform:uppercase;
-  letter-spacing:var(--track-caps);margin-left:auto}
+/* Position only. It carried `--t-label` with uppercase and tracking -- a LABEL treatment -- so a
+   whole timestamp printed as "DECIDED 2026-09-21 14:03 BST" and a sentence as "15 POINTS BELOW
+   THRESHOLD". Both call sites already pass `sub`, which is the meta tuple these two want. */
+.bullet .val .verdict{margin-left:auto}
 /* The 24px below is the tick label's lane (4px clear, a 16px line, 4px clear). It used to sit ABOVE the track, on the same line as
    the right-aligned verdict, and at a threshold anywhere past ~70% of the scale the two printed
    on top of each other ("Threshold 100" through "100 POINTS BELOW THRESHOLD"). Under the track
@@ -801,6 +817,10 @@ h2.sec.tight{margin-top:0}
    sibling chips gets a real container instead. */
 .chips,.chiprow{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center}
 .chiprow.end{justify-content:flex-end;flex-wrap:nowrap}
+/* The armed website confirm adds a question to the row. The pair itself must never split across
+   two lines, so the question takes a line of its own above it. */
+.chiprow.end[data-review]{flex-wrap:wrap}
+.chiprow.end[data-review]>[data-review-q]{flex:1 0 100%;text-align:right;margin-bottom:var(--s1)}
 .chev{color:var(--muted);text-align:right}
 /* A key, not a sentence: each pill and its gloss are one unit, and the units are separated by
    space alone. The literal middots doubled up with the flex gap and stranded one at every wrap. */
@@ -851,9 +871,8 @@ dialog.modal p{margin:0 0 var(--s3)}
 dialog.modal textarea{min-height:88px}
 dialog.modal .banner{margin-top:var(--s3)}
 /* The only coloured control in this dialog is the one that commits. Cancel was the accent-blue
-   outlined button -- the system's affirmative colour -- sitting beside a peach confirm. */
-#ap-cancel{border-color:var(--border-input);color:var(--text)}
-#ap-cancel:hover{background:var(--surface-muted)}
+   outlined button -- the system's affirmative colour -- sitting beside a peach confirm; it now
+   carries `.neutral`, the shared class, so the website Reject and this Cancel cannot drift. */
 </style>
 </head>
 <body>
@@ -937,7 +956,7 @@ dialog.modal .banner{margin-top:var(--s3)}
     <div class="grp">Actions</div>
     <a class="nav-item" href="#/composer" data-r="composer">
       <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25"><path d="M14 2L7 9M14 2l-4.5 12-2.5-5.5L2 6z" stroke-linejoin="round"/></svg>
-      Case actions</a>
+      Case Actions</a>
   </nav>
   <div class="side-foot">
     <label><input type="checkbox" id="autorefresh"> Refresh every 5 seconds</label>
@@ -966,7 +985,7 @@ dialog.modal .banner{margin-top:var(--s3)}
       approval is appended to the record permanently and cannot be withdrawn.</div></div>
     <div id="ap-err" class="banner" role="alert" hidden></div>
     <div class="toolbar" style="margin:0;justify-content:flex-end">
-      <button type="button" id="ap-cancel">Cancel</button>
+      <button type="button" class="neutral" id="ap-cancel">Cancel</button>
       <button type="submit" class="warn" id="ap-go">Approve Manually</button></div>
   </form>
 </dialog>
@@ -993,7 +1012,15 @@ const errText=b=>typeof b?.detail==="string"?b.detail:b?.error||JSON.stringify(b
 function toast(msg,ms=5000){const t=document.createElement("div");t.className="toast";
   t.setAttribute("role",msg.startsWith(I.cross)?"alert":"status");t.innerHTML=msg;
   document.body.appendChild(t);setTimeout(()=>t.remove(),ms)}
-const fmtExact=s=>s?new Date(s).toLocaleString(undefined,{hour12:false}):"—";
+/* ONE absolute format for the whole console. `toLocaleString(undefined, …)` printed the legally
+   load-bearing timestamp as 9/21/2026 for one reader and 21/09/2026 for another, carried seconds
+   nobody reads, and named no zone at all -- and a decision record is read months later by someone
+   who has to know which clock it is on. Year-first is unambiguous in every locale. */
+const TZNAME=(()=>{try{return new Intl.DateTimeFormat(undefined,{timeZoneName:"short"})
+  .formatToParts(new Date()).find(x=>x.type==="timeZoneName")?.value||""}catch{return""}})();
+const fmtExact=s=>{if(!s)return"—";const d=new Date(s);if(isNaN(d))return"—";
+  const p=n=>String(n).padStart(2,"0");
+  return`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}${TZNAME?` ${TZNAME}`:""}`};
 function rel(s){if(!s)return"—";const d=new Date(s),now=Date.now(),sec=(now-d)/1e3;
   if(sec<50)return"just now";if(sec<3600)return`${Math.round(sec/60)}m ago`;
   if(sec<86400)return`${Math.round(sec/3600)}h ago`;
@@ -1170,6 +1197,9 @@ const SAY={
   decision:{approve:"Approved",approve_buy_locked:"Approved, Buying Locked",
     manual_review_insufficient:"On Hold",reject:"Rejected"},
   buy:{enabled:"Buying enabled",locked_org_id_required:"Buying locked pending Org ID verification"},
+  /* The same two states, in a table column already headed "Buying". The long form above is for the
+     decision line, where the clause stands alone and has to name its own subject. */
+  buy_short:{enabled:"Enabled",locked_org_id_required:"Locked, Org ID required"},
   buy_status:{not_applicable:"Buying Not Yet Applicable",
     buy_locked_org_id_required:"Buying Locked Pending Org ID",
     org_id_validation_pending:"Org ID Verification In Progress",org_id_failed:"Org ID Verification Failed",
@@ -1307,7 +1337,7 @@ const TIPS={
     the platform, and the platform acts on the decision above, not on this number.</p>
     <p>If it exceeds the threshold while the sent decision has not caught up, a verification
     round is pending. The bar is grey so it is not mistaken for a decision.</p>`},
-  latestcases:{t:"Latest decisions by case",b:`<p>The most recently updated cases, newest
+  latestcases:{t:"Latest Decisions by Case",b:`<p>The most recently updated cases, newest
     first, up to one hundred of them. Each row shows that case's latest decision, so a case with
     no decision yet does not appear here.</p>`},
   checks:{t:"Evidence History",b:`<p>Each type of evidence, oldest first. Newer evidence of the
@@ -1341,7 +1371,7 @@ const TIPS={
   activity:{t:"Activity Log",b:`<p>The complete record of activity for this case, oldest first.
     Highlighted entries changed the outcome.</p>
     <p>Open Record under any entry to view the stored details.</p>`},
-  identity:{t:"Registration details",b:`<p>The registrant, and the company they applied on
+  identity:{t:"Registration Details",b:`<p>The registrant, and the company they applied on
     behalf of, exactly as the platform submitted them. Every check on this page compares evidence against
     these values, so an error here explains a failed rule faster than anything else on the
     screen. The verbatim payload is at the foot of the page under Submitted Details.</p>`},
@@ -1395,7 +1425,7 @@ const TIPS={
   events:{t:"Accepted Message Types",b:`<p>The complete list of message types the platform may
     send. Any other type is refused.</p>`},
   /* Case actions */
-  composer:{t:"Case actions",b:`<p>Build and review one platform message before confirming it.
+  composer:{t:"Case Actions",b:`<p>Build and review one platform message before confirming it.
     A confirmed message creates real records in this database.</p>
     <p>The unique key stays with the reviewed message. If the outcome is unknown, verify the
     case record instead of submitting that message again.</p>`},
@@ -1407,7 +1437,7 @@ const TIPS={
     completed. A client or server failure can leave the outcome unknown; verify the case record
     before taking another action.</p><p>Returned event and verification-round IDs are shown when
     available. The raw response stays available below for diagnosis.</p>`},
-  demo:{t:"Demo fixture",b:`<p>These are illustrative values for the built-in demonstration
+  demo:{t:"Demo Fixture",b:`<p>These are illustrative values for the built-in demonstration
     case. They create real records when sent.</p><p>The three messages request review, verify
     email, and submit an Org ID. They do not guarantee approval; safety and evidence rules still
     apply.</p>`},
@@ -1594,7 +1624,7 @@ async function viewOverview(){
           <th class="num" title="95th percentile">Response Time</th></tr></thead>
           <tbody>${adapters}</tbody></table></div></div>
     </div>
-    ${sec("Latest decisions by case","latestcases")}
+    ${sec("Latest Decisions by Case","latestcases")}
     <div class="card"><div class="latest-controls"><label class="flab" for="latest-decision-filter">Decision</label>
       <span class="select-wrap"><select id="latest-decision-filter" aria-label="Latest case decision filter"><option value="all">All</option>
         ${decisionEntries.map(([decision])=>`<option value="${esc(decision)}">${esc(say("decision",decision))}</option>`).join("")}
@@ -1836,14 +1866,14 @@ function identityFields(c){
 
 function identityCard(c){
   const rows=identityFields(c);
-  if(!rows.length)return`<div class="card"><div class="hd"><h2>Registration details</h2>${tip("identity")}</div>
+  if(!rows.length)return`<div class="card"><div class="hd"><h2>Registration Details</h2>${tip("identity")}</div>
     <div class="bd"><div class="empty"><b>No details submitted yet</b>The platform has not sent this registrant's details.</div></div></div>`;
   const cell=([k,v,sub])=>{
     const link=k==="Website"&&/^https?:\/\//i.test(v);
     const val=link?`<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v)}</a>`:esc(v);
     return`<div class="idf"><span class="k">${esc(k)}</span><span class="v">${val}${
       sub?`<span class="sub">${esc(sub)}</span>`:""}</span></div>`};
-  return`<div class="card"><div class="hd"><h2>Registration details</h2>
+  return`<div class="card"><div class="hd"><h2>Registration Details</h2>
       ${tip("identity")}</div>
     <div class="bd"><div class="idgrid">${rows.map(cell).join("")}</div></div></div>`}
 
@@ -1869,7 +1899,7 @@ async function viewCase(id){
   // decision, or captioning it "threshold met", made one visual read out of two different
   // authority eras (re-audit cbb783b F6). The published tuple gets its own card below.
   const liveGap=s.threshold-live;
-  const liveNote=liveGap>0?`${liveGap} points below threshold`:`threshold met`;
+  const liveNote=liveGap>0?`${liveGap} points below threshold`:`Threshold met`;
   const decisionColor=decision==="approve"||decision==="approve_buy_locked"?"var(--green)":
                       decision==="reject"?"var(--red)":decision?"var(--amber)":"var(--faint)";
   // The dot is decoration: the row's real status is the .vh text beside it. The two glyph states
@@ -1934,7 +1964,7 @@ async function viewCase(id){
     return`<tr><td class="mono" title="${esc(r.id)}">${esc(r.id.slice(0,8))}…${r.partial?` ${pill("needs_review","Partial")}`:""}</td>
       <td>${pipe(r.state)}${r.error?`<div class="sub" style="color:var(--red)">${esc(r.error)}</div>`:""}</td>
       <td>${ads?`<div class="chiprow">${ads}</div>`:`<span class="sub">No sources queried; the broker check ended the round.</span>`}</td>
-      <td class="num">${when(r.started_at)}</td></tr>`}).join("")
+      <td class="num">${exact(r.started_at)}</td></tr>`}).join("")
     ||emptyRow(4,"No verification rounds yet","Each platform message starts one verification round.");
 
   const taskRows=d.review_tasks.map(t=>`<tr>
@@ -1943,21 +1973,24 @@ async function viewCase(id){
     <td>${t.result?pill(t.result):"—"}${t.reviewer_id?` <span class="sub">by ${esc(t.reviewer_id)}</span>`:""}</td>
     <td class="sub mono" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
         title="${esc(JSON.stringify(t.context_json,null,2))}">${esc(JSON.stringify(t.context_json))}</td>
-    <td>${t.status==="open"&&t.task_type==="website"?`<div class="chiprow end">
-      <button class="warn" data-complete="${esc(t.id)}:pass">${I.check}Approve Website</button>
-      <button data-complete="${esc(t.id)}:fail">${I.cross}Reject Website</button></div>`:""}</td></tr>`).join("")
+    <td>${t.status==="open"&&t.task_type==="website"?`<div class="chiprow end" data-review>
+      <span class="sub" data-review-q hidden></span>
+      <button class="sm neutral" data-review-keep hidden>Keep Open</button>
+      <button class="sm" data-complete="${esc(t.id)}:pass">${I.check}<span data-label>Approve Website</span></button>
+      <button class="sm neutral" data-complete="${esc(t.id)}:fail">${I.cross}<span data-label>Reject Website</span></button></div>`:""}</td></tr>`).join("")
     ||emptyRow(6,"No open review tasks","A website review task opens during a full verification round.");
 
   const tokenRows=d.poc_tokens.map(t=>{
     const state=t.verified_at?pill("pass","Verified"):
       (new Date(t.expired_at)<new Date()?pill("fail","Expired"):pill("pending","Sent"));
     return`<tr><td class="mono">${esc(t.poc_handle)}</td><td class="mono">${esc(t.rir_listed_email)}</td>
-      <td>${state}</td><td class="num">${when(t.sent_at)}</td></tr>`}).join("");
+      <td>${state}</td><td class="num">${exact(t.sent_at)}</td></tr>`}).join("");
 
   const sfRows=Object.entries(d.salesforce).filter(([k])=>k!=="KYC_Check__c").map(([k,v])=>`<tr>
     <td class="mono">${esc(k)}</td>
     <td>${v===null||v===undefined?`<span class="sub">—</span>`:`<span class="strong">${esc(String(v))}</span>`}</td>
-    <td class="sub src">${esc(d.field_sources[k]||"")}</td></tr>`).join("");
+    <td class="sub src">${esc(d.field_sources[k]||"")}</td></tr>`).join("")
+    ||emptyRow(3,"No Salesforce values yet","Values appear once this case has a decision.");
 
   const fitems=d.audit.map(a=>{
     const line=humanizeAudit(a);if(line===null)return"";
@@ -1995,14 +2028,14 @@ async function viewCase(id){
        ${decision&&c.status===decision?"":casePill(c,hold)}
        ${statePill(BUY_PILL,"buy_status",c.buy_status)}${pill(c.broker_status)}</span>`,
       `${c.status==="approved_manual"?"":`<button class="warn" id="approvebtn">${I.person}Approve Manually</button>`}
-       <button id="sendbtn">Case actions</button>`)}
+       <button id="sendbtn">Case Actions</button>`)}
     ${identityCard(c)}
     <div class="card"><div class="hd"><h2>Decision Sent to Platform</h2>
         ${tip("published")}</div>
       <div class="bd">
         ${latest.decision?`<div class="bullet"><div class="val">
             <b style="color:${decisionColor}" title="${esc(latest.decision)}${hold?` — the rules computed ${esc(hold.computed_decision)}`:""}">${hold?"Held for Approval":esc(say("decision",latest.decision))}</b>
-            <span class="of">${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"Buying not recorded"))} (this decision)</span>${
+            <span class="of">Sent with ${latest.score??"—"} points · ${esc(say("buy",latest.buy_enablement,"Buying not recorded"))}</span>${
               latest.manual&&latest.reviewer_id?`<span class="of">Approved by <b class="strong">${esc(latest.reviewer_id)}</b></span>`:""}
             <span class="verdict sub">Decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
           ${hold?holdCallout(hold,latest,s.threshold,d.latest_manual_decision):""}
@@ -2017,38 +2050,39 @@ async function viewCase(id){
               // a 2.89px text middot, which shifted its label origin 12.11px in the same slot.
               :`<div class="gate na" title="${esc(g0)} — bypassed by manual approval">${I.absent}<span
                   class="g-s">${esc(say("gate",g0))}</span> <span class="g-r">Not evaluated</span></div>`).join("")}</div></div>`
-          :`<div class="sub">${d.decision_provenance==="unresolved_pointer_drift"?`<b>Record conflict.</b> This case's decision reference points to a decision the integrity check rejects: it belongs to another case or no longer exists. No decision can be shown until this is investigated; the database has prohibited this state since migration 022.`:d.decision_provenance==="unresolved_legacy_order"?`No decision can be shown. These records predate the ordering fix, so the most recent decision cannot be determined. The next decision resolves this.`:`No decision has been sent for this case.`}</div>`}
+          :`<div class="sub"${d.decision_provenance==="unresolved_pointer_drift"?` title="The database has prohibited this state since migration 022"`:""}>${d.decision_provenance==="unresolved_pointer_drift"?`<b>Record conflict.</b> This case points at a decision that is not its own — it belongs to another case, or it no longer exists. Nothing can be shown here until someone looks at it. Do not approve this case from this page in the meantime; raise it with whoever operates the tool.`:d.decision_provenance==="unresolved_legacy_order"?`<b>No decision can be shown.</b> These records were written before the ordering was fixed, so which of them is the most recent cannot be established. The next decision on this case settles it.`:`No decision has been sent for this case.`}</div>`}
       </div></div>
     <div class="card"><div class="hd"><h2>Current Evidence Score</h2>
         ${tip("live")}</div>
       <div class="bd">
         <div class="bullet">
-          <div class="val"><b>${live}</b><span class="of">of ${s.threshold} points required</span>
+          <div class="val"><b>${live}</b><span class="of">points held today</span>
             <span class="verdict sub">${liveNote}</span></div>
           <div class="btrack">
             <span class="bscale"><span class="bmeasure" style="width:${Math.min(100,live/max*100)}%;background:var(--muted)"></span>
               <span class="btick" style="left:${s.threshold/max*100}%"><span>Threshold ${s.threshold}</span></span></span>
           </div>
         </div>
-        ${s.items.length?`<p class="sub">Rubric: ${esc(s.rubric_scope||"Recorded evidence")} · ${s.configuration_revision?`configuration revision ${esc(s.configuration_revision)}`:esc(s.rubric_provenance||"Legacy policy")}</p><div class="contrib" style="--rows:${Math.ceil(s.items.length/2)}">${contrib}</div>`:`<p class="callout amber" role="status">Historical rubric unavailable. Known published and current evidence scores remain shown separately; today's weights are not substituted.</p>`}
+        ${s.items.length?`<p class="sub">Rubric: ${esc(s.rubric_scope||"Recorded evidence")} · ${s.configuration_revision?`configuration revision ${esc(s.configuration_revision)}`:esc(s.rubric_provenance||"Legacy policy")}</p><div class="contrib" style="--rows:${Math.ceil(s.items.length/2)}">${contrib}</div>`:`<p class="callout amber" role="status">The rubric this case was scored against is no longer on file. The published score and today's evidence score are both still shown, separately — this case is not re-scored with today's weights.</p>`}
       </div></div>
-    ${sec("Evidence History","checks")}
-    <div class="card"><div class="bd flush"><table>
+    <div class="card"><div class="hd"><h2>Evidence History</h2>${tip("checks")}</div>
+      <div class="bd flush"><table>
       <thead><tr><th>Evidence</th><th>History</th><th>Source</th></tr></thead>
       <tbody>${chains}</tbody></table></div></div>
-    ${sec("Verification Rounds","runs")}
-    <div class="card"><div class="bd flush"><table>
+    <div class="card"><div class="hd"><h2>Verification Rounds</h2>${tip("runs")}</div>
+      <div class="bd flush"><table>
       <thead><tr><th>Round</th><th>Progress</th><th>Sources Queried</th><th class="num">Started</th></tr></thead>
       <tbody>${runRows}</tbody></table></div></div>
-    ${sec("Manual Review Tasks","tasks")}
-    <div class="card"><div class="bd flush"><table>
+    <div class="card"><div class="hd"><h2>Manual Review Tasks</h2>${tip("tasks")}</div>
+      <div class="bd flush"><table>
       <thead><tr><th>Task</th><th>Type</th><th>Status</th><th>Result</th><th>Details</th><th></th></tr></thead>
       <tbody>${taskRows}</tbody></table></div></div>
-    ${tokenRows?sec("Verification Codes","tokens")+`<div class="card"><div class="bd flush"><table>
+    <div class="card"><div class="hd"><h2>Verification Codes</h2>${tip("tokens")}</div>
+      <div class="bd flush"><table>
       <thead><tr><th>RIR Contact</th><th>Sent To</th><th>Status</th><th class="num">Sent</th></tr></thead>
-      <tbody>${tokenRows}</tbody></table></div></div>`:""}
-    ${sec("Salesforce Fields","salesforce")}
-    <div class="card">
+      <tbody>${tokenRows||emptyRow(4,"No verification codes sent",
+        "A code goes to each RIR-listed contact during a full verification round.")}</tbody></table></div></div>
+    <div class="card"><div class="hd"><h2>Salesforce Fields</h2>${tip("salesforce")}</div>
       <div class="bd flush"><table>
       <thead><tr><th>Salesforce Field</th><th>Value</th><th>Source</th></tr></thead>
       <tbody>${sfRows}</tbody></table></div>
@@ -2056,18 +2090,18 @@ async function viewCase(id){
         <details><summary>
           KYC_Check__c records (${d.salesforce.KYC_Check__c.length})</summary>
         <pre>${esc(JSON.stringify(d.salesforce.KYC_Check__c,null,2))}</pre></details></div></div>
-    ${sec("Decision History","history")}
-    <div class="card"><div class="bd flush"><table>
+    <div class="card"><div class="hd"><h2>Decision History</h2>${tip("history")}</div>
+      <div class="bd flush"><table>
       <thead><tr><th>Decision</th><th class="num">Score</th><th>Buying</th><th>Manual Approver</th>
       <th class="num">Decided</th><th class="num">Delivered</th></tr></thead>
       <tbody>${d.decisions.map(x=>`<tr><td>${x.enforcement_held?pill("held_for_approval"):pill(x.decision)}</td><td class="num strong">${x.score}</td>
-        <td class="sub">${esc(say("buy",x.buy_enablement))}</td><td>${x.manual?`<span class="iw">${I.person}${esc(x.reviewer_id||"")}</span>`:"—"}</td>
+        <td class="sub">${esc(say("buy_short",x.buy_enablement))}</td><td>${x.manual?`<span class="iw">${I.person}${esc(x.reviewer_id||"")}</span>`:"—"}</td>
         <td class="num">${exact(x.decided_at)}</td><td class="num">${exact(x.published_at)}</td></tr>`).join("")
-        ||emptyRow(6,"No decisions yet","")}</tbody></table></div></div>
-    ${sec("Activity Log","activity")}
-    <div class="card"><div class="bd"><div class="feed">${feed}</div></div></div>
-    ${sec("Submitted Details","submitted")}
-    <div class="card"><div class="bd">
+        ||emptyRow(6,"No decisions yet","A decision is recorded at the end of each verification round.")}</tbody></table></div></div>
+    <div class="card"><div class="hd"><h2>Activity Log</h2>${tip("activity")}</div>
+      <div class="bd"><div class="feed">${feed}</div></div></div>
+    <div class="card"><div class="hd"><h2>Submitted Details</h2>${tip("submitted")}</div>
+      <div class="bd">
       <details open><summary>Details as received from the platform</summary>
       <pre>${esc(JSON.stringify(c.submitted_json,null,2))}</pre></details></div></div>`;
 
@@ -2099,16 +2133,35 @@ async function viewCase(id){
         payload:{rir:$("#org-rir").value,org_handle:handle}})});
     if(r.status<300){toast(`${I.check}<span>Org ID recorded under your name. The case will be re-scored shortly.</span>`);setTimeout(route,700);return}
     toast(`${I.cross}<span>${esc(errText(r.body))}</span>`)};
-  page.querySelectorAll("[data-complete]").forEach(b=>b.onclick=async()=>{
-    if(!needReviewer())return;
-    const[taskId,result]=b.dataset.complete.split(":");
+  /* A website verdict is a named person's judgement, appended to the case permanently. It used to
+     commit on the first click, from a button that was the same accent blue as its opposite. The
+     pair now asks in place: the chosen side becomes the confirm, the other is withdrawn so the
+     armed state cannot be misread, and Keep Open puts both back. The reviewer ID is demanded
+     before arming, so nobody types a verdict and then discovers they have no name on it. */
+  const sendReview=async(taskId,result)=>{
     const r=await j(`/ui/api/send-event`,{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({case_id:c.id,event_type:"website.review_completed",
         idempotency_key:"review-task-complete-"+taskId,
         payload:{task_id:taskId,result,reviewer_id:reviewer(),reason_codes:[]}})});
     toast(r.status<300?`${I.check}<span>Review recorded. The case will be re-scored shortly.</span>`:`${I.cross}<span>${esc(errText(r.body))}</span>`);
-    setTimeout(route,700)});
+    setTimeout(route,700)};
+  page.querySelectorAll("[data-review]").forEach(row=>{
+    const q=row.querySelector("[data-review-q]"),keep=row.querySelector("[data-review-keep]"),
+      pair=[...row.querySelectorAll("[data-complete]")],lab=b=>b.querySelector("[data-label]"),
+      names=new Map(pair.map(b=>[b,lab(b).textContent]));
+    const disarm=()=>{q.hidden=keep.hidden=true;
+      pair.forEach(b=>{b.hidden=false;delete b.dataset.armed;lab(b).textContent=names.get(b)})};
+    keep.onclick=()=>{disarm();pair[0].focus()};
+    for(const b of pair){const[taskId,result]=b.dataset.complete.split(":");
+      b.onclick=()=>{
+        if(!needReviewer())return;
+        if(b.dataset.armed)return sendReview(taskId,result);
+        disarm();
+        for(const other of pair)if(other!==b)other.hidden=true;
+        b.dataset.armed="1";lab(b).textContent=result==="pass"?"Confirm Approve":"Confirm Reject";
+        q.textContent=`Record this website as ${result==="pass"?"approved":"rejected"} under your reviewer ID?`;
+        q.hidden=keep.hidden=false;b.focus()}}});
 }
 
 /* ── Integrations ─────────────────────────────────────── */
@@ -2312,7 +2365,7 @@ async function viewPolicy(rule=""){
     <div class="card policy-preview-mounted" id="points-editor"><div class="hd"><div class="header-title"><h2>Scoring</h2>${tip("rubric")}</div><div class="preview-actions"></div></div>
       <div class="config-feedback"><p class="config-access"></p><p class="preview-status" id="points-status" role="status"></p></div>
       <div class="bd flush"><table class="preview-table"><thead><tr><th>Evidence</th><th class="num">Points</th><th>Category</th><th>Method</th><th>Pass Condition</th></tr></thead><tbody></tbody></table></div></div>
-    ${sec("Decision Table (first match applies)","decisionpolicy")}
+    ${sec("Decision Table (First Match Applies)","decisionpolicy")}
     <div class="card"><div class="bd flush"><table><thead><tr><th class="num">#</th><th>Decision</th><th>Condition</th><th>Platform Action</th></tr></thead><tbody>${decisions}</tbody></table></div>
       <p class="sub" style="padding:var(--s3) var(--s4)">Held for Approval means an approval was published as On Hold because automatic approval is not enabled. Manual approval remains record-only.</p></div>
     <section class="subsection" style="margin-top:var(--s5)">
@@ -2323,7 +2376,7 @@ async function viewPolicy(rule=""){
       <div class="bd flush"><table class="preview-table"><thead><tr><th>Company</th><th>Treatment</th><th>Matching identifiers and notes</th><th></th></tr></thead><tbody></tbody></table></div></div></section>
     ${sec("Rule Definitions","hardgates")}<div class="card"><div class="bd"><pre style="margin:0">${esc(JSON.stringify(p.hard_gates,null,2))}</pre></div></div>
     ${sec("Accepted Message Types","events")}<div class="card"><div class="bd chips">${p.events.map(e=>`<span class="tag">${esc(e)}</span>`).join("")}</div></div>
-    ${sec("Configuration version")}<div class="card"><div class="bd rules-metadata"><p>Active configuration revision: <span class="mono" id="configuration-revision">${esc(configuration.revision||"Not activated")}</span></p>
+    ${sec("Configuration Version")}<div class="card"><div class="bd rules-metadata"><p>Active configuration revision: <span class="mono" id="configuration-revision">${esc(configuration.revision||"Not activated")}</span></p>
       <div class="policy-hash"><span class="policy-hash-label">Rules fingerprint</span><div class="policy-hash-row"><code id="rules-hash">${esc(configuration.bundle_hash)}</code><button class="sm" id="copy-rules-hash" aria-label="Copy rules fingerprint">Copy</button></div><span id="rules-hash-status" class="policy-hash-status" role="status"></span></div></div></div>`;
   page.dataset.policyRule=rule;mountPointsEditor(p,configuration);mountBrokerEditor(p,configuration);
   if(rule){const row=page.querySelector("#rule-"+CSS.escape(rule));if(row){row.scrollIntoView({block:"center"});row.focus({preventScroll:true})}}
@@ -2346,7 +2399,7 @@ function viewOptions(){
       <div class="options-footer"><p class="sub">Saved only in this browser. System follows your operating system setting.</p>
         <p class="options-hint" id="options-hint" role="status"></p></div></form>
     </div></div>
-    <div class="card"><div class="hd"><h2>Operator access</h2></div><div class="bd">
+    <div class="card"><div class="hd"><h2>Operator Access</h2></div><div class="bd">
       <form class="operator-form" id="operator-form"><label class="flab" for="operator-credential">Admin credential</label>
         <input type="password" id="operator-credential" autocomplete="off" aria-describedby="operator-note">
         <p class="sub" id="operator-note">Kept only in memory for this page session. Never saved in browser storage. Reloading clears access.</p>
@@ -2610,7 +2663,7 @@ async function viewComposer(){
           <div class="composer-status" id="c-status" role="status"><span class="sub">No message sent in this session.</span></div>
           <details class="composer-raw" id="c-raw" hidden><summary>Raw response</summary><pre id="c-out"></pre></details>
           <section class="composer-review" id="c-prior" hidden aria-label="Earlier attempts to verify"></section></div></div>
-        <div class="card" id="c-demo"><div class="hd"><h2>Demo fixture</h2>${tip("demo")}</div><div class="bd demo-journey">
+        <div class="card" id="c-demo"><div class="hd"><h2>Demo Fixture</h2>${tip("demo")}</div><div class="bd demo-journey">
           <p class="sub">Illustrative values for the built-in demo. Each send creates real records; safety holds and evidence rules still apply, so this sequence does not guarantee approval.</p>
           <div class="demo-step"><span class="step-number">1</span><div><b>Request case review</b><code>kyb.run_requested</code><div class="sub">Jane Doe · Acme Networks Ltd · GB · acme.example</div></div></div>
           <div class="demo-step"><span class="step-number">2</span><div><b>Verify contact email</b><code>email.verified</code><div class="sub">jane.doe@acme.example · current verification time</div></div></div>
@@ -2659,7 +2712,7 @@ const routes=[
   [/^#\/fieldmap$/,()=>viewFieldMap(),"fieldmap","Salesforce Fields"],
   [/^#\/policy(?:\?rule=([^&]*))?$/,m=>viewPolicy(m[1]?decodeURIComponent(m[1]):""),"policy","Decision Rules"],
   [/^#\/options$/,()=>viewOptions(),"options","Options"],
-  [/^#\/composer$/,()=>viewComposer(),"composer","Case actions"],
+  [/^#\/composer$/,()=>viewComposer(),"composer","Case Actions"],
 ];
 const main=$("#main");
 let navigated=false;   // set by a hash change; cleared once the new page has taken focus
