@@ -287,16 +287,22 @@ main{flex:1;overflow-y:auto;scroll-behavior:smooth;min-width:0}
    only by their own shadow, which merged "the decision the platform got" with "what the evidence
    says now" into one slab — the exact distinction the page exists to draw. */
 .page>.card+.card{margin-top:var(--card-gap)}
+/* Heading row: the help button belongs beside its title and centred on it, never pushed to
+   the far edge of the card where it reads as a control for the whole panel. Baseline alignment
+   would hang the round button off the text baseline, so the title and its button are centred
+   together and anything else in the row keeps the baseline. */
 .card .hd{padding:var(--s3) var(--s4);border-bottom:1px solid var(--line);display:flex;
-      align-items:baseline;gap:var(--s2);flex-wrap:wrap}
+      align-items:center;gap:var(--s2);flex-wrap:wrap}
 .card .hd h2,.card .hd h3{font:var(--t-title);color:var(--ink)}
 /* Own margin on both sides. Without the top margin the decision word and this heading touched at
    0px on every state that renders no hold callout — i.e. everywhere except the two cases anyone
    demos, where the callout's own margin happened to cover it. */
 .subsection{display:grid;gap:var(--s3);margin-top:var(--s5)}
 .subsection>.card{min-width:0}
-.sub-hd{font:var(--t-subhd);color:var(--ink);margin:0}
-.card .hd .hint{font:var(--t-meta);color:var(--muted)}
+.sub-hd{font:var(--t-subhd);color:var(--ink);margin:0;
+  display:flex;align-items:center;gap:var(--s2)}
+/* A count is data, not a label, so it reads in the panel body rather than beside the heading. */
+.count-note{margin:0;padding:var(--s3) var(--s4) 0;font:var(--t-meta);color:var(--muted)}
 .card .bd{padding:var(--s4)}
 /* The bordered header ends the heading region; the following content container owns the clear
    12px lane below it. Flush tables already provide that lane with their own cell padding. */
@@ -755,10 +761,7 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
 .tip dd{margin:0 0 var(--s2)}
 .tip dd:last-child{margin-bottom:0}
 @keyframes tipin{from{opacity:0}to{opacity:1}}
-/* A gloss sits inside `h2.sec`, which is uppercase and tracked. Without the reset it inherits
-   both and prints as a tenth tuple that is in no token. */
-.gloss{font:var(--t-meta);color:var(--muted);text-transform:none;letter-spacing:normal}
-.card .hd .tipbtn{margin-left:auto}
+.card .hd .tipbtn{margin-left:0}
 .toolbar .tipbtn{margin-left:var(--s2)}
 /* Status panels are TINTED PAPER in the chip colours, never a coloured spine. */
 .banner{display:flex;gap:var(--s3);align-items:center;background:var(--red-soft);
@@ -777,7 +780,7 @@ pre{background:var(--surface-muted);border:1px solid var(--line);border-radius:v
    file, and it is deliberate — the space belongs above the label, with the group it opens. */
 h2.sec{font:var(--t-label);color:var(--muted);text-transform:uppercase;
   letter-spacing:var(--track-caps);margin:var(--s6) 0 var(--s3);
-  display:flex;align-items:baseline;gap:var(--s2)}
+  display:flex;align-items:center;gap:var(--s2)}
 h2.sec.tight{margin-top:0}
 /* Chips joined with `" "` in a template literal are spaced by the rendered width of a space:
    3.66px across and 1.00px on wrap. Anisotropic, so no scale value can produce it. Every run of
@@ -1242,8 +1245,8 @@ const TIPS={
       evidence meets the threshold. Where evidence is sufficient but automatic approval is not
       enabled, the case waits for a named reviewer. The case page states which.</dd>
     <dt>Rejected</dt><dd>Exact match on the Blocked Broker List.</dd></dl>`},
-  latency:{t:"External Services",b:`<p>Call volume, error rate, and 95th-percentile response time
-    for each external service.</p>
+  latency:{t:"External Services",b:`<p>A response summary for each external service: call
+    volume, the share of calls that returned an error, and the 95th-percentile response time.</p>
     <p>A rising error rate usually explains cases that stop progressing.</p>`},
   deadjobs:{t:"Failed Jobs",b:`<p>Background work that failed after all retries. The related
     case cannot progress until this is resolved.</p>
@@ -1269,9 +1272,9 @@ const TIPS={
     <dt>Buying</dt><dd>Whether the registrant may purchase addresses.</dd>
     <dt>Broker Status</dt><dd>Result of the Blocked Broker List check.</dd></dl>`},
   /* Case page */
-  published:{t:"Decision Sent to Platform",b:`<p>The decision delivered to the platform and the values
-    it was based on. All values come from one decision record, so the score, buying status and
-    rule results are always consistent.</p>
+  published:{t:"Decision Sent to Platform",b:`<p>The decision delivered to the platform and the
+    values it was based on. The score, buying status and rule results are all read from one
+    decision record, so they agree with each other and with what the platform received.</p>
     <p>The buying value reflects this decision only. A held account cannot buy regardless of it.</p>
     <p>Held for Approval means the rules returned an approval but automatic approval is not
     enabled on this installation. The panel below the decision states what is required.</p>
@@ -1285,10 +1288,14 @@ const TIPS={
     <dt>No broker block</dt><dd>No exact match on the Blocked Broker List.</dd>
     <dt>No conflicting evidence</dt><dd>No two items of evidence contradict each other.</dd></dl>
     <p>A rule marked not evaluated was bypassed by a manual approval.</p>`},
-  live:{t:"Current Evidence Score",b:`<p>Today's evidence scored now. This is a live total, not a
-    decision, and has not been sent to the platform.</p>
+  live:{t:"Current Evidence Score",b:`<p>Every piece of evidence held for this case today,
+    scored against the current rubric. It is a live total, not a decision: it has not been sent to
+    the platform, and the platform acts on the decision above, not on this number.</p>
     <p>If it exceeds the threshold while the sent decision has not caught up, a verification
     round is pending. The bar is grey so it is not mistaken for a decision.</p>`},
+  latestcases:{t:"Latest decisions by case",b:`<p>The most recently updated cases, newest
+    first, up to one hundred of them. Each row shows that case's latest decision, so a case with
+    no decision yet does not appear here.</p>`},
   checks:{t:"Evidence History",b:`<p>Each type of evidence, oldest first. Newer evidence of the
     same type replaces the earlier entry, which remains visible but faded. Nothing is deleted.</p>
     <p>Only the latest evidence of each type counts toward the score. Tags show the recorded
@@ -1309,8 +1316,10 @@ const TIPS={
   tokens:{t:"Verification Codes",b:`<p>To confirm control of an address block, a one-time code is
     emailed to the contact on the public RIR record, not to an address supplied by the
     applicant.</p><p>Sent means the code has not yet been used. Codes expire.</p>`},
-  salesforce:{t:"Salesforce Fields",b:`<p>The service's field projection for this case.</p>
-    <p>This console does not write Salesforce. The external platform must consume the saved destination mapping.</p>`},
+  salesforce:{t:"Salesforce Fields",b:`<p>The values this case would produce for Salesforce,
+    under the destination names currently saved.</p>
+    <p>These are the values the platform is expected to write. This console does not write to
+    Salesforce; the platform reads this projection and writes them itself.</p>`},
   history:{t:"Decision History",b:`<p>Decisions are never edited. Each new decision is appended,
     so this is the complete history of what was decided and when.</p>
     <p>Decided is when processing started; Delivered is when the platform was notified. A name in
@@ -1319,7 +1328,7 @@ const TIPS={
     Highlighted entries changed the outcome.</p>
     <p>Open Record under any entry to view the stored details.</p>`},
   identity:{t:"Registration details",b:`<p>The registrant, and the company they applied on
-    behalf of, as the platform described them. Every check on this page compares evidence against
+    behalf of, exactly as the platform submitted them. Every check on this page compares evidence against
     these values, so an error here explains a failed rule faster than anything else on the
     screen. The verbatim payload is at the foot of the page under Submitted Details.</p>`},
   submitted:{t:"Submitted Details",b:`<p>The details received from the platform, exactly as
@@ -1334,8 +1343,9 @@ const TIPS={
     decision delivery to the platform, verification code emails, and evidence file storage.</p>
     <p>Decisions are delivered at least once and signed, so the platform can verify their
     origin. Duplicates are safe to ignore.</p>`},
-  adapters:{t:"Evidence Sources",b:`<p>The nine services queried for evidence. Test Connection
-    sends a harmless request and reports whether the service responds.</p>
+  adapters:{t:"Evidence Sources",b:`<p>The nine services queried for evidence, listed in the
+    order the scoring rules consult them. Test Connection sends a harmless request and reports
+    whether the service responds.</p>
     <p>Credentials Required means the connection is configured but has no key.</p>`},
   /* Salesforce Fields */
   fieldmap:{t:"Salesforce Fields",b:`<p>The Salesforce field each value is written to, and the
@@ -1493,8 +1503,9 @@ const caseLink=id=>`<a href="#/case/${encodeURIComponent(id)}" class="mono">${es
 const tbar=(title,desc,actions="",tk="",legend="")=>`<div class="tbar"><div class="heading"><h1>${title}${tip(tk)}</h1>
   <div class="desc">${desc}</div></div>${
   actions?`<div class="actions">${actions}</div>`:""}</div>`;
-const sec=(title,tk="",cls="",gloss="")=>`<h2 class="sec ${cls}">${title}${
-  gloss?`<span class="gloss">${gloss}</span>`:""}${tip(tk)}</h2>`;
+/* No gloss slot: a heading carries its title and its help button, and the explanation lives in
+   the tooltip where it can be a sentence rather than a fragment. */
+const sec=(title,tk="",cls="")=>`<h2 class="sec ${cls}">${title}${tip(tk)}</h2>`;
 const emptyRow=(cols,head,body)=>`<tr><td colspan="${cols}"><div class="empty"><b>${head}</b>${body}</div></td></tr>`;
 
 async function sidebarBadge(){try{
@@ -1560,17 +1571,16 @@ async function viewOverview(){
       ${kpi("Time to Decision",(m.event_to_decision_seconds?.p95??0).toFixed(1)+"s","95th percentile · target under 10s")}
     </div>
     <div class="split">
-      <div class="card" id="decision-distribution"><div class="hd"><h2>Decisions to Date</h2>
-        <span class="hint">${decisionTotal} all-time decision record${decisionTotal===1?"":"s"}</span>${tip("decisions")}</div>
-        <div class="bd flush"><table><thead><tr><th>Decision</th><th class="num">Count</th><th class="num">Share</th></tr></thead>
+      <div class="card" id="decision-distribution"><div class="hd"><h2>Decisions to Date</h2>${tip("decisions")}</div>
+        <div class="bd flush"><p class="count-note">${decisionTotal} all-time decision record${decisionTotal===1?"":"s"}</p><table><thead><tr><th>Decision</th><th class="num">Count</th><th class="num">Share</th></tr></thead>
           <tbody>${decisions}</tbody></table></div></div>
-      <div class="card"><div class="hd"><h2>External Services</h2><span class="hint">response summary</span>${tip("latency")}</div>
+      <div class="card"><div class="hd"><h2>External Services</h2>${tip("latency")}</div>
         <div class="bd flush"><table>
           <thead><tr><th>Service</th><th class="num">Calls</th><th class="num" title="share of calls that returned an error">Error Rate</th>
           <th class="num" title="95th percentile">Response Time</th></tr></thead>
           <tbody>${adapters}</tbody></table></div></div>
     </div>
-    ${sec("Latest decisions by case","","","up to 100 most recently updated cases")}
+    ${sec("Latest decisions by case","latestcases")}
     <div class="card"><div class="latest-controls"><label class="flab" for="latest-decision-filter">Decision</label>
       <span class="select-wrap"><select id="latest-decision-filter" aria-label="Latest case decision filter"><option value="all">All</option>
         ${decisionEntries.map(([decision])=>`<option value="${esc(decision)}">${esc(say("decision",decision))}</option>`).join("")}
@@ -1820,7 +1830,7 @@ function identityCard(c){
     return`<div class="idf"><span class="k">${esc(k)}</span><span class="v">${val}${
       sub?`<span class="sub">${esc(sub)}</span>`:""}</span></div>`};
   return`<div class="card"><div class="hd"><h2>Registration details</h2>
-      <span class="hint">as submitted by the platform</span>${tip("identity")}</div>
+      ${tip("identity")}</div>
     <div class="bd"><div class="idgrid">${rows.map(cell).join("")}</div></div></div>`}
 
 async function viewCase(id){
@@ -1974,7 +1984,7 @@ async function viewCase(id){
        <button id="sendbtn">Case actions</button>`)}
     ${identityCard(c)}
     <div class="card"><div class="hd"><h2>Decision Sent to Platform</h2>
-        <span class="hint">all values from one decision record</span>${tip("published")}</div>
+        ${tip("published")}</div>
       <div class="bd">
         ${latest.decision?`<div class="bullet"><div class="val">
             <b style="color:${decisionColor}" title="${esc(latest.decision)}${hold?` — the rules computed ${esc(hold.computed_decision)}`:""}">${hold?"Held for Approval":esc(say("decision",latest.decision))}</b>
@@ -1982,8 +1992,7 @@ async function viewCase(id){
               latest.manual&&latest.reviewer_id?`<span class="of">Approved by <b class="strong">${esc(latest.reviewer_id)}</b></span>`:""}
             <span class="verdict sub">Decided ${esc(fmtExact(latest.decided_at))}</span></div></div>
           ${hold?holdCallout(hold,latest,s.threshold,d.latest_manual_decision):""}
-          <div class="subsection"><h3 class="sub-hd">Decision Rules
-            <span class="gloss">— all five must be true</span>${tip("gates")}</h3>
+          <div class="subsection"><h3 class="sub-hd">Decision Rules${tip("gates")}</h3>
           <div class="gates published-gates">${GATE_KEYS
             .map(g0=>g0 in gates
               // The space between the two spans is load-bearing: without it the cell's accessible
@@ -1997,7 +2006,7 @@ async function viewCase(id){
           :`<div class="sub">${d.decision_provenance==="unresolved_pointer_drift"?`<b>Record conflict.</b> This case's decision reference points to a decision the integrity check rejects: it belongs to another case or no longer exists. No decision can be shown until this is investigated; the database has prohibited this state since migration 022.`:d.decision_provenance==="unresolved_legacy_order"?`No decision can be shown. These records predate the ordering fix, so the most recent decision cannot be determined. The next decision resolves this.`:`No decision has been sent for this case.`}</div>`}
       </div></div>
     <div class="card"><div class="hd"><h2>Current Evidence Score</h2>
-        <span class="hint">live total from today's evidence · not the decision sent to the platform</span>${tip("live")}</div>
+        ${tip("live")}</div>
       <div class="bd">
         <div class="bullet">
           <div class="val"><b>${live}</b><span class="of">of ${s.threshold} points required</span>
@@ -2009,7 +2018,7 @@ async function viewCase(id){
         </div>
         ${s.items.length?`<p class="sub">Rubric: ${esc(s.rubric_scope||"Recorded evidence")} · ${s.configuration_revision?`configuration revision ${esc(s.configuration_revision)}`:esc(s.rubric_provenance||"Legacy policy")}</p><div class="contrib" style="--rows:${Math.ceil(s.items.length/2)}">${contrib}</div>`:`<p class="callout amber" role="status">Historical rubric unavailable. Known published and current evidence scores remain shown separately; today's weights are not substituted.</p>`}
       </div></div>
-    ${sec("Evidence History","checks","","— oldest first; grey entries were replaced")}
+    ${sec("Evidence History","checks")}
     <div class="card"><div class="bd flush"><table>
       <thead><tr><th>Evidence</th><th>History</th><th>Source</th></tr></thead>
       <tbody>${chains}</tbody></table></div></div>
@@ -2024,7 +2033,7 @@ async function viewCase(id){
     ${tokenRows?sec("Verification Codes","tokens")+`<div class="card"><div class="bd flush"><table>
       <thead><tr><th>RIR Contact</th><th>Sent To</th><th>Status</th><th class="num">Sent</th></tr></thead>
       <tbody>${tokenRows}</tbody></table></div></div>`:""}
-    ${sec("Salesforce Fields","salesforce","","— the values the platform is expected to write; this console does not write to Salesforce")}
+    ${sec("Salesforce Fields","salesforce")}
     <div class="card">
       <div class="bd flush"><table>
       <thead><tr><th>Salesforce Field</th><th>Value</th><th>Source</th></tr></thead>
@@ -2121,7 +2130,7 @@ async function viewIntegrations(){
       [pill("dev"),"development stand-in"],[pill("needs-config"),"configured without credentials"],
       [pill("manual"),"manual process"]].map(([c,t])=>`<span class="item">${c}<span class="legend-copy">${t}</span></span>`).join("");
   page.innerHTML=tbar("Data Sources","Where each piece of evidence comes from, and whether the connection is live.","","integrations",legend)+`
-    <div class="card mb-4"><div class="hd"><h2 class="iw">${I.swap}Platform Connections</h2>${tip("platform")}</div>
+    <div class="card mb-4"><div class="hd"><h2>Platform Connections</h2>${tip("platform")}</div>
       <div class="irow"><div class="itile">CB</div>
         <div class="meta"><div class="nm">Decision Delivery ${pill(p.status)}</div>
           <div class="kind">Decisions are posted to the platform and signed. Delivery is at least once;
@@ -2138,7 +2147,7 @@ async function viewIntegrations(){
         <div class="meta"><div class="nm">Evidence Storage ${pill("live",say("store",d.object_store.kind))}</div>
           <div class="kind mono">${esc(d.object_store.root)}</div></div></div>
     </div>
-    <div class="card"><div class="hd"><h2>Evidence Sources</h2><span class="hint">nine sources, in rule order</span>${tip("adapters")}</div>${rows}</div>
+    <div class="card"><div class="hd"><h2>Evidence Sources</h2>${tip("adapters")}</div>${rows}</div>
 `;
   page.querySelectorAll("[data-probe]").forEach(b=>b.onclick=async()=>{
     b.disabled=true;b.textContent="Testing…";
@@ -2235,7 +2244,7 @@ function mountBrokerEditor(p,configuration){
     setPreviewStatus($("#broker-status"),s.message,["error","conflict","unknown"].includes(s.mode)?"err":"");
     if(rebuild){
       const shown=s.working.filter(b=>(filter==="all"||b.policy===filter)&&[b.name,...BROKER_LISTS.flatMap(k=>b[k]||[])].join(" ").toLowerCase().includes(search.toLowerCase()));
-      body.innerHTML=shown.map(b=>`<tr data-broker-row="${esc(b.id)}"><td class="strong">${esc(b.name)}</td><td>${b.policy==="blocked"?pill("blocked","Blocked"):pill("clear","Allowed")}</td><td><div class="broker-identifiers">${BROKER_LISTS.flatMap(k=>(b[k]||[]).map(v=>`<span class="tag" title="${esc(k)}">${esc(v)}</span>`)).join("")}</div>${b.notes?`<div class="sub">${esc(b.notes)}</div>`:""}</td><td><div class="broker-row-actions">${!s.editing&&!s.request&&s.configuration.can_edit?`<button class="sm" data-edit-broker="${esc(b.id)}">Edit</button><button class="sm danger" data-remove-broker="${esc(b.id)}">Remove</button>`:""}</div></td></tr>`).join("")||emptyRow(4,"No matching brokers","Change the search or policy filter.");
+      body.innerHTML=shown.map(b=>`<tr data-broker-row="${esc(b.id)}"><td class="strong">${esc(b.name)}</td><td>${b.policy==="blocked"?pill("blocked","Blocked"):pill("clear","Allowed")}</td><td><div class="broker-identifiers">${BROKER_LISTS.flatMap(k=>(b[k]||[]).map(v=>`<span class="tag" title="${esc(k)}">${esc(v)}</span>`)).join("")}</div>${b.notes?`<div class="sub">${esc(b.notes)}</div>`:""}</td><td><div class="broker-row-actions">${!s.editing&&!s.request&&s.configuration.can_edit?`<button class="sm" data-edit-broker="${esc(b.id)}">Edit</button><button class="sm" data-remove-broker="${esc(b.id)}">Remove</button>`:""}</div></td></tr>`).join("")||emptyRow(4,"No matching brokers","Change the search or policy filter.");
       $("#broker-count").textContent=shown.length+" of "+s.working.length+" brokers";
       const overlaps=s.configuration.broker_overlaps||[];$("#broker-overlap").innerHTML=overlaps.length?`<p class="broker-overlap">${I.warn} Overlapping match identifiers: ${esc(overlaps.map(o=>o.entity_ids.map(id=>s.configuration.brokers.find(b=>b.id===id)?.name||id).join(" / ")+" ("+o.identifier_classes.join(", ")+")").join("; "))}. Blocked matches take precedence.</p>`:"";
       if(!s.editing)slot.innerHTML="";

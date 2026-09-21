@@ -8,6 +8,7 @@ plus optional reachability probes against the real upstreams.
 
 import os
 import time
+from pathlib import Path
 
 import httpx
 from sqlalchemy import text
@@ -226,13 +227,33 @@ def integration_report(settings: Settings, session: Session, adapters: dict) -> 
     return {
         "adapters": rows,
         "platform_callback": platform,
-        "object_store": {"kind": settings.object_store, "root": str(settings.object_store_root)},
+        "object_store": {"kind": settings.object_store, "root": _store_location(settings)},
         "email_sender": {
             "status": "stub",
             "detail": "LoggingEmailSender — POC token emails are logged, not sent",
             "todo": "TODO(integration): outbound email provider (AUDIT:C4)",
         },
     }
+
+
+def _store_location(settings) -> str:
+    """Where evidence files land, as an operator needs to read it.
+
+    S3 reports its bucket. Local disk reports the directory relative to the service working
+    directory: an absolute path carries the host's account and layout off the machine, and a
+    hidden directory is internal scaffolding, so neither is published. Either case falls back to
+    the directory's own name, which is what an operator looking for the files actually needs.
+    """
+    if settings.object_store == "s3":
+        return f"bucket {settings.s3_bucket}" if settings.s3_bucket else "bucket not configured"
+    root = Path(settings.object_store_root)
+    try:
+        relative = root.resolve().relative_to(Path.cwd().resolve())
+    except ValueError:
+        return root.name
+    if any(part.startswith(".") for part in relative.parts):
+        return root.name
+    return str(relative)
 
 
 def probe(adapter_id: str) -> dict:
