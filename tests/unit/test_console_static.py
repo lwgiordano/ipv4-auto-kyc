@@ -275,7 +275,7 @@ def test_a_run_of_chips_is_spaced_by_gap_not_by_a_space():
     # the three runs that used to be joined by a space now sit in a real container
     assert '<div class="chiprow haspill">${chain}</div>' in VIEW_CASE
     assert '<div class="chiprow">${ads}</div>' in VIEW_CASE
-    assert '<div class="chiprow end">' in VIEW_CASE
+    assert '<div class="chiprow end" data-review>' in VIEW_CASE
 
 
 def test_no_state_is_encoded_in_an_opacity():
@@ -507,7 +507,7 @@ def test_reviewer_and_identity_grids_align_content_rows():
 def test_routes_name_every_non_case_document():
     router = CONSOLE[CONSOLE.index("const routes=["):]
     for title in ("Overview", "Cases", "Data Sources", "Salesforce Fields",
-                  "Decision Rules", "Options", "Case actions"):
+                  "Decision Rules", "Options", "Case Actions"):
         assert f'"{title}"' in router
     assert 'document.title=title?`${title} · KYC Tool`:"Case · KYC Tool"' in router
 
