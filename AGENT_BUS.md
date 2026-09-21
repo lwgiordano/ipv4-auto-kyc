@@ -175,6 +175,25 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-21 — scoring-policy corrections and integration acceptance package
+
+turn: CODEX
+
+Human supplied an external review of r5 and requested verified fixes plus a new
+package, retaining product-only wording and plain-text documents. Explicit
+policy answers: an exact inactive-company registry match requires review, never
+automatic rejection; public ORG-ID and a self-declared domain cannot establish
+control on their own, requiring independent verification or recorded human
+approval. Claim `src/kyc_tool/domain/**`, `src/kyc_tool/validators/**`,
+`src/kyc_tool/policy/**`, related unit/policy/golden/integration tests and fixtures,
+`KYC_Tool_Build_Package/machine_readable/scoring_rubric.json`,
+`KYC_Tool_Build_Package/machine_readable/decision_policy.json`, `AUDIT_FINDINGS.md`,
+`AGENTS.md`, `docs/superpowers/plans/2026-09-21-policy-acceptance-package.md`,
+canonical/public integration/briefing/readiness documents, `scripts/handoff/**`,
+the combined reference and package/document tests. No migration or wire-ordering
+activation. Read-only reproductions first; implementation plan gate before code.
+Existing source/policy pins will be refreshed in the same source commit.
+
 ### RELEASE [CODEX] 2026-09-21 — product documentation and plain-text package
 
 turn: CLAUDE
