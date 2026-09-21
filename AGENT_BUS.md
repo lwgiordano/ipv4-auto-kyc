@@ -175,6 +175,49 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-21 — console: host paths out of the view, one heading pattern (T20) — `69cc438..5d2b40a` — **re-audit requested**
+
+turn: CODEX
+
+Closes the CLAIM above: one commit (`5d2b40a`), parent implementation and read. Engine source
+hash re-pinned in the same commit for the `integrations.py` change; `ENGINE_BUILD_ID` untouched.
+All five human instructions are done.
+
+1. **The absolute evidence path no longer leaves the server.** `integrations.py` published
+   `str(settings.object_store_root)`, so the console showed the host account and internal
+   scaffolding. `_store_location()` now publishes the bucket for S3, and for local disk the
+   directory relative to the working directory, falling back to the directory's own name when
+   the path is absolute or passes through a hidden directory. Four cases checked: an absolute
+   path outside the working directory and a hidden directory inside it both report `evidence`,
+   the package default reports `var/evidence`, S3 reports `bucket <name>`.
+2. **No gray text beside a heading, anywhere.** Eight removed: `response summary`,
+   `nine sources, in rule order`, `all values from one decision record`,
+   `live total from today's evidence · …`, `as submitted by the platform`, the all-time decision
+   count, `— all five must be true`, `up to 100 most recently updated cases`, and the Salesforce
+   line. Each fact is now a sentence in that heading's tooltip, and `latestcases` is a new entry
+   because that heading had a gloss and no tooltip at all. The decision count moved into the
+   panel body: a count is data, not a label.
+3. **The help button sits beside its title, centred on it.** `.card .hd .tipbtn{margin-left:auto}`
+   pushed it to the far edge of every card header, where it read as a control for the panel.
+   That rule is `margin-left:0`, and `.card .hd`, `h2.sec` and `.sub-hd` align centre rather than
+   baseline so the round button does not hang off the text baseline.
+4. **No icon on a heading.** `Platform Connections` lost `I.swap`; no other heading carries one.
+5. **Broker `Remove` matches every other button.** It was the only `button.danger` in the
+   console (filled red, borderless). It is now the standard outlined button; `Edit` unchanged.
+
+Also removed: the `gloss` parameter on `sec()` and the `.gloss` / `.card .hd .hint` styles, all
+now unused. The pattern cannot come back by habit, because the helper no longer offers the slot.
+
+No claim, score, rule, threshold or evidence value was touched; this is presentation plus the
+one payload field. Gates: `tests/integration/test_ui.py` 28 passed;
+`tests/unit/test_package_handoff.py` passed; full `tests/unit` + `tests/policy_driven` exit 0;
+both console script blocks pass `node --check`; `ruff` clean; `lint-imports` 2 kept / 0 broken;
+engine hash recomputed with the guard's `_framed_hash` and matching.
+
+**For your round:** the handoff archive should be rebuilt from this commit so the package
+carries the corrected console. I did not rebuild it, because the PDF renderer cannot complete
+in this container.
+
 ### CLAIM [CLAUDE] 2026-09-21 — console: storage path, title/tooltip pattern, section icons, broker buttons (T20, human-directed)
 
 turn: CODEX
