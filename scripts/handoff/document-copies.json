@@ -17,9 +17,9 @@
       "copy_path": "scripts/handoff/docs/DEPLOYMENT.md",
       "source_paths": ["docs/DEPLOYMENT.md"],
       "source_sha256": {
-        "docs/DEPLOYMENT.md": "616eb80bd7689159ca5d75c7d5c6903af8a22a7aa4c9775592a7719e5e25dcc4"
+        "docs/DEPLOYMENT.md": "ef93dcfd277a2378bcd6000ca0bb3283fc17f94ffbeb03d9fbec6e913a6b566d"
       },
-      "copy_sha256": "159fcb3ec28db463c1c7200129d18cbcd994dde0495c75a91d6af49a489baf05",
+      "copy_sha256": "254873579a8e62c25e5b51f2523d65d98e418bc90366e1407046b1bd321dc4af",
       "rationale": "Keeps the complete deployment and cutover procedures while removing internal review history."
     },
     {
@@ -27,9 +27,9 @@
       "copy_path": "scripts/handoff/docs/PLATFORM_BRIEFING.md",
       "source_paths": ["docs/PLATFORM_BRIEFING.md"],
       "source_sha256": {
-        "docs/PLATFORM_BRIEFING.md": "70aba0510c62f13985204f96954f3d364087fa07351da7bab5b0adc6ddb4907a"
+        "docs/PLATFORM_BRIEFING.md": "bdbbb68fbf8b6978ac8c297232cc9fb29b6d7a0dded3c433fe2c461edb1b8154"
       },
-      "copy_sha256": "c8d248e13618ced91cda54de9c237cffc2b3707ae31d8e0ed7cc32055d7f2378",
+      "copy_sha256": "02e261cda04e4c4ce4a2a8ae763a3c48afde8d4d4a6c3e320611f02eef99478d",
       "rationale": "Publishes a self-contained platform briefing with package-local paths and references."
     },
     {
@@ -37,9 +37,9 @@
       "copy_path": "scripts/handoff/docs/PLATFORM_INTEGRATION.md",
       "source_paths": ["docs/PLATFORM_INTEGRATION.md"],
       "source_sha256": {
-        "docs/PLATFORM_INTEGRATION.md": "6d3790bd2e0f6578c636e0244ff265971bac92b22a6a1f08aea516e2f6ce1076"
+        "docs/PLATFORM_INTEGRATION.md": "81413106c60f7f717d8f7c91db54e34ebc652a519aa5cea91bf6ff4fe2553b0f"
       },
-      "copy_sha256": "127540cf447f43de69ad2a3becddc6ebd4e8167456fd58e7a38f745f3ec9c462",
+      "copy_sha256": "875180bc25a75511dbbd6ec3a518b5693424c9bf3438af414a9cb457536a8dec",
       "rationale": "Preserves the integration contract while using neutral product wording and removing conversational narration."
     },
     {
@@ -70,10 +70,10 @@
         "docs/superpowers/specs/2026-09-12-production-readiness-design.md"
       ],
       "source_sha256": {
-        "docs/PLATFORM_BRIEFING.md": "70aba0510c62f13985204f96954f3d364087fa07351da7bab5b0adc6ddb4907a",
+        "docs/PLATFORM_BRIEFING.md": "bdbbb68fbf8b6978ac8c297232cc9fb29b6d7a0dded3c433fe2c461edb1b8154",
         "docs/superpowers/specs/2026-09-12-production-readiness-design.md": "4242f0b3e9e63ea295e3afbd3b0328a48f506e4e5854d0c528556c024be535cf"
       },
-      "copy_sha256": "0f03753d7558bcc5505ba21a0e1b2f2c7676c781cd97121aa5900f3c1e1dc418",
+      "copy_sha256": "161d239007eb52adb5b5a4849ffe097e8b8995dfd4a7a3c371612d5a9666e60c",
       "rationale": "Combines the production gate with the current platform gaps into a neutral public readiness checklist."
     }
   ]

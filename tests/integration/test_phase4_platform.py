@@ -3,6 +3,7 @@ stability), and the full staging scenario G3 → G7a → G7b with website review
 and manual-approve interplay."""
 
 import json
+import re
 
 import httpx
 import pytest
@@ -145,11 +146,12 @@ def test_redelivery_carries_identical_dedupe_key(
 
 
 def test_full_staging_scenario_g3_to_approval(
-    client, engine, post_event, phase3_worker, publisher, callback_capture, evidence_store, sign
+    client, engine, post_event, phase3_worker, publisher, callback_capture, evidence_store, sign,
+    email_sender,
 ):
     """The acceptance journey: registration-time KYB (insufficient) → evidence
     accumulates through the platform loop (registry, email, website reviewer,
-    document) → approve_buy_locked → ORG-ID passes → approve. Every decision
+    document) → verified POC → approve_buy_locked → ORG-ID passes → approve. Every decision
     flows through the callback with the audit trail intact."""
     case_id = "case-staging"
 
@@ -195,6 +197,27 @@ def test_full_staging_scenario_g3_to_approval(
         ).encode(),
     )
     post_event(case_id, "document.uploaded", {"object_ref": doc_ref, "doc_type": "registration_certificate"})
+    phase3_worker.run_until_idle()
+    publisher.process_pending()
+
+    case = client.get(f"/v1/cases/{case_id}").json()
+    assert case["latest_decision"] == "manual_review_insufficient"
+
+    post_event(
+        case_id,
+        "poc.submitted",
+        {"rir": "arin", "poc_handle": "JD123-ARIN", "org_handle": "ORG-ACME-1"},
+    )
+    phase3_worker.run_until_idle()
+    publisher.process_pending()
+    body = email_sender.sent[-1]["body"]
+    token = re.search(r"token: (\S+)", body).group(1)
+    token_id = re.search(r"reference: (\S+)", body).group(1)
+    post_event(
+        case_id,
+        "poc.token_verified",
+        {"token_id": token_id, "verified_at": "2026-07-04T11:00:00Z", "token": token},
+    )
     phase3_worker.run_until_idle()
     publisher.process_pending()
 

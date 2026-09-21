@@ -58,10 +58,7 @@ def test_free_inbox_passes_only_any_email():
     intents = {i.check_type: i for i in email_intents(_email_norm("bob@gmail.com"), ACME)}
     assert intents["verified_email"].status is CheckStatus.PASS
     assert intents["verified_company_email"].status is CheckStatus.FAIL
-    assert (
-        ReasonCode.EMAIL_FREE_OR_DISPOSABLE_DOMAIN.value
-        in intents["verified_company_email"].reason_codes
-    )
+    assert ReasonCode.EMAIL_FREE_OR_DISPOSABLE_DOMAIN.value in intents["verified_company_email"].reason_codes
 
 
 def test_wrong_business_domain_fails_company_check():
@@ -100,6 +97,70 @@ def test_registry_inactive_company_fails():
     intent = registry_intent({"companies_house": inactive}, ACME)
     assert intent.status is CheckStatus.FAIL
     assert ReasonCode.REGISTRY_COMPANY_INACTIVE.value in intent.reason_codes
+    assert "registry_exact_company_inactive" in intent.reason_codes
+
+
+def test_registry_inactive_wrong_entity_is_only_a_mismatch():
+    inactive_other = {
+        "candidates": [
+            {
+                **CH_OK["candidates"][0],
+                "legal_name": "Other Networks Ltd",
+                "company_number": "99999999",
+                "status": "dissolved",
+            }
+        ]
+    }
+    intent = registry_intent({"companies_house": inactive_other}, ACME)
+    assert intent.status is CheckStatus.FAIL
+    assert ReasonCode.REGISTRY_NAME_MISMATCH.value in intent.reason_codes
+    assert ReasonCode.REGISTRY_NUMBER_MISMATCH.value in intent.reason_codes
+    assert "registry_exact_company_inactive" not in intent.reason_codes
+
+
+def test_registry_exact_inactive_wins_over_earlier_exact_active_candidate():
+    active = CH_OK["candidates"][0]
+    inactive = {**active, "status": "dissolved"}
+    for candidates in ([active, inactive], [inactive, active]):
+        intent = registry_intent(
+            {"companies_house": {"candidates": candidates}},
+            ACME,
+        )
+        assert intent.status is CheckStatus.FAIL
+        assert "registry_exact_company_inactive" in intent.reason_codes
+        assert intent.source == "companies_house"
+        assert intent.source_detail["status"] == "dissolved"
+
+
+def test_registry_exact_inactive_wins_across_sources_and_preserves_source():
+    active = CH_OK["candidates"][0]
+    inactive = {**active, "status": "retired"}
+    for inactive_source, adapter_outputs in (
+        (
+            "gleif",
+            {
+                "companies_house": {"candidates": [active]},
+                "gleif": {"candidates": [inactive]},
+            },
+        ),
+        (
+            "companies_house",
+            {
+                "companies_house": {"candidates": [inactive]},
+                "gleif": {"candidates": [active]},
+            },
+        ),
+    ):
+        intent = registry_intent(adapter_outputs, ACME)
+        assert intent.status is CheckStatus.FAIL
+        assert "registry_exact_company_inactive" in intent.reason_codes
+        assert intent.source == inactive_source
+        assert intent.source_detail == {
+            "registry": inactive_source,
+            "legal_name": "ACME NETWORKS LTD",
+            "company_number": "12345678",
+            "status": "retired",
+        }
 
 
 def test_registry_name_mismatch_fails_not_fuzzy():
@@ -302,15 +363,11 @@ def test_email_payload_domain_conflict_fails_both_checks():
     # contradicts the address, so NEITHER check may pass
     normalized = {"verified": True, "email": "attacker@gmail.com", "domain": "company.example"}
     intents = {
-        i.check_type: i
-        for i in email_intents(normalized, {**ACME, "website": "https://company.example"})
+        i.check_type: i for i in email_intents(normalized, {**ACME, "website": "https://company.example"})
     }
     assert intents["verified_email"].status is CheckStatus.FAIL
     assert intents["verified_company_email"].status is CheckStatus.FAIL
-    assert (
-        ReasonCode.EMAIL_PAYLOAD_DOMAIN_CONFLICT.value
-        in intents["verified_email"].reason_codes
-    )
+    assert ReasonCode.EMAIL_PAYLOAD_DOMAIN_CONFLICT.value in intents["verified_email"].reason_codes
 
 
 def test_broker_gate_compares_domains_the_same_way_on_both_sides():
@@ -323,8 +380,15 @@ def test_broker_gate_compares_domains_the_same_way_on_both_sides():
 
     def broker(domain):
         return SimpleNamespace(
-            id="b1", policy="blocked", name="Larus", aliases=[], domains=[domain],
-            email_domains=[], org_ids=[], poc_handles=[], asns=[],
+            id="b1",
+            policy="blocked",
+            name="Larus",
+            aliases=[],
+            domains=[domain],
+            email_domains=[],
+            org_ids=[],
+            poc_handles=[],
+            asns=[],
         )
 
     for entry, website in (

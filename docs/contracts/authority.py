@@ -1977,7 +1977,7 @@ def _command_inventory_problems(ref, section: str) -> list[str]:
     return problems
 PROCEDURE_DEFINITION_PINS = {
     "PR 5b full maintenance window": "74dc08a643bcc640",
-    "Bundle-pinning activation": "1906bcffd7980305",
+    "Bundle-pinning activation": "a8f8b19d91203c2d",
     "Migrations 013-023": "bda1cf4ad00de4ed",
 }
 @verifies("OPS.CUTOVER.PROCEDURES")

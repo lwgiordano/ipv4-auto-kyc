@@ -269,7 +269,7 @@ BUNDLE_PINNING = Procedure(
         path="docs/DEPLOYMENT.md",
         heading="## 10. PR 6 cutover — bundle-pinning activation",
         body=BUNDLE_PINNING_BODY,
-        sha256="c7b02139284b25ba30cd431a3de508f51681eb1be9d15b0dd443947afd88b96a",
+        sha256="d559c8829ea135630ec5a45e2c6178c3ed33cec917386e2848733ca623b62f11",
     ),
 )
 

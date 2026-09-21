@@ -26,10 +26,10 @@ for the complete wire request and response contract.
 
 ## 1. What it is
 
-The tool determines whether a registrant represents the company they claim.
-It never drives platform screens and never
-changes platform state. It gathers evidence, scores it and answers. The
-platform acts.
+The tool evaluates evidence about one registrant and the company they claim to
+represent. It applies the published scoring and gate policy and returns a
+decision for the platform to handle. It does not certify unrestricted legal
+authority, drive platform screens or change platform state.
 
 The work happens in the background. The platform POSTs an event (a
 registration, a verified email, an uploaded document, an RIR org handle) and
@@ -54,9 +54,9 @@ approval. A reviewer can approve manually through the separate review action.
 |---|---|
 | `score_met` | total ≥ 100 |
 | `legal_proof` | at least one legal-identity check passed (registry or document) |
-| `control_proof` | at least one control check passed (ORG-ID, POC, or company email) |
+| `control_proof` | a live `poc_verified` check passed |
 | `broker_ok` | not on the blocked-broker list |
-| `no_hard_conflict` | no live check carries `hard_conflict` or `document_registry_conflict` |
+| `no_hard_conflict` | no live check carries `hard_conflict`, `document_registry_conflict` or `registry_exact_company_inactive` |
 
 The default checks and weights come from
 `KYC_Tool_Build_Package/machine_readable/scoring_rubric.json`, the policy file
@@ -68,8 +68,8 @@ the run's recorded score is the authority for that decision.
 |---|---|---|
 | `official_registry_match` | 25 | legal proof |
 | `business_document_verified` | 25 | legal proof |
-| `verified_company_email` | 25 | control proof |
-| `org_id_match` | 25 | control proof |
+| `verified_company_email` | 25 | supporting |
+| `org_id_match` | 25 | supporting |
 | `poc_verified` | 25 | control proof |
 | `linkedin_company_match` | 20 | supporting |
 | `verified_email` | 10 | account access |
@@ -77,10 +77,11 @@ the run's recorded score is the authority for that decision.
 
 Five of those eight can run without a human in closed staging when their
 inputs and live credentials are present: the registry match, the ORG-ID match,
-the company email, any verified email and the LinkedIn match. A case that
-passes all five scores 105, which clears the threshold on its own. Website
-review is a human task by design. The other two need the decisions and provider
-work in §5.
+the company email, any verified email and the LinkedIn match. Passing those
+five scores 105, but it does not pass the control gate. Automated control
+requires a verified `poc_verified` check. Email and ORG-ID checks remain
+supporting evidence. Website review is a human task by design. The POC and
+document paths still need the decisions and provider work in §5.
 
 Four verdicts come back: `approve`, `approve_buy_locked` (the account is fine,
 buying stays locked until an ORG-ID verifies), `manual_review_insufficient`
@@ -89,20 +90,39 @@ in practice. Every check that does not pass carries a stable reason code
 naming what is missing or wrong, and that code is what the review team acts
 on.
 
-Only a broker-blocklist match rejects a case on its own. Everything else that
-falls short goes to manual review, so expect more cases in the review queue
-than among rejections. The tool does not implement sanctions
-screening. That is a platform responsibility and must be completed before the
-platform calls the tool.
+Only a broker-blocklist match rejects a case on its own. An inactive official
+registry record creates a hard conflict only when its legal name, address and
+registration number exactly match the submitted company. That check carries
+`registry_exact_company_inactive` and routes to manual review, never automatic
+rejection. A generic historical `registry_company_inactive` reason alone does
+not create the conflict because it may describe an unrelated search result.
+Everything else that falls short also goes to manual review. The tool does not
+implement sanctions screening. That is a platform responsibility and must be
+completed before the platform calls the tool.
 
-**When a source is down:** the run finishes as *partial*. Evidence already
-gathered stands and nothing is guessed, but older live checks remain in the
-score. An older PASS can therefore contribute to a positive computed decision
-even though the current run did not freshly verify that source. The callback
-does not carry the `partial` flag. After receiving it, read
-`GET /v1/runs/{run_id}`; if `partial` is true, treat the result as not freshly
-verified and send it to the agreed operational follow-up. The next relevant
-event starts a new run.
+Historical category labels and decisions are not rewritten. A historical
+category labelled control proof is not current authorization: the current gate
+requires a live passed POC check. Governed revalidation of historical evidence
+is required before production relies on it, including old POC and registry
+results. A recorded manual approval remains authoritative.
+
+**Evidence coverage and freshness:** the run is *partial* when a source invoked
+for that run fails. Evidence already gathered stands and nothing is guessed,
+but older live checks remain in the score. `partial: false` means the invoked
+sources did not fail; it does not prove that every live check was fetched in
+that run. The callback carries neither the partial flag nor evidence ages.
+
+Use `GET /v1/runs/{run_id}` for `partial` and the invoked adapters'
+`adapters[].fetched_at` values. Use `GET /v1/cases/{case_id}/checks` for the
+current live checks and their `checks[].created_at` values. These reads are
+review aids. A check's `created_at` is check-record time, not proof of
+provider-evidence freshness. The checks endpoint shows current live-check
+state, not a callback-time snapshot. Combining the reads cannot prove source
+age or bind evidence to the callback decision. A full source-age and coverage
+contract bound to the decision must still be specified, built and accepted
+before automatic production decisions. Unavailable or unprovable freshness or
+coverage means hold. A relevant new event can fetch evidence again;
+`recalculate.requested` cannot.
 
 ## 3. A case, end to end
 
@@ -135,9 +155,15 @@ table above.
    which earns `verified_email` (10) and `verified_company_email` (25). Score
    80.
 4. The user supplies their RIR org handle. The platform POSTs
-   `org_id.submitted`, the RIR lookup passes (25), and the score reaches
-   105 with all five gates green.
-5. The computed decision is `approve`. While enforcement is off it arrives as
+   `org_id.submitted`, the RIR lookup passes (25), and the score reaches 105.
+   ORG-ID eligibility is now present, but the control gate is still false.
+5. The user completes the POC token exchange after the live directory and
+   delivery path are wired. A passed `poc_verified` adds 25 and passes the
+   control gate. It proves access to the RIR-listed contact channel associated
+   with the submitted organization or resource. It does not prove unrestricted
+   legal authority to represent the company; business-policy checks and a
+   recorded human review can still be required.
+6. The computed decision is `approve`. While enforcement is off it arrives as
    `manual_review_insufficient` with that computed decision attached, and the
    registration team confirms it in the platform admin.
 
@@ -202,7 +228,9 @@ production blockers.
 
 **Decision 1. POC verification email owner**
 
-Proving control of IP resources means sending a token to the address the
+The POC exchange proves access to the RIR-listed contact channel associated
+with the submitted organization or resource. It does not prove unrestricted
+legal authority to represent an entity. The token goes to the address the
 regional registry lists for that contact, never to an address the user typed.
 The live RDAP-backed directory that can find that address is implemented, but
 the production pipeline does not select it yet.
@@ -561,8 +589,10 @@ ORG-ID verifies), `manual_review_insufficient`, `reject`.
 `platform_account_id` on the sign-up event is the platform id for that person,
 and every returned decision concerns that case and contact. Company
 evidence (registry records, ORG-ID, website) is about the company they claim.
-Contact evidence ties the person to it: an inbox at the company's domain, a
-LinkedIn profile showing them at that company, later the RIR contact token.
+Company email, ORG-ID and LinkedIn results are supporting evidence. Automated
+control proof requires a passed POC token sent to the RIR-listed contact channel
+associated with the submitted organization or resource. That proves access to
+the channel, not unrestricted legal authority to represent the company.
 Approving a case approves the contact, not the company. A second registrant at
 the same company is a second case, with its own `case_id`.
 
@@ -813,24 +843,33 @@ Body:
     "broker_ok": true,
     "no_hard_conflict": true
   },
-  "buy_enablement": "locked_org_id_required",
+  "buy_enablement": "enabled",
   "checks": [
+    {"type": "verified_company_email", "status": "pass", "points": 25,
+     "source": "platform_email_verification", "reason_codes": []},
     {"type": "official_registry_match", "status": "pass", "points": 25,
-     "source": "companies_house", "reason_codes": []}
+     "source": "companies_house", "reason_codes": []},
+    {"type": "org_id_match", "status": "pass", "points": 25,
+     "source": "arin_rdap", "reason_codes": []},
+    {"type": "poc_verified", "status": "pass", "points": 25,
+     "source": "rir_poc_record_plus_token", "reason_codes": []},
+    {"type": "verified_email", "status": "pass", "points": 10,
+     "source": "platform_email_verification", "reason_codes": []}
   ],
   "decided_at": "2026-07-16T12:00:05Z",
   "enforcement_held": {
-    "computed_decision": "approve_buy_locked",
+    "computed_decision": "approve",
     "reason": "positive_enforcement_disabled"
   }
 }
 ```
 
-- `buy_enablement` is `enabled` or `locked_org_id_required`.
+- `buy_enablement` is `enabled` or `locked_org_id_required`. It reports whether
+  the ORG-ID check makes buying eligible. It is not permission to enable buying.
 - `checks[].reason_codes` are stable strings explaining any non-pass — show
   them to your registration team.
-- `enforcement_held` appears only while MVP enforcement is off: it carries the
-  decision the tool computed. Treat the case as pending human review.
+- `enforcement_held` appears while automatic positive decisions are held: it
+  carries the decision the tool computed. Treat the case as pending human review.
 - **Delivery is at-least-once.** Dedupe on `(case_id, run_id)`. Retries back
   off exponentially (defaults: base 10 s, 8 attempts) before dead-lettering on
   the tool side. Delivery failures then need operator recovery (§8). Retries are
@@ -849,27 +888,121 @@ Body:
   activation.
 
 A partial run can retain older passing checks when a source fails. The callback
-does not include a freshness or partial-run flag. Read `GET /v1/runs/{run_id}`
-and inspect `partial` before treating a result as a fresh verification. Agree
-with operations when to hold the result and send another triggering event to
-fetch evidence again. `recalculate.requested` does not fetch fresh evidence.
+does not include a freshness or partial-run flag. Use `GET /v1/runs/{run_id}`
+for `partial` and the invoked adapters' `adapters[].fetched_at` values. Use
+`GET /v1/cases/{case_id}/checks` for the current live checks and their
+`checks[].created_at` values. `partial: false` means the sources invoked in that
+run did not fail. It does not prove that every live check was fetched in that
+run.
 
-### What to do with each result
+These reads are review aids. A check's `created_at` is check-record time, not
+proof of provider-evidence freshness. The checks endpoint shows current
+live-check state, not a callback-time snapshot. Combining the reads cannot
+prove source age or bind evidence to the callback decision. A full source-age
+and coverage contract bound to the decision must still be specified, built and
+accepted before automatic production decisions. Unavailable or unprovable
+freshness or coverage means hold. Send another relevant event to fetch evidence
+again; `recalculate.requested` does not fetch.
 
-These are business-state meanings, not permission to apply an unordered
-callback. Until migration `025` is built and activated, follow the hold and
-manual-approval rules above.
+### Permission precedence
 
-Notifications, reviewer assignment, and user-facing screens are platform
-features. The tool supplies the statuses. Suggested mapping:
+Receiver acceptance and effectiveness are separate from permission changes.
+Apply these rules in order; a later row cannot override an earlier hold.
 
-| Result | Suggested platform handling |
-|---|---|
-| `approve` | activate the account; notify the user |
-| `approve_buy_locked` | activate; notify the user with the ORG-ID prompt |
-| `manual_review_insufficient` **with** `enforcement_held` | "ready to confirm" queue — the tool computed a positive; an admin confirms (MVP only) |
-| `manual_review_insufficient`, no marker | manual-review queue; assign a reviewer; notify admins |
-| `reject` | admin notification; user handling per ops policy |
+| Priority | Condition | Required outcome |
+|---|---|---|
+| 1 | Signature or complete body is invalid | Reject without a callback or dedupe record. |
+| 2 | Same `(case_id, run_id)`, different content | Create an integrity hold for investigation. Preserve the original durable body and outcome; do not classify the variant as an exact duplicate or emit effects. |
+| 3 | Exact duplicate: same identity and content | Acknowledge from the original durable outcome without repeating an effect. |
+| 4 | A recorded manual decision is current | Keep it authoritative. Record later valid automatic callbacks without replacing it. |
+| 5 | First accepted valid callback, with no current manual or automatic decision | Record it as the current automatic receiver decision. |
+| 6 | Later automatic callback would replace a current automatic decision without ordering authority, or automatic callbacks conflict | Record it and hold effectiveness for review. Do not use arrival order, `decided_at` or `event_sequence` as authority. |
+| 7 | The run is partial, required source coverage is missing, or freshness is unavailable or unacceptable | Hold for review and revalidation. |
+| 8 | `enforcement_held` is present, the decision is `manual_review_insufficient`, or a positive approval candidate has an unmet gate | Hold both account approval and buying. `buy_enablement=enabled` does not clear the hold. |
+| 9 | Current release in staging | Store the receiver result, but do not mutate LIVE account or buying permissions, including suspension. Synthetic sandbox permission effects may be tested. |
+| 10 | Future production, after every prior rule and production gate passes | Apply the account result and ORG-ID purchase eligibility as separate permissions. |
+
+The interim receiver records the first accepted callback as its current
+automatic decision when no higher-priority rule prevents effectiveness. A
+current automatic receiver decision does not grant LIVE permissions. A later
+automatic replacement without ordering authority is recorded but held from
+effectiveness. Current staging never changes LIVE permissions either way.
+
+For every valid new callback, fetch any required run and freshness evidence
+beforehand. Then, under the same per-case transaction or serialization used to
+persist the callback, re-read the current ledger and manual authority, apply the
+precedence above, and record the callback, dedupe identity and apply-or-hold
+result atomically. Commit before 2xx. External effects may follow only from that
+committed outcome.
+
+For the future production behavior, `approve` is an account-approval candidate
+and `buy_enablement=enabled` is a buying candidate. `approve_buy_locked` is an
+account-approval candidate while buying remains locked. A held decision enables
+neither. A `reject` can drive the approved deny-or-suspend policy only after the
+receiver and evidence requirements pass. The production gate must pass too. Exact matched
+inactive-registry evidence produces a held manual-review decision, not `reject`.
+
+### Receiver acceptance cases
+
+TechCraft must execute these cases against its own durable receiver. Acceptance
+evidence has not been collected. The conformance utility does not certify
+permission enforcement.
+
+#### A1 — Invalid callback
+
+- **Input:** A callback with an invalid signature, unknown field or wrong field type.
+- **Expected record:** No callback or dedupe row and no apply-or-hold result.
+- **Expected permissions:** Account and buying state stay unchanged.
+- **Observable result:** A non-2xx response and no row for the rejected identity.
+
+#### A2 — First valid callback
+
+- **Input:** A new, valid callback with a previously unseen `(case_id, run_id)`.
+- **Expected record:** Callback, dedupe identity and apply-or-hold result in the same transaction.
+- **Expected permissions:** The current release records the result but makes no LIVE permission change.
+- **Observable result:** The transaction commit succeeds before 2xx; a crash before commit produces no 2xx and the tool retries.
+
+#### A3 — Exact duplicate
+
+- **Input:** The same valid callback bytes after A2 committed.
+- **Expected record:** The existing durable callback and dedupe row remain single.
+- **Expected permissions:** Return the stored outcome with no repeated effect.
+- **Observable result:** A 2xx response, one durable identity and no duplicate notification or permission write.
+
+#### A4 — Held positive with buy eligibility
+
+- **Input:** `decision=manual_review_insufficient`, `enforcement_held.computed_decision=approve` and `buy_enablement=enabled`.
+- **Expected record:** Store the decision, buy state and any enforcement-hold marker.
+- **Expected permissions:** Account and buying receive no LIVE permission change; buying stays locked despite ORG-ID eligibility.
+- **Observable result:** The review view shows account status and buying status separately.
+
+#### A5 — Partial run or unavailable freshness
+
+- **Input:** `partial: true`, missing required run coverage, or freshness evidence unavailable or outside the approved policy.
+- **Expected record:** Store and acknowledge the valid callback with a review hold.
+- **Expected permissions:** No LIVE permission changes; `buy_enablement=enabled` does not clear the hold.
+- **Observable result:** The case enters revalidation or review and records the missing coverage or freshness evidence.
+
+#### A6 — Manual approval precedence
+
+- **Input:** A valid automatic callback arrives after a recorded manual approval.
+- **Expected record:** Store and acknowledge the automatic callback without replacing the manual record.
+- **Expected permissions:** The manual approval remains authoritative until the platform's governed release process changes it.
+- **Observable result:** The effective source remains manual and the automatic callback remains auditable.
+
+#### A7 — Unordered or conflicting automatic callbacks
+
+- **Input:** Two valid automatic callbacks conflict and no active platform ordering authority resolves them.
+- **Expected record:** Store and acknowledge both callbacks with a review hold.
+- **Expected permissions:** No LIVE permission change; never choose by last arrival or timestamp.
+- **Observable result:** The conflict is visible for review and neither callback silently replaces the other.
+
+#### A8 — Same identity with different content
+
+- **Input:** A callback reuses the same `(case_id, run_id)` as A2 with different content.
+- **Expected record:** Preserve the original durable body, dedupe row and original outcome; add an integrity hold without replacing them.
+- **Expected permissions:** No permission effect follows from the conflicting variant.
+- **Observable result:** An investigation opens, the original remains unchanged and the variant is not treated as an exact duplicate.
 
 Two boundaries shape the volume. Only a broker-blocklist match ever
 auto-rejects, so expect the review queue rather than rejections to fill up. And
@@ -885,10 +1018,11 @@ reason codes are stable strings safe to key copy on.
 
 ## 5. Platform POC verification page
 
-Proving that a registrant controls IP resources means sending a code to the
-address their regional registry lists, and having them type it back. The
-platform hosts the confirmation page. Email ownership is a required provider
-decision.
+The POC exchange proves access to the RIR-listed contact channel associated
+with the submitted organization or resource. It does not prove unrestricted
+legal authority to represent an entity. A code goes to the address the
+regional registry lists, and the registrant types it back. The platform hosts
+the confirmation page. Email ownership is a required provider decision.
 
 1. You post `poc.submitted`.
 2. Once the live directory is wired into the worker, the tool looks up the POC over RDAP: the
@@ -1605,11 +1739,14 @@ peers. Flip it with the pool fully drained, using the same stop/start shape desc
    never stopped — only the worker pool is drained here).
 
 **Activate the epoch.** Once the cutover is verified stable, write the
-durable activation record:
+durable activation record. Run this only for the first activation, when
+no activation row exists. An existing activation epoch is a historical
+boundary: do not reset or recreate it to deploy a later engine build.
+For a new first activation under this release:
 
 ```operator
 python -m kyc_tool.ops.activate_bundle_pinning_epoch \
-    --expect-bundle-hash <sha256> --expect-engine eng-1
+    --expect-bundle-hash <sha256> --expect-engine eng-2
 ```
 
 This compares the **locally loaded** policy bundle and this process's
@@ -2668,6 +2805,24 @@ IPv4.Global delivery work, not migrations TechCraft should attempt to run now.
 The current runtime protections do not mean these database and operating
 requirements are finished. All of them belong to the production backlog that
 must close before automatic positive decisions are enabled.
+
+## Completion matrix
+
+These are production acceptance requirements. Evidence has not been collected
+for the following rows.
+
+| Area | Current implementation | Responsible team | Observable acceptance result |
+|---|---|---|---|
+| Provider wiring | Live registry clients exist. The production POC, email and document profile is incomplete. | IPv4.Global service team | Uncollected — a production-profile run uses only approved live providers and completes the chosen POC and document paths. |
+| Applicant authority | Automated control requires a passed POC for the RIR-listed contact channel. This is not unrestricted legal authority. | Joint product approval | Uncollected — recorded policy defines when POC is sufficient and when human approval is required, with production cases demonstrating both paths. |
+| Registry negatives | Exact matched inactive evidence holds for review. Generic historical inactive results do not create the hard conflict. | IPv4.Global service team | Uncollected — live-provider cases prove exact inactive, mismatched inactive and active-plus-inactive outcomes, followed by governed evidence revalidation. |
+| Callback ordering | The current wire is unsequenced. Migration `025`, activation, the platform bootstrap and receiver acceptance remain open. | IPv4.Global service team and TechCraft platform team | Uncollected — the tool emits governed order and the durable receiver passes ordered, duplicate, delayed and conflicting callback cases without using arrival time. |
+| Evidence freshness | The run and current-check reads are review aids only; no decision-bound source-age and coverage contract exists. | IPv4.Global service team and TechCraft platform team, with joint product approval of source-age and coverage rules | Uncollected — the teams implement the approved contract, bind its evidence to the decision, and prove that unavailable or unprovable freshness and coverage hold. The existing reads do not meet this acceptance result. |
+| Reviewer workflows | Manual approval and review tasks exist. Platform assignment and user notifications remain external. | TechCraft platform team | Uncollected — staging proves assignment, evidence request, manual precedence and governed release without callback override. |
+| Sanctions | The tool performs no sanctions screening. | TechCraft platform team | Uncollected — the platform records a passing sanctions control before calling the tool and demonstrates failure handling. |
+| Salesforce reconciliation | The read-only projection exists. The platform writer, retry and backfill service is not built here. | TechCraft platform team | Uncollected — sandbox evidence shows writes, retries, mapping changes, backfill and reconciliation through the public projection. |
+| Recovery | Retry, dead-letter and documented restore procedures exist. A full rehearsal is outstanding. | IPv4.Global service team and TechCraft platform team, with joint product approval setting recovery targets | Uncollected — database and object-store restore plus interrupted-cutover exercises meet approved recovery objectives. |
+| Capacity | No approved load targets or completed soak result are recorded. | IPv4.Global service team and TechCraft platform team, with joint product approval setting targets | Uncollected — signed volume, latency and maintenance targets are met by the release image in a representative soak. |
 
 ## Production go/no-go gate
 

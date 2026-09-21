@@ -49,7 +49,7 @@ def test_pipeline_worker_startup_attests_and_refuses_corrupt(
             worker = pipeline_worker.build_worker()
         assert worker is not None
         rec = next(r for r in logs if r.get("event") == "bundle_pinning_ready")
-        assert (rec["flag"] is flag and rec["engine_build_id"] == "eng-1"
+        assert (rec["flag"] is flag and rec["engine_build_id"] == "eng-2"
                 and rec["bundle_hash"] == bundle_x().bundle_hash)   # §8.18 deployment witness
     # CORRUPT process-bundle row (the single seeded row) → build_worker RAISES before
     # returning a Worker; nothing attested AND the queued job stays WHOLLY unclaimed (§8.2).
@@ -154,7 +154,7 @@ def test_mixed_era_reprices_score_gate_and_callback(
     on_score, on_gates = _recalc(flag=True)
     assert on_score == 10 and on_gates["control_proof"] is False    # re-priced; gate flips off
     off_score, off_gates = _recalc(flag=False)
-    assert off_score == 83 and off_gates["control_proof"] is True    # stamped; gate holds
+    assert off_score == 83 and off_gates["control_proof"] is False   # legacy category cannot prove control
     # callback checks-summary uses the SAME repriced views: a final flag-on run's body
     # (pipeline._callback_body, pipeline.py:570-597 → {"type","points": pts if PASS else 0}).
     post_event("case-mix", "recalculate.requested", {})
@@ -194,7 +194,7 @@ def test_cross_bundle_provenance(session_factory, policy, settings, tmp_path, en
         run = s.execute(text("SELECT policy_bundle_hash, engine_build_id FROM runs "
                              "WHERE case_id='case-xy'")).first()
         assert run.policy_bundle_hash == bx.bundle_hash      # creation pin ALWAYS X (immutable)
-        assert run.engine_build_id == "eng-1"
+        assert run.engine_build_id == "eng-2"
         chk = s.execute(
             text("SELECT policy_bundle_hash FROM checks WHERE case_id='case-xy' "
                  "AND check_type='verified_email' AND superseded_by_check_id IS NULL")
@@ -202,7 +202,7 @@ def test_cross_bundle_provenance(session_factory, policy, settings, tmp_path, en
         assert chk == expected.bundle_hash                   # stamped under the resolved bundle
         dec = s.execute(text("SELECT policy_shas, engine_build_id FROM decisions "
                              "WHERE case_id='case-xy' ORDER BY decided_at DESC LIMIT 1")).first()
-        assert dec.policy_shas == expected.shas and dec.engine_build_id == "eng-1"
+        assert dec.policy_shas == expected.shas and dec.engine_build_id == "eng-2"
         # reconstruct the bundle hash from the recorded shas (loader.py:56-58 formula:
         # sha256 of "".join(f"{name}:{sha};") over POLICY_FILES) → equals the resolved bundle
         rebuilt = hashlib.sha256("".join(f"{n}:{dec.policy_shas[n]};"
@@ -212,17 +212,18 @@ def test_cross_bundle_provenance(session_factory, policy, settings, tmp_path, en
 
 def test_cross_bundle_decision_diverges_approve_x_manual_y(
         session_factory, policy, settings, tmp_path, engine, clean_db, post_event):
-    ydir, by = make_bundle_y(tmp_path, threshold=101)     # Y differs ONLY in threshold
+    ydir, by = make_bundle_y(tmp_path, threshold=126)     # Y differs ONLY in threshold
     with session_factory() as s:
         store.store_bundle(s, raw_x())
         store.store_bundle(s, read_policy_files(ydir))
         s.execute(text("INSERT INTO cases (id) VALUES ('case-div')"))   # broker_status defaults 'clear'
-        for ct, cat in [("verified_company_email", "control_proof"),
+        for ct, cat in [("verified_company_email", "supporting"),
                         ("official_registry_match", "legal_business_proof"),
-                        ("org_id_match", "control_proof"),
+                        ("org_id_match", "supporting"),
+                        ("poc_verified", "control_proof"),
                         ("business_document_verified", "legal_business_proof")]:
             checkstore.write_check(s, case_id="case-div", check_type=ct, status=CheckStatus.PASS,
-                                   points_awarded=25, category=cat, source="seed")   # stamped sum = 100
+                                   points_awarded=25, category=cat, source="seed")   # stamped sum = 125
         s.commit()
 
     def _decide(flag: bool) -> str:
@@ -236,8 +237,8 @@ def test_cross_bundle_decision_diverges_approve_x_manual_y(
             return s.execute(text("SELECT decision FROM decisions WHERE case_id='case-div' "
                                   "ORDER BY decided_at DESC LIMIT 1")).scalar_one()
 
-    assert _decide(flag=True) == "approve"                      # pinned X: 100>=100, all gates, org_id
-    assert _decide(flag=False) == "manual_review_insufficient"  # process Y: 100<101 → score_met False
+    assert _decide(flag=True) == "approve"                      # pinned X: 125>=100, all gates, org_id
+    assert _decide(flag=False) == "manual_review_insufficient"  # process Y: 125<126 → score_met False
 
 
 def test_manual_approve_stamps_engine_build_id(session_factory, clean_db, post_event):
@@ -248,7 +249,7 @@ def test_manual_approve_stamps_engine_build_id(session_factory, clean_db, post_e
     with session_factory() as s:
         eid = s.execute(text("SELECT engine_build_id FROM decisions WHERE case_id='c-ma' "
                              "AND manual=true ORDER BY decided_at DESC LIMIT 1")).scalar_one()
-    assert eid == "eng-1"
+    assert eid == "eng-2"
 
 
 def test_broker_blocked_short_circuit_stamps_provenance(
@@ -269,9 +270,9 @@ def test_broker_blocked_short_circuit_stamps_provenance(
     with session_factory() as s:
         dec = s.execute(text("SELECT decision, policy_shas, engine_build_id FROM decisions "
                              "WHERE case_id='case-blk' ORDER BY decided_at DESC LIMIT 1")).first()
-        assert dec.decision == "reject" and dec.engine_build_id == "eng-1" and dec.policy_shas == bx.shas
+        assert dec.decision == "reject" and dec.engine_build_id == "eng-2" and dec.policy_shas == bx.shas
         reid = s.execute(text("SELECT engine_build_id FROM runs WHERE case_id='case-blk'")).scalar_one()
-        assert reid == "eng-1"
+        assert reid == "eng-2"
 
 
 def test_cascade_successor_carries_resolved_hash(

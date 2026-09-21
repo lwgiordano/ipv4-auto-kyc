@@ -88,10 +88,10 @@ def test_activate_epoch_idempotent(session_factory, clean_db):
         s.commit()
     for _ in range(2):
         with session_factory() as s:
-            store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-1")
+            store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-2")
             s.commit()
     with session_factory() as s:
-        assert store.read_epoch(s) == (h, "eng-1")
+        assert store.read_epoch(s) == (h, "eng-2")
 
 def test_activate_epoch_valid_y_after_x_fails_on_readback(session_factory, engine, clean_db, tmp_path):
     from kyc_tool.policy.loader import read_policy_files
@@ -103,7 +103,7 @@ def test_activate_epoch_valid_y_after_x_fails_on_readback(session_factory, engin
         hy = store.store_bundle(s, read_policy_files(ydir))
         s.commit()
     with session_factory() as s:                          # X activated first
-        store.activate_epoch(s, expect_bundle_hash=hx, expect_engine="eng-1")
+        store.activate_epoch(s, expect_bundle_hash=hx, expect_engine="eng-2")
         s.commit()
     with session_factory() as s, pytest.raises(store.BundleCorrupt):  # valid Y loses on read-back
-        store.activate_epoch(s, expect_bundle_hash=hy, expect_engine="eng-1")
+        store.activate_epoch(s, expect_bundle_hash=hy, expect_engine="eng-2")

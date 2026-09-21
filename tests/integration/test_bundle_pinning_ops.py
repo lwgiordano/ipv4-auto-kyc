@@ -135,7 +135,7 @@ def test_activation_recovery_requeues_then_scores_under_pinning(
     with session_factory() as s:
         assert (
             s.execute(text("SELECT engine_build_id FROM decisions WHERE case_id='c-rec'")).scalar_one()
-            == "eng-1"
+            == "eng-2"
         )  # scored under pinning
         assert (
             s.execute(
@@ -184,11 +184,11 @@ def test_rollback_inflight_job_requeued_then_flag_off_decides_once(
         run = s.execute(
             text("SELECT policy_bundle_hash, engine_build_id FROM runs WHERE case_id='c-rb'")
         ).first()
-        assert run.policy_bundle_hash == bx.bundle_hash and run.engine_build_id == "eng-1"  # pin intact
+        assert run.policy_bundle_hash == bx.bundle_hash and run.engine_build_id == "eng-2"  # pin intact
         dec = s.execute(
             text("SELECT policy_shas, engine_build_id FROM decisions WHERE case_id='c-rb'")
         ).first()
-        assert dec.policy_shas == bx.shas and dec.engine_build_id == "eng-1"  # process-bundle provenance
+        assert dec.policy_shas == bx.shas and dec.engine_build_id == "eng-2"  # process-bundle provenance
 
 
 def test_post_epoch_null_alert(session_factory, engine, clean_db):
@@ -200,7 +200,7 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
 
     with session_factory() as s:
         h = store.store_bundle(s, raw_x())
-        store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-1")
+        store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-2")
         s.commit()
 
     # Truth table over (decision.engine_build_id, run.engine_build_id): the runs
@@ -324,7 +324,7 @@ def test_activate_cli_refuses_valid_but_wrong_bundle(
         s.commit()
     monkeypatch.setattr(epoch_cli, "get_settings", lambda: settings)  # local bundle = X
     monkeypatch.setattr(
-        sys, "argv", ["prog", "--expect-bundle-hash", by.bundle_hash, "--expect-engine", "eng-1"]
+        sys, "argv", ["prog", "--expect-bundle-hash", by.bundle_hash, "--expect-engine", "eng-2"]
     )
     with pytest.raises((SystemExit, store.BundleCorrupt)):
         epoch_cli.main()

@@ -446,11 +446,14 @@ peers. Flip it with the pool fully drained, using the same stop/start shape desc
    never stopped — only the worker pool is drained here).
 
 **Activate the epoch.** Once the cutover is verified stable, write the
-durable activation record:
+durable activation record. Run this only for the first activation, when
+no activation row exists. An existing activation epoch is a historical
+boundary: do not reset or recreate it to deploy a later engine build.
+For a new first activation under this release:
 
 ```operator
 python -m kyc_tool.ops.activate_bundle_pinning_epoch \
-    --expect-bundle-hash <sha256> --expect-engine eng-1
+    --expect-bundle-hash <sha256> --expect-engine eng-2
 ```
 
 This compares the **locally loaded** policy bundle and this process's

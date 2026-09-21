@@ -387,6 +387,29 @@ directly. See ADR-009 and `docs/DEPLOYMENT.md` §12 for activation and recovery.
   self-described). Spec line 03 §2 and `scoring_rubric.json` (`2.0` → `2.1`) changed together;
   the policy baseline is re-pinned. Still `norm_equal` / `domain_of`, nothing fuzzy.
 
+### 🔵 D-INACTIVE-CONTROL — Exact inactive registry evidence holds; POC alone proves control
+
+- **Rule amended 2026-09-21 by the human.** An inactive official-registry status is
+  authoritative adverse evidence only when that candidate is an exact normalized match on legal
+  name, address, and registration number. Every relevant candidate from every registry source is
+  inspected before PASS: an exact inactive match wins over an exact active match regardless of
+  source or order. It creates a failed registry check carrying both the existing diagnostic
+  `registry_company_inactive` and the exact-only stable
+  `registry_exact_company_inactive`; only the exact-only code fails the hard-conflict gate. This
+  routes the automatic decision to `manual_review_insufficient`, never `reject`. A later live
+  registry check can supersede it, and the existing platform-only manual-approval exception is
+  unchanged.
+- **Independent control means an existing verified RIR POC.** A live passed `poc_verified` check
+  is the sole automated control proof. Company-email and ORG-ID matches keep their points but are
+  supporting evidence; neither their policy category, legacy persisted categories, nor edited
+  point weights can satisfy the control gate. This change does not claim freshness revalidation
+  for historical passed POC checks; governed production activation remains responsible for that
+  separate acceptance boundary.
+- `scoring_rubric.json` (`2.1` → `2.2`) and `decision_policy.json` (`2.0` → `2.1`) record the
+  amendment. Wire decision/check enums and the manual-approval exception remain unchanged.
+  Because validator and gate semantics changed, `ENGINE_BUILD_ID` advances from `eng-1` to
+  `eng-2`; the intentional policy and whole-source hash baselines are re-pinned.
+
 ### 🔵 D-CONTACT-FIRST — A case is one registrant, and the contact's email is required
 
 - **Decided 2026-09-17 by the human.** Contacts are what trigger this: a registrant is a

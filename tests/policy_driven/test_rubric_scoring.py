@@ -4,7 +4,6 @@ No point values appear in this file; they flow from the loader."""
 from kyc_tool.config import REPO_ROOT
 from kyc_tool.domain.models import BrokerStatus, CheckStatus, CheckView
 from kyc_tool.domain.scoring import (
-    CONTROL_PROOF_CATEGORY,
     LEGAL_PROOF_CATEGORY,
     evaluate_gates,
     score,
@@ -47,11 +46,9 @@ def test_needs_review_scores_zero(rubric_item):
 
 def test_single_item_gate_category(rubric_item):
     views = [_view(rubric_item, CheckStatus.PASS)]
-    gates = evaluate_gates(
-        views, rubric_item.points, BUNDLE.rubric.threshold, BrokerStatus.CLEAR
-    )
+    gates = evaluate_gates(views, rubric_item.points, BUNDLE.rubric.threshold, BrokerStatus.CLEAR)
     assert gates.legal_proof == (rubric_item.category == LEGAL_PROOF_CATEGORY)
-    assert gates.control_proof == (rubric_item.category == CONTROL_PROOF_CATEGORY)
+    assert gates.control_proof == (rubric_item.check_type == "poc_verified")
 
 
 def test_duplicate_live_type_counts_once(rubric_item):

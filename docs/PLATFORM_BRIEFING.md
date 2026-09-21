@@ -9,10 +9,10 @@ including status codes.
 
 ## 1. What it is
 
-The tool answers one question about one person: does this registrant really
-speak for the company they claim? It never drives your screens and never
-changes platform state. It gathers evidence, scores it and answers. The
-platform acts.
+The tool evaluates evidence about one registrant and the company they claim to
+represent. It applies the published scoring and gate policy and returns a
+decision for the platform to handle. It does not certify unrestricted legal
+authority, drive platform screens or change platform state.
 
 The work happens in the background. Your platform POSTs an event (a
 registration, a verified email, an uploaded document, an RIR org handle) and
@@ -37,9 +37,9 @@ approval. A reviewer can approve manually through the separate review action.
 |---|---|
 | `score_met` | total ≥ 100 |
 | `legal_proof` | at least one legal-identity check passed (registry or document) |
-| `control_proof` | at least one control check passed (ORG-ID, POC, or company email) |
+| `control_proof` | a live `poc_verified` check passed |
 | `broker_ok` | not on the blocked-broker list |
-| `no_hard_conflict` | no live check carries `hard_conflict` or `document_registry_conflict` |
+| `no_hard_conflict` | no live check carries `hard_conflict`, `document_registry_conflict` or `registry_exact_company_inactive` |
 
 The default checks and weights come from
 `KYC_Tool_Build_Package/machine_readable/scoring_rubric.json`, the policy file
@@ -51,8 +51,8 @@ the run's recorded score is the authority for that decision.
 |---|---|---|
 | `official_registry_match` | 25 | legal proof |
 | `business_document_verified` | 25 | legal proof |
-| `verified_company_email` | 25 | control proof |
-| `org_id_match` | 25 | control proof |
+| `verified_company_email` | 25 | supporting |
+| `org_id_match` | 25 | supporting |
 | `poc_verified` | 25 | control proof |
 | `linkedin_company_match` | 20 | supporting |
 | `verified_email` | 10 | account access |
@@ -60,10 +60,11 @@ the run's recorded score is the authority for that decision.
 
 Five of those eight can run without a human in closed staging when their
 inputs and live credentials are present: the registry match, the ORG-ID match,
-the company email, any verified email and the LinkedIn match. A case that
-passes all five scores 105, which clears the threshold on its own. Website
-review is a human task by design. The other two need the decisions and provider
-work in §5.
+the company email, any verified email and the LinkedIn match. Passing those
+five scores 105, but it does not pass the control gate. Automated control
+requires a verified `poc_verified` check. Email and ORG-ID checks remain
+supporting evidence. Website review is a human task by design. The POC and
+document paths still need the decisions and provider work in §5.
 
 Four verdicts come back: `approve`, `approve_buy_locked` (the account is fine,
 buying stays locked until an ORG-ID verifies), `manual_review_insufficient`
@@ -72,20 +73,39 @@ in practice. Every check that does not pass carries a stable reason code
 naming what is missing or wrong, and that code is what your review team acts
 on.
 
-Only a broker-blocklist match rejects a case on its own. Everything else that
-falls short goes to manual review, so expect more cases in the review queue
-than among rejections. The tool does not implement sanctions
-screening. That is a platform responsibility and must be completed before the
-platform calls the tool.
+Only a broker-blocklist match rejects a case on its own. An inactive official
+registry record creates a hard conflict only when its legal name, address and
+registration number exactly match the submitted company. That check carries
+`registry_exact_company_inactive` and routes to manual review, never automatic
+rejection. A generic historical `registry_company_inactive` reason alone does
+not create the conflict because it may describe an unrelated search result.
+Everything else that falls short also goes to manual review. The tool does not
+implement sanctions screening. That is a platform responsibility and must be
+completed before the platform calls the tool.
 
-**When a source is down:** the run finishes as *partial*. Evidence already
-gathered stands and nothing is guessed, but older live checks remain in the
-score. An older PASS can therefore contribute to a positive computed decision
-even though the current run did not freshly verify that source. The callback
-does not carry the `partial` flag. After receiving it, read
-`GET /v1/runs/{run_id}`; if `partial` is true, treat the result as not freshly
-verified and send it to the agreed operational follow-up. The next relevant
-event starts a new run.
+Historical category labels and decisions are not rewritten. A historical
+category labelled control proof is not current authorization: the current gate
+requires a live passed POC check. Governed revalidation of historical evidence
+is required before production relies on it, including old POC and registry
+results. A recorded manual approval remains authoritative.
+
+**Evidence coverage and freshness:** the run is *partial* when a source invoked
+for that run fails. Evidence already gathered stands and nothing is guessed,
+but older live checks remain in the score. `partial: false` means the invoked
+sources did not fail; it does not prove that every live check was fetched in
+that run. The callback carries neither the partial flag nor evidence ages.
+
+Use `GET /v1/runs/{run_id}` for `partial` and the invoked adapters'
+`adapters[].fetched_at` values. Use `GET /v1/cases/{case_id}/checks` for the
+current live checks and their `checks[].created_at` values. These reads are
+review aids. A check's `created_at` is check-record time, not proof of
+provider-evidence freshness. The checks endpoint shows current live-check
+state, not a callback-time snapshot. Combining the reads cannot prove source
+age or bind evidence to the callback decision. A full source-age and coverage
+contract bound to the decision must still be specified, built and accepted
+before automatic production decisions. Unavailable or unprovable freshness or
+coverage means hold. A relevant new event can fetch evidence again;
+`recalculate.requested` cannot.
 
 ## 3. A case, end to end
 
@@ -118,9 +138,15 @@ table above.
    which earns `verified_email` (10) and `verified_company_email` (25). Score
    80.
 4. The user supplies their RIR org handle. The platform POSTs
-   `org_id.submitted`, the RIR lookup passes (25), and the score reaches
-   105 with all five gates green.
-5. The computed decision is `approve`. While enforcement is off it arrives as
+   `org_id.submitted`, the RIR lookup passes (25), and the score reaches 105.
+   ORG-ID eligibility is now present, but the control gate is still false.
+5. The user completes the POC token exchange after the live directory and
+   delivery path are wired. A passed `poc_verified` adds 25 and passes the
+   control gate. It proves access to the RIR-listed contact channel associated
+   with the submitted organization or resource. It does not prove unrestricted
+   legal authority to represent the company; business-policy checks and a
+   recorded human review can still be required.
+6. The computed decision is `approve`. While enforcement is off it arrives as
    `manual_review_insufficient` with that computed decision attached, and your
    registration team confirms it in the platform admin.
 
@@ -186,7 +212,9 @@ rest.
 
 **Question 1. Can your platform send the POC verification email?**
 
-Proving control of IP resources means sending a token to the address the
+The POC exchange proves access to the RIR-listed contact channel associated
+with the submitted organization or resource. It does not prove unrestricted
+legal authority to represent an entity. The token goes to the address the
 regional registry lists for that contact, never to an address the user typed.
 The live RDAP-backed directory that can find that address is implemented, but
 the production pipeline does not select it yet.

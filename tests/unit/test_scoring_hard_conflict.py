@@ -12,6 +12,7 @@ from kyc_tool.domain.scoring import (
     org_id_check_passed,
     score,
 )
+from kyc_tool.validators.registry import registry_intent
 
 
 def _check(reason_codes, *, status=CheckStatus.FAIL):
@@ -48,6 +49,8 @@ def test_allow_list_membership_is_the_regression_guard():
     assert ReasonCode.DOCUMENT_REGISTRY_CONFLICT.value in HARD_CONFLICT_REASON_CODES
     assert ReasonCode.HARD_CONFLICT.value in HARD_CONFLICT_REASON_CODES
     assert ReasonCode.ORG_ID_BROKER_CONFLICT.value not in HARD_CONFLICT_REASON_CODES
+    assert "registry_exact_company_inactive" in HARD_CONFLICT_REASON_CODES
+    assert ReasonCode.REGISTRY_COMPANY_INACTIVE.value not in HARD_CONFLICT_REASON_CODES
 
 
 def _cv(check_type, points, category, *, status=CheckStatus.PASS, reasons=()):
@@ -79,3 +82,51 @@ def test_high_score_with_document_conflict_never_approves():
     assert gates.all_pass is False
     result = decide(breakdown.score, gates, org_id_check_passed(views), BrokerStatus.CLEAR)
     assert result.decision is Decision.MANUAL_REVIEW_INSUFFICIENT  # never approve
+
+
+def test_exact_inactive_registry_blocks_approval_even_with_verified_poc():
+    """The adverse-evidence gate is isolated from the independent-control gate."""
+    submission = {
+        "company_legal_name": "Acme Networks Ltd",
+        "address": "1 Main Street, London, EC1A 1AA",
+        "registration_number": "12345678",
+    }
+    intent = registry_intent(
+        {
+            "companies_house": {
+                "candidates": [
+                    {
+                        "legal_name": "ACME NETWORKS LTD",
+                        "company_number": "12345678",
+                        "status": "dissolved",
+                        "address": "1 Main Street, London, EC1A 1AA",
+                    }
+                ]
+            }
+        },
+        submission,
+    )
+    registry_view = CheckView(
+        intent.check_type,
+        intent.status,
+        0,
+        "legal_business_proof",
+        intent.source,
+        intent.reason_codes,
+        intent.source_detail,
+    )
+    views = [
+        registry_view,
+        _cv("business_document_verified", 25, "legal_business_proof"),
+        _cv("poc_verified", 25, "control_proof"),
+        _cv("verified_company_email", 25, "supporting"),
+        _cv("linkedin_company_match", 20, "supporting"),
+        _cv("website_verified", 10, "supporting"),
+    ]
+    breakdown = score(views)
+    gates = evaluate_gates(views, breakdown.score, 100, BrokerStatus.CLEAR)
+    result = decide(breakdown.score, gates, org_id_check_passed(views), BrokerStatus.CLEAR)
+    assert breakdown.score == 105
+    assert gates.control_proof is True
+    assert gates.no_hard_conflict is False
+    assert result.decision is Decision.MANUAL_REVIEW_INSUFFICIENT

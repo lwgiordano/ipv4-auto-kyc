@@ -3,6 +3,7 @@ points alone, and the buy-lock upgrade path (approve_buy_locked → org_id pass
 → approve with buying enabled)."""
 
 import json
+import re
 
 import pytest
 from sqlalchemy import text
@@ -143,10 +144,9 @@ def test_g6_hard_conflict_blocks_approval_e2e(client, post_event, phase3_worker,
 
 
 def test_buy_lock_upgrade_path_e2e(
-    client, post_event, phase3_worker, publisher, callback_capture, evidence_store
+    client, post_event, phase3_worker, publisher, callback_capture, evidence_store, email_sender
 ):
-    """Phase 3 acceptance: approve_buy_locked → org_id pass event → approve
-    with buying enabled (G7a/G7b through the whole service)."""
+    """Phase 3 acceptance: verified POC → approve_buy_locked → ORG-ID → approve."""
     case_id = "case-upgrade"
     post_event(case_id, "kyb.run_requested", ACME_KYB_WITH_CONTACT)
     phase3_worker.run_until_idle()
@@ -179,7 +179,28 @@ def test_buy_lock_upgrade_path_e2e(
 
     case = client.get(f"/v1/cases/{case_id}").json()
     assert case["score"] >= 100
-    assert case["latest_decision"] == "approve_buy_locked"  # all gates, no ORG-ID
+    assert case["latest_decision"] == "manual_review_insufficient"  # no independent control yet
+
+    post_event(
+        case_id,
+        "poc.submitted",
+        {"rir": "arin", "poc_handle": "JD123-ARIN", "org_handle": "ORG-ACME-1"},
+    )
+    phase3_worker.run_until_idle()
+    publisher.process_pending()
+    body = email_sender.sent[-1]["body"]
+    token = re.search(r"token: (\S+)", body).group(1)
+    token_id = re.search(r"reference: (\S+)", body).group(1)
+    post_event(
+        case_id,
+        "poc.token_verified",
+        {"token_id": token_id, "verified_at": "2026-07-04T11:00:00Z", "token": token},
+    )
+    phase3_worker.run_until_idle()
+    publisher.process_pending()
+
+    case = client.get(f"/v1/cases/{case_id}").json()
+    assert case["latest_decision"] == "approve_buy_locked"
     assert case["buy_status"] == "buy_locked_org_id_required"
 
     post_event(case_id, "org_id.submitted", {"rir": "arin", "org_handle": "ORG-ACME-1"})

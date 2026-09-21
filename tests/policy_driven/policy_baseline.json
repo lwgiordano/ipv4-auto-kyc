@@ -8,8 +8,8 @@
     "version": "2.0"
   },
   "decision_policy.json": {
-    "sha256": "72614f11854da72edb61f0271003b176fcb6fda3990ba5ceba6513939087ca90",
-    "version": "2.0"
+    "sha256": "9761c203c81e8dd86c66aef24a8d3f69707fc185ad27b68afc08b21f283e4111",
+    "version": "2.1"
   },
   "platform_events.json": {
     "sha256": "aaa8cb10a03b02d70386528010b2756455d6bb4303d4f641bb933196f0261787",
@@ -20,8 +20,8 @@
     "version": "2.0"
   },
   "scoring_rubric.json": {
-    "sha256": "10d4c7f3b2641a688ab79e3f5f30192c3a3c390020303b133b32aafd242a82eb",
-    "version": "2.1"
+    "sha256": "8ad3de9f9860c764446aa00ec0f4d3a040fec2f77dc925bc2e8c740295fdcc21",
+    "version": "2.2"
   },
   "state_machine.json": {
     "sha256": "220230adc23121a6627e5dfc01f59ff3dda65cf5d41a7a253b03642958d2594d",

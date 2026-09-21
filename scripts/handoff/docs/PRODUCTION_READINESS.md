@@ -52,6 +52,24 @@ The current runtime protections do not mean these database and operating
 requirements are finished. All of them belong to the production backlog that
 must close before automatic positive decisions are enabled.
 
+## Completion matrix
+
+These are production acceptance requirements. Evidence has not been collected
+for the following rows.
+
+| Area | Current implementation | Responsible team | Observable acceptance result |
+|---|---|---|---|
+| Provider wiring | Live registry clients exist. The production POC, email and document profile is incomplete. | IPv4.Global service team | Uncollected — a production-profile run uses only approved live providers and completes the chosen POC and document paths. |
+| Applicant authority | Automated control requires a passed POC for the RIR-listed contact channel. This is not unrestricted legal authority. | Joint product approval | Uncollected — recorded policy defines when POC is sufficient and when human approval is required, with production cases demonstrating both paths. |
+| Registry negatives | Exact matched inactive evidence holds for review. Generic historical inactive results do not create the hard conflict. | IPv4.Global service team | Uncollected — live-provider cases prove exact inactive, mismatched inactive and active-plus-inactive outcomes, followed by governed evidence revalidation. |
+| Callback ordering | The current wire is unsequenced. Migration `025`, activation, the platform bootstrap and receiver acceptance remain open. | IPv4.Global service team and TechCraft platform team | Uncollected — the tool emits governed order and the durable receiver passes ordered, duplicate, delayed and conflicting callback cases without using arrival time. |
+| Evidence freshness | The run and current-check reads are review aids only; no decision-bound source-age and coverage contract exists. | IPv4.Global service team and TechCraft platform team, with joint product approval of source-age and coverage rules | Uncollected — the teams implement the approved contract, bind its evidence to the decision, and prove that unavailable or unprovable freshness and coverage hold. The existing reads do not meet this acceptance result. |
+| Reviewer workflows | Manual approval and review tasks exist. Platform assignment and user notifications remain external. | TechCraft platform team | Uncollected — staging proves assignment, evidence request, manual precedence and governed release without callback override. |
+| Sanctions | The tool performs no sanctions screening. | TechCraft platform team | Uncollected — the platform records a passing sanctions control before calling the tool and demonstrates failure handling. |
+| Salesforce reconciliation | The read-only projection exists. The platform writer, retry and backfill service is not built here. | TechCraft platform team | Uncollected — sandbox evidence shows writes, retries, mapping changes, backfill and reconciliation through the public projection. |
+| Recovery | Retry, dead-letter and documented restore procedures exist. A full rehearsal is outstanding. | IPv4.Global service team and TechCraft platform team, with joint product approval setting recovery targets | Uncollected — database and object-store restore plus interrupted-cutover exercises meet approved recovery objectives. |
+| Capacity | No approved load targets or completed soak result are recorded. | IPv4.Global service team and TechCraft platform team, with joint product approval setting targets | Uncollected — signed volume, latency and maintenance targets are met by the release image in a representative soak. |
+
 ## Production go/no-go gate
 
 Production is **no-go** if any item below is false:

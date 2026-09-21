@@ -19,6 +19,7 @@ class ReasonCode(StrEnum):
 
     # registry
     REGISTRY_COMPANY_INACTIVE = "registry_company_inactive"
+    REGISTRY_EXACT_COMPANY_INACTIVE = "registry_exact_company_inactive"
     REGISTRY_NAME_MISMATCH = "registry_name_mismatch"
     REGISTRY_ADDRESS_MISMATCH = "registry_address_mismatch"
     REGISTRY_NUMBER_MISMATCH = "registry_number_mismatch"

@@ -1351,7 +1351,8 @@ const TIPS={
     <dt>Decision Score</dt><dd>The score recorded with the decision.</dd>
     <dt>Current Score</dt><dd>Today's evidence total. It can exceed the decision score when new
       evidence arrived after the decision; a new decision follows.</dd>
-    <dt>Buying</dt><dd>Whether the registrant may purchase addresses.</dd>
+    <dt>Buying</dt><dd>Whether an approved registrant has verified Org ID eligibility to purchase
+      addresses. Held or unapproved accounts cannot buy.</dd>
     <dt>Broker Status</dt><dd>Result of the Blocked Broker List check.</dd></dl>`},
   /* Case page */
   published:{t:"Recorded Decision",b:`<p>The recorded decision and the values it was based on.
@@ -1366,9 +1367,11 @@ const TIPS={
     are not sufficient.</p><dl>
     <dt>Score threshold met</dt><dd>The score reached the required total.</dd>
     <dt>Legal entity verified</dt><dd>Confirmed in an official registry or by a business document.</dd>
-    <dt>Control verified</dt><dd>Confirmed by a company email, an Org ID, or a verified RIR contact.</dd>
+    <dt>Control verified</dt><dd>Confirmed only by a verified RIR-listed contact. Company email and
+      public Org ID matches are supporting evidence.</dd>
     <dt>No broker block</dt><dd>No exact match on the Blocked Broker List.</dd>
-    <dt>No conflicting evidence</dt><dd>No two items of evidence contradict each other.</dd></dl>
+    <dt>No conflicting evidence</dt><dd>No evidence conflicts, including an exact official-registry
+      match showing the company is inactive.</dd></dl>
     <p>A rule marked not evaluated was bypassed by a manual approval.</p>`},
   live:{t:"Current Evidence Score",b:`<p>Current evidence total using the rubric shown below;
     it is not a new decision. A new decision is recorded only when a verification round

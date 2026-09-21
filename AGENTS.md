@@ -7,7 +7,8 @@ five hard gates, and returns one of four decisions for the platform to enforce.
 
 **Read first**: `KYC_Tool_Build_Package/` is the normative spec (committed
 unmodified except where `AUDIT_FINDINGS.md` records a human-directed amendment
-— currently one, the 2026-09-16 LinkedIn pass rule; the `machine_readable/*.json`
+— currently two: the 2026-09-16 LinkedIn pass rule and the 2026-09-21
+inactive-registry/independent-control rule; the `machine_readable/*.json`
 files win over prose) and
 `AUDIT_FINDINGS.md` records every known spec defect and the chosen resolution —
 corrections live in code/fixtures tagged `AUDIT:<id>`.

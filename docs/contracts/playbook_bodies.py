@@ -212,7 +212,10 @@ BUNDLE_PINNING_BODY = (
         "   never stopped — only the worker pool is drained here).\n"
         "\n"
         "**Activate the epoch.** Once the cutover is verified stable, write the\n"
-        "durable activation record:\n"
+        "durable activation record. Run this only for the first activation, when\n"
+        "no activation row exists. An existing activation epoch is a historical\n"
+        "boundary: do not reset or recreate it to deploy a later engine build.\n"
+        "For a new first activation under this release:\n"
         "",
         commands=(
             Command(('python', '-m', 'kyc_tool.ops.verify_pinnable_backlog')),
@@ -223,13 +226,13 @@ BUNDLE_PINNING_BODY = (
         commands=(
         Command((
             'python', '-m', 'kyc_tool.ops.activate_bundle_pinning_epoch', '--expect-bundle-hash', '<sha256>',
-            '--expect-engine', 'eng-1',
+            '--expect-engine', 'eng-2',
         )),
         ),
         wraps=(
             (
                 'python -m kyc_tool.ops.activate_bundle_pinning_epoch \\',
-                '    --expect-bundle-hash <sha256> --expect-engine eng-1',
+                '    --expect-bundle-hash <sha256> --expect-engine eng-2',
             ),
         ),
     ),
