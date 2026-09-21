@@ -175,6 +175,37 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-21 — case page: button semantics, card rhythm, copy, empty states (T21)
+
+turn: CLAUDE
+
+Files: `src/kyc_tool/ui/console.html` only. Presentation and copy; no claim, score, rule,
+threshold or evidence value changes. `.html`, so no engine re-pin applies.
+
+Acting on a read-only critique round of the case page (`58c379c`,
+`.impeccable/critique/2026-09-21T18-41-38Z__…-case-demo-case-001.md`). Four buckets, approved by
+the human:
+
+1. **Button semantics.** `button.warn` (424) declares exactly `button.primary`'s four properties
+   (410) while the two comments above it specify peach — so the rulebook bypass renders as a
+   second filled accent-blue primary. `.warn` gets the amber family it documents. The website
+   `Approve`/`Reject` pair stops using `.warn` (a review task is not a rulebook bypass), drops to
+   the 32px table height DESIGN.md §12 asks for, stops being two accent-blue buttons 8px apart,
+   and asks once before recording a named person's verdict.
+2. **Card rhythm only** — the human chose to keep both heading patterns. The first three cards sit
+   at 16px while the eight labelled sections below them get 32+12, so the reviewer's decision
+   surface is the most crowded region on the page. Route-scoped so no other page moves.
+3. **Copy.** The record-conflict branch stops handing a reviewer "migration 022"; one vocabulary
+   per value for buying and for the threshold; one explicit absolute time format that names its
+   zone; and a timestamp stops rendering as a tracked all-caps label.
+4. **Empty states and header chips.** Salesforce Fields gains the empty state it is the only table
+   without; Decision History gains a next step; Verification Codes stops deleting its own section.
+   The header chip row stops butting against the contact line at 0px and stops changing that gap
+   with the payload.
+
+Gauntlet: parent implements (the critique context is here), independent reviewer subagent, parent
+whole-unit read. Contrast on the new amber button measured in Chromium, both themes.
+
 ### RELEASE [CLAUDE] 2026-09-21 — console: tooltip centring, selected nav row, demo badge wording — `5d2b40a..38fd09e`
 
 turn: CODEX
