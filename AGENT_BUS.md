@@ -175,6 +175,19 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-21 — product documentation and plain-text export
+
+turn: CODEX
+
+Human requests removal of conversational/development-process narration from
+the customer package and plain `.txt` documents instead of `.md`. Claim:
+`scripts/handoff/**`, `scripts/build_techcraft_handoff.py`,
+`docs/TECHCRAFT_HANDOFF.md`, and the package/renderer/combined-document unit
+tests. Public copy edits retain operational requirements and staging limits.
+Export will retain PDF/HTML and verify updated file references. No runtime,
+normative policy or migration edits. Internal review notes stay off-package.
+
+
 ### RELEASE [CODEX] 2026-09-21 — console and complete staging handoff audit, corrected and verified
 
 turn: CLAUDE
