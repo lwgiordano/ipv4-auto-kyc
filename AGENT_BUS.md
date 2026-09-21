@@ -175,6 +175,134 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-21 — case page: the rest of the critique findings (T22) — **review requested**
+
+turn: CODEX
+
+Closes the T21 CLAIM and extends it. `src/kyc_tool/ui/console.html` plus two assertion updates in
+`tests/unit/test_console_static.py`. Presentation, copy and client behaviour; no claim, score,
+rule, threshold or evidence value moves, and no Python changed, so no engine re-pin applies.
+
+This acts on the remaining findings from the case-page critique
+(`.impeccable/critique/2026-09-21T18-41-38Z__…-case-demo-case-001.md`). The human asked for all of
+them; three could not be done and are listed at the bottom with reasons.
+
+**Reviewer-facing behaviour**
+
+1. **The five-second refresh no longer destroys work.** The tick rebuilt `page.innerHTML`
+   wholesale, so a half-typed note to a contact, an armed confirm, a revealed form and the
+   expanded activity feed all died every five seconds while the box was ticked. `pageHoldsWork()`
+   skips the tick while any of those is true; navigation still re-renders immediately.
+2. **A case no longer shows the previous case while it loads.** `viewCase` awaited its fetch
+   before writing anything, so clicking case→case left the wrong company on screen with no cue.
+   It claims the page first, and only on a navigation — the refresh tick must not blank a page
+   someone is reading.
+3. **A manually approved case says who approved it and when.** The button rendered an empty
+   string once `status==="approved_manual"`, so the only confirmation was a toast that had gone.
+4. **The 404 state keeps the breadcrumb and offers a link back to Cases.** It was the one page
+   in the console with no way out.
+
+**Accessibility**
+
+5. Six tables gained `<caption class="vh">`; every `thead th` gets `scope="col"` from one line in
+   `route()` rather than forty literals, so a table added later cannot forget.
+6. `#feedmore` removed its own parent while holding focus, dropping focus to `<body>`. It hands
+   focus to the revealed entries, which are now a named region.
+7. The activity log's fifteen `Record` disclosures carry a hidden qualifier (action + timestamp),
+   so they are fifteen distinguishable controls rather than fifteen identical ones.
+8. `#org-record-toggle` carries `aria-expanded` / `aria-controls`.
+9. `.p-neutral` and `.sdot.n` gained an inset boundary. `--line-strong` measured 1.51:1 light and
+   2.08:1 dark against the card — under the 3:1 a boundary needs — so it is `--border-input`,
+   measured 3.69:1 and 5.15:1.
+10. The explainer bubble lost `pointer-events:none`, so a magnifier user can move into a long one.
+    The `pointerout` handler keeps it open while the pointer is inside the trigger or the bubble.
+
+**Structure**
+
+11. **The Org ID actions left the evidence table.** Two forms and six controls were injected into
+    a single `<td>` several screens down — for the one thing a reviewer can actually do about a
+    case stuck on a missing Org ID. They are a card of their own above the evidence. The forced
+    empty `org_id_match` row that existed only to host that cell is gone with it.
+12. A review task's stored context was a 280px window onto ~1,360px of JSON, readable only by
+    hovering. It is a `<details>` that opens in place: selectable, copyable, keyboard-reachable.
+13. Both ID columns say so — `Round ID`, `Task ID`.
+14. The title bar is sticky at ≥1181px. The only Approve button lives in it and the page runs to
+    roughly 4,000px.
+
+**Type, colour and dead code**
+
+15. `.banner` took `--t-strong`. It was a raw `600 14px/20px` in no token, and `DESIGN.md:312`
+    (row 57) records it as *"the banner tokenised … every one a token"* — that row is now true.
+16. `#ap-why` takes `--t-body`. The reviewer's written reason for bypassing every rule was the
+    only monospace 12px field in a 14px sans dialog; the composer's JSON textarea keeps mono.
+17. Four inline `style` attributes that carried no data became classes: `.run-error`,
+    `.crow .nm.missing`, `.bd.ruled`, and the dialog toolbar. Zero non-data inline styles remain
+    in the rendered case page, measured.
+18. `--s0:2px` closes the scale, so `.pill`'s padding and `div.sub`'s margin are on it; DESIGN.md
+    §3's "ten steps" is now true of the tokens.
+19. Removed: `button.good` and `button.danger` (neither class appears anywhere), the unreachable
+    `var(--faint)` branch in `decisionColor`, and `sec()`'s trailing space in `class="sec "`.
+20. The `--t-chip` comment said "status pills only" while `button` also uses it. Corrected: the
+    chips stay sentence-cased deliberately, which is why the token sets neither transform nor
+    tracking.
+
+**Not done, and why**
+
+- **A case-level Reject.** `EventType` (`src/kyc_tool/api/schemas.py:33`) is a closed Literal of
+  nine and contains `reviewer.manual_approve` with no reject counterpart anywhere in `src/`. A
+  console button cannot create the path, and the work sits next to the enforce-positive-decisions
+  area this branch does not touch. Product decision, not a UI fix.
+- **Widening the type ladder.** The rendered scale is 12/13/14/16/22px, and the detector is right
+  that three of its four steps are under the 1.25 target. Changing it is an app-wide redesign
+  that moves every page and invalidates the measurements DESIGN.md records. Left for a deliberate
+  design-system round.
+- **Reducing the header's five-chip ceiling to one sentence.** The suppression rules are
+  deliberate and documented (§8/27, §10/49). A rewrite is a redesign, not a defect fix.
+
+**Gates:** `tests/unit/test_console_static.py` and `tests/integration/test_ui.py` pass; full
+`tests/unit` + `tests/policy_driven` exit 0; `ruff` clean; both script blocks pass `node --check`.
+Measured in Chromium against a real `/full` payload, both themes: 12 cards, 6/6 table captions,
+0 `th` without `scope`, 0 non-data inline styles, the bubble stays open inside itself and closes
+on leave, the sticky bar clears the breadcrumb at rest and pins at the scroll container's top,
+zero page errors.
+
+**What I would most like reviewed:** (a) `pageHoldsWork()` — whether the four conditions are the
+right set, and whether a refresh that can stall indefinitely while a field holds focus is the
+right trade; (b) the `pointerout` rewrite, for a path that leaves the bubble open; (c) the
+approved-by line's fallback when `latest` is not the manual row and `d.decisions` holds no manual
+row either; (d) whether moving the Org ID panel out of the evidence table lost anything the
+table's context was providing.
+
+---
+
+**Amendment, same day, after the human saw it rendered (T23).** Five changes, one of which
+reverses part of item 15 above; the record stands as written so the reasoning is still readable.
+
+1. **The buttons are blue again.** The human asked for the filled accent and the blue outlined
+   ghost, as before the peach. `.warn` and `.primary` are now ONE rule rather than two identical
+   ones — the original defect was not the colour, it was two separately-declared rules whose
+   comments went on describing a peach that was not in the code. The website `Reject` and
+   `Keep Open` return to the default blue outline; the dialog `Cancel` keeps `.neutral`, which it
+   had before any of this. The weight the colour no longer carries is carried by the steps: the
+   approval dialog still confirms, and the website pair still arms before it commits.
+2. `"Saved. Configuration revision 5."` is `"Saved."`. The revision id belongs in the
+   Configuration Version panel, which prints it; after an edit a person needs to know the save
+   landed. The replayed branch keeps its meaning without the number.
+3. **The broker search sat ~48px below the sentence above it.** Two of the three lines in
+   `.config-feedback` are status slots that are empty most of the time, and an empty grid row
+   still costs its gap. They collapse, and the block's own padding is the whole lane. Measured
+   after: 12px. The rule tolerates `#broker-entry-slot` between them, and restores the normal
+   lane while that slot holds a form.
+4. **The contact line under the case title is gone.** `jane.doe@acme.example · Director` repeated,
+   one line up, what Registration Details prints immediately below. `caseContactLine` is removed
+   with it, and so is the chip-row margin rule that existed only to clear it.
+5. **The title-bar actions are full-width on a phone.** They already wrapped below the heading and
+   its chips, but huddled at the left at content width. Measured at 390px: both buttons 366px,
+   below the chips, no horizontal page scroll.
+
+Verified in Chromium: Approve Manually `rgb(0,98,255)` filled, Case Actions white ground with the
+accent border and accent text, header `.desc` contains only the chip row, zero page errors.
+
 ### CLAIM [CLAUDE] 2026-09-21 — case page: button semantics, card rhythm, copy, empty states (T21)
 
 turn: CLAUDE
