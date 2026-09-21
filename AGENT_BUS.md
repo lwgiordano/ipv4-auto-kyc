@@ -175,6 +175,65 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-21 — product documentation and plain-text package
+
+turn: CLAUDE
+
+Closes the product-documentation CLAIM. Human explicitly requested neutral
+product documentation, no conversational/build-history/review narration, and
+`.txt` instead of Markdown in the customer archive. Range `769d1db..e588db8`;
+source changes `546a6db`, cover correction `e588db8`. No runtime, engine build,
+normative policy or migration changes. This is a staging package, not production
+approval.
+
+**Delivered:** all nine public authoring copies edited; combined reference
+regenerated; ten archive documents exported as readable plain text, with tables
+converted into labelled records and commands preserved. Internal Markdown stays
+in the repository. PDF/HTML retained. Known document links use `.txt`. The
+cover uses the product title and release status, without source-hash clutter.
+Removed first-person development narration, internal milestone aliases and
+review credits. Corrected the stale enforcement shortcut: validator hardening
+alone does not authorize enforcement; all production-readiness criteria apply.
+
+Manifest schema 2 retains source provenance and per-file hashes, sizes and
+permissions, but not process/transformation notes or the excluded-test inventory.
+No scores, reviewer identity, tool credits or before/after commentary ship.
+Published migrations retain original comments and exact bytes: the frozen-file
+integrity boundary was not weakened for presentation. Human was told explicitly.
+
+**Independent reviews:** scoped copy and export reviews plus combined source
+and exact-archive review completed. Export review reproduced seven failures from
+authoring-only tests opening removed `.md` paths. Four authoring-governance
+suites are excluded from the customer archive and remain in the full source
+gate; runtime tests remain. Combined review's three editorial findings were
+fixed. Final archive review verified CRC, all 315 listed files, all ten text
+documents and all 21 code blocks. Parent inspected the 57-page PDF contact
+sheet and final cover. Nine copy-lint results were 5/5 with numerical proof
+allowed. Separate-family CLI copy pass did not run: revoked OAuth. No claim
+that it completed; this process detail is internal only.
+
+**Verification:** full source suite at `546a6db`: 2984 passed / 1 existing
+governance skip; 57 affected tests reran at `e588db8`. Fresh preview archive:
+2209 passed. Final exact ZIP extraction: setup/doctor passed, full suite
+2209 passed / no skips in 526.92s, lint clean, imports 2 kept / 0 broken.
+CI run `35657443142` at `e588db85da4bc14cd1a24bcfe63a2d73973e999d` passed
+kyc-tool, substrate-kit and signal-green. No Docker binary was available;
+image build remains untested locally.
+
+**Timing observation retained:** the first final-extraction run hit three
+20-second subprocess timeouts in live-configuration activation tests and was
+interrupted. Those exact three passed in 7.73s without edits; the subsequent
+complete final-extraction run passed all 2209. Cause is not established and no
+fix is claimed. Evidence stays in the internal output logs/report, not the ZIP.
+
+**Artifact:** `output/techcraft/IPv4-Global-KYC-KYB-Staging-2026-09-21-r5.zip`
+(local artifact, not committed), source `e588db8`, 315 manifest-listed files
+plus manifest, zero `.md` archive entries. SHA-256:
+`2dde9080fdca798b1aefb5d1dc91ecf5f1f4f17b8b575ce55dfc85b02576df3a`.
+All 152 runtime/migration/policy files are byte-identical to r4. Internal report:
+`output/techcraft-review/2026-09-21-r5-review.md`. No publication, delivery to
+TechCraft, production enabling or provider credentials were performed.
+
 ### CLAIM [CODEX] 2026-09-21 — product documentation and plain-text export
 
 turn: CODEX
