@@ -175,6 +175,90 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-21 — console and complete staging handoff audit, corrected and verified
+
+turn: CLAUDE
+
+Closes the 2026-09-21 CLAIM. Human authorized audit and direct corrections to
+the latest release and exported package. Reviewed `872314d..fcfe48f`; fixes
+landed in `013113a` (`fcfe48f..013113a`, including the intervening CLAIM).
+Independent scoped reviews and the final combined review are clean for the
+corrected scope; no remaining P1/P2 finding from this pass. This is staging
+handoff approval, not production approval.
+
+**Nine findings fixed (1 P1, 7 P2, 1 P3):**
+
+1. **P1 — approver attribution:** the case header no longer chooses a manual
+   row from timestamp-sorted display history. It uses the authoritative manual
+   decision supplied by the read API and does not invent missing attribution.
+2. **P2 — draft loss:** background refresh now checks work again after the
+   response, including failure. Dirty input, focus/caret, armed confirmation,
+   open forms and pending submissions survive. Background refresh is explicit;
+   navigation errors and successful action refreshes retain their own behavior.
+3. **P2 — unsupported delivery claims:** the card says Recorded Decision and
+   states delivery evidence separately. Manual approval records an approval,
+   not a callback; token creation is not email delivery. Dialogs, activity text
+   and help text use the same distinction. Null delivery time is not called
+   pending, failed or proof the platform did not receive the callback.
+4. **P2 — false no-adapter explanation:** no external results no longer implies
+   the broker check stopped the run; website-only rounds are covered.
+5. **P2 — stale route completion:** generation checks protect focus/navigation
+   cleanup as well as the renderer itself.
+6. **P2 — repeated form submissions:** both Org ID forms guard in-flight work,
+   disable their controls, permit retry after failure and clear submitted dirty
+   state after acknowledgement. Late responses are bound to their original
+   form. This is not server-side idempotency after an unknown network outcome.
+7. **P2 — misleading storage hint:** concealed paths use a nonempty explicit
+   hint, including filesystem roots. Actual location remains in deployment
+   configuration; no account basename is exposed as a pretend relative path.
+8. **P2 — incorrect email mode:** Data Sources distinguishes logging, file
+   sink and unsupported provider configuration without touching the sink or
+   reflecting arbitrary configuration values.
+9. **P3 — stale operator documentation:** canonical/public runbooks and the
+   combined reference now match the menus, reviewer actions, browser working
+   state, storage hint and email modes. The standalone doctor correctly names
+   PostgreSQL as needed for both the demo and integration tests.
+
+**Evidence.** Source full gate: **2976 passed, 1 skipped**, local PostgreSQL,
+ruff clean, import contracts 2/0, diff-check clean. The skip is a document
+fixture without comma-separated token cells, independently reconfirmed with
+the skip reason; it is not a skipped DB test. Parent focused gate 117 passed;
+independent reviewer gate 115 passed plus the browser harness and six further
+race checks. Browser harness passes independently in the parent. Final visual
+matrix: 64 route/theme/width checks, with populated case fixtures explicitly
+separate from the real DB tests. No browser exceptions or page-wide horizontal
+overflow. Engine pin updated with the Python change; build id, scoring,
+normative package and migrations unchanged. CI and its green comment confirm
+all three required jobs on exact source commit `013113a`.
+
+**Exact handoff artifact.** `IPv4-Global-TechCraft-Staging-2026-09-21-r4.zip`,
+source `013113a633dd872213be6f30a4cfd8543c63c115`, SHA-256
+`cfdddda1b398a359d8f63e1b798b9f40eec80142e62d9f42b3a2cb59d5d3d9cf`.
+All 319 manifest-listed files verify; no unexpected entries. Fresh extracted
+setup/doctor/lint/import contracts pass; imports resolve inside the extracted
+package. Its **entire shipped test suite: 2226 passed, no skips**, real local
+PostgreSQL. Rendered 57-page PDF checked, including the final release cover and
+changed runbook pages. Export and rendered-PDF prohibited-text scans pass.
+Docker is not installed here: no local container-image build is claimed.
+
+**Copy review complete.** Plain-English edits preserve technical contracts;
+no invented anecdotes, opinions, author credit or unsupported promises were
+added. SlopMonster final checks: ALERTS, DEPLOYMENT, PLATFORM_BRIEFING,
+PLATFORM_INTEGRATION, PRODUCTION_READINESS, RUNBOOK, SALESFORCE_MAPPING,
+START-HERE and README each **5/5** with documented technical quantities
+reviewed rather than removed. No pre-edit score is claimed. Scores, findings
+and review history stay here/in the excluded internal report, not the package.
+The ZIP excludes the substrate and collaboration records. The one frozen
+migration comment retaining an internal issue reference is unchanged, as are
+the manifest's declared immutable-commentary exceptions; it contains no model
+credit or conversation.
+
+Production gates remain explicit: provider choices/wiring, TechCraft receiver
+acceptance and ordering activation, remaining reserved database work,
+Salesforce writes, capacity/soak and full recovery rehearsal. No positive
+enforcement or production gate was relaxed. Independent review of this range
+is welcome; do not describe the staging package as production sign-off.
+
 ### CLAIM [CODEX] 2026-09-21 — latest console and complete handoff review
 
 Human requests review of the latest Claude release, correction of affected
