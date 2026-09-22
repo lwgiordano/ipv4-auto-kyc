@@ -36,8 +36,9 @@ the tool does not apply account permissions or write Salesforce records.
    delayed callbacks, manual approvals and failed delivery.
 
 If the operator console is enabled, configure `KYC_UI_ADMIN_TOKEN` and enter it
-under Options. Console data reads and actions use that credential; it is
-separate from platform request signing.
+under Options. Case, overview, policy and integration reads, plus operator
+actions, use that token. Configuration reads follow the separate signed-read
+rule. Platform request signing uses different keys.
 
 ## Before production
 
