@@ -175,6 +175,60 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-21 — approved policy corrections and staging package r6
+
+turn: CLAUDE
+
+Released all lanes in the preceding claim. Product source: `70445bdcf0bad394c2833a38980cf4f3dbadc20b`
+(implementation range `80d43c4..70445bd`; previous packaged source `e588db8`).
+The human approved both policy changes and the bounded plan before implementation.
+No production activation, new provider, callback-field change or migration edit.
+
+**Policy:** only a live passed `poc_verified` satisfies automated control, regardless
+of old category labels or edited point weights. Public ORG-ID and company-email
+matches retain supporting points. Recorded manual approval remains authoritative.
+Registry identity is matched before status; an exact inactive result wins across
+candidate/source order and blocks automatic approval through the conflict gate.
+It does not itself reject the case. The new exact-only reason avoids promoting
+historical generic inactive reasons that may describe a different company.
+New semantics carry `eng-2`; current stamping tests and first-epoch instructions
+agree, while historical `eng-1` fixtures and immutable epoch records remain intact.
+Normative JSON changes are the explicitly approved human amendment, recorded in
+AGENTS/AUDIT; point values and four decision values are unchanged.
+
+**Documents:** coherent 110-point callback example, eight receiver acceptance cases,
+separate receipt/effective-ledger/permission rules, integrity-before-replay handling,
+and a ten-area completion matrix. First interim callback effectiveness is not a
+LIVE permission grant. Run/check reads are review aids, not decision-bound freshness
+proof; check creation time is not source age. Production freshness, provider,
+ordering, receiver, Salesforce, recovery and capacity work stays explicitly open.
+Public documents contain product instructions only; internal review notes do not ship.
+
+**Independent verification:** non-Astra implementation and scoped reviews, followed
+by combined Astra PASS (138 focused tests plus 34 adversarial registry permutations).
+The first doc review found three real ambiguities/omissions; all corrected and
+independently re-reviewed. Full source PostgreSQL suite: **2998 passed, 1 skipped**
+(inapplicable comma-list document mutation), 657 warnings. Ruff and imports 2/0 pass.
+CI is green on `70445bd`: https://github.com/lwgiordano/ipv4-auto-kyc/actions/runs/35669808312
+
+**Exact local artifact:** `output/techcraft/IPv4-Global-KYC-KYB-Staging-2026-09-21-r6.zip`
+SHA-256 `5d8edac8f1dc71683a05cb19dfb8e04cf64967c70bccb96901e34437855be40e`.
+315 manifest-listed files plus manifest; 275 Python files parse; 10 TXT documents;
+zero Markdown/substrate/collaboration entries. CRC, hashes, sizes, modes, inventory,
+internal-meta scan and all 18 command-block content/order checks pass. Exact PDF:
+61 pages visually inspected, no clipping/overlap or out-of-page glyphs observed.
+Fresh extraction setup/doctor/lint/imports pass; complete packaged PostgreSQL suite:
+**2215 passed, no skips**, 554 warnings. No earlier timing observation recurred.
+
+**Limits:** Docker absent, so no image-build claim. No actual TechCraft receiver,
+live-provider composition, Salesforce, capacity or disaster-recovery acceptance
+was executed. This is closed-staging readiness only, not production approval.
+All nine public sources score 5/5 in SlopMonster lint; the separate-family cleanse
+request failed with revoked OAuth credentials (HTTP 401), produced no copy, and
+is NOT claimed complete. No tooling credits, scores or process notes enter the ZIP.
+Review the approved change as a unit if taking the next peer-review turn; do not
+activate production or reinterpret documented future work as completed.
+
 ### CLAIM [CODEX] 2026-09-21 — scoring-policy corrections and integration acceptance package
 
 turn: CODEX
