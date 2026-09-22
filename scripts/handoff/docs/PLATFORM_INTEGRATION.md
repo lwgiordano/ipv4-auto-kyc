@@ -34,12 +34,15 @@ the channel, not unrestricted legal authority to represent the company.
 Approving a case approves the contact, not the company. A second registrant at
 the same company is a second case, with its own `case_id`.
 
-**Enforcement posture:** auto-enforcement is off. A computed `approve` /
+**Initial integration posture:** auto-enforcement is off. A computed `approve` /
 `approve_buy_locked` is delivered as `manual_review_insufficient` with an
 `enforcement_held` marker (§4), and the registration team confirms it.
 Production enforcement requires completion of the full backlog in
 `PRODUCTION_READINESS.md`, real-provider staging tests and platform cutover
-approval. This guide is not permission to enable it.
+approval. An optional automation rehearsal uses synthetic sandbox accounts
+only, after the approvals in `PLATFORM_BRIEFING.md` §6. It does not permit live
+permission changes or bypass the interim receiver holds in §4. This guide is
+not permission to enable production enforcement.
 
 ## 2. Authentication (both directions)
 

@@ -36,7 +36,7 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 | | Staging | Production |
 |---|---|---|
 | `KYC_ENVIRONMENT` | `development` (until real providers are available) | `production` |
-| `KYC_ENFORCE_POSITIVE_DECISIONS` | `true` — rehearse full automation | `false`; enable only after all `PRODUCTION_READINESS.md` requirements pass |
+| `KYC_ENFORCE_POSITIVE_DECISIONS` | `false` for initial integration; `true` only for an authorized synthetic-account rehearsal | `false`; enable only after all `PRODUCTION_READINESS.md` requirements pass |
 | Providers | live registry lookups (`CH_API_KEY` set), with stand-ins for the POC directory, document extraction and email (file sink) | real registry providers, required. Real OCR and email providers are needed only if the tool extracts documents or sends the POC email, which are the two open questions in `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
 | Secret | staging secret | separate production secret |
 
@@ -45,10 +45,13 @@ invalid under its checks (for example, a missing secret, stub provider or
 non-HTTPS callback URL), listing the violations. Passing these checks does not
 prove that external services are available or the platform integration works.
 
-Staging's automation-on is safe **only** while staging is closed to untrusted
-callers. Path-bound HMAC v2 is available, but during the dual-accept window a
-**v1-only** request is still path-unbound — a captured signed event could be
-replayed to another case within the skew window. The redirect closes for v2
+Initial staging integration keeps positive enforcement off. The optional
+automation rehearsal requires the approvals and synthetic-account isolation in
+`docs/PLATFORM_BRIEFING.md` §6; it never changes live permissions. Keep staging
+closed to untrusted callers in both stages. Path-bound HMAC v2 is available,
+but during the dual-accept window a **v1-only** request is still path-unbound —
+a captured signed event could be replayed to another case within the skew
+window. The redirect closes for v2
 traffic at deploy, but for everyone only once **inbound v1 is actually disabled**
 (the zero-witness satisfied AND `hmac_v1_inbound_sunset_at` in effect). Keep
 staging's perimeter closed until that day arrives. Deploying v2 is not the

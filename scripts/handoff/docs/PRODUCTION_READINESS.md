@@ -15,7 +15,7 @@ The staging package includes signed event ingestion, scoring, read APIs,
 decision callbacks, retries, dead-letter handling, an operator console, live
 registry clients, S3-compatible evidence storage, Salesforce projection and a
 conformance kit. Positive-decision enforcement may be exercised only in a
-closed staging environment.
+separately authorized, closed staging rehearsal using synthetic accounts.
 
 Production work is still open in these areas:
 
@@ -23,6 +23,11 @@ Production work is still open in these areas:
   choice is platform-owned delivery through a typed contract or tool-owned SES.
 - Select and wire the production document path. The open choice is
   platform-extracted JSON or tool-side OCR with an approved provider.
+- Agree how document authenticity and issuer provenance are established.
+  Matching four extracted fields to the submission is a consistency check,
+  not proof that the document is genuine. Define and test upload authorization,
+  allowed types and sizes, safe storage, scanning and quarantine for the chosen
+  path before relying on document points for unattended approval.
 - Build the production provider profile. Production must not select fixtures,
   empty directories, file sinks or development stand-ins.
 - Build and activate migration `025` with the platform-owned ordering bootstrap.
@@ -59,7 +64,7 @@ for the following rows.
 
 | Area | Current implementation | Responsible team | Observable acceptance result |
 |---|---|---|---|
-| Provider wiring | Live registry clients exist. The production POC, email and document profile is incomplete. | IPv4.Global service team | Uncollected — a production-profile run uses only approved live providers and completes the chosen POC and document paths. |
+| Provider wiring | Live registry clients exist. The production POC, email and document profile is incomplete; document field matching does not establish authenticity. | IPv4.Global service team and TechCraft platform team | Uncollected — a production-profile run uses only approved live providers, completes the chosen POC and document paths, and passes the agreed authenticity and upload-control tests. |
 | Applicant authority | Automated control requires a passed POC for the RIR-listed contact channel. This is not unrestricted legal authority. | Joint product approval | Uncollected — recorded policy defines when POC is sufficient and when human approval is required, with production cases demonstrating both paths. |
 | Registry negatives | Exact matched inactive evidence holds for review. Generic historical inactive results do not create the hard conflict. | IPv4.Global service team | Uncollected — live-provider cases prove exact inactive, mismatched inactive and active-plus-inactive outcomes, followed by governed evidence revalidation. |
 | Callback ordering | The current wire is unsequenced. Migration `025`, activation, the platform bootstrap and receiver acceptance remain open. | IPv4.Global service team and TechCraft platform team | Uncollected — the tool emits governed order and the durable receiver passes ordered, duplicate, delayed and conflicting callback cases without using arrival time. |

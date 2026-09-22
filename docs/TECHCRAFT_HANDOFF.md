@@ -270,6 +270,9 @@ production format before implementing uploads. `PLATFORM_INTEGRATION.md` §6
 describes both options.
 The document check cannot award its 25 points in production until the chosen
 path is wired into the production profile.
+Matching extracted fields to the submission does not authenticate the document
+or its issuer. Agree the production document-trust rule and upload controls
+before relying on those points for unattended approval.
 
 ### Hosting and operations ownership
 
@@ -310,11 +313,14 @@ release and redeploys. Do not edit code on the server.
 
 ## 6. Staging plan
 
-Staging runs with **automation on** (`KYC_ENFORCE_POSITIVE_DECISIONS=true`) so
-that the real end state gets a rehearsal. That is safe **only** because
-staging is closed: reachable by authorized tests, never by an untrusted caller.
-It is a rehearsal and not the production go-live. Production approval requires
-the full `PRODUCTION_READINESS.md` backlog, an end-to-end staging run on real
+Initial staging integration runs with `KYC_ENFORCE_POSITIVE_DECISIONS=false`.
+Prove signed events, the durable receiver and all eight receiver acceptance
+cases before changing that setting. An automation rehearsal may then use
+`true` only with approval from the IPv4.Global integration owner and TechCraft
+platform owner, in an isolated, closed sandbox with synthetic accounts. It
+must not change live account or buying permissions; return the setting to
+`false` when the rehearsal ends. This is not a production go-live. Production
+approval requires the full `PRODUCTION_READINESS.md` backlog, an end-to-end staging run on real
 adapters, and platform cutover approval before automation can be turned on in
 **production**. Production launches with it off. The tool investigates, the
 review team confirms, and the flag flips per environment only after that gate
@@ -342,7 +348,7 @@ Checklist:
    rehearse, so configure it on both sides.
 4. Core env vars: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL` (the
    staging receiver), `KYC_OBJECT_STORE=s3` with `KYC_S3_BUCKET`,
-   `KYC_ENFORCE_POSITIVE_DECISIONS=true`, and `CH_API_KEY` (§8 item 14),
+   `KYC_ENFORCE_POSITIVE_DECISIONS=false`, and `CH_API_KEY` (§8 item 14),
    because the registry lookups are live.
 5. Leave `KYC_ENVIRONMENT` at `development` for now. The Companies House,
    GLEIF, RIR RDAP and Floqer clients can make live calls in this profile, but
@@ -596,12 +602,15 @@ the channel, not unrestricted legal authority to represent the company.
 Approving a case approves the contact, not the company. A second registrant at
 the same company is a second case, with its own `case_id`.
 
-**Enforcement posture:** auto-enforcement is off. A computed `approve` /
+**Initial integration posture:** auto-enforcement is off. A computed `approve` /
 `approve_buy_locked` is delivered as `manual_review_insufficient` with an
 `enforcement_held` marker (§4), and the registration team confirms it.
 Production enforcement requires completion of the full backlog in
 `PRODUCTION_READINESS.md`, real-provider staging tests and platform cutover
-approval. This guide is not permission to enable it.
+approval. An optional automation rehearsal uses synthetic sandbox accounts
+only, after the approvals in `PLATFORM_BRIEFING.md` §6. It does not permit live
+permission changes or bypass the interim receiver holds in §4. This guide is
+not permission to enable production enforcement.
 
 ## 2. Authentication (both directions)
 
@@ -1329,7 +1338,7 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 | | Staging | Production |
 |---|---|---|
 | `KYC_ENVIRONMENT` | `development` (until real providers are available) | `production` |
-| `KYC_ENFORCE_POSITIVE_DECISIONS` | `true` — rehearse full automation | `false`; enable only after all `PRODUCTION_READINESS.md` requirements pass |
+| `KYC_ENFORCE_POSITIVE_DECISIONS` | `false` for initial integration; `true` only for an authorized synthetic-account rehearsal | `false`; enable only after all `PRODUCTION_READINESS.md` requirements pass |
 | Providers | live registry lookups (`CH_API_KEY` set), with stand-ins for the POC directory, document extraction and email (file sink) | real registry providers, required. Real OCR and email providers are needed only if the tool extracts documents or sends the POC email, which are the two open questions in `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
 | Secret | staging secret | separate production secret |
 
@@ -1338,10 +1347,13 @@ invalid under its checks (for example, a missing secret, stub provider or
 non-HTTPS callback URL), listing the violations. Passing these checks does not
 prove that external services are available or the platform integration works.
 
-Staging's automation-on is safe **only** while staging is closed to untrusted
-callers. Path-bound HMAC v2 is available, but during the dual-accept window a
-**v1-only** request is still path-unbound — a captured signed event could be
-replayed to another case within the skew window. The redirect closes for v2
+Initial staging integration keeps positive enforcement off. The optional
+automation rehearsal requires the approvals and synthetic-account isolation in
+`docs/PLATFORM_BRIEFING.md` §6; it never changes live permissions. Keep staging
+closed to untrusted callers in both stages. Path-bound HMAC v2 is available,
+but during the dual-accept window a **v1-only** request is still path-unbound —
+a captured signed event could be replayed to another case within the skew
+window. The redirect closes for v2
 traffic at deploy, but for everyone only once **inbound v1 is actually disabled**
 (the zero-witness satisfied AND `hmac_v1_inbound_sunset_at` in effect). Keep
 staging's perimeter closed until that day arrives. Deploying v2 is not the
@@ -2769,7 +2781,7 @@ The staging package includes signed event ingestion, scoring, read APIs,
 decision callbacks, retries, dead-letter handling, an operator console, live
 registry clients, S3-compatible evidence storage, Salesforce projection and a
 conformance kit. Positive-decision enforcement may be exercised only in a
-closed staging environment.
+separately authorized, closed staging rehearsal using synthetic accounts.
 
 Production work is still open in these areas:
 
@@ -2777,6 +2789,11 @@ Production work is still open in these areas:
   choice is platform-owned delivery through a typed contract or tool-owned SES.
 - Select and wire the production document path. The open choice is
   platform-extracted JSON or tool-side OCR with an approved provider.
+- Agree how document authenticity and issuer provenance are established.
+  Matching four extracted fields to the submission is a consistency check,
+  not proof that the document is genuine. Define and test upload authorization,
+  allowed types and sizes, safe storage, scanning and quarantine for the chosen
+  path before relying on document points for unattended approval.
 - Build the production provider profile. Production must not select fixtures,
   empty directories, file sinks or development stand-ins.
 - Build and activate migration `025` with the platform-owned ordering bootstrap.
@@ -2813,7 +2830,7 @@ for the following rows.
 
 | Area | Current implementation | Responsible team | Observable acceptance result |
 |---|---|---|---|
-| Provider wiring | Live registry clients exist. The production POC, email and document profile is incomplete. | IPv4.Global service team | Uncollected — a production-profile run uses only approved live providers and completes the chosen POC and document paths. |
+| Provider wiring | Live registry clients exist. The production POC, email and document profile is incomplete; document field matching does not establish authenticity. | IPv4.Global service team and TechCraft platform team | Uncollected — a production-profile run uses only approved live providers, completes the chosen POC and document paths, and passes the agreed authenticity and upload-control tests. |
 | Applicant authority | Automated control requires a passed POC for the RIR-listed contact channel. This is not unrestricted legal authority. | Joint product approval | Uncollected — recorded policy defines when POC is sufficient and when human approval is required, with production cases demonstrating both paths. |
 | Registry negatives | Exact matched inactive evidence holds for review. Generic historical inactive results do not create the hard conflict. | IPv4.Global service team | Uncollected — live-provider cases prove exact inactive, mismatched inactive and active-plus-inactive outcomes, followed by governed evidence revalidation. |
 | Callback ordering | The current wire is unsequenced. Migration `025`, activation, the platform bootstrap and receiver acceptance remain open. | IPv4.Global service team and TechCraft platform team | Uncollected — the tool emits governed order and the durable receiver passes ordered, duplicate, delayed and conflicting callback cases without using arrival time. |

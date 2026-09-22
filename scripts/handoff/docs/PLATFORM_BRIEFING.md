@@ -252,6 +252,9 @@ production format before implementing uploads. `PLATFORM_INTEGRATION.md` §6
 describes both options.
 The document check cannot award its 25 points in production until the chosen
 path is wired into the production profile.
+Matching extracted fields to the submission does not authenticate the document
+or its issuer. Agree the production document-trust rule and upload controls
+before relying on those points for unattended approval.
 
 ### Hosting and operations ownership
 
@@ -292,11 +295,14 @@ release and redeploys. Do not edit code on the server.
 
 ## 6. Staging plan
 
-Staging runs with **automation on** (`KYC_ENFORCE_POSITIVE_DECISIONS=true`) so
-that the real end state gets a rehearsal. That is safe **only** because
-staging is closed: reachable by authorized tests, never by an untrusted caller.
-It is a rehearsal and not the production go-live. Production approval requires
-the full `PRODUCTION_READINESS.md` backlog, an end-to-end staging run on real
+Initial staging integration runs with `KYC_ENFORCE_POSITIVE_DECISIONS=false`.
+Prove signed events, the durable receiver and all eight receiver acceptance
+cases before changing that setting. An automation rehearsal may then use
+`true` only with approval from the IPv4.Global integration owner and TechCraft
+platform owner, in an isolated, closed sandbox with synthetic accounts. It
+must not change live account or buying permissions; return the setting to
+`false` when the rehearsal ends. This is not a production go-live. Production
+approval requires the full `PRODUCTION_READINESS.md` backlog, an end-to-end staging run on real
 adapters, and platform cutover approval before automation can be turned on in
 **production**. Production launches with it off. The tool investigates, the
 review team confirms, and the flag flips per environment only after that gate
@@ -324,7 +330,7 @@ Checklist:
    rehearse, so configure it on both sides.
 4. Core env vars: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL` (the
    staging receiver), `KYC_OBJECT_STORE=s3` with `KYC_S3_BUCKET`,
-   `KYC_ENFORCE_POSITIVE_DECISIONS=true`, and `CH_API_KEY` (§8 item 14),
+   `KYC_ENFORCE_POSITIVE_DECISIONS=false`, and `CH_API_KEY` (§8 item 14),
    because the registry lookups are live.
 5. Leave `KYC_ENVIRONMENT` at `development` for now. The Companies House,
    GLEIF, RIR RDAP and Floqer clients can make live calls in this profile, but

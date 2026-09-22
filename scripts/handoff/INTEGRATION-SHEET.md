@@ -3,8 +3,10 @@
 Release `__VERSION__` · source commit `__COMMIT__`
 
 This build supports a closed staging integration. It is not approved for
-production. Automatic approval remains off: a computed positive decision is
-held for registration-team review.
+production. Initial integration keeps `KYC_ENFORCE_POSITIVE_DECISIONS=false`:
+a computed positive decision is held for registration-team review. A later
+automation rehearsal requires both integration owners' approval and synthetic
+sandbox accounts only. It never changes live permissions.
 
 ## What each system does
 
@@ -31,9 +33,15 @@ the tool does not apply account permissions or write Salesforce records.
    platform owns the Salesforce writes, retries and reconciliation. See
    `docs/PLATFORM_INTEGRATION.md` §7 and
    `docs/SALESFORCE_MAPPING.md`.
-5. Run the receiver acceptance cases in `docs/PLATFORM_INTEGRATION.md` and the
-   staging procedures in `docs/DEPLOYMENT.md`. Record results for duplicates,
-   delayed callbacks, manual approvals and failed delivery.
+5. Pass all eight receiver acceptance cases in `docs/PLATFORM_INTEGRATION.md`
+   before an automation rehearsal. Record results for duplicates, delayed and
+   conflicting callbacks, manual approvals and failed delivery. Follow the
+   staging procedures in `docs/DEPLOYMENT.md`.
+
+A held callback can say `decision=manual_review_insufficient` while
+`buy_enablement=enabled`. That field reports ORG-ID eligibility, not permission
+to buy. Keep both account approval and buying off while the decision is held;
+receiver case A4 tests this exact combination.
 
 If the operator console is enabled, configure `KYC_UI_ADMIN_TOKEN` and enter it
 under Options. Case, overview, policy and integration reads, plus operator
@@ -43,7 +51,8 @@ rule. Platform request signing uses different keys.
 ## Before production
 
 Production provider wiring, ordered callback delivery, the platform receiver,
-Salesforce reconciliation and the real-provider staging tests are unfinished.
+Salesforce reconciliation, document-authenticity policy and real-provider
+staging tests are unfinished.
 Migration 025 and its platform-owned ordering bootstrap have not shipped.
 Do not infer callback order from timestamps or arrival order. Do not enable
 automatic enforcement from a successful staging demo. The owners, open choices
