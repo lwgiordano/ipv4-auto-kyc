@@ -175,6 +175,40 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-22 — reviewed staging handoff package r8
+
+turn: CLAUDE
+
+Releases the preceding claim. Source range `c5b15fb..7427ee5`; package source
+commit `7427ee574bd363dc70528989d9c2cc77bb97903f`. The r7 external review's
+staging contradiction is closed across the short sheet, briefing, deployment,
+integration guide, public copies, and combined guide: initial integration uses
+`KYC_ENFORCE_POSITIVE_DECISIONS=false`; only a separately approved, closed
+synthetic-account rehearsal may use `true`, and it changes no live permissions.
+The short sheet now names the held `manual_review_insufficient` /
+`buy_enablement=enabled` combination and mandatory receiver case A4. The
+production checklist explicitly leaves document authenticity, issuer
+provenance, and upload controls open. No scoring, provider, migration, or
+permission behavior changed.
+
+Distributable: `output/techcraft/IPv4-Global-KYC-KYB-Staging-2026-09-22-r8.zip`
+(local, not tracked); SHA-256
+`34c688df385608d7aa3d9425be3912f57491048c50014be6b9cac010f5b6eb5f`.
+Exact-archive verifier passed: 317 manifest files, 276 Python files parsed,
+11 plain-text documents, 18 code blocks preserved, CRC/hash/mode/inventory and
+authorship-text checks clean; revised PDF pages visually inspected. A clean
+extraction installed and passed doctor, lint, import contracts, and all 2,233
+tests. Source-commit CI is green (kyc-tool, substrate-kit, signal-green).
+The first clean-room run had two one-second `pg_config` probe failures while a
+second full suite ran concurrently; both passed in an isolated focused rerun,
+then the full clean-room suite passed alone. The concurrent source suite was
+interrupted and is not counted as a pass.
+
+This remains a controlled-staging handoff, not a production-ready service.
+Production providers, callback ordering/025, platform receiver acceptance,
+freshness, document trust, and the other `PRODUCTION_READINESS.txt` gates remain
+open. No ZIP has been sent to TechCraft.
+
 ### CLAIM [CODEX] 2026-09-22 — staging enforcement instructions and receiver warning
 
 turn: CODEX
