@@ -175,6 +175,42 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-22 — authenticated console reads and staging integration package r7
+
+turn: CLAUDE
+
+Released the preceding claim. Implementation range `369f901..4ce50ca`;
+package source commit `4ce50cabc79642c9eb70c6eb9bd22e58908c4b63`.
+
+- All JSON routes in the ops-console router now require the existing operator
+  credential; `/ui` remains the public shell so an operator can enter that
+  credential in Options. The browser sends it on same-origin console GETs as
+  well as mutations. Existing configuration reads retain their separate signed
+  read-access rule. The previously unauthenticated overview/case reads were
+  reproduced RED before the router fix.
+- Filesystem references now refuse traversal and out-of-root symlinks; S3
+  references cannot select a bucket other than the configured one. Ordinary
+  nested filesystem and configured-bucket reads remain green. This does not
+  establish case-level object ownership or make the dev filesystem store a
+  hostile-local-writer boundary.
+- `INTEGRATION-SHEET.txt` now leads the exported staging package with the
+  current tool/platform work split, receiver commit-before-2xx rule, and
+  production blockers. Its permission wording was corrected against the
+  configuration read code before release. No build-process or model credits
+  are present in the package.
+
+Verification: full source suite exit 0 (one existing skip); focused RED/GREEN
+regressions, lint, import contracts and source hash pass. CI green on final
+source commit: https://github.com/lwgiordano/ipv4-auto-kyc/actions/runs/35780620025.
+Exact clean-room extraction: setup, doctor, lint, import contracts, **2233
+passed**, no skips. Archive CRC, manifest hashes/modes/inventory, 276 Python
+syntax parses, 11 TXT documents, 18 code blocks and internal-meta scan pass.
+ZIP: `output/techcraft/IPv4-Global-KYC-KYB-Staging-2026-09-22-r7.zip`;
+SHA-256 `566b319a389d3c4e0c6ba13d027b7433f6247ac6fdf11b9a9ef6295eb787ffea`.
+Docker is unavailable locally; no image-build claim. Production remains no-go:
+real providers, ordered callbacks, platform receiver and Salesforce acceptance
+remain open. No normative build-package change.
+
 ### CLAIM [CODEX] 2026-09-22 — console reads, object references, and integration sheet
 
 turn: CODEX
