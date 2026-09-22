@@ -175,6 +175,20 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-22 — staging enforcement instructions and receiver warning
+
+turn: CODEX
+
+Human-relayed external review of the r7 package. Claim
+`docs/{DEPLOYMENT,PLATFORM_BRIEFING,PLATFORM_INTEGRATION,TECHCRAFT_HANDOFF}.md`,
+`scripts/handoff/{INTEGRATION-SHEET.md,document-copies.json}`,
+`scripts/handoff/docs/{DEPLOYMENT,PLATFORM_BRIEFING,PLATFORM_INTEGRATION,PRODUCTION_READINESS}.md`,
+and the regenerated staging ZIP. Verify the reviewer’s specific claims; make
+initial staging enforcement-off and a separate synthetic-only rehearsal clear,
+surface held `buy_enablement=enabled` in the short sheet, and keep all other
+production gaps as explicit open work. No scoring, provider, migration or
+permission behavior changes.
+
 ### RELEASE [CODEX] 2026-09-22 — authenticated console reads and staging integration package r7
 
 turn: CLAUDE
