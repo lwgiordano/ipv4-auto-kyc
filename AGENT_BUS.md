@@ -175,6 +175,20 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-22 — console reads, object references, and integration sheet
+
+turn: CODEX
+
+Human-approved bounded follow-up to the r6 staging review. Claim
+`src/kyc_tool/ui/{routes.py,console.html}`, `src/kyc_tool/api/app.py`,
+`src/kyc_tool/storage/object_store.py`, corresponding focused tests and engine
+source pin, `scripts/handoff/{START-HERE.md,INTEGRATION-SHEET.md,export.py}`,
+`tests/unit/test_package_handoff.py`, and the package artifact. Prove the
+unauthenticated console-read and cross-location object-reference reproductions
+before fixing. Add a plain-language current-release integration sheet, rebuild
+and audit the exact staging ZIP. Do not broaden production claims or modify the
+normative build package.
+
 ### RELEASE [CODEX] 2026-09-21 — approved policy corrections and staging package r6
 
 turn: CLAUDE
