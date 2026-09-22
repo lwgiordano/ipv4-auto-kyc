@@ -42,6 +42,7 @@ def test_inventory_is_allowlisted_and_overrides_external_documents(exporter):
         "scripts/dev.sh",
         "scripts/handoff/README.md",
         "scripts/handoff/START-HERE.md",
+        "scripts/handoff/INTEGRATION-SHEET.md",
         "scripts/handoff/.dockerignore",
         "scripts/handoff/manage.sh",
         "scripts/handoff/test_support.py",
@@ -71,6 +72,7 @@ def test_inventory_is_allowlisted_and_overrides_external_documents(exporter):
     assert "docs/RUNBOOK.md" not in selected
     assert selected["scripts/handoff/README.md"] == "README.md"
     assert selected["scripts/handoff/START-HERE.md"] == "START-HERE.md"
+    assert selected["scripts/handoff/INTEGRATION-SHEET.md"] == "INTEGRATION-SHEET.md"
     assert selected["scripts/handoff/.dockerignore"] == ".dockerignore"
     assert selected["scripts/handoff/manage.sh"] == "manage.sh"
     assert selected["scripts/handoff/test_support.py"] == "tests/handoff_support.py"
@@ -571,9 +573,17 @@ def test_plain_text_documents_preserve_commands_tables_and_links(tmp_path, expor
     )
     output = tmp_path / "product.zip"
     exporter.write_package(
-        source_files={"README.md": source.encode(), "START-HERE.md": b"# Setup\n"},
+        source_files={
+            "README.md": source.encode(),
+            "START-HERE.md": b"# Setup\n",
+            "INTEGRATION-SHEET.md": b"Release __VERSION__ at __COMMIT__\n",
+        },
         source_modes={},
-        inventory={"README.md": "README.md", "START-HERE.md": "START-HERE.md"},
+        inventory={
+            "README.md": "README.md",
+            "START-HERE.md": "START-HERE.md",
+            "INTEGRATION-SHEET.md": "INTEGRATION-SHEET.md",
+        },
         output=output,
         label="v1-staging",
         commit="a" * 40,
@@ -588,6 +598,9 @@ def test_plain_text_documents_preserve_commands_tables_and_links(tmp_path, expor
         assert "2. Run the check." in content
         assert 'printf "**literal**\\n" \\\n  --flag\n' in content
         assert "```" not in content
+        assert archive.read("kyc-tool-v1-staging/INTEGRATION-SHEET.txt") == (
+            b"Release v1-staging at " + b"a" * 40 + b"\n"
+        )
         assert "# Product" not in content
         manifest = json.loads(archive.read("kyc-tool-v1-staging/MANIFEST.json"))
         rows = {row["path"]: row for row in manifest["files"]}

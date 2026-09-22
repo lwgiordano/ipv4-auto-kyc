@@ -154,6 +154,7 @@ def select_inventory(tracked_paths: Iterable[str]) -> dict[str, str]:
         "scripts/handoff/.dockerignore": ".dockerignore",
         "scripts/handoff/README.md": "README.md",
         "scripts/handoff/START-HERE.md": "START-HERE.md",
+        "scripts/handoff/INTEGRATION-SHEET.md": "INTEGRATION-SHEET.md",
         "scripts/handoff/manage.sh": "manage.sh",
         "scripts/handoff/test_support.py": "tests/handoff_support.py",
     }
@@ -591,7 +592,7 @@ def write_package(
         if destination in packaged:
             raise ValueError(f"duplicate archive destination: {destination}")
         data, changes = transform_bytes(destination, source_files[source])
-        if destination in {"README.md", "START-HERE.md"}:
+        if destination in {"README.md", "START-HERE.md", "INTEGRATION-SHEET.md"}:
             substituted = data.replace(b"__VERSION__", label.encode()).replace(b"__COMMIT__", commit.encode())
             if substituted != data:
                 changes.append("release_metadata_substituted")

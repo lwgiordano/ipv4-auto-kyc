@@ -235,7 +235,7 @@ def test_active_projection_policy_metadata_sources_and_overlap_classes(settings,
     baseline(session_factory, policy)
     client = make_client(settings, session_factory, policy)
     send(client)
-    before = client.get("/ui/api/cases/acme/full").json()
+    before = client.get("/ui/api/cases/acme/full", headers=AUTH).json()
     mappings = {key: key for key in before["field_sources"]} | {"KYC_Status__c": "Saved_Status__c"}
     saved = save_section(session_factory, "mappings", mappings)
     points = {i.check_type: i.points for i in policy.rubric.items} | {"website_verified": 777}
@@ -259,20 +259,21 @@ def test_active_projection_policy_metadata_sources_and_overlap_classes(settings,
             "blocked_precedence": True,
         }
     ]
-    full = client.get("/ui/api/cases/acme/full").json()
+    full = client.get("/ui/api/cases/acme/full", headers=AUTH).json()
     assert "KYC_Status__c" not in full["salesforce"]
     assert full["salesforce"]["Saved_Status__c"] == before["salesforce"]["KYC_Status__c"]
     assert full["field_sources"]["Saved_Status__c"] == before["field_sources"]["KYC_Status__c"]
     assert full["mapping_revision"] == current["revision"]
     assert int(full["mapping_revision"]) >= int(saved["revision"])
-    policy_view = client.get("/ui/api/policy").json()
+    policy_view = client.get("/ui/api/policy", headers=AUTH).json()
     assert policy_view["configuration_revision"] == current["revision"]
     assert next(i["points"] for i in policy_view["rubric"] if i["check_type"] == "website_verified") == 777
     assert len(policy_view["broker_entities"]) == 3
     assert policy_view["field_sources"]["Saved_Status__c"] == before["field_sources"]["KYC_Status__c"]
     assert policy_view["mapping_revision"] == current["revision"]
-    assert client.get("/ui/api/overview").json()["policy"]["bundle_hash"] == current["bundle_hash"]
-    sources = client.get("/ui/api/integrations").json()
+    overview = client.get("/ui/api/overview", headers=AUTH).json()
+    assert overview["policy"]["bundle_hash"] == current["bundle_hash"]
+    sources = client.get("/ui/api/integrations", headers=AUTH).json()
     broker_source = next(a for a in sources["adapters"] if a["adapter_id"] == "broker_policy")
     assert broker_source["configuration_revision"] == current["revision"]
     assert broker_source["total"] == 3

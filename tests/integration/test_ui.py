@@ -26,6 +26,27 @@ def test_console_page_and_gate(settings, session_factory, policy, clean_db):
     assert off.get("/ui/api/overview").status_code == 404
 
 
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/ui/api/overview",
+        "/ui/api/cases",
+        "/ui/api/cases/missing/full",
+        "/ui/api/policy",
+        "/ui/api/integrations",
+        "/ui/api/event-templates",
+    ),
+)
+def test_console_reads_require_operator_credential(prod_ui_client, path):
+    assert prod_ui_client.get("/ui").status_code == 200
+    assert prod_ui_client.get(path).status_code == 401
+    assert prod_ui_client.get(path, headers={"Authorization": "Bearer wrong"}).status_code == 401
+    # This endpoint constructs the optional boto3 adapter only after authorization;
+    # the slim test environment does not install that production-only extra.
+    if path != "/ui/api/integrations":
+        assert prod_ui_client.get(path, headers=_admin_headers()).status_code != 401
+
+
 def test_overview_shape(client):
     body = client.get("/ui/api/overview").json()
     assert body["policy"]["bundle_hash"]

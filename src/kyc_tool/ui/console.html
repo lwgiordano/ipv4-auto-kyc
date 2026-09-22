@@ -1033,11 +1033,12 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 const NBSP=" ";
 let operatorCredential="";
 function consoleFetch(url,opts={}){
-  const target=new URL(url,location.href),method=(opts.method||"GET").toUpperCase(),headers=new Headers(opts.headers);
-  if(operatorCredential&&target.origin===location.origin&&target.pathname.startsWith("/ui/api/")&&!["GET","HEAD","OPTIONS"].includes(method))headers.set("Authorization","Bearer "+operatorCredential);
+  const target=new URL(url,location.href),headers=new Headers(opts.headers);
+  if(operatorCredential&&target.origin===location.origin&&target.pathname.startsWith("/ui/api/"))headers.set("Authorization","Bearer "+operatorCredential);
   return fetch(url,{...opts,headers});
 }
 async function j(url,opts){const r=await consoleFetch(url,opts);const body=await r.json().catch(()=>({}));
+  if(r.status===401&&(opts?.method||"GET").toUpperCase()==="GET")throw new Error("Operator credential required. Open Options and enter it.");
   if(!r.ok&&r.status>=500)throw new Error(`${r.status}: ${JSON.stringify(body).slice(0,300)}`);
   return{status:r.status,body}}
 /* One reading of a refused request: FastAPI's `detail` (a string, or pydantic's error list) or
@@ -2881,6 +2882,7 @@ async function route({background=false}={}){
         if(here)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current")});
       try{await fn(m,{background})}catch(e){if(generation!==renderGeneration||(background&&pageHoldsWork()))return;page.innerHTML=
         `<div class="card"><div class="empty"><b>This page did not load</b>${esc(e.message)}<br><br>
+        ${e.message.startsWith("Operator credential required.")?'<a href="#/options">Open Options</a><br><br>':""}
         <button class="sm" onclick="route()">Try again</button></div></div>`}
       if(generation!==renderGeneration)return;
       /* A column header is announced as one only when it says which cells it heads. Set here

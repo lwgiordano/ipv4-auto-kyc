@@ -8,6 +8,9 @@ automatic approval must remain off in production.
 
 ## Start here
 
+Read `INTEGRATION-SHEET.md` for the current staging boundary and the work split.
+The detailed contracts and procedures are below.
+
 1. Product and integration leads: Part 1 of `docs/TECHCRAFT_HANDOFF.md` defines
    two required provider decisions and the numbered responsibilities in §8.
 2. Developers: use Part 2 for the event and callback contracts, including
@@ -29,6 +32,7 @@ direct command copying.
 
 | File or folder | Purpose |
 |---|---|
+| `INTEGRATION-SHEET.md` | Current-release scope, team responsibilities and staging acceptance |
 | `docs/TECHCRAFT_HANDOFF.md` | Combined briefing, integration guide and deployment instructions |
 | `docs/PLATFORM_BRIEFING.md` | Product overview, team responsibilities and required provider decisions |
 | `docs/PLATFORM_INTEGRATION.md` | Technical integration contract and staging test commands |

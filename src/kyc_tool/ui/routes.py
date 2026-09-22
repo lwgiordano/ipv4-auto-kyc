@@ -1,17 +1,11 @@
-"""Ops console routes — the JSON the console consumes plus the page itself.
-
-Debug tooling, deliberately in the same trust domain as the existing read API
-(which is unauthenticated). The composer and requeue endpoints MUTATE, so the
-whole router is gated by KYC_UI_ENABLED — set it false in production or front
-the port with network controls (see runbook).
-"""
+"""Ops console page and operator-authorized JSON routes."""
 
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -36,7 +30,13 @@ from kyc_tool.policy_store import repo as policy_store
 from kyc_tool.ui import integrations as integrations_report
 from kyc_tool.ui.salesforce_projection import FIELD_SOURCES, project_salesforce_fields
 
-router = APIRouter()
+
+def _require_console_operator(request: Request) -> None:
+    require_admin(request.app.state.settings, request.headers)
+
+
+page_router = APIRouter()
+router = APIRouter(dependencies=[Depends(_require_console_operator)])
 
 _CONSOLE_HTML = (Path(__file__).parent / "console.html").read_text()
 
@@ -119,7 +119,7 @@ def _active_configuration(session):
         raise HTTPException(503, "Configuration authority unavailable.") from exc
 
 
-@router.get("/ui", include_in_schema=False)
+@page_router.get("/ui", include_in_schema=False)
 def console() -> HTMLResponse:
     return HTMLResponse(_CONSOLE_HTML)
 

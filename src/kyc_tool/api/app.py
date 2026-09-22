@@ -82,8 +82,10 @@ def create_app(
     app.include_router(ops_router)
     if settings.ui_enabled:
         from kyc_tool.ui.configuration_routes import router as configuration_router
+        from kyc_tool.ui.routes import page_router as ui_page_router
         from kyc_tool.ui.routes import router as ui_router  # deferred: reads console.html
 
+        app.include_router(ui_page_router)
         app.include_router(ui_router)
         app.include_router(configuration_router)
 

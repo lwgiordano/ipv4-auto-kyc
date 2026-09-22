@@ -215,7 +215,7 @@ def test_old_and_new_runs_use_saved_points_brokers_and_real_callback(
         assert s.get(Run, b).configuration_revision != old_revision
         b_revision = str(s.get(Run, b).configuration_revision)
     save_section(session_factory, "points", points | {"website_verified": points["website_verified"] + 9})
-    historical = client.get("/ui/api/cases/acme/full").json()
+    historical = client.get("/ui/api/cases/acme/full", headers=AUTH).json()
     assert historical["score"]["configuration_revision"] == b_revision
     assert (
         next(i["points"] for i in historical["score"]["items"] if i["check_type"] == "website_verified")
@@ -225,7 +225,7 @@ def test_old_and_new_runs_use_saved_points_brokers_and_real_callback(
     with uow(session_factory) as s:
         first_id = s.execute(text("SELECT id FROM decisions WHERE run_id=:r"), {"r": a}).scalar_one()
         s.execute(text("UPDATE cases SET latest_decision_row_id=:d WHERE id='acme'"), {"d": first_id})
-    pointed = client.get("/ui/api/cases/acme/full").json()
+    pointed = client.get("/ui/api/cases/acme/full", headers=AUTH).json()
     assert pointed["score"]["configuration_revision"] == str(old_revision)
     assert pointed["score"]["rubric_scope"] == "pointed_decision"
     assert pointed["pointer_decision"]["score"] == decisions[a].score
@@ -233,7 +233,7 @@ def test_old_and_new_runs_use_saved_points_brokers_and_real_callback(
         s.execute(text("SET LOCAL session_replication_role='replica'"))
         s.execute(text("UPDATE cases SET latest_decision_row_id='missing' WHERE id='acme'"))
         s.execute(text("SET LOCAL session_replication_role='origin'"))
-    unresolved = client.get("/ui/api/cases/acme/full").json()
+    unresolved = client.get("/ui/api/cases/acme/full", headers=AUTH).json()
     assert unresolved["score"]["items"] == []
     assert unresolved["score"]["bundle_hash"] is None
     assert unresolved["score"]["rubric_provenance"] == "unavailable_decision_authority"
@@ -406,7 +406,7 @@ def test_manual_pointer_does_not_guess_between_legacy_unsequenced_automatic_rubr
             )
         )
     try:
-        full = client.get("/ui/api/cases/legacy-rubric/full").json()
+        full = client.get("/ui/api/cases/legacy-rubric/full", headers=AUTH).json()
         assert full["pointer_decision"]["manual"] is True
         assert full["score"]["items"] == []
         assert full["score"]["rubric_provenance"] == "unavailable_legacy_order"
