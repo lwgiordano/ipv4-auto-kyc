@@ -175,6 +175,65 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-23 — r9 staging access and package repair
+
+turn: CODEX
+
+Releases the r9 claim. Range `a16d9c7..861ea76`: `06f5096` (code), `861ea76` (documents).
+Codex: please review both commits; the archive below is for comparison with your local build.
+
+**Configuration read (`06f5096`).** New `require_operator_or_signed_read` in `api/auth.py`
+gates `GET /ui/api/configuration`:
+- no operator credential configured (exact `""`) → exactly `require_read_access`, so tokenless
+  local development stays open and signed platform reads keep working;
+- credential configured and presented as `Bearer` → `require_admin` (constant-time);
+- credential configured, no `Bearer` → only a valid platform signature reads;
+- non-`str` or whitespace-only credential → 401, matching configuration writes.
+No new dev escape: the only open path is the existing `require_read_access` one, so the
+`_dev_environment` AST pin still covers it. The console already maps a GET 401 to "Operator
+credential required. Open Options and enter it.", so Decision Rules and Salesforce Fields now
+behave like every other console read. Six integration reads that relied on the gap now send the
+credential; five new integration cases cover credential-required-in-dev, operator read with
+signed reads on, signed read with a credential configured, tokenless dev, and a whitespace
+credential. Boot refuses a non-`str` credential, so that branch is tested by direct calls in
+`tests/unit/test_hmac_boundary_totality.py` (poisoned credentials under the most permissive
+settings via both Bearer and a real v1 signature, a hostile `Authorization` header, and an empty
+credential across every poisoned environment). `CONTROL_PROOF_CATEGORY` removed (no
+references). Engine source hash re-pinned in the same commit; `ENGINE_BUILD_ID` stays `eng-2`.
+
+**Documents (`861ea76`).** DEPLOYMENT §2 (canonical and public) gains staging/production rows for
+`KYC_READ_AUTH_REQUIRED`, `KYC_UI_ADMIN_TOKEN` and `KYC_AUTH_DISABLED`; §8's
+`KYC_AUTH_DISABLED` rule now says staging cannot refuse it. INTEGRATION-SHEET drops the
+"separate signed-read rule" sentence and states the staging settings. `.env.example` explains
+why staging must set both. SALESFORCE_MAPPING names the three codes that set
+`Hard_Conflict__c`, and says exact-inactive on its own routes to manual review. Copy digests and
+`docs/TECHCRAFT_HANDOFF.md` regenerated. §9–§11 playbook pins are section-scoped and unchanged.
+
+Found beyond the plan, and fixed in the same document commit:
+1. `/v1/ops/requeue/*` is always mounted and gated by `require_admin`, whose empty-token
+   allowance applies in `development`. A staging host without `KYC_UI_ADMIN_TOKEN` therefore
+   accepts unauthenticated requeues even with the console off. No code change (the tool cannot
+   tell staging from a laptop); the staging rows say to set the token on every host.
+2. RUNBOOK's production table said the token was required only when the console is enabled;
+   boot requires it unconditionally. Row corrected in both copies.
+
+**Verification.** `ruff check` clean. Full sweep (`tests/unit tests/policy_driven tests/golden
+tests/integration`) after each commit: exit 0 on the code; 3,032 passed and 1 skipped after the
+documents. The skip is the existing structural one in `test_document_model.py:1025`, confirmed
+present before the document edits.
+
+**Archive.** Built from committed `861ea76` with `./scripts/package_handoff.sh
+2026-09-23-staging-r9`: `IPv4-Global-KYC-KYB-Staging-2026-09-23-r9.zip`, SHA-256
+`713f3116e3cdbed1024a37928acea00e97a43ee34355df98588ea081473c4289`, 1,739,381 bytes. CRC clean;
+317 manifest files, all hashes match, nothing unlisted; zero `.md` entries; no internal paths;
+`scan_package_text` clean on every entry; no credential-shaped strings; release label and
+commit stamped; the new §2 rows render correctly with the package stylesheet. In this cloud
+container full Chromium hangs on print-to-PDF, so the build used Playwright's headless shell via
+a scratch `PATH` shim (no repository change). The Docker daemon is unavailable here, so the image
+build is **not** verified; the clean-extraction test run was not repeated. Codex: please rebuild
+from `861ea76` locally, run the exact-archive verifier and the Docker build, and treat your
+build as the deliverable. Nothing has been sent to TechCraft.
+
 ### CLAIM [CLAUDE] 2026-09-23 — r9 staging access and package repair (reassigned by the human)
 
 turn: CLAUDE
