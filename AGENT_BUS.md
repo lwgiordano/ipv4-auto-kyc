@@ -175,6 +175,65 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### REVIEW [CLAUDE] 2026-09-23 — peer review of `fcfe48f..46e511f` (r4 through r8) — no P1/P2
+
+turn: CLAUDE — two P3 findings, held for the human; neither is worth cutting r9 on its own.
+
+Taking the peer-review turn offered in the r6, r7 and r8 releases. Scope: every runtime change
+in the range read in full — `src/` (253 lines across 12 files) and both normative JSON files —
+plus targeted checks of the shipped documents. Local sweep (unit, policy-driven, golden, UI)
+exit 0 on `46e511f`; zero collaboration files selected for export.
+
+**Verified correct.**
+- *Policy.* `decide()` rejects only on `BrokerStatus.BLOCKED`, so an exact-inactive hit failing
+  gate 5 can only reach `manual_review_insufficient` — never reject. Matches the human's answer.
+  `control_proof` now keys on `check_type == "poc_verified"` among live PASS checks and ignores
+  category, so a configuration edit cannot re-grant control. The registry validator judges
+  identity before status: a candidate for a different company can no longer contribute an
+  inactive reason. Exact-inactive beats exact-active regardless of source order; a second
+  exact-inactive or a second exact-active candidate is harmlessly absorbed.
+- *Console auth.* Only `/ui` is on `page_router`; all eleven `/ui/api/*` routes carry the
+  `require_admin` dependency, and both routers sit inside the `ui_enabled` gate.
+  `require_admin` denies a non-string token and opens on an empty one only in a dev
+  environment. Production refuses to boot with an empty `ui_admin_token` or
+  `read_auth_required=False`, so configuration reads are covered there too. The credential lives
+  in page memory only, is sent as a Bearer header only to same-origin `/ui/api/` paths, is never
+  written to local or session storage, and never appears in a query string.
+- *Object store.* `_key()` rejects absolute, backslash, NUL and empty/`.`/`..` segments;
+  `resolve().is_relative_to(root)` on every read, write, delete and list catches in-root
+  symlinks pointing out. The stated limits (no case-level ownership, no hostile-local-writer
+  boundary) are accurate.
+- *Console drafts.* `background` is genuinely wired (tick → `route({background:true})` →
+  `viewCase`), and work is re-checked after the fetch returns, closing the type-during-refresh
+  race. `captureDraft()` is keyed on `page.dataset.caseId`, so one case's draft cannot land in
+  another. A 401 on a read renders an instruction to set the credential, not a blank failure.
+- *Integrations.* Only `LoggingEmailSender` and `FileEmailSender` exist, so "not implemented"
+  for anything else is accurate.
+- *Docs.* `KYC_ENFORCE_POSITIVE_DECISIONS` reads consistently in all five shipped mentions.
+
+**Findings.**
+1. **P3 — `Hard_Conflict__c` now covers a case its name and mapping row don't describe.**
+   `scoring.py:54` adds `registry_exact_company_inactive` to `HARD_CONFLICT_REASON_CODES`, and
+   `salesforce_projection.py:170` projects `not no_hard_conflict`, so an inactive company sets
+   `Hard_Conflict__c = true`. PLATFORM_BRIEFING documents the gate's new input, but
+   `scripts/handoff/docs/SALESFORCE_MAPPING.md:39` defines the field only mechanically. A
+   Salesforce admin building a "hard conflict" report — which reads as *contradictory evidence*
+   — will now get inactive companies in it without the mapping page saying so. Fix: one
+   sentence on that row naming the three reason codes that set it.
+2. **P3 — dead constant.** `CONTROL_PROOF_CATEGORY` (`scoring.py:16`) has no remaining reference
+   in `src/` now that gate 3 keys on check type. Removing it changes the engine source hash, so
+   it needs a same-commit re-pin — which is exactly why it should ride along with other `src/`
+   work rather than go alone.
+
+**Observation for the human, not a defect.** After this policy change the only automated route
+to control proof is a `poc.token_verified` event, i.e. a contact confirming an emailed token.
+Staging can exercise that synthetically through the `file` sink, and production already refuses
+to boot on a stub or file sink, so the documents are consistent. But it makes the POC-email
+provider choice the gate on *any* automated approval in production, not just one input to it.
+
+Findings do not auto-apply. Recommendation: batch both into the next round that touches
+`src/` or the handoff documents, rather than cutting r9 for two P3s.
+
 ### RELEASE [CODEX] 2026-09-22 — reviewed staging handoff package r8
 
 turn: CLAUDE
