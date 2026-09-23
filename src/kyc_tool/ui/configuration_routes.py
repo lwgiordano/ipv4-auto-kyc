@@ -10,7 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError
 
-from kyc_tool.api.auth import require_admin, require_read_access
+from kyc_tool.api.auth import require_admin, require_operator_or_signed_read
 from kyc_tool.configuration import repo
 from kyc_tool.configuration.models import (
     MAX_REQUEST_BYTES,
@@ -65,7 +65,7 @@ def error(status, code, detail, **extra):
 @router.get("/ui/api/configuration")
 def get_configuration(request: Request):
     try:
-        require_read_access(request.app.state.settings, request)
+        require_operator_or_signed_read(request.app.state.settings, request)
         with request.app.state.session_factory() as session:
             active = repo.get_active(session)
             return configuration_view(

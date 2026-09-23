@@ -8,6 +8,7 @@ from sqlalchemy import event, text
 
 from kyc_tool.api.app import create_app
 from kyc_tool.configuration.models import MAX_REQUEST_BYTES
+from tests.conftest import sign_headers
 from tests.integration.test_configuration_repo import baseline, counts
 
 pytestmark = pytest.mark.usefixtures("clean_db")
@@ -58,7 +59,7 @@ def test_configuration_requires_actual_admin_even_in_development(
 
 def test_unactivated_read_is_explicit_and_router_is_optional(settings, session_factory, policy):
     client = make_client(settings, session_factory, policy)
-    response = client.get("/ui/api/configuration")
+    response = client.get("/ui/api/configuration", headers=AUTH)
     assert response.status_code == 200
     assert response.json()["active"] is False
     assert response.json()["revision"] is None
@@ -74,6 +75,49 @@ def test_configuration_read_preserves_read_auth(settings, session_factory, polic
     response = client.get("/ui/api/configuration")
     assert response.status_code == 401
     assert set(response.json()) >= {"error", "detail"}
+
+
+
+# --- the read gate: operator credential, platform signature, or (tokenless dev only) neither ----
+#
+# The console reads configuration with the operator's Bearer credential and cannot sign; the
+# platform reads it signed. The read used to accept only the signature, and to check nothing at
+# all in development -- even with an operator credential configured. Staging runs as
+# `development` until real providers exist, so that was the deployed state, not a laptop state.
+
+
+@pytest.mark.parametrize("header", [None, "Bearer wrong", "Basic disposable-admin"])
+def test_a_configured_credential_protects_the_read_even_in_development(
+    settings, session_factory, policy, header
+):
+    client = make_client(settings, session_factory, policy)
+    assert settings.read_auth_required is False
+    response = client.get("/ui/api/configuration", headers={"Authorization": header} if header else {})
+    assert response.status_code == 401
+    assert response.json()["error"] == "unauthorized"
+
+
+def test_the_operator_credential_reads_where_signed_reads_are_enforced(settings, session_factory, policy):
+    client = make_client(settings, session_factory, policy, read_auth_required=True)
+    assert client.get("/ui/api/configuration", headers=AUTH).status_code == 200
+
+
+def test_a_signed_platform_read_still_works_with_a_credential_configured(settings, session_factory, policy):
+    client = make_client(settings, session_factory, policy, read_auth_required=True)
+    assert client.get("/ui/api/configuration", headers=sign_headers(b"")).status_code == 200
+
+
+def test_tokenless_local_development_still_reads_openly(settings, session_factory, policy):
+    client = make_client(settings, session_factory, policy, ui_admin_token="")
+    assert client.get("/ui/api/configuration").status_code == 200
+
+
+def test_a_whitespace_only_credential_denies_the_read(settings, session_factory, policy):
+    # Boot refuses a non-str credential outright; the gate's own refusal of one is covered by the
+    # direct calls in tests/unit/test_hmac_boundary_totality.py.
+    client = make_client(settings, session_factory, policy, ui_admin_token="   ")
+    response = client.get("/ui/api/configuration", headers={"Authorization": "Bearer    "})
+    assert response.status_code == 401
 
 
 @pytest.mark.parametrize(
@@ -148,7 +192,7 @@ def test_save_conflict_lost_response_replay_and_reconstructed_app(settings, sess
     assert result["configuration"]["revision"] == result["current_revision"] == result["revision"]
     assert result["configuration"]["can_edit"] is True
     second_client = make_client(settings, session_factory, policy)
-    current = second_client.get("/ui/api/configuration").json()
+    current = second_client.get("/ui/api/configuration", headers=AUTH).json()
     assert current["mappings"]["KYC_Score__c"] == "Saved_Score__c"
     later_body = {
         "expected_revision": current["revision"],
@@ -216,7 +260,7 @@ def test_failed_commit_emits_no_success_or_partial_write(settings, session_facto
 def test_active_wrong_mode_and_missing_pointer_are_unavailable(settings, session_factory, policy):
     base = baseline(session_factory, policy)
     client = make_client(settings, session_factory, policy, enforce_bundle_pinning=False)
-    assert client.get("/ui/api/configuration").json()["can_edit"] is False
+    assert client.get("/ui/api/configuration", headers=AUTH).json()["can_edit"] is False
     assert client.put("/ui/api/configuration/mappings", json=payload(base), headers=AUTH).status_code == 503
     assert client.get("/readyz").status_code == 503
     client = make_client(settings, session_factory, policy)
@@ -225,7 +269,7 @@ def test_active_wrong_mode_and_missing_pointer_are_unavailable(settings, session
         session.execute(text("DELETE FROM configuration_state"))
         session.commit()
     assert client.get("/readyz").status_code == 503
-    assert client.get("/ui/api/configuration").status_code == 503
+    assert client.get("/ui/api/configuration", headers=AUTH).status_code == 503
 
 
 def test_active_projection_policy_metadata_sources_and_overlap_classes(settings, session_factory, policy):
@@ -251,7 +295,7 @@ def test_active_projection_policy_metadata_sources_and_overlap_classes(settings,
     )
     with uow(session_factory) as s:
         s.execute(text("DELETE FROM broker_entities"))
-    current = client.get("/ui/api/configuration").json()
+    current = client.get("/ui/api/configuration", headers=AUTH).json()
     assert current["broker_overlaps"] == [
         {
             "entity_ids": ["acme-broker", "blocked"],
@@ -316,7 +360,8 @@ def test_actual_routes_serialize_two_editors(settings, session_factory, policy):
         results = list(pool.map(submit, range(2)))
     assert sorted(r.status_code for r in results) == [200, 409]
     winner = next(r.json() for r in results if r.status_code == 200)
-    assert clients[0].get("/ui/api/configuration").json()["mappings"] == winner["configuration"]["mappings"]
+    current = clients[0].get("/ui/api/configuration", headers=AUTH).json()
+    assert current["mappings"] == winner["configuration"]["mappings"]
 
 
 def test_save_first_authority_read_has_bounded_lock_wait(settings, session_factory, policy):

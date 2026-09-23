@@ -595,6 +595,67 @@ def test_the_direct_ui_route_uses_the_same_admin_decision():
     assert "_require_ops_admin" not in ui, "/ui grew a second, separate admin decision"
 
 
+# ── r9: the configuration read, which the console (Bearer) and the platform (signed) both make ─
+#
+# `require_read_access` alone gated it, so in a dev environment with signed reads off it checked
+# nothing even with an operator credential configured -- and staging runs as `development`. The
+# combined gate must demand a configured credential there, accept the credential or a signature
+# where signed reads are enforced, and read a malformed credential as "deny", never "open".
+
+OPERATOR = {"Authorization": "Bearer " + "t" * 32}
+DEV_READ_OPEN = {"environment": "development", "read_auth_required": False}
+READ_CREDENTIAL_POISON = [*ADMIN_POISON, ("token is whitespace", {"ui_admin_token": "   "})]
+
+
+def _read(settings, headers):
+    auth.require_operator_or_signed_read(settings, _Req(headers, method="GET"))
+
+
+def _assert_read_refused(settings, headers, label=""):
+    with pytest.raises(HTTPException) as excinfo:
+        _read(settings, headers)
+    assert excinfo.value.status_code == 401, (label, excinfo.value.detail)
+
+
+def test_a_configured_credential_is_demanded_even_where_reads_are_dev_open():
+    settings = hardened().model_copy(update=DEV_READ_OPEN)
+    _assert_read_refused(settings, {})
+    _read(settings, OPERATOR)
+
+
+@pytest.mark.parametrize("label,update", READ_CREDENTIAL_POISON,
+                         ids=[c[0] for c in READ_CREDENTIAL_POISON])
+def test_a_malformed_credential_denies_the_read_however_it_is_presented(label, update):
+    """The most permissive state the read has, and both ways in: the credential the configuration
+    used to hold, and a genuinely signed request. Neither may fall through a misconfiguration."""
+    settings = hardened(platform_hmac_secret=SECRET).model_copy(update={**DEV_READ_OPEN, **update})
+    for headers in (OPERATOR, _v1_headers(body=b"")):
+        _assert_read_refused(settings, headers, label)
+
+
+def test_the_credential_or_a_signature_reads_where_signed_reads_are_enforced():
+    """Guard the guard: production-shaped settings, so both legitimate callers must still read."""
+    settings = hardened(platform_hmac_secret=SECRET)
+    _read(settings, OPERATOR)
+    _read(settings, _v1_headers(body=b""))
+    _assert_read_refused(settings, {})
+    _assert_read_refused(settings, {"Authorization": "Bearer wrong"})
+
+
+def test_a_hostile_authorization_header_falls_through_to_the_signature():
+    _assert_read_refused(hardened(), {"Authorization": HostileStr("Bearer " + "t" * 32)})
+
+
+def test_an_empty_credential_is_exactly_the_platform_read_rule():
+    """Tokenless local development stays open; the same empty credential anywhere that is not an
+    exact dev environment must be signed, as `require_read_access` already demands."""
+    _read(hardened().model_copy(update={**DEV_READ_OPEN, "ui_admin_token": ""}), {})
+    for label, update in DEV_ESCAPE_POISON:
+        settings = hardened().model_copy(
+            update={"read_auth_required": False, "ui_admin_token": "", **update})
+        _assert_read_refused(settings, {}, label)
+
+
 # ── gate round: the int subclass the Wave 0 skew test never reached ───────────────────────────
 class HostileInt(int):
     """Passes `isinstance(x, int)`. Wave 0's skew case used a hostile STRING, which fails the

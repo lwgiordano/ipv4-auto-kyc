@@ -293,6 +293,35 @@ def require_read_access(settings: Settings, request, body: bytes = b"") -> None:
     require_valid_signature(settings, request, body)
 
 
+def require_operator_or_signed_read(settings: Settings, request) -> None:
+    """Gate a read that both the operator console and the platform make.
+
+    The console reads with the operator's Bearer credential and cannot sign; the platform reads
+    signed. `require_read_access` alone served neither: where signed reads were enforced it
+    refused a logged-in operator, and in a dev environment with them off it checked nothing at
+    all -- even with an operator credential configured, while every other console read required
+    that credential. So:
+
+    - no operator credential configured (exact `""`) -> the platform read rule is the whole rule,
+      which keeps tokenless local development open and signed platform reads working;
+    - one configured and presented as a Bearer -> `require_admin` judges it, constant-time;
+    - one configured but not presented -> only a valid platform signature may read.
+
+    A non-`str` or whitespace-only credential is a misconfiguration and denies, as configuration
+    writes already do: the safe reading of a misconfigured credential is "deny", not "open".
+    """
+    token = settings.ui_admin_token
+    if type(token) is not str or (token and not token.strip()):
+        raise HTTPException(status_code=401, detail="invalid or missing admin credential")
+    if token == "":
+        require_read_access(settings, request)
+        return
+    if _exact_str(request.headers.get("Authorization", "")).startswith("Bearer "):
+        require_admin(settings, request.headers)
+        return
+    require_valid_signature(settings, request, b"")
+
+
 def require_admin(settings: Settings, headers) -> None:
     """Gate a mutating ops-console endpoint with the operator bearer token.
 

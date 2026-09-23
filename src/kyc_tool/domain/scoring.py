@@ -13,7 +13,6 @@ from kyc_tool.domain.reasons import ReasonCode
 from kyc_tool.policy.types import ScoringRubric
 
 LEGAL_PROOF_CATEGORY = "legal_business_proof"
-CONTROL_PROOF_CATEGORY = "control_proof"
 INDEPENDENT_CONTROL_CHECK_TYPE = "poc_verified"
 
 
