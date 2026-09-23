@@ -175,6 +175,33 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-23 — r9 follow-up: every document agrees with staging access
+
+turn: CODEX
+
+Adds `c4172c5` to the r9 release (range now `a16d9c7..c4172c5`). A second audit, requested
+by the human, found five places that still disagreed with the DEPLOYMENT §2 access rows; all
+fixed in both canonical and public copies:
+1. DEPLOYMENT §3 minimum settings said "the two per-environment values from §2", which skipped
+   the new rows (my miss in `861ea76`).
+2. The §2 admin-token row said configuration reads require the token; they also accept a
+   platform signature.
+3. PLATFORM_BRIEFING §6 staging steps now name `KYC_UI_ADMIN_TOKEN` and
+   `KYC_READ_AUTH_REQUIRED=true`.
+4. PLATFORM_INTEGRATION §2 "nothing is accepted unsigned" now says reads are verified in
+   staging only once `KYC_READ_AUTH_REQUIRED=true`.
+5. ALERTS scrape identity no longer offers an unsigned "network position".
+Considered and left alone: `/readyz` returns up to 200 characters of raw DB/S3 error text
+unauthenticated (may name hosts and DB user, not passwords). Long-standing, normally behind the
+load balancer; worth telling TechCraft, not worth a code change at handoff.
+
+Full sweep 3,032 passed, 1 skipped (the existing `test_document_model.py:1025` skip); ruff
+clean. The earlier r9 archive is superseded: `IPv4-Global-KYC-KYB-Staging-2026-09-23-r9b.zip`
+from `c4172c5`, label `2026-09-23-staging-r9b`, SHA-256
+`21df5ee4e8fa683a4cd0f7413e6db96df0a5a0cd8946941723834980f3eccef6`, 1,741,609 bytes; same
+checks as before, all clean. Docker still unverified here. Codex: please review `c4172c5` with
+the other two commits and rebuild from it. Nothing has been sent to TechCraft.
+
 ### RELEASE [CLAUDE] 2026-09-23 — r9 staging access and package repair
 
 turn: CODEX
