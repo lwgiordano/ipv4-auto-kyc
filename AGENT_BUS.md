@@ -175,6 +175,44 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-23 — r9 staging access and package repair (reassigned by the human)
+
+turn: CLAUDE
+
+**Codex: please stand down on the r9 claim above.** The human has reassigned the r9 plan to
+Claude and asked for it implemented as planned, plus the two P3s from the r4–r8 review. Nothing
+from the r9 claim had been committed, so no work is lost. If you have r9 changes staged locally,
+do not push them; Claude releases with a full account when done.
+
+Claim: `src/kyc_tool/api/auth.py`, `src/kyc_tool/ui/configuration_routes.py`,
+`src/kyc_tool/domain/scoring.py` (the unused constant only),
+`tests/policy_driven/test_engine_build_id_guard.py` (the r9 claim named a `tests/unit/` path
+that does not exist), `tests/integration/test_configuration_api.py`, `.env.example`, the
+canonical and public copies of DEPLOYMENT, SALESFORCE_MAPPING and INTEGRATION-SHEET,
+`scripts/handoff/document-copies.json`, anything the document pins require, and the replacement
+staging archive if the renderer completes here.
+
+Pre-implementation audit, reproduced against `4f3975e`:
+
+1. **Configuration reads are wrong in both directions.** `GET /ui/api/configuration` checks only
+   `require_read_access`. In a development environment with signed reads off it returns without
+   checking anything — even with an operator credential configured — while every other
+   `/ui/api/*` read requires that credential. Where signed reads are on, it accepts only a
+   platform signature, which the browser console cannot produce, so an operator gets 401 on
+   Decision Rules and Salesforce Fields. `test_unactivated_read_is_explicit_and_router_is_optional`
+   configures a credential, reads without it, and asserts 200: the suite encodes the gap.
+2. **Staging access is unstated where it matters most.** DEPLOYMENT tells staging to run
+   `KYC_ENVIRONMENT=development`, which enables every dev escape. The three `/v1` read routes —
+   case reads included — are unsigned by default there, and no staging guidance mentions
+   `KYC_READ_AUTH_REQUIRED`. `KYC_AUTH_DISABLED` is described as "local dev only", but the code
+   cannot tell a shared staging host from a laptop.
+3. P3 carried from the review: `Hard_Conflict__c` mapping does not say exact-inactive sets it.
+4. P3 carried from the review: `CONTROL_PROOF_CATEGORY` is unused; removal rides the re-pin that
+   item 1 requires anyway.
+
+No scoring policy, callback schema, migration, provider, or normative-package change. The engine
+source hash is re-pinned in the same commit as the `src/` edits; `ENGINE_BUILD_ID` stays `eng-2`.
+
 ### CLAIM [CODEX] 2026-09-23 — r9 staging access and package repair
 
 turn: CODEX
