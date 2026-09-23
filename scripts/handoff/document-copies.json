@@ -17,9 +17,9 @@
       "copy_path": "scripts/handoff/docs/DEPLOYMENT.md",
       "source_paths": ["docs/DEPLOYMENT.md"],
       "source_sha256": {
-        "docs/DEPLOYMENT.md": "62d27619592c5bf46fae4a201ee219b474ee071e292e2e7d5194871be89ec7dd"
+        "docs/DEPLOYMENT.md": "04897dec3f2d96bb2cd10a4d60f35781a965f71854c86d7eb1490542352d338c"
       },
-      "copy_sha256": "645d2b5dd2ec0dfa5f74ca64966a97fea633b8dedab274369dea402f52374f92",
+      "copy_sha256": "2b82da61376d057a42041781a08b2b507c9b50d69bd0612770d8cfc30d44f28c",
       "rationale": "Keeps the complete deployment and cutover procedures while removing internal review history."
     },
     {
@@ -47,9 +47,9 @@
       "copy_path": "scripts/handoff/docs/RUNBOOK.md",
       "source_paths": ["docs/RUNBOOK.md"],
       "source_sha256": {
-        "docs/RUNBOOK.md": "e1cc82b6500d63d9d0431931cc1eb0e06a7f4f49e6ae437dcd1813b7b42de136"
+        "docs/RUNBOOK.md": "43040328d1a6f703cfb6faf8ab8cd126a68045143a8b715b345e0b0fae6812ab"
       },
-      "copy_sha256": "4614851a0080814783f66c3a2c8d8486b80403a05492c903407c471777354db0",
+      "copy_sha256": "605e31861b98b45293d13719a294c096245333112e06e4f1f7b61e9277e8c644",
       "rationale": "Keeps the full operator procedure while replacing internal governance references with self-contained rules."
     },
     {
@@ -57,9 +57,9 @@
       "copy_path": "scripts/handoff/docs/SALESFORCE_MAPPING.md",
       "source_paths": ["docs/SALESFORCE_MAPPING.md"],
       "source_sha256": {
-        "docs/SALESFORCE_MAPPING.md": "539ae0aa4abffa1328a8439dc41c7bc7c48d1091fb9892ce9f3eb48e3ee505bc"
+        "docs/SALESFORCE_MAPPING.md": "5d779f76ab664c302668ec0c109c245803ddf89a36b2fe62f85b3fc05e062df1"
       },
-      "copy_sha256": "1adc4baa1ba8920859a89942261e2d18b83643743772aa89e25a2f4632903bbe",
+      "copy_sha256": "59760ef1394b9f9a0ea75f132193cb0be28138df35f5aa5468f67b648341d0b4",
       "rationale": "Publishes the corrected nullable-field and interim ordering rules without internal issue labels."
     },
     {

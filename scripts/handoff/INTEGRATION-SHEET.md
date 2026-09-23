@@ -43,10 +43,13 @@ A held callback can say `decision=manual_review_insufficient` while
 to buy. Keep both account approval and buying off while the decision is held;
 receiver case A4 tests this exact combination.
 
-If the operator console is enabled, configure `KYC_UI_ADMIN_TOKEN` and enter it
-under Options. Case, overview, policy and integration reads, plus operator
-actions, use that token. Configuration reads follow the separate signed-read
-rule. Platform request signing uses different keys.
+Configure `KYC_UI_ADMIN_TOKEN` on every staging host, and enter it under
+Options when the operator console is enabled. Console reads, including
+configuration, and operator actions use that token; the platform may instead
+read configuration with a signed request. Platform request signing uses
+different keys. Set `KYC_READ_AUTH_REQUIRED=true` on any staging host another
+machine can reach, and never set `KYC_AUTH_DISABLED` there
+(`docs/DEPLOYMENT.md` §2).
 
 ## Before production
 

@@ -146,7 +146,7 @@ lists **all** violations at once:
 | `KYC_FLOQER_API_KEY` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`, secret manager or `.env` only — never a task definition, a log, or a case snapshot |
 | `KYC_FLOQER_SHORTCUT_ID` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`, the id of the ONE published shortcut the tool runs |
 | `KYC_READ_AUTH_REQUIRED` | `true` (read API requires a signed request) |
-| `KYC_UI_ADMIN_TOKEN` | required when `KYC_UI_ENABLED=true` |
+| `KYC_UI_ADMIN_TOKEN` | required, not blank: it authenticates the always-mounted `/v1/ops` requeue endpoints and, when `KYC_UI_ENABLED=true`, the console |
 | `KYC_OUTBOX_LEASE_SECONDS` | must EXCEED `4 × KYC_OUTBOX_HTTP_TIMEOUT_SECONDS + KYC_OUTBOX_LEASE_MARGIN_SECONDS` — the publisher enforces 4 × timeout as a hard per-attempt deadline, and a lease that expires mid-attempt makes every delivery unwitnessable |
 | `KYC_OUTBOX_HTTP_TIMEOUT_SECONDS` | per HTTPX **inactivity** phase (not a total clock), 4 × this is the enforced whole-attempt deadline. Raising it raises the required lease FOUR-fold — move the two together or production refuses to boot |
 | `KYC_OUTBOX_LEASE_MARGIN_SECONDS` | DB commit/processing room added to the deadline in the lease rule above |

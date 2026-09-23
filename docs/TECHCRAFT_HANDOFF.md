@@ -1341,6 +1341,9 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 | `KYC_ENFORCE_POSITIVE_DECISIONS` | `false` for initial integration; `true` only for an authorized synthetic-account rehearsal | `false`; enable only after all `PRODUCTION_READINESS.md` requirements pass |
 | Providers | live registry lookups (`CH_API_KEY` set), with stand-ins for the POC directory, document extraction and email (file sink) | real registry providers, required. Real OCR and email providers are needed only if the tool extracts documents or sends the POC email, which are the two open questions in `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
 | Secret | staging secret | separate production secret |
+| `KYC_READ_AUTH_REQUIRED` | `true` on any host another machine can reach. Staging runs as `development`, where every `/v1` read (cases, checks, runs, review tasks, metrics) is otherwise unsigned. The platform signs reads exactly as it will in production. | `true` (boot refuses anything else) |
+| `KYC_UI_ADMIN_TOKEN` | Set on every staging host, whether or not the console is enabled. Without it, the always-mounted `/v1/ops` requeue endpoints and an enabled console accept anyone who can reach them. Once it is set, those endpoints, the console and configuration reads all require it. | required, not blank (boot refuses an empty token) |
+| `KYC_AUTH_DISABLED` | Never set on a shared host. The tool cannot tell staging from a developer machine, so nothing refuses it here. | refused at boot |
 
 Production mode validates config at boot and refuses to start on anything
 invalid under its checks (for example, a missing secret, stub provider or
@@ -1549,7 +1552,8 @@ token. Recovery limits:
   Threshold, hard gates, evidence rules, and positive-decision enforcement are
   not console-editable.
 - Secrets only via environment / Secrets Manager, nothing secret is logged.
-- Never set `KYC_AUTH_DISABLED` outside local dev. Production boot refuses it.
+- Never set `KYC_AUTH_DISABLED` outside a single developer's machine. Production boot refuses
+  it. Staging runs as `development` and cannot refuse it, so keep this rule there yourself (§2).
 - **ANY change to `KYC_OUTBOX_MAX_ATTEMPTS` (raising OR lowering) is a DRAINED
   publisher cutover, not a rolling restart.** Each publisher enforces the ceiling
   it was started with, so during a rolling restart an OLD and a NEW publisher run
@@ -2179,7 +2183,7 @@ lists **all** violations at once:
 | `KYC_FLOQER_API_KEY` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`, secret manager or `.env` only — never a task definition, a log, or a case snapshot |
 | `KYC_FLOQER_SHORTCUT_ID` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`, the id of the ONE published shortcut the tool runs |
 | `KYC_READ_AUTH_REQUIRED` | `true` (read API requires a signed request) |
-| `KYC_UI_ADMIN_TOKEN` | required when `KYC_UI_ENABLED=true` |
+| `KYC_UI_ADMIN_TOKEN` | required, not blank: it authenticates the always-mounted `/v1/ops` requeue endpoints and, when `KYC_UI_ENABLED=true`, the console |
 | `KYC_OUTBOX_LEASE_SECONDS` | must EXCEED `4 × KYC_OUTBOX_HTTP_TIMEOUT_SECONDS + KYC_OUTBOX_LEASE_MARGIN_SECONDS` — the publisher enforces 4 × timeout as a hard per-attempt deadline, and a lease that expires mid-attempt makes every delivery unwitnessable |
 | `KYC_OUTBOX_HTTP_TIMEOUT_SECONDS` | per HTTPX **inactivity** phase (not a total clock), 4 × this is the enforced whole-attempt deadline. Raising it raises the required lease FOUR-fold — move the two together or production refuses to boot |
 | `KYC_OUTBOX_LEASE_MARGIN_SECONDS` | DB commit/processing room added to the deadline in the lease rule above |
@@ -2735,7 +2739,7 @@ A mapping save neither writes Salesforce nor proves that the platform adopted it
 | `Business_Document_Status__c` | live `business_document_verified` check | None → "None". Uploaded but unprocessed → "Uploaded". `pass` → "Verified". `fail` → "Failed" |
 | `Website_Review_Status__c` | review task / check | Open task → "Open". Check `pass` → "Pass". Check `fail` → "Fail" |
 | `Broker_Status__c` | case `broker_status` | `clear` → "Clear". `allowed_broker` → "Allowed Broker". `blocked` → "Blocked" |
-| `Hard_Conflict__c` | callback `gates.no_hard_conflict` | **Nullable boolean**, negated when present (`no_hard_conflict: false` ⇒ `true`). NULL occurs in exactly two conditions: there is no authoritative decision tuple because the pointer or legacy order is unresolved, or a manual approval bypassed the gates and they were never evaluated. The platform sync must carry NULL through and must not coerce it to `false`. Doing so would assert "no hard conflict" when no gate ran. The base `salesforce_sync_fields.json` type is `boolean`. This mapping adds the required nullable behavior. |
+| `Hard_Conflict__c` | callback `gates.no_hard_conflict` | **Nullable boolean**, negated when present (`no_hard_conflict: false` ⇒ `true`). It is `true` when a live check carries `hard_conflict`, `document_registry_conflict` or `registry_exact_company_inactive`. The last means the official registry reports the exact company as inactive. On its own, that routes the case to manual review, never to rejection. NULL occurs in exactly two conditions: there is no authoritative decision tuple because the pointer or legacy order is unresolved, or a manual approval bypassed the gates and they were never evaluated. The platform sync must carry NULL through and must not coerce it to `false`. Doing so would assert "no hard conflict" when no gate ran. The base `salesforce_sync_fields.json` type is `boolean`. This mapping adds the required nullable behavior. |
 | `Review_Reason_Codes__c` | union of live checks' `reason_codes` | delimited text / multi-select |
 | `Manual_Approved_By__c` / `Manual_Approved_At__c` | latest MANUAL decision row (sticky: a later automatic decision moves the latest-decision pointer but never blanks the manual attribution while the case stays `approved_manual`). Platform initiated it. Also in tool audit log. | reviewer id, timestamp |
 

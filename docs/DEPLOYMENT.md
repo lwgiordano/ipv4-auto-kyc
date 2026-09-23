@@ -39,6 +39,9 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 | `KYC_ENFORCE_POSITIVE_DECISIONS` | `false` for initial integration; `true` only for an authorized synthetic-account rehearsal | `false`; enable only after the full production gate passes |
 | Providers | live registry lookups (`CH_API_KEY` set), with stand-ins for the POC directory, document extraction and email (file sink) | real registry providers, required. Real OCR and email providers are needed only if the tool extracts documents or sends the POC email, which are the two open questions in `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
 | Secret | staging secret | separate production secret |
+| `KYC_READ_AUTH_REQUIRED` | `true` on any host another machine can reach: staging runs as `development`, where every `/v1` read (cases, checks, runs, review tasks, metrics) is otherwise unsigned. The platform signs reads exactly as it will in production | `true` (boot refuses anything else) |
+| `KYC_UI_ADMIN_TOKEN` | set on every staging host, console enabled or not. Without it the always-mounted `/v1/ops` requeue endpoints and, when enabled, the console accept anyone who can reach them; once set, those endpoints, the console and configuration reads all require it | required, not blank (boot refuses an empty token) |
+| `KYC_AUTH_DISABLED` | never set on a shared host. The tool cannot tell staging from a developer machine, so nothing refuses it here | refused at boot |
 
 Production mode validates config at boot and refuses to start on anything
 invalid under its checks (for example, a missing secret, stub provider or
@@ -246,7 +249,8 @@ token. Three limits to know:
   Salesforce destination names instead use audited, server-saved revisions.
   Threshold, hard gates, evidence rules, and M2 are not console-editable.
 - Secrets only via environment / Secrets Manager; nothing secret is logged.
-- Never set `KYC_AUTH_DISABLED` outside local dev. Production boot refuses it.
+- Never set `KYC_AUTH_DISABLED` outside a single developer's machine. Production boot refuses
+  it; staging runs as `development` and cannot, so the rule is yours to keep there (§2).
 - **ANY change to `KYC_OUTBOX_MAX_ATTEMPTS` — raising OR lowering — is a DRAINED
   publisher cutover, not a rolling restart.** Each publisher enforces the ceiling
   it was started with, so during a rolling restart an OLD and a NEW publisher run
