@@ -46,7 +46,11 @@ not permission to enable production enforcement.
 
 ## 2. Authentication (both directions)
 
-Nothing is accepted unsigned in either direction. Platform requests and tool
+Sign every request in both directions. The tool always verifies event
+signatures (`KYC_AUTH_DISABLED` is for one developer's machine only). It
+verifies read signatures in production, and in staging once
+`KYC_READ_AUTH_REQUIRED=true` is set. `docs/DEPLOYMENT.md` §2 requires that on
+any staging host another machine can reach. Platform requests and tool
 webhooks carry the same two headers:
 
 ```

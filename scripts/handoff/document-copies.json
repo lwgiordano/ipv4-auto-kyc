@@ -7,9 +7,9 @@
       "copy_path": "scripts/handoff/docs/ALERTS.md",
       "source_paths": ["docs/ALERTS.md"],
       "source_sha256": {
-        "docs/ALERTS.md": "9bda157cba3c026aa746b1d819df8e7877a8f30c2d7082d76803a33b3ed44996"
+        "docs/ALERTS.md": "251df5f4cfdb5fbe2ce3aaf3faa81336555f7fc9f27fc20c4e757ff605bc548e"
       },
-      "copy_sha256": "7fe3ba17667cc428f783f8ed709f8e709d0a166df5b05f9c467f4a7739ceb2ec",
+      "copy_sha256": "5e28477ccbdebaf9edca54e7611e32483c19617c472ede0e0c41c40c34b141d9",
       "rationale": "Publishes the operational alerts while removing internal release-history labels."
     },
     {
@@ -17,9 +17,9 @@
       "copy_path": "scripts/handoff/docs/DEPLOYMENT.md",
       "source_paths": ["docs/DEPLOYMENT.md"],
       "source_sha256": {
-        "docs/DEPLOYMENT.md": "04897dec3f2d96bb2cd10a4d60f35781a965f71854c86d7eb1490542352d338c"
+        "docs/DEPLOYMENT.md": "0e955858483455ece8e31eea99415799ffd053dc3601115c9abeb369e47d09ee"
       },
-      "copy_sha256": "2b82da61376d057a42041781a08b2b507c9b50d69bd0612770d8cfc30d44f28c",
+      "copy_sha256": "728390d7332f512a03eba8d109b830d8e1421823873d05c55bad6114326bee93",
       "rationale": "Keeps the complete deployment and cutover procedures while removing internal review history."
     },
     {
@@ -27,9 +27,9 @@
       "copy_path": "scripts/handoff/docs/PLATFORM_BRIEFING.md",
       "source_paths": ["docs/PLATFORM_BRIEFING.md"],
       "source_sha256": {
-        "docs/PLATFORM_BRIEFING.md": "5cfe7499020b0e8b0da57878ac3df11e64ebc23a6d3d86b1c40388409e92cc1d"
+        "docs/PLATFORM_BRIEFING.md": "dc2969fc6d8355f31c27e74d1562665854877457b8062d5e0e8eafa48faeae68"
       },
-      "copy_sha256": "b86d9cccceaa7e59f3834cc3fe174d01ee95cd227c7c43d943849c0d6043cfcb",
+      "copy_sha256": "a0a9815f44e212e40c4a50d65f51fa319203f83cb690cc4820a275705217364d",
       "rationale": "Publishes a self-contained platform briefing with package-local paths and references."
     },
     {
@@ -37,9 +37,9 @@
       "copy_path": "scripts/handoff/docs/PLATFORM_INTEGRATION.md",
       "source_paths": ["docs/PLATFORM_INTEGRATION.md"],
       "source_sha256": {
-        "docs/PLATFORM_INTEGRATION.md": "52b068ba0a4a497c6c930447d37a506ecb5c2b7a4ef21fa681d83fc3cc7979c1"
+        "docs/PLATFORM_INTEGRATION.md": "39f073d3fbf633e46e71a425f55514d532e8eaf0c17c097caa882582a839a97b"
       },
-      "copy_sha256": "a296dbec0ef5551362b7e91b738af78d458a802e5024b075b19e35aba7ff5d83",
+      "copy_sha256": "a965353c44e841f29d537ad2a28de7392987e5106deee2d4505dc3e24ea83c87",
       "rationale": "Preserves the integration contract while using neutral product wording and removing conversational narration."
     },
     {
@@ -70,7 +70,7 @@
         "docs/superpowers/specs/2026-09-12-production-readiness-design.md"
       ],
       "source_sha256": {
-        "docs/PLATFORM_BRIEFING.md": "5cfe7499020b0e8b0da57878ac3df11e64ebc23a6d3d86b1c40388409e92cc1d",
+        "docs/PLATFORM_BRIEFING.md": "dc2969fc6d8355f31c27e74d1562665854877457b8062d5e0e8eafa48faeae68",
         "docs/superpowers/specs/2026-09-12-production-readiness-design.md": "4242f0b3e9e63ea295e3afbd3b0328a48f506e4e5854d0c528556c024be535cf"
       },
       "copy_sha256": "dca8005e5f2a6cd4fe39c0f7497a78ca7680da5caa34e84acd6a210161513a61",

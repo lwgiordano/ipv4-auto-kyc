@@ -331,7 +331,11 @@ Checklist:
 4. Core env vars: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL` (your
    staging receiver), `KYC_OBJECT_STORE=s3` with `KYC_S3_BUCKET`,
    `KYC_ENFORCE_POSITIVE_DECISIONS=false`, and `CH_API_KEY` (§8 item 14),
-   because the registry lookups are live.
+   because the registry lookups are live. Also set `KYC_UI_ADMIN_TOKEN`, and
+   `KYC_READ_AUTH_REQUIRED=true` on any host another machine can reach.
+   Development mode requires neither, so without them the requeue endpoints,
+   an enabled console and the `/v1` reads accept anyone who can reach them
+   (`DEPLOYMENT.md` §2).
 5. Leave `KYC_ENVIRONMENT` at `development` for now. The Companies House,
    GLEIF, RIR RDAP and Floqer clients can make live calls in this profile, but
    the profile itself is still a development fixture and production refuses

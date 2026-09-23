@@ -45,8 +45,12 @@ to enable production enforcement.
 
 ## 2. Authentication (both directions)
 
-Nothing is accepted unsigned, in either direction. Your requests to us and our
-webhook to you carry the same two headers:
+Sign everything, in both directions. We always verify event signatures
+(`KYC_AUTH_DISABLED` is for one developer's machine only). We verify read
+signatures in production, and in staging once `KYC_READ_AUTH_REQUIRED=true` is
+set, as `docs/DEPLOYMENT.md` §2 requires on any staging host another machine
+can reach. Your requests to us and our webhook to you carry the same two
+headers:
 
 ```
 X-KYC-Timestamp: <unix seconds, e.g. "1752681600">

@@ -19,5 +19,5 @@ Production requires a current path-bound signed request. A stock Prometheus cann
 scraping with the legacy v1 scheme is prohibited because every accepted v1 request records v1 traffic in
 the durable witness and would stall the v1 sunset forever. Until the dedicated least-privilege scrape
 identity is available, scoped as a read-only bearer for `/v1/metrics.prom` only, run the scrape
-through a sidecar that v2-signs each request, or scrape from a network position where
-`KYC_READ_AUTH_REQUIRED` staging rules apply. Do NOT wire a v1 signer into a scraper.
+through a sidecar that v2-signs each request. Staging hosts set up per `docs/DEPLOYMENT.md`
+§2 require signed reads too, so scrape them the same way. Do NOT wire a v1 signer into a scraper.

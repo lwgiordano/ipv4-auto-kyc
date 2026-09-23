@@ -40,7 +40,7 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 | Providers | live registry lookups (`CH_API_KEY` set), with stand-ins for the POC directory, document extraction and email (file sink) | real registry providers, required. Real OCR and email providers are needed only if the tool extracts documents or sends the POC email, which are the two open questions in `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
 | Secret | staging secret | separate production secret |
 | `KYC_READ_AUTH_REQUIRED` | `true` on any host another machine can reach: staging runs as `development`, where every `/v1` read (cases, checks, runs, review tasks, metrics) is otherwise unsigned. The platform signs reads exactly as it will in production | `true` (boot refuses anything else) |
-| `KYC_UI_ADMIN_TOKEN` | set on every staging host, console enabled or not. Without it the always-mounted `/v1/ops` requeue endpoints and, when enabled, the console accept anyone who can reach them; once set, those endpoints, the console and configuration reads all require it | required, not blank (boot refuses an empty token) |
+| `KYC_UI_ADMIN_TOKEN` | set on every staging host, console enabled or not. Without it the always-mounted `/v1/ops` requeue endpoints and, when enabled, the console accept anyone who can reach them; once set, those endpoints and the console require it, and configuration reads require it or a platform signature | required, not blank (boot refuses an empty token) |
 | `KYC_AUTH_DISABLED` | never set on a shared host. The tool cannot tell staging from a developer machine, so nothing refuses it here | refused at boot |
 
 Production mode validates config at boot and refuses to start on anything
@@ -84,8 +84,9 @@ zero-witness never turns green (by design), so v1 can never be sunset.
    DRAINED cutover (§8). Where a release note or a setting calls for one, run
    that procedure rather than the default rolling deploy.
    Minimum: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL`,
-   `KYC_OBJECT_STORE=s3`, `KYC_S3_BUCKET`, `CH_API_KEY`, the two per-environment
-   values from §2, and the full **HMAC credential set**. Production boot refuses without
+   `KYC_OBJECT_STORE=s3`, `KYC_S3_BUCKET`, `CH_API_KEY`, every per-environment
+   value from §2 (including the access settings), and the full **HMAC credential
+   set**. Production boot refuses without
    all of it (PR 5a):
    - v1 legacy secret: `KYC_PLATFORM_HMAC_SECRET`
    - v2 **inbound** (platform→tool): `KYC_HMAC_INBOUND_KEY_ID` +

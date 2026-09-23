@@ -349,7 +349,11 @@ Checklist:
 4. Core env vars: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL` (the
    staging receiver), `KYC_OBJECT_STORE=s3` with `KYC_S3_BUCKET`,
    `KYC_ENFORCE_POSITIVE_DECISIONS=false`, and `CH_API_KEY` (§8 item 14),
-   because the registry lookups are live.
+   because the registry lookups are live. Also set `KYC_UI_ADMIN_TOKEN`, and
+   `KYC_READ_AUTH_REQUIRED=true` on any host another machine can reach.
+   Development mode requires neither, so without them the requeue endpoints,
+   an enabled console and the `/v1` reads accept anyone who can reach them
+   (`DEPLOYMENT.md` §2).
 5. Leave `KYC_ENVIRONMENT` at `development` for now. The Companies House,
    GLEIF, RIR RDAP and Floqer clients can make live calls in this profile, but
    the profile itself is still a development fixture and production refuses
@@ -614,7 +618,11 @@ not permission to enable production enforcement.
 
 ## 2. Authentication (both directions)
 
-Nothing is accepted unsigned in either direction. Platform requests and tool
+Sign every request in both directions. The tool always verifies event
+signatures (`KYC_AUTH_DISABLED` is for one developer's machine only). It
+verifies read signatures in production, and in staging once
+`KYC_READ_AUTH_REQUIRED=true` is set. `docs/DEPLOYMENT.md` §2 requires that on
+any staging host another machine can reach. Platform requests and tool
 webhooks carry the same two headers:
 
 ```
@@ -1342,7 +1350,7 @@ Disable the image's HTTP healthcheck on worker containers (they serve no HTTP).
 | Providers | live registry lookups (`CH_API_KEY` set), with stand-ins for the POC directory, document extraction and email (file sink) | real registry providers, required. Real OCR and email providers are needed only if the tool extracts documents or sends the POC email, which are the two open questions in `docs/PLATFORM_INTEGRATION.md` §5/§6. Either way `KYC_OCR_ENGINE` and `KYC_EMAIL_PROVIDER` must leave their dev stubs (`docs/RUNBOOK.md`). |
 | Secret | staging secret | separate production secret |
 | `KYC_READ_AUTH_REQUIRED` | `true` on any host another machine can reach. Staging runs as `development`, where every `/v1` read (cases, checks, runs, review tasks, metrics) is otherwise unsigned. The platform signs reads exactly as it will in production. | `true` (boot refuses anything else) |
-| `KYC_UI_ADMIN_TOKEN` | Set on every staging host, whether or not the console is enabled. Without it, the always-mounted `/v1/ops` requeue endpoints and an enabled console accept anyone who can reach them. Once it is set, those endpoints, the console and configuration reads all require it. | required, not blank (boot refuses an empty token) |
+| `KYC_UI_ADMIN_TOKEN` | Set on every staging host, whether or not the console is enabled. Without it, the always-mounted `/v1/ops` requeue endpoints and an enabled console accept anyone who can reach them. Once it is set, those endpoints and the console require it. Configuration reads accept it or a platform-signed request. | required, not blank (boot refuses an empty token) |
 | `KYC_AUTH_DISABLED` | Never set on a shared host. The tool cannot tell staging from a developer machine, so nothing refuses it here. | refused at boot |
 
 Production mode validates config at boot and refuses to start on anything
@@ -1386,8 +1394,9 @@ zero-witness never turns green (by design), so v1 can never be sunset.
    DRAINED cutover (§8). Where a release note or a setting calls for one, run
    that procedure rather than the default rolling deploy.
    Minimum: `KYC_DATABASE_URL`, `KYC_PLATFORM_CALLBACK_URL`,
-   `KYC_OBJECT_STORE=s3`, `KYC_S3_BUCKET`, `CH_API_KEY`, the two per-environment
-   values from §2, and the full **HMAC credential set**. Production boot refuses without
+   `KYC_OBJECT_STORE=s3`, `KYC_S3_BUCKET`, `CH_API_KEY`, every per-environment
+   value from §2 (including the access settings), and the full **HMAC credential
+   set**. Production boot refuses without
    all of it:
    - v1 legacy secret: `KYC_PLATFORM_HMAC_SECRET`
    - v2 **inbound** (platform→tool): `KYC_HMAC_INBOUND_KEY_ID` +
@@ -2698,8 +2707,8 @@ Production requires a current path-bound signed request. A stock Prometheus cann
 scraping with the legacy v1 scheme is prohibited because every accepted v1 request records v1 traffic in
 the durable witness and would stall the v1 sunset forever. Until the dedicated least-privilege scrape
 identity is available, scoped as a read-only bearer for `/v1/metrics.prom` only, run the scrape
-through a sidecar that v2-signs each request, or scrape from a network position where
-`KYC_READ_AUTH_REQUIRED` staging rules apply. Do NOT wire a v1 signer into a scraper.
+through a sidecar that v2-signs each request. Staging hosts set up per `docs/DEPLOYMENT.md`
+§2 require signed reads too, so scrape them the same way. Do NOT wire a v1 signer into a scraper.
 
 # Part 6: Salesforce mapping
 
