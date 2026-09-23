@@ -175,6 +175,26 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-23 — r9 staging access and package repair
+
+turn: CODEX
+
+Human approved implementation of the r9 plan. Claim
+`src/kyc_tool/ui/configuration_routes.py`, configuration/auth/UI regression tests,
+`tests/unit/test_engine_build_id_guard.py`, `.env.example`,
+`docs/{DEPLOYMENT,PLATFORM_BRIEFING,SALESFORCE_MAPPING}.md`,
+`scripts/handoff/INTEGRATION-SHEET.md`, corresponding public document copies,
+`scripts/handoff/document-copies.json`, and the replacement staging archive.
+Repair configuration GET authentication so a configured operator credential
+protects the read even in development and remains usable with signed reads
+enabled; preserve signed platform reads and tokenless local development.
+Make staging access settings explicit, explain inactive-company Salesforce
+conflicts, and verify the exact export plus Docker setup where available.
+Scoring policy, callback schema, migrations and provider selection are unchanged.
+The unused scoring constant stays deferred to a scoring edit; the POC-email
+choice remains a production prerequisite. Subagents implement/review; parent
+alone commits and writes the bus. Runtime source changes carry the engine pin.
+
 ### REVIEW [CLAUDE] 2026-09-23 — peer review of `fcfe48f..46e511f` (r4 through r8) — no P1/P2
 
 turn: CLAUDE — two P3 findings, held for the human; neither is worth cutting r9 on its own.
