@@ -5,6 +5,7 @@ deadline no matter what the peer does. Mock transports bypass (not process-porta
 containment errors relay across the process boundary intact."""
 
 import gzip
+import os
 import socketserver
 import threading
 import time
@@ -26,6 +27,25 @@ _CAP = 64_000
 _SMALL_BOMB = gzip.compress(b"z" * (4 * _CAP))  # tiny wire, 4× the cap decoded
 
 
+def _exit_without_reply(*args):
+    os._exit(1)
+
+
+def test_child_exit_without_reply_is_a_transport_error(monkeypatch, server_url):
+    monkeypatch.setattr("kyc_tool.adapters.executor._child_fetch", _exit_without_reply)
+    with httpx.Client(base_url=server_url) as client, pytest.raises(
+        httpx.TransportError, match="without a response"
+    ):
+        supervised_fetch(client, "GET", "/ok", None, None, _hard_budget(10), None)
+
+
+def test_nonserializable_auth_refuses_as_transport_error(server_url):
+    with httpx.Client(base_url=server_url, auth=lambda request: request) as client, pytest.raises(
+        httpx.TransportError, match="could not start"
+    ):
+        supervised_fetch(client, "GET", "/ok", None, None, _hard_budget(10), None)
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -42,6 +62,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802 — http.server API
         try:
+            if self.path == "/auth":
+                body = (self.headers.get("Authorization", "") + "|" +
+                        self.headers.get("X-Caller", "")).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path.startswith("/bomb"):
                 self.send_response(200)
                 self.send_header("Content-Encoding", "gzip")
@@ -125,6 +153,13 @@ def test_supervised_success_round_trips_through_the_child(server_url):
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert "content-encoding" not in response.headers  # child decoded + stripped, like in-process
+
+
+def test_spawn_preserves_basic_auth_and_headers(server_url):
+    with httpx.Client(base_url=server_url, auth=("user", "pass"),
+                      headers={"X-Caller": "synthetic"}) as client:
+        response = supervised_fetch(client, "GET", "/auth", None, None, _hard_budget(10), None)
+    assert response.text == "Basic dXNlcjpwYXNz|synthetic"
 
 
 def test_containment_errors_relay_typed_across_the_process_boundary(server_url):
