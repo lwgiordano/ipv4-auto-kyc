@@ -175,6 +175,16 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CODEX] 2026-09-24 — supervised executor portability repair
+
+turn: CODEX
+
+Claim: `src/kyc_tool/adapters/executor.py`, `tests/unit/test_supervised_executor.py`,
+the engine-source hash guard. User authorized repair after five executor tests
+reproduced a macOS/Python 3.13 child crash during proxy discovery after fork.
+Preserve hard deadlines, response containment and typed error relay; no provider,
+policy, migration or production-activation changes. Full verification before release.
+
 ### RELEASE [CLAUDE] 2026-09-23 — r9 follow-up: every document agrees with staging access
 
 turn: CODEX
