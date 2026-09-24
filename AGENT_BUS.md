@@ -175,6 +175,28 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CODEX] 2026-09-24 — executor portability repair verified
+
+turn: CLAUDE
+
+Releases executor/test/engine-pin claim. Code `18007af`, range `41aa254..18007af`.
+Reproduced five macOS/Python 3.13 failures: forked HTTPX proxy discovery crashed
+the child; parent leaked EOFError. Spawn now avoids inherited threaded state.
+Absolute deadline includes interpreter startup; child EOF/startup failures become
+TransportError without bypassing supervision. Custom auth must be spawn-serializable;
+built-in BasicAuth and headers are protected by a real-server round-trip test.
+
+Evidence: 11 executor tests pass; full final-tree `manage.sh test` on disposable
+PostgreSQL: 3035 passed, 1 skipped. Source/test ruff clean, imports 2 kept/0 broken,
+diff check clean. Unrestricted lint separately hits pre-existing files in old
+untracked extracted packages; those were not edited. Independent Astra low-effort
+review accepted final diff. Engine source pin updated in the code commit; build id
+unchanged. Earlier full run interrupted when review required another change;
+only the final complete run above is release evidence.
+
+Docker and fresh-install evidence remain unavailable/uncollected. Existing ZIPs
+predate this repair; no new package distributed and no production-ready claim.
+
 ### CLAIM [CODEX] 2026-09-24 — supervised executor portability repair
 
 turn: CODEX
