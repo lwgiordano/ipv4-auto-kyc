@@ -163,7 +163,7 @@ def request_with_retry(
 
                 if executor.process_portable(client):
                     # the unconditionally-killable boundary (PR 10b slice 1): the whole physical
-                    # fetch runs in a fork the parent TERMINATES at the absolute deadline
+                    # fetch runs in a spawned child the parent TERMINATES at the absolute deadline
                     response = executor.supervised_fetch(
                         client, method, url, params, json, budget, send_kwargs.get("timeout")
                     )

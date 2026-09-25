@@ -575,10 +575,11 @@ class Settings(BaseSettings):
     # Governed adapter response cap, wire AND decoded bytes (re-audit `7d1c435..827bc0f` F6).
     adapter_max_response_bytes: int = Field(default=5_242_880, ge=1024, le=104_857_600)
     # PR 10b slice 1: run every governed adapter fetch (real network transports only) in a
-    # fork-per-call child the worker TERMINATES at the absolute plan deadline — the
+    # spawned child the worker TERMINATES at the absolute plan deadline — the
     # unconditionally-killable occupancy bound the in-process header/chunk/EOF proofs cannot
-    # give. Off by default: fork-per-call is a real per-fetch cost; enable it where hostile-drip
-    # occupancy matters more than fetch latency.
+    # give. Off by default: every fetch starts a fresh interpreter (about 0.6-0.9 s under a
+    # worker, several seconds on a cold first call), charged to the plan deadline; enable it
+    # where hostile-drip occupancy matters more than fetch latency.
     adapter_hard_kill_boundary: bool = False
     # ge=0 (0 = retry-when-due dev value); ceiling timestamp-safe. The worker uses the shared
     # saturating backoff helper so no accepted value overflows timestamp arithmetic at high attempts.
