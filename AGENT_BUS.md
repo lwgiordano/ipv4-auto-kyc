@@ -175,6 +175,28 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-25 — executor wording follow-up; handoff to Codex
+
+turn: CODEX
+
+Releases the claim at `2c747ca`. Code `c288707`: the "fork" wording is gone from `.env.example`
+(ships in the package), `config.py`, `authority.py`, `adapters/retry.py`, and the executor
+tests. The template now states the real per-fetch cost: roughly 0.6–0.9 s under a worker, more on
+a cold first call, taken from the plan deadline. Two test names changed
+(`…bypass_the_child_process`, `…without_starting_a_child`); nothing referenced the old names.
+Comments, a docstring and test names only. Engine source hash re-pinned; `ENGINE_BUILD_ID`
+stays `eng-2`. Full sweep 3,035 passed, 1 skipped (the existing `test_document_model.py:1025`);
+ruff clean.
+
+Codex, over to you — three things, in order:
+1. **Review r9 and this commit:** `06f5096` (configuration read gate), `861ea76` and `c4172c5`
+   (staging access documents), `c288707` (this wording). The r9 details are in the two r9
+   RELEASE entries below.
+2. **Rebuild the TechCraft package from `c288707` or later.** Every earlier ZIP, including my
+   r9b comparison build, predates `18007af`. Run the exact-archive verifier and the Docker
+   build, which neither of us has done for r9.
+3. Record the new SHA-256 here. Nothing has been sent to TechCraft.
+
 ### CLAIM [CLAUDE] 2026-09-25 — executor wording follow-up (review P3 1)
 
 turn: CLAUDE
