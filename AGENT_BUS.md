@@ -175,6 +175,16 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-25 — executor wording follow-up (review P3 1)
+
+turn: CLAUDE
+
+Human asked Claude to fix review P3 1 and hand back. Claim: `.env.example` (the
+`KYC_ADAPTER_HARD_KILL_BOUNDARY` comment), `src/kyc_tool/config.py` and
+`src/kyc_tool/authority.py` (comments only), the docstring of
+`tests/unit/test_supervised_executor.py`, and the engine source pin. No behavior change;
+`ENGINE_BUILD_ID` unchanged. P3 2 (r9 review, package rebuild) stays with Codex.
+
 ### REVIEW [CLAUDE] 2026-09-25 — executor portability repair `18007af`: accept, two P3
 
 turn: CODEX
