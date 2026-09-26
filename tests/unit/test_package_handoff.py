@@ -152,6 +152,8 @@ def test_review_labels_leave_comments_and_docstrings_and_never_touch_code(export
         b"def check():\n"
         b'    """PR 7b-core: per-case allocation (re-gate-3 finding 1)."""\n'
         b"    return LIMIT  # exact types first (R-audit-5 finding 1; PR 6 \xc2\xa78.11)\n"
+        b"# How the body is encoded. 7b-core never puts the sequence on the wire, and the\n"
+        b"# 7b-core PRE-WINDOW diagnostics hold a share lock.\n"
     )
 
     packaged, names = exporter.transform_bytes("src/kyc_tool/example.py", original)
@@ -165,6 +167,8 @@ def test_review_labels_leave_comments_and_docstrings_and_never_touch_code(export
     assert 'MESSAGE = "left alone (PR 5b fix)"' in text
     assert '"""per-case allocation."""' in text
     assert "return LIMIT  # exact types first\n" in text
+    assert "# How the body is encoded. The callback cutover never puts the sequence on the wire" in text
+    assert "# callback-cutover PRE-WINDOW diagnostics hold a share lock.\n" in text
     assert len(text.splitlines()) == len(original.splitlines())
     assert exporter._executable_ast(text) == exporter._executable_ast(original.decode())
 
@@ -177,6 +181,9 @@ def test_archive_scan_refuses_review_labels_the_export_could_not_remove(exporter
     exporter.scan_package_text("alembic/versions/013.py", b"# PR 7b-core migration history\n")
     exporter.scan_package_text("src/kyc_tool/capabilities.py", b'roadmap_unit="PR 5c",\n')
     exporter.scan_package_text("src/kyc_tool/ops/shape.py", b"PR7B_CORE_PREWINDOW = contract\n")
+    exporter.scan_package_text("docs/RUNBOOK.txt", b"python -m kyc_tool.ops.verify_pr7b_core_backfill\n")
+    with pytest.raises(ValueError, match="review history"):
+        exporter.scan_package_text("docs/RUNBOOK.txt", b"Run the 7b-core diagnostic.\n")
 
 
 def test_real_config_defaults_are_rebased_without_other_executable_changes(exporter):

@@ -134,10 +134,28 @@ _LABEL_SEP = r"[ \t]*[,;/&+][ \t]*|" + _SP + r"(?:and|\+)" + _SP
 _LABEL_RUN = rf"(?:{_ANY_LABEL})(?:(?:{_LABEL_SEP})(?:{_ANY_LABEL}))*"
 
 
-def _label_case(match: re.Match) -> str:
+def _starts_sentence(match: re.Match) -> bool:
     before = match.string[: match.start()].rstrip()
-    starts = not before or before.endswith((".", "#", '"""', "─", ":", "!", "?"))
-    return "Regression case" if starts else "regression case"
+    return not before or before.endswith((".", "#", '"""', "─", "!", "?"))
+
+
+def _label_case(match: re.Match) -> str:
+    return "Regression case" if _starts_sentence(match) else "regression case"
+
+
+def _cutover_subject(match: re.Match) -> str:
+    return "The callback cutover" if _starts_sentence(match) else "the callback cutover"
+
+
+def _earlier_pass(match: re.Match) -> str:
+    before = match.string[: match.start()]
+    if re.search(r"\bthe[ \t]+$", before, re.IGNORECASE):
+        return "earlier"
+    return "An earlier pass" if _starts_sentence(match) else "an earlier pass"
+
+
+def _repro(match: re.Match) -> str:
+    return "Repro" if _starts_sentence(match) else "repro"
 
 
 REVIEW_LABEL_RULES = (
@@ -160,10 +178,16 @@ REVIEW_LABEL_RULES = (
     (re.compile(rf"(?:{_LABEL_SEP}){_LEAD_LABEL}\)", re.IGNORECASE), ")"),
     # A bare finding marker before a lowercase word is a list marker ("; F2 the permit").
     (re.compile(r"(?<![-\w])(?:finding" + _SP + r"\d+|" + _F + r")" + _SP + r"(?=[a-z])"), ""),
-    (re.compile(r"\bWave" + _SP + r"\d+\b(?!" + _SP + r"(?:gate|F\d))"), "an earlier hardening pass"),
+    (re.compile(r"\bWave" + _SP + r"\d+\b(?!" + _SP + r"(?:gate|F\d))"), _earlier_pass),
+    # A label naming the finding a repro belongs to: "(R4-F4 repro a)" → "(repro a)".
+    (re.compile(rf"(?:{_FINDING_LABEL}|regression case)" + _SP + r"repro(?=s?\b)", re.IGNORECASE), _repro),
     # Whatever remains in running text.
     (re.compile(_FINDING_LABEL, re.IGNORECASE), _label_case),
     (re.compile(r"\b" + _PR_LABEL + r"\b,?[ \t]*"), ""),
+    # The bare work-package name for the callback cutover (DEPLOYMENT §11).
+    (re.compile(r"\b7b-core(?=" + _SP + r"never\b)"), _cutover_subject),
+    (re.compile(r"\b7b-core\b"), "callback-cutover"),
+    (re.compile(r"\bpre-7b\b"), "pre-cutover"),
     (re.compile(r"\bG1\d\b"), ""),
     # Tidy what removal leaves behind.
     (
@@ -176,6 +200,21 @@ REVIEW_LABEL_RULES = (
     (re.compile(r"^#[ \t]*[.,;:]*[ \t]*$"), "#"),
 )
 _TOOL_DIRECTIVE = re.compile(r"\b(?:noqa|type:|pragma)\b")
+# Matches `[tool.ruff] line-length`: a rewrite may lengthen a line ("R5-F7" → "regression case"),
+# and the package's own lint must still pass.
+_COMMENT_WIDTH = 110
+
+
+def _wrap(line: str, continuation: str) -> list[str]:
+    """Split one over-long line at word boundaries; continuation lines start with `continuation`."""
+    lines = []
+    while len(line) > _COMMENT_WIDTH:
+        cut = line.rfind(" ", len(continuation) + 1, _COMMENT_WIDTH + 1)
+        if cut <= len(continuation):
+            break
+        lines.append(line[:cut].rstrip())
+        line = continuation + line[cut:].lstrip()
+    return [*lines, line]
 
 
 def remove_review_labels(text: str) -> str:
@@ -191,6 +230,7 @@ def remove_review_labels(text: str) -> str:
     line_starts = [0]
     for line in text.splitlines(keepends=True):
         line_starts.append(line_starts[-1] + len(line))
+    source_lines = text.splitlines()
     edits = []
     for token in tokenize.generate_tokens(io.StringIO(text).readline):
         is_comment = token.type == tokenize.COMMENT
@@ -201,10 +241,29 @@ def remove_review_labels(text: str) -> str:
         rewritten = token.string
         for pattern, replacement in REVIEW_LABEL_RULES:
             rewritten = pattern.sub(replacement, rewritten)
-        if rewritten != token.string:
-            start = line_starts[token.start[0] - 1] + token.start[1]
-            end = line_starts[token.end[0] - 1] + token.end[1]
-            edits.append((start, end, rewritten))
+        if rewritten == token.string:
+            continue
+        line = source_lines[token.start[0] - 1]
+        if is_comment:
+            # A comment is one physical line: an overflow continues as a comment at the same column,
+            # or at the code's indentation when the comment trails code.
+            prefix = line[: token.start[1]]
+            indent = prefix if not prefix.strip() else re.match(r"[ \t]*", line).group(0)
+            wrapped = _wrap(prefix + rewritten, indent + "# ")
+            rewritten = "\n".join([wrapped[0][len(prefix):], *wrapped[1:]])
+        else:
+            # A docstring line that overflows continues at its own indentation.
+            first_column = token.start[1]
+            out = []
+            for number, piece in enumerate(rewritten.split("\n")):
+                lead = " " * first_column if number == 0 else ""
+                indent = re.match(r"[ \t]*", piece).group(0) if number else " " * first_column
+                pieces = _wrap(lead + piece, indent)
+                out.append("\n".join([pieces[0][len(lead):], *pieces[1:]]))
+            rewritten = "\n".join(out)
+        start = line_starts[token.start[0] - 1] + token.start[1]
+        end = line_starts[token.end[0] - 1] + token.end[1]
+        edits.append((start, end, rewritten))
     for start, end, rewritten in reversed(edits):
         text = text[:start] + rewritten + text[end:]
     return text
@@ -243,7 +302,7 @@ PROHIBITED_TEXT = (
         re.compile(
             r'(?<!roadmap_unit=")\b(?:PR ?\d+[a-z]?(?:-[a-z0-9]+)?\b|re-gate|[Gg]ate[ \t]+finding'
             r"|R-audit|R\d+-F\d+"
-            r"|Wave[ \t]+\d|remediation[ \t]+item|[Rr]egression case-\d)"
+            r"|Wave[ \t]+\d|remediation[ \t]+item|[Rr]egression case-\d|7b-core|pre-7b)"
         ),
         "review history",
     ),
