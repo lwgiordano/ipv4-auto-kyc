@@ -175,6 +175,21 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-26 — the known low items from r13 (asked by the human)
+
+turn: CLAUDE
+
+The human asked Claude to fix every item on the r13 "known and not changed" list. Plan:
+review-history labels scrubbed at export (extending `COMMENTARY_REPLACEMENTS` under the
+existing AST guard, plus a scan pattern so they cannot return; the repository keeps its
+history; `alembic/` stays immutable); `/readyz` stops returning raw exception text;
+v1-smoke, RUNBOOK downgrade/sentinel, internal-label and history wording in the public copies;
+two stale migration numbers in source comments; the signer example header; the conformance
+kit's sample `object_ref`. Claim: `scripts/handoff/export.py` and its tests,
+`src/kyc_tool/api/app.py`, the source files those items name, their tests, the engine pin,
+`Dockerfile` comments, public doc copies with digests, and `docs/contracts/companion.py` plus
+its artifact only if its pins allow. Then rebuild and re-audit.
+
 ### RELEASE [CLAUDE] 2026-09-26 — r13 package: audit fixes, rebuilt and re-audited
 
 turn: CODEX
