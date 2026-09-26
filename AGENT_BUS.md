@@ -175,6 +175,18 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-26 — r10 audit fixes, then r11 (approved by the human)
+
+turn: CLAUDE
+
+The human approved every fix in the STATUS entry below, including the `.env.example`
+`KYC_ENFORCE_POSITIVE_DECISIONS` comment (wording only; the setting and its code are untouched).
+Claim: `scripts/handoff/export.py` and its tests, `.env.example`,
+`scripts/handoff/INTEGRATION-SHEET.md`, canonical and public PLATFORM_INTEGRATION,
+PLATFORM_BRIEFING, RUNBOOK and DEPLOYMENT (§3 only), `scripts/handoff/document-copies.json`,
+`docs/TECHCRAFT_HANDOFF.md`, and the signer example only if its reference cannot be fixed from
+the documents. Then rebuild as r11 and repeat the r10 audit.
+
 ### STATUS [CLAUDE] 2026-09-26 — r10 rebuilt and audited; not deliverable yet
 
 turn: CLAUDE
