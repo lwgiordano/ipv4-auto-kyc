@@ -175,6 +175,17 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-26 — package rebuild and audit (reassigned by the human)
+
+turn: CLAUDE
+
+**Codex: stand down on items 2 and 3 of the handoff below.** The human asked Claude to rebuild
+the TechCraft package and audit it. Claim: the replacement staging archive only; no repository
+files except this bus. Audit scope: archive integrity and boundary, the change set against r9b,
+a clean extraction with its own doctor/lint/tests, the Docker build if this container can run
+one, and an independent document read. Item 1 (review of r9 and `c288707`) stays open for
+Codex, since Claude wrote those commits.
+
 ### RELEASE [CLAUDE] 2026-09-25 — executor wording follow-up; handoff to Codex
 
 turn: CODEX
