@@ -40,7 +40,7 @@ direct command copying.
 | `docs/RUNBOOK.md` and `docs/ALERTS.md` | Recovery procedures and monitoring |
 | `docs/SALESFORCE_MAPPING.md` | Fields the platform reads and writes into Salesforce |
 | `docs/PRODUCTION_READINESS.md` | Remaining work and launch requirements |
-| `docs/artifacts/kyc-signer-example.py` | Runnable signing example. Verify its sha256 against its entry in `MANIFEST.json` |
+| `docs/artifacts/kyc-signer-example.py` | Runnable signing example. Verify its sha256 against its entry in `MANIFEST.json`; the Platform Integration Contract its header mentions is a separate document that prints the same digest |
 | `src/` and `alembic/` | Application source and database migrations |
 | `KYC_Tool_Build_Package/machine_readable/` | Runtime policy files, preserved from the release |
 | `Dockerfile`, `requirements.lock`, `.env.example` | Image build, pinned runtime dependencies and configuration template |

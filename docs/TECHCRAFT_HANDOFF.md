@@ -409,8 +409,9 @@ print(r.status_code, r.json())
 - Re-send the same bytes with the same `Idempotency-Key` and you get `200`
   with the stored response, no duplicate run. That is the retry safety to
   build on.
-- That example signs v1. `PLATFORM_INTEGRATION.md` §2 has the v2 recipe and a
-  worked vector. Its §11 has the conformance kit, whose `vector` mode prints
+- That example signs v1, and every accepted v1 request restarts the zero-v1
+  observation window, so prefer v2 once that clock is running.
+  `PLATFORM_INTEGRATION.md` §2 has the v2 recipe and a worked vector. Its §11 has the conformance kit, whose `vector` mode prints
   the contract's reference vector (a different one from the §2
   example) so you can hold your own signer against it offline.
 - `GET /v1/cases/case-001` shows the live checks and reason codes after each
@@ -1166,8 +1167,8 @@ The envelope's `actor` must identify the same reviewer (`actor.type:
 422, and the actor-derived reviewer is the one recorded. The tool checks that
 the task exists, that it is a website task on that case, and that it is open
 (else 404/409/422). The state change, the check and the audit row are identical
-to any other event. (The old `POST /v1/review-tasks/{id}/complete` endpoint is
-retired — it duplicated this event.)
+to any other event. There is no separate completion endpoint: this event is how a
+review task is completed.
 
 **What a reviewer has asked the contact for.** `GET /v1/cases/{id}` carries
 `information_requested`: one entry per outstanding ask, shaped `{"field":
@@ -1429,9 +1430,10 @@ zero-witness never turns green (by design), so v1 can never be sunset.
    the §3 values by hand. Then run
    `python -m kyc_tool.ops.activate_hmac_v1_observation` once to start the v1
    observation clock (§2). Until it runs, inbound v1 can never be retired.
-6. Smoke test: send one signed `kyb.run_requested` (script in
-   `docs/PLATFORM_BRIEFING.md` §7) and confirm the decision arrives at the
-   callback URL.
+6. Smoke test: send one signed `kyb.run_requested` and confirm the decision
+   arrives at the callback URL. Sign it with v2 (`docs/PLATFORM_INTEGRATION.md`
+   §2). The v1 script in `docs/PLATFORM_BRIEFING.md` §7 also works, but every
+   accepted v1 request restarts the zero-v1 observation window (§5).
 
 ## 4. Deploying an update
 
@@ -1506,7 +1508,8 @@ Read those notes before scheduling the update.
   **024-compatible** image — an older publisher lacks the receipt/terminal
   contract and must not run against preserved evidence. Rollback after first
   witness use is a flag/image rollback on that compatible schema, never a
-  schema downgrade. A pre-7b image is permitted only after the entire walk
+  schema downgrade. An image from before the callback cutover (§11) is permitted
+  only after the entire walk
   reaches 012 — which is only possible on a schema that never reached `018`. Once
   `018` through `022` ARE installed, the supported rollback is redeploying the prior
   reviewed `024`-compatible image against the schema it is already on. The schema
@@ -1977,8 +1980,8 @@ R4. **With `018` or anything above it installed there is no schema-downgrade pat
 R5. ROLLBACK OUTCOME A: downgrade REFUSED (any sentinel above). The DB stays on the
     witness-authority schema, so KEEP or redeploy the reviewed **`024`-COMPATIBLE image** digest —
     an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
-    evidence, PROHIBIT the pre-7b image outright. Rollback after first witness use is a
-    FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is
+    evidence, PROHIBIT any pre-cutover image outright. Rollback after first witness use is a
+    FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-cutover image is
     permitted ONLY after the entire walk reaches `012` (outcome B). Verify `/readyz`, start + attest its fenced workers, then
     re-enable retention, autoscaling/restarts, and submissions and remove the composer edge block —
     OR remain in a DELIBERATELY DECLARED maintenance incident while the forward fix is applied. Do
@@ -1986,7 +1989,7 @@ R5. ROLLBACK OUTCOME A: downgrade REFUSED (any sentinel above). The DB stays on 
 R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image digest, start API, probe
     `/readyz`, then start + attest its workers, attest image digest + running processes, then re-enable
     retention, autoscaling/restarts, and submissions and remove the composer edge block. Redeploying
-    the pre-7b image BEFORE 013 is applied is also safe.
+    the pre-cutover image BEFORE 013 is applied is also safe.
 
 ## 12. Live configuration cutover (migration 024)
 
@@ -2071,16 +2074,16 @@ ordinary requeue must not feed unfinished unversioned work to snapshot-only work
 | Pipeline worker | `python -m kyc_tool.workers.pipeline_worker` | N processes, per-case FIFO is queue-enforced |
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | delivers decision callbacks + POC emails |
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily), prunes per KYC_RETENTION_DAYS |
-| Migrations | `alembic upgrade head` | before rollout, downgrade clean EXCEPT migration 010 and the 013-023 witness chain (see below). **018 through 022 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`, `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
+| Migrations | `alembic upgrade head` | before rollout, downgrade clean EXCEPT migration 010, migration 011 once any policy bundle is stored (every API and worker stores one at startup), the 013-023 witness chain, and 024 once configuration history exists (see below). **018 through 022 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`, `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
 | v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, after the migration-010 cutover, idempotent |
 | Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot, before the bundle-pinning cutover (`docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
 | Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot, stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
 | Bundle epoch activation | `python -m kyc_tool.ops.activate_bundle_pinning_epoch --expect-bundle-hash <sha256> --expect-engine <id>` | one-shot, after the bundle-pinning cutover (`docs/DEPLOYMENT.md` §10), idempotent on a matching re-run, fails on a mismatched one |
-| 7b-core pre-window diagnostic | `python -m kyc_tool.ops.verify_pr7b_core_backfill` | one shot, compatible with schema 012, takes a SHARE lock and is read only. Run it before the window with retention suspended and zero activity attested. A nonzero exit plus `BLOCKED_NO_AUTHORITATIVE_MAPPING` blocks the cutover (see the cutover section). |
-| 7b-core ops prerequisites | `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites --expect-revision 012` | one-shot, READ-ONLY, takes NO lock (no writer stop needed) — run BEFORE pausing service to confirm the maintenance credential: refuses unless the schema is exactly `--expect-revision` (the restore path is `012`), then reports current role, `outbox_id_seq` owner, whether they match, and the lock/statement budgets, nonzero unless the current role OWNS the sequence, so a wrong credential OR wrong phase is caught before the outage, not inside it |
+| Callback cutover pre-window diagnostic | `python -m kyc_tool.ops.verify_pr7b_core_backfill` | one shot, compatible with schema 012, takes a SHARE lock and is read only. Run it before the window with retention suspended and zero activity attested. A nonzero exit plus `BLOCKED_NO_AUTHORITATIVE_MAPPING` blocks the cutover (see the cutover section). |
+| Callback cutover ops prerequisites | `python -m kyc_tool.ops.verify_pr7b_ops_prerequisites --expect-revision 012` | one-shot, READ-ONLY, takes NO lock (no writer stop needed) — run BEFORE pausing service to confirm the maintenance credential: refuses unless the schema is exactly `--expect-revision` (the restore path is `012`), then reports current role, `outbox_id_seq` owner, whether they match, and the lock/statement budgets, nonzero unless the current role OWNS the sequence, so a wrong credential OR wrong phase is caught before the outage, not inside it |
 | Outbox claim reset | `python -m kyc_tool.ops.reset_interrupted_outbox_claims` | one-shot, post-013-only, ONLY with every publisher stopped + attested — clears complete claim tuples, preserves `next_attempt_at`, atomic (refuses on any surviving tuple) |
 | Outbox sequence repair | `python -m kyc_tool.ops.repair_outbox_sequence [--floor N]` | one-shot, DRAINED maintenance stop only (takes `ACCESS EXCLUSIVE` on outbox), restarts `outbox_id_seq` at `GREATEST(max(id), floor)+1` with a fail-closed read-back — exit status IS the result |
-| 7b-core callback restore | `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file> --expect-original-id <id> --expect-manifest-digest <sha256> [--apply]` | one shot for schema 012 only, during the maintenance stop before the window. It defaults to dry run. `--expect-manifest-digest` (sha256 of the file, from the signed backup manifest) is MANDATORY. The file cannot certify itself. The command inserts the exact backed-up row, floors the sequence past it in one transaction and performs two fail-closed reads (see cutover step 0.5/0.6). |
+| Callback cutover restore | `python -m kyc_tool.ops.restore_pr7b_core_callback --evidence <file> --expect-original-id <id> --expect-manifest-digest <sha256> [--apply]` | one shot for schema 012 only, during the maintenance stop before the window. It defaults to dry run. `--expect-manifest-digest` (sha256 of the file, from the signed backup manifest) is MANDATORY. The file cannot certify itself. The command inserts the exact backed-up row, floors the sequence past it in one transaction and performs two fail-closed reads (see cutover step 0.5/0.6). |
 
 > **Migration 010 is a non-hot, forward-only-after-reuse cutover.** It
 > drops the global unique on `events.idempotency_key`, which the *old* image's
@@ -2117,7 +2120,7 @@ ordinary requeue must not feed unfinished unversioned work to snapshot-only work
 > for a pending/dead callback the attempt row is the only proof bytes were
 > staged. On refusal, KEEP or redeploy the reviewed **024-compatible** image — an older
 > publisher lacks the receipt/terminal contract and must not run against preserved evidence,
-> a pre-7b image is permitted only after the entire walk reaches 012.
+> an image from before the callback cutover is permitted only after the entire walk reaches 012.
 
 > **`022` and `023` need EVERY decision writer drained. This includes the pipeline and API,
 > as well as the publishers.** They are the first revisions in the chain to take `ACCESS EXCLUSIVE` on
@@ -2126,8 +2129,8 @@ ordinary requeue must not feed unfinished unversioned work to snapshot-only work
 > itself** — `reviewer.manual_approve` is handled inline in the ingest transaction with the
 > same case-lock-then-decision-insert shape, with no job and no run, so a job/run drain check
 > cannot see it. Running either migration against either writer **deadlocks** (Postgres
-> reports `40P01` and kills one side, reproduced against both a live decide and a live inline
-> manual approval, `021` does not do it). This is not silent corruption: DDL is transactional,
+> reports `40P01` and kills one side, with either a live decide or a live inline
+> manual approval; `021` does not). This is not silent corruption: DDL is transactional,
 > so a killed migration rolls back whole and the schema stays where it was. But it costs the
 > window and it can kill the approval instead of the migration, so before applying `022`/`023`
 > pause event submission, stop and attest the API writers AND the pipeline workers (as well as
@@ -2137,7 +2140,8 @@ ordinary requeue must not feed unfinished unversioned work to snapshot-only work
 
 ### Migration refusal sentinels
 
-Every deliberate migration refusal raises a **stable sentinel string**, so a refused
+Deliberate migration refusals raise a **stable sentinel string** (except the oldest two,
+010 and 011, whose messages say the migration is forward-only), so a refused
 `alembic upgrade`/`downgrade` reads as a designed stop rather than a broken migration.
 Grep the sentinel out of the command's output and find it here. The exception
 message names the offending rows or objects and a remediation. Older migration
@@ -2362,7 +2366,7 @@ WHERE status='pending' AND payload_json = '{"redacted": true}'::jsonb;
 
 ### RIR / registry outage
 Runs complete as `partial` (upstream_error recorded, prior checks stay live,
-no failing check is invented — G12 semantics). No action needed, when the
+no failing check is invented). No action needed, when the
 upstream recovers, re-drive affected cases by re-sending the original
 evidence event (fresh idempotency keys). `recalculate.requested` re-decides
 without re-fetching and without the broker screen — use it only when no new
@@ -2554,8 +2558,8 @@ R4. **With `018` or anything above it installed there is no schema-downgrade pat
 R5. ROLLBACK OUTCOME A: downgrade REFUSED (any sentinel above). The DB stays on the
     witness-authority schema, so KEEP or redeploy the reviewed **`024`-COMPATIBLE image** digest —
     an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
-    evidence, PROHIBIT the pre-7b image outright. Rollback after first witness use is a
-    FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is
+    evidence, PROHIBIT any pre-cutover image outright. Rollback after first witness use is a
+    FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-cutover image is
     permitted ONLY after the entire walk reaches `012` (outcome B). Verify `/readyz`, start + attest its fenced workers, then
     re-enable retention, autoscaling/restarts, and submissions and remove the composer edge block —
     OR remain in a DELIBERATELY DECLARED maintenance incident while the forward fix is applied. Do
@@ -2563,7 +2567,7 @@ R5. ROLLBACK OUTCOME A: downgrade REFUSED (any sentinel above). The DB stays on 
 R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image digest, start API, probe
     `/readyz`, then start + attest its workers, attest image digest + running processes, then re-enable
     retention, autoscaling/restarts, and submissions and remove the composer edge block. Redeploying
-    the pre-7b image BEFORE 013 is applied is also safe.
+    the pre-cutover image BEFORE 013 is applied is also safe.
 
 ## Retention & compliance
 
@@ -2581,8 +2585,8 @@ carries `checks[].source` (can be reviewer-derived), is a different matter:
 `COALESCE(delivered_at, resolved_at, created_at)` is past
 `KYC_RETENTION_DAYS`, for any row whose `status` is `delivered`, `superseded`
 **or `dead`** (migration 020 — a callback that exhausted its attempts during a
-platform outage carries the same reviewer-derived body as any other, and
-keeping it forever inverted this policy, a dead row has neither `delivered_at`
+platform outage carries the same reviewer-derived body as any other, so it is
+redacted too; a dead row has neither `delivered_at`
 nor `resolved_at`, so it ages on `created_at`). Redaction **never** touches a
 `pending` row: that body is still sendable, and the database refuses the write.
 A redacted row can no longer be requeued. The console returns 409 and names

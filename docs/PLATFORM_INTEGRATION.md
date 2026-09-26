@@ -588,8 +588,8 @@ The envelope's `actor` must identify the same reviewer (`actor.type:
 422, and the actor-derived reviewer is the one recorded. The tool checks that
 the task exists, that it is a website task on that case, and that it is open
 (else 404/409/422). The state change, the check and the audit row are identical
-to any other event. (The old `POST /v1/review-tasks/{id}/complete` endpoint is
-retired — it duplicated this event.)
+to any other event. There is no separate completion endpoint: this event is how a
+review task is completed.
 
 **What a reviewer has asked the contact for.** `GET /v1/cases/{id}` carries
 `information_requested`: one entry per outstanding ask, shaped `{"field":

@@ -391,8 +391,9 @@ print(r.status_code, r.json())
 - Re-send the same bytes with the same `Idempotency-Key` and you get `200`
   with the stored response, no duplicate run. That is the retry safety to
   build on.
-- That example signs v1. `PLATFORM_INTEGRATION.md` §2 has the v2 recipe and a
-  worked vector. Its §11 has the conformance kit, whose `vector` mode prints
+- That example signs v1, and every accepted v1 request restarts the zero-v1
+  observation window, so prefer v2 once that clock is running.
+  `PLATFORM_INTEGRATION.md` §2 has the v2 recipe and a worked vector. Its §11 has the conformance kit, whose `vector` mode prints
   the contract's reference vector (a different one from the §2
   example) so you can hold your own signer against it offline.
 - `GET /v1/cases/case-001` shows the live checks and reason codes after each

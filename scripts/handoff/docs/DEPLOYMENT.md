@@ -109,9 +109,10 @@ zero-witness never turns green (by design), so v1 can never be sunset.
    the §3 values by hand. Then run
    `python -m kyc_tool.ops.activate_hmac_v1_observation` once to start the v1
    observation clock (§2). Until it runs, inbound v1 can never be retired.
-6. Smoke test: send one signed `kyb.run_requested` (script in
-   `docs/PLATFORM_BRIEFING.md` §7) and confirm the decision arrives at the
-   callback URL.
+6. Smoke test: send one signed `kyb.run_requested` and confirm the decision
+   arrives at the callback URL. Sign it with v2 (`docs/PLATFORM_INTEGRATION.md`
+   §2). The v1 script in `docs/PLATFORM_BRIEFING.md` §7 also works, but every
+   accepted v1 request restarts the zero-v1 observation window (§5).
 
 ## 4. Deploying an update
 
@@ -186,7 +187,8 @@ Read those notes before scheduling the update.
   **024-compatible** image — an older publisher lacks the receipt/terminal
   contract and must not run against preserved evidence. Rollback after first
   witness use is a flag/image rollback on that compatible schema, never a
-  schema downgrade. A pre-7b image is permitted only after the entire walk
+  schema downgrade. An image from before the callback cutover (§11) is permitted
+  only after the entire walk
   reaches 012 — which is only possible on a schema that never reached `018`. Once
   `018` through `022` ARE installed, the supported rollback is redeploying the prior
   reviewed `024`-compatible image against the schema it is already on. The schema
@@ -657,8 +659,8 @@ R4. **With `018` or anything above it installed there is no schema-downgrade pat
 R5. ROLLBACK OUTCOME A: downgrade REFUSED (any sentinel above). The DB stays on the
     witness-authority schema, so KEEP or redeploy the reviewed **`024`-COMPATIBLE image** digest —
     an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
-    evidence, PROHIBIT the pre-7b image outright. Rollback after first witness use is a
-    FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is
+    evidence, PROHIBIT any pre-cutover image outright. Rollback after first witness use is a
+    FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-cutover image is
     permitted ONLY after the entire walk reaches `012` (outcome B). Verify `/readyz`, start + attest its fenced workers, then
     re-enable retention, autoscaling/restarts, and submissions and remove the composer edge block —
     OR remain in a DELIBERATELY DECLARED maintenance incident while the forward fix is applied. Do
@@ -666,7 +668,7 @@ R5. ROLLBACK OUTCOME A: downgrade REFUSED (any sentinel above). The DB stays on 
 R6. ROLLBACK OUTCOME B — downgrade SUCCEEDED: deploy the recorded prior-image digest, start API, probe
     `/readyz`, then start + attest its workers, attest image digest + running processes, then re-enable
     retention, autoscaling/restarts, and submissions and remove the composer edge block. Redeploying
-    the pre-7b image BEFORE 013 is applied is also safe.
+    the pre-cutover image BEFORE 013 is applied is also safe.
 
 ## 12. Live configuration cutover (migration 024)
 

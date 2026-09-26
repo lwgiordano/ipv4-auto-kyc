@@ -8,7 +8,7 @@
 | Pipeline worker | `python -m kyc_tool.workers.pipeline_worker` | N processes; per-case FIFO is queue-enforced |
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | delivers decision callbacks + POC emails |
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily); prunes per KYC_RETENTION_DAYS |
-| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-023 witness chain (see below). **018 through 022 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`, `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
+| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010, migration 011 once any policy bundle is stored (every API and worker stores one at startup), the 013-023 witness chain, and 024 once configuration history exists (see below). **018 through 022 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`, `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
 | v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, POST-cutover (PR 5a §6a); idempotent |
 | Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot; PRE-cutover for `enforce_bundle_pinning` (PR 6, `docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
 | Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot; stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
@@ -63,8 +63,8 @@
 > itself** — `reviewer.manual_approve` is handled inline in the ingest transaction with the
 > same case-lock-then-decision-insert shape, with no job and no run, so a job/run drain check
 > cannot see it. Running either migration against either writer **deadlocks** (Postgres
-> reports `40P01` and kills one side; reproduced against both a live decide and a live inline
-> manual approval; `021` does not do it). This is not silent corruption: DDL is transactional,
+> reports `40P01` and kills one side, with either a live decide or a live inline
+> manual approval; `021` does not). This is not silent corruption: DDL is transactional,
 > so a killed migration rolls back whole and the schema stays where it was. But it costs the
 > window and it can kill the approval instead of the migration, so before applying `022`/`023`
 > pause event submission, stop and attest the API writers AND the pipeline workers (as well as
@@ -74,7 +74,8 @@
 
 ### Migration refusal sentinels
 
-Every deliberate migration refusal raises a **stable sentinel string**, so a refused
+Deliberate migration refusals raise a **stable sentinel string** (except the oldest two,
+010 and 011, whose messages say the migration is forward-only), so a refused
 `alembic upgrade`/`downgrade` reads as a designed stop rather than a broken migration.
 Grep the sentinel out of the command's output and find it here. The exception message
 names the offending rows or objects and a remediation — but published migrations are
@@ -521,8 +522,8 @@ carries `checks[].source` (can be reviewer-derived), is a different matter:
 `COALESCE(delivered_at, resolved_at, created_at)` is past
 `KYC_RETENTION_DAYS`, for any row whose `status` is `delivered`, `superseded`
 **or `dead`** (migration 020 — a callback that exhausted its attempts during a
-platform outage carries the same reviewer-derived body as any other, and
-keeping it forever inverted this policy; a dead row has neither `delivered_at`
+platform outage carries the same reviewer-derived body as any other, so it is
+redacted too; a dead row has neither `delivered_at`
 nor `resolved_at`, so it ages on `created_at`). Redaction **never** touches a
 `pending` row: that body is still sendable, and the database refuses the write.
 A redacted row can no longer be requeued — the console returns 409 and names
