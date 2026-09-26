@@ -60,6 +60,9 @@ X-KYC-Signature: <hex HMAC-SHA256(secret, timestamp + "." + raw_body)>
 - The signed message is the timestamp string, a literal `.`, then the **raw
   request body bytes**. Sign the exact bytes you send. Verify the exact bytes
   you receive, before any JSON parsing.
+- The timestamp is Unix seconds as a decimal string and may carry a fraction; our
+  callbacks do (for example `1752681600.25`). Sign and verify the string exactly
+  as sent, and parse it as a decimal number for the age check.
 - Requests older or newer than 300 seconds are rejected, so keep clocks on NTP.
 - Compare signatures constant-time.
 - v1 uses one shared secret per environment (staging ≠ production), ≥ 32 chars.

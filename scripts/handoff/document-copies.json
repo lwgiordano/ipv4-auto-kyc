@@ -17,9 +17,9 @@
       "copy_path": "scripts/handoff/docs/DEPLOYMENT.md",
       "source_paths": ["docs/DEPLOYMENT.md"],
       "source_sha256": {
-        "docs/DEPLOYMENT.md": "0e955858483455ece8e31eea99415799ffd053dc3601115c9abeb369e47d09ee"
+        "docs/DEPLOYMENT.md": "d983455440667c0c6425cefb8a5292ad1697c7de8e97eeb51be2cfb6108b127a"
       },
-      "copy_sha256": "728390d7332f512a03eba8d109b830d8e1421823873d05c55bad6114326bee93",
+      "copy_sha256": "ce68de62344a5ce3b634ace2fffedb9f4acd24b8e8ae30d19335a0a138ffc84b",
       "rationale": "Keeps the complete deployment and cutover procedures while removing internal review history."
     },
     {
@@ -27,9 +27,9 @@
       "copy_path": "scripts/handoff/docs/PLATFORM_BRIEFING.md",
       "source_paths": ["docs/PLATFORM_BRIEFING.md"],
       "source_sha256": {
-        "docs/PLATFORM_BRIEFING.md": "dc2969fc6d8355f31c27e74d1562665854877457b8062d5e0e8eafa48faeae68"
+        "docs/PLATFORM_BRIEFING.md": "faa9fbd6880b73997d137f21f45f3b13c8e8e13f9ef05d8b3319623b79d0176b"
       },
-      "copy_sha256": "a0a9815f44e212e40c4a50d65f51fa319203f83cb690cc4820a275705217364d",
+      "copy_sha256": "c6a058910d7a9755b1e3ebc93aae8db7dfb0a8f4a01bcd11eff631a829666414",
       "rationale": "Publishes a self-contained platform briefing with package-local paths and references."
     },
     {
@@ -37,9 +37,9 @@
       "copy_path": "scripts/handoff/docs/PLATFORM_INTEGRATION.md",
       "source_paths": ["docs/PLATFORM_INTEGRATION.md"],
       "source_sha256": {
-        "docs/PLATFORM_INTEGRATION.md": "39f073d3fbf633e46e71a425f55514d532e8eaf0c17c097caa882582a839a97b"
+        "docs/PLATFORM_INTEGRATION.md": "cacb73865b34cf79b4a30f51f8172030c0f1762a79adc5f8ac400ae6b852725a"
       },
-      "copy_sha256": "a965353c44e841f29d537ad2a28de7392987e5106deee2d4505dc3e24ea83c87",
+      "copy_sha256": "589c1869b5b4dc0fe7b118e68c177c6beccbc353e222efed821bf870b4a843ae",
       "rationale": "Preserves the integration contract while using neutral product wording and removing conversational narration."
     },
     {
@@ -47,9 +47,9 @@
       "copy_path": "scripts/handoff/docs/RUNBOOK.md",
       "source_paths": ["docs/RUNBOOK.md"],
       "source_sha256": {
-        "docs/RUNBOOK.md": "43040328d1a6f703cfb6faf8ab8cd126a68045143a8b715b345e0b0fae6812ab"
+        "docs/RUNBOOK.md": "4c27d943e5868efe4d6a4c5bd356737d72da3b1770be3b632a9680510884a32c"
       },
-      "copy_sha256": "605e31861b98b45293d13719a294c096245333112e06e4f1f7b61e9277e8c644",
+      "copy_sha256": "930b4e1299a9f4cc2f3102d0fbfe4781db185b7446149eb60afbf10af50b630a",
       "rationale": "Keeps the full operator procedure while replacing internal governance references with self-contained rules."
     },
     {
@@ -70,7 +70,7 @@
         "docs/superpowers/specs/2026-09-12-production-readiness-design.md"
       ],
       "source_sha256": {
-        "docs/PLATFORM_BRIEFING.md": "dc2969fc6d8355f31c27e74d1562665854877457b8062d5e0e8eafa48faeae68",
+        "docs/PLATFORM_BRIEFING.md": "faa9fbd6880b73997d137f21f45f3b13c8e8e13f9ef05d8b3319623b79d0176b",
         "docs/superpowers/specs/2026-09-12-production-readiness-design.md": "4242f0b3e9e63ea295e3afbd3b0328a48f506e4e5854d0c528556c024be535cf"
       },
       "copy_sha256": "dca8005e5f2a6cd4fe39c0f7497a78ca7680da5caa34e84acd6a210161513a61",

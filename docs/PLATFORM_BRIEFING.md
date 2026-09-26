@@ -390,7 +390,7 @@ print(r.status_code, r.json())
   build on.
 - That example signs v1. `PLATFORM_INTEGRATION.md` §2 has the v2 recipe and a
   worked vector. Its §11 has the conformance kit, whose `vector` mode prints
-  the vector from the signed contract PDF (a different one from the §2
+  the contract's reference vector (a different one from the §2
   example) so you can hold your own signer against it offline.
 - `GET /v1/cases/case-001` shows the live checks and reason codes after each
   event.
@@ -403,7 +403,8 @@ print(r.status_code, r.json())
   email sink file, then POST `poc.token_verified` with both.
 - The ops console (`/ui`, switched on with `KYC_UI_ENABLED=true` in staging)
   shows every case with its score, its gates and its run state, and it can
-  compose signed test events from the browser.
+  compose test events from the browser. The server ingests them directly,
+  authorized by the operator credential rather than an HMAC signature.
 
 ## 8. Where things stand, and what we need from you
 

@@ -106,7 +106,9 @@ zero-witness never turns green (by design), so v1 can never be sunset.
    DB connectivity, migration version, and storage access, and returns 503
    until all pass. Config safety is validated only in production mode. In
    staging's development mode `/readyz` does NOT vet the env vars, so verify
-   the §3 values by hand.
+   the §3 values by hand. Then run
+   `python -m kyc_tool.ops.activate_hmac_v1_observation` once to start the v1
+   observation clock (§2). Until it runs, inbound v1 can never be retired.
 6. Smoke test: send one signed `kyb.run_requested` (script in
    `docs/PLATFORM_BRIEFING.md` §7) and confirm the decision arrives at the
    callback URL.

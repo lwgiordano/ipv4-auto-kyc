@@ -408,7 +408,7 @@ print(r.status_code, r.json())
   build on.
 - That example signs v1. `PLATFORM_INTEGRATION.md` §2 has the v2 recipe and a
   worked vector. Its §11 has the conformance kit, whose `vector` mode prints
-  the vector from the signed contract PDF (a different one from the §2
+  the contract's reference vector (a different one from the §2
   example) so you can hold your own signer against it offline.
 - `GET /v1/cases/case-001` shows the live checks and reason codes after each
   event.
@@ -421,7 +421,8 @@ print(r.status_code, r.json())
   email sink file, then POST `poc.token_verified` with both.
 - The ops console (`/ui`, switched on with `KYC_UI_ENABLED=true` in staging)
   shows every case with its score, its gates and its run state, and it can
-  compose signed test events from the browser.
+  compose test events from the browser. The server ingests them directly,
+  authorized by the operator credential rather than an HMAC signature.
 
 ## 8. Release status and required inputs
 
@@ -633,6 +634,9 @@ X-KYC-Signature: <hex HMAC-SHA256(secret, timestamp + "." + raw_body)>
 - The signed message is the timestamp string, a literal `.`, then the **raw
   request body bytes**. Sign the exact bytes you send. Verify the exact bytes
   you receive, before any JSON parsing.
+- The timestamp is Unix seconds as a decimal string and may carry a fraction.
+  Tool callbacks do, for example `1752681600.25`. Sign and verify the string
+  exactly as sent, and parse it as a decimal number for the age check.
 - Requests older or newer than 300 seconds are rejected, so keep clocks on NTP.
 - Compare signatures constant-time.
 - v1 uses one shared secret per environment (staging ≠ production), ≥ 32 chars.
@@ -1416,7 +1420,9 @@ zero-witness never turns green (by design), so v1 can never be sunset.
    DB connectivity, migration version, and storage access, and returns 503
    until all pass. Config safety is validated only in production mode. In
    staging's development mode `/readyz` does NOT vet the env vars, so verify
-   the §3 values by hand.
+   the §3 values by hand. Then run
+   `python -m kyc_tool.ops.activate_hmac_v1_observation` once to start the v1
+   observation clock (§2). Until it runs, inbound v1 can never be retired.
 6. Smoke test: send one signed `kyb.run_requested` (script in
    `docs/PLATFORM_BRIEFING.md` §7) and confirm the decision arrives at the
    callback URL.
@@ -2241,8 +2247,9 @@ reviewer and reason as a new decision without altering historical decisions.
 Data Sources reports adapter mode,
 configuration and reachability. Salesforce Fields previews the current case
 projection. Decision Rules shows the active scoring and gate configuration.
-Options holds appearance and operator access. Case Actions prepares signed
-events for review before they are sent server-side. Treat an unsent Case Actions
+Options holds appearance and operator access. Case Actions prepares events
+for review before the server ingests them directly, authorized by the operator
+credential rather than an HMAC signature. Treat an unsent Case Actions
 entry as browser-page working state, not a durable record. The five-second
 refresh waits while a person is typing, has armed a confirmation, or has a case
 form open. Navigation still re-renders the page, so unsent case edits can be

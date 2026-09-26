@@ -198,8 +198,9 @@ reviewer and reason as a new decision without altering historical decisions.
 The remaining menu names match the console: Data Sources reports adapter mode,
 configuration and reachability. Salesforce Fields previews the current case
 projection. Decision Rules shows the active scoring and gate configuration.
-Options holds appearance and operator access. Case Actions prepares signed
-events for review before they are sent server-side. Treat an unsent Case Actions
+Options holds appearance and operator access. Case Actions prepares events
+for review before the server ingests them directly, authorized by the operator
+credential rather than an HMAC signature. Treat an unsent Case Actions
 entry as browser-page working state, not a durable record. The five-second
 refresh waits while a person is typing, has armed a confirmation, or has a case
 form open. Navigation still re-renders the page, so unsent case edits can be

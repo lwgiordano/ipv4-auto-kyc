@@ -45,9 +45,8 @@ receiver case A4 tests this exact combination.
 
 Configure `KYC_UI_ADMIN_TOKEN` on every staging host, and enter it under
 Options when the operator console is enabled. Console reads, including
-configuration, and operator actions use that token; the platform may instead
-read configuration with a signed request. Platform request signing uses
-different keys. Set `KYC_READ_AUTH_REQUIRED=true` on any staging host another
+configuration, and operator actions use that token. Platform request signing
+uses different keys. Set `KYC_READ_AUTH_REQUIRED=true` on any staging host another
 machine can reach, and never set `KYC_AUTH_DISABLED` there
 (`docs/DEPLOYMENT.md` §2).
 

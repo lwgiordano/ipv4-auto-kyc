@@ -500,7 +500,10 @@ def plain_text_document(source: str) -> str:
                 )
             row = None
         elif kind in {"bullet_list_open", "ordered_list_open"}:
-            lists.append(int(token.attrGet("start") or 1) if kind == "ordered_list_open" else None)
+            # `start` is 0 for a list that begins at step 0; `or 1` renumbered it and shifted every
+            # "step N" reference in the exported text. Only an absent attribute means 1.
+            start = token.attrGet("start") if kind == "ordered_list_open" else None
+            lists.append((1 if start is None else int(start)) if kind == "ordered_list_open" else None)
         elif kind in {"bullet_list_close", "ordered_list_close"}:
             lists.pop()
         elif kind == "list_item_open":

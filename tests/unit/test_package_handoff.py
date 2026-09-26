@@ -607,6 +607,18 @@ def test_plain_text_documents_preserve_commands_tables_and_links(tmp_path, expor
         assert rows["README.txt"]["sha256"] == hashlib.sha256(content.encode()).hexdigest()
 
 
+def test_plain_text_lists_keep_their_starting_number(exporter):
+    """A procedure that starts at step 0 is cross-referenced by number ("hold workers until step 5
+    passes"), so renumbering it from 1 silently points every reference at the wrong step."""
+    text = exporter.plain_text_document(
+        "0. Record the digest.\n1. Pause submissions.\n\n"
+        "Then:\n\n14. Continue here.\n15. And here.\n\nAlso:\n\n1. Default start.\n"
+    )
+    assert "0. Record the digest." in text and "1. Pause submissions." in text
+    assert "14. Continue here." in text and "15. And here." in text
+    assert "1. Default start." in text
+
+
 def test_renderer_receives_updated_public_references_before_plain_text_conversion(tmp_path, exporter):
     def render(root):
         assert "START-HERE.txt" in (root / "README.md").read_text()
