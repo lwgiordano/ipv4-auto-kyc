@@ -693,6 +693,8 @@ unbuilt/fail-closed; this procedure does not enable M2 or alter callbacks.
    `KYC_UI_ADMIN_TOKEN` in the CLI and every compatible API/pipeline/dev worker
    environment. Supply credentials through the secret store/environment, never
    command arguments, source, screenshots, or logs. Keep UI access restricted.
+   Set `KYC_UI_ENABLED=true` on the API: `GET /ui/api/configuration` (step 5)
+   and the console editor exist only when it is on.
 3. Run the read-only preflight before the maintenance window where schema `024`
    is already installed:
 

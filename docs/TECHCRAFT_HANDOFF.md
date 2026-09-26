@@ -362,11 +362,14 @@ Checklist:
    live directory is wired in (§8, not built yet). For that day set
    `KYC_EMAIL_PROVIDER=file`, which appends each verification email as a JSON
    line to a local sink file (`var/poc-emails.log` by default,
+   `/data/poc-emails.log` in the image,
    moved with `KYC_EMAIL_FILE_PATH`), so staging tests can read the token and the
    reference and finish the round-trip. That sink writes raw tokens to disk,
    so it is for closed staging only and production refuses it at boot. The
    production email and document paths still need the agreements in §5.
-6. `alembic upgrade head`, start the processes, check `/readyz`.
+6. `alembic upgrade head`, start the processes, check `/readyz`, then run
+   `python -m kyc_tool.ops.activate_hmac_v1_observation` once
+   (`DEPLOYMENT.md` §3).
 7. Smoke test: send a signed `kyb.run_requested` and watch the verdict arrive.
    Until the platform receiver exists, `scripts/dev_receiver.py` is a stub that prints
    incoming callbacks.
@@ -1126,9 +1129,12 @@ A later upload re-runs verification (§3).
    Each key is individually optional, and anything missing routes toward review
    rather than toward a pass. Extract what the document says, not what the user
    typed. Comparing the two is exactly the tool's job.
-2. Post `document.uploaded` with `object_ref` (storage key) and `doc_type`
+2. Post `document.uploaded` with `object_ref` and `doc_type`
    (`registration_certificate` for formation/registration documents, and more
-   types can be added as needed).
+   types can be added as needed). `object_ref` is the object's full reference,
+   `s3://<KYC_S3_BUCKET>/<key>`, in the bucket the tool is configured with. A
+   bare key or another bucket is refused and the document check does not run.
+   The local filesystem store used in development takes `fs://<key>`.
 3. Keep the original upload on your side for audit.
 
 Staging can use hand-extracted JSON. Choosing platform extraction does not
@@ -1671,7 +1677,10 @@ Steps:
    - a signed `system`-actor `website.review_completed` against a valid open
      task → the app's **422** (a 404/409 would mask a broken actor floor),
    - a mismatched-actor `reviewer.manual_approve` → the app's **422**,
-   - the composer → the app's **403** for both sensitive event types.
+   - the composer → the app's **403** for both sensitive event types. This
+     refusal exists only with `KYC_ENVIRONMENT=production`. Staging runs as
+     `development`, where the composer accepts these events and would record
+     a real review or approval, so skip this probe in a staging rehearsal.
 
    Do not probe the decide-txn guard's live behavior in production this way —
    a real pipeline run there writes a decision and enqueues a callback
@@ -1996,6 +2005,8 @@ enforcement or alter callbacks.
    `KYC_UI_ADMIN_TOKEN` in the CLI and every compatible API/pipeline/dev worker
    environment. Supply credentials through the secret store/environment, never
    command arguments, source, screenshots, or logs. Keep UI access restricted.
+   Set `KYC_UI_ENABLED=true` on the API: `GET /ui/api/configuration` (step 5)
+   and the console editor exist only when it is on.
 3. Run the read-only preflight before the maintenance window where schema `024`
    is already installed:
 

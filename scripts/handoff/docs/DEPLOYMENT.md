@@ -357,7 +357,10 @@ Steps:
    - a signed `system`-actor `website.review_completed` against a valid open
      task → the app's **422** (a 404/409 would mask a broken actor floor),
    - a mismatched-actor `reviewer.manual_approve` → the app's **422**,
-   - the composer → the app's **403** for both sensitive event types.
+   - the composer → the app's **403** for both sensitive event types. This
+     refusal exists only with `KYC_ENVIRONMENT=production`. Staging runs as
+     `development`, where the composer accepts these events and would record
+     a real review or approval, so skip this probe in a staging rehearsal.
 
    Do not probe the decide-txn guard's live behavior in production this way —
    a real pipeline run there writes a decision and enqueues a callback
@@ -682,6 +685,8 @@ enforcement or alter callbacks.
    `KYC_UI_ADMIN_TOKEN` in the CLI and every compatible API/pipeline/dev worker
    environment. Supply credentials through the secret store/environment, never
    command arguments, source, screenshots, or logs. Keep UI access restricted.
+   Set `KYC_UI_ENABLED=true` on the API: `GET /ui/api/configuration` (step 5)
+   and the console editor exist only when it is on.
 3. Run the read-only preflight before the maintenance window where schema `024`
    is already installed:
 

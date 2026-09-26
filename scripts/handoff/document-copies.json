@@ -17,9 +17,9 @@
       "copy_path": "scripts/handoff/docs/DEPLOYMENT.md",
       "source_paths": ["docs/DEPLOYMENT.md"],
       "source_sha256": {
-        "docs/DEPLOYMENT.md": "d983455440667c0c6425cefb8a5292ad1697c7de8e97eeb51be2cfb6108b127a"
+        "docs/DEPLOYMENT.md": "34c4f5b5f7ec866c2008d9ca4b7e5e94026d2c66749b43eaf3141bda9b36070f"
       },
-      "copy_sha256": "ce68de62344a5ce3b634ace2fffedb9f4acd24b8e8ae30d19335a0a138ffc84b",
+      "copy_sha256": "e84daf1bad0e7d65430327b7c819ae3d88ef1353a73522ee2a26762a94df3bb6",
       "rationale": "Keeps the complete deployment and cutover procedures while removing internal review history."
     },
     {
@@ -27,9 +27,9 @@
       "copy_path": "scripts/handoff/docs/PLATFORM_BRIEFING.md",
       "source_paths": ["docs/PLATFORM_BRIEFING.md"],
       "source_sha256": {
-        "docs/PLATFORM_BRIEFING.md": "faa9fbd6880b73997d137f21f45f3b13c8e8e13f9ef05d8b3319623b79d0176b"
+        "docs/PLATFORM_BRIEFING.md": "88f0d4401d78f218bcb354cceb52ff329e9cca6e2c69548b381f6ef6c7d953ad"
       },
-      "copy_sha256": "c6a058910d7a9755b1e3ebc93aae8db7dfb0a8f4a01bcd11eff631a829666414",
+      "copy_sha256": "bf47b28dabed5dbaa3e93898350f2551e791d2bb1986989f22d722fe29fe6a36",
       "rationale": "Publishes a self-contained platform briefing with package-local paths and references."
     },
     {
@@ -37,9 +37,9 @@
       "copy_path": "scripts/handoff/docs/PLATFORM_INTEGRATION.md",
       "source_paths": ["docs/PLATFORM_INTEGRATION.md"],
       "source_sha256": {
-        "docs/PLATFORM_INTEGRATION.md": "cacb73865b34cf79b4a30f51f8172030c0f1762a79adc5f8ac400ae6b852725a"
+        "docs/PLATFORM_INTEGRATION.md": "b1ed9fcf20904b50437dad4eaf8ad15e3f65885bb4838c5d6a93254e6210823f"
       },
-      "copy_sha256": "589c1869b5b4dc0fe7b118e68c177c6beccbc353e222efed821bf870b4a843ae",
+      "copy_sha256": "a7269da76d710c00d299bffc98c360df29d27a43a99c4e854db6098e95f7b64a",
       "rationale": "Preserves the integration contract while using neutral product wording and removing conversational narration."
     },
     {
@@ -70,7 +70,7 @@
         "docs/superpowers/specs/2026-09-12-production-readiness-design.md"
       ],
       "source_sha256": {
-        "docs/PLATFORM_BRIEFING.md": "faa9fbd6880b73997d137f21f45f3b13c8e8e13f9ef05d8b3319623b79d0176b",
+        "docs/PLATFORM_BRIEFING.md": "88f0d4401d78f218bcb354cceb52ff329e9cca6e2c69548b381f6ef6c7d953ad",
         "docs/superpowers/specs/2026-09-12-production-readiness-design.md": "4242f0b3e9e63ea295e3afbd3b0328a48f506e4e5854d0c528556c024be535cf"
       },
       "copy_sha256": "dca8005e5f2a6cd4fe39c0f7497a78ca7680da5caa34e84acd6a210161513a61",

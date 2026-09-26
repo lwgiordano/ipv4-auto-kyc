@@ -344,11 +344,14 @@ Checklist:
    live directory is wired in (§8, not built yet). For that day set
    `KYC_EMAIL_PROVIDER=file`, which appends each verification email as a JSON
    line to a local sink file (`.substrate/state/poc-emails.log` by default,
+   `/data/poc-emails.log` in the image,
    moved with `KYC_EMAIL_FILE_PATH`), so your tests can read the token and the
    reference and finish the round-trip. That sink writes raw tokens to disk,
    so it is for closed staging only and production refuses it at boot. The
    production email and document paths still need the agreements in §5.
-6. `alembic upgrade head`, start the processes, check `/readyz`.
+6. `alembic upgrade head`, start the processes, check `/readyz`, then run
+   `python -m kyc_tool.ops.activate_hmac_v1_observation` once
+   (`DEPLOYMENT.md` §3).
 7. Smoke test: send a signed `kyb.run_requested` and watch the verdict arrive.
    Until your receiver exists, `scripts/dev_receiver.py` is a stub that prints
    incoming callbacks.

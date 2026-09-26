@@ -553,9 +553,12 @@ A later upload re-runs verification (§3).
    Each key is individually optional, and anything missing routes toward review
    rather than toward a pass. Extract what the document says, not what the user
    typed. Comparing the two is exactly the tool's job.
-2. Post `document.uploaded` with `object_ref` (storage key) and `doc_type`
+2. Post `document.uploaded` with `object_ref` and `doc_type`
    (`registration_certificate` for formation/registration documents, and more
-   types can be added as needed).
+   types can be added as needed). `object_ref` is the object's full reference,
+   `s3://<KYC_S3_BUCKET>/<key>`, in the bucket the tool is configured with. A
+   bare key or another bucket is refused and the document check does not run.
+   The local filesystem store used in development takes `fs://<key>`.
 3. Keep the original upload on your side for audit.
 
 Staging can use hand-extracted JSON. Choosing platform extraction does not

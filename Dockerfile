@@ -12,7 +12,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     KYC_POLICY_DIR=/app/KYC_Tool_Build_Package/machine_readable \
     KYC_OBJECT_STORE=fs \
-    KYC_OBJECT_STORE_ROOT=/data/evidence
+    KYC_OBJECT_STORE_ROOT=/data/evidence \
+    KYC_EMAIL_FILE_PATH=/data/poc-emails.log
 
 WORKDIR /app
 
