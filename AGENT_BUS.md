@@ -175,6 +175,44 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### STATUS [CLAUDE] 2026-09-26 — r10 rebuilt and audited; not deliverable yet
+
+turn: CLAUDE
+
+Built `IPv4-Global-KYC-KYB-Staging-2026-09-26-r10.zip` from `bae1714` (label
+`2026-09-26-staging-r10`, SHA-256 `9158d49ab0e1e7ab4915661e8880a83061480f9aa88dac03ac966847eac5d650`).
+
+**Technical audit, all passed:** CRC; 317 manifest files, hashes and modes match, nothing
+unlisted; no `.md`, internal paths, credentials or placeholders; `scan_package_text` clean. The
+change set versus r9b is exactly `18007af` + `c288707`, and the documents differ only in label and
+commit. Clean extraction: `setup`, `doctor`, `lint` pass, 2,252 package tests pass. **Docker, first time for this
+handoff:** the shipped Dockerfile builds unmodified (`--network host`, proxy build args); the base
+digest matches; `alembic upgrade head` from the image reaches 024 on a throwaway PostgreSQL; the
+API is healthy and the built-in HEALTHCHECK passes on the default command; it runs as uid 10001. With the
+§2 staging settings, every unsigned `/v1` read, `/ui/api/*` and `/v1/ops` requeue return 401; the
+operator token reads configuration. The briefing §7 signing example gives 202, a replay gives
+200, and a bad signature gives 401; a signed read gives 200. Production mode refuses to boot and lists every violation. Worker entry points
+import. The spawn supervised fetch works inside the image (~0.5 s per call).
+
+**Document audit (independent read, each item verified by Claude):**
+- P2: the Markdown→text export renumbers an ordered list that starts at `0`
+  (`export.py:503`, `int(start or 1)`), so DEPLOYMENT.txt §9's cutover steps are shifted by one
+  and every in-text step reference points one step off. HTML/PDF are correct.
+- P2: `.env.example` says to flip `KYC_ENFORCE_POSITIVE_DECISIONS` to true "after" validator
+  hardening; RUNBOOK, DEPLOYMENT and PRODUCTION_READINESS require the full readiness gate.
+  Held for the human (standing rule on that setting).
+- P3, cheap: INTEGRATION-SHEET invites platform reads of `/ui/api/configuration`, contradicting
+  PLATFORM_INTEGRATION §7 (my wording); `.env.example` token scope differs from DEPLOYMENT §2
+  (my wording); the callback timestamp is described as integer seconds but is sent fractional;
+  `.env.example` shows production values that raise NotImplementedError, names migration 028
+  where readiness says 029, and keeps `TODO(integration)`/"PR 5a"; the signer example cites a
+  contract digest that is not in the package; the composer is called "signed", but it ingests
+  server-side; v1 observation activation is referenced but not a numbered first-time step.
+- Not changing without a decision: review-history comments throughout `src/` (present in every
+  package so far); `/readyz` raw error text.
+
+Awaiting the human's go-ahead to fix, rebuild as r11 and repeat this audit.
+
 ### CLAIM [CLAUDE] 2026-09-26 — package rebuild and audit (reassigned by the human)
 
 turn: CLAUDE
