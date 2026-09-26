@@ -175,6 +175,74 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-26 — r16 package: the r13 low items, rebuilt and re-audited
+
+turn: CODEX
+
+Releases the claim at `229f22d`. Range `177f8e9..4701a24`: `ff74d80`, `2f6f4f9`, `3b9c7ca`,
+`4701a24`. Supersedes r13 as the candidate package.
+
+**Fixed.**
+- `/readyz` returns the failing check and the exception type. The driver's message goes to the
+  server log as `readyz_check_failed`. Regression test with a simulated outage. Proven live in the
+  image: with PostgreSQL stopped, the body shows only `OperationalError`, and the log carries the
+  host and port.
+- Review-history labels are removed at export, from comments and docstrings only
+  (`remove_review_labels` in `export.py`, tokenizer-scoped).
+  - Comments carrying `noqa`, `type:` or `pragma` are untouched; all 52 `noqa` survive.
+  - The executable-AST guard still holds: r16 against r13 is 138 changed `.py` files, with no
+    executable change outside the files edited at source.
+  - Lines lengthened past 110 columns are wrapped. r14 failed the package's own ruff on this;
+    `3b9c7ca` fixed it.
+  - `alembic/` and `src/kyc_tool/migration_contracts/` (the frozen v013 contract, pinned by its
+    bytes) ship byte-identical. r15 failed one package test on this; `4701a24` fixed it.
+  - A new "review history" scan refuses to package any label left in code or prose.
+  - The repository keeps its history.
+- Labels inside runtime strings are reworded at source:
+  - the three "not implemented yet" messages point at PRODUCTION_READINESS;
+  - one `ProcessRoleCapabilityError` message and three test messages drop their labels;
+  - two comments name migration 027 for the lease token;
+  - the conformance kit's sample document is `s3://…/conformance-kit.json` /
+    `registration_certificate`;
+  - Dockerfile and pyproject comments drop their labels.
+- Documents (canonical and public for facts; public only for labels):
+  - the first-time smoke test signs with v2;
+  - RUNBOOK names every refusing downgrade (010, 011 once a bundle is stored, 013–023, 024 with
+    configuration history), and notes that 010 and 011 refuse without a sentinel;
+  - development-history phrasing is replaced;
+  - "pre-7b", "7b-core" and "G12" are gone from the public copies;
+  - START-HERE explains the signer header.
+
+**Deliberately kept.**
+- `capabilities.py` `roadmap_unit="PR 5c"` / `"PR 7b-inputs"`: internal identifiers, read only
+  by unshipped tests, never displayed. The scan exempts them.
+- `golden-G12`: a golden-test case ID in code.
+- The signer example's bytes and header: governed by `docs/contracts/companion.py`, with its
+  digest printed in the separately published contract. Rewriting it would break that digest.
+- Migration comments: immutable.
+
+**r16.** `IPv4-Global-KYC-KYB-Staging-2026-09-26-r16.zip` from `4701a24`, label
+`2026-09-26-staging-r16`, SHA-256 `f5b472bf9f89ff1fc1fa1c0f2fdf9430e8ad48d60ace28e28618388f8eb50e43`,
+1,744,862 bytes.
+- **Archive:** CRC, hashes and modes match, nothing unlisted; no `.md`, internal paths,
+  credentials or placeholders; the export's own scan is clean; zero labels outside the ledgers
+  (apart from the kept identifiers above).
+- **Clean extraction:** `setup`/`doctor`/`lint` pass; 2,253 tests pass.
+- **Docker:** the shipped Dockerfile builds (fresh install layer).
+- **Live smoke in the image:**
+  - migrate to 024; activation;
+  - API healthy on the built-in HEALTHCHECK as uid 10001;
+  - with the §2 staging settings, unsigned reads, console reads and requeue return 401, and the
+    operator token reads;
+  - signed event 202, replay 200, bad signature 401, signed read 200;
+  - outbox worker with the file sink runs; `/readyz` redacts during a real outage;
+  - production refuses; worker and kit entry points import.
+- Full repository sweep: 3,040 passed, 1 skipped (the existing `test_document_model.py:1025`);
+  ruff clean. Engine hash re-pinned in `ff74d80`; `ENGINE_BUILD_ID` stays `eng-2`.
+
+Codex: still open for you, a review of r9 (`06f5096`, `861ea76`, `c4172c5`), `c288707`, and the
+r11–r16 ranges. Nothing has been sent to TechCraft.
+
 ### CLAIM [CLAUDE] 2026-09-26 — the known low items from r13 (asked by the human)
 
 turn: CLAUDE
