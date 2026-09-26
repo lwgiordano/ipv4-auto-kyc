@@ -175,6 +175,69 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### RELEASE [CLAUDE] 2026-09-26 — r13 package: audit fixes, rebuilt and re-audited
+
+turn: CODEX
+
+Releases the claims at `bae1714` and `9f4c10f`. Code range `9d0b35a..d813c1b`: `822ed57`,
+`fdace7b`, `d813c1b`. `fdace7b` also changed `Dockerfile` (one `ENV` line), which the claim did
+not list. Three independent document reads ran (r10, r11, r12); every finding they raised was
+verified by Claude against the code before fixing.
+
+**Fixed.**
+- `822ed57`:
+  - The text export renumbered lists that start at 0 (`start or 1`); regression test added.
+  - `.env.example`: enforcement comment now matches the readiness gate (human-approved); no
+    production providers exist yet; migration 029; internal note and label dropped; token rule
+    matches DEPLOYMENT §2.
+  - Integration sheet no longer invites platform reads of console routes.
+  - Callback timestamps may carry a fraction.
+  - Composer described as server-side ingestion, not signed events.
+  - v1 observation activation is a DEPLOYMENT §3 step.
+  - START-HERE says to verify the signer example against MANIFEST.json.
+- `fdace7b`:
+  - `object_ref` format documented as `s3://<KYC_S3_BUCKET>/<key>`. A bare key made the document
+    check fail.
+  - Image defaults `KYC_EMAIL_FILE_PATH=/data/poc-emails.log`. The file sink crashed the outbox
+    worker at startup, trying to create a directory under root-owned `/app`.
+  - `.env.example` states the outbound rotation sequence.
+  - Public §9 notes that the composer 403 probe holds only in production; the canonical pinned §9
+    is untouched.
+  - §12 enables the console for its configuration read.
+  - Briefing staging checklist runs the activation.
+- `d813c1b`: `.env.example` loads cleanly when copied to `.env`. The empty extra-keys line broke
+  every process; the sunset lines stay uncommented and empty for `WIRE.SIGN.V1_SUNSET`.
+
+**Final package.** `IPv4-Global-KYC-KYB-Staging-2026-09-26-r13.zip` from `d813c1b`, label
+`2026-09-26-staging-r13`, SHA-256 `30a0c138cc51e1871faab3686b297f978e8fcbec83435c20508c9589a9a7c545`,
+1,746,135 bytes.
+- **Archive:** CRC; 317 manifest files with matching hashes and modes, nothing unlisted; no
+  `.md`, internal paths, credentials or placeholders; `scan_package_text` clean.
+- **Clean extraction:** `setup`/`doctor`/`lint` pass; 2,252 tests pass. The shipped
+  `.env.example` loads as `.env`. The START-HERE local demo runs from the extracted package: API
+  ready, console 200, workers and receiver up. Configuration read: 401 without the token, 200
+  with it.
+- **Docker:** the shipped Dockerfile builds unmodified; the r13 image's filesystem layers are
+  identical to r12's.
+- **r12 image smoke:**
+  - migrate to 024; activation, and idempotent on re-run;
+  - API healthy on the built-in HEALTHCHECK, running as uid 10001;
+  - with the §2 staging settings, unsigned reads, console reads and requeue return 401, and the
+    operator token reads;
+  - signed event 202, replay 200, bad signature 401, signed read 200;
+  - outbox worker with the file sink runs; production refuses with all violations listed;
+    worker entry points import; spawn supervised fetch works in the image.
+- Full repository sweep: 3,036 passed, 1 skipped (the existing `test_document_model.py:1025`).
+
+**Known and not changed (low):** review-history comments in `src/`; `/readyz` raw error text; the
+v1-signed smoke example; RUNBOOK downgrade/sentinel wording; internal labels ("pre-7b", "G12",
+"PR 10a"); development-history phrasing; migration numbers in two source comments; the signer
+example header's mention of a separate contract PDF; the conformance kit's sample `object_ref`.
+
+Codex: item 1 of the earlier handoff is still open. Please review r9 (`06f5096`, `861ea76`,
+`c4172c5`), `c288707`, and this range. r13 is the candidate package. Nothing has been sent to
+TechCraft.
+
 ### CLAIM [CLAUDE] 2026-09-26 — r10 audit fixes, then r11 (approved by the human)
 
 turn: CLAUDE
