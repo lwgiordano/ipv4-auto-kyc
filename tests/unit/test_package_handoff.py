@@ -173,12 +173,23 @@ def test_review_labels_leave_comments_and_docstrings_and_never_touch_code(export
     assert exporter._executable_ast(text) == exporter._executable_ast(original.decode())
 
 
+def test_frozen_migration_contracts_ship_byte_identical(exporter):
+    """The v013 contract is pinned by its exact bytes and must never be re-pinned, so the export
+    treats it like a migration: no rewrite, labels and all."""
+    path = "src/kyc_tool/migration_contracts/v013_backfill.py"
+    original = (REPO_ROOT / path).read_bytes()
+    assert b"7b-core" in original
+    assert exporter.transform_bytes(path, original) == (original, [])
+
+
 def test_archive_scan_refuses_review_labels_the_export_could_not_remove(exporter):
     with pytest.raises(ValueError, match="review history"):
         exporter.scan_package_text("src/kyc_tool/example.py", b'MESSAGE = "left alone (PR 5b fix)"\n')
     with pytest.raises(ValueError, match="review history"):
         exporter.scan_package_text("docs/DEPLOYMENT.txt", b"See re-gate-3 finding 1.\n")
     exporter.scan_package_text("alembic/versions/013.py", b"# PR 7b-core migration history\n")
+    contract = "src/kyc_tool/migration_contracts/v013_backfill.py"
+    exporter.scan_package_text(contract, b'"""7b-core backfill."""\n')
     exporter.scan_package_text("src/kyc_tool/capabilities.py", b'roadmap_unit="PR 5c",\n')
     exporter.scan_package_text("src/kyc_tool/ops/shape.py", b"PR7B_CORE_PREWINDOW = contract\n")
     exporter.scan_package_text("docs/RUNBOOK.txt", b"python -m kyc_tool.ops.verify_pr7b_core_backfill\n")

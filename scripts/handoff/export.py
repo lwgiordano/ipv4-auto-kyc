@@ -73,7 +73,10 @@ NON_OPERATIONAL_TESTS = {
 }
 
 TEXT_SUFFIXES = {".cjs", ".html", ".ini", ".json", ".md", ".py", ".sh", ".toml", ".txt"}
-IMMUTABLE_PREFIXES = ("alembic/", "KYC_Tool_Build_Package/")
+# Ledgers ship byte-identical: migrations and the frozen migration contracts are pinned by their
+# exact bytes (tests/unit/test_migration_contract_v013.py), so no export rewrite may touch them.
+LEDGER_PREFIXES = ("alembic/", "src/kyc_tool/migration_contracts/")
+IMMUTABLE_PREFIXES = (*LEDGER_PREFIXES, "KYC_Tool_Build_Package/")
 DOC_COPY_MANIFEST_PATH = "scripts/handoff/document-copies.json"
 DOC_COPY_PREFIX = "scripts/handoff/docs/"
 COMMENTARY_REPLACEMENTS = (
@@ -489,11 +492,11 @@ def scan_package_text(path: str, data: bytes) -> None:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return
-    # Migrations are an executable, immutable ledger. A historical issue-file
-    # label in one migration comment remains byte-exact; model names and hidden
+    # Migrations and frozen migration contracts are an immutable ledger. Historical
+    # labels in their comments remain byte-exact; model names and hidden
     # collaboration paths are still forbidden there.
     for pattern, kind in PROHIBITED_TEXT:
-        if path.startswith("alembic/") and kind == "review history":
+        if path.startswith(LEDGER_PREFIXES) and kind == "review history":
             continue
         match = pattern.search(text)
         if match:
