@@ -108,19 +108,28 @@ def _retry_delay(response, attempt: int, backoff_seconds: float, now) -> float:
     return min(delta, _MAX_RETRY_AFTER_SECONDS)
 
 
-def get_with_retry(
+def request_with_retry(
     client: httpx.Client,
+    method: str,
     url: str,
     *,
     params: dict | None = None,
-    attempts: int = 3,
+    json: dict | None = None,
+    attempts: int | None = None,
     backoff_seconds: float = 0.5,
     sleep=time.sleep,
     now=time.time,
 ) -> httpx.Response:
-    """GET with bounded transient retries under the ambient RetryBudget (if any). Returns the final
-    response (transient-exhausted included — the caller's raise_for_status() reports it); re-raises
-    the final transport error. A permanent status returns on the FIRST attempt with zero sleeps."""
+    """One governed request with bounded transient retries under the ambient RetryBudget (if any).
+    Returns the final response (transient-exhausted included — the caller's raise_for_status()
+    reports it); re-raises the final transport error. A permanent status returns on the FIRST
+    attempt with zero sleeps.
+
+    `attempts=None` defaults to 3 for GET and 1 for every other method: a non-idempotent call (a
+    Floqer shortcut run is a PAID run) must not be replayed by this layer — a retried POST starts
+    a second run. A caller that knows its POST is idempotent passes `attempts` explicitly."""
+    if attempts is None:
+        attempts = 3 if method.upper() == "GET" else 1
     if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
         raise ValueError(f"attempts must be a positive int, got {attempts!r}")
     bad_backoff = not isinstance(backoff_seconds, (int, float)) or not math.isfinite(backoff_seconds)
@@ -154,14 +163,16 @@ def get_with_retry(
 
                 if executor.process_portable(client):
                     # the unconditionally-killable boundary (PR 10b slice 1): the whole physical
-                    # fetch runs in a fork the parent TERMINATES at the absolute deadline
+                    # fetch runs in a spawned child the parent TERMINATES at the absolute deadline
                     response = executor.supervised_fetch(
-                        client, url, params, budget, send_kwargs.get("timeout")
+                        client, method, url, params, json, budget, send_kwargs.get("timeout")
                     )
                 else:  # Mock/fixture transports cannot cross a process boundary
-                    response = _contained_get(client, url, params, budget, send_kwargs)
+                    response = _contained_request(client, method, url, params, json, budget,
+                                                  send_kwargs)
             else:
-                response = _contained_get(client, url, params, budget, send_kwargs)
+                response = _contained_request(client, method, url, params, json, budget,
+                                              send_kwargs)
             last_exc = None
         except httpx.TransportError as exc:  # connect/read/pool timeouts, DNS, resets
             last_exc = exc
@@ -173,10 +184,27 @@ def get_with_retry(
     return response  # transient-exhausted: caller's raise_for_status() surfaces it
 
 
-def _contained_get(
+def get_with_retry(
     client: httpx.Client,
     url: str,
+    *,
+    params: dict | None = None,
+    attempts: int = 3,
+    backoff_seconds: float = 0.5,
+    sleep=time.sleep,
+    now=time.time,
+) -> httpx.Response:
+    """GET through `request_with_retry` with the historical defaults."""
+    return request_with_retry(client, "GET", url, params=params, attempts=attempts,
+                              backoff_seconds=backoff_seconds, sleep=sleep, now=now)
+
+
+def _contained_request(
+    client: httpx.Client,
+    method: str,
+    url: str,
     params: dict | None,
+    json: dict | None,
     budget: RetryBudget | None,
     send_kwargs: dict,
 ) -> httpx.Response:
@@ -194,10 +222,10 @@ def _contained_get(
       encodings are rejected; truncated/corrupt streams raise DecodingError.
     Without a budget (direct unit calls) the buffered path is unchanged."""
     if budget is None:
-        return client.get(url, params=params, **send_kwargs)
+        return client.request(method, url, params=params, json=json, **send_kwargs)
     cap = budget.max_response_bytes
     with client.stream(
-        "GET", url, params=params, headers={"Accept-Encoding": "gzip"}, **send_kwargs
+        method, url, params=params, json=json, headers={"Accept-Encoding": "gzip"}, **send_kwargs
     ) as streamed:
         _remaining_or_spent(budget, "header completion")  # a header drip cannot smuggle a result
         declared = streamed.headers.get("Content-Length", "")
@@ -296,7 +324,7 @@ def _contained_get(
 def _attempt_timeout(client: httpx.Client, remaining: float) -> httpx.Timeout | float:
     """Per-attempt HTTP phase timeouts = the client's own configured values capped at the remaining
     budget (TIGHTEN-only — a large budget never loosens a small configured timeout). SECONDARY to
-    the absolute streamed deadline in _contained_get: phases bound inactivity, not total time."""
+    the absolute streamed deadline in _contained_request: phases bound inactivity, not total time."""
     base = getattr(client, "timeout", None)
     if base is None:
         return remaining

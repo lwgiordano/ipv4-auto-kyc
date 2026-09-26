@@ -5,19 +5,20 @@ The in-process governed transport proves the absolute deadline after headers, pe
 at EOF — but between individual bytes only inactivity phase timeouts apply, so a hostile drip can
 OCCUPY a worker past the deadline even though nothing it produces is ever returned. When
 `settings.adapter_hard_kill_boundary` is on and the client is process-portable (a real network
-transport), the whole physical fetch runs in a FORK-PER-CALL child the parent TERMINATES at the
+transport), the whole physical fetch runs in a fresh spawned child the parent TERMINATES at the
 absolute deadline: occupancy itself becomes bounded, unconditionally.
 
 Contract details:
-- The child performs ONLY wire + containment (`_contained_get` under a child-local budget carrying
+- The child performs ONLY wire + containment (`_contained_request` under a child-local budget carrying
   the deadline + byte cap). Rate permits and the DB liveness proof already ran PARENT-side in
-  `_authorize_send` — the fork must never touch inherited DB connections.
-- The child exits via `os._exit` so inherited finalizers (DB sockets, pools) never run in the
-  fork; a terminated child is killed by signal, which skips them likewise.
+  `_authorize_send`. Spawn avoids inheriting DB connections and unsafe threaded runtime state.
+- The child exits via `os._exit`; a terminated child is killed by signal.
 - Results/typed errors relay over a pipe; the parent reconstructs the buffered `httpx.Response`
   or re-raises the governed exception type.
 - MockTransport/fixture clients are NOT portable across a process boundary — callers must route
-  them through the in-process path (get_with_retry does this automatically)."""
+  them through the in-process path (get_with_retry does this automatically).
+- Authentication must be spawn-serializable (including built-in BasicAuth). Unsupported custom
+  objects refuse with TransportError; they never bypass the hard-kill boundary."""
 
 import contextlib
 import multiprocessing
@@ -42,8 +43,8 @@ def process_portable(client: httpx.Client) -> bool:
     return isinstance(transport, httpx.HTTPTransport)
 
 
-def _child_fetch(config: dict, url: str, params: dict | None, remaining: float,
-                 cap: int | None, conn) -> None:  # pragma: no cover — runs in the fork
+def _child_fetch(config: dict, method: str, url: str, params: dict | None, json: dict | None,
+                 deadline: float, cap: int | None, conn) -> None:  # pragma: no cover — child process
     try:
         from kyc_tool.adapters import retry
 
@@ -54,11 +55,11 @@ def _child_fetch(config: dict, url: str, params: dict | None, remaining: float,
             timeout=config["timeout"],
         )
         budget = RetryBudget(
-            deadline_monotonic=time.monotonic() + remaining, max_response_bytes=cap
+            deadline_monotonic=deadline, max_response_bytes=cap
         )
         with budget_scope(budget):
-            response = retry._contained_get(
-                child_client, url, params, budget, {"timeout": config["timeout"]}
+            response = retry._contained_request(
+                child_client, method, url, params, json, budget, {"timeout": config["timeout"]}
             )
         conn.send(("ok", response.status_code, list(response.headers.multi_items()),
                    response.content))
@@ -69,7 +70,7 @@ def _child_fetch(config: dict, url: str, params: dict | None, remaining: float,
         try:
             conn.close()
         finally:
-            os._exit(0)  # NEVER run inherited finalizers (DB sockets, pools) inside the fork
+            os._exit(0)
 
 
 def _rebuild_error(name: str, message: str) -> Exception:
@@ -92,8 +93,10 @@ def _rebuild_error(name: str, message: str) -> Exception:
 
 def supervised_fetch(
     client: httpx.Client,
+    method: str,
     url: str,
     params: dict | None,
+    json: dict | None,
     budget: RetryBudget,
     phase_timeout,
 ) -> httpx.Response:
@@ -106,20 +109,32 @@ def supervised_fetch(
     config = {
         "base_url": str(client.base_url),
         "headers": list(client.headers.multi_items()),
-        "auth": client.auth,  # inherited via fork memory — BasicAuth etc., never serialized
+        "auth": client.auth,
         "timeout": phase_timeout if phase_timeout is not None else client.timeout,
     }
-    ctx = multiprocessing.get_context("fork")
+    # Convert the caller's clock to an absolute process-shared monotonic deadline;
+    # importing the fresh interpreter must not grant a new request budget.
+    deadline = time.monotonic() + remaining
+    ctx = multiprocessing.get_context("spawn")
     parent_conn, child_conn = ctx.Pipe(duplex=False)
     child = ctx.Process(
         target=_child_fetch,
-        args=(config, url, params, remaining, budget.max_response_bytes, child_conn),
+        args=(config, method, url, params, json, deadline, budget.max_response_bytes, child_conn),
         daemon=True,
     )
-    child.start()
+    try:
+        child.start()
+    except Exception as exc:  # noqa: BLE001 — startup/serialization must fail as transport
+        parent_conn.close()
+        child_conn.close()
+        if child.pid is not None:
+            if child.is_alive():
+                child.kill()
+            child.join(2)
+        raise httpx.TransportError("supervised child could not start") from exc
     child_conn.close()
     try:
-        if not parent_conn.poll(remaining + _KILL_MARGIN_SECONDS):
+        if not parent_conn.poll(max(0.0, deadline + _KILL_MARGIN_SECONDS - time.monotonic())):
             child.terminate()
             child.join(2)
             if child.is_alive():
@@ -129,13 +144,16 @@ def supervised_fetch(
                 f"supervised fetch HARD-KILLED {remaining + _KILL_MARGIN_SECONDS:.1f}s after "
                 "start — the absolute deadline is now an occupancy bound, not only a result bound"
             )
-        message = parent_conn.recv()
+        try:
+            message = parent_conn.recv()
+        except EOFError as exc:
+            raise httpx.TransportError("supervised child exited without a response") from exc
     finally:
         parent_conn.close()
         child.join(2)
     if message[0] == "ok":
         _, status, headers, body = message
-        request = httpx.Request("GET", httpx.URL(str(client.base_url)).join(url))
+        request = httpx.Request(method, httpx.URL(str(client.base_url)).join(url))
         return httpx.Response(status, headers=headers, content=body, request=request)
     _, name, text = message
     raise _rebuild_error(name, text)

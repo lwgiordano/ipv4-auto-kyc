@@ -502,7 +502,7 @@ def test_decide_txn_rollback_then_retry_completes_exactly_once(
     def flaky_enqueue(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise RuntimeError("simulated decide-txn fault (PR 5b fix brief FIX 2)")
+            raise RuntimeError("simulated decide-txn fault")
         return real_enqueue(*args, **kwargs)
 
     monkeypatch.setattr(pipeline_module, "enqueue_decision_callback", flaky_enqueue)

@@ -8,6 +8,12 @@ from kyc_tool.api.schemas import DecisionCallback
 
 pytestmark = pytest.mark.postgres
 
+WALK2 = {
+    "company_legal_name": "Walk2 Co",
+    "contact": {"name": "Robin Vale", "email": "robin.vale@walk.example"},
+    "platform_account_id": "acct-walk-2",
+}
+
 
 def test_run_walks_to_complete_and_callback_is_well_formed(
     client, engine, post_event, worker, publisher, callback_capture
@@ -15,7 +21,9 @@ def test_run_walks_to_complete_and_callback_is_well_formed(
     response, _ = post_event(
         "case-walk-1",
         "kyb.run_requested",
-        {"company_legal_name": "Walk Co", "jurisdiction": "GB"},
+        {"company_legal_name": "Walk Co", "jurisdiction": "GB",
+         "contact": {"name": "Robin Vale", "email": "robin.vale@walk.example"},
+         "platform_account_id": "acct-walk-1"},
     )
     assert response.status_code == 202
     run_id = response.json()["run_id"]
@@ -68,14 +76,14 @@ def test_replayed_event_does_not_rerun_pipeline(client, engine, post_event, work
     response, key = post_event(
         "case-walk-2",
         "kyb.run_requested",
-        {"company_legal_name": "Walk2 Co"},
+        WALK2,
     )
     run_id = response.json()["run_id"]
     worker.run_until_idle()
     publisher.process_pending()
 
     replay, _ = post_event(
-        "case-walk-2", "kyb.run_requested", {"company_legal_name": "Walk2 Co"}, key=key
+        "case-walk-2", "kyb.run_requested", WALK2, key=key
     )
     assert replay.status_code == 200
     assert replay.json()["run_id"] == run_id

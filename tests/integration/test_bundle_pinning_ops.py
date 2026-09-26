@@ -135,7 +135,7 @@ def test_activation_recovery_requeues_then_scores_under_pinning(
     with session_factory() as s:
         assert (
             s.execute(text("SELECT engine_build_id FROM decisions WHERE case_id='c-rec'")).scalar_one()
-            == "eng-1"
+            == "eng-2"
         )  # scored under pinning
         assert (
             s.execute(
@@ -184,11 +184,11 @@ def test_rollback_inflight_job_requeued_then_flag_off_decides_once(
         run = s.execute(
             text("SELECT policy_bundle_hash, engine_build_id FROM runs WHERE case_id='c-rb'")
         ).first()
-        assert run.policy_bundle_hash == bx.bundle_hash and run.engine_build_id == "eng-1"  # pin intact
+        assert run.policy_bundle_hash == bx.bundle_hash and run.engine_build_id == "eng-2"  # pin intact
         dec = s.execute(
             text("SELECT policy_shas, engine_build_id FROM decisions WHERE case_id='c-rb'")
         ).first()
-        assert dec.policy_shas == bx.shas and dec.engine_build_id == "eng-1"  # process-bundle provenance
+        assert dec.policy_shas == bx.shas and dec.engine_build_id == "eng-2"  # process-bundle provenance
 
 
 def test_post_epoch_null_alert(session_factory, engine, clean_db):
@@ -200,7 +200,7 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
 
     with session_factory() as s:
         h = store.store_bundle(s, raw_x())
-        store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-1")
+        store.activate_epoch(s, expect_bundle_hash=h, expect_engine="eng-2")
         s.commit()
 
     # Truth table over (decision.engine_build_id, run.engine_build_id): the runs
@@ -324,7 +324,7 @@ def test_activate_cli_refuses_valid_but_wrong_bundle(
         s.commit()
     monkeypatch.setattr(epoch_cli, "get_settings", lambda: settings)  # local bundle = X
     monkeypatch.setattr(
-        sys, "argv", ["prog", "--expect-bundle-hash", by.bundle_hash, "--expect-engine", "eng-1"]
+        sys, "argv", ["prog", "--expect-bundle-hash", by.bundle_hash, "--expect-engine", "eng-2"]
     )
     with pytest.raises((SystemExit, store.BundleCorrupt)):
         epoch_cli.main()
@@ -432,3 +432,34 @@ def test_create_app_db_reconstructed_policy_corrupt_row_fails_boot(
                   {"h": recon.bundle_hash})
     with pytest.raises(store.BundleCorrupt):
         create_app(settings, session_factory=session_factory, policy=recon)
+
+
+def test_readyz_reports_the_failing_check_without_the_drivers_message(
+    settings, session_factory, policy, clean_db
+):
+    """`/readyz` is unauthenticated, so a database outage must not publish the driver's message,
+    which names the host, port and user. The check and error type stay; the log keeps the rest."""
+    from fastapi.testclient import TestClient
+
+    from kyc_tool.api.app import create_app
+
+    class Outage:
+        down = False
+
+        def __call__(self):
+            if self.down:
+                raise RuntimeError(
+                    'connection to server at "db.internal.example" (10.0.0.5), port 5432 failed: '
+                    'FATAL: password authentication failed for user "kyc"'
+                )
+            return session_factory()
+
+    outage = Outage()
+    client = TestClient(create_app(settings, session_factory=outage, policy=policy))
+    assert client.get("/readyz").status_code == 200
+    outage.down = True
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["checks"]["database"] == {"ok": False, "error": "RuntimeError"}
+    for leaked in ("db.internal.example", "10.0.0.5", '"kyc"', "password"):
+        assert leaked not in response.text

@@ -94,6 +94,8 @@ def _hardened(**overrides) -> Settings:
         read_auth_required=True,
         ui_enabled=False,
         ui_admin_token="t" * 32,
+        floqer_api_key="floq_placeholder-not-a-real-key",
+        floqer_shortcut_id="00000000-0000-0000-0000-000000000000",
         hmac_inbound_key_id="kyc-platform-1",
         hmac_inbound_secret="i" * 40,
         hmac_outbound_key_id="kyc-tool-1",

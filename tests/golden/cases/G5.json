@@ -10,6 +10,7 @@
         {"type": "official_registry_match", "status": "pass"},
         {"type": "website_verified", "status": "pass"},
         {"type": "linkedin_company_match", "status": "pass"},
+        {"type": "poc_verified", "status": "pass", "detail": {"org_handle": "ORG-IPXO-1"}},
         {"type": "org_id_match", "status": "pass", "detail": {"org_handle": "ORG-IPXO-1"}}
       ],
       "expect": {
@@ -17,7 +18,7 @@
         "buy_enablement": "enabled",
         "gates_all_pass": true,
         "gates": {"broker_ok": true},
-        "live_pass_types": ["verified_company_email", "verified_email", "official_registry_match", "website_verified", "linkedin_company_match", "org_id_match"]
+        "live_pass_types": ["verified_company_email", "verified_email", "official_registry_match", "website_verified", "linkedin_company_match", "poc_verified", "org_id_match"]
       }
     }
   ]

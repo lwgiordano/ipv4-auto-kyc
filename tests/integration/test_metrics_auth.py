@@ -66,7 +66,7 @@ def test_rejected_read_auth_opens_no_session_and_persists_nothing(
         "/v1/metrics", headers={"X-KYC-Key-Id": "k", "X-KYC-Signature-V2": "bad"}
     ).status_code == 401
 
-    assert spy.calls == 0, "a rejected request opened a DB session — the F1 write amplifier is back"
+    assert spy.calls == 0, "a rejected request opened a DB session — the write amplifier is back"
     # the diagnostic signal is preserved, but IN-PROCESS (no DB write)
     assert auth.diagnostic_counts().get("rejected", 0) == before + 2
 
@@ -85,7 +85,7 @@ def test_invalid_v1_opens_no_db_regardless_of_sunset(settings, session_factory, 
         spy.calls = 0
         r = tc.get("/v1/metrics", headers={"X-KYC-Timestamp": "1", "X-KYC-Signature": "bad"})
         assert r.status_code == 401
-        assert spy.calls == 0, f"invalid v1 opened a DB session (sunset={sunset}) — F1 amplifier back"
+        assert spy.calls == 0, f"invalid v1 opened a DB session (sunset={sunset}): write amplifier is back"
 
 
 def test_valid_v1_is_retired_only_after_verification_with_a_green_witness(

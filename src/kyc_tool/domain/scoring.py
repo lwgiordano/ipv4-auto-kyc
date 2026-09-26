@@ -13,7 +13,7 @@ from kyc_tool.domain.reasons import ReasonCode
 from kyc_tool.policy.types import ScoringRubric
 
 LEGAL_PROOF_CATEGORY = "legal_business_proof"
-CONTROL_PROOF_CATEGORY = "control_proof"
+INDEPENDENT_CONTROL_CHECK_TYPE = "poc_verified"
 
 
 def score(live_checks: list[CheckView]) -> ScoreBreakdown:
@@ -50,6 +50,7 @@ HARD_CONFLICT_REASON_CODES = frozenset(
     {
         ReasonCode.HARD_CONFLICT.value,
         ReasonCode.DOCUMENT_REGISTRY_CONFLICT.value,
+        ReasonCode.REGISTRY_EXACT_COMPANY_INACTIVE.value,
     }
 )
 
@@ -58,11 +59,7 @@ def has_hard_conflict(live_checks: list[CheckView]) -> bool:
     """Gate 5. A conflict is a property of the live evidence set — validators
     stamp a HARD_CONFLICT_REASON_CODES member onto the conflicting check(s), so
     the flag survives recalculation from live checks alone."""
-    return any(
-        code in HARD_CONFLICT_REASON_CODES
-        for check in live_checks
-        for code in check.reason_codes
-    )
+    return any(code in HARD_CONFLICT_REASON_CODES for check in live_checks for code in check.reason_codes)
 
 
 def evaluate_gates(
@@ -80,7 +77,7 @@ def evaluate_gates(
     return Gates(
         score_met=total_score >= threshold,
         legal_proof=any(c.category == LEGAL_PROOF_CATEGORY for c in passing),
-        control_proof=any(c.category == CONTROL_PROOF_CATEGORY for c in passing),
+        control_proof=any(c.check_type == INDEPENDENT_CONTROL_CHECK_TYPE for c in passing),
         broker_ok=broker_status.value in allowed_broker_statuses,
         no_hard_conflict=not has_hard_conflict(live_checks),
     )
@@ -88,6 +85,4 @@ def evaluate_gates(
 
 def org_id_check_passed(live_checks: list[CheckView]) -> bool:
     """Buy enablement hinges on a live, passing ORG-ID check."""
-    return any(
-        c.check_type == "org_id_match" and c.status is CheckStatus.PASS for c in live_checks
-    )
+    return any(c.check_type == "org_id_match" and c.status is CheckStatus.PASS for c in live_checks)

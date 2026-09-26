@@ -42,7 +42,7 @@ class RetryBudget:
     prove_live: object | None = None  # zero-arg callable: DB re-proof of the ambient claim
     max_response_bytes: int | None = None  # wire AND decoded cap for every governed payload
     # When True (settings.adapter_hard_kill_boundary), governed HTTP fetches on process-portable
-    # clients run in a fork-per-call subprocess the parent TERMINATES at the absolute deadline —
+    # clients run in a spawned child process the parent TERMINATES at the absolute deadline —
     # the unconditionally-killable occupancy bound the in-process checks cannot give.
     hard_kill: bool = False
 

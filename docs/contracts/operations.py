@@ -78,7 +78,7 @@ from docs.contracts.statements import statement
 # dropped a control that exists to prevent irreversible damage: the direct trusted-path probes (a
 # load-balancer 403 can otherwise certify a broken app as healthy), the flag-only rollback on the
 # PR6 image (substituting the prior image mints permanent NULL provenance), and the writer-role
-# set plus the 023-compatible image requirement (a pre-7b publisher run against preserved witness
+# set plus the 024-compatible image requirement (a pre-7b publisher run against preserved witness
 # authority). Tests that assert a first and last phrase pass over every one of those omissions.
 #
 # A summary of a safety procedure is a second copy that drifts, so these claims now publish what
@@ -269,7 +269,7 @@ BUNDLE_PINNING = Procedure(
         path="docs/DEPLOYMENT.md",
         heading="## 10. PR 6 cutover — bundle-pinning activation",
         body=BUNDLE_PINNING_BODY,
-        sha256="c7b02139284b25ba30cd431a3de508f51681eb1be9d15b0dd443947afd88b96a",
+        sha256="d559c8829ea135630ec5a45e2c6178c3ed33cec917386e2848733ca623b62f11",
     ),
 )
 
@@ -277,7 +277,7 @@ PR7B_CORE = Procedure(
     name="Migrations 013-023",
     # NOT "the ordering-authority schema" (re-audit `4f23f23..97deeae` finding 5). These revisions
     # give the tool local receipt and transition authority plus a best-effort local supersession
-    # guard. Platform-wide ordering does not exist until 024, which is unbuilt — and a team that
+    # guard. Platform-wide ordering does not exist until 025, which is unbuilt — and a team that
     # read "ordering-authority schema" here could reasonably treat completing 023 as the
     # activation of ordered delivery and start trusting an order nothing provides.
     plan=ProcedurePlanContract(
@@ -324,7 +324,7 @@ PR7B_CORE = Procedure(
                 RollbackFact(SCHEMA, BR_SCHEMA_HELD,
                              "the DB stays on the witness-authority schema"),
                 RollbackFact(IMAGE, IMAGE_SAME_RELEASE,
-                             "KEEP or redeploy the reviewed 023-COMPATIBLE image"),
+                             "KEEP or redeploy the reviewed 024-COMPATIBLE image"),
                 RollbackFact(RESTORES, RESTORES_NO, "PROHIBIT the pre-7b image outright"),
                 RollbackFact(VERIFICATION, VERIFY_NOT_STATED),
                 RollbackFact(ENDING, ENDING_RESUMED_OR_DECLARED_INCIDENT,
@@ -349,7 +349,7 @@ PR7B_CORE = Procedure(
         path="docs/DEPLOYMENT.md",
         heading="## 11. PR 7b-core cutover — drained maintenance window (migration 013)",
         body=PR7B_CORE_BODY,
-        sha256="b4bd97bada2f96cc0f3002e0a9cc4be740230aa8797faed3e555871da5af23f6",
+        sha256="da96801777fe43e8d9511043302c81f7267278c91b1c652737eb35ae14440f75",
         # Every operator-run command the section publishes, as parsed argv. The placeholders
         # (`<file.json>`, `<id>`, `<sha256>`) are the section's own literal text.
     ),
@@ -413,8 +413,8 @@ OPERATIONS = Registry(
                 ("Migrations", "alembic upgrade head",
                  "one-shot per deploy; a no-op when the release carries none"),
                 ("Pipeline worker", "python -m kyc_tool.workers.pipeline_worker",
-                 "scale horizontally; per-case ordering is enforced by the database, so extra "
-                 "workers are safe"),
+                 "scale horizontally; per-case processing order is enforced by the job queue, so "
+                 "extra workers are safe"),
                 ("Outbox publisher", "python -m kyc_tool.workers.outbox_worker",
                  "delivers decision callbacks and verification emails"),
                 ("Retention", "python -m kyc_tool.workers.retention",

@@ -8,7 +8,7 @@
 | Pipeline worker | `python -m kyc_tool.workers.pipeline_worker` | N processes; per-case FIFO is queue-enforced |
 | Outbox publisher | `python -m kyc_tool.workers.outbox_worker` | delivers decision callbacks + POC emails |
 | Retention | `python -m kyc_tool.workers.retention` | cron (daily); prunes per KYC_RETENTION_DAYS |
-| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010 and the 013-023 witness chain (see below). **018 through 022 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`, `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
+| Migrations | `alembic upgrade head` | before rollout; downgrade clean EXCEPT migration 010, migration 011 once any policy bundle is stored (every API and worker stores one at startup), the 013-023 witness chain, and 024 once configuration history exists (see below). **018 through 022 are forward-only: once installed there is NO supported schema downgrade** — rollback is image-only. 017 and 018 both refuse to UPGRADE while any live outbox claim exists (`MIGRATION_017_PREFLIGHT_LIVE_CLAIMS`, `MIGRATION_018_PREFLIGHT_LIVE_CLAIMS` — publishers AND retention must be drained) |
 | v1 witness activation | `python -m kyc_tool.ops.activate_hmac_v1_observation` | one-shot, POST-cutover (PR 5a §6a); idempotent |
 | Bundle preflight | `python -m kyc_tool.ops.verify_pinnable_backlog` | one-shot; PRE-cutover for `enforce_bundle_pinning` (PR 6, `docs/DEPLOYMENT.md` §10) — nonzero exit + the un-pinnable run ids blocks the cutover |
 | Bundle seed | `python -m kyc_tool.ops.seed_policy_bundle --expect-hash <sha256>` | one-shot; stores a policy bundle only if it hashes to `--expect-hash` (no write on mismatch) — also the historical-recovery path when reprocessing a run under an older bundle |
@@ -37,10 +37,10 @@
 > `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY`,
 > `MIGRATION_018_DOWNGRADE_REFUSED_FORWARD_ONLY`) — walking below them would restore
 > search-path-vulnerable or under-validated authority functions, so once `018` is on the schema
-> the ONLY rollback is redeploying the prior reviewed **023-compatible** image against it.
-> `023` itself is validation-only and its downgrade is a no-op, so a walk started from the head
-> does not stop there — it reaches `022` and refuses with that sentinel, one revision lower than
-> the command names. Do not apply `018` or anything above it in production until that bridge
+> the ONLY rollback is redeploying the prior reviewed **024-compatible** image against it.
+> `024` first refuses if any configuration history exists. With unused configuration additions,
+> its downgrade removes only those additions; `023` is validation-only and its downgrade is a
+> no-op, so the walk reaches `022` and refuses there. Do not apply `018` or anything above it in production until that bridge
 > image has been reviewed and staged; this preproduction branch otherwise rolls forward. Below
 > `018` the walk still preflights with stable sentinels, in execution order
 > (`MIGRATION_017_DOWNGRADE_REFUSED_WITNESS_IN_USE`,
@@ -52,7 +52,7 @@
 > terminal `callback_wire_sha256`, or a `superseded` row exists — immutable
 > delivery evidence is never destroyed because local status looks terminal;
 > for a pending/dead callback the attempt row is the only proof bytes were
-> staged. On refusal, KEEP or redeploy the reviewed **023-compatible** image — an older
+> staged. On refusal, KEEP or redeploy the reviewed **024-compatible** image — an older
 > publisher lacks the receipt/terminal contract and must not run against preserved evidence;
 > a pre-7b image is permitted only after the entire walk reaches 012.
 
@@ -63,25 +63,26 @@
 > itself** — `reviewer.manual_approve` is handled inline in the ingest transaction with the
 > same case-lock-then-decision-insert shape, with no job and no run, so a job/run drain check
 > cannot see it. Running either migration against either writer **deadlocks** (Postgres
-> reports `40P01` and kills one side; reproduced against both a live decide and a live inline
-> manual approval; `021` does not do it). This is not silent corruption: DDL is transactional,
+> reports `40P01` and kills one side, with either a live decide or a live inline
+> manual approval; `021` does not). This is not silent corruption: DDL is transactional,
 > so a killed migration rolls back whole and the schema stays where it was. But it costs the
 > window and it can kill the approval instead of the migration, so before applying `022`/`023`
 > pause event submission, stop and attest the API writers AND the pipeline workers (as well as
 > publishers/retention), then re-run. Unlike the live-claim preflight, this one is **not
 > machine-checked** — `022` and `023` are published and cannot be amended to add one; the
-> machine-checked fence ships with `024` (activation blocker O4).
+> machine-checked fence ships with `025` (activation blocker O4).
 
 ### Migration refusal sentinels
 
-Every deliberate migration refusal raises a **stable sentinel string**, so a refused
+Deliberate migration refusals raise a **stable sentinel string** (except the oldest two,
+010 and 011, whose messages say the migration is forward-only), so a refused
 `alembic upgrade`/`downgrade` reads as a designed stop rather than a broken migration.
 Grep the sentinel out of the command's output and find it here. The exception message
 names the offending rows or objects and a remediation — but published migrations are
 frozen, so a frozen message can lag this document: **where the message and this runbook
 disagree, the runbook wins.** Concretely, `022`'s forward-only refusal still names the
 compatible image for the revision it froze at (`022`); the image to keep is always the one
-compatible with the **live head** — `023`-compatible today, kept current in this document
+compatible with the **live head** — `024`-compatible today, kept current in this document
 by a head-derived test that a frozen migration message cannot satisfy.
 
 `tests/unit/test_plan_artifact_static.py` fails if a migration raises a sentinel this
@@ -110,7 +111,9 @@ table omits, so a new refusal cannot ship undocumented.
 | `MIGRATION_019_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
 | `MIGRATION_020_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
 | `MIGRATION_021_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional |
-| `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional — the highest refusal on the chain, so this is the sentinel a walk from the head actually hits (`023`'s downgrade is a validation-only no-op) |
+| `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY` | downgrade: unconditional — reached from head only when 024 has no configuration history; 023's downgrade is a validation-only no-op |
+| `MIGRATION_024_CONFIGURATION_DOWNGRADE_REFUSED` | downgrade: any configuration revision, request, active pointer, or versioned run exists; restore a prior configuration through a new reviewed section save, never delete its history |
+| `MIGRATION_024_CONFIGURATION_DOWNGRADE_BUSY` | downgrade: a configuration-authority lock is busy; acquisition uses NOWAIT so it cannot deadlock a concurrent writer. Quiesce writers before retrying; existing configuration history still requires roll-forward recovery |
 
 > **`enforce_bundle_pinning` (PR 6) is a drained, not rolling, flag flip.**
 > Off (default), every worker scores under its own process-loaded policy
@@ -140,11 +143,13 @@ lists **all** violations at once:
 | `KYC_HMAC_V1_OBSERVATION_WINDOW_DAYS` | ≥ 1 |
 | `KYC_PLATFORM_CALLBACK_URL` | HTTPS, not localhost |
 | `KYC_OBJECT_STORE` / `KYC_S3_BUCKET` | `s3` / non-empty |
-| `KYC_OCR_ENGINE` | not the `json_scan` dev stub |
+| `KYC_OCR_ENGINE` | not the `json_scan` dev stub — required today regardless of the open document-extraction decision (`docs/PLATFORM_INTEGRATION.md` §6) |
 | `KYC_EMAIL_PROVIDER` | not the `logging` dev stub |
 | `KYC_ADAPTERS_PROFILE` | not the `fixture` stub |
+| `KYC_FLOQER_API_KEY` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`; secret manager or `.env` only — never a task definition, a log, or a case snapshot |
+| `KYC_FLOQER_SHORTCUT_ID` | non-empty when `KYC_ADAPTERS_PROFILE` is not `fixture`; the id of the ONE published shortcut the tool runs |
 | `KYC_READ_AUTH_REQUIRED` | `true` (read API requires a signed request) |
-| `KYC_UI_ADMIN_TOKEN` | required when `KYC_UI_ENABLED=true` |
+| `KYC_UI_ADMIN_TOKEN` | required, not blank: it authenticates the always-mounted `/v1/ops` requeue endpoints and, when `KYC_UI_ENABLED=true`, the console |
 | `KYC_OUTBOX_LEASE_SECONDS` | must EXCEED `4 × KYC_OUTBOX_HTTP_TIMEOUT_SECONDS + KYC_OUTBOX_LEASE_MARGIN_SECONDS` — the publisher enforces 4 × timeout as a hard per-attempt deadline, and a lease that expires mid-attempt makes every delivery unwitnessable |
 | `KYC_OUTBOX_HTTP_TIMEOUT_SECONDS` | per HTTPX **inactivity** phase (not a total clock); 4 × this is the enforced whole-attempt deadline. Raising it raises the required lease FOUR-fold — move the two together or production refuses to boot |
 | `KYC_OUTBOX_LEASE_MARGIN_SECONDS` | DB commit/processing room added to the deadline in the lease rule above |
@@ -175,12 +180,42 @@ that is intentional fail-closed behaviour, not a bug.
 
 ## Ops console (`/ui`)
 
-The built-in console covers most of this runbook visually: Overview (health
-tiles, dead-letter tables with one-click requeue), Cases (score meter, gates,
-supersession chains, per-run state machine, audit trail), Integrations
-(stub/live/needs-config per adapter, env presence, reachability probes),
-Field Map (live Salesforce projection per case), Policy, and a Composer that
-sends signed events server-side. **Security**: **off by default**
+The built-in console covers most of this runbook visually. Overview shows
+health and dead-letter work. Cases is the reviewer's working view. It puts the
+registration and contact details beside two deliberately separate readings:
+the decision already recorded for the case and the score of the evidence held
+now. New evidence can change the latter. It never rewrites an earlier decision.
+The next verification round appends another decision to the case history.
+
+On a case, a reviewer can record that the contact was asked for a missing RIR
+Org ID. That button records the request and who made it. It does **not** send an
+email. The platform owns the contact message. If the contact supplies a handle
+through another channel, **Record handle** saves it under the reviewer's name
+and queues the case to be scored again. An open website task can be approved or
+rejected only after an inline confirmation. The result and reviewer ID become
+part of the permanent case record. **Approve manually** also records the named
+reviewer and reason as a new decision without altering historical decisions.
+
+The remaining menu names match the console: Data Sources reports adapter mode,
+configuration and reachability. Salesforce Fields previews the current case
+projection. Decision Rules shows the active scoring and gate configuration.
+Options holds appearance and operator access. Case Actions prepares events
+for review before the server ingests them directly, authorized by the operator
+credential rather than an HMAC signature. Treat an unsent Case Actions
+entry as browser-page working state, not a durable record. The five-second
+refresh waits while a person is typing, has armed a confirmation, or has a case
+form open. Navigation still re-renders the page, so unsent case edits can be
+lost when the reviewer leaves it.
+
+Data Sources may hide a local evidence-storage path. Check
+`KYC_OBJECT_STORE_ROOT` in the deployment configuration for the actual location.
+The email status distinguishes log-only testing from the closed-staging file
+sink; neither sends an email to the contact.
+
+Options saves the System, Light or Dark theme in that browser. The admin
+credential is kept only in memory for the current page session, is checked by
+the server on every protected action, and is cleared by a reload. **Security**:
+**off by default**
 (`KYC_UI_ENABLED=false`); when enabled in production it requires
 `KYC_UI_ADMIN_TOKEN`, and every mutating endpoint (composer, requeue, probe)
 demands `Authorization: Bearer <token>`. Local dev: `bash scripts/dev.sh`
@@ -283,7 +318,17 @@ evidence or blocklist change is in play.
 Adapter p95 in `/v1/metrics`; per-upstream rate caps via
 `KYC_ADAPTER_RATE_LIMITS` (requests/sec, process-local — divide by worker
 count). Queue depth is `jobs_by_status.queued`; scale pipeline workers
-horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
+horizontally (SKIP LOCKED makes them safe; per-case processing order is
+preserved. Callback delivery order is a separate contract,
+`docs/PLATFORM_INTEGRATION.md` §4).
+
+**Floqer.** The documented limits are 200 requests/minute and 10,000/day per
+key. One case costs one run request plus its polls — about 12, hard-capped near
+45 by the 180 s client deadline — and 1.6-9.6 credits. Set
+`KYC_ADAPTER_RATE_LIMITS={"floqer_company_enrichment": <n>}` per worker so the
+whole fleet stays under 200/minute, and remember credits and requests are
+separate budgets. A run ending `outOfCredits` is a billing stop, not a fault to
+retry: top the account up, do not re-drive the cases.
 
 ## PR 7b-core cutover — drained maintenance window (migration 013)
 
@@ -300,7 +345,7 @@ horizontally (SKIP LOCKED makes them safe; per-case ordering is preserved).
     suspended AND the 0.3 attestation holds.
 0.5 On failure, ABORT here — before stopping service (no outage begun). Recovery is restore-or-block:
     restore from authoritative backup the EXACT callback row, OR remain on 012 in
-    `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`024`) is
+    `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation (`025`) is
     downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back to
     `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.
     THE RESTORE PATH IS A SHIPPED CLI, reachable from HERE — a pre-window maintenance stop, not the
@@ -448,7 +493,7 @@ R4. **With `018` or anything above it installed there is no schema-downgrade pat
       (`MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`), or the attempt table under a bare `013`
       stamp (`MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`).
 R5. ROLLBACK OUTCOME A — downgrade REFUSED (any sentinel above): the DB stays on the
-    witness-authority schema, so KEEP or redeploy the reviewed **`023`-COMPATIBLE image** digest —
+    witness-authority schema, so KEEP or redeploy the reviewed **`024`-COMPATIBLE image** digest —
     an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved
     evidence; PROHIBIT the pre-7b image outright. Rollback after first witness use is a
     FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is
@@ -477,8 +522,8 @@ carries `checks[].source` (can be reviewer-derived), is a different matter:
 `COALESCE(delivered_at, resolved_at, created_at)` is past
 `KYC_RETENTION_DAYS`, for any row whose `status` is `delivered`, `superseded`
 **or `dead`** (migration 020 — a callback that exhausted its attempts during a
-platform outage carries the same reviewer-derived body as any other, and
-keeping it forever inverted this policy; a dead row has neither `delivered_at`
+platform outage carries the same reviewer-derived body as any other, so it is
+redacted too; a dead row has neither `delivered_at`
 nor `resolved_at`, so it ages on `created_at`). Redaction **never** touches a
 `pending` row: that body is still sendable, and the database refuses the write.
 A redacted row can no longer be requeued — the console returns 409 and names
@@ -504,10 +549,39 @@ body until they age out on the backup retention schedule, independent of
 
 ## Policy changes
 
-Rubric/decision/broker JSON changes ship as a deploy: bump the file's
-`version`, update `tests/policy_driven/policy_baseline.json` in the same
-commit (the drift-guard test enforces this), redeploy. Every run/decision
-records the sha of the policy that produced it.
+After the explicit migration-024 activation in `docs/DEPLOYMENT.md` §12,
+authorized console saves publish shared, durable revisions of scoring points,
+the complete Allowed/Blocked broker list, and Salesforce destination names.
+Points must be exact integers 0–1000. Broker limits are 200 entries, 1–200
+characters per name, 100 entries per identifier class, 1–256 characters per
+identifier, and at most 2000 characters of notes; Blocked wins on exact matches.
+Allowed never bypasses another gate. New review runs, including new runs for
+existing companies, use the saved revision. Existing runs and event replays keep
+their creation revision; Save does not recalculate, rewrite evidence/decisions,
+send events, write Salesforce, or enable automatic positive enforcement.
+
+Saving requires a nonempty configured admin credential in **every environment**,
+including development, and same-origin browser requests. A shared token proves
+the authentication mechanism, not the operator label's personal identity.
+Conflicts preserve the draft: reload/review the latest revision before resaving.
+An uncertain result is not cancellation: keep the exact payload/request ID for
+identical retry and check the returned current revision. Cancel discards only
+unsent edits. Never automatically publish old browser-local previews.
+
+Recover prior settings through new reviewed revisions, never by editing history
+or resetting the active pointer. After activation `broker_entities` is only the
+legacy/bootstrap source, not a second live editing interface. If active authority
+is missing/corrupt, new admissions/saves fail closed and the console company
+`/full` response can return 503 even when an old run snapshot is intact. For
+read-only historical inspection use `GET /v1/cases/{case_id}` and
+`GET /v1/cases/{case_id}/checks` under their existing read authorization.
+
+Threshold, hard gates, evidence rules, identity invalidation, manual record-only
+semantics, callback schema, and M2 remain unchanged. Changes to non-editable
+packaged policy still ship as a deploy: bump `version`, update
+`tests/policy_driven/policy_baseline.json` in the same commit, and redeploy.
+Every run/decision records the policy hash that produced it. See ADR-009 and
+`AUDIT_FINDINGS.md` D-LIVE-CONFIG for the approved point-cap deviation.
 
 ## Policy bundle pinning & provenance (PR 6)
 

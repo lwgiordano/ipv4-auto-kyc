@@ -523,7 +523,7 @@ class Settings(BaseSettings):
     read_auth_required: bool = False
     ui_admin_token: str = ""
 
-    # SAFETY OVERLAY (temporary — remove once remediation items 3–5 land):
+    # SAFETY OVERLAY (temporary — remove once the approval-grade validators in PRODUCTION_READINESS land):
     # while the approval-grade validators are known-permissive, the tool must
     # not emit an auto-enforceable positive decision. When False, decide()'s
     # approve / approve_buy_locked outcomes are held for manual review at
@@ -551,6 +551,11 @@ class Settings(BaseSettings):
     ocr_engine: str = STUB_OCR_ENGINE
     email_provider: str = STUB_EMAIL_PROVIDER  # logging | file | (real: item 12)
     adapters_profile: str = STUB_ADAPTERS_PROFILE  # fixture | real
+    # Floqer discovery over the Shortcut API: the key authorizes the account, the id names the
+    # ONE published shortcut the tool runs. Both required outside the fixture profile; the key
+    # comes from the secret manager / .env and is never logged or echoed into evidence.
+    floqer_api_key: str = ""
+    floqer_shortcut_id: str = ""
     # Sink path for email_provider="file" (closed staging/dev only): each token
     # email is appended as a JSON line so the POC round-trip is testable.
     email_file_path: Path = REPO_ROOT / ".substrate" / "state" / "poc-emails.log"
@@ -570,10 +575,11 @@ class Settings(BaseSettings):
     # Governed adapter response cap, wire AND decoded bytes (re-audit `7d1c435..827bc0f` F6).
     adapter_max_response_bytes: int = Field(default=5_242_880, ge=1024, le=104_857_600)
     # PR 10b slice 1: run every governed adapter fetch (real network transports only) in a
-    # fork-per-call child the worker TERMINATES at the absolute plan deadline — the
+    # spawned child the worker TERMINATES at the absolute plan deadline — the
     # unconditionally-killable occupancy bound the in-process header/chunk/EOF proofs cannot
-    # give. Off by default: fork-per-call is a real per-fetch cost; enable it where hostile-drip
-    # occupancy matters more than fetch latency.
+    # give. Off by default: every fetch starts a fresh interpreter (about 0.6-0.9 s under a
+    # worker, several seconds on a cold first call), charged to the plan deadline; enable it
+    # where hostile-drip occupancy matters more than fetch latency.
     adapter_hard_kill_boundary: bool = False
     # ge=0 (0 = retry-when-due dev value); ceiling timestamp-safe. The worker uses the shared
     # saturating backoff helper so no accepted value overflows timestamp arithmetic at high attempts.
@@ -906,6 +912,11 @@ def _section_providers_and_storage(settings: Settings, v: list[str]) -> None:
         v.append("email_provider is the staging file sink (writes raw tokens to disk)")
     if settings.adapters_profile == STUB_ADAPTERS_PROFILE:
         v.append(f"adapters_profile is the fixture stub ({STUB_ADAPTERS_PROFILE!r})")
+    else:
+        # Outside the fixture profile the Floqer client is live: without both the key and the
+        # published shortcut id every case loses LinkedIn discovery silently.
+        for name in ("floqer_api_key", "floqer_shortcut_id"):
+            v.extend(string_setting_violations(getattr(settings, name), name))
 
     if not settings.read_auth_required:
         v.append("read_auth_required is False (the read API would be unauthenticated)")
@@ -1022,7 +1033,8 @@ def validate_for_production(settings: Settings) -> None:
 
 
 class ProcessRole(StrEnum):
-    """Every executable entry point's role. dev_worker is DEV-ONLY (it always wires fixture adapters);
+    """Every executable entry point's role. dev_worker is DEV-ONLY (fixture adapters, or live
+    registries when CH_API_KEY is set — never a production configuration);
     the rest are production roles."""
 
     API = "api"
@@ -1300,8 +1312,8 @@ def require_role_capability(context: "ProcessContext", capability: str, construc
     if type(settings) is not Settings:
         raise ProcessRoleCapabilityError(
             f"{construction}: an exact Settings object is required — absent or malformed "
-            "settings cannot prove the validated environment (R-audit-6: an explicit None "
-            "was a role-only escape hatch)"
+            "settings cannot prove the validated environment (an explicit None would be a role-only "
+            "escape hatch)"
         )
     issued = _verify_issuance(context)
     if issued is None:
@@ -1517,7 +1529,7 @@ def _admission_checks(settings: Settings, role: ProcessRole) -> ProcessRole:
     # definitions are internally consistent but mutually different (old (8,8) next to new (12,12)
     # both boot). The independent authority — a DB CAS cutover record + orchestrator-inventory
     # receipt every publisher must match before claiming — needs a table and is reserved into
-    # migration 028 (PR 10b); the drained STOP/ATTEST-ZERO procedure remains the operative control
+    # migration 029 (PR 10b); the drained STOP/ATTEST-ZERO procedure remains the operative control
     # until then.
     attested = settings.outbox_max_attempts_attested
     if (

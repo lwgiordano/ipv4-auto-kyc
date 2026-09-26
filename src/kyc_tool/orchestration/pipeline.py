@@ -26,6 +26,8 @@ from kyc_tool.adapters.base import Adapter, AdapterOutput
 from kyc_tool.api.schemas import encode_decision_callback
 from kyc_tool.checkstore import repo as checkstore
 from kyc_tool.config import Settings
+from kyc_tool.configuration import repo as configuration_repo
+from kyc_tool.configuration.models import ConfigurationUnavailable
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import AdapterResult, Case, DecisionRow, Event, Run
@@ -43,6 +45,7 @@ from kyc_tool.domain.models import (
     RunState,
 )
 from kyc_tool.events import review_guard
+from kyc_tool.orchestration.broker_gate import BrokerGate
 from kyc_tool.orchestration.rate_limit import RateLimiter
 from kyc_tool.orchestration.side_effects import SideEffects
 from kyc_tool.orchestration.triggers import RunPlan, plan_for
@@ -120,6 +123,9 @@ class Pipeline:
         self.policy, so an unresolvable pin refuses instead of scoring under
         the wrong rubric. Flag-on results are cached on self by bundle_hash.
         """
+        configuration = self._resolve_configuration(session, run)
+        if configuration is not None:
+            return configuration.bundle
         if not self.settings.enforce_bundle_pinning:
             return self.policy
         bundle_hash = run.policy_bundle_hash
@@ -134,6 +140,32 @@ class Pipeline:
             )
         self._bundle_cache[bundle_hash] = bundle
         return bundle
+
+    def _resolve_configuration(self, session, run):
+        try:
+            active = configuration_repo.get_active(session)
+            if run.configuration_revision is None:
+                if active is not None:
+                    raise ConfigurationUnavailable("active system cannot process an unversioned run")
+                return None
+            if active is None or self.settings.enforce_bundle_pinning is not True:
+                raise ConfigurationUnavailable("versioned runs require active configuration and pinning")
+            configuration = configuration_repo.get_revision(session, run.configuration_revision)
+            if configuration.bundle.bundle_hash != run.policy_bundle_hash:
+                raise ConfigurationUnavailable("run configuration and bundle pins disagree")
+            return configuration
+        except ConfigurationUnavailable as exc:
+            raise BundleUnavailable("Run configuration authority unavailable; no work performed.") from exc
+
+    def _pinned_broker_status(self, session, run, case):
+        configuration = self._resolve_configuration(session, run)
+        if configuration is None:
+            return None
+        match = BrokerGate().match(session, self._run_snapshot(run, case), snapshot=configuration.brokers)
+        run.matched_broker_entity_id = match.entity_id
+        run.matched_identifier_class = match.identifier_class
+        case.broker_status = match.status.value
+        return match.status
 
     def handle_job(self, job: ClaimedJob) -> None:
         run_id = job.payload["run_id"]
@@ -271,8 +303,9 @@ class Pipeline:
             jobs.assert_live(session)  # HELD fence FIRST — lock order job → case → run (R9-F1)
             run, case, event = self._load(session, run_id)
             plan = plan_for(event.event_type)
-            status = BrokerStatus(case.broker_status)
-            if plan.run_broker_gate and self.broker_matcher is not None:
+            pinned = self._pinned_broker_status(session, run, case)
+            status = pinned if pinned is not None else BrokerStatus(case.broker_status)
+            if pinned is None and plan.run_broker_gate and self.broker_matcher is not None:
                 status = self.broker_matcher(session, self._run_snapshot(run, case))
                 case.broker_status = status.value
             blocked = status is BrokerStatus.BLOCKED
@@ -286,6 +319,9 @@ class Pipeline:
                 run_id=run_id,
                 broker_status=status.value,
                 short_circuit=blocked,
+                configuration_revision=run.configuration_revision,
+                matched_broker_entity_id=run.matched_broker_entity_id,
+                matched_identifier_class=run.matched_identifier_class,
             )
 
     # ---------------------------------------------------------- RUN_ADAPTERS
@@ -552,11 +588,14 @@ class Pipeline:
                 # each check's stamped points/category from whatever era wrote it.
                 views = scoring.rubric_scoring_views(views, bundle.rubric)
             breakdown = scoring.score(views)
+            # A resumed/interleaved run must not inherit another run's case projection.
+            pinned = self._pinned_broker_status(session, run, case)
+            broker_status = pinned if pinned is not None else BrokerStatus(case.broker_status)
             gates = scoring.evaluate_gates(
                 views,
                 breakdown.score,
                 bundle.rubric.threshold,
-                BrokerStatus(case.broker_status),
+                broker_status,
                 bundle.rubric.allowed_broker_statuses,
             )
             org_passed = scoring.org_id_check_passed(views)
@@ -564,7 +603,7 @@ class Pipeline:
                   score=breakdown.score, by_check=breakdown.by_check, gates=gates.as_dict())
 
             # DECIDE (logical stage)
-            computed = decide(breakdown.score, gates, org_passed, BrokerStatus(case.broker_status))
+            computed = decide(breakdown.score, gates, org_passed, broker_status)
             # Emergency enforcement overlay (temporary): while approval-grade
             # validators are known-permissive, hold auto-enforceable positives
             # for manual review. The computed decision stays in the audit trail.

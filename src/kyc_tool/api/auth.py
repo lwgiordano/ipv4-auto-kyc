@@ -23,6 +23,12 @@ from kyc_tool.api import hmac_witness
 from kyc_tool.config import _TS_SAFE_DAYS as _MAX_OBSERVATION_WINDOW_DAYS
 from kyc_tool.config import Settings, parse_sunset
 
+IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
+TIMESTAMP_HEADER = "X-KYC-Timestamp"
+V1_SIGNATURE_HEADER = "X-KYC-Signature"
+KEY_ID_HEADER = "X-KYC-Key-Id"
+V2_SIGNATURE_HEADER = "X-KYC-Signature-V2"
+
 # Process-local diagnostic counters (v2_accepted | rejected). Deliberately NOT database-backed
 # (re-audit `d569a15..4938840` F1): a rejected (401) request must not open a session or persist
 # telemetry, or an unauthenticated caller — and the browser sidebar polling unsigned — could drive
@@ -212,24 +218,24 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
     headers = request.headers
     session_factory = _session_factory(request)
     # slot: idempotency key for event POSTs, else empty (reads/callbacks).
-    slot = headers.get("Idempotency-Key", "")
+    slot = headers.get(IDEMPOTENCY_KEY_HEADER, "")
 
-    if "X-KYC-Signature-V2" in headers or "X-KYC-Key-Id" in headers:
+    if V2_SIGNATURE_HEADER in headers or KEY_ID_HEADER in headers:
         # v2 asserted by PRESENCE of any v2 header ⇒ v2-only, no fallback to the
         # path-unbound v1 scheme — a present-but-empty v2 header still locks v2
         # (the contract is header presence, not a truthy value).
-        key_id = headers.get("X-KYC-Key-Id", "")
+        key_id = headers.get(KEY_ID_HEADER, "")
         secret = _inbound_secret(settings, key_id)
         path_qs = _raw_path_qs(request)
         ok = bool(secret) and security.verify_v2(
             secret,
-            headers.get("X-KYC-Signature-V2", ""),
+            headers.get(V2_SIGNATURE_HEADER, ""),
             max_skew_seconds=settings.hmac_max_skew_seconds,
             key_id=key_id,
             direction=security.DIRECTION_INBOUND,
             method=request.method,
             path_qs=path_qs,
-            timestamp=headers.get("X-KYC-Timestamp", ""),
+            timestamp=headers.get(TIMESTAMP_HEADER, ""),
             slot=slot,
             body=body,
         )
@@ -254,9 +260,9 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
         raise HTTPException(status_code=401, detail="authentication not configured")
     if not security.verify(
         legacy_secret,
-        headers.get("X-KYC-Timestamp", ""),
+        headers.get(TIMESTAMP_HEADER, ""),
         body,
-        headers.get("X-KYC-Signature", ""),
+        headers.get(V1_SIGNATURE_HEADER, ""),
         max_skew_seconds=settings.hmac_max_skew_seconds,
     ):
         _bump("rejected")
@@ -285,6 +291,35 @@ def require_read_access(settings: Settings, request, body: bytes = b"") -> None:
     if settings.read_auth_required is False and _dev_environment(settings):
         return
     require_valid_signature(settings, request, body)
+
+
+def require_operator_or_signed_read(settings: Settings, request) -> None:
+    """Gate a read that both the operator console and the platform make.
+
+    The console reads with the operator's Bearer credential and cannot sign; the platform reads
+    signed. `require_read_access` alone served neither: where signed reads were enforced it
+    refused a logged-in operator, and in a dev environment with them off it checked nothing at
+    all -- even with an operator credential configured, while every other console read required
+    that credential. So:
+
+    - no operator credential configured (exact `""`) -> the platform read rule is the whole rule,
+      which keeps tokenless local development open and signed platform reads working;
+    - one configured and presented as a Bearer -> `require_admin` judges it, constant-time;
+    - one configured but not presented -> only a valid platform signature may read.
+
+    A non-`str` or whitespace-only credential is a misconfiguration and denies, as configuration
+    writes already do: the safe reading of a misconfigured credential is "deny", not "open".
+    """
+    token = settings.ui_admin_token
+    if type(token) is not str or (token and not token.strip()):
+        raise HTTPException(status_code=401, detail="invalid or missing admin credential")
+    if token == "":
+        require_read_access(settings, request)
+        return
+    if _exact_str(request.headers.get("Authorization", "")).startswith("Bearer "):
+        require_admin(settings, request.headers)
+        return
+    require_valid_signature(settings, request, b"")
 
 
 def require_admin(settings: Settings, headers) -> None:

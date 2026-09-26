@@ -20,7 +20,7 @@ What remains authored: a procedure's short SUBJECT (a noun phrase, length-capped
 tries to be a sentence) and each prerequisite's EVIDENCE quote, which must appear verbatim in the
 digest-bound playbook section — the same discipline as rollback facts. The executable bindings —
 the flag's Settings default, the role vocabulary against `ProcessRole`, the preflight and
-diagnostic commands against the ref's typed command records, 024 still PENDING — live in the
+diagnostic commands against the ref's typed command records, 025 still PENDING — live in the
 release verifier.
 """
 
@@ -252,7 +252,7 @@ _WHEN_TEMPLATES = {
     ),
     PHASE_SCHEMA_MAINTENANCE: (
         "{subject}. It provides best-effort local supersession only; PLATFORM ordering authority "
-        "remains absent until 024 is built and active, and 024 is pending."
+        "remains absent until 025 is built and active, and 025 is pending."
     ),
 }
 

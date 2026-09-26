@@ -17,6 +17,8 @@ def _hardened(**overrides):
         s3_bucket="kyc-evidence", ocr_engine="tesseract", email_provider="ses",
         adapters_profile="real", read_auth_required=True, ui_enabled=False,
         ui_admin_token="t" * 32,
+        floqer_api_key="floq_placeholder-not-a-real-key",
+        floqer_shortcut_id="00000000-0000-0000-0000-000000000000",
         hmac_inbound_key_id="k-in", hmac_inbound_secret="i" * 40,
         hmac_outbound_key_id="k-out", hmac_outbound_secret="o" * 40,
         hmac_v1_inbound_sunset_at=unarrived_sunset(365),

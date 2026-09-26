@@ -774,7 +774,7 @@ MUTATIONS = [
      "OPS.RELEASE.CLASSIFICATION",
      {"value": "Releases without a migration are always safe to deploy rolling, including "
                "security releases."}),
-    ("deleting the accepted 024 requirements", WIRE, contract_gen, "WIRE.ORDERING.BOOTSTRAP_024",
+    ("deleting the accepted 025 requirements", WIRE, contract_gen, "WIRE.ORDERING.BOOTSTRAP_025",
      {"value": "NOT BUILT"}),
     ("reversing the eight visible canonical lines", WIRE, contract_gen, "WIRE.SIGN.CANONICAL",
      {"value": ("sha256(body) hex", "slot", "timestamp", "path?query", "method", "direction",
@@ -1364,7 +1364,7 @@ NARRATION_LABELS = {
                                         "checks separately"),
     ("contract", "asks", 0): ("c77063c9a829011c", "1.1 heading + why ordering is asked for"),
     ("contract", "asks", 1): ("f7662c6b9304e6b7", "1.1 what we need now is not code"),
-    ("contract", "asks", 2): ("2c5f41e9c09d3884",
+    ("contract", "asks", 2): ("cb7699e00b602dd7",
                               "1.1 necessary and not sufficient; screened but "
                               "cannot clear (gate finding 10)"),
     ("contract", "asks", 3): ("3f901c37e3839bdc", "1.2 dedupe commitment"),

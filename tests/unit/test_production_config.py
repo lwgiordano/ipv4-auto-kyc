@@ -162,3 +162,21 @@ def test_lease_bound_is_declared_not_silently_clamped():
     The bound belongs to the settings layer, where exceeding it is an error the operator sees."""
     with pytest.raises(Exception, match="less than or equal to 3600|outbox_lease_seconds"):
         Settings(environment="development", outbox_lease_seconds=7200)
+
+
+def test_floqer_credentials_are_required_outside_the_fixture_profile():
+    """A live adapters profile runs the Floqer shortcut for real: without the key AND the
+    published shortcut id every case silently loses LinkedIn discovery. Inside the fixture
+    profile neither is needed — the fixture client places no call."""
+    blank = {"floqer_api_key": "", "floqer_shortcut_id": ""}  # explicit: the env must not decide
+    fixture = production_config_violations(hardened(adapters_profile="fixture", **blank))
+    assert not any("floqer" in v for v in fixture)
+
+    live = production_config_violations(hardened(**blank))
+    assert any("floqer_api_key" in v for v in live)
+    assert any("floqer_shortcut_id" in v for v in live)
+
+    configured = production_config_violations(
+        hardened(floqer_api_key="from-the-secret-manager", floqer_shortcut_id="shortcut-uuid")
+    )
+    assert not any("floqer" in v for v in configured)

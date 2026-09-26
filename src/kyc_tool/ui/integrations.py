@@ -8,19 +8,21 @@ plus optional reachability probes against the real upstreams.
 
 import os
 import time
+from pathlib import Path
 
 import httpx
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from kyc_tool.config import Settings
+from kyc_tool.configuration import repo as configuration_repo
 
 # Static wiring facts per adapter (kind + config the live client needs).
 WIRING = {
     "broker_policy": {
-        "kind": "internal gate (broker_entities table)",
+        "kind": "internal gate (legacy/bootstrap broker_entities table)",
         "env": [],
-        "todo": "ops maintain identifier arrays (aliases/domains/org_ids/…) via SQL",
+        "todo": "Legacy/bootstrap source; activate versioned configuration for console editing.",
     },
     "email_verification": {
         "kind": "platform event data (no upstream)",
@@ -34,9 +36,9 @@ WIRING = {
     },
     "gleif": {"kind": "HTTP · api.gleif.org (public)", "env": [], "todo": None},
     "floqer_company_enrichment": {
-        "kind": "HTTP · Floqer enrichment",
-        "env": [],
-        "todo": "TODO(integration): real Floqer API contract unknown (AUDIT:C4)",
+        "kind": "HTTP · api.floqer.com shortcut",
+        "env": ["KYC_FLOQER_API_KEY", "KYC_FLOQER_SHORTCUT_ID"],
+        "todo": None,
     },
     "rir_rdap": {
         "kind": "HTTP · 5 RIR RDAP endpoints",
@@ -46,7 +48,8 @@ WIRING = {
     "rir_poc": {
         "kind": "RIR POC directory + token email",
         "env": [],
-        "todo": "TODO(integration): wire POC lookup to RDAP; email provider (AUDIT:C2/C4)",
+        "todo": "TODO(integration): outbound email provider for the token (AUDIT:C4); the "
+        "RDAP POC lookup is built (RdapPocDirectory, live under the dev switch)",
     },
     "document_ocr": {
         "kind": "object store + OCR engine",
@@ -90,7 +93,7 @@ def _classify(adapter_id: str, adapter: object) -> tuple[str, str]:
         client = getattr(adapter, "client", None)
         if type(client).__name__ == "FixtureFloqerClient":
             return "stub", "FixtureFloqerClient — returns canned records only"
-        return "live", type(client).__name__
+        return "live", f"{type(client).__name__} — shortcut {getattr(client, 'shortcut_id', '')}"
     if adapter_id == "rir_rdap":
         strategies = getattr(adapter, "strategies", {})
         names = {type(s).__name__ for s in strategies.values()}
@@ -135,24 +138,46 @@ def integration_report(settings: Settings, session: Session, adapters: dict) -> 
         )
     }
 
-    broker = session.execute(
-        text(
-            """
+    active = configuration_repo.get_active(session)
+    broker = (
+        session.execute(
+            text(
+                """
             SELECT count(*) AS total,
                    count(*) FILTER (WHERE cardinality(aliases) + cardinality(domains)
                        + cardinality(email_domains) + cardinality(org_ids)
                        + cardinality(poc_handles) + cardinality(asns) > 0) AS with_identifiers
             FROM broker_entities
             """
+            )
+        ).one()
+        if active is None
+        else None
+    )
+    total = len(active.brokers) if active else broker.total
+    with_identifiers = (
+        sum(
+            any((b.aliases, b.domains, b.email_domains, b.org_ids, b.poc_handles, b.asns))
+            for b in active.brokers
         )
-    ).one()
+        if active
+        else broker.with_identifiers
+    )
 
     rows = []
     for adapter_id in WIRING:
         adapter = adapters.get(adapter_id)
         if adapter_id == "broker_policy":
-            status, detail = "live", (
-                f"{broker.total} entities seeded, {broker.with_identifiers} with identifiers beyond name"
+            status, detail = (
+                "live",
+                (
+                    f"{total} entities, {with_identifiers} with identifiers beyond name; "
+                    + (
+                        f"versioned configuration revision {active.revision}"
+                        if active
+                        else "legacy/bootstrap source"
+                    )
+                ),
             )
         elif adapter is None:
             status, detail = "missing", "not in the worker registry"
@@ -162,18 +187,26 @@ def integration_report(settings: Settings, session: Session, adapters: dict) -> 
         rows.append(
             {
                 "adapter_id": adapter_id,
-                "kind": wiring["kind"],
+                "kind": "internal gate (versioned configuration)"
+                if adapter_id == "broker_policy" and active
+                else wiring["kind"],
                 "status": status,
                 "detail": detail,
                 "env": [
                     {"name": e.split(" ")[0], "present": bool(os.environ.get(e.split(" ")[0])), "note": e}
                     for e in wiring["env"]
                 ],
-                "todo": wiring["todo"],
+                "todo": None if adapter_id == "broker_policy" and active else wiring["todo"],
                 "probeable": adapter_id in PROBES or adapter_id == "rir_rdap",
                 "stats": stats.get(adapter_id),
             }
         )
+        if adapter_id == "broker_policy":
+            rows[-1].update(
+                total=total,
+                with_identifiers=with_identifiers,
+                configuration_revision=str(active.revision) if active else None,
+            )
 
     callback_configured = bool(
         settings.platform_hmac_secret
@@ -194,13 +227,53 @@ def integration_report(settings: Settings, session: Session, adapters: dict) -> 
     return {
         "adapters": rows,
         "platform_callback": platform,
-        "object_store": {"kind": settings.object_store, "root": str(settings.object_store_root)},
-        "email_sender": {
+        "object_store": {"kind": settings.object_store, "root": _store_location(settings)},
+        "email_sender": _email_sender_report(settings),
+    }
+
+
+def _email_sender_report(settings) -> dict[str, str]:
+    """Describe the configured sender without constructing it or touching its sink."""
+    if settings.email_provider == "logging":
+        return {
             "status": "stub",
             "detail": "LoggingEmailSender — POC token emails are logged, not sent",
             "todo": "TODO(integration): outbound email provider (AUDIT:C4)",
-        },
+        }
+    if settings.email_provider == "file":
+        return {
+            "status": "dev",
+            "detail": "Closed staging: messages are written to a file, not emailed.",
+            "todo": "TODO(integration): production outbound email provider (AUDIT:C4)",
+        }
+    return {
+        "status": "needs-config",
+        "detail": "Configured email provider is not implemented",
+        "todo": "TODO(integration): implement the configured outbound email provider (AUDIT:C4)",
     }
+
+
+def _store_location(settings) -> str:
+    """Return a safe display hint for the configured evidence store.
+
+    S3 reports its bucket. Local disk reports an ordinary path beneath the service working
+    directory. Paths outside it, filesystem roots and paths with hidden components are concealed;
+    ``KYC_OBJECT_STORE_ROOT`` remains the authority for the precise configured location.
+    """
+    if settings.object_store == "s3":
+        return f"bucket {settings.s3_bucket}" if settings.s3_bucket else "bucket not configured"
+    root = Path(settings.object_store_root)
+    resolved = root.resolve()
+    hidden = "Local directory (path hidden)"
+    if resolved == Path(resolved.anchor):
+        return hidden
+    try:
+        relative = resolved.relative_to(Path.cwd().resolve())
+    except ValueError:
+        return hidden
+    if any(part.startswith(".") for part in relative.parts):
+        return hidden
+    return str(relative)
 
 
 def probe(adapter_id: str) -> dict:

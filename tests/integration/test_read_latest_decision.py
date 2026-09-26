@@ -256,7 +256,16 @@ def test_manual_approve_end_to_end_serves_one_row_on_every_surface(
     all read the SAME manual row — value, gates, reviewer attribution — with no decided_at sort
     anywhere in the chain. (The old behavior returned the stale automatic decision value beside
     the manual row's gates.)"""
-    post_event("cme", "kyb.run_requested", {"company_legal_name": "A", "jurisdiction": "GB"})
+    post_event(
+        "cme",
+        "kyb.run_requested",
+        {
+            "company_legal_name": "A",
+            "jurisdiction": "GB",
+            "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"},
+            "platform_account_id": "acct-1",
+        },
+    )
     worker.run_until_idle()
     publisher.process_pending()
     auto = client.get("/v1/cases/cme").json()
