@@ -523,7 +523,7 @@ class Settings(BaseSettings):
     read_auth_required: bool = False
     ui_admin_token: str = ""
 
-    # SAFETY OVERLAY (temporary — remove once remediation items 3–5 land):
+    # SAFETY OVERLAY (temporary — remove once the approval-grade validators in PRODUCTION_READINESS land):
     # while the approval-grade validators are known-permissive, the tool must
     # not emit an auto-enforceable positive decision. When False, decide()'s
     # approve / approve_buy_locked outcomes are held for manual review at
@@ -1312,8 +1312,8 @@ def require_role_capability(context: "ProcessContext", capability: str, construc
     if type(settings) is not Settings:
         raise ProcessRoleCapabilityError(
             f"{construction}: an exact Settings object is required — absent or malformed "
-            "settings cannot prove the validated environment (R-audit-6: an explicit None "
-            "was a role-only escape hatch)"
+            "settings cannot prove the validated environment (an explicit None would be a role-only "
+            "escape hatch)"
         )
     issued = _verify_issuance(context)
     if issued is None:

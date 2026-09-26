@@ -34,7 +34,7 @@ def requeue_dead_job(session_factory, job_id: int, *, attempt_grant: int) -> dic
     min(queued,running) check itself, so recovering it beside newer case state replayed frozen
     old evidence. Old evidence is re-processed by submitting a fresh `recalculate.requested`
     event, never by replaying its dead job. (DB backstop — partial unique index on jobs(case_id)
-    WHERE status='running' — is reserved into migration 026 with the lease_token column.)
+    WHERE status='running' — is reserved into migration 027 with the lease_token column.)
 
     RUN BINDING (F6): the run reset is verified, not fire-and-forget — the run must EXIST, belong
     to THIS job's case, and be FAILED; anything else rolls the whole recovery back with a governed

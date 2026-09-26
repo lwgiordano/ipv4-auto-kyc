@@ -104,6 +104,13 @@ def create_app(
         database is reachable and migrated to head, and (in S3 mode) the
         evidence bucket is accessible. 503 on any failing check."""
         checks: dict[str, dict] = {}
+
+        def unready(check: str, exc: Exception) -> dict:
+            # The probe is unauthenticated, and a driver's message can name hosts, users and
+            # buckets. Callers get the failing check and the error type; the log gets the rest.
+            structlog.get_logger().warning("readyz_check_failed", check=check, error=str(exc)[:500])
+            return {"ok": False, "error": type(exc).__name__}
+
         ready = True
 
         violations = production_config_violations(settings) if settings.environment == "production" else []
@@ -125,7 +132,7 @@ def create_app(
             }
             ready = ready and current == head
         except Exception as exc:  # noqa: BLE001 — any failure means not-ready
-            checks["database"] = {"ok": False, "error": str(exc)[:200]}
+            checks["database"] = unready("database", exc)
             ready = False
 
         if settings.object_store == "s3":
@@ -138,7 +145,7 @@ def create_app(
                 store.verify_access()
                 checks["object_store"] = {"ok": True}
             except Exception as exc:  # noqa: BLE001
-                checks["object_store"] = {"ok": False, "error": str(exc)[:200]}
+                checks["object_store"] = unready("object_store", exc)
                 ready = False
 
         # PR 6 (Task 10): UNCONDITIONALLY (regardless of enforce_bundle_pinning
@@ -152,7 +159,7 @@ def create_app(
             checks["policy_bundle"] = {"ok": pinnable, "bundle_hash": bundle_hash}
             ready = ready and pinnable
         except Exception as exc:  # noqa: BLE001 — any failure means not-ready
-            checks["policy_bundle"] = {"ok": False, "bundle_hash": bundle_hash, "error": str(exc)[:200]}
+            checks["policy_bundle"] = {**unready("policy_bundle", exc), "bundle_hash": bundle_hash}
             ready = False
 
         try:

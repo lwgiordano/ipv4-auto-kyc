@@ -138,7 +138,45 @@ def test_commentary_cleanup_never_joins_source_lines(exporter):
     assert len(packaged.splitlines()) == len(original.splitlines())
     assert b"regression case\n" in packaged
     assert b"regression case    " not in packaged
-    assert names == ["commentary_attribution_removed"]
+    assert b"f2929f8" not in packaged and b"F8" not in packaged
+    assert names == ["commentary_attribution_removed", "review_labels_removed"]
+
+
+def test_review_labels_leave_comments_and_docstrings_and_never_touch_code(exporter):
+    original = (
+        b'"""Durable witness (PR 5a \xc2\xa76). Gate finding 3, and a correction."""\n'
+        b"import os  # noqa: F401\n"
+        b"# \xe2\x94\x80\xe2\x94\x80 R10-F2: a late response is refused\n"
+        b"LIMIT = 3  # nested numeric sink (R5-F6)\n"
+        b'MESSAGE = "left alone (PR 5b fix)"\n'
+        b"def check():\n"
+        b'    """PR 7b-core: per-case allocation (re-gate-3 finding 1)."""\n'
+        b"    return LIMIT  # exact types first (R-audit-5 finding 1; PR 6 \xc2\xa78.11)\n"
+    )
+
+    packaged, names = exporter.transform_bytes("src/kyc_tool/example.py", original)
+    text = packaged.decode()
+
+    assert names == ["review_labels_removed"]
+    assert '"""Durable witness. Regression case, and a correction."""' in text
+    assert "import os  # noqa: F401\n" in text
+    assert "# \u2500\u2500 a late response is refused\n" in text
+    assert "LIMIT = 3  # nested numeric sink\n" in text
+    assert 'MESSAGE = "left alone (PR 5b fix)"' in text
+    assert '"""per-case allocation."""' in text
+    assert "return LIMIT  # exact types first\n" in text
+    assert len(text.splitlines()) == len(original.splitlines())
+    assert exporter._executable_ast(text) == exporter._executable_ast(original.decode())
+
+
+def test_archive_scan_refuses_review_labels_the_export_could_not_remove(exporter):
+    with pytest.raises(ValueError, match="review history"):
+        exporter.scan_package_text("src/kyc_tool/example.py", b'MESSAGE = "left alone (PR 5b fix)"\n')
+    with pytest.raises(ValueError, match="review history"):
+        exporter.scan_package_text("docs/DEPLOYMENT.txt", b"See re-gate-3 finding 1.\n")
+    exporter.scan_package_text("alembic/versions/013.py", b"# PR 7b-core migration history\n")
+    exporter.scan_package_text("src/kyc_tool/capabilities.py", b'roadmap_unit="PR 5c",\n')
+    exporter.scan_package_text("src/kyc_tool/ops/shape.py", b"PR7B_CORE_PREWINDOW = contract\n")
 
 
 def test_real_config_defaults_are_rebased_without_other_executable_changes(exporter):

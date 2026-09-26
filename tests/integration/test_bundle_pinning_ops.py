@@ -432,3 +432,34 @@ def test_create_app_db_reconstructed_policy_corrupt_row_fails_boot(
                   {"h": recon.bundle_hash})
     with pytest.raises(store.BundleCorrupt):
         create_app(settings, session_factory=session_factory, policy=recon)
+
+
+def test_readyz_reports_the_failing_check_without_the_drivers_message(
+    settings, session_factory, policy, clean_db
+):
+    """`/readyz` is unauthenticated, so a database outage must not publish the driver's message,
+    which names the host, port and user. The check and error type stay; the log keeps the rest."""
+    from fastapi.testclient import TestClient
+
+    from kyc_tool.api.app import create_app
+
+    class Outage:
+        down = False
+
+        def __call__(self):
+            if self.down:
+                raise RuntimeError(
+                    'connection to server at "db.internal.example" (10.0.0.5), port 5432 failed: '
+                    'FATAL: password authentication failed for user "kyc"'
+                )
+            return session_factory()
+
+    outage = Outage()
+    client = TestClient(create_app(settings, session_factory=outage, policy=policy))
+    assert client.get("/readyz").status_code == 200
+    outage.down = True
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["checks"]["database"] == {"ok": False, "error": "RuntimeError"}
+    for leaked in ("db.internal.example", "10.0.0.5", '"kyc"', "password"):
+        assert leaked not in response.text

@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tokenize
 import zipfile
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePosixPath
@@ -97,6 +98,119 @@ COMMENTARY_REPLACEMENTS = (
         "regression case",
     ),
 )
+# Review-history labels in shipped comments and docstrings: release work packages ("PR 5a
+# §6", "PR 7b-core"), review findings ("re-gate-3 finding 1", "R5-F11", "R-audit-8", "Wave 0")
+# and commit ranges. They mean nothing outside the review, so the export removes them from
+# comments and docstrings only; code and every other string stay byte-identical, which the
+# executable-AST check in `transform_bytes` still proves. The repository keeps its history.
+_SP = r"[ \t]+"
+_HASH = r"`[0-9a-f]{7,}(?:\.\.[0-9a-f]{7,})?`"
+_F = r"F\d+(?:/F?\d+)*"
+_PR_LABEL = (
+    r"PR ?\d+[a-z]?(?:-(?:core|inputs))?"
+    r"(?:" + _SP + r"slice(?:" + _SP + r"\d+)?)?"
+    r"(?:[ \t]*\((?:Task|item)" + _SP + r"[\w.]+\))?"
+    r"(?:" + _SP + r"§[\w.]+(?:" + _SP + r"(?:step" + _SP + r"[\d.]+|item" + _SP + r"[\w.]+))?)?"
+    r"(?:" + _SP + r"supply-chain)?"
+)
+_FINDING_LABEL = (
+    r"(?:"
+    r"(?:Wave" + _SP + r"\d+" + _SP + r")?(?:re-gate(?:-\d+)?(?:" + _SP + r"finding" + _SP + r"\d+)?"
+    r"|gate" + _SP + r"(?:round|finding" + _SP + r"\d+))"
+    r"|R-audit(?:-\d+)?(?:" + _SP + r"finding" + _SP + r"\d+)?"
+    r"|R\d+-" + _F
+    + r"|Wave" + _SP + r"\d+(?:" + _SP + _F + r")?"
+    r"|(?:(?:gate" + _SP + r")?audit" + _SP + r"(?:" + _HASH + _SP + r")?finding" + _SP + r"\d+)"
+    r"|regression case(?:-\d+(?:" + _SP + r"finding" + _SP + r"\d+)?|" + _SP + r"(?:finding" + _SP + r"\d+|"
+    + _F + r"))(?:" + _SP + r"\(" + _HASH + r"\))?"
+    r"|(?:" + _HASH + _SP + r")?(?:finding" + _SP + r"\d+|" + _F + r")(?:" + _SP + r"\(" + _HASH + r"\))?"
+    r"(?=[)\s:,.;—-]|$)"
+    r"|" + _HASH + r")"
+)
+_ITEM_LABEL = r"(?:remediation" + _SP + r")?items?" + _SP + r"\d+[A-Z]?(?:[–-]\d+)?"
+_ANY_LABEL = rf"(?:{_PR_LABEL}|{_FINDING_LABEL}|{_ITEM_LABEL}|G1\d|regression case)"
+_LEAD_LABEL = rf"(?:{_PR_LABEL}|{_FINDING_LABEL}|regression case)"
+_LABEL_SEP = r"[ \t]*[,;/&+][ \t]*|" + _SP + r"(?:and|\+)" + _SP
+_LABEL_RUN = rf"(?:{_ANY_LABEL})(?:(?:{_LABEL_SEP})(?:{_ANY_LABEL}))*"
+
+
+def _label_case(match: re.Match) -> str:
+    before = match.string[: match.start()].rstrip()
+    starts = not before or before.endswith((".", "#", '"""', "─", ":", "!", "?"))
+    return "Regression case" if starts else "regression case"
+
+
+REVIEW_LABEL_RULES = (
+    # "F1/F2/F3 suites" → "regression suites"
+    (re.compile(r"\b" + _F + r"(?=" + _SP + r"suites?\b)"), "regression"),
+    # A label parenthetical opening a line or comment, with trailing punctuation or dash.
+    (re.compile(rf"(?m)(^[ \t]*(?:#[ \t]*)?)\({_LABEL_RUN}\)[ \t]*[.,;:—–-]*[ \t]*", re.IGNORECASE), r"\1"),
+    # The tail of a parenthetical opened on the previous line: "# `hash` R5-F7): …"
+    (re.compile(rf"(?m)(^[ \t]*(?:#[ \t]*)?){_LABEL_RUN}\)", re.IGNORECASE), r"\1regression case)"),
+    (re.compile(r"[ \t]*\(G1\d" + _SP + r"semantics\)"), ""),
+    # A parenthetical that is only labels, with its leading space.
+    (re.compile(rf"[ \t]*\({_LABEL_RUN}\)", re.IGNORECASE), ""),
+    (re.compile(r"\bpre-PR ?\d+[a-z]?\b"), "earlier"),
+    # A label leading a comment, docstring or line, followed by ":", "." or " —".
+    (re.compile(rf"(?<=[#\"─—-] ){_LEAD_LABEL}(?:[:.]| —)[ \t]+", re.IGNORECASE), ""),
+    (re.compile(rf'(?<="""){_LEAD_LABEL}(?:[:.]| —)[ \t]+', re.IGNORECASE), ""),
+    (re.compile(rf"(?m)^([ \t]*){_LEAD_LABEL}(?:[:.]| —)[ \t]+", re.IGNORECASE), r"\1"),
+    # A label opening or closing a parenthetical list.
+    (re.compile(rf"\({_LEAD_LABEL}(?:{_LABEL_SEP})", re.IGNORECASE), "("),
+    (re.compile(rf"(?:{_LABEL_SEP}){_LEAD_LABEL}\)", re.IGNORECASE), ")"),
+    # A bare finding marker before a lowercase word is a list marker ("; F2 the permit").
+    (re.compile(r"(?<![-\w])(?:finding" + _SP + r"\d+|" + _F + r")" + _SP + r"(?=[a-z])"), ""),
+    (re.compile(r"\bWave" + _SP + r"\d+\b(?!" + _SP + r"(?:gate|F\d))"), "an earlier hardening pass"),
+    # Whatever remains in running text.
+    (re.compile(_FINDING_LABEL, re.IGNORECASE), _label_case),
+    (re.compile(r"\b" + _PR_LABEL + r"\b,?[ \t]*"), ""),
+    (re.compile(r"\bG1\d\b"), ""),
+    # Tidy what removal leaves behind.
+    (
+        re.compile(
+            r"(?i)\b(regression case)(?:[ \t]*(?:[+,/;&]|\band\b|\bunder\b)?[ \t]*regression case\b)+"
+        ),
+        r"\1",
+    ),
+    (re.compile(r"(?i)\b(regression case)[ \t]*\(regression case(?:[ \t]+repros?)?\)"), r"\1"),
+    (re.compile(r"^#[ \t]*[.,;:]*[ \t]*$"), "#"),
+)
+_TOOL_DIRECTIVE = re.compile(r"\b(?:noqa|type:|pragma)\b")
+
+
+def remove_review_labels(text: str) -> str:
+    """Apply `REVIEW_LABEL_RULES` to comments and docstrings only. A comment carrying a tool
+    directive (`noqa`, `type:`, `pragma`) is code to its tool and is left exactly as written."""
+    docstrings = set()
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                docstrings.add(first.value.lineno)
+    line_starts = [0]
+    for line in text.splitlines(keepends=True):
+        line_starts.append(line_starts[-1] + len(line))
+    edits = []
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        is_comment = token.type == tokenize.COMMENT
+        if not (is_comment or (token.type == tokenize.STRING and token.start[0] in docstrings)):
+            continue
+        if is_comment and _TOOL_DIRECTIVE.search(token.string):
+            continue
+        rewritten = token.string
+        for pattern, replacement in REVIEW_LABEL_RULES:
+            rewritten = pattern.sub(replacement, rewritten)
+        if rewritten != token.string:
+            start = line_starts[token.start[0] - 1] + token.start[1]
+            end = line_starts[token.end[0] - 1] + token.end[1]
+            edits.append((start, end, rewritten))
+    for start, end, rewritten in reversed(edits):
+        text = text[:start] + rewritten + text[end:]
+    return text
+
+
+
 PROHIBITED_TEXT = (
     (re.compile(r"\b(?:Codex|Claude|ChatGPT)\b", re.IGNORECASE), "model name"),
     (
@@ -123,6 +237,16 @@ PROHIBITED_TEXT = (
     (re.compile(r"\b(?:agent[- ]substrate|superpowers)\b", re.IGNORECASE), "internal tooling"),
     (re.compile(r"\b(?:AI|agent) conversations?\b", re.IGNORECASE), "conversation history"),
     (re.compile(r"\b(?:independent review|re-audits?)\b", re.IGNORECASE), "review history"),
+    # Labels `remove_review_labels` strips from comments; anything left is in code or prose that
+    # the export must not ship. `roadmap_unit` values are internal identifiers, never displayed.
+    (
+        re.compile(
+            r'(?<!roadmap_unit=")\b(?:PR ?\d+[a-z]?(?:-[a-z0-9]+)?\b|re-gate|[Gg]ate[ \t]+finding'
+            r"|R-audit|R\d+-F\d+"
+            r"|Wave[ \t]+\d|remediation[ \t]+item|[Rr]egression case-\d)"
+        ),
+        "review history",
+    ),
 )
 PRIVATE_KEY = re.compile(rb"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")
 
@@ -241,9 +365,14 @@ def transform_bytes(path: str, data: bytes) -> tuple[bytes, list[str]]:
         commentary_changed = commentary_changed or changed != transformed
         transformed = changed
 
+    labels_removed = remove_review_labels(transformed) if path.endswith(".py") else transformed
+
     changes: list[str] = []
     if commentary_changed:
         changes.append("commentary_attribution_removed")
+    if labels_removed != transformed:
+        changes.append("review_labels_removed")
+        transformed = labels_removed
     if state_rebased != original:
         changes.append("local_state_directory_rebased")
     if support_rebased != state_rebased:

@@ -223,7 +223,7 @@ def complete(session: Session, job: ClaimedJob) -> bool:
     with the work it performed. The fence is the CLAIM GENERATION: `attempts` increments on every
     claim, so a worker that lost its lease (reaped + reclaimed) matches zero rows here and returns
     False — the decide transaction must then abort via StaleJobClaim rather than commit a duplicate
-    decision (PR 7a, migration-free slice; the dedicated lease_token column lands with migration 026)."""
+    decision (PR 7a, migration-free slice; the dedicated lease_token column lands with migration 027)."""
     applied = session.execute(
         text(
             "UPDATE jobs SET status='done', updated_at=now() "
