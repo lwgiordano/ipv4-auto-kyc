@@ -1,47 +1,47 @@
-"""outbox authority boundary: lease fence, lifecycle guards, maintenance fence (PR 7b-core)
+"""outbox authority boundary: lease fence, lifecycle guards, maintenance fence
 
 Revision ID: 017
 Revises: 016
 
-Folds the CORRECTNESS findings of re-audit `15d875d` and — for the first time in this loop —
-formally REBUTS its regress-class prescriptions (terminal provenance-on-provenance, epoch reset of
-historical claims). The boundary, declared once here and in the bus: the in-database authority
-defends against APPLICATION defects and races; defense against an adversary holding raw SQL/DDL
-privileges does not terminate inside the database it already controls — it terminates at the
-platform's signed accepted-request ledger, which is what 7b-activation exists to provide. The
-witness taxonomy's `legacy_*` states already say, honestly, "local history cannot prove this".
+Closes the CORRECTNESS gaps left in `016`'s authority and deliberately DECLINES regress-class
+hardening (terminal provenance-on-provenance, epoch reset of historical claims). The boundary,
+declared once here: the in-database authority defends against APPLICATION defects and races;
+defense against an adversary holding raw SQL/DDL privileges does not terminate inside the database
+it already controls — it terminates at the platform's signed accepted-request ledger, which is
+what platform activation exists to provide. The witness taxonomy's `legacy_*` states already
+say, honestly, "local history cannot prove this".
 
 What this revision FIXES:
 
-- **Expired leases stage nothing (F4).** Admission — DB trigger and publisher fence — required
+- **Expired leases stage nothing.** Admission — DB trigger and publisher fence — required
   only token equality and `status='pending'`; an expired-but-not-yet-reclaimed owner could still
   stage an attempt and transmit, contradicting `_CLAIM_SQL`, which already treats that row as
   reclaimable. Admission now requires a live claimant AND `claim_lease_expires_at >
   clock_timestamp()` — wall-clock, not transaction-start `now()`, so a transaction that began
   before expiry cannot wait out the deadline and still win.
-- **Delivered is reachable only from pending, and only through the front door (F1).** The guard
+- **Delivered is reachable only from pending, and only through the front door.** The guard
   was BEFORE UPDATE only, and its no-witness refusal checked only `OLD.status='pending'`: a
   delivered decision row could be INSERTed directly, and `dead → delivered` with a NULL digest
   passed. New rows must enter `pending` with no terminal fields and no claim; any transition INTO
   `delivered` requires source `pending`; the decision-terminal witness must be backed by an
   ADMITTED attempt (`admission_v1` joins the EXISTS in both trigger and publisher — the existing
   provenance doing more work, not a new provenance layer).
-- **The ordering authority cannot be deleted or re-identified (F3).** No DELETE branch existed:
+- **The ordering authority cannot be deleted or re-identified.** No DELETE branch existed:
   a decision callback — including one whose `attempt_v1`/no-attempt state is durable NEGATIVE
   evidence — could simply be deleted, and identity fields (case/run/stream/sequence) could be
   rewritten. Decision callbacks are now undeletable; identity is immutable; the payload is
   immutable while the row is sendable (pending/dead) and mutable only to the governed redaction
   value once delivered/superseded.
-- **Maintenance and writers share ONE fence (F5).** Child-first table locking does not eliminate
+- **Maintenance and writers share ONE fence.** Child-first table locking does not eliminate
   deadlocks against the TERMINAL writer (parent row first, then the trigger reads the child).
   Writers now take a SHARED advisory transaction lock before touching either table; this
   migration (both directions) takes it EXCLUSIVE before any table lock — cycles are impossible
   by construction, and a live-claim preflight refuses the upgrade when quiescence was not real.
-- **Functions resolve one schema (F2, folded part).** All authority functions are recreated with
+- **Functions resolve one schema.** All authority functions are recreated with
   schema-qualified relations and a pinned `search_path`, and the pre-recreation validator covers
   the full structural surface (columns, defaults, constraints, indexes, the complete trigger
-  set) — refusing on drift BEFORE any replacement. What is NOT folded: proving the unknowable
-  history of prior function bodies, or demoting claims recorded under them — see the rebuttal.
+  set) — refusing on drift BEFORE any replacement. Deliberately NOT done: proving the unknowable
+  history of prior function bodies, or demoting claims recorded under them — see the boundary above.
 """
 
 import sqlalchemy as sa
@@ -88,7 +88,7 @@ _EXPECTED_OUTBOX_TRIGGERS = {"trg_outbox_witness_guard"}
 
 
 def _validate_full_structure(conn) -> None:
-    """The complete structural surface, validated BEFORE any code replacement (F2 folded part):
+    """The complete structural surface, validated BEFORE any code replacement:
     columns/types/nullability/defaults, exact constraint definitions, indexes, and the complete
     trigger sets of BOTH tables. Data-bearing drift refuses; only then are owned functions
     recreated."""
@@ -168,7 +168,7 @@ def _drop_authority_code() -> None:
 
 def upgrade() -> None:
     conn = op.get_bind()
-    # ONE fence for maintenance and writers (F5): exclusive here, shared in the publisher.
+    # ONE fence for maintenance and writers: exclusive here, shared in the publisher.
     # Taken BEFORE any table lock, so a terminal writer holding the parent row can never form a
     # lock-order cycle with this migration — it simply finishes first.
     op.execute(sa.text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=_FENCE_KEY))
@@ -214,7 +214,7 @@ def upgrade() -> None:
         "FOR EACH ROW EXECUTE FUNCTION outbox_attempts_guard()"
     )
 
-    # --- admission: live claim means UNEXPIRED claim (F4) ---
+    # --- admission: live claim means UNEXPIRED claim ---
     op.execute(
         """
         CREATE FUNCTION outbox_attempts_admission() RETURNS trigger
@@ -259,7 +259,7 @@ def upgrade() -> None:
         "FOR EACH ROW EXECUTE FUNCTION outbox_attempts_admission()"
     )
 
-    # --- the outbox lifecycle authority (F1 + F3) ---
+    # --- the outbox lifecycle authority ---
     op.execute(
         """
         CREATE FUNCTION outbox_witness_guard() RETURNS trigger
@@ -392,7 +392,7 @@ def downgrade() -> None:
             f"the compatible schema instead."
         )
     _drop_authority_code()
-    # restore 016's exact authority (unpinned path, pre-F4 admission, no INSERT/DELETE guards)
+    # restore 016's exact authority (unpinned path, no lease-expiry admission check, no INSERT/DELETE guards)
     op.execute(
         """
         CREATE FUNCTION outbox_attempts_guard() RETURNS trigger LANGUAGE plpgsql AS $$

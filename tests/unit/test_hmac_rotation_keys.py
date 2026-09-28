@@ -1,5 +1,5 @@
-"""Re-audit `82636da..9ac574f` F1: `hmac_inbound_extra_keys` entries are FULL v2 verification
-credentials, and the production boundary used to validate only the active pair.
+"""`hmac_inbound_extra_keys` entries are FULL v2 verification credentials, and the production
+boundary used to validate only the active pair.
 
 `api/auth._inbound_secret` resolves a v2 secret out of this mapping, so a one-character rotation
 secret — or one filed under an empty key id, which an absent `X-KYC-Key-Id` header resolves to —
@@ -45,8 +45,8 @@ def test_construction_refuses_unsafe_rotation_keys(mapping, needle):
 @pytest.mark.parametrize("mapping", [{"old": None}, {7: STRONG}, {"old": 42}])
 def test_construction_refuses_non_string_entries(mapping):
     """Pydantic's own dict[str, str] coercion is the authority at this layer, so the message is
-    its type error rather than ours. The mapping is refused either way; our type branch below
-    covers the boundary path, where model_copy skips Pydantic entirely."""
+    its type error rather than the tool's own. The mapping is refused either way; the tool's type
+    branch below covers the boundary path, where model_copy skips Pydantic entirely."""
     with pytest.raises(ValidationError):
         Settings(**_extra(mapping))
 
@@ -69,10 +69,9 @@ def test_a_valid_rotation_pair_is_accepted():
 
 
 def test_only_an_empty_dict_is_the_empty_state():
-    """`None` is NOT "no rotation keys" (re-audit `6feca36..4f23f23` F2). An earlier version of
-    this very test codified None as safe, while `_inbound_secret` called `.get` on it and raised
-    AttributeError inside signature verification: a clean boot followed by a 500 on an
-    authenticated request."""
+    """`None` is NOT "no rotation keys". Treating None as safe lets `_inbound_secret` call `.get`
+    on it and raise AttributeError inside signature verification: a clean boot followed by a 500
+    on an authenticated request."""
     assert Settings(hmac_inbound_key_id=ACTIVE).hmac_inbound_extra_keys == {}
     assert hmac_extra_key_violations({}, ACTIVE) == []
     assert hmac_extra_key_violations(None, ACTIVE), "None must be a violation, not the empty map"
@@ -80,7 +79,7 @@ def test_only_an_empty_dict_is_the_empty_state():
 
 # ── production boundary (the model_copy bypass) ───────────────────────────────────────────────────
 def test_production_boundary_catches_the_model_copy_bypass():
-    """Codex's exact reproduction: a hardened production config reported zero violations while
+    """Exact reproduction: a hardened production config reported zero violations while
     `_inbound_secret` handed out a one-byte secret and an empty-key-id secret."""
     smuggled = hardened().model_copy(
         update={"hmac_inbound_extra_keys": {"old": "x", "": "y"}}
@@ -126,13 +125,13 @@ def test_both_keys_verify_during_overlap_and_only_the_new_one_after_retirement()
     assert _inbound_secret(retired, "kyc-platform-1") == ""
 
 
-# ── re-audit `6feca36..4f23f23`: the boundary must be TOTAL and must not leak secrets ─────────────
+# ── The boundary must be TOTAL and must not leak secrets ──────────────────────────────────────────
 SENTINEL = "SENTINEL_ROTATION_SECRET_0123456789"
 
 
 @pytest.mark.parametrize("mapping", [{" padded ": SENTINEL}, {"": SENTINEL}, {ACTIVE: SENTINEL}])
 def test_validation_errors_never_carry_the_secret(mapping):
-    """F1: Pydantic embeds the rejected input in ValidationError text by default, so a deployment
+    """Pydantic embeds the rejected input in ValidationError text by default, so a deployment
     typo in a rotation key id printed a WORKING credential into startup logs and CI output."""
     with pytest.raises(ValidationError) as excinfo:
         Settings(**_extra(mapping))
@@ -142,7 +141,7 @@ def test_validation_errors_never_carry_the_secret(mapping):
 
 def test_other_secret_settings_are_hidden_too():
     """The setting is class-wide, so prove it on a second secret rather than only the one that
-    prompted the finding."""
+    exposed the leak."""
     with pytest.raises(ValidationError) as excinfo:
         Settings(hmac_v1_inbound_sunset_at=SENTINEL, worker_poll_seconds="not-a-number")
     assert SENTINEL not in str(excinfo.value)
@@ -150,7 +149,7 @@ def test_other_secret_settings_are_hidden_too():
 
 @pytest.mark.parametrize("mapping", [None, [], 5, "text", {"k": None}, {7: STRONG}])
 def test_boundary_is_total_for_any_mapping_shape(mapping):
-    """F2: every shape yields violations, never an exception, and auth still resolves safely."""
+    """Every shape yields violations, never an exception, and auth still resolves safely."""
     smuggled = hardened().model_copy(update={"hmac_inbound_extra_keys": mapping})
     assert production_config_violations(smuggled), f"{mapping!r} booted clean"
     assert _inbound_secret(smuggled, "any-key") == ""

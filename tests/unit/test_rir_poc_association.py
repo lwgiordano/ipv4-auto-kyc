@@ -1,6 +1,6 @@
-"""PR 3 (item 3): the rir_poc adapter marks association only when a submitted
-ORG-ID or resource is a VERIFIED target in the directory record — a missing
-submitted target is no longer 'associated by default'."""
+"""The rir_poc adapter marks association only when a submitted ORG-ID or resource is a
+VERIFIED target in the directory record — a missing submitted target is no longer
+'associated by default'."""
 
 from kyc_tool.adapters.rir_poc import FixturePocDirectory, RirPocAdapter
 
@@ -44,7 +44,7 @@ def test_wrong_org_is_not_associated():
 
 
 def test_submitted_targets_reach_the_directory():
-    """T14: a live directory verifies the association against the submitted
+    """A live directory verifies the association against the submitted
     ORG-ID / resource record, so the adapter must hand both over."""
     seen = {}
 

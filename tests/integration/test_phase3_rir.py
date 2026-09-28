@@ -85,7 +85,7 @@ def test_floqer_never_awards_points_alone(client, engine, post_event, session_fa
     assert checks["linkedin_company_match"]["status"] == "pass"
     # discovery context is seeded IN-RUN only (for later adapters in the same
     # run) — it is NEVER written back to the case snapshot, so it can't leak into
-    # a later run's frozen inputs (PR 2: cross-run isolation)
+    # a later run's frozen inputs (cross-run isolation)
     with engine.connect() as conn:
         snapshot = conn.execute(
             text("SELECT submitted_json FROM cases WHERE id='case-floqer'")

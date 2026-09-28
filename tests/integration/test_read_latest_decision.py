@@ -1,4 +1,4 @@
-"""PR 7b-core repair (re-audit `1f8412e` F4): `/v1/cases/{id}` and the latest-decision pointer.
+"""Read-path repair: `/v1/cases/{id}` and the latest-decision pointer.
 
 `decided_at` is transaction-start `now()`, so two case-locked decides can COMMIT in one order
 while their `decided_at` values sit in the other. Migration 013 wrote that fact down and ordered
@@ -173,7 +173,7 @@ def test_read_surfaces_do_not_dereference_cross_case_pointer_if_fk_drifted(
 
         full = client.get("/ui/api/cases/drift-a/full").json()
         assert full["pointer_decision"] is None
-        # every read surface classifies the SAME dereference the same way (re-audit F10): the
+        # every read surface classifies the SAME dereference the same way: the
         # full view and the list must both name the drift, so the console can render an
         # integrity alert instead of an ordinary "No decision" blank
         assert full["decision_provenance"] == "unresolved_pointer_drift"
@@ -251,7 +251,7 @@ def test_null_pointer_with_decisions_returns_empty_gates_not_a_guess(
 def test_manual_approve_end_to_end_serves_one_row_on_every_surface(
     client, session_factory, post_event, worker, publisher, clean_db
 ):
-    """Re-audit 4dfdf8a F4's real trigger, driven through the REAL paths: worker decide, then a
+    """The cross-pairing's real trigger, driven through the REAL paths: worker decide, then a
     real signed reviewer.manual_approve. API, UI full view, and the Salesforce projection must
     all read the SAME manual row — value, gates, reviewer attribution — with no decided_at sort
     anywhere in the chain. (The old behavior returned the stale automatic decision value beside
@@ -289,8 +289,8 @@ def test_manual_approve_end_to_end_serves_one_row_on_every_surface(
     assert sf["Platform_Action_Taken__c"] == "Manual Approve"
     assert sf["Manual_Approved_By__c"] == "rev-1"      # attribution from the pointer row,
     assert sf["Hard_Conflict__c"] is None              # manual bypass: gate never evaluated
-    # (was pinned `is False` — that pinned the fabrication: a manual approval bypasses the
-    # gates, so the mirror may not assert a definite "no hard conflict"; re-audit F9)
+    # (not `is False`: a manual approval bypasses the gates, so the mirror may not assert a
+    # definite "no hard conflict")
 
 
 def test_full_view_disambiguates_missing_manual_from_unresolved_manual_history(
@@ -331,7 +331,7 @@ def test_full_view_disambiguates_missing_manual_from_unresolved_manual_history(
 
 
 def test_unresolved_ambiguity_metric_counts_only_real_ambiguity(client, session_factory, clean_db):
-    """Re-audit 0c46443 F7: the counter must include NULL-pointer-WITH-decisions, exclude
+    """The counter must include NULL-pointer-WITH-decisions, exclude
     NULL-pointer-without-decisions, and return to zero when the next decision heals the case."""
     with session_factory() as s:
         s.execute(text("INSERT INTO cases (id, last_decision_sequence) VALUES ('cm1', 1)"))
@@ -357,7 +357,7 @@ def test_unresolved_ambiguity_metric_counts_only_real_ambiguity(client, session_
 
 
 def test_list_endpoint_serves_the_pointed_decision(client, session_factory, clean_db):
-    """Re-audit 0c46443 F6: the cases LIST also reads through the pointer — after the raw manual
+    """The cases LIST also reads through the pointer — after the raw manual
     row moves it, the list shows the manual verdict; with the pointer unresolved it shows NULL,
     never the stale projection column."""
     with session_factory() as s:
@@ -382,7 +382,7 @@ def test_list_endpoint_serves_the_pointed_decision(client, session_factory, clea
 def test_salesforce_action_follows_the_pointer_not_the_case_column(
     client, session_factory, clean_db
 ):
-    """Re-audit 0c46443 F6: with the pointer unresolved, the Salesforce projection must emit NO
+    """With the pointer unresolved, the Salesforce projection must emit NO
     action rather than mapping the stale cases.latest_decision column."""
     with session_factory() as s:
         s.execute(text("INSERT INTO cases (id, last_decision_sequence, latest_decision) "

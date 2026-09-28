@@ -1,4 +1,4 @@
-"""Outbound callback signing (PR 5a §3): decision callbacks dual-emit v1 + v2
+"""Outbound callback signing: decision callbacks dual-emit v1 + v2
 until the outbound sunset, then v2 only. v2 binds the outbound direction + path
 so the platform can migrate without a coordinated flip."""
 
@@ -74,7 +74,7 @@ def test_callback_dual_emits_and_v2_binds_direction_and_path(session_factory, se
 
 
 def test_callback_signs_literal_prefixed_path(session_factory, settings):
-    """Audit finding 1: a callback base with a path prefix POSTs to
+    """A callback base with a path prefix POSTs to
     /hooks/kyc/decision; the v2 signature must bind THAT literal target, not a
     hard-coded /kyc/decision (else a conforming receiver rejects every v2
     callback)."""
@@ -115,9 +115,9 @@ def test_callback_signs_literal_prefixed_path(session_factory, settings):
     ],
 )
 def test_callback_signs_the_httpx_wire_path(session_factory, settings, base, expected_wire_path):
-    """Audit re-finding 1: httpx normalizes the URL (percent-encoding non-ASCII,
-    stripping dot-segments) before it sends, so the v2 signature must bind the
-    literal wire path — a pre-normalized string disagrees with what's received."""
+    """The httpx client normalizes the URL (percent-encoding non-ASCII, stripping
+    dot-segments) before it sends, so the v2 signature must bind the literal wire
+    path — a pre-normalized string disagrees with what's received."""
     s = _outbound_settings(
         settings, platform_callback_url=base, hmac_v1_outbound_sunset_at="2999-01-01T00:00:00Z"
     )

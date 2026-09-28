@@ -184,12 +184,12 @@ def list_cases(
 ) -> dict:
     # The listed decision is the POINTED row's value (or NULL when unresolved/none) — the
     # cases.latest_decision projection column goes stale after a record-only manual approval
-    # and must not be served as the verdict (re-audit 0c46443 F6).
+    # and must not be served as the verdict.
     #
     # The pointed row's own `score` ships beside it as `decision_score`, and the live recomputed
-    # `current_evidence_score` is a DISTINCT field (re-audit `cbb783b` F6): serving one Score
-    # column that mixed a historical verdict with a later evidence total let the list render
-    # "Approve / 40" for a case decided at 105. Two names, two meanings, never blended.
+    # `current_evidence_score` is a DISTINCT field: serving one Score column that mixed a
+    # historical verdict with a later evidence total let the list render "Approve / 40" for a
+    # case decided at 105. Two names, two meanings, never blended.
     sql = """
         SELECT c.id, c.company_name, c.jurisdiction, c.status, c.buy_status, c.broker_status,
                c.current_score AS current_evidence_score,
@@ -339,11 +339,11 @@ def case_full(case_id: str, request: Request) -> dict:
         )
         # The AUTHORITATIVE latest decision for the Salesforce projection: the trigger-maintained
         # pointer (migration 014), fetched separately — feeding decisions[0] here preserved the
-        # exact inversion the pointer was introduced to eliminate (re-audit 4dfdf8a F4). A NULL
-        # pointer (ambiguous pre-014 history) projects None, never a decided_at guess.
+        # exact inversion the pointer was introduced to eliminate. A NULL pointer (ambiguous
+        # pre-014 history) projects None, never a decided_at guess.
         pointer_decision = None
         # `is not None`, never truthiness: a schema-representable empty-string pointer is a
-        # SET pointer that resolves to nothing — DRIFT — not an absent one (re-audit F5)
+        # SET pointer that resolves to nothing — DRIFT — not an absent one
         if case.get("latest_decision_row_id") is not None:
             row = session.execute(
                 text(
@@ -361,13 +361,12 @@ def case_full(case_id: str, request: Request) -> dict:
             row_resolved=pointer_decision is not None,
             any_rows=bool(decisions),
         )
-        # Manual attribution is sticky (re-audit 15d875d F6): the verdict pointer moves to later
-        # automatic decisions, but Manual_Approved_By/At must keep naming the manual act. It is
-        # read from its OWN trigger-maintained pointer, never by sorting `decisions` — `id` is a
-        # random UUID hex, so `ORDER BY id DESC` returned the lexically largest manual row rather
-        # than the latest one (re-audit `cbb783b` F6), and `decided_at` inverts against commit
-        # order. NULL here is honestly unresolved: either no manual approval, or a legacy history
-        # with several that cannot be ordered.
+        # Manual attribution is sticky: the verdict pointer moves to later automatic decisions,
+        # but Manual_Approved_By/At must keep naming the manual act. It is read from its OWN
+        # trigger-maintained pointer, never by sorting `decisions` — `id` is a random UUID hex,
+        # so `ORDER BY id DESC` returned the lexically largest manual row rather than the latest
+        # one, and `decided_at` inverts against commit order. NULL here is honestly unresolved:
+        # either no manual approval, or a legacy history with several that cannot be ordered.
         latest_manual_decision = None
         manual_pointer = case.get("latest_manual_decision_row_id")
         if manual_pointer is not None:
@@ -575,8 +574,8 @@ def case_full(case_id: str, request: Request) -> dict:
             "case": case,
             "checks": checks,
             # LIVE evidence, recomputed from today's checks — NOT the published decision. Named
-            # so the consumer cannot mistake it for one (re-audit `cbb783b` F6); the decided
-            # value travels with the pointed row below, as `pointer_decision.score`.
+            # so the consumer cannot mistake it for one; the decided value travels with the
+            # pointed row below, as `pointer_decision.score`.
             "score": {
                 "current_evidence_score": case["current_score"],
                 "total": case["current_score"],  # retained: the rubric panel's own bar total
@@ -831,8 +830,8 @@ def requeue_job(job_id: int, request: Request) -> dict:
     """Runbook §dead-letter as a button: requeue the job and reset its FAILED
     run to QUEUED — transitions are guarded, adapter fetches resume."""
     require_admin(request.app.state.settings, request.headers)
-    # Shared transaction (re-audit F3): the always-mounted /v1/ops router owns the same service, so
-    # this console button and the production recovery path can never drift apart.
+    # Shared transaction: the always-mounted /v1/ops router owns the same service, so this console
+    # button and the production recovery path can never drift apart.
     return requeue_dead_job(
         request.app.state.session_factory,
         job_id,

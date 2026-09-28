@@ -1,4 +1,4 @@
-"""Drained outbox-sequence repair (PR 7b-core RUNBOOK step 0.6d escape hatch).
+"""Drained outbox-sequence repair (RUNBOOK step 0.6d escape hatch).
 
 Run ONLY inside a drained maintenance stop, after every writer is hard-stopped and attested
 at zero. It exists because the step-0 precondition can legitimately fail when a restored id is
@@ -14,10 +14,10 @@ the object under repair. The read-back reads last_value/is_called from the seque
 
 Restart target: `GREATEST(max(id), floor) + 1`. `--floor` (optional) serves the restore path —
 when an authoritative row with an id ABOVE current max(id) is about to be restored, the floor
-keeps the sequence from being restarted below it and later colliding (Codex re-audit `f495de8`
-F1: max=10, missing id=100 → a floorless repair sets next=11, and the restored 100 collides
-when the sequence catches up). `restore_pr7b_core_callback` passes it automatically; a bare run
-repairs to the current table contents.
+keeps the sequence from being restarted below it and later colliding (max=10, missing id=100 →
+a floorless repair sets next=11, and the restored 100 collides when the sequence catches up).
+`restore_pr7b_core_callback` passes it automatically; a bare run repairs to the current table
+contents.
 
 Execution is bound to the governed schema first (`ops/binding.py`): the sequence repaired is
 provably `public.outbox_id_seq`, and a conflicting lock refuses with `OPS_COMMAND_LOCK_TIMEOUT`
@@ -51,7 +51,7 @@ def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: in
     with uow(session_factory) as session:
         binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
                      statement_timeout_seconds=statement_timeout_seconds,
-                     require_sequence_owner=True,  # ALTER SEQUENCE needs ownership (F13)
+                     require_sequence_owner=True,  # ALTER SEQUENCE needs ownership
                      shape_contract=shape.SEQUENCE_REPAIR)
         # The fence. Writers are already stopped by the runbook; this makes that a guarantee
         # rather than an assumption, and ALTER SEQUENCE (unlike setval) excludes concurrent
@@ -59,9 +59,9 @@ def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: in
         session.execute(text("LOCK TABLE public.outbox IN ACCESS EXCLUSIVE MODE"))
         # (PostgreSQL sequences cannot be LOCK TABLE'd; the outbox ACCESS EXCLUSIVE lock blocks the
         # writers that would touch it, and the integrity check + RESTART run in ONE transaction so the
-        # certified definition is the one RESTART acts on — re-audit `03dbfab..bc325e7` R5-F3.)
-        # Re-check the SAME contract under the lock (re-audit R4-F4): outbox must still be a table
-        # with a bigint id before we realign its sequence.
+        # certified definition is the one RESTART acts on.)
+        # Re-check the SAME contract under the lock: outbox must still be a table
+        # with a bigint id before its sequence is realigned.
         under_lock = shape.shape_mismatches(session, shape.SEQUENCE_REPAIR)
         if under_lock:
             session.rollback()
@@ -69,7 +69,7 @@ def repair_sequence(session_factory, *, floor: int = 0, lock_timeout_seconds: in
                 f"{binding.SCHEMA_REFUSED_SENTINEL}: outbox shape changed under the maintenance "
                 f"lock: {'; '.join(under_lock)}"
             )
-        # Verify the sequence actually allocates monotonically from next_id (re-audit R5-F3): a bare
+        # Verify the sequence actually allocates monotonically from next_id: a bare
         # nextval default with unit increment, no cycle, bigint domain. Otherwise RESTART reports a
         # success it cannot deliver (an arithmetic default or negative increment recreates collisions).
         seq_problems = shape.sequence_integrity_violations(

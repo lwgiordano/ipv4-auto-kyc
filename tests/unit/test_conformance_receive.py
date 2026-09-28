@@ -1,6 +1,6 @@
 """The conformance receiver validates the COMPLETE callback schema, not just keys and enums.
 
-Codex F1 (2026-09-19): a correctly signed body with a string score, a bad date, non-boolean
+Regression: a correctly signed body with a string score, a bad date, non-boolean
 gates and a malformed check passed every row and was recorded in the dedupe ledger, while
 `DecisionCallback.model_validate` rejected the same body with ten errors. The receiver must
 fail the `body.schema` row for a wrong primitive, a wrong nested field and an unknown field,
@@ -95,7 +95,7 @@ def test_an_unknown_field_fails_the_schema_row_and_is_not_recorded():
 
 def test_a_scalar_in_a_nested_field_is_a_reported_failure_not_a_crash():
     # `checks: 1` raised TypeError inside the nested inspection before the schema row ran, so
-    # the diagnostic dropped the connection instead of printing a failed row (human, 2026-09-19).
+    # the diagnostic dropped the connection instead of printing a failed row.
     scalars = (1, True, 1.5, "str")
     invalid = {"checks": scalars + ({}, None),  # an empty list is a legal, checkless body
                "gates": scalars + ({}, [], None),

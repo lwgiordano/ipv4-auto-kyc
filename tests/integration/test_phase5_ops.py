@@ -77,9 +77,9 @@ def test_lease_expiry_requeues_and_another_worker_finishes(
     response, _ = post_event("case-lease", "recalculate.requested", {})
     run_id = response.json()["run_id"]
 
-    # worker A claims with a valid lease and then "dies". A zero lease is no longer a legal domain
-    # value (re-audit R4-F3 — it minted an already-expired claim), so we force the claim's expiry
-    # directly to simulate the crash rather than minting an out-of-domain lease.
+    # worker A claims with a valid lease and then "dies". A zero lease is not a legal domain value
+    # (it would mint an already-expired claim), so the test forces the claim's expiry directly to
+    # simulate the crash rather than minting an out-of-domain lease.
     from kyc_tool.db.session import uow
 
     with uow(session_factory) as session:

@@ -1,6 +1,6 @@
-"""Re-audit `5b0f0b8..b75a320` R4-F3: the shared saturating backoff never overflows and always
-returns a delay in [0, cap]. Covers the attempt counts Codex overflowed (63, 1025, int4-max) and the
-base values (negative, zero, normal, oversized)."""
+"""The shared saturating backoff never overflows and always returns a delay in [0, cap]. Covers the
+attempt counts that previously overflowed (63, 1025, int4-max) and the base values (negative, zero,
+normal, oversized)."""
 
 import pytest
 

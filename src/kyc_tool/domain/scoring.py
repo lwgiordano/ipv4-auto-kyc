@@ -28,9 +28,9 @@ def score(live_checks: list[CheckView]) -> ScoreBreakdown:
 
 
 def rubric_scoring_views(views: list[CheckView], rubric: ScoringRubric) -> list[CheckView]:
-    """Re-price each live check from `rubric` by check_type (PR 6 flag-on). A type
-    absent from the rubric contributes no points/category. Evidence (status,
-    reason_codes, source) is untouched — PASS/FAIL re-judgment is PR 6b."""
+    """Re-price each live check from `rubric` by check_type (when bundle pinning is enforced).
+    A type absent from the rubric contributes no points/category. Evidence (status,
+    reason_codes, source) is untouched — PASS/FAIL is not re-judged here."""
     out = []
     for v in views:
         try:

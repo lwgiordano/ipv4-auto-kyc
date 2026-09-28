@@ -1,4 +1,4 @@
-"""PR 7b-core: the drained sequence repair, through its REAL entry point, on a divergent lineage."""
+"""The drained sequence repair, through its REAL entry point, on a divergent lineage."""
 
 import os
 import subprocess
@@ -49,10 +49,10 @@ def test_repair_restarts_divergent_sequence_and_next_allocation_is_exact(pg):
 
 
 def test_repair_refuses_an_unknown_alembic_stamp_without_mutating(pg):
-    """Re-audit `d569a15..4938840` F8: repair supplies no floor/exact revision, so bind()'s graph
-    resolution was skipped and an unknown '999' stamp let it mutate. bind() now ALWAYS resolves the
-    singleton stamp through the migration graph; an unknown revision is refused with the governed
-    sentinel and the divergent sequence is left untouched."""
+    """Regression: repair supplies no floor/exact revision, so bind()'s graph resolution was skipped
+    and an unknown '999' stamp let it mutate. bind() now ALWAYS resolves the singleton stamp through
+    the migration graph; an unknown revision is refused with the governed sentinel and the divergent
+    sequence is left untouched."""
     url = _fresh_db(pg, "kyc_seq_unknown_stamp")
     command.upgrade(_config(url), "013")
     engine = create_engine(url)
@@ -135,8 +135,8 @@ def _run_repair(url):
 
 
 def test_repair_refuses_an_arithmetic_id_default(pg):
-    """Re-audit `03dbfab..bc325e7` R5-F3: a `nextval(seq)+1000` default makes RESTART report a
-    success it cannot deliver (next allocation is +1000). Refuse it, mutate nothing."""
+    """A `nextval(seq)+1000` default makes RESTART report a success it cannot deliver (next
+    allocation is +1000). Refuse it, mutate nothing."""
     url = _fresh_db(pg, "kyc_seq_arith")
     command.upgrade(_config(url), "013")
     engine = create_engine(url)
@@ -151,7 +151,7 @@ def test_repair_refuses_an_arithmetic_id_default(pg):
 
 
 def test_repair_refuses_a_negative_increment_sequence(pg):
-    """R5-F3: INCREMENT BY -1 allocates downward and collides — refuse before RESTART."""
+    """INCREMENT BY -1 allocates downward and collides — refuse before RESTART."""
     url = _fresh_db(pg, "kyc_seq_neg")
     command.upgrade(_config(url), "013")
     engine = create_engine(url)
@@ -164,7 +164,7 @@ def test_repair_refuses_a_negative_increment_sequence(pg):
 
 
 def test_repair_refuses_a_stamped_but_missing_outbox(pg):
-    """Re-audit R5-F5: bind() resolved the outbox sequence before checking outbox existence, so a
+    """Regression: bind() resolved the outbox sequence before checking outbox existence, so a
     stamped-but-missing outbox tracebacked. It now refuses cleanly."""
     url = _fresh_db(pg, "kyc_seq_no_outbox")
     command.upgrade(_config(url), "013")
@@ -180,10 +180,10 @@ def test_repair_refuses_a_stamped_but_missing_outbox(pg):
 
 
 def test_repair_refuses_an_evil_substring_sequence_default(pg):
-    """Re-audit `f2929f8..6a4cd87` F1: the default check was substring containment, so a bare
-    nextval('evil_outbox_id_seq') — which CONTAINS 'outbox_id_seq' — certified clean while the column
-    allocated from the evil sequence. The check now resolves the referenced sequence's OID and
-    compares it to public.outbox_id_seq exactly."""
+    """Regression: the default check was substring containment, so a bare
+    nextval('evil_outbox_id_seq') — which CONTAINS 'outbox_id_seq' — certified clean while the
+    column allocated from the evil sequence. The check now resolves the referenced sequence's OID
+    and compares it to public.outbox_id_seq exactly."""
     url = _fresh_db(pg, "kyc_seq_evil_substr")
     command.upgrade(_config(url), "013")
     engine = create_engine(url)

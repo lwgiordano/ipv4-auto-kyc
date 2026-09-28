@@ -1,4 +1,4 @@
-"""PR 2 pure pieces (offline): the snapshot builder never mutates the case, and
+"""Run-snapshot pure pieces (offline): the snapshot builder never mutates the case, and
 the pipeline reads a run's FROZEN snapshot with a pre-008 fallback. The DB-level
 behaviour (sequence allocation, cross-run isolation, concurrency) is in
 tests/integration/test_run_snapshots.py."""
@@ -70,7 +70,7 @@ def test_run_snapshot_prefers_frozen_then_falls_back():
 
 
 def test_callback_event_sequence_gated_by_flag():
-    # _callback_body touches no DB, so a bare Pipeline is enough to test the M3 gate
+    # _callback_body touches no DB, so a bare Pipeline is enough to test the event_sequence cutover gate
     def pipeline(flag):
         return Pipeline(None, None, None, Settings(callback_include_event_sequence=flag))
 
@@ -101,7 +101,7 @@ def test_seed_in_run_context_only_floqer_discovery():
 
 
 def test_decision_callback_model_preserves_event_sequence():
-    # Codex P2: the authoritative model must keep the gated field, not drop it
+    # The authoritative model must keep the gated field, not drop it
     from kyc_tool.api.schemas import DecisionCallback
 
     body = {

@@ -110,7 +110,7 @@ def settings(migrated: str, tmp_path) -> Settings:
     return Settings(
         # Never read the developer's `.env`, and pin the external-provider settings empty: a
         # local Floqer key and shortcut id flipped the integrations report from `stub` to
-        # `live` and failed a test that never asked for either (Codex, 2026-09-19).
+        # `live` and failed a test that never asked for either.
         _env_file=None,
         floqer_api_key="",
         floqer_shortcut_id="",
@@ -147,10 +147,10 @@ def sign_headers(body: bytes, *, key: str | None = None) -> dict[str, str]:
 
 
 def seed_automatic_decision(conn, *, case_id, run_id, decision_id, seq, engine_build_id=None):
-    """PR 7b-core (re-audit F3): insert an automatic decision valid under 013's NULL-explicit
-    shape CHECK — a positive per-case decision_sequence plus the matching
-    cases.last_decision_sequence counter bump. The caller must already have seeded the case
-    and the run. No callback row is created (tests that exercise delivery enqueue their own)."""
+    """Insert an automatic decision valid under 013's NULL-explicit shape CHECK — a positive
+    per-case decision_sequence plus the matching cases.last_decision_sequence counter bump. The
+    caller must already have seeded the case and the run. No callback row is created (tests that
+    exercise delivery enqueue their own)."""
     conn.execute(
         text(
             "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, "
@@ -320,9 +320,9 @@ def evidence_store(settings) -> FsStore:
 
 def process_context(role, settings=None):
     """The BOUND ProcessContext for tests — issued through the REAL validate_process_role path
-    (R-audit-3 finding 10; R-audit-4 finding 1 bound it to the validated Settings), exactly as
-    an entry point would obtain it. Pass the SAME settings object the construction will use;
-    default development settings serve constructions that carry no settings binding."""
+    and bound to the validated Settings, exactly as an entry point would obtain it. Pass the SAME
+    settings object the construction will use; default development settings serve constructions
+    that carry no settings binding."""
     from kyc_tool.config import Settings, validate_process_role
 
     return validate_process_role(settings if settings is not None else Settings(), role)
@@ -330,7 +330,7 @@ def process_context(role, settings=None):
 
 def bound_process(role):
     """A (process_role, settings) pair issued together through the real path — for Worker
-    constructions, whose settings bind is mandatory (R-audit-5 finding 1). Splat as
+    constructions, whose settings bind is mandatory. Splat as
     `**bound_process(role)`."""
     from kyc_tool.config import Settings, validate_process_role
 

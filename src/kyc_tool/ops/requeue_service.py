@@ -1,13 +1,13 @@
 """The dead-letter requeue TRANSACTIONS, shared by the always-mounted ops router and the optional
-/ui console (re-audit `f2929f8..6a4cd87` F3). The RUNBOOK's recovery path must exist in the secure
-production configuration — previously it lived only under KYC_UI_ENABLED=true, so a dead job/outbox
-in production 404'd until an operator enabled the debug/PII console.
+/ui console. The RUNBOOK's recovery path must exist in the secure production configuration —
+previously it lived only under KYC_UI_ENABLED=true, so a dead job/outbox in production 404'd until
+an operator enabled the debug/PII console.
 
-Recovery is a single CAS (re-audit `7d1c435..827bc0f` F2/F4): the authority is ONE conditional
-UPDATE whose predicate carries the full contract — still dead, and the fixed bounded grant still
-fits int4 — with RETURNING deciding the winner. The pre-read exists only for friendly 404/409
-messages; it authorizes nothing, so a recovery racing another recovery (or a worker claim) can
-never clear a live nonce, double-grant budget, or double-write audit evidence."""
+Recovery is a single CAS: the authority is ONE conditional UPDATE whose predicate carries the full
+contract — still dead, and the fixed bounded grant still fits int4 — with RETURNING deciding the
+winner. The pre-read exists only for friendly 404/409 messages; it authorizes nothing, so a recovery
+racing another recovery (or a worker claim) can never clear a live nonce, double-grant budget, or
+double-write audit evidence."""
 
 from fastapi import HTTPException
 from sqlalchemy import text
@@ -24,19 +24,18 @@ def requeue_dead_job(session_factory, job_id: int, *, attempt_grant: int) -> dic
     QUEUED (the run reset is load-bearing: a requeued job whose run stays FAILED completes without
     doing anything). `max_attempts = attempts + grant` leaves exactly `grant` remaining attempts —
     the monotonic attempts counter is never rewound (nonce-ABA, audit honesty), and repeated
-    exhaust/recover cycles grant exactly N each time instead of doubling (re-audit F4).
+    exhaust/recover cycles grant exactly N each time instead of doubling.
 
-    CASE-ORDERING AUTHORITY (re-audit `750630c..ca85355` F1; HELD, not observed, per
-    `ddbff39..c3884bd` F1): recovery may only resurrect the LATEST job of its case, and only while
-    nothing for the case is running — and it proves both UNDER the same case FOR UPDATE lock
-    ingest admits new events through, so a newer event either landed before the lock (refused) or
-    waits behind this recovery's commit. A recovered OLDER job passes the claim gate's
+    CASE-ORDERING AUTHORITY (HELD, not observed): recovery may only resurrect the LATEST job of its
+    case, and only while nothing for the case is running — and it proves both UNDER the same case
+    FOR UPDATE lock ingest admits new events through, so a newer event either landed before the
+    lock (refused) or waits behind this recovery's commit. A recovered OLDER job passes the claim gate's
     min(queued,running) check itself, so recovering it beside newer case state replayed frozen
     old evidence. Old evidence is re-processed by submitting a fresh `recalculate.requested`
     event, never by replaying its dead job. (DB backstop — partial unique index on jobs(case_id)
     WHERE status='running' — is reserved into migration 027 with the lease_token column.)
 
-    RUN BINDING (F6): the run reset is verified, not fire-and-forget — the run must EXIST, belong
+    RUN BINDING: the run reset is verified, not fire-and-forget — the run must EXIST, belong
     to THIS job's case, and be FAILED; anything else rolls the whole recovery back with a governed
     409 (a dead job pointing at a COMPLETE run or another case's run recovers nothing)."""
     require_numeric_domain("job_recovery_attempt_grant", attempt_grant)
@@ -77,7 +76,7 @@ def requeue_dead_job(session_factory, job_id: int, *, attempt_grant: int) -> dic
             except ConfigurationUnavailable as exc:
                 raise HTTPException(503, "Pinned configuration unavailable; recovery refused.") from exc
         if row.case_id is not None:
-            # HOLD the case-order authority, don't observe it (re-audit `ddbff39..c3884bd` F1):
+            # HOLD the case-order authority, don't observe it:
             # ingest locks this same case row FOR UPDATE before admitting a new event/job, so
             # taking it here makes recovery and ingest strictly serial — a newer same-case
             # event/job either committed BEFORE the lock (the re-checks below see it and refuse)

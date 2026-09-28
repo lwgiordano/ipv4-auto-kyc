@@ -15,10 +15,9 @@ from kyc_tool.config import adapter_rate_violations
 
 class RateLimiter:
     def __init__(self, rates_per_second: dict[str, float]) -> None:
-        # Consumer-layer guard (re-audit `03dbfab..bc325e7` R5-F6): a NaN/negative/Infinite/tiny rate
-        # removes the cap or makes an effectively infinite sleep. Refuse a bad mapping here too, so a
-        # direct constructor (tests, other callers) cannot install one that the field validator would
-        # have caught.
+        # Consumer-layer guard: a NaN/negative/Infinite/tiny rate removes the cap or makes an
+        # effectively infinite sleep. Refuse a bad mapping here too, so a direct constructor (tests,
+        # other callers) cannot install one that the field validator would have caught.
         problems = adapter_rate_violations(rates_per_second)
         if problems:
             raise ValueError("invalid adapter rate limits: " + "; ".join(problems))
@@ -27,7 +26,7 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     def acquire(self, key: str, *, deadline_monotonic: float | None = None) -> None:
-        """Wait out the per-upstream spacing. Deadline-aware form (re-audit `3db5f13..a7df17b` F5):
+        """Wait out the per-upstream spacing. Deadline-aware form:
         the RESERVED SEND TIME must fit strictly inside the deadline, else refuse with
         BudgetExhausted BEFORE reserving the slot or sleeping — a permit the claim cannot use must
         not be consumed (at 0.001 req/s the wait is ~1000s, far past any job lease), and the slot

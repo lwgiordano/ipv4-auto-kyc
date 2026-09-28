@@ -40,7 +40,7 @@ def create_app(
     policy: PolicyBundle | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
-    # Production kill switch via the shared process-role authority (re-audit R5-F1): refuse to boot on
+    # Production kill switch via the shared process-role authority: refuse to boot on
     # unsafe/stub configuration before any DB/store access.
     validate_process_role(settings, ProcessRole.API)
     if session_factory is None:
@@ -77,8 +77,8 @@ def create_app(
     app.include_router(events_router)
     app.include_router(read_router)
     app.include_router(metrics_router)
-    # ALWAYS mounted (re-audit `f2929f8..6a4cd87` F3): the RUNBOOK's dead-letter recovery must exist
-    # in the secure production configuration, where the optional /ui console is disabled.
+    # ALWAYS mounted: the RUNBOOK's dead-letter recovery must exist in the secure production
+    # configuration, where the optional /ui console is disabled.
     app.include_router(ops_router)
     if settings.ui_enabled:
         from kyc_tool.ui.configuration_routes import router as configuration_router
@@ -148,9 +148,9 @@ def create_app(
                 checks["object_store"] = unready("object_store", exc)
                 ready = False
 
-        # PR 6 (Task 10): UNCONDITIONALLY (regardless of enforce_bundle_pinning
-        # or the checks above) confirm the process's loaded policy bundle is
-        # durably resolvable — a missing/corrupt row means neither a flag-on
+        # UNCONDITIONALLY (regardless of enforce_bundle_pinning or the checks
+        # above) confirm the process's loaded policy bundle is durably
+        # resolvable — a missing/corrupt row means neither a flag-on
         # worker nor a bundle-pinning-epoch activation could resolve it.
         bundle_hash = app.state.policy.bundle_hash
         try:

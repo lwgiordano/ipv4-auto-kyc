@@ -1,4 +1,4 @@
-"""Durable, fail-closed v1 acceptance witness (PR 5a §6). The witness gates the
+"""Durable, fail-closed v1 acceptance witness. The witness gates the
 inbound sunset: it must never let real v1 traffic go silently unrecorded, and an
 inactive/unseeded row must never satisfy the zero predicate."""
 
@@ -44,7 +44,7 @@ def test_record_v1_accepted_raises_when_row_absent(session_factory, clean_db):
         w.record_v1_accepted(s)
 
 
-# NOTE: test_bump_stat_upserts was REMOVED with hmac_witness.bump_stat (re-audit
-# `d569a15..4938840` F1) — the diagnostic v2/rejected counters are now process-local in api.auth, not
-# a DB upsert. The rejected-path zero-DB guarantee is proven in
-# tests/integration/test_metrics_auth.py; the surfaced counters in tests/integration/test_metrics_hmac.py.
+# NOTE: test_bump_stat_upserts was REMOVED with hmac_witness.bump_stat — the diagnostic
+# v2/rejected counters are now process-local in api.auth, not a DB upsert. The rejected-path
+# zero-DB guarantee is proven in tests/integration/test_metrics_auth.py; the surfaced counters in
+# tests/integration/test_metrics_hmac.py.

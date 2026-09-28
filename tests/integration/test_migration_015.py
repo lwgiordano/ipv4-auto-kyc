@@ -1,4 +1,4 @@
-"""PR 7b-core hardening revision 015 (re-audit `4dfdf8a` F2/F3/F5).
+"""Hardening revision 015.
 
 `014` made the witness tables exist; `015` makes them an authority: raw SQL can no longer
 manufacture, mutate, or destroy witness evidence, the amended-history validator compares exact
@@ -34,7 +34,7 @@ def _claimed_pending(conn, case_id, run_id, seq, *, with_attempt=True):
     return row
 
 
-# --- F2: the fabrication matrix — every path raw SQL had is now refused by the database ---
+# --- the fabrication matrix — every path raw SQL had is now refused by the database ---
 
 @pytest.mark.parametrize("name, setup_sql, tamper_sql, must_match", [
     ("attempt-for-unclaimed-row", None,
@@ -135,7 +135,7 @@ def test_terminal_digest_requires_matching_attempt_at_the_database(pg):
     eng.dispose()
 
 
-# --- F3: the validator compares exact definitions, complete sets, bound to the schema ---
+# --- the validator compares exact definitions, complete sets, bound to the schema ---
 
 @pytest.mark.parametrize("name, mutilate, db", [
     ("weakened-same-name-check",
@@ -225,7 +225,7 @@ def test_amended_and_canonical_histories_still_adopt_through_015(pg):
         eng.dispose()
 
 
-# --- F5: the downgrade lock order cannot deadlock with a live attempt writer ---
+# --- the downgrade lock order cannot deadlock with a live attempt writer ---
 
 def test_015_downgrade_and_live_attempt_writer_never_deadlock(pg):
     """The writer's order is child-table-write then parent-row (admission trigger FOR UPDATE);
@@ -277,8 +277,8 @@ def test_015_downgrade_and_live_attempt_writer_never_deadlock(pg):
 def test_unused_database_round_trips_through_015(pg):
     url = _fresh_db(pg, "kyc_mig_015_roundtrip")
     cfg = _config(url)
-    # 018 is forward-only once installed (re-audit `cbb783b` F3), so a round trip that
-    # walks below its own revision is anchored at 017 — the top of the walkable chain.
+    # 018 is forward-only once installed, so a round trip that walks below its own revision
+    # is anchored at 017 — the top of the walkable chain.
     command.upgrade(cfg, "017")
     command.downgrade(cfg, "012")
     command.upgrade(cfg, "017")

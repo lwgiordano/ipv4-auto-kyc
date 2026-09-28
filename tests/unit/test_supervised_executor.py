@@ -1,4 +1,4 @@
-"""PR 10b slice 1: the supervised (spawn-per-call) executor — the unconditionally-killable
+"""The supervised (spawn-per-call) executor — the unconditionally-killable
 occupancy bound. The in-process transport proves the deadline at header/chunk/EOF boundaries but
 cannot bound time BETWEEN bytes; with `hard_kill` the whole physical fetch dies at the absolute
 deadline no matter what the peer does. Mock transports bypass (not process-portable); typed

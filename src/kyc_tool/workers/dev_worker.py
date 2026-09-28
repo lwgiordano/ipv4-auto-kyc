@@ -140,8 +140,7 @@ def main() -> None:
     settings = get_settings()
     # DEV-ONLY: this loop would consume real run_transition jobs, and its adapters synthesize
     # checks/decisions/callbacks whenever CH_API_KEY is absent. Refuse categorically in production
-    # BEFORE touching the database
-    # (re-audit `03dbfab..bc325e7` R5-F1) — a hardened production config does not make it safe.
+    # BEFORE touching the database — a hardened production config does not make it safe.
     context = validate_process_role(settings, ProcessRole.DEV_WORKER)
     session_factory = make_session_factory(make_engine(settings.database_url))
     policy = load_policy(settings.policy_dir)

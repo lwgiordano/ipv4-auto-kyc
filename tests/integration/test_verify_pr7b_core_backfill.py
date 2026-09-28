@@ -1,4 +1,4 @@
-"""PR 7b-core: schema-012 pre-window backfill diagnostic — REAL CLI entry point (subprocess),
+"""Schema-012 pre-window backfill diagnostic — REAL CLI entry point (subprocess),
 the shared parity matrix (CLI + 013 both refuse), and the retention-race DB-lock half."""
 
 import os
@@ -114,7 +114,7 @@ def test_cli_and_013_both_refuse_on_parity_state(pg, name):
 
 # The schema-012 retention DELETE, frozen as a literal. The hazard is an OLD retention process
 # still in flight during cutover — its SQL is fixed by the already-deployed pre-013 image, so this
-# string must NOT track the current retention module. (Task 5 narrowed the live prune() to
+# string must NOT track the current retention module. (The live prune() is narrowed to
 # kind='poc_email'; test_retention_keeps_decision_callbacks_and_prunes_poc_email covers that the
 # NEW worker never deletes a callback, which is why the new prune() cannot produce this state.)
 _LEGACY_012_RETENTION_DELETE = (
@@ -180,9 +180,9 @@ def test_cli_share_lock_blocks_until_legacy_retention_resolves(pg, mode):
 
 
 def test_cli_refuses_when_decisions_relation_is_dropped(pg):
-    """Re-audit `8aba2df..2cee937` R3-F7: dropping `decisions` at stamp 012 left the parity matrix to
-    traceback UndefinedTable. The shared PR7B_CORE_PREWINDOW shape contract requires the relation, so
-    the diagnostic now refuses (governed) before taking the SHARE lock or reading data."""
+    """Dropping `decisions` at stamp 012 left the parity matrix to traceback UndefinedTable. The
+    shared PR7B_CORE_PREWINDOW shape contract requires the relation, so the diagnostic now refuses
+    (governed) before taking the SHARE lock or reading data."""
     url = _fresh_db(pg, "kyc_backfill_no_decisions")
     command.upgrade(_config(url), "012")
     engine = create_engine(url)
@@ -200,7 +200,7 @@ def test_cli_refuses_when_decisions_relation_is_dropped(pg):
 
 
 def test_cli_refuses_a_view_masquerading_as_the_decisions_table(pg):
-    """Re-audit R4-F4 (repro d): a filtering VIEW named `decisions` lists in information_schema but
+    """A filtering VIEW named `decisions` lists in information_schema but
     is not an ordinary table; the relkind check refuses it before the parity certifies a false OK."""
     url = _fresh_db(pg, "kyc_backfill_decisions_view")
     command.upgrade(_config(url), "012")

@@ -1,9 +1,9 @@
 """Outbox callback delivery: the status is the acknowledgement, the body is drained safely.
 
-Two properties have to hold together, and an earlier revision traded one for the other. A
+Two properties have to hold together, and it is easy to trade one for the other. A
 slow-dripping response body must not hold the claim lease (so the read is budgeted), AND the
 connection must survive the exchange (so a delivery is not a fresh TCP+TLS handshake, and a
-truncated body is still detected). Closing an unconsumed response gave the first and destroyed
+truncated body is still detected). Closing an unconsumed response gives the first and destroys
 the second — invisibly, because `MockTransport` has no socket to observe. The socket-level tests
 here are the ones that can see it.
 """
@@ -38,9 +38,9 @@ def _publisher(client: httpx.Client, **settings) -> OutboxPublisher:
 def test_slow_response_body_cannot_outlive_the_configured_budget():
     """A receiver that drips its body sets its own pace, not the publisher's.
 
-    The predecessor of this test asserted the body was never read AT ALL (`< 0.05s`). That is a
-    stronger statement than the property needs and it cost connection reuse; what actually
-    matters is that the drain is bounded, so the claim lease outlives the attempt.
+    Asserting the body is never read AT ALL (`< 0.05s`) is a stronger statement than the property
+    needs, and it costs connection reuse; what actually matters is that the drain is bounded, so
+    the claim lease outlives the attempt.
     """
     def _handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, stream=_SlowBody())
@@ -141,8 +141,8 @@ def test_sequential_deliveries_reuse_one_connection():
 
     Against the production `https` callback URL, a dropped connection is a full TCP+TLS
     handshake per delivery — and the receiver takes a broken pipe writing the response body it
-    was never allowed to finish. Measured at 4 connections for 4 deliveries before the drain
-    was restored.
+    was never allowed to finish. Without the drain this measures 4 connections for 4
+    deliveries.
     """
     receiver = _Receiver()
     try:
@@ -224,7 +224,7 @@ def test_header_drip_returns_within_the_bound_and_the_publisher_keeps_working():
             publisher._send_for_status(request)
         elapsed = time.monotonic() - started
         # the return is bounded by the queue timeout ALONE — no synchronous close()/join eating
-        # into the lease (re-audit `8377440` F4). Generous ceiling for CI scheduling jitter.
+        # into the lease. Generous ceiling for CI scheduling jitter.
         assert elapsed < 1.0, f"return took {elapsed:.2f}s — cleanup is not off the hot path"
     finally:
         drip.close()
@@ -253,7 +253,7 @@ class _WedgedTransport(httpx.BaseTransport):
 
 
 def test_return_bound_holds_even_when_close_would_block():
-    """The specific F4 trigger: a client whose close() blocks forever. The deadline path must
+    """A client whose close() blocks forever: the deadline path must
     NOT call it synchronously, so the publisher still returns within the bound."""
     from kyc_tool.outbox.publisher import _AttemptDeadlineExceeded
 
@@ -261,7 +261,7 @@ def test_return_bound_holds_even_when_close_would_block():
 
     class _UncloseableClient(httpx.Client):
         def close(self):
-            gate.wait()  # close() itself wedges — the exact audited hang
+            gate.wait()  # close() itself wedges
 
     publisher = OutboxPublisher(
         lambda: None,
@@ -279,9 +279,9 @@ def test_return_bound_holds_even_when_close_would_block():
 
 
 def test_capacity_is_a_hard_cap_that_stops_new_claims_not_a_log_line():
-    """Re-audit `8377440` F5: wedged sends must not accrete past the cap. Beyond it the publisher
-    reports at_capacity and process_once refuses to claim (returns False) — resources bounded,
-    delivery stalled (safe), not one thread/connection per stuck send forever."""
+    """Wedged sends must not accrete past the cap. Beyond it the publisher reports at_capacity and
+    process_once refuses to claim (returns False) — resources bounded, delivery stalled (safe), not
+    one thread/connection per stuck send forever."""
     from kyc_tool.outbox.publisher import _MAX_ORPHAN_SENDS, _AttemptDeadlineExceeded
 
     gate = threading.Event()
@@ -311,7 +311,7 @@ def test_capacity_is_a_hard_cap_that_stops_new_claims_not_a_log_line():
 
 
 def test_close_is_bounded_not_linear_in_orphan_count():
-    """close() waits ONE total budget for detached sends, not 0.5s each (re-audit `8377440` F5)."""
+    """close() waits ONE total budget for detached sends, not 0.5s each."""
     from kyc_tool.outbox.publisher import _ORPHAN_DRAIN_SECONDS, _AttemptDeadlineExceeded
 
     gate = threading.Event()
@@ -333,9 +333,9 @@ def test_close_is_bounded_not_linear_in_orphan_count():
 
 
 def test_close_is_bounded_even_when_http_close_blocks_forever():
-    """Re-audit `538e55e..42e1c7d` F5: close()'s OWN self.http.close() must run inside the same
-    total deadline. A client whose close() hangs otherwise wedges shutdown even at ZERO orphans —
-    the exact 'CLOSE_ENTER, no return' the audit measured."""
+    """The publisher's close() must run its OWN self.http.close() inside the same total deadline.
+    A client whose close() hangs otherwise wedges shutdown even at ZERO orphans: close() is
+    entered and never returns."""
     from kyc_tool.outbox.publisher import _ORPHAN_DRAIN_SECONDS
 
     gate = threading.Event()
@@ -350,7 +350,7 @@ def test_close_is_bounded_even_when_http_close_blocks_forever():
         http_client=_UncloseableClient(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
         process_role=validate_process_role(bound, ProcessRole.OUTBOX_WORKER))
     try:
-        assert publisher._orphans == []  # ZERO orphans — Codex's exact case
+        assert publisher._orphans == []  # ZERO orphans: only http.close() can block
         started = time.monotonic()
         publisher.close()  # must return despite http.close() blocking forever
         assert time.monotonic() - started < _ORPHAN_DRAIN_SECONDS + 1.0, (
@@ -361,9 +361,9 @@ def test_close_is_bounded_even_when_http_close_blocks_forever():
 
 
 def test_run_forever_exits_on_saturation_for_supervised_restart():
-    """Re-audit `538e55e..42e1c7d` F6: at the orphan cap, run_forever must become EXTERNALLY
-    observable — raise OutboxSaturated so the worker exits nonzero and a supervisor restarts it —
-    not sleep forever like an empty queue (which stalled delivery invisibly)."""
+    """At the orphan cap, run_forever must become EXTERNALLY observable — raise OutboxSaturated so
+    the worker exits nonzero and a supervisor restarts it — not sleep forever like an empty queue
+    (which would stall delivery invisibly)."""
     from kyc_tool.outbox.publisher import (
         OutboxSaturated,
         _AttemptDeadlineExceeded,
@@ -390,7 +390,7 @@ def test_run_forever_exits_on_saturation_for_supervised_restart():
 
 def test_daemon_send_threads_never_block_process_exit():
     """A publisher whose send is wedged in an uninterruptible call must not hang interpreter
-    shutdown — the audit measured a child process unable to exit within two seconds."""
+    shutdown — otherwise a child process cannot exit within two seconds."""
     import subprocess
     import sys as _sys
 

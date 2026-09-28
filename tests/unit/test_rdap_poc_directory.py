@@ -1,4 +1,4 @@
-"""The LIVE POC directory over RDAP (T14): association is read from the
+"""The LIVE POC directory over RDAP: association is read from the
 AUTHORITATIVE record (the org / autnum / ip object must itself list the POC),
 the RIR-listed email comes off the POC entity's jCard, and every wire call goes
 through the governed helper. RFC 9083-shaped fixtures over httpx.MockTransport —
@@ -167,7 +167,7 @@ def test_unknown_rir_is_a_miss_not_an_exception():
 
 def test_every_wire_call_goes_through_the_governed_helper(monkeypatch):
     """No `client.get` anywhere: the plan budget, liveness proof, deadline and
-    byte containment all hang off `adapters.retry` (re-audit F3)."""
+    byte containment all hang off `adapters.retry`."""
     governed: list[str] = []
     for module in (poc_module, base_module):
         real = module.get_with_retry

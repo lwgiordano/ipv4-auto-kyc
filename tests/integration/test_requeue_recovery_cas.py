@@ -1,7 +1,7 @@
-"""Re-audit `7d1c435..827bc0f` F2/F4 REDs (CAS + fixed grant) extended per `750630c..ca85355`
-F1/F6: recovery is a CASE-ORDERING authority — only the LATEST job of a case, with nothing
-running beside it, and only onto a verified FAILED run of the SAME case. Anything else refuses
-with a governed 409 and mutates nothing (job stays dead, victim runs untouched, no audit row)."""
+"""Dead-job recovery: CAS + a fixed bounded grant, and recovery as a CASE-ORDERING authority — only
+the LATEST job of a case, with nothing running beside it, and only onto a verified FAILED run of the
+SAME case. Anything else refuses with a governed 409 and mutates nothing (job stays dead, victim
+runs untouched, no audit row)."""
 
 import threading
 import time
@@ -76,7 +76,7 @@ def _requeued_audits(session_factory):
         ).scalar_one()
 
 
-# ── R9-F2/F4: CAS + fixed bounded grant ───────────────────────────────────────────────────────────
+# ── CAS + fixed bounded grant ─────────────────────────────────────────────────────────────────────
 def test_concurrent_recoveries_produce_one_winner_one_409_one_audit(session_factory, clean_db):
     jid = _dead_job(session_factory)
     barrier = threading.Barrier(2)
@@ -103,7 +103,7 @@ def test_concurrent_recoveries_produce_one_winner_one_409_one_audit(session_fact
 
 
 def test_recovery_racing_a_worker_claim_cannot_erase_the_live_owner(session_factory, clean_db):
-    """R9-F2 witness: A pre-reads 'dead', B recovers and a worker claims; A's UPDATE must now be
+    """Stale-read race: A pre-reads 'dead', B recovers and a worker claims; A's UPDATE must then be
     a no-op 409 — never `locked_by=NULL` over a running claim."""
     jid = _dead_job(session_factory)
     requeue_dead_job(session_factory, jid, attempt_grant=GRANT)  # B's recovery wins first
@@ -133,7 +133,7 @@ def test_recovery_refuses_at_the_int4_ceiling_without_mutation(session_factory, 
 
 
 def test_repeated_recovery_grants_exactly_n_each_cycle_not_doubling(session_factory, clean_db):
-    """R9-F4 growth witness (5 → 10 → 20 → 40 remaining) must flatten to exactly N per cycle:
+    """Budget growth (5 → 10 → 20 → 40 remaining) must flatten to exactly N per cycle:
     max_attempts always lands at attempts + N, never attempts + old ceiling."""
     jid = _dead_job(session_factory)
     requeue_dead_job(session_factory, jid, attempt_grant=GRANT)
@@ -167,11 +167,11 @@ def test_bad_grant_refuses_before_any_db_write(session_factory, clean_db):
     assert _job_row(session_factory, jid).status == "dead"
 
 
-# ── R10-F1: recovery is a CASE-ORDERING authority ─────────────────────────────────────────────────
+# ── Recovery is a CASE-ORDERING authority ─────────────────────────────────────────────────────────
 def test_recovery_refuses_an_old_dead_job_beside_a_running_newer_sibling(session_factory, clean_db):
-    """The audit's double-claim witness: old dead job 1 + newer running job 2 for the same case —
-    recovering job 1 made claim() hand it out too (it IS the case minimum), two nonces running at
-    once. Recovery must refuse and the case must end this test with exactly ONE running row."""
+    """Double-claim regression: old dead job 1 + newer running job 2 for the same case — recovering
+    job 1 made claim() hand it out too (it IS the case minimum), two nonces running at once.
+    Recovery must refuse and the case must end this test with exactly ONE running row."""
     old = _dead_job(session_factory, case_id="co", run_id="co-r1")
     _seed_case_run(session_factory, "co", "co-r2", seq=2)
     with uow(session_factory) as s:
@@ -208,14 +208,14 @@ def test_recovery_refuses_when_any_newer_sibling_exists_even_done(session_factor
     assert _job_row(session_factory, old).status == "dead"
 
 
-# ── R11-F1: recovery HOLDS the case-order authority, it does not observe it ───────────────────────
+# ── Recovery HOLDS the case-order authority, it does not observe it ───────────────────────────────
 def test_recovery_serializes_behind_ingest_on_the_case_lock(session_factory, clean_db):
-    """The audit's mid-recovery witness: recovery's plain-SELECT checks passed, a newer same-case
-    job committed while recovery was still in its transaction, and the resurrected OLD job ran
-    ahead of the newer one. Recovery now takes the same case FOR UPDATE lock ingest admits events
-    through: with 'ingest' holding the lock and a newer job in flight, recovery BLOCKS, re-reads
-    under the lock, and refuses — the old job never runs ahead of the newer event. Removing the
-    case lock makes recovery succeed before the ingest commit and fails this test's 409."""
+    """Mid-recovery regression: recovery's plain-SELECT checks passed, a newer same-case job
+    committed while recovery was still in its transaction, and the resurrected OLD job ran ahead of
+    the newer one. Recovery now takes the same case FOR UPDATE lock ingest admits events through:
+    with 'ingest' holding the lock and a newer job in flight, recovery BLOCKS, re-reads under the
+    lock, and refuses — the old job never runs ahead of the newer event. Removing the case lock
+    makes recovery succeed before the ingest commit and fails this test's 409."""
     old = _dead_job(session_factory, case_id="ci", run_id="ci-r1")
     _seed_case_run(session_factory, "ci", "ci-r2", seq=2)
 
@@ -249,9 +249,9 @@ def test_recovery_serializes_behind_ingest_on_the_case_lock(session_factory, cle
     assert claimed is not None and claimed.id != old  # the NEWER job runs; the old one never does
 
 
-# ── R10-F6: the run reset is BOUND, not fire-and-forget ───────────────────────────────────────────
+# ── The run reset is BOUND, not fire-and-forget ───────────────────────────────────────────────────
 def test_recovery_refuses_a_job_whose_run_is_complete(session_factory, clean_db):
-    """The audit's lie witness: a dead job pointing at a COMPLETE run reported run_reset while
+    """False-report regression: a dead job pointing at a COMPLETE run reported run_reset while
     the run stayed COMPLETE. Now the whole recovery rolls back — the job STAYS DEAD."""
     jid = _dead_job(session_factory, case_id="cc1", run_id="cc1-r", run_state="COMPLETE")
     with pytest.raises(HTTPException) as exc:
@@ -265,7 +265,7 @@ def test_recovery_refuses_a_job_whose_run_is_complete(session_factory, clean_db)
 
 
 def test_recovery_cannot_reset_another_cases_run(session_factory, clean_db):
-    """The audit's cross-case witness: a dead job under case A naming case B's FAILED run reset
+    """Cross-case regression: a dead job under case A naming case B's FAILED run reset
     the victim to QUEUED. The bound UPDATE requires runs.case_id = jobs.case_id."""
     _seed_case_run(session_factory, "victim", "victim-r")  # case B's FAILED run
     jid = _dead_job(session_factory, case_id="ca", run_id="ca-r")

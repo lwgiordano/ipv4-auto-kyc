@@ -2,8 +2,7 @@
 
 Every ops command in this package mutates or attests the GOVERNED schema — `public` — and is
 run by an operator pasting a database URL mid-window. Two failure classes follow from that
-shape (Codex re-audit `f495de8` F4/F10), and this module closes both at the top of every
-command's transaction:
+shape, and this module closes both at the top of every command's transaction:
 
 - **Object identity.** A URL carrying `?options=-csearch_path=shadow,public` (or a role-level
   `search_path`) silently redirects unqualified `outbox` / `outbox_id_seq` references to a
@@ -36,7 +35,7 @@ STATEMENT_TIMEOUT_SENTINEL = "OPS_COMMAND_STATEMENT_TIMEOUT"
 SEQUENCE_OWNER_SENTINEL = "OPS_COMMAND_NOT_SEQUENCE_OWNER"
 # Every schema-identity / phase / cardinality refusal `bind()` raises carries this sentinel, so a
 # one-shot CLI's main() catches `BindingRefused`, prints the stable line, and exits nonzero WITHOUT
-# a Python traceback (re-audit `538e55e..42e1c7d` F4).
+# a Python traceback.
 SCHEMA_REFUSED_SENTINEL = "OPS_COMMAND_SCHEMA_REFUSED"
 
 # psycopg surfaces a timed-out lock as SQLSTATE 55P03 (lock_not_available); a statement that
@@ -45,8 +44,8 @@ _LOCK_NOT_AVAILABLE = "55P03"
 _QUERY_CANCELED = "57014"
 
 # PostgreSQL stores lock_timeout/statement_timeout as a signed 32-bit millisecond value; a setting
-# that overflows it is rejected by the server mid-command. We refuse such a value up front as a
-# governed BindingRefused instead of letting it traceback (re-audit `42e1c7d..b39b82a` F7).
+# that overflows it is rejected by the server mid-command. Such a value is refused up front as a
+# governed BindingRefused instead of letting it traceback.
 _PG_MAX_TIMEOUT_MS = 2_147_483_647
 
 
@@ -54,15 +53,14 @@ class BindingRefused(RuntimeError):
     """A governed pre-flight refusal from `bind()`: wrong/absent/multi-head schema revision, a
     sequence-ownership gap, or an incoherent timeout budget. A `RuntimeError` subclass so existing
     broad handlers still catch it, but a distinct type so every ops `main()` can turn it into a
-    stable, traceback-free, non-mutating exit (re-audit `538e55e..42e1c7d` F4)."""
+    stable, traceback-free, non-mutating exit."""
 
 
 def _revision_is_known(version: str) -> bool:
-    """True iff `version` is a revision that EXISTS in the checked-out Alembic graph (re-audit
-    `d569a15..4938840` F8). Graph resolution previously ran ONLY when a caller supplied a floor/exact
-    revision, so a no-floor command (`repair_outbox_sequence`) would happily mutate a DB stamped with
-    an unknown revision like '999'. Every command now resolves the stamp through the graph. Unknown →
-    False (fail closed)."""
+    """True iff `version` is a revision that EXISTS in the checked-out Alembic graph. Resolving the
+    graph ONLY when a caller supplies a floor/exact revision would let a no-floor command
+    (`repair_outbox_sequence`) happily mutate a DB stamped with an unknown revision like '999', so
+    every command resolves the stamp through the graph. Unknown → False (fail closed)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -79,11 +77,10 @@ def _revision_is_known(version: str) -> bool:
 
 def _revision_is_at_or_after(version: str, floor: str) -> bool:
     """True iff `version` is `floor` or a descendant of it in the CHECKED-OUT Alembic graph — real
-    lineage, not string ordering (re-audit `b39b82a..b53daf4` F8). A spoofed/unknown revision like
-    '999' string-compares `>= '013'` yet is not a descendant of 013, so the old `version < floor`
-    let it satisfy a floor it never reached and a phase-specific command then hit columns that do
-    not exist. Loaded the same way `api/app.py` resolves the head; unknown/unreachable → False
-    (fail closed)."""
+    lineage, not string ordering. A spoofed/unknown revision like '999' string-compares `>= '013'`
+    yet is not a descendant of 013, so a plain `version < floor` would let it satisfy a floor it
+    never reached and a phase-specific command would then hit columns that do not exist. Loaded the
+    same way `api/app.py` resolves the head; unknown/unreachable → False (fail closed)."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -117,19 +114,18 @@ def bind(
     empty, or in a multi-head/invalid state (`alembic_version` cardinality != 1), off
     `exact_revision`/below `min_revision`, `public.outbox` is not backed by `public.outbox_id_seq`,
     or (when `require_sequence_owner`) the current role does not OWN the sequence — the last is a
-    preflight so an operator learns it BEFORE entering maintenance, not at `ALTER SEQUENCE`
-    (re-audit `8377440` F13).
+    preflight so an operator learns it BEFORE entering maintenance, not at `ALTER SEQUENCE`.
 
     `statement_timeout_seconds` is the SEPARATE per-statement ceiling (its own governed budget, not
-    a constant derived from the lock — re-audit `538e55e..42e1c7d` F11). It must exceed
-    `lock_timeout_seconds` (a statement may wait most of the lock budget, then run its query); a
-    ceiling at or below the lock budget would cancel the lock wait before `lock_timeout` fires and
-    misclassify the failure, so `bind()` refuses it. When omitted it falls back to
+    a constant derived from the lock). It must exceed `lock_timeout_seconds` (a statement may wait
+    most of the lock budget, then run its query); a ceiling at or below the lock budget would
+    cancel the lock wait before `lock_timeout` fires and misclassify the failure, so `bind()`
+    refuses it. When omitted it falls back to
     `lock_timeout_seconds + 300` (the historical headroom) so non-production callers keep working.
     """
-    # Validate the timeout inputs against their governed domains BEFORE any coercion (re-audit
-    # `03dbfab..bc325e7` R5-F7): int() would silently truncate a float, accept a bool, or raise a raw
-    # error on NaN and let it reach SET LOCAL as a DataError. A bad value is a governed refusal.
+    # Validate the timeout inputs against their governed domains BEFORE any coercion: int() would
+    # silently truncate a float, accept a bool, or raise a raw error on NaN and let it reach
+    # SET LOCAL as a DataError. A bad value is a governed refusal.
     for name, value in (
         ("ops_lock_timeout_seconds", lock_timeout_seconds),
         *(
@@ -162,7 +158,7 @@ def bind(
                 f"SET LOCAL. Lower {env}."
             )
     session.execute(text("SET LOCAL search_path = pg_catalog, public"))
-    # both take a literal; the values are our own bounded ints, never operator text
+    # both take a literal; the values are bounded ints computed here, never operator text
     session.execute(text(f"SET LOCAL lock_timeout = '{lock_s * 1000}ms'"))
     session.execute(text(f"SET LOCAL statement_timeout = '{statement_s * 1000}ms'"))
     has_table = session.execute(
@@ -170,7 +166,7 @@ def bind(
     ).first()
     # Read the FULL ordered version set and require cardinality one BEFORE any comparison: `.scalar()`
     # reads one arbitrary row, so a multi-head `{012, 999}` would silently satisfy an exact/floor
-    # check against whichever row came back (re-audit `538e55e..42e1c7d` F4).
+    # check against whichever row came back.
     versions = (
         sorted(session.execute(text("SELECT version_num FROM public.alembic_version")).scalars().all())
         if has_table
@@ -188,8 +184,8 @@ def bind(
             "or mutation. Resolve the migration heads first."
         )
     version = versions[0]
-    # ALWAYS resolve the singleton stamp through the graph — not only when a floor/exact is given
-    # (re-audit `d569a15..4938840` F8). A valid label string is not a valid schema.
+    # ALWAYS resolve the singleton stamp through the graph — not only when a floor/exact is given.
+    # A valid label string is not a valid schema.
     if not _revision_is_known(version):
         raise BindingRefused(
             f"{SCHEMA_REFUSED_SENTINEL}: public.alembic_version={version!r} is not a revision known "
@@ -208,9 +204,9 @@ def bind(
             f"the {min_revision!r} schema (string ordering is not lineage; an unknown/spoofed "
             f"revision is refused here rather than tracebacking on a missing column)"
         )
-    # Resolve outbox existence BEFORE inspecting its sequence (re-audit `03dbfab..bc325e7` R5-F5):
-    # pg_get_serial_sequence('public.outbox','id') raises "relation does not exist" on a
-    # stamped-but-missing outbox (e.g. an early revision), tracebacking instead of refusing cleanly.
+    # Resolve outbox existence BEFORE inspecting its sequence: pg_get_serial_sequence('public.outbox',
+    # 'id') raises "relation does not exist" on a stamped-but-missing outbox (e.g. an early revision),
+    # tracebacking instead of refusing cleanly.
     outbox_relkind = session.execute(
         text(
             "SELECT c.relkind FROM pg_catalog.pg_class c "
@@ -245,19 +241,18 @@ def bind(
                 "as the sequence's owning role (the migration/ops credential; see RUNBOOK)."
             )
 
-    # Structural preflight (re-audit `d3c0852..23e005e` F6): a revision STAMP is not the physical
-    # schema. A DB stamped at a known descendant of the floor (e.g. `023` set by hand) over a drifted
-    # or wrong physical shape passes the lineage check yet would traceback mid-mutation on a missing
-    # column. Verify every column the command will actually touch EXISTS before any lock or write —
-    # lineage answers "which migration", this answers "does the shape match".
+    # Structural preflight: a revision STAMP is not the physical schema. A DB stamped at a known
+    # descendant of the floor (e.g. `023` set by hand) over a drifted or wrong physical shape passes
+    # the lineage check yet would traceback mid-mutation on a missing column. Verify every column
+    # the command will actually touch EXISTS before any lock or write — lineage answers "which
+    # migration", this answers "does the shape match".
     #
-    # SCOPE (honest — re-audit `d569a15..4938840` F9): this is COLUMN + relation PRESENCE only. It is
-    # NOT a full typed shape contract — it does not assert types, nullability, defaults, constraints,
-    # triggers or sequence ownership, and each command must still enumerate the columns it consumes
-    # (reset now includes `status`). A per-command typed `ShapeContract` (relation identity + every
-    # referenced column's type/nullability/default + constraint/trigger/function/sequence-owner set),
-    # consumed identically by the prerequisite, diagnostic and mutation paths under the operation's
-    # lock, is deferred to the production-ops-hardening unit (ROADMAP PR 10).
+    # SCOPE: this is COLUMN + relation PRESENCE only. It is NOT a full typed shape contract — it does
+    # not assert types, nullability, defaults, constraints, triggers or sequence ownership, and each
+    # command must still enumerate the columns it consumes (reset includes `status`). The typed
+    # check (relkind plus each consumed column's type/nullability) is the separate `shape_contract`
+    # check below; column defaults and constraint/trigger/function definitions are asserted by
+    # neither.
     if require_columns:
         for table, cols in require_columns.items():
             present = {
@@ -278,17 +273,16 @@ def bind(
                     "schema this command mutates (a valid revision label is not a valid shape)"
                 )
 
-    # Typed shape contract (re-audit `8aba2df..2cee937` R3-F7): the shared per-operation object that
-    # the prerequisite, diagnostic and mutator all check identically — relation existence + each
-    # consumed column's nullability/type, so a diagnostic cannot certify a schema (dropped `decisions`,
-    # `claim_token` flipped NOT NULL) that the mutator then tracebacks or half-applies on.
+    # Typed shape contract: the shared per-operation object that the prerequisite, diagnostic and
+    # mutator all check identically — relation existence + each consumed column's nullability/type,
+    # so a diagnostic cannot certify a schema (dropped `decisions`, `claim_token` flipped NOT NULL)
+    # that the mutator then tracebacks or half-applies on.
     if shape_contract is not None:
         from kyc_tool.ops.shape import shape_mismatches, supported_revision_violation
 
-        # ENFORCE the contract's declared revision set (re-audit `f2929f8..6a4cd87` F7 — it was
-        # advisory metadata no production caller consulted). An empty set means the command's own
-        # min/exact gate governs alone; a NON-empty set is a hard admission list checked here
-        # against the already-resolved singleton stamp.
+        # ENFORCE the contract's declared revision set; it is not advisory metadata. An empty set
+        # means the command's own min/exact gate governs alone; a NON-empty set is a hard admission
+        # list checked here against the already-resolved singleton stamp.
         admission = supported_revision_violation(version, shape_contract)
         if admission:
             raise BindingRefused(f"{SCHEMA_REFUSED_SENTINEL}: {admission}")

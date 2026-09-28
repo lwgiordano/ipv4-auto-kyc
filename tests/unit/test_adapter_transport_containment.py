@@ -1,8 +1,8 @@
-"""Re-audit `7d1c435..827bc0f` F3/F6 REDs against a REAL local HTTP socket (not MockTransport):
-the governed transport's deadline is total wall-clock time — rate wait + headers + streamed body —
-and every governed response is byte-contained (declared length, chunked overflow, gzip expansion),
-failing closed as non-retryable. The RIR strategy, previously a direct `client.get` bypass, now
-refuses to place even one wire call on an expired budget."""
+"""Transport containment against a REAL local HTTP socket (not MockTransport): the governed
+transport's deadline is total wall-clock time — rate wait + headers + streamed body — and every
+governed response is byte-contained (declared length, chunked overflow, gzip expansion), failing
+closed as non-retryable. The RIR strategy, previously a direct `client.get` bypass, now refuses to
+place even one wire call on an expired budget."""
 
 import gzip
 import socketserver
@@ -65,7 +65,7 @@ class _Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
                 self.wfile.write(b"0\r\n\r\n")
             elif self.path.startswith("/gzip-bomb-big"):
-                # the audit's allocation witness: ~32 KiB wire expanding to 32 MiB decoded — the
+                # allocation reproduction: ~32 KiB wire expanding to 32 MiB decoded — the
                 # cap must fire BEFORE the decompressed body is materialized
                 self.send_response(200)
                 self.send_header("Content-Encoding", "gzip")
@@ -96,7 +96,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             elif self.path.startswith("/brotli-claimed"):
                 self.send_response(200)
-                self.send_header("Content-Encoding", "br")  # never negotiated: we pin gzip
+                self.send_header("Content-Encoding", "br")  # never negotiated: the client pins gzip
                 self.send_header("Content-Length", "4")
                 self.end_headers()
                 self.wfile.write(b"XXXX")
@@ -138,9 +138,9 @@ def _budget(remaining: float, cap: int | None = _CAP) -> RetryBudget:
 
 
 def test_drip_fed_body_cannot_outlive_the_absolute_deadline(server_url):
-    """The audit's witness: bytes arriving under the inactivity timeout kept a 0.12s budget busy
-    for the full body. The absolute per-chunk deadline check must abort within the budget (plus
-    one chunk of slack), not after 100000 × 40ms."""
+    """Regression: bytes arriving under the inactivity timeout kept a 0.12s budget busy for the full
+    body. The absolute per-chunk deadline check must abort within the budget (plus one chunk of
+    slack), not after 100000 × 40ms."""
     client = httpx.Client(base_url=server_url, timeout=5.0)
     started = time.monotonic()
     with budget_scope(_budget(0.3)), pytest.raises(BudgetExhausted):
@@ -191,10 +191,10 @@ def test_contained_response_round_trips_for_the_caller(server_url):
 
 
 def test_gzip_bomb_is_refused_before_allocation_not_after(server_url):
-    """R10-F3: iter_bytes() decoded a whole wire chunk before any cap could look at it — the
-    audit measured an 81 MB peak for a 64 KB cap. The bounded incremental decoder (zlib
-    max_length) must keep peak memory far under the decompressed size. Mutating the transport
-    back to iter_bytes() blows this bound and fails here."""
+    """Regression: iter_bytes() decoded a whole wire chunk before any cap could look at it — an
+    81 MB peak was measured for a 64 KB cap. The bounded incremental decoder (zlib max_length) must
+    keep peak memory far under the decompressed size. Mutating the transport back to iter_bytes()
+    blows this bound and fails here."""
     client = httpx.Client(base_url=server_url, timeout=10.0)
     tracemalloc.start()
     try:
@@ -220,17 +220,17 @@ def test_zlib_wrapped_deflate_decodes_fine(server_url):
 
 
 def test_unnegotiated_encoding_is_rejected_without_decoding(server_url):
-    """We pin Accept-Encoding: gzip; a server claiming br/zstd/multiple encodings is refused
-    outright — never fed to a decoder we did not agree to."""
+    """The client pins Accept-Encoding: gzip; a server claiming br/zstd/multiple encodings is
+    refused outright — never fed to a decoder the client did not negotiate."""
     client = httpx.Client(base_url=server_url, timeout=5.0)
     with budget_scope(_budget(30.0)), pytest.raises(httpx.DecodingError):
         get_with_retry(client, "/brotli-claimed", attempts=1)
 
 
-# ── R10-F2: the header phase cannot smuggle a result past the deadline ────────────────────────────
+# ── The header phase cannot smuggle a result past the deadline ────────────────────────────────────
 class _HeaderDripHandler(socketserver.StreamRequestHandler):
     """Raw TCP: reads the request, then drips the RESPONSE HEADER bytes one at a time — each byte
-    beats any inactivity timeout, no body chunk ever runs a deadline check (the audit's witness
+    beats any inactivity timeout, no body chunk ever runs a deadline check (unguarded, this
     returned 200 after 2.17s under a 0.2s budget)."""
 
     def handle(self):
@@ -269,8 +269,8 @@ def test_header_drip_with_empty_body_cannot_return_success_past_the_deadline(dri
 
 def test_expired_budget_means_zero_rir_wire_calls(server_url):
     """The RIR strategy previously bypassed the governed helper entirely; now an already-expired
-    budget refuses before the FIRST wire call — the audit's `RetryBudget(deadline=0, clock=1)`
-    witness placed one call, this places none."""
+    budget refuses before the FIRST wire call — the `RetryBudget(deadline=0, clock=1)`
+    reproduction used to place one call; it now places none."""
     from kyc_tool.adapters.rir_rdap.base import RdapStrategy
 
     strategy = RdapStrategy(client=httpx.Client(base_url=server_url, timeout=5.0))

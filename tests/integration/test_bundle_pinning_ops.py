@@ -1,4 +1,4 @@
-"""PR 6 §7, §8.11-15: the /readyz process-bundle check, the three ops
+"""Bundle-pinning ops: the /readyz process-bundle check, the three ops
 one-shot CLIs (verify_pinnable_backlog, seed_policy_bundle,
 activate_bundle_pinning_epoch), the post-epoch NULL-provenance alert, and
 the activation-recovery / flag-off-rollback / activation-identity-gate
@@ -95,7 +95,7 @@ def test_readyz_503_when_process_bundle_absent(client, engine, clean_db):
 def test_activation_recovery_requeues_then_scores_under_pinning(
     session_factory, policy, settings, tmp_path, engine, clean_db
 ):
-    # §8.12: a final-attempt running job (crash during flag-on) is requeued after all
+    # A final-attempt running job (crash during flag-on) is requeued after all
     # workers are confirmed stopped, THEN a flag-ON worker scores it under the pin —
     # not merely requeued. The run is pinned to a REAL seeded bundle so resolve succeeds.
     h = bundle_x().bundle_hash
@@ -148,8 +148,8 @@ def test_activation_recovery_requeues_then_scores_under_pinning(
 def test_rollback_inflight_job_requeued_then_flag_off_decides_once(
     session_factory, policy, settings, tmp_path, engine, clean_db, post_event
 ):
-    # §8.13: a final-attempt in-flight job during a flag-on→flag-off rollback is
-    # requeued (confirmed-zero workers), and the flag-OFF restart on the PR6 image
+    # A final-attempt in-flight job during a flag-on→flag-off rollback is
+    # requeued (confirmed-zero workers), and the flag-OFF restart on the pinning-capable image
     # decides it EXACTLY once — creation pin intact, resolved process-bundle + engine
     # provenance written (no post-epoch NULL).
     bx = bundle_x()
@@ -204,8 +204,8 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
         s.commit()
 
     # Truth table over (decision.engine_build_id, run.engine_build_id): the runs
-    # surface must key off the RUN's OWN stamp, independent of the decision's
-    # (AUDIT P2). Each group is its own case+event+run (FK) [+ decision].
+    # surface must key off the RUN's OWN stamp, independent of the decision's.
+    # Each group is its own case+event+run (FK) [+ decision].
     with engine.begin() as c:
         # (a) decision stamped eng-1 / run engine NULL ⇒ run flagged, decision NOT
         c.execute(text("INSERT INTO cases (id) VALUES ('c-a')"))
@@ -303,7 +303,7 @@ def test_post_epoch_null_alert(session_factory, engine, clean_db):
     assert "k-ok" not in alert["checks"]  # non-null policy_bundle_hash NOT flagged
 
 
-# §8.15 activation identity gate — three runnable rejections (each pins a guard whose
+# Activation identity gate — three runnable rejections (each pins a guard whose
 # removal would otherwise leave the suite green):
 
 
@@ -313,7 +313,7 @@ def test_activate_cli_refuses_valid_but_wrong_bundle(
     # Both X and Y are SEEDED (both loadable). The running process is X
     # (settings.policy_dir = normative). Activating a valid, seeded Y must be refused
     # by the CLI's LOCAL-bundle comparison — NOT by store-absence. Deleting that
-    # comparison would let activate_epoch accept the historical Y, so this pins §8.15.
+    # comparison would let activate_epoch accept the historical Y, so this pins that comparison.
     from kyc_tool.policy.loader import read_policy_files
     from tests.integration._bundle_helpers import make_bundle_y
 
@@ -363,7 +363,7 @@ def test_epoch_fk_rejects_unknown_bundle(engine, clean_db):
         )
 
 
-# --- P3 audit fix: create_app() must attest the SELECTED policy (injected or
+# --- create_app() must attest the SELECTED policy (injected or
 # on-disk) as the single startup identity, never settings.policy_dir when it
 # can differ from what the app actually serves ---
 
@@ -379,7 +379,7 @@ def test_create_app_attests_injected_policy_not_settings_dir(
     ydir, by = make_bundle_y(tmp_path, threshold=101)
     assert by.bundle_hash != bundle_x().bundle_hash and by.policy_dir is not None
     # create_app() unconditionally calls structlog.configure() with a brand-new
-    # processor list on every invocation (pre-existing, unrelated to this fix);
+    # processor list on every invocation (unrelated to the attestation under test);
     # neutralize it here so it doesn't clobber capture_logs()'s own capture setup,
     # which relies on mutating the CURRENT processors list in place.
     monkeypatch.setattr(structlog, "configure", lambda *a, **k: None)

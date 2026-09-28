@@ -79,7 +79,7 @@ def test_composer_drives_pipeline_and_case_full_projects(client, phase3_worker, 
 
 
 def test_composer_website_review_completed_binds_reviewer_actor(client, engine, phase3_worker):
-    """PR 5b final-review fix (spec §8.8): in DEV settings, the composer builds
+    """In DEV settings, the composer builds
     a genuine {"type":"reviewer","id":<reviewer_id>} actor for
     website.review_completed (routes.py send_event _SENSITIVE branch) — NOT a
     system/ops-console actor — so it passes the SAME reviewer-actor floor
@@ -416,9 +416,9 @@ def test_requeue_outbox_dead_row(client, engine, post_event, worker):
 
 
 def test_requeue_refuses_redacted_dead_poc_email(client, engine, post_event):
-    """Audit round 2, F4: a dead poc_email's payload was redacted (token
-    scrubbed) — requeueing it would just crash delivery. The endpoint refuses;
-    recovery is a fresh poc.submitted."""
+    """A dead poc_email's payload is redacted (token scrubbed) — requeueing it
+    would just crash delivery. The endpoint refuses; recovery is a fresh
+    poc.submitted."""
     post_event("ui-redacted", "recalculate.requested", {})  # creates the case row
     with engine.begin() as conn:
         outbox_id = conn.execute(
@@ -468,8 +468,8 @@ def _admin_headers() -> dict[str, str]:
 def prod_ui_client(settings, session_factory, policy, clean_db) -> TestClient:
     """Production-hardened settings (shape of `hardened()` in
     tests/unit/test_production_config.py) with the ops console enabled and an
-    admin token set, so the composer's production bar (PR 5b Task 4) can be
-    exercised end-to-end against the real ephemeral Postgres."""
+    admin token set, so the composer's production bar can be exercised
+    end-to-end against the real ephemeral Postgres."""
     prod_settings = settings.model_copy(
         update={
             "environment": "production",

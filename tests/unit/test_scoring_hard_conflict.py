@@ -1,6 +1,6 @@
-"""PR 3 (item 4): gate 5 keys on the centralized HARD_CONFLICT_REASON_CODES
-allow-list — document/registry conflicts fail the gate, routing codes never do,
-and the check remains failed even if a producer stops stamping HARD_CONFLICT."""
+"""Gate 5 keys on the centralized HARD_CONFLICT_REASON_CODES allow-list —
+document/registry conflicts fail the gate, routing codes never do, and the
+check remains failed even if a producer stops stamping HARD_CONFLICT."""
 
 from kyc_tool.domain.decision import decide
 from kyc_tool.domain.models import BrokerStatus, CheckStatus, CheckView, Decision
@@ -58,7 +58,7 @@ def _cv(check_type, points, category, *, status=CheckStatus.PASS, reasons=()):
 
 
 def test_high_score_with_document_conflict_never_approves():
-    """PR 3: a case worth >= 105 points that also carries a document/registry
+    """A case worth >= 105 points that also carries a document/registry
     conflict must never auto-approve — gate 5 fails, so it holds for review."""
     views = [
         _cv("official_registry_match", 25, "legal_business_proof"),

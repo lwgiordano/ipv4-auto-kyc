@@ -89,9 +89,9 @@ class SideEffects:
 
     def _poc_effects(self, session: Session, run: Run, case: Case, normalized: dict) -> None:
         if normalized.get("send_token"):
-            # Consumer-layer domain re-check (re-audit `5b0f0b8..b75a320` R4-F3): expired_at is
-            # now() + timedelta(hours=ttl), so a nonpositive TTL would mint and EMAIL a token that is
-            # already expired. Refuse before expiring old tokens or minting a new one.
+            # Consumer-layer domain re-check: expired_at is now() + timedelta(hours=ttl), so a
+            # nonpositive TTL would mint and EMAIL a token that is already expired. Refuse before
+            # expiring old tokens or minting a new one.
             require_numeric_domain("poc_token_ttl_hours", self.settings.poc_token_ttl_hours)
             # a re-submitted POC expires all outstanding tokens (02 §6)
             session.execute(
@@ -107,7 +107,7 @@ class SideEffects:
             token = PocToken(
                 case_id=case.id,
                 poc_handle=normalized["poc_handle"],
-                # bind the token to the identity it proves (item 5) — the
+                # bind the token to the identity it proves — the
                 # validator re-checks these against the current snapshot, so a POC
                 # re-submission with a different org/resource invalidates it
                 rir=normalized.get("rir"),

@@ -1,5 +1,4 @@
-"""Canonical cutover records for operationally-sensitive config changes (re-audit `8aba2df..2cee937`
-R3-F5/F6, hardened under `5b0f0b8..b75a320` R4-F5).
+"""Canonical cutover records for operationally-sensitive config changes.
 
 The rule is a CLOSED phase machine, not free-form strings: `validate_cutover` requires the actions to
 be exactly `disable_restart -> stop -> attest_zero -> attest_new_value -> start`, each exactly once and
@@ -37,11 +36,11 @@ CUTOVER_SEQUENCE: tuple[CutoverAction, ...] = (
     CutoverAction.START,
 )
 _ROLE_BEARING = {CutoverAction.STOP, CutoverAction.ATTEST_ZERO, CutoverAction.START}
-# The CLOSED set of publisher roles (re-audit `03dbfab..bc325e7` R5-F9): a third "mystery_worker"
-# consistently copied into every role-bearing phase must NOT validate.
+# The CLOSED set of publisher roles: a third "mystery_worker" consistently copied into every
+# role-bearing phase must NOT validate.
 _ALLOWED_ROLES = frozenset({"outbox_worker", "dev_worker"})
-# The CLOSED registry of settings governed by a drained cutover (re-audit `f2929f8..6a4cd87` F14):
-# a record whose setting was consistently rewritten (e.g. KYC_WRONG everywhere) must not validate.
+# The CLOSED registry of settings governed by a drained cutover: a record whose setting was
+# consistently rewritten (e.g. KYC_WRONG everywhere) must not validate.
 _ALLOWED_SETTINGS = frozenset({"KYC_OUTBOX_MAX_ATTEMPTS"})
 _MARKER = "cutover"  # surfaces delimit the rendered block with "<marker>:<setting>:start|end"
 
@@ -110,8 +109,8 @@ def validate_cutover(record: DrainedCutover) -> list[str]:
         )
         return problems  # ordering is the spine; role/setting checks below assume it holds
 
-    # Discriminated phase fields (re-audit R5-F9): a role-bearing phase names EXACTLY the roles and
-    # carries no setting; attest_new_value names EXACTLY the setting and carries no roles; the
+    # Discriminated phase fields: a role-bearing phase names EXACTLY the roles and carries no
+    # setting; attest_new_value names EXACTLY the setting and carries no roles; the
     # disable_restart phase carries neither. Inapplicable fields are forbidden, not ignored.
     for phase in record.phases:
         role_bearing = phase.action in _ROLE_BEARING
@@ -133,18 +132,18 @@ def validate_cutover(record: DrainedCutover) -> list[str]:
 
 
 def attest_new_value(record: DrainedCutover, *, target: int, observed: dict[str, object]) -> list[str]:
-    """Executable attestation for the attest_new_value phase (re-audit `03dbfab..bc325e7` R5-F2). The
-    record names only the SETTING; a fleet whose every task carries the variable but the OLD value, or
-    whose two roles disagree, would otherwise be attested and started. `observed` maps each publisher
-    role to the value its new task definition carries (None ⇒ variable absent/unobserved). Returns
-    violations (empty ⇒ every role's new task carries exactly `target`, a valid outbox_max_attempts).
+    """Executable attestation for the attest_new_value phase. The record names only the SETTING; a fleet
+    whose every task carries the variable but the OLD value, or whose two roles disagree, would
+    otherwise be attested and started. `observed` maps each publisher role to the value its new task
+    definition carries (None ⇒ variable absent/unobserved). Returns violations (empty ⇒ every role's
+    new task carries exactly `target`, a valid outbox_max_attempts).
 
-    AUTHORITY SCOPE (re-audit `3db5f13..a7df17b` F6): `observed` is only as strong as its source —
-    it must be read from the ORCHESTRATOR's live task-definition inventory, never from the process
-    environment it is attesting (self-attestation proves nothing about the rest of the fleet).
-    There is no central receipt yet: the DB CAS cutover record + inventory receipt that publishers
-    compare against before claiming is reserved into migration 029 (PR 10b). Until it lands, the
-    drained STOP + ATTEST-ZERO phases are the fleet-level control this check rides behind."""
+    AUTHORITY SCOPE: `observed` is only as strong as its source — it must be read from the
+    ORCHESTRATOR's live task-definition inventory, never from the process environment it is attesting
+    (self-attestation proves nothing about the rest of the fleet). There is no central receipt yet:
+    the DB CAS cutover record + inventory receipt that publishers compare against before claiming is
+    reserved into migration 029. Until it lands, the drained STOP + ATTEST-ZERO phases are the
+    fleet-level control this check rides behind."""
     from kyc_tool.config import numeric_domain_of, numeric_value_violation
 
     problems: list[str] = []
@@ -198,10 +197,10 @@ def extract_block(surface_text: str, record: DrainedCutover) -> list[str]:
     render_cutover. Raises if the markers are absent or malformed."""
     start, end = marker(record, "start"), marker(record, "end")
     lines = surface_text.splitlines()
-    # EXACT normalized marker-line equality (re-audit `f2929f8..6a4cd87` F14): substring matching
-    # accepted a prefixed/suffixed marker line (`cutover:...:start-evil`), letting a decoy block
-    # shadow the governed one. A marker line is the marker alone, modulo the surface's comment
-    # dressing (# for .env, <!-- --> for markdown).
+    # EXACT normalized marker-line equality: substring matching accepted a prefixed/suffixed marker
+    # line (`cutover:...:start-evil`), letting a decoy block shadow the governed one. A marker line
+    # is the marker alone, modulo the surface's comment dressing (# for .env, <!-- --> for
+    # markdown).
     def _is_marker(line: str, marker_text: str) -> bool:
         stripped = line.strip()
         for token in ("<!--", "-->"):
@@ -211,8 +210,8 @@ def extract_block(surface_text: str, record: DrainedCutover) -> list[str]:
 
     starts = [i for i, line in enumerate(lines) if _is_marker(line, start)]
     ends = [i for i, line in enumerate(lines) if _is_marker(line, end)]
-    # EXACTLY one block (re-audit `03dbfab..bc325e7` R5-F9): a safe first block followed by a second,
-    # unsafe marked procedure must NOT be silently accepted by matching only the first markers.
+    # EXACTLY one block: a safe first block followed by a second, unsafe marked procedure must NOT
+    # be silently accepted by matching only the first markers.
     if len(starts) != 1 or len(ends) != 1:
         raise ValueError(
             f"surface must contain exactly one {start!r}..{end!r} block "

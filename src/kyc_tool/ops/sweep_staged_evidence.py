@@ -1,4 +1,4 @@
-"""Staged raw-evidence sweeper (re-audit `750630c..ca85355` F8, crash-window arm).
+"""Staged raw-evidence sweeper (crash-window cleanup).
 
 The pipeline STAGES raw adapter bytes in the object store BEFORE the fenced recording
 transaction (the job row lock is never held over I/O). Every in-process failure deletes the

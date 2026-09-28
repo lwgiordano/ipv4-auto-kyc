@@ -521,11 +521,11 @@ class SalesforceProjectionResponse(BaseModel):
 
 
 class GatesBody(BaseModel):
-    # Strict, unlike the INBOUND payload models above (re-gate-3 finding 3). The tolerance
-    # asymmetry is the contract's own: we ignore unknown fields the platform sends us, and we
-    # never emit a field the contract does not declare. Root-only strictness left every nested
-    # outbound object permissive, so a future gate could be silently dropped here while leaking
-    # through any path that skipped the encoder.
+    # Strict, unlike the INBOUND payload models above. The tolerance asymmetry is the contract's
+    # own: the tool ignores unknown fields the platform sends, and never emits a field the contract
+    # does not declare. Root-only strictness left every nested outbound object permissive, so a
+    # future gate could be silently dropped here while leaking through any path that skipped the
+    # encoder.
     model_config = ConfigDict(extra="forbid")
 
     score_met: bool
@@ -546,9 +546,8 @@ class CheckSummary(BaseModel):
 
 
 class EnforcementHeld(BaseModel):
-    """The enforcement-hold block, typed (re-gate-3 finding 3). As a plain `dict` it accepted
-    arbitrary keys — the one nested object that was not merely dropping unknowns but PUBLISHING
-    them."""
+    """The enforcement-hold block, typed. As a plain `dict` it accepted arbitrary keys — the one
+    nested object that was not merely dropping unknowns but PUBLISHING them."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -559,10 +558,10 @@ class EnforcementHeld(BaseModel):
 class DecisionCallback(BaseModel):
     """The authoritative decision body (04 §2).
 
-    `extra="forbid"` (re-gate finding 3): permissive extras meant an unknown field was silently
-    DROPPED at the encoder while the same field leaked through any path that skipped it. Refusing
-    is the honest behaviour — a post-024 ordering key arriving before 024 exists is a defect to
-    surface, not a value to quietly discard.
+    `extra="forbid"`: permissive extras meant an unknown field was silently DROPPED at the encoder
+    while the same field leaked through any path that skipped it. Refusing is the honest behaviour —
+    a post-024 ordering key arriving before 024 exists is a defect to surface, not a value to
+    quietly discard.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -576,7 +575,7 @@ class DecisionCallback(BaseModel):
     buy_enablement: Literal["enabled", "locked_org_id_required"]
     checks: list[CheckSummary]
     decided_at: datetime
-    # D1: per-case ordinal of the triggering event. Present only when the M3
+    # Per-case ordinal of the triggering event. Present only when the
     # cutover flag (callback_include_event_sequence) is on; optional here so the
     # authoritative model preserves it on validate instead of dropping it.
     event_sequence: int | None = None
@@ -589,23 +588,23 @@ class DecisionCallback(BaseModel):
 
 # The wire's ordering generation. `unsequenced` means the callback carries NO platform ordering
 # key; it becomes `sequenced` only when migration 025 ships and `decision_sequence` joins the
-# authoritative model. Declared here, beside the model, so the pending-025 gate has one authority
-# to interrogate instead of two declarations that can drift (re-audit Wave 0 gate finding 6).
+# authoritative model. Declared here, beside the model, so the pending-025 contract check has one
+# authority to interrogate instead of two declarations that can drift.
 
 
 def encode_decision_callback(payload: dict) -> dict:
     """The ONE place a decision callback body is produced.
 
-    Gate finding 6: `Pipeline._callback_body` built a plain dict and handed it straight to the
+    Previously `Pipeline._callback_body` built a plain dict and handed it straight to the
     outbox, so the authoritative model was a declaration nothing enforced. Adding
     `decision_sequence` to the emitter while leaving `DecisionCallback` untouched put the post-024
     ordering key on the wire with every check green — the "joint" 024 guard was watching a model
     the publisher did not use.
 
     Routing the body through validation makes the model load-bearing rather than descriptive: an
-    unmodelled key is REFUSED here (`extra="forbid"`, re-gate finding 3 — the first version
-    dropped it, which hid the divergence instead of surfacing it), so an emitter cannot publish a
-    field the contract does not declare. `mode="json"` keeps `decided_at` an ISO string as the
-    wire requires, and `exclude_none` keeps optional fields absent rather than explicitly null.
+    unmodelled key is REFUSED here (`extra="forbid"` — an earlier version dropped it, which hid the
+    divergence instead of surfacing it), so an emitter cannot publish a field the contract does not
+    declare. `mode="json"` keeps `decided_at` an ISO string as the wire requires, and `exclude_none`
+    keeps optional fields absent rather than explicitly null.
     """
     return DecisionCallback.model_validate(payload).model_dump(mode="json", exclude_none=True)

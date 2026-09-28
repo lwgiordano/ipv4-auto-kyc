@@ -7,7 +7,7 @@ Revision 022 validated the owned trigger/function authority surface, but it did 
 cross-table authority constraints that make the read pointers and outbox callback binding belong
 to the same case. A drifted 021 database could drop those FKs, write cross-case pointers, and then
 upgrade through 022 cleanly. This revision is deliberately validation-only: canonical databases
-move forward unchanged; drifted databases refuse before 7b-activation can build on bad authority.
+move forward unchanged; drifted databases refuse before platform activation can build on bad authority.
 """
 
 import sqlalchemy as sa
@@ -160,6 +160,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Validation-only revision: downgrading one step merely removes the stamp. Earlier 7b-core
-    # revisions remain forward-only where they actually changed durable authority.
+    # Validation-only revision: downgrading one step merely removes the stamp. Earlier outbox
+    # authority revisions remain forward-only where they actually changed durable authority.
     pass

@@ -1,4 +1,4 @@
-"""Always-mounted, narrowly-scoped ops endpoints (re-audit `f2929f8..6a4cd87` F3).
+"""Always-mounted, narrowly-scoped ops endpoints.
 
 The RUNBOOK's dead-letter recovery must exist in the SECURE production configuration — the /ui
 console is optional (and off in production guidance), so its requeue buttons cannot be the only

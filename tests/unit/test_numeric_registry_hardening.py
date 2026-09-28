@@ -1,6 +1,6 @@
-"""Re-audit `03dbfab..bc325e7` R5-F6/F8/F11: the numeric registry must cover the NESTED adapter-rate
-sink, reject Python bool at construction, enforce the 72h security TTL in production, and aggregate
-malformed values into one ProductionConfigError instead of crashing."""
+"""The numeric registry must cover the NESTED adapter-rate sink, reject Python bool at construction,
+enforce the 72h security TTL in production, and aggregate malformed values into one
+ProductionConfigError instead of crashing."""
 
 import pytest
 from docs.contracts.authority import unarrived_sunset
@@ -44,7 +44,7 @@ def _hardened(**overrides):
     return Settings(**base)
 
 
-# ── R5-F6: nested adapter-rate sink + bool coercion ────────────────────────────────────────────────
+# ── nested adapter-rate sink + bool coercion ───────────────────────────────────────────────────────
 @pytest.mark.parametrize("rate", [float("nan"), float("inf"), float("-inf"), -1, 0, 1e-9, 999_999])
 def test_bad_adapter_rate_is_refused_at_construction(rate):
     with pytest.raises(ValidationError):
@@ -77,12 +77,12 @@ def test_adapter_rate_violations_helper_flags_each_hazard():
 
 @pytest.mark.parametrize("ns", NUMERIC_SETTINGS, ids=lambda ns: ns.name)
 def test_bool_is_refused_for_every_numeric_field_at_construction(ns):
-    # bool is an int subclass; Pydantic would coerce True->1, collapsing the horizon (R5-F6).
+    # bool is an int subclass; Pydantic would coerce True->1, collapsing the horizon.
     with pytest.raises(ValidationError):
         Settings(**{ns.name: True})
 
 
-# ── R5-F8: the 72h security/business TTL is a production contract, not a storage ceiling ────────────
+# ── the 72h security/business TTL is a production contract, not a storage ceiling ───────────────────
 def test_production_requires_exactly_72h_token_ttl():
     for bad in (71, 73, 87_600):
         hits = production_numeric_violations(Settings().model_copy(update={"poc_token_ttl_hours": bad}))
@@ -91,7 +91,7 @@ def test_production_requires_exactly_72h_token_ttl():
     assert not any("poc_token_ttl_hours" in m for m in ok)
 
 
-# ── R5-F11: malformed values aggregate into one error, never a raw TypeError ────────────────────────
+# ── malformed values aggregate into one error, never a raw TypeError ────────────────────────────────
 @pytest.mark.parametrize(
     "field", ["retention_days", "worker_poll_seconds", "hmac_v1_observation_window_days"]
 )
@@ -103,7 +103,7 @@ def test_malformed_numeric_yields_aggregate_not_crash(field):
         validate_for_production(leaked)
 
 
-# ── R6-F8: closed adapter keys, raw-bool values, total container validation ────────────────────────
+# ── closed adapter keys, raw-bool values, total container validation ───────────────────────────────
 def test_unknown_or_variant_adapter_keys_are_refused():
     for bad_key in ("companies_hose", "Companies_House", " gleif ", "unknown"):
         with pytest.raises(ValidationError):

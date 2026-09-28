@@ -1,12 +1,11 @@
-"""outbox poison recovery: a guard must never make a stuck row unrecoverable (PR 7b-core)
+"""outbox poison recovery: a guard must never make a stuck row unrecoverable
 
 Revision ID: 021
 Revises: 020
 
-Folds an adversarial review of the released `020`, which found that my own fix was worse than the
-bug it replaced.
+Repairs `020`, whose fix for the redaction rule was worse than the bug it replaced.
 
-**P1 — `020`'s new arm asserted a STATE, not a TRANSITION, so it fired on the CLAIM.**
+**`020`'s new arm asserted a STATE, not a TRANSITION, so it fired on the CLAIM.**
 
     IF NEW.status = 'pending' AND NEW.payload_json = '{"redacted": true}'::jsonb THEN RAISE
 

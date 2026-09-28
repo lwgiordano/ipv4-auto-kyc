@@ -225,7 +225,7 @@ def test_document_unreadable_fails():
 
 
 def test_document_name_only_never_passes():
-    # PR 3 fail-closed: a document showing only a matching name (no address/
+    # Fail-closed: a document showing only a matching name (no address/
     # number/jurisdiction) can never award legal proof — it routes to review
     intent = document_intent({"extracted": {"name": "ACME NETWORKS LTD"}}, ACME, ())
     assert intent.status is CheckStatus.NEEDS_REVIEW
@@ -233,8 +233,8 @@ def test_document_name_only_never_passes():
 
 
 def test_document_conflicting_with_registry_stamps_hard_conflict():
-    # PR 3 item 4: a document number contradicting the live registry record
-    # fails AND stamps HARD_CONFLICT so gate 5 fails
+    # A document number contradicting the live registry record fails AND
+    # stamps HARD_CONFLICT so gate 5 fails
     from kyc_tool.domain.models import CheckView
 
     registry = CheckView(
@@ -264,8 +264,8 @@ def test_document_conflicting_with_registry_stamps_hard_conflict():
 
 
 def test_website_reviewer_verdict_maps_to_check():
-    # reviewer_id is now the actor-derived trusted id (PR 5b), passed explicitly
-    # by the caller rather than read from the payload.
+    # reviewer_id is the actor-derived trusted id, passed explicitly by the
+    # caller rather than read from the payload.
     passed = website_intent({"result": "pass", "reviewer_id": "rev-1", "task_id": "t1"}, "rev-1")
     assert passed.status is CheckStatus.PASS
     assert passed.source == "reviewer:rev-1"
@@ -345,7 +345,7 @@ def test_poc_missing_token_digest_needs_review():
 
 
 def test_poc_without_association_target_needs_review():
-    # PR 3 fail-closed: a verified token with no ORG-ID/resource to vouch for
+    # Fail-closed: a verified token with no ORG-ID/resource to vouch for
     # can't award control proof — a human decides
     snap = {"poc": {"poc_handle": "JD123-ARIN", "rir": "arin"}}  # no org_handle, no resource
     intent = poc_token_intent(
@@ -355,7 +355,7 @@ def test_poc_without_association_target_needs_review():
     assert ReasonCode.POC_NO_ASSOCIATION_TARGET.value in intent.reason_codes
 
 
-# --- email domain-forgery (PR 3) ---------------------------------------------
+# --- email domain-forgery ----------------------------------------------------
 
 
 def test_email_payload_domain_conflict_fails_both_checks():

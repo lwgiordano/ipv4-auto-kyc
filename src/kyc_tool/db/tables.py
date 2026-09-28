@@ -37,7 +37,7 @@ class Base(DeclarativeBase):
 class Case(Base):
     __tablename__ = "cases"
 
-    # The platform addresses cases by its own id (path param); we adopt it as PK.
+    # The platform addresses cases by its own id (path param); it is adopted as the PK.
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     platform_account_id: Mapped[str | None] = mapped_column(Text)
     company_name: Mapped[str | None] = mapped_column(Text)
@@ -46,7 +46,7 @@ class Case(Base):
     # Per-case event counter (last assigned event_sequence). Incremented under a
     # FOR UPDATE lock in ingest so sequence allocation is race-free.
     event_sequence: Mapped[int] = mapped_column(BigInteger, server_default=text("0"), default=0)
-    # PR 7b-core (migration 013): per-case decision-callback sequence counter,
+    # Migration 013: per-case decision-callback sequence counter,
     # incremented under the Case FOR UPDATE lock in _decide_txn (never max()+1).
     last_decision_sequence: Mapped[int] = mapped_column(
         BigInteger, server_default=text("0"), default=0
@@ -60,7 +60,7 @@ class Case(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()")
     )
-    # PR 7b-core (migration 014): the atomic latest-decision authority. Maintained by a DB
+    # Migration 014: the atomic latest-decision authority. Maintained by a DB
     # trigger on decisions INSERT (same transaction, both decide paths), NEVER derived from
     # decided_at — now() is transaction-start time and can invert against the lock-serialized
     # commit order, which is exactly how the read API once paired a decision with the previous
@@ -68,9 +68,9 @@ class Case(Base):
     latest_decision_row_id: Mapped[str | None] = mapped_column(Text)
     # Migration 018: the MANUAL pointer, maintained by its own INSERT trigger. Separate from the
     # pointer above because manual attribution is sticky — a later automatic decision moves the
-    # verdict pointer but must never blank who approved the case (re-audit `cbb783b` F6). Sorting
-    # `decisions` to find "the latest manual row" is not an option: `id` is a random UUID hex and
-    # `decided_at` is transaction-start time. NULL means unresolved, never "no manual approval":
+    # verdict pointer but must never blank who approved the case. Sorting `decisions` to find
+    # "the latest manual row" is not an option: `id` is a random UUID hex and `decided_at` is
+    # transaction-start time. NULL means unresolved, never "no manual approval":
     # a legacy case with two or more manual rows cannot be ordered and is left explicitly unknown.
     latest_manual_decision_row_id: Mapped[str | None] = mapped_column(Text)
 
@@ -95,11 +95,11 @@ class Event(Base):
 
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=_uuid)
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), index=True)
-    # D3 (PR 5a): idempotency is per-case, not global — the same key in another
+    # Idempotency is per-case, not global — the same key in another
     # case is an independent event, never a replay of the first.
     idempotency_key: Mapped[str] = mapped_column(Text)
     payload_hash: Mapped[str] = mapped_column(Text)
-    # Gap-free per-case ordinal (D1: this is the wire's `event_sequence`).
+    # Gap-free per-case ordinal (this is the wire's `event_sequence`).
     # sequence_backfilled marks rows whose sequence was RECONSTRUCTED by the 008
     # migration (arrival order) rather than assigned live at ingest.
     event_sequence: Mapped[int | None] = mapped_column(BigInteger)
@@ -130,14 +130,14 @@ class Run(Base):
     configuration_revision: Mapped[int | None] = mapped_column(BigInteger)
     matched_broker_entity_id: Mapped[str | None] = mapped_column(Text)
     matched_identifier_class: Mapped[str | None] = mapped_column(Text)
-    # PR 6 (migration 011): which engine build resolved/scored this run. Paired
+    # Migration 011: which engine build resolved/scored this run. Paired
     # with policy_bundle_hash above for full pinning provenance.
     engine_build_id: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
 
-    # PR 7b-core (migration 013): named composite target for fk_decisions_run_case —
+    # Migration 013: named composite target for fk_decisions_run_case —
     # decisions(run_id, case_id) must cite a run under its OWN case.
     __table_args__ = (
         UniqueConstraint("id", "case_id", name="uq_runs_id_case_id"),
@@ -228,7 +228,7 @@ class Check(Base):
     superseded_by_check_id: Mapped[str | None] = mapped_column(
         ForeignKey("checks.id", deferrable=True, initially="DEFERRED")
     )
-    # PR 6 (migration 011): which policy bundle's rubric produced this check.
+    # Migration 011: which policy bundle's rubric produced this check.
     policy_bundle_hash: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
@@ -282,11 +282,11 @@ class DecisionRow(Base):
     gates_json: Mapped[dict] = mapped_column(JSONB, default=dict)
     buy_enablement: Mapped[str] = mapped_column(Text)
     policy_shas: Mapped[dict] = mapped_column(JSONB, default=dict)  # audit provenance
-    # PR 6 (migration 011): which engine build resolved/scored this decision.
+    # Migration 011: which engine build resolved/scored this decision.
     engine_build_id: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # PR 7b-core (migration 013): internal per-case ordinal for callback-emitting
+    # Migration 013: internal per-case ordinal for callback-emitting
     # (automatic) decisions; NULL for manual approvals. NOT on the wire.
     decision_sequence: Mapped[int | None] = mapped_column(BigInteger)
     manual: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -344,13 +344,13 @@ class Outbox(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     kind: Mapped[str] = mapped_column(Text)  # decision_callback | poc_email
-    # NOT NULL + named FK (migration 013). The FK lives in ORM metadata too (re-audit F9):
+    # NOT NULL + named FK (migration 013). The FK lives in ORM metadata too:
     # Base.metadata is Alembic's comparison target, so a live-only FK would report drift.
     case_id: Mapped[str] = mapped_column(
         Text, ForeignKey("cases.id", name="fk_outbox_case_id"), index=True
     )
     run_id: Mapped[str | None] = mapped_column(Text)
-    # PR 7b-core: FIFO stream this row is claimed under (decision | email), NOT NULL.
+    # FIFO stream this row is claimed under (decision | email), NOT NULL.
     ordering_stream: Mapped[str] = mapped_column(Text)
     # Internal per-case ordinal for decision_callback rows (NULL for poc_email).
     decision_sequence: Mapped[int | None] = mapped_column(BigInteger)
@@ -365,12 +365,12 @@ class Outbox(Base):
     claim_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     claim_token: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
     claimed_by: Mapped[str | None] = mapped_column(Text)
-    # PR 7b-core (013): the recorded digest of the bytes actually sent + which encoding was
+    # Migration 013: the recorded digest of the bytes actually sent + which encoding was
     # used. Written in the delivery transaction; NULL for undelivered rows and for anything
     # delivered before 013 (jsonb normalizes key order, so those sent bytes are unrecoverable).
     callback_wire_sha256: Mapped[str | None] = mapped_column(Text)
     wire_version: Mapped[str | None] = mapped_column(Text)
-    # PR 7b-core (migration 014): which witness regime this row was created under. 'legacy'
+    # Migration 014: which witness regime this row was created under. 'legacy'
     # rows predate the pre-HTTP attempt authority, so an absent attempt proves nothing about
     # them; only an 'attempt_v1' row with no attempt is provably never-transmitted. The DB
     # default is 'legacy' — the fail-closed direction: a write path that forgets to stamp
@@ -382,7 +382,7 @@ class Outbox(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     __table_args__ = (
-        # PR 7b-core (013): partial to the claimable set — decision_callback terminals are never
+        # Migration 013: partial to the claimable set — decision_callback terminals are never
         # pruned, so a full index would grow without bound and enter every claim plan.
         Index("ix_outbox_claim", "next_attempt_at", postgresql_where=text("status = 'pending'")),
         Index(
@@ -417,7 +417,7 @@ class Outbox(Base):
 
 
 class OutboxDeliveryAttempt(Base):
-    """Immutable record that specific bytes were durably STAGED for the wire (PR 7b-core, 014).
+    """Immutable record that specific bytes were durably STAGED for the wire (migration 014).
 
     Written and COMMITTED before the HTTP send, under the claim that authorized it. Committed
     intent is exactly what it proves — no more: the process can die between this commit and the
@@ -465,10 +465,10 @@ class OutboxDeliveryAttempt(Base):
 
 
 class HmacV1Observation(Base):
-    """Durable, cross-replica v1 acceptance witness (PR 5a §6). Single row
-    (id=1), seeded INACTIVE by migration 010; the observation clock starts only
-    at the post-cutover activation command. Updated fail-closed on every
-    accepted inbound v1 request, so real v1 traffic is never silently invisible.
+    """Durable, cross-replica v1 acceptance witness. Single row (id=1), seeded
+    INACTIVE by migration 010; the observation clock starts only at the
+    post-cutover activation command. Updated fail-closed on every accepted
+    inbound v1 request, so real v1 traffic is never silently invisible.
     """
 
     __tablename__ = "hmac_v1_observation"
@@ -491,8 +491,8 @@ class HmacSignatureStat(Base):
 
 
 class PolicyBundleRow(Base):
-    """Durable policy-bundle store, keyed by content hash (PR 6, migration
-    011). Rows are immutable once referenced by the pinning epoch or by a
+    """Durable policy-bundle store, keyed by content hash (migration 011).
+    Rows are immutable once referenced by the pinning epoch or by a
     check/run/decision provenance column — downgrade refuses once any is used."""
 
     __tablename__ = "policy_bundles"
@@ -504,7 +504,7 @@ class PolicyBundleRow(Base):
 
 class BundlePinningEpochRow(Base):
     """Single-row (id=1) activation epoch: the policy bundle + engine build
-    currently pinned for new runs (PR 6, migration 011). Written only by the
+    currently pinned for new runs (migration 011). Written only by the
     activation command, never by request-serving code paths."""
 
     __tablename__ = "bundle_pinning_epoch"

@@ -1,5 +1,5 @@
 """Read endpoints (04 §2). Review completion is the keyed website.review_completed
-event (PR 5a §4), no longer a dedicated endpoint."""
+event, no longer a dedicated endpoint."""
 
 from typing import Literal
 
@@ -111,8 +111,8 @@ def get_case(case_id: str, request: Request) -> dict:
         # decision insert), NEVER from decided_at ordering and never mixed with the projection:
         # decided_at is transaction-start time and inverts against commit order, and the
         # projection's `latest_decision` is not updated by the record-only manual-approve path —
-        # serving projection-value + pointer-gates returned reject/bypassed-gates hybrids
-        # (re-audit 4dfdf8a F4). `decision_provenance` makes the remaining ambiguity OBSERVABLE:
+        # serving projection-value + pointer-gates returned reject/bypassed-gates hybrids.
+        # `decision_provenance` makes the remaining ambiguity OBSERVABLE:
         # a NULL pointer with decisions present is a pre-014 manual-among-several history whose
         # write order has no durable record; it serves no decision tuple rather than a guess, is
         # counted in /v1/metrics, and heals on the case's next decision.

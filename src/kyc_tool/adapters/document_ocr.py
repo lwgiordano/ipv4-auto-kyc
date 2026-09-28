@@ -37,14 +37,14 @@ class DocumentOcrAdapter:
             return AdapterOutput(self.adapter_id, AdapterStatus.NOT_APPLICABLE)
 
         # This adapter's "upstream" is the object store + OCR engine — the same authority applies
-        # as to an HTTP fetch (re-audit `750630c..ca85355` F7): a lost/unprovable claim or spent
-        # budget places ZERO object/OCR calls, and the document read is byte-capped BEFORE
-        # materialization. The read-boundary proof now lives INSIDE get_bounded (PR 10b slice 1:
-        # transitive authority — the store proves for every caller, cooperating or not).
+        # as to an HTTP fetch: a lost/unprovable claim or spent budget places ZERO object/OCR
+        # calls, and the document read is byte-capped BEFORE materialization. The read-boundary
+        # proof lives INSIDE get_bounded (transitive authority — the store proves for every
+        # caller, cooperating or not).
         data = self.store.get_bounded(doc["object_ref"], max_bytes=retry.governed_response_cap())
-        # SECOND proof (re-audit `ddbff39..c3884bd` F2): the store read and the OCR engine are two
-        # separate physical sends — a claim revoked or a budget spent DURING the read must not
-        # hand the bytes to the OCR provider on the strength of the read-time proof.
+        # SECOND proof: the store read and the OCR engine are two separate physical sends — a
+        # claim revoked or a budget spent DURING the read must not hand the bytes to the OCR
+        # provider on the strength of the read-time proof.
         retry.authorize_external_io()
         extracted = self.engine.extract(data, doc.get("doc_type", "unknown"))
         return AdapterOutput(

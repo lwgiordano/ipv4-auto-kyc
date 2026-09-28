@@ -1,5 +1,4 @@
-"""Supervised external-call executor (PR 10b slice 1 — the unconditionally-killable wall-clock
-boundary reserved by the `750630c..ca85355` re-audit).
+"""Supervised external-call executor: the unconditionally-killable wall-clock boundary.
 
 The in-process governed transport proves the absolute deadline after headers, per body chunk, and
 at EOF — but between individual bytes only inactivity phase timeouts apply, so a hostile drip can
@@ -101,7 +100,7 @@ def supervised_fetch(
     phase_timeout,
 ) -> httpx.Response:
     """One governed fetch under the hard-kill boundary. Raises BudgetExhausted when the child had
-    to be terminated at the deadline — the run records UPSTREAM_ERROR (partial, G12), identical to
+    to be terminated at the deadline — the run records UPSTREAM_ERROR (partial run), identical to
     every other spent-budget outcome."""
     remaining = budget.deadline_monotonic - budget.clock()
     if remaining <= 0:

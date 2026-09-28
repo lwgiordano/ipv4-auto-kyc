@@ -1,7 +1,7 @@
-"""PR 10a retry helper, hardened per re-audit `f2929f8..6a4cd87` F2/F5/F6: the classifier is the
-written contract (408/429/ALL 5xx transient, other statuses permanent-fast), Retry-After parses
-delta-seconds AND HTTP-dates finitely with a 30s clamp, inputs have governed domains, and the
-pipeline's RetryBudget bounds every retry under the job lease with a per-attempt rate permit."""
+"""Retry helper: the classifier is the written contract (408/429/ALL 5xx transient, other
+statuses permanent-fast), Retry-After parses delta-seconds AND HTTP-dates finitely with a 30s
+clamp, inputs have governed domains, and the pipeline's RetryBudget bounds every retry under the
+job lease with a per-attempt rate permit."""
 
 import httpx
 import pytest
@@ -21,7 +21,7 @@ def _client(responder):
     return httpx.Client(transport=httpx.MockTransport(responder), base_url="https://u.test")
 
 
-# ── F5: the classifier is the WRITTEN contract ─────────────────────────────────────────────────────
+# ── The classifier is the WRITTEN contract ─────────────────────────────────────────────────────────
 @pytest.mark.parametrize("status", [408, 429, 500, 501, 503, 507, 520, 599])
 def test_all_5xx_plus_408_429_are_transient(status):
     assert is_transient(status)
@@ -64,7 +64,7 @@ def test_post_is_not_retried_by_default_but_is_when_attempts_are_asked_for():
     assert len(sends) == 2  # explicit attempts still retry the transient
 
 
-# ── F5: Retry-After parsing — delta, HTTP-date, garbage, clamp ────────────────────────────────────
+# ── Retry-After parsing — delta, HTTP-date, garbage, clamp ────────────────────────────────────────
 def test_retry_after_delta_honored_and_capped():
     sleeps = []
     get_with_retry(_client(lambda r: httpx.Response(429, headers={"Retry-After": "2"})),
@@ -96,7 +96,7 @@ def test_bad_or_past_retry_after_falls_back_finite_nonnegative(header):
     assert len(sleeps) == 1 and 0 <= sleeps[0] <= _MAX_RETRY_AFTER_SECONDS
 
 
-# ── F5: governed input domains ────────────────────────────────────────────────────────────────────
+# ── Governed input domains ────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("attempts", [0, -1, True])
 def test_nonpositive_or_bool_attempts_refused(attempts):
     with pytest.raises(ValueError):
@@ -127,7 +127,7 @@ def test_exhausted_transient_returns_last_response_for_raise_for_status():
         r.raise_for_status()
 
 
-# ── F2: the RetryBudget bounds sleeps under the lease and re-acquires the rate permit ─────────────
+# ── The RetryBudget bounds sleeps under the lease and re-acquires the rate permit ─────────────────
 def test_budget_stops_retries_that_would_cross_the_deadline():
     calls, sleeps = [], []
     def responder(request):
@@ -152,11 +152,11 @@ def test_budget_acquires_one_rate_permit_per_physical_attempt():
     )
     with budget_scope(budget):
         get_with_retry(_client(responder), "/x", attempts=3, sleep=lambda s: None)
-    # R9-F5: EVERY send — the first included — holds its own permit; no outer pipeline permit
+    # EVERY send — the first included — holds its own permit; no outer pipeline permit
     assert len(calls) == 3 and len(permits) == 3
 
 
-# ── R8-F5: the budget covers the FIRST attempt, the permit wait, and the wire itself ──────────────
+# ── The budget covers the FIRST attempt, the permit wait, and the wire itself ─────────────────────
 def test_budget_dead_before_first_attempt_sends_nothing_and_raises():
     """Zero sends past the deadline includes the FIRST send: a budget already exhausted (e.g. the
     first rate permit consumed it) must raise BudgetExhausted with zero wire calls, not send once."""
@@ -171,7 +171,7 @@ def test_budget_dead_before_first_attempt_sends_nothing_and_raises():
 
 
 def test_permit_wait_that_consumes_the_budget_stops_the_retry():
-    """The audit's executable witness: deadline=10, the RETRY permit advances the clock 0 → 20.
+    """Executable witness: deadline=10, the RETRY permit advances the clock 0 → 20.
     Previously the second wire call still happened at t=20; now the post-permit deadline proof
     stops it — wire calls happen at [0.0] only and the last outcome is surfaced."""
     call_times = []
@@ -242,9 +242,9 @@ def test_per_attempt_timeout_is_capped_at_remaining_budget_tighten_only():
     assert seen[0]["read"] == 5.0  # the client's own 5s stands — a big budget never loosens it
 
 
-# ── R9-F5: a permit wait that loses the claim yields NO second call ───────────────────────────────
+# ── A permit wait that loses the claim yields NO second call ──────────────────────────────────────
 def test_permit_that_loses_the_claim_sends_no_further_call():
-    """The audit's witness: first call 503; while waiting for the retry permit the heartbeat marks
+    """Reproduction: first call 503; while waiting for the retry permit the heartbeat marks
     the claim lost. The post-permit liveness proof must refuse the second send and propagate the
     revocation (StaleJobClaim) — never record a retry outcome under a lost claim. Removing the
     post-permit proof makes calls == 2 and this test fail."""
@@ -274,9 +274,9 @@ def test_permit_that_loses_the_claim_sends_no_further_call():
     assert len(calls) == 1  # the revoked claim authorized NO second upstream call
 
 
-# ── R10-F2: a response COMPLETING past the deadline is refused, empty bodies included ─────────────
+# ── A response COMPLETING past the deadline is refused, empty bodies included ─────────────────────
 def test_slow_empty_body_completing_past_the_deadline_is_refused():
-    """The audit's witness: headers dripped past a 0.2s budget then Content-Length: 0 — zero body
+    """Reproduction: headers dripped past a 0.2s budget then Content-Length: 0 — zero body
     chunks meant zero deadline checks, and a 200 was returned at 2.17s. The post-EOF proof must
     refuse a result that completed after the deadline even with NO body bytes at all."""
     clocks = iter([0.0, 0.0, 5.0])  # authorize, post-header, post-EOF — time died mid-response
@@ -291,10 +291,10 @@ def test_slow_empty_body_completing_past_the_deadline_is_refused():
         get_with_retry(_client(lambda r: httpx.Response(200, content=b"")), "/x", attempts=1)
 
 
-# ── R11-F3: exact deadline equality is SPENT at every boundary ────────────────────────────────────
+# ── Exact deadline equality is SPENT at every boundary ────────────────────────────────────────────
 def test_exact_equality_at_header_completion_refuses():
-    """clock == deadline at header arrival must refuse — the R10 boundary used `>` and let the
-    exact-equality response through (the audit's MockTransport repro)."""
+    """clock == deadline at header arrival must refuse — an earlier boundary used `>` and let the
+    exact-equality response through (reproduced here with MockTransport)."""
     clocks = iter([0.0, 1.0])  # authorize passes at 0.0; headers complete exactly AT the deadline
     last = {"v": 0.0}
 
@@ -320,7 +320,7 @@ def test_exact_equality_at_eof_refuses():
         get_with_retry(_client(lambda r: httpx.Response(200, content=b"")), "/x", attempts=1)
 
 
-# ── R10-F4: an unprovable claim is an authority failure, never upstream evidence ──────────────────
+# ── An unprovable claim is an authority failure, never upstream evidence ──────────────────────────
 def test_prove_live_db_error_fails_closed_with_zero_wire_calls():
     """The proof erroring (DB down) must surface as StaleJobClaim — fail closed — not leak through
     as a generic exception the pipeline would record as AdapterStatus.UPSTREAM_ERROR."""
@@ -349,7 +349,7 @@ def test_prove_live_db_error_fails_closed_with_zero_wire_calls():
     assert "UNAVAILABLE" in str(exc.value)
 
 
-# ── R9-F3: every adapter wire call must go through the governed helper ────────────────────────────
+# ── Every adapter wire call must go through the governed helper ───────────────────────────────────
 def test_no_adapter_calls_httpx_outside_the_governed_helper():
     """Static transport guard: a direct `client.get/post/...`, a raw boto3 import, or an
     ungoverned `store.get(` in an adapter bypasses the budget, liveness proof, absolute deadline,

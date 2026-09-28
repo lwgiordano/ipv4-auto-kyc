@@ -38,8 +38,8 @@ def test_double_post_same_key_yields_one_run_and_identical_responses(client, eng
 
 
 def test_d3_cross_case_reuse_yields_two_independent_runs(client, post_event):
-    """D3 (PR 5a): the SAME idempotency key in a DIFFERENT case is an independent
-    event — never a replay of the first case's run. (Same signed bytes, as a
+    """D3: the SAME idempotency key in a DIFFERENT case is an independent event —
+    never a replay of the first case's run. (Same signed bytes, as a
     redirect attacker would send.)"""
     a, key = post_event("case-d3-a", "kyb.run_requested", KYB_PAYLOAD)
     b, _ = post_event("case-d3-b", "kyb.run_requested", KYB_PAYLOAD, key=key)

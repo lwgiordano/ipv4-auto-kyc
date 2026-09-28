@@ -150,7 +150,7 @@ def test_supersession_is_atomic_with_insert(engine, session_factory, policy, cas
     assert rows[0].superseded_by_check_id is None
 
 
-# --- item 5: event-driven identity invalidation -------------------------------
+# --- Event-driven identity invalidation ---------------------------------------
 
 
 def _invalidate(session_factory, policy, case_id, event_type, payload):
@@ -249,9 +249,9 @@ def test_poc_handle_change_supersedes_prior_poc(session_factory, policy, case_id
 
 
 def test_poc_identity_change_same_handle_supersedes(session_factory, policy, case_id):
-    # audit round 1, finding 2: proof is bound to the FULL (rir, poc, org,
-    # resource) tuple — same handle but a different rir/org/resource must
-    # invalidate the stale PASS even with rir_poc unavailable to re-prove it.
+    # Proof is bound to the FULL (rir, poc, org, resource) tuple — same handle
+    # but a different rir/org/resource must invalidate the stale PASS even with
+    # rir_poc unavailable to re-prove it.
     _apply(
         session_factory,
         policy,
@@ -304,14 +304,14 @@ def test_poc_resubmit_identical_identity_keeps_proof(session_factory, policy, ca
     assert _live(session_factory, case_id)["poc_verified"][0] == "pass"
 
 
-# --- audit round 1, finding 3: successor category comes from the resolved rubric --
+# --- Successor category comes from the resolved rubric --
 
 
 def test_cascade_successor_category_from_resolved_rubric(session_factory, policy, case_id):
-    # Finding 3: a cascade successor stamped under bundle X must carry X's rubric
-    # category, NOT the category copied from the superseded row (which may be from a
-    # different bundle). Seed a live poc with a deliberately WRONG category, then
-    # invalidate it via an ORG-ID change under the resolved rubric.
+    # A cascade successor stamped under bundle X must carry X's rubric category, NOT the
+    # category copied from the superseded row (which may be from a different bundle).
+    # Seed a live poc with a deliberately WRONG category, then invalidate it via an
+    # ORG-ID change under the resolved rubric.
     stale = "stale_from_other_bundle"
     resolved = policy.rubric.item("poc_verified").category
     assert resolved != stale                       # the seed must actually differ

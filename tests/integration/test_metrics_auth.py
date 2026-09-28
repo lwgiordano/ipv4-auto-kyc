@@ -1,9 +1,9 @@
-"""Re-audit `d569a15..4938840` F1: a REJECTED (401) request must not synchronously open a database
-session or persist telemetry. The previous "zero-DB" test was vacuous — its `_boom()` sentinel raised
-inside `_bump()` and was swallowed by a blanket `except`, so it passed BECAUSE the forbidden write
-happened. This test uses a NON-RAISING session-factory spy and asserts the rejected path opens ZERO
-sessions (no diagnostic write, no protected query), while the diagnostic counter still advances
-in-process. If the DB-backed rejected bump were reintroduced, `spy.calls` would be > 0 and this fails.
+"""A REJECTED (401) request must not synchronously open a database session or persist telemetry.
+The previous "zero-DB" test was vacuous — its `_boom()` sentinel raised inside `_bump()` and was
+swallowed by a blanket `except`, so it passed BECAUSE the forbidden write happened. This test uses
+a NON-RAISING session-factory spy and asserts the rejected path opens ZERO sessions (no diagnostic
+write, no protected query), while the diagnostic counter still advances in-process. If the
+DB-backed rejected bump were reintroduced, `spy.calls` would be > 0 and this fails.
 """
 
 import datetime as dt
@@ -72,10 +72,10 @@ def test_rejected_read_auth_opens_no_session_and_persists_nothing(
 
 
 def test_invalid_v1_opens_no_db_regardless_of_sunset(settings, session_factory, policy, clean_db):
-    """Re-audit `8aba2df..2cee937` R3-F1: an invalid/unsigned v1 request must open ZERO sessions
-    whether the sunset is future OR past. Previously a PAST sunset drove the durable zero-witness
-    SELECT before `security.verify()`, so an unauthenticated flood could amplify DB reads once the
-    date passed. Moving the witness read ahead of verification again makes spy.calls > 0 here."""
+    """An invalid/unsigned v1 request must open ZERO sessions whether the sunset is future OR past.
+    Previously a PAST sunset drove the durable zero-witness SELECT before `security.verify()`, so an
+    unauthenticated flood could amplify DB reads once the date passed. Moving the witness read ahead
+    of verification again makes spy.calls > 0 here."""
     for sunset in (_FUTURE_SUNSET, _PAST_SUNSET):
         spy = _SpyFactory(session_factory)
         tc = _read_auth_app(

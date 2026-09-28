@@ -1,4 +1,4 @@
-"""POC token binding + single-use (remediation item 5).
+"""POC token binding + single-use.
 
 A token proves exactly one identity — (case, token_id, digest, rir, poc_handle,
 org/resource) — and exactly once. These pure-validator tests pin the binding
@@ -107,9 +107,9 @@ def test_token_id_must_match_the_presented_id():
 
 
 def test_dropping_a_bound_resource_dimension_fails():
-    # audit round 1, finding 1: a token minted bound to BOTH an org and a
-    # resource must not pass when the resource is dropped on re-submission —
-    # that leaves it proving only the org, a DIFFERENT identity than minted.
+    # a token minted bound to BOTH an org and a resource must not pass when
+    # the resource is dropped on re-submission — that leaves it proving only
+    # the org, a DIFFERENT identity than minted.
     row = _token_row(org_handle="ORG-ACME-1", resource="192.0.2.0/24")
     snap = _snapshot(org_handle="ORG-ACME-1")  # resource omitted from the claim
     intent = _intent(_event(), row, snap)

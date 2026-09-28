@@ -1,9 +1,9 @@
 """The shared maintenance fence: one lock order for EVERY outbox-authority writer.
 
-Re-audit `cbb783b` F4: `017` fenced the publisher but not retention, which updates the parent
-`outbox` and then deletes from the child `outbox_delivery_attempts` — the exact opposite of a
-migration's child-then-parent order, and invisible to the live-claim preflight because retention
-holds no claim. These are the deterministic two-connection barriers that prove the cycle is gone.
+`017` fenced the publisher but not retention, which updates the parent `outbox` and then deletes
+from the child `outbox_delivery_attempts` — the exact opposite of a migration's child-then-parent
+order, and invisible to the live-claim preflight because retention holds no claim. These are the
+deterministic two-connection barriers that prove the cycle is gone.
 """
 
 import threading
@@ -75,7 +75,7 @@ def _run_migration_in_thread(cfg, target, result: dict, *, downgrade=False):
 
 def _seed_retention_shaped_work(eng):
     """A delivered callback with an attempt row: retention will UPDATE the parent (redaction) and
-    DELETE from the child (the now-redundant attempt) — the two-relation shape F4 is about."""
+    DELETE from the child (the now-redundant attempt) — the two-relation shape the fence covers."""
     with eng.begin() as conn:
         # attempts are insert-only, so the row is BORN old rather than aged by an UPDATE
         row = _claimed_pending(conn, "cx", "cx-r1", 1, with_attempt=False)

@@ -91,9 +91,9 @@ class RdapStrategy:
     def lookup_org(self, org_handle: str) -> tuple[bytes, dict]:
         """→ (raw upstream bytes, normalized dict). 404 = handle not found.
 
-        The wire call goes through the GOVERNED helper (re-audit `7d1c435..827bc0f` F3: this
-        adapter previously called `client.get` directly and bypassed the plan budget entirely —
-        no permit, no liveness proof, no deadline, no byte containment)."""
+        The wire call goes through the GOVERNED helper. Calling `client.get` directly would
+        bypass the plan budget entirely — no permit, no liveness proof, no deadline, no byte
+        containment."""
         response = get_with_retry(self.client, self.entity_path.format(handle=org_handle))
         if response.status_code == 404:
             return response.content, {"found": False, "org_handle": org_handle}
@@ -111,7 +111,7 @@ class RdapStrategy:
         `conflicting_entity` flag require per-RIR relationship analysis against
         live RDAP data. They are NOT computed here — only fixtures inject them —
         so those human-review routes are currently unreachable in production.
-        We deliberately do not fake the detection: guessing RIR semantics could
+        The detection is deliberately not faked: guessing RIR semantics could
         wrongly fail legitimate orgs. Exposure is bounded because org_id_match
         still requires positive name + address matching to PASS. Implementing
         the real detection is scoped to the RIR integration work (validators

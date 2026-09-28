@@ -1,4 +1,4 @@
-"""Start the v1 observation clock AFTER the non-hot cutover (PR 5a §6a).
+"""Start the v1 observation clock AFTER the non-hot cutover.
 
 Non-network, idempotent compare-and-set: sets `observation_started_at` only when
 it is NULL. A rerun reports "already active" and NEVER resets a live window, so

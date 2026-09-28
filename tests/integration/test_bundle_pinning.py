@@ -50,9 +50,9 @@ def test_pipeline_worker_startup_attests_and_refuses_corrupt(
         assert worker is not None
         rec = next(r for r in logs if r.get("event") == "bundle_pinning_ready")
         assert (rec["flag"] is flag and rec["engine_build_id"] == "eng-2"
-                and rec["bundle_hash"] == bundle_x().bundle_hash)   # §8.18 deployment witness
+                and rec["bundle_hash"] == bundle_x().bundle_hash)   # deployment witness
     # CORRUPT process-bundle row (the single seeded row) → build_worker RAISES before
-    # returning a Worker; nothing attested AND the queued job stays WHOLLY unclaimed (§8.2).
+    # returning a Worker; nothing attested AND the queued job stays WHOLLY unclaimed.
     with engine.begin() as c:
         c.execute(text("UPDATE policy_bundles SET files_json = jsonb_set("
                        "files_json,'{scoring_rubric.json}','\"%%%\"')"))
@@ -69,7 +69,7 @@ def test_pipeline_worker_startup_attests_and_refuses_corrupt(
         assert job.status == "queued" and job.attempts == 0 and job.locked_by is None  # unclaimed
 
 
-# --- Task 7: resolve-at-entry refuses BEFORE any side effect ---------------
+# --- Resolve-at-entry refuses BEFORE any side effect ------------------------
 
 
 def test_flag_on_absent_bundle_dead_letters_zero_side_effects(
@@ -111,11 +111,11 @@ def test_flag_on_absent_bundle_dead_letters_zero_side_effects(
                             "WHERE r.case_id='case-absent'")).scalar_one()   # adapter_results is run_id-keyed
         assert ar == 0, "adapter_results had side effects on an absent-bundle run"
         dead = s.execute(text("SELECT count(*) FROM jobs WHERE status='dead'")).scalar_one()
-    assert calls == [], "rir_poc was called before the absent-bundle refusal"  # §8.7 zero adapter calls
+    assert calls == [], "rir_poc was called before the absent-bundle refusal"  # zero adapter calls
     assert dead >= 1
 
 
-# --- Task 8: rubric-pinned decision-time scoring (every live check) --------
+# --- Rubric-pinned decision-time scoring (every live check) -----------------
 
 
 def test_mixed_era_reprices_score_gate_and_callback(
@@ -130,7 +130,7 @@ def test_mixed_era_reprices_score_gate_and_callback(
     from kyc_tool.queue.worker import Worker
     from kyc_tool.storage.object_store import FsStore
     from tests.integration._bundle_helpers import raw_x
-    T = "verified_email"                                     # §8.8b example type
+    T = "verified_email"                                     # example type
     assert policy.rubric.item(T).points == 10 and policy.rubric.item(T).category == "account_access"
     with session_factory() as s:
         store.store_bundle(s, raw_x())
@@ -168,7 +168,7 @@ def test_mixed_era_reprices_score_gate_and_callback(
     assert any(c["type"] == T and c["points"] == 10 for c in checks)  # re-priced points in callback
 
 
-# --- Task 9: atomic bundle+engine provenance; immutable run pin ------------
+# --- Atomic bundle+engine provenance; immutable run pin ---------------------
 
 
 @pytest.mark.parametrize("flag, resolved_is_x", [(True, True), (False, False)],
@@ -243,7 +243,7 @@ def test_cross_bundle_decision_diverges_approve_x_manual_y(
 
 def test_manual_approve_stamps_engine_build_id(session_factory, clean_db, post_event):
     # manual-approve writes DecisionRow(run_id=None) synchronously in the API
-    # (events/ingest.py:_handle_manual_approve) — Task 9 stamps ENGINE_BUILD_ID there.
+    # (events/ingest.py:_handle_manual_approve), which stamps ENGINE_BUILD_ID there.
     post_event("c-ma", "reviewer.manual_approve", {"reviewer_id": "rev-1"},
                actor={"type": "reviewer", "id": "rev-1"})
     with session_factory() as s:

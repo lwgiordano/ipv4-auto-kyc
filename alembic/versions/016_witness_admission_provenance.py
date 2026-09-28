@@ -1,10 +1,10 @@
-"""witness admission provenance + canonical authority recreation (PR 7b-core)
+"""witness admission provenance + canonical authority recreation
 
 Revision ID: 016
 Revises: 015
 
 Third repair, same rule as the first two: a published revision is never edited, so `015`'s gaps
-close here. What `4dfdf8a..172fd71`'s audit proved still fabricable:
+close here. What was still fabricable after `015`:
 
 - a decision callback could go `pending → delivered` with NO witness at all — `015`'s guard fired
   only when a digest was being WRITTEN, so raw SQL writing none passed, and the taxonomy then
@@ -225,11 +225,11 @@ def downgrade() -> None:
     digests = conn.execute(
         sa.text("SELECT count(*) FROM outbox WHERE callback_wire_sha256 IS NOT NULL")
     ).scalar_one()
-    # NEGATIVE evidence counts too (re-audit F4 of 0c46443): an attempt_v1 decision callback with
-    # no attempt and no digest is the durable proof that nothing was ever staged — the only state
-    # licensing a non-delivery claim. Dropping witness_generation (014's downgrade) would erase
-    # it and a re-upgrade would refill it as 'legacy', permanently. Refuse here, at the top of
-    # the walk, so the destructive step is never reachable.
+    # NEGATIVE evidence counts too: an attempt_v1 decision callback with no attempt and no digest
+    # is the durable proof that nothing was ever staged — the only state licensing a non-delivery
+    # claim. Dropping witness_generation (014's downgrade) would erase it and a re-upgrade would
+    # refill it as 'legacy', permanently. Refuse here, at the top of the walk, so the destructive
+    # step is never reachable.
     negatives = conn.execute(sa.text(
         "SELECT count(*) FROM outbox WHERE kind = 'decision_callback' "
         "AND witness_generation = 'attempt_v1'"

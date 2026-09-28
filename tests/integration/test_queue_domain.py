@@ -1,7 +1,7 @@
-"""Re-audit `5b0f0b8..b75a320` R4-F3: the queue's open time domains. A nonpositive/overflowing lease
-defeats per-case serialization or raises DatetimeFieldOverflow at claim; a negative/oversized backoff
-overflowed at fail; a bad poll kills the worker; a nonpositive token TTL mints an expired token. Every
-invalid case now fails closed and leaves durable state unchanged; the real DB sinks are driven."""
+"""The queue's open time domains. A nonpositive/overflowing lease defeats per-case serialization or
+raises DatetimeFieldOverflow at claim; a negative/oversized backoff overflows at fail; a bad poll kills
+the worker; a nonpositive token TTL mints an expired token. Every invalid case fails closed and leaves
+durable state unchanged; the real DB sinks are driven."""
 
 import pytest
 from sqlalchemy import text
@@ -32,8 +32,8 @@ def test_claim_refuses_out_of_domain_lease_without_touching_the_job(session_fact
 
 def test_two_workers_cannot_both_run_the_same_case_job(session_factory, clean_db):
     """Per-case serialization holds with a VALID lease: while A holds the claim, B claims nothing for
-    the same case. The reported double-claim came from a -1 lease minting an already-expired claim
-    that the reaper immediately requeued — now impossible, the lease floor is 1."""
+    the same case. A double-claim would come from a -1 lease minting an already-expired claim
+    that the reaper immediately requeues — impossible, since the lease floor is 1."""
     _enqueue(session_factory, case_id="cx")
     with uow(session_factory) as sa:
         a = jobs.claim(sa, ["run_transition"], "worker-a", 120)
@@ -60,7 +60,7 @@ def test_fail_at_a_high_attempt_count_requeues_without_overflow(session_factory,
     _enqueue(session_factory)
     with uow(session_factory) as s:
         claimed = jobs.claim(s, ["run_transition"], "w", 120)
-    # keep the REAL claim nonce (fail() is fenced on it — R8 F1); only the counters are synthetic
+    # keep the REAL claim nonce (fail() is fenced on it); only the counters are synthetic
     high = dataclasses.replace(claimed, attempts=63, max_attempts=100)
     with uow(session_factory) as s:
         s.execute(text("UPDATE jobs SET attempts=63 WHERE id=:i"), {"i": claimed.id})
@@ -147,8 +147,8 @@ def test_poc_mint_with_a_valid_ttl_sets_a_future_expiry(session_factory, clean_d
 
 @pytest.mark.parametrize("bad", [-1, 0, True, 1.5, 2_147_483_648])
 def test_enqueue_refuses_out_of_domain_max_attempts_without_creating_a_row(session_factory, clean_db, bad):
-    """Re-audit `03dbfab..bc325e7` R5-F7: jobs.max_attempts is int4 with no DB CHECK yet, so enqueue
-    re-checks the domain before add/flush; -1/0/bool/float/int4+1 refuse and no job row is created."""
+    """The jobs.max_attempts column is int4 with no DB CHECK yet, so enqueue re-checks the domain
+    before add/flush; -1/0/bool/float/int4+1 refuse and no job row is created."""
     with uow(session_factory) as s, pytest.raises(ValueError):
         jobs.enqueue(s, "run_transition", {}, max_attempts=bad)
     with session_factory() as s:

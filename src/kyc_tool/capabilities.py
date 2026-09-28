@@ -1,9 +1,9 @@
 """The RUNTIME authority registry for capabilities this system publishes as absent.
 
-Re-audit `1826661..b5c7a83` finding 6: the typed absence slots lived under the document layer
-(docs/contracts), a package runtime is forbidden to import, so "shipping any part forces the gates forward"
-rested on a four-string name sweep that a provider with different identifiers walked straight
-past. The registry now lives HERE, in runtime, dependency-neutral (stdlib only, like
+The typed absence slots previously lived under the document layer (docs/contracts), a package
+runtime is forbidden to import, so "shipping any part forces the gates forward" rested on a
+four-string name sweep that a provider with different identifiers walked straight past. The
+registry now lives HERE, in runtime, dependency-neutral (stdlib only, like
 `kyc_tool.authority`): every official consumer — the retirement gates, the answer-artifact
 resolution gate, and any future API route or worker that would exercise such an authority —
 resolves through `resolve()`, and the published contract documents PROJECT this registry's
@@ -13,7 +13,7 @@ The forcing property is scoped where it is executable: an unregistered provider 
 because nothing official consults anything but this registry; and `register()` — the one call
 production would make to ship a provider — flips the slot away from `MissingCapability`, which
 trips every consumer's rewrite-me branch and fails the dependent claim verifiers until the
-claims, the gates, and the ROADMAP unit move in the same change.
+claims, the gates, and the provider work move in the same change.
 """
 
 from dataclasses import dataclass
@@ -22,10 +22,9 @@ from typing import Protocol, runtime_checkable
 
 @runtime_checkable
 class RetirementEvidenceAuthority(Protocol):
-    """What a shipped retirement-evidence provider must BE (R-audit-3 finding 11): the typed
-    boundary registration validates, so `register(slot, object())` — an arbitrary object with
-    no evidence surface — is refused, and 'MissingCapability | AuthorityProtocol' is the slot's
-    real domain."""
+    """What a shipped retirement-evidence provider must BE: the typed boundary registration
+    validates, so `register(slot, object())` — an arbitrary object with no evidence surface — is
+    refused, and 'MissingCapability | AuthorityProtocol' is the slot's real domain."""
 
     def inbound_zero_window_receipt(self, key_id: str) -> object: ...
 
@@ -68,7 +67,7 @@ _SLOTS: dict[str, object] = {
 
 def resolve(slot: str) -> object:
     """The one resolution path. Returns the slot's current holder — a `MissingCapability`
-    until the owning ROADMAP unit ships and registers a real provider."""
+    until the owning provider work ships and registers a real provider."""
     if slot not in _SLOTS:
         raise ValueError(f"unknown capability slot {slot!r}")
     return _SLOTS[slot]
@@ -79,9 +78,9 @@ _SLOT_PROTOCOLS: dict[str, type] = {
     SLOT_ANSWER_ARTIFACT: AnswerArtifactAuthority,
 }
 
-# Per-slot CONTRACT probes (R-audit-4 finding 5): a runtime_checkable Protocol proves member
-# NAMES exist, not that they are callable, take the promised arguments, or return the promised
-# shape — same-named integers and zero-arg methods both "conformed". Registration now proves
+# Per-slot CONTRACT probes: a runtime_checkable Protocol proves member NAMES exist, not that
+# they are callable, take the promised arguments, or return the promised shape — same-named
+# integers and zero-arg methods both "conformed". Registration therefore proves
 # each member callable, binds the probe arguments against its real signature, CALLS it with
 # inert probe inputs, and validates the result shape — all BEFORE the slot changes.
 _SLOT_PROBES: dict[str, tuple] = {
@@ -121,11 +120,11 @@ def _provider_contract_problems(slot: str, provider: object) -> list:
 
 
 def register(slot: str, provider: object) -> None:
-    """Ship a provider into a slot — the call the owning unit makes when it lands. One
+    """Ship a provider into a slot — the call the owning provider work makes when it ships. One
     authority per slot: registering over a live provider refuses; a `MissingCapability`,
-    empty, or NON-CONFORMING provider is not a registration (R-audit-3 finding 11 — the slot's
-    domain is MissingCapability | the slot's AuthorityProtocol, so an arbitrary object cannot
-    become an authority)."""
+    empty, or NON-CONFORMING provider is not a registration (the slot's domain is
+    MissingCapability | the slot's AuthorityProtocol, so an arbitrary object cannot become an
+    authority)."""
     if slot not in _SLOTS:
         raise ValueError(f"unknown capability slot {slot!r}")
     if provider is None or isinstance(provider, MissingCapability):

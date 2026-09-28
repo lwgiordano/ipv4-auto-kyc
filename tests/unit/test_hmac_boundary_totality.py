@@ -1,14 +1,14 @@
-"""The REQUEST-time HMAC boundary is total against hostile inputs (re-audit `4c3015a..cccd5f7` F1).
+"""The REQUEST-time HMAC boundary is total against hostile inputs.
 
-The production aggregate was hardened first, and that was mistaken for the boundary being closed.
-It is not the same boundary: `production_config_violations` runs at BOOT, while
-`require_valid_signature` runs per request against whatever object is on `app.state`. A
-`model_copy(update=...)` that never passed a validator reaches the request path intact, and Codex
-reproduced four escapes there — a hostile active-key-id `__eq__` raising `RuntimeError`, a rotation
-`str` subclass whose `encode()` raises inside `sign_v2`, an integer legacy secret raising
-`AttributeError`, and a correctly signed v1 request reaching a hostile sunset value.
+Hardening the production aggregate does not close this boundary. It is not the same boundary:
+`production_config_violations` runs at BOOT, while `require_valid_signature` runs per request
+against whatever object is on `app.state`. A `model_copy(update=...)` that never passed a validator
+reaches the request path intact, where four escapes are possible — a hostile active-key-id `__eq__`
+raising `RuntimeError`, a rotation `str` subclass whose `encode()` raises inside `sign_v2`, an
+integer legacy secret raising `AttributeError`, and a correctly signed v1 request reaching a hostile
+sunset value.
 
-Every one produced a 500 on a request that deserved a 401. That distinction matters beyond tidiness:
+Unguarded, each one produces a 500 on a request that deserves a 401. That distinction matters:
 a 500 is an availability signal an unauthenticated caller can drive, and it discards the honest
 answer (this signature is not valid) in favour of an accident.
 
@@ -145,7 +145,7 @@ def test_a_correctly_signed_v1_request_is_accepted():
     auth.require_valid_signature(settings, _Req(_v1_headers()), b"{}")
 
 
-# ── Codex's four reproductions, and the fields they generalise to ─────────────────────────────
+# ── The four reproductions, and the fields they generalise to ─────────────────────────────────
 # Poison that the ACTIVE-key path consults. The request is signed with the active key id.
 ACTIVE_POISON = [
     ("active key id, hostile __eq__", {"hmac_inbound_key_id": HostileStr(ACTIVE_ID)}),
@@ -157,8 +157,8 @@ ACTIVE_POISON = [
 ]
 
 # Poison that only the ROTATION path consults. These MUST be presented under a non-active key id:
-# an earlier draft signed every case with the active id, so `_inbound_secret` returned the active
-# secret and the poisoned mapping was never touched — the tests passed without exercising anything.
+# signing every case with the active id makes `_inbound_secret` return the active secret, so the
+# poisoned mapping is never touched — the tests would pass without exercising anything.
 ROTATION_KEY_ID = "kyc-platform-0"
 EXTRAS_POISON = [
     ("extras is a hostile mapping",
@@ -213,19 +213,19 @@ def test_a_hostile_presented_key_id_is_gated_before_it_is_compared():
     assert auth._inbound_secret(settings, None) == ""
 
 
-# ── v1: two DIFFERENT outcome classes, named honestly (gate finding 4) ────────────────────────
+# ── v1: two DIFFERENT outcome classes, named honestly ─────────────────────────────────────────
 #
-# The previous single test was called `..._is_401_not_500` and then accepted either a 401 or no
-# exception at all, which let two genuinely different policies hide behind one name. They are split
-# here because they answer different questions.
+# A single `..._is_401_not_500` test that accepts either a 401 or no exception at all lets two
+# genuinely different policies hide behind one name. They are split here because they answer
+# different questions.
 #
-#   * A malformed VERIFICATION input (the legacy secret) means we cannot check the signature. There
-#     is no honest answer but 401.
-#   * A malformed RETIREMENT input (sunset, observation window) means we cannot prove v1 is retired.
+#   * A malformed VERIFICATION input (the legacy secret) means the signature cannot be checked.
+#     There is no honest answer but 401.
+#   * A malformed RETIREMENT input (sunset, observation window) means v1 cannot be proven retired.
 #     ADR-003 is explicit that a scheduled date takes effect only once the witness is green, so
 #     "cannot read the evidence" is definitionally not proof, and a VALID v1 request is accepted.
 #
-# That second behaviour is a deliberate, human-approved policy, not an accident. The reasoning: the
+# That second behaviour is a deliberate, approved policy, not an accident. The reasoning: the
 # request is cryptographically valid, so accepting it is not an authentication failure; the only way
 # to reach a malformed value at request time is injecting an object into a live Settings, which
 # means code execution — an adversary there has no need to extend v1's life; `production_config_
@@ -266,10 +266,10 @@ class _TrivialSession:
 def witness(monkeypatch):
     """Stub only the DATABASE layer, so the real `_inbound_v1_zero`/`_record_v1` logic runs.
 
-    Recording the arguments is the point: gate finding 4 was that the observation-window specimen
-    passed `session_factory=None`, so `_inbound_v1_zero` returned before consulting the poisoned
-    value and the test proved nothing. Capturing what the witness was CALLED WITH turns "the value
-    is consumed" from an assumption into an assertion.
+    Recording the arguments is the point: an observation-window specimen that passes
+    `session_factory=None` makes `_inbound_v1_zero` return before consulting the poisoned value,
+    so the test proves nothing. Capturing what the witness was CALLED WITH turns "the value is
+    consumed" from an assumption into an assertion.
     """
     seen = {"windows": [], "recorded": 0, "zero": True}
 
@@ -311,9 +311,9 @@ def test_unreadable_retirement_evidence_accepts_a_valid_v1_request(label, update
 
 
 def test_the_observation_window_value_is_actually_consulted(witness):
-    """Gate finding 4's second half. The old specimen passed `session_factory=None`, so
-    `_inbound_v1_zero` returned before reading the window at all — it could not have detected a
-    poisoned value because it never looked. Here the witness records what it was called with."""
+    """A specimen that passes `session_factory=None` makes `_inbound_v1_zero` return before
+    reading the window at all — it cannot detect a poisoned value because it never looks. Here the
+    witness records what it was called with."""
     settings = hardened(platform_hmac_secret=SECRET,
                         hmac_v1_inbound_sunset_at="2020-01-01T00:00:00Z",
                         hmac_v1_observation_window_days=11)
@@ -385,13 +385,13 @@ def test_no_hostile_method_is_ever_dispatched():
     assert auth._sunset_passed(HostileStr("2020-01-01T00:00:00Z"), None) is False
 
 
-# ── gate round: the toggles that decide whether verification runs at all ──────────────────────
+# ── The toggles that decide whether verification runs at all ──────────────────────────────────
 #
-# Wave 0 hardened every key, secret and skew field ON the verification path and never touched the
-# boolean deciding whether that path runs (gate finding 1). `require_valid_signature` opened with
-# `if settings.auth_disabled: return`, so an injected `1`, a truthy `"false"`, or any non-empty
-# mapping ACCEPTED AN UNSIGNED REQUEST. That is strictly worse than the 500s Wave 0 fixed: those
-# refused service, this grants it.
+# Hardening every key, secret and skew field ON the verification path does not cover the boolean
+# deciding whether that path runs. A `require_valid_signature` that opens with
+# `if settings.auth_disabled: return` lets an injected `1`, a truthy `"false"`, or any non-empty
+# mapping ACCEPT AN UNSIGNED REQUEST. That is strictly worse than the 500s above: those refuse
+# service, this grants it.
 #
 # The rule is a closed grammar rather than a type check: only exact built-in `True` may disable
 # authentication, and only exact built-in `False` may select the deliberately-open dev read path.
@@ -415,7 +415,7 @@ MALFORMED_TOGGLES = [
 @pytest.mark.parametrize("label,value", MALFORMED_TOGGLES, ids=[c[0] for c in MALFORMED_TOGGLES])
 def test_only_exact_true_disables_signature_checking(label, value):
     """An UNSIGNED request against a malformed `auth_disabled`. Every case must be denied, and
-    denied cleanly — a raw exception here is the same availability signal Wave 0 removed."""
+    denied cleanly — a raw exception here is the same availability signal as the 500s above."""
     settings = hardened().model_copy(update={"auth_disabled": value})
     with pytest.raises(HTTPException) as excinfo:
         auth.require_valid_signature(settings, _Req({}), b"{}")
@@ -424,8 +424,8 @@ def test_only_exact_true_disables_signature_checking(label, value):
 
 def test_exact_true_still_disables_it_in_a_dev_environment():
     """Guard the guard: the documented dev escape hatch must keep working, or this is not a
-    grammar, it is a removal. In a DEV environment — the production-shaped variant is the re-gate-3
-    finding, tested below."""
+    grammar, it is a removal. In a DEV environment — the production-shaped variant is tested
+    below."""
     settings = hardened().model_copy(update={"auth_disabled": True, "environment": "development"})
     auth.require_valid_signature(settings, _Req({}), b"{}")
 
@@ -445,11 +445,11 @@ def test_exact_false_still_opens_the_dev_read_path_in_a_dev_environment():
     auth.require_read_access(settings, _Req({}), b"{}")
 
 
-# ── re-gate-3 finding 1: the dev escapes are environment-bound, like the admin token ──────────
+# ── The dev escapes are environment-bound, like the admin token ───────────────────────────────
 #
-# The admin-token fix added an environment gate; its two siblings still treated their exact
-# boolean as sufficient by itself, so `auth_disabled=True` and `read_auth_required=False` on a
-# PRODUCTION-shaped mutated Settings accepted unsigned access. Same class, other two switches.
+# The admin token has an environment gate; its two siblings need one too. An exact boolean is not
+# sufficient by itself: `auth_disabled=True` and `read_auth_required=False` on a PRODUCTION-shaped
+# mutated Settings would accept unsigned access. Same class, other two switches.
 
 DEV_ESCAPE_POISON = [
     ("prod-shaped default", {}),
@@ -481,8 +481,8 @@ def test_read_auth_required_false_is_not_enough_outside_an_exact_dev_environment
 
 
 def test_all_three_dev_escapes_consult_the_same_predicate():
-    """One helper, three gates, so they cannot drift apart a THIRD time — the admin token was
-    fixed in one round and its two siblings in the next, which is exactly the drift this pins.
+    """One helper, three gates, so they cannot drift apart again — the admin token and its two
+    siblings were once fixed separately, which is exactly the drift this pins.
     AST, not substring: each permissive branch must reference `_dev_environment` by name."""
     import ast as ast_module
 
@@ -543,7 +543,7 @@ def test_the_configured_admin_token_still_authenticates():
     auth.require_admin(settings, {"Authorization": "Bearer " + "t" * 32})
 
 
-# Re-gate finding 1: the empty-token allowance was ENVIRONMENT-BLIND, so a production-shaped
+# Regression: the empty-token allowance was ENVIRONMENT-BLIND, so a production-shaped
 # Settings opened the `/ui` mutation surface with no credential. `/ui` calls `require_admin`
 # directly rather than through the ops wrapper, so the wrapper's production check did not cover it.
 EMPTY_TOKEN_ENVIRONMENTS = [
@@ -578,7 +578,7 @@ EMPTY_TOKEN_POISON = [
 
 @pytest.mark.parametrize("label,update", EMPTY_TOKEN_POISON, ids=[c[0] for c in EMPTY_TOKEN_POISON])
 def test_an_empty_token_never_opens_a_non_dev_or_malformed_environment(label, update):
-    """Codex's four specimens plus the malformed-environment cases. An environment that is not
+    """The first four specimens plus the malformed-environment cases. An environment that is not
     exactly a known dev value is not a dev environment."""
     settings = hardened(ui_admin_token="t" * 32).model_copy(
         update={"ui_admin_token": "", **update})
@@ -595,7 +595,7 @@ def test_the_direct_ui_route_uses_the_same_admin_decision():
     assert "_require_ops_admin" not in ui, "/ui grew a second, separate admin decision"
 
 
-# ── r9: the configuration read, which the console (Bearer) and the platform (signed) both make ─
+# ── The configuration read, which the console (Bearer) and the platform (signed) both make ────
 #
 # `require_read_access` alone gated it, so in a dev environment with signed reads off it checked
 # nothing even with an operator credential configured -- and staging runs as `development`. The
@@ -656,11 +656,11 @@ def test_an_empty_credential_is_exactly_the_platform_read_rule():
         _assert_read_refused(settings, {}, label)
 
 
-# ── gate round: the int subclass the Wave 0 skew test never reached ───────────────────────────
+# ── The int subclass a hostile-string skew test never reaches ─────────────────────────────────
 class HostileInt(int):
-    """Passes `isinstance(x, int)`. Wave 0's skew case used a hostile STRING, which fails the
-    isinstance check and returns before the comparison — so the accepting branch, where the
-    dispatch actually happens, was never exercised (gate finding 2)."""
+    """Passes `isinstance(x, int)`. A hostile STRING skew value fails the isinstance check and
+    returns before the comparison — so it never exercises the accepting branch, where the dispatch
+    actually happens."""
 
     def __ge__(self, other):
         raise RuntimeError("hostile __ge__")
@@ -687,16 +687,16 @@ def test_an_exact_int_skew_still_works():
         SECRET, now, b"{}", security.sign(SECRET, now, b"{}"), max_skew_seconds=300) is True
 
 
-# ── re-gate finding 2: a malformed window must never PROVE zero ───────────────────────────────
+# ── A malformed window must never PROVE zero ──────────────────────────────────────────────────
 #
-# The Wave 0 fix hardened the direction that ACCEPTS and left the direction that REFUSES. With a
-# past sunset and a real observation row two days old, a window of `True`, `0.5`, `-1` or `0` makes
+# Hardening the direction that ACCEPTS does not cover the direction that REFUSES. With a past sunset
+# and a real observation row two days old, a window of `True`, `0.5`, `-1` or `0` makes
 # `(now - started).days < window` false and `accepted_within_window` false, so the witness returns
 # "zero proven" and a valid v1 request is RETIRED. That cuts off the platform's live traffic — the
 # outage the approved availability policy exists to prevent, arrived at from the other side.
 #
-# My hostile-window tests could not have caught it: `hardened()` carries an UNARRIVED sunset, so
-# `_sunset_passed` was False and the poisoned window never reached the witness at all.
+# Hostile-window tests built on `hardened()` cannot catch it: `hardened()` carries an UNARRIVED
+# sunset, so `_sunset_passed` is False and the poisoned window never reaches the witness at all.
 
 PAST_SUNSET = "2020-01-01T00:00:00Z"
 
@@ -728,8 +728,8 @@ def test_a_malformed_window_never_retires_live_v1(label, window, witness):
 
 
 def test_the_sunset_really_has_passed_in_these_specimens():
-    """Guard the guard, and the exact reason the Wave 0 version was vacuous: `hardened()` supplies
-    a FUTURE sunset, so `_sunset_passed` was False and no poisoned window was ever consulted."""
+    """Guard the guard, and the exact reason a `hardened()`-based version is vacuous: `hardened()`
+    supplies a FUTURE sunset, so `_sunset_passed` is False and no poisoned window is consulted."""
     from datetime import UTC, datetime
 
     assert auth._sunset_passed(PAST_SUNSET, datetime.now(UTC)) is True
@@ -738,10 +738,10 @@ def test_the_sunset_really_has_passed_in_these_specimens():
 
 @pytest.mark.parametrize("field", ["hmac_v1_inbound_sunset_at", "hmac_v1_outbound_sunset_at"])
 def test_a_specimen_sunset_cannot_quietly_age_into_the_past(field):
-    """The anti-rot guard. The test above was written against `hardened()`'s literal
-    `2026-09-01T00:00:00Z`, and on 2026-09-01 it started failing on a clean tree: the specimen
-    that had to be in the future had become the past, so the guard reported the opposite of the
-    thing it guards. Nothing about v1 retirement had changed.
+    """The anti-rot guard. A test written against a literal sunset date starts failing on a
+    clean tree once that date passes: the specimen that had to be in the future becomes the past,
+    so the guard reports the opposite of the thing it guards, though nothing about v1 retirement
+    has changed.
 
     A relative specimen cannot do that, and this asserts the property rather than the mechanism:
     both sunsets must sit COMFORTABLY ahead of the clock, not merely ahead of it. A date literal

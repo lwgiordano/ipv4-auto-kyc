@@ -1,20 +1,20 @@
-"""Governed schema-012 restore of a pruned decision callback (PR 7b-core step 0.5/0.6).
+"""Governed schema-012 restore of a pruned decision callback.
 
 The pre-window diagnostic refuses on a missing callback (`BLOCKED_NO_AUTHORITATIVE_MAPPING`),
 and the documented remediation used to be pasted SQL — an unexecutable `:param` predicate, a
 sequence step that was unreachable before cutover, and a repair that only knew current
-`max(id)` and could restart the sequence BELOW the id about to be restored (Codex re-audit
-`f495de8` F1: max=10, missing id=100 → repair says OK at next=11, the restored 100 collides
-later). This command IS the executable form, run inside a PRE-WINDOW MAINTENANCE STOP (every
-writer stopped and attested — it takes `ACCESS EXCLUSIVE` on `public.outbox`):
+`max(id)` and could restart the sequence BELOW the id about to be restored (for example:
+max=10, missing id=100 → repair says OK at next=11, the restored 100 collides later). This
+command IS the executable form, run inside a PRE-WINDOW MAINTENANCE STOP (every writer stopped
+and attested — it takes `ACCESS EXCLUSIVE` on `public.outbox`):
 
 - input is a STRICT, VERSIONED backup-evidence JSON file (`schema_version` plus every schema-012
   outbox column, the decision id, and the body digest computed ON THE BACKUP ROW) parsed through a
   typed model that refuses unknown fields, naive timestamps, a non-object body, and malformed
-  shapes with a stable payload-free refusal — never a traceback (re-audit `538e55e..42e1c7d` F3) —
-  plus `--expect-original-id`, which must equal the file's id (double-entry against the wrong row);
-- **only a DELIVERED, terminal decision callback may be restored** (re-audit `8377440` F1):
-  retention prunes only `delivered` rows, so that is the only legitimate gap. A restored
+  shapes with a stable payload-free refusal — never a traceback — plus `--expect-original-id`,
+  which must equal the file's id (double-entry against the wrong row);
+- **only a DELIVERED, terminal decision callback may be restored**: retention prunes only
+  `delivered` rows, so that is the only legitimate gap. A restored
   `delivered` row is TERMINAL — the claim SQL selects `status='pending'`, so it is never
   claimed, signed, or sent. That closes the "manufacture a sendable callback from a
   self-consistent file" exploit at the root: even a wholly attacker-controlled body cannot be
@@ -23,16 +23,16 @@ writer stopped and attested — it takes `ACCESS EXCLUSIVE` on `public.outbox`):
   evidence tuple AND the linked automatic decision — a body that names a different case/run is
   refused;
 - `--expect-manifest-digest` (REQUIRED, dry-run AND apply) is a mandatory INTEGRITY check, NOT
-  signature verification (re-audit `42e1c7d..b39b82a` F4): the tool recomputes sha256 over the
-  ENTIRE evidence file and refuses unless it matches this value, before any parsing or DB work — so
-  altering the body OR any lifecycle field is rejected, and a file cannot self-certify by carrying
-  its own digest. What the tool does NOT do is verify a cryptographic signature or vouch for the
-  digest itself; the digest's AUTHENTICITY is the operator's responsibility — source it OUT OF BAND
-  from a trusted/signed backup manifest (the RUNBOOK documents the capture step). A pinned-key
+  signature verification: the tool recomputes sha256 over the ENTIRE evidence file and refuses
+  unless it matches this value, before any parsing or DB work — so altering the body OR any
+  lifecycle field is rejected, and a file cannot self-certify by carrying its own digest. What the
+  tool does NOT do is verify a cryptographic signature or vouch for the digest itself; the
+  digest's AUTHENTICITY is the operator's responsibility — source it OUT OF BAND from a
+  trusted/signed backup manifest (the RUNBOOK documents the capture step). A pinned-key
   signed-manifest verification is a deliberate future option, not yet built;
 - DRY-RUN by default: it runs the EXACT apply path inside a SAVEPOINT and rolls back, so a
   value that would fail on apply (a malformed timestamp, a lifecycle CHECK) fails dry-run too
-  — dry-run and apply are the same code, never divergent previews (re-audit `8377440` F2);
+  — dry-run and apply are the same code, never divergent previews;
 - `--apply` commits: the exact original row AND the sequence floored to
   `GREATEST(max(id), original_id) + 1` land in ONE transaction, with fail-closed read-backs of
   both the acceptance predicate (exactly one row) and the sequence tuple before commit.
@@ -48,8 +48,8 @@ next_attempt_at, last_error, timestamps) are ATTESTED inputs from the backup —
 is terminal so they never affect delivery, and nothing in the target database can contradict a
 falsified backup value. That is why the evidence must come from the authoritative backup by the
 documented capture query, and why the MANDATORY `--expect-manifest-digest` (sha256 of the whole
-evidence file) binds every attested field for INTEGRITY. Its limit is explicit (F4): the tool
-checks the file matches the digest, but does not verify the digest is genuinely signed — that
+evidence file) binds every attested field for INTEGRITY. Its limit is explicit: the tool checks
+the file matches the digest, but does not verify the digest is genuinely signed — that
 authenticity is operator-attested (source the digest from a trusted/signed backup manifest, out of
 band). Machine-verified authenticity (a pinned-key detached signature) is a deliberate future
 option, not built here.
@@ -79,20 +79,20 @@ _SCHEMA_VERSION = "pr7b-core.restore.v1"
 def _reject_nonfinite(value: str):
     """json.loads parse_constant hook: PostgreSQL JSONB rejects NaN/Infinity/-Infinity, but
     Python's json.loads accepts them by default — which would slip past validation and only fault
-    at the JSONB cast (re-audit `42e1c7d..b39b82a` F3). Reject them at parse time instead."""
+    at the JSONB cast. Reject them at parse time instead."""
     raise ValueError(f"non-finite JSON constant not allowed: {value}")
 
 
 # An evidence file is a SINGLE schema-012 outbox row plus a digest; a legitimate one is a few KiB.
-# The ceiling bounds memory and, with the recursion translation below, the parse cost of a hostile
-# file (re-audit `b39b82a..b53daf4` F9).
+# The ceiling bounds memory and, with the recursion translation below, the parse cost of a
+# hostile file.
 _MAX_EVIDENCE_BYTES = 1 << 20  # 1 MiB
 
-# Machine-readable SINGLE SOURCE OF TRUTH for what `--expect-manifest-digest` is (re-audit
-# `d569a15..4938840` F11). Prose drifts and denylists are enumerable; this structured contract is
-# what the wording guard asserts against. `--expect-manifest-digest` proves the file matches an
-# OPERATOR-SUPPLIED digest (INTEGRITY); it does not verify a cryptographic signature and does not
-# vouch for the digest's provenance (that authenticity is the operator's responsibility).
+# Machine-readable SINGLE SOURCE OF TRUTH for what `--expect-manifest-digest` is. Prose drifts
+# and denylists are enumerable; this structured contract is what the wording guard asserts against.
+# `--expect-manifest-digest` proves the file matches an OPERATOR-SUPPLIED digest (INTEGRITY); it
+# does not verify a cryptographic signature and does not vouch for the digest's provenance (that
+# authenticity is the operator's responsibility).
 INTEGRITY_CONTRACT = {
     "integrity_only": True,
     "signature_verified": False,
@@ -103,9 +103,9 @@ INTEGRITY_CONTRACT = {
 def _loads_strict(raw) -> object:
     """json.loads that refuses NaN/Infinity/-Infinity AND deeply nested JSON — for every untrusted
     evidence parse. Deep nesting otherwise raises RecursionError (NOT a ValueError), which escapes
-    the parse-boundary handlers as an uncaught traceback in both dry-run and apply (re-audit
-    `b39b82a..b53daf4` F9). Python's recursion limit is the effective nesting ceiling; the overflow
-    is translated into the same ValueError every caller already refuses on, payload-free."""
+    the parse-boundary handlers as an uncaught traceback in both dry-run and apply. Python's
+    recursion limit is the effective nesting ceiling; the overflow is translated into the same
+    ValueError every caller already refuses on, payload-free."""
     try:
         return json.loads(raw, parse_constant=_reject_nonfinite)
     except RecursionError as exc:
@@ -113,7 +113,7 @@ def _loads_strict(raw) -> object:
 
 
 class _Evidence(BaseModel):
-    """Strict, versioned backup-evidence schema (re-audit `538e55e..42e1c7d` F3).
+    """Strict, versioned backup-evidence schema.
 
     Unknown fields are refused, ids are non-blank, the digest is 64-hex, timestamps are
     timezone-aware ISO-8601, `payload_json` is a JSON OBJECT string, kind/status are closed to the
@@ -125,7 +125,7 @@ class _Evidence(BaseModel):
     """
 
     # strict=True so mistyped fields are REFUSED, not coerced: `"1"`->1 and `true`->1 no longer
-    # pass an int field (re-audit `42e1c7d..b39b82a` F3). extra=forbid rejects unknown fields.
+    # pass an int field. extra=forbid rejects unknown fields.
     model_config = ConfigDict(extra="forbid", strict=True)
 
     schema_version: Literal[_SCHEMA_VERSION]
@@ -139,8 +139,8 @@ class _Evidence(BaseModel):
     original_delivered_at: str  # delivered ⇒ non-null (Literal status forces it)
     original_next_attempt_at: str | None
     original_last_error: str | None
-    # le=int4 max: outbox.attempts is int4; an import above the domain would overflow the INSERT
-    # (re-audit `d569a15..4938840` F6). Refuse at validation, not at the database.
+    # le=int4 max: outbox.attempts is int4; an import above the domain would overflow the INSERT.
+    # Refuse at validation, not at the database.
     original_attempts: int = Field(ge=0, le=PG_INT4_MAX)
     original_created_at: str
     payload_json: str = Field(min_length=1)
@@ -178,7 +178,7 @@ class _Evidence(BaseModel):
 
 
 # The declared evidence field names — the ONLY field identifiers safe to name in a refusal. An
-# attacker controls unknown keys and values (re-audit F8), so a schema refusal may echo these names
+# attacker controls unknown keys and values, so a schema refusal may echo these names
 # but never the caller's own keys/values.
 _EVIDENCE_FIELDS = frozenset(_Evidence.model_fields)
 
@@ -215,13 +215,13 @@ class _Refused(RuntimeError):
 def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
     """Verify the MANDATORY out-of-band manifest digest over the whole file, then strictly parse and
     validate it. Every file/JSON/shape error becomes a payload-free `_Refused` — never a traceback,
-    never an echo of the evidence values (re-audit `538e55e..42e1c7d` F2/F3)."""
-    # F7/F10: open ONCE and fstat the SAME descriptor — no stat()-then-open() window a barrier-timed
-    # symlink→FIFO swap could exploit (re-audit `d569a15..4938840` F10). O_NOFOLLOW refuses a
-    # symlinked final component outright (prefer refusing symlinks); O_NONBLOCK means opening a FIFO
-    # returns immediately instead of blocking for a writer, so the fstat can reject it. Then stream at
-    # most _MAX_EVIDENCE_BYTES+1 in bounded chunks, hashing as we go, so an oversize (or growing)
-    # artifact is refused WITHOUT allocating the whole file first.
+    never an echo of the evidence values."""
+    # Open ONCE and fstat the SAME descriptor — no stat()-then-open() window a barrier-timed
+    # symlink→FIFO swap could exploit. O_NOFOLLOW refuses a symlinked final component outright
+    # (prefer refusing symlinks); O_NONBLOCK means opening a FIFO returns immediately instead of
+    # blocking for a writer, so the fstat can reject it. Then stream at most _MAX_EVIDENCE_BYTES+1 in
+    # bounded chunks, hashing each chunk as it is read, so an oversize (or growing) artifact is
+    # refused WITHOUT allocating the whole file first.
     open_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
     try:
         fd = os.open(path, open_flags)
@@ -254,10 +254,10 @@ def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
     finally:
         os.close(fd)
     raw_bytes = b"".join(parts)
-    # F2: the manifest anchor is checked FIRST and binds the ENTIRE file byte-for-byte. The operator
+    # The manifest anchor is checked FIRST and binds the ENTIRE file byte-for-byte. The operator
     # obtains sha256(evidence.json) from a trusted/signed backup manifest and passes it here; a file
     # that self-certifies cannot pass, and altering ANY field (body OR any lifecycle field) changes
-    # this digest and refuses before any parsing or DB work. F4/F13: this is an INTEGRITY digest, not
+    # this digest and refuses before any parsing or DB work. This is an INTEGRITY digest, not
     # a cryptographic signature — the tool does not verify the digest is genuine (that authenticity
     # is operator-attested), so the refusal names only integrity, never "authenticated".
     actual = hasher.hexdigest()
@@ -276,9 +276,9 @@ def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
     try:
         model = _Evidence.model_validate(raw)
     except ValidationError as exc:
-        # payload-free AND key-safe (re-audit `d3c0852..23e005e` F8): declared field names are static
-        # and safe to name, but an `extra_forbidden` loc is the ATTACKER'S key — echoing it leaks the
-        # supplied data and injects the operator log. Known fields report name + error TYPE (never the
+        # payload-free AND key-safe: declared field names are static and safe to name, but an
+        # `extra_forbidden` loc is the ATTACKER'S key — echoing it leaks the supplied data and
+        # injects the operator log. Known fields report name + error TYPE (never the
         # value); unknown keys are reported only as a count, their names withheld.
         known: set[str] = set()
         unexpected = 0
@@ -293,7 +293,7 @@ def _load_evidence(path: Path, *, expect_manifest_digest: str) -> dict:
             problems.append(f"{unexpected} unexpected field(s) [names withheld]")
         raise _Refused(f"evidence file failed schema validation: {problems}") from exc
     data = model.model_dump()
-    # F1: the body (a JSON object, model-checked) must name the SAME case/run as the evidence tuple.
+    # The body (a JSON object, model-checked) must name the SAME case/run as the evidence tuple.
     body = _loads_strict(data["payload_json"])
     if body.get("case_id") != data["case_id"] or body.get("run_id") != data["run_id"]:
         raise _Refused("the callback body's case_id/run_id do not match the evidence tuple")
@@ -317,17 +317,17 @@ def restore_callback(
     with uow(session_factory) as session:
         # bind(exact_revision="012") owns the schema/phase gate: it reads the FULL version set,
         # requires cardinality one, and refuses a multi-head or off-012 schema as BindingRefused —
-        # no separate .scalar_one() that would itself traceback on a multi-head state (F4).
+        # no separate .scalar_one() that would itself traceback on a multi-head state.
         binding.bind(session, lock_timeout_seconds=lock_timeout_seconds,
                      statement_timeout_seconds=statement_timeout_seconds,
                      exact_revision="012", require_sequence_owner=True,
                      shape_contract=shape.RESTORE_OUTBOX_CALLBACK)
-        # Lock EVERY relation the contract declares, in its canonical order (re-audit
-        # `f2929f8..6a4cd87` F7): the acceptance predicate joins decisions, so certifying it while
-        # decisions stays unlocked let concurrent DDL invalidate the certification mid-restore.
+        # Lock EVERY relation the contract declares, in its canonical order: the acceptance
+        # predicate joins decisions, so certifying it while decisions stays unlocked let
+        # concurrent DDL invalidate the certification mid-restore.
         for relation in shape.RESTORE_OUTBOX_CALLBACK.lock_relations:
             session.execute(text(f"LOCK TABLE public.{relation} IN ACCESS EXCLUSIVE MODE"))
-        # Re-check the SAME contract under the locks (re-audit R4-F4): a view swap or type/column
+        # Re-check the SAME contract under the locks: a view swap or type/column
         # drift between bind() and the locks cannot slip past the INSERT.
         under_lock = shape.shape_mismatches(session, shape.RESTORE_OUTBOX_CALLBACK)
         if under_lock:
@@ -351,7 +351,7 @@ def restore_callback(
             {"d": evidence["decision_id"], "c": evidence["case_id"], "r": evidence["run_id"]},
         ).first()
         if not decision_ok:
-            # F10: name the failed invariant/fields only — NEVER the candidate values (an attacker
+            # Name the failed invariant/fields only — NEVER the candidate values (an attacker
             # controls decision_id/case_id/run_id in the file; echoing them injects the operator log).
             raise _Refused(
                 "no automatic (manual=false) decision matches the evidence tuple "
@@ -365,7 +365,7 @@ def restore_callback(
         except SQLAlchemyError as exc:
             # The JSONB cast is the one pre-savepoint query that touches untrusted body text. A
             # value that slipped the strict parser must still refuse SANITIZED here, never leak the
-            # payload through a traceback (re-audit `42e1c7d..b39b82a` F3).
+            # payload through a traceback.
             raise _Refused(
                 f"the database rejected the evidence body ({type(exc).__name__}); nothing changed"
             ) from exc
@@ -379,7 +379,7 @@ def restore_callback(
             {"oid": oid},
         ).scalar_one()
 
-        # ONE code path for both modes (re-audit `8377440` F2): the exact INSERT + sequence
+        # ONE code path for both modes: the exact INSERT + sequence
         # restart + both read-backs run inside a SAVEPOINT. Dry-run rolls the savepoint back
         # after proving acceptance; apply lets the outer uow commit it. A DB error here (a
         # lifecycle CHECK, a bad cast that slipped Python normalization) aborts BOTH modes
@@ -449,8 +449,7 @@ def _sha256_hex(raw: str) -> str:
 
 class _Singleton(argparse.Action):
     """Reject a singleton option given more than once (argparse's default is silent last-wins, so a
-    duplicate/conflicting --expect-original-id could smuggle a second value — re-audit
-    `03dbfab..bc325e7` R5-F10)."""
+    duplicate/conflicting --expect-original-id could smuggle a second value)."""
 
     def __call__(self, parser, namespace, values, option_string=None):
         if getattr(namespace, self.dest + "_seen", False):
@@ -461,9 +460,9 @@ class _Singleton(argparse.Action):
 
 def build_parser() -> argparse.ArgumentParser:
     """The restore CLI parser. The --expect-manifest-digest trust semantics are RENDERED from
-    INTEGRITY_CONTRACT (re-audit `8aba2df..2cee937` R3-F8). allow_abbrev=False + singleton actions +
-    typed values close the ambiguous-grammar surface (re-audit `03dbfab..bc325e7` R5-F10): no option
-    truncation (--expect-manifest-dig), no duplicate/conflicting option, positive-id and 64-hex types."""
+    INTEGRITY_CONTRACT. allow_abbrev=False + singleton actions + typed values close the
+    ambiguous-grammar surface: no option truncation (--expect-manifest-dig), no
+    duplicate/conflicting option, positive-id and 64-hex types."""
     parser = argparse.ArgumentParser(
         prog="restore_pr7b_core_callback",
         allow_abbrev=False,

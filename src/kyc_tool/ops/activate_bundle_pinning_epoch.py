@@ -1,5 +1,5 @@
-"""Activate the bundle-pinning epoch (PR 6 §8.11/§8.15) — the single-row
-identity gate that pins which bundle+engine build are the enforced ones.
+"""Activate the bundle-pinning epoch — the single-row identity gate that
+pins which bundle+engine build are the enforced ones.
 The CLI compares the LOCALLY loaded policy bundle (this process's on-disk
 policy, not the store) against `--expect-bundle-hash` before ever touching
 the database — a valid but WRONG bundle (even one already seeded in
@@ -24,7 +24,7 @@ from kyc_tool.policy_store import repo as store
 
 
 def post_epoch_null_provenance(session) -> dict:
-    """Alert payload (PR 6 §7): decisions/checks/runs recorded AFTER the epoch
+    """Alert payload: decisions/checks/runs recorded AFTER the epoch
     activated but missing their pinning provenance — decisions by
     `decided_at`, checks by `created_at`, runs by finding post-epoch
     decisions, joining to the runs they reference, and surfacing runs whose

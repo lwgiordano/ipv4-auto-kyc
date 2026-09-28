@@ -7,9 +7,9 @@ EXCLUSIVE before touching any table.
 Why a fence at all: child-first table locking does not eliminate deadlocks, it only reorders them.
 The publisher's terminal path locks the parent `outbox` row and its trigger then reads the child
 `outbox_delivery_attempts`; retention updates the parent and then deletes from the child; a
-migration that locks child-then-parent forms a real `40P01` cycle with either of them (re-audits
-`15d875d` F5 and `cbb783b` F4). With one shared fence taken FIRST by every participant, the cycle
-cannot form at all: maintenance simply queues behind live writers.
+migration that locks child-then-parent forms a real `40P01` cycle with either of them. With one
+shared fence taken FIRST by every participant, the cycle cannot form at all: maintenance simply
+queues behind live writers.
 
 `prune()` and the publisher take this as the FIRST transactional statement, before any DML — a
 fence acquired after the parent is already locked would fence nothing.

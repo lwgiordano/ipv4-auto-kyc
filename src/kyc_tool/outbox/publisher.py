@@ -2,14 +2,14 @@
 
 Rows are written inside the decide transaction; this publisher delivers them
 at-least-once with exponential backoff (AUDIT:A6 — the platform dedupes on
-(case_id, run_id); we never claim exactly-once). Claiming pushes
+(case_id, run_id); exactly-once is never claimed). Claiming pushes
 next_attempt_at forward as a lease, so a crash mid-delivery just retries.
 
-PR 7b-core: rows are claimed per (case_id, ordering_stream) under a fenced claim_token;
+Rows are claimed per (case_id, ordering_stream) under a fenced claim_token;
 a decision callback proven obsolete by a higher locally-stamped delivery is terminally
 `superseded` (zero sends; decision callbacks only — DB-enforced) — a best-effort LOCAL
 suppression, not exactly-once and not platform-authoritative. Three residual reverts
-remain for 7b-activation: (1) send-before-stamp; (2) cross-replica; (3) a queued
+remain until ordering activation: (1) send-before-stamp; (2) cross-replica; (3) a queued
 automatic callback may be delivered AFTER a later manual approval — manual rows have
 run_id NULL, no callback, and no sequence, so the guard sees no higher locally-
 published automatic sequence. All three are expected pre-activation.
@@ -55,14 +55,14 @@ log = structlog.get_logger(__name__)
 DECISION_CALLBACK = "decision_callback"
 POC_EMAIL = "poc_email"
 
-# How the callback body is encoded on the wire. 7b-core never puts decision_sequence on the wire,
-# so every attempt it records is 'legacy'; 7b-activation introduces 'sequenced'. The vocabulary is
-# pinned by ck_attempt_wire_vocab, so an unknown value fails at the database rather than silently
-# becoming an uninterpretable witness.
-# The active callback wire generation, compared by the pending-025 gate against the pre-025
-# LITERAL held in the verifier itself (re-gate-3 finding 4). The previous arrangement compared this
-# to a sibling alias in this same module, so the natural two-line edit — move the alias and the
-# active value together — passed the gate while every persisted attempt advertised sequenced wire.
+# How the callback body is encoded on the wire. This release never puts decision_sequence on the
+# wire, so every attempt it records is 'legacy'; ordering activation (migration 025) starts
+# emitting 'sequenced'. The vocabulary is pinned by ck_attempt_wire_vocab, so an unknown value fails at the
+# database rather than silently becoming an uninterpretable witness.
+# The active callback wire generation, compared by the pending-025 contract check against the
+# pre-025 LITERAL held in the verifier itself. An earlier arrangement compared this to a sibling
+# alias in this same module, so the natural two-line edit — move the alias and the active value
+# together — passed the check while every persisted attempt advertised sequenced wire.
 # A name declared beside the thing it checks is not an authority. The vocabulary itself is pinned
 # independently by the ck_attempt_wire_vocab DB constraint.
 _WIRE_VERSION = "legacy"
@@ -77,13 +77,13 @@ _ORPHAN_DRAIN_SECONDS = 2.0
 
 # Ceiling on a single backoff delay. The schedule is base × 2**(attempts-1); with a large base or
 # attempts that grows unbounded, `now() + make_interval(secs => delay)` would overflow PostgreSQL's
-# timestamptz (µs since epoch, int64) and raise mid-write, leaving the row pending/claimed/unredacted
-# (re-audit `d3c0852..23e005e` F5). 24h is far beyond any real retry cadence and is overflow-safe.
+# timestamptz (µs since epoch, int64) and raise mid-write, leaving the row pending/claimed/unredacted.
+# 24h is far beyond any real retry cadence and is overflow-safe.
 _MAX_BACKOFF_SECONDS = 86_400
 
 # How much of a callback acknowledgement body the publisher will read to keep the connection
-# reusable. A platform ack is a few hundred bytes; past this it is not an ack we need, and reading
-# further would let the receiver decide how long the tool holds its claim.
+# reusable. A platform ack is a few hundred bytes; past this it is not an ack the publisher needs,
+# and reading further would let the receiver decide how long the tool holds its claim.
 _MAX_ACK_BODY_BYTES = 64 * 1024
 
 
@@ -107,14 +107,14 @@ class _StaleClaim(Exception):
 class OutboxSaturated(RuntimeError):
     """The orphan-cap circuit breaker tripped: detached wedged sends have reached
     `_MAX_ORPHAN_SENDS`, so the publisher can stage nothing new. `run_forever` raises this instead
-    of sleeping forever like an empty queue, making saturation SUPERVISOR-VISIBLE (re-audit
-    `538e55e..42e1c7d` F6): the worker exits nonzero, a supervisor restarts it, and the fresh
-    process drops the daemon attempts and reclaims their connections — observable recovery."""
+    of sleeping forever like an empty queue, making saturation SUPERVISOR-VISIBLE: the worker exits
+    nonzero, a supervisor restarts it, and the fresh process drops the daemon attempts and reclaims
+    their connections — observable recovery."""
 
 
 @dataclass(frozen=True)
 class DeliveryReceipt:
-    """Proof-of-staging a decision-callback terminal must present (re-audit `4dfdf8a` F1).
+    """Proof-of-staging a decision-callback terminal must present.
 
     The requirement is derived from the ROW'S KIND, never from whether a caller happened to pass
     a digest: `_record_delivered(row, token)` with no receipt used to mark a decision callback
@@ -151,12 +151,12 @@ class DeliveryReceipt:
 # with a fresh claim_token + lease. next_attempt_at is left as the retry due time (the
 # lease is separate). case_id is NOT NULL (013), so there is no case_id IS NULL bypass.
 #
-# The CTE captures the PRE-claim claim_token as `prev_claim_token`: a non-NULL value means we
-# reclaimed a row whose prior claim expired WITHOUT being cleared by a terminal — i.e. the
+# The CTE captures the PRE-claim claim_token as `prev_claim_token`: a non-NULL value means this
+# claim took a row whose prior claim expired WITHOUT being cleared by a terminal — i.e. the
 # predecessor admitted an attempt (or crashed mid-cycle) and never terminalized. process_once
 # reconciles that instead of sending again, so a crash cannot push real sends past
-# outbox_max_attempts (re-audit `42e1c7d..b39b82a` F1). A cleanly-released row (post-terminal or
-# never claimed) has prev_claim_token NULL and takes the ordinary admit+send path.
+# outbox_max_attempts. A cleanly-released row (post-terminal or never claimed) has
+# prev_claim_token NULL and takes the ordinary admit+send path.
 _CLAIM_SQL = text(
     """
     WITH claimed AS (
@@ -188,7 +188,7 @@ _CLAIM_SQL = text(
 
 
 def enqueue_decision_callback(session: Session, *, body: dict, decision_sequence: int) -> None:
-    """Enqueue a decision callback. THIS is the serialization boundary (re-gate finding 3).
+    """Enqueue a decision callback. THIS is the serialization boundary.
 
     Validating in the pipeline sanitized one caller's dict and left the boundary open: adding
     `decision_sequence` after that call, or calling this function directly, stored the ordering key
@@ -197,13 +197,13 @@ def enqueue_decision_callback(session: Session, *, body: dict, decision_sequence
     `extra="forbid"`, so an unmodelled field is REFUSED rather than silently dropped in one path
     while leaking through another.
 
-    The row's `case_id`/`run_id` are DERIVED from the validated body (re-gate-3 finding 2). They
-    used to be separate keyword arguments, so the outbox could account, order, and complete a row
-    under one identity while the wire body named another — and several integration tests were
-    doing exactly that without noticing. One authority now: the platform dedupes on the BODY's
-    `(case_id, run_id)` (A6), so the body is the identity, and the row follows it.
-    `decision_sequence` stays an argument because it is row-only — it is the per-case ordering
-    column, deliberately absent from the pre-024 wire.
+    The row's `case_id`/`run_id` are DERIVED from the validated body. They used to be separate
+    keyword arguments, so the outbox could account, order, and complete a row under one identity
+    while the wire body named another — and several integration tests were doing exactly that
+    without noticing. One authority now: the platform dedupes on the BODY's `(case_id, run_id)`
+    (A6), so the body is the identity, and the row follows it. `decision_sequence` stays an argument
+    because it is row-only — it is the per-case ordering column, deliberately absent from the
+    pre-024 wire.
     """
     payload = encode_decision_callback(body)
     session.add(
@@ -243,20 +243,20 @@ class OutboxPublisher:
         http_client: httpx.Client | None = None,
         email_sender: EmailSender | None = None,
     ) -> None:
-        # Constructing a publisher is acquiring the callback-publish capability (re-audit
-        # `1826661..b5c7a83` finding 5): the declared role must carry it in the canonical map,
-        # checked here so no alias, factory, or disposable entry point publishes unaccounted.
+        # Constructing a publisher is acquiring the callback-publish capability: the declared
+        # role must carry it in the canonical map, checked here so no alias, factory, or
+        # disposable entry point publishes unaccounted.
         admitted = require_role_capability(
             process_role, CAP_CALLBACK_PUBLISH, "OutboxPublisher", settings=settings)
         self.process_role = admitted.role
         self.session_factory = session_factory
-        # Execute the ADMITTED snapshot, never the caller's live object (R-audit-8 finding
-        # 1): a same-value hostile subclass swapped in after validation fingerprints equal,
-        # so the wire target, signing inputs, sunsets, and knobs below all read
-        # self.settings — canonical built-ins the admission screen actually judged. The
-        # snapshot is FROZEN and the attribute is read-only (R-audit-9 finding 2): plain
-        # assignment on either refuses, so the value consumed at send time is the admitted
-        # value for the publisher's whole lifetime.
+        # Execute the ADMITTED snapshot, never the caller's live object: a same-value
+        # hostile subclass swapped in after validation fingerprints equal, so the wire
+        # target, signing inputs, sunsets, and knobs below all read self.settings —
+        # canonical built-ins the admission screen actually judged. The snapshot is
+        # FROZEN and the attribute is read-only: plain assignment on either refuses, so
+        # the value consumed at send time is the admitted value for the publisher's whole
+        # lifetime.
         self._settings = admitted.settings
         self.http = http_client or httpx.Client(
             timeout=self.settings.outbox_http_timeout_seconds)
@@ -267,8 +267,8 @@ class OutboxPublisher:
 
     @property
     def settings(self) -> Settings:
-        """The admitted, frozen execution snapshot (R-audit-9 finding 2). Read-only: the
-        send path must consume the value admission validated, so there is no setter."""
+        """The admitted, frozen execution snapshot. Read-only: the send path must consume the value
+        admission validated, so there is no setter."""
         return self._settings
 
     # -- delivery -----------------------------------------------------------
@@ -287,11 +287,11 @@ class OutboxPublisher:
         url = f"{self.settings.platform_callback_url.rstrip('/')}/kyc/decision"
 
         # Build the request FIRST, then sign the literal target httpx will put on
-        # the wire. httpx percent-encodes non-ASCII and strips dot-segments when
-        # it constructs the URL, so a base like ".../café" or ".../a/../hooks" is
+        # the wire. httpx percent-encodes non-ASCII and strips dot-segments when it
+        # constructs the URL, so a base like ".../café" or ".../a/../hooks" is
         # normalized before it is sent. Signing request.url.raw_path binds the v2
-        # signature to exactly what a conforming receiver verifies (finding 1) —
-        # a pre-normalized string would disagree with the wire. (config validation
+        # signature to exactly what a conforming receiver verifies — a
+        # pre-normalized string would disagree with the wire. (config validation
         # rejects query/fragment callback bases, which would misdirect the POST.)
         request = self.http.build_request(
             "POST",
@@ -307,8 +307,8 @@ class OutboxPublisher:
         wire_sha256 = hashlib.sha256(wire).hexdigest()
 
         # v2 (path-bound) is always emitted; v1 is dual-emitted until the OUTBOUND
-        # sunset so the platform can migrate its receiver on its own schedule
-        # (PR 5a §3). The two sunset dates are independent.
+        # sunset so the platform can migrate its receiver on its own schedule.
+        # The two sunset dates are independent.
         request.headers["X-KYC-Key-Id"] = self.settings.hmac_outbound_key_id
         request.headers["X-KYC-Signature-V2"] = security.sign_v2(
             self.settings.hmac_outbound_secret,
@@ -344,7 +344,7 @@ class OutboxPublisher:
         # yields is send_intent_witnessed, not proof of transmission. Counting at admission (not at
         # accounting) is what makes the count survive a crash between the two; extending the lease
         # here is what stops a reclaimer from sending a duplicate while this attempt is still being
-        # accounted (re-audit `538e55e..42e1c7d` F1).
+        # accounted.
         attempt_id = self._record_attempt(
             outbox_id=outbox_id, token=token, wire_version=_WIRE_VERSION,
             request_sha256=wire_sha256,
@@ -364,18 +364,17 @@ class OutboxPublisher:
         thread and the publisher waits at most `OUTBOX_ATTEMPT_DEADLINE_PHASES × timeout` — the
         same number the production config requires the lease to exceed.
 
-        What the bound guarantees, precisely (re-audits `f495de8` F2, `8377440` F4): the
-        publisher RETURNS within `deadline` — the `queue.get(timeout=deadline)` is the only wait,
-        and the overrun branch does no unbounded work (no synchronous `client.close()`, no join),
-        so failure accounting lands well inside the lease the config sizes against. And clean
-        process exit, since the worker is daemon. What it cannot guarantee: retraction of the
-        attempt itself. A request whose bytes are already moving may still complete — a late 2xx
-        after failure accounting is the documented at-least-once residual (A6) the platform
-        dedupes on (case_id, run_id). No in-process design retracts an in-flight request; a
-        supervised child process is the only stronger boundary and is deferred (recorded on the
-        bus). Detached attempts are tracked, reaped, and CAPPED: at `_MAX_ORPHAN_SENDS` the
-        publisher stops claiming (`at_capacity`), so a wedged endpoint stalls delivery instead of
-        leaking threads/connections without bound.
+        What the bound guarantees, precisely: the publisher RETURNS within `deadline` — the
+        `queue.get(timeout=deadline)` is the only wait, and the overrun branch does no unbounded
+        work (no synchronous `client.close()`, no join), so failure accounting lands well inside the
+        lease the config sizes against. And clean process exit, since the worker is daemon. What it
+        cannot guarantee: retraction of the attempt itself. A request whose bytes are already moving
+        may still complete — a late 2xx after failure accounting is the documented at-least-once
+        residual (A6) the platform dedupes on (case_id, run_id). No in-process design retracts an
+        in-flight request; a supervised child process is the only stronger boundary and is deferred.
+        Detached attempts are tracked, reaped, and CAPPED: at `_MAX_ORPHAN_SENDS` the publisher
+        stops claiming (`at_capacity`), so a wedged endpoint stalls delivery instead of leaking
+        threads/connections without bound.
         """
         deadline = OUTBOX_ATTEMPT_DEADLINE_PHASES * self.settings.outbox_http_timeout_seconds
         self._reap_orphans()
@@ -394,17 +393,16 @@ class OutboxPublisher:
         try:
             (exc,) = outcome.get(timeout=deadline)
         except queue.Empty:
-            # Detach STRICTLY WITHIN the budget (re-audit `8377440` F4): NO synchronous
-            # `client.close()` and NO join here — both are themselves unbounded (a wedged pool
-            # never closes) and would push the publisher's return past the `4 × timeout` the
-            # lease is sized against, so a valid lease could expire before failure accounting.
-            # The worker is daemon (never blocks process exit) and keeps using the SHARED client;
-            # its connection releases when it finishes or its own per-phase httpx timeout fires.
-            # A truly wedged OS call holds one connection until the OS gives up — bounded by the
-            # capacity gate (`at_capacity`, checked before the next claim) and reclaimed fully
-            # only by the supervised child-process boundary (deferred; recorded on the bus). No
-            # client rebuild: a fresh client is pointless while the old one is neither closed nor
-            # exhausted, and rebuilding is just more unbudgeted work on the hot path.
+            # Detach STRICTLY WITHIN the budget: NO synchronous `client.close()` and NO join here —
+            # both are themselves unbounded (a wedged pool never closes) and would push the
+            # publisher's return past the `4 × timeout` the lease is sized against, so a valid lease
+            # could expire before failure accounting. The worker is daemon (never blocks process exit)
+            # and keeps using the SHARED client; its connection releases when it finishes or its own
+            # per-phase httpx timeout fires. A truly wedged OS call holds one connection until the OS
+            # gives up — bounded by the capacity gate (`at_capacity`, checked before the next claim)
+            # and reclaimed fully only by the supervised child-process boundary (deferred). No client
+            # rebuild: a fresh client is pointless while the old one is neither closed nor exhausted,
+            # and rebuilding is just more unbudgeted work on the hot path.
             self._orphans.append(worker)
             log.error("outbox_attempt_deadline_exceeded", url=str(request.url),
                       deadline_seconds=deadline, live_orphans=len(self._orphans))
@@ -419,19 +417,18 @@ class OutboxPublisher:
         self._orphans = [t for t in self._orphans if t.is_alive()]
 
     def at_capacity(self) -> bool:
-        """True when detached (wedged) sends have reached the resource cap. A REAL gate, not a
-        log line (re-audit `8377440` F5): `process_once` refuses to claim while this holds, so
-        resources stay bounded — no new attempt is staged past the cap — instead of one thread
-        and one held connection accreting per stuck send."""
+        """True when detached (wedged) sends have reached the resource cap. A REAL gate, not a log
+        line: `process_once` refuses to claim while this holds, so resources stay bounded — no new
+        attempt is staged past the cap — instead of one thread and one held connection accreting per
+        stuck send."""
         self._reap_orphans()
         return len(self._orphans) >= _MAX_ORPHAN_SENDS
 
     def close(self) -> None:
         """Release the HTTP client under ONE bounded TOTAL deadline covering BOTH the orphan joins
-        and `self.http.close()` itself (re-audit `8377440` F5 bounded the joins; `538e55e..42e1c7d`
-        F5 bounds the close). `http.close()` can hang on a wedged pool, so it runs in a daemon
-        joined only for the remaining budget: a bounded close may leak a connection for the OS to
-        reap, but it never waits forever — even at zero orphans. Daemon threads never block
+        and `self.http.close()` itself. `http.close()` can hang on a wedged pool, so it runs in a
+        daemon joined only for the remaining budget: a bounded close may leak a connection for the
+        OS to reap, but it never waits forever — even at zero orphans. Daemon threads never block
         interpreter exit, so this is hygiene for a long-lived embedder (tests, dev worker)."""
         cutoff = time.monotonic() + _ORPHAN_DRAIN_SECONDS
         for t in self._orphans:
@@ -464,13 +461,13 @@ class OutboxPublisher:
 
         Abandoning the drain past the cap or budget is deliberate and DELIVERS: the witness this
         taxonomy records is receipt of the 2xx status for the exact staged request bytes — the
-        response body carries no callback semantics, and completing its framing would prove
-        nothing more about what the platform accepted. Failing here instead would let any
-        verbose-but-healthy receiver drive a delivered callback through retries into a dead
-        letter — a false negative manufactured from our own refusal to keep reading. The cost of
-        abandonment is one dropped connection, paid in the pathological case instead of the
-        normal one. (A framing violation the drain OBSERVES — premature close, bad chunking —
-        still raises and retries; that is the receiver breaking HTTP, not us walking away.)
+        response body carries no callback semantics, and completing its framing would prove nothing
+        more about what the platform accepted. Failing here instead would let any
+        verbose-but-healthy receiver drive a delivered callback through retries into a dead letter —
+        a false negative manufactured from the publisher's own refusal to keep reading. The cost of
+        abandonment is one dropped connection, paid in the pathological case instead of the normal
+        one. (A framing violation the drain OBSERVES — premature close, bad chunking — still raises
+        and retries; that is the receiver breaking HTTP, not the publisher walking away.)
         """
         deadline = time.monotonic() + self.settings.outbox_http_timeout_seconds
         response = client.send(request, stream=True)
@@ -486,7 +483,7 @@ class OutboxPublisher:
             if declared and declared.isdigit() and int(declared) > _MAX_ACK_BODY_BYTES:
                 # The receiver has promised more than the cap: the drain would be abandoned
                 # anyway, so skip the pointless read instead of paying for _MAX_ACK_BODY_BYTES
-                # of a body we will not keep.
+                # of a body that will not be kept.
                 log.warning("outbox_callback_ack_body_abandoned",
                             declared_bytes=int(declared), url=str(request.url))
                 return
@@ -505,9 +502,8 @@ class OutboxPublisher:
     def _admission_budget(self) -> float:
         """Seconds a freshly admitted attempt's claim must survive: the enforced per-attempt send
         deadline (`OUTBOX_ATTEMPT_DEADLINE_PHASES × timeout`) plus the DB-accounting margin. Sized
-        so the failure/terminal write always lands before any reclaimer can take the row — the
-        explicit accounting budget re-audit `538e55e..42e1c7d` F1 asks for, not a boot-time margin
-        alone."""
+        so the failure/terminal write always lands before any reclaimer can take the row — an
+        explicit accounting budget, not a boot-time margin alone."""
         return (
             OUTBOX_ATTEMPT_DEADLINE_PHASES * self.settings.outbox_http_timeout_seconds
             + self.settings.outbox_lease_margin_seconds
@@ -518,21 +514,20 @@ class OutboxPublisher:
         fenced on the LIVE claim, inside the caller's transaction. Returns True if admitted, False
         if the claim is no longer live (expired lease → reclaimable).
 
-        Counting happens HERE — before the send — not at accounting after it (re-audit
-        `538e55e..42e1c7d` F1): a publisher that admits then dies still leaves `attempts`
-        incremented, so a reclaimer counts its own attempt on top and max-attempt dead-letter
-        stays reachable; no admitted transport call is ever under-counted. `_record_failure` then
-        writes the same absolute count (`row.attempts + 1`) idempotently, so a live claimant's own
-        failure accounting is unchanged. Re-anchoring the lease to `deadline + accounting budget`
-        (wall clock, not transaction now()) means a production-valid claim cannot expire between
-        admission and the failure/terminal write, so no reclaimer sends a duplicate while the first
-        attempt is still being accounted."""
+        Counting happens HERE — before the send — not at accounting after it: a publisher that
+        admits then dies still leaves `attempts` incremented, so a reclaimer counts its own attempt
+        on top and max-attempt dead-letter stays reachable; no admitted transport call is ever
+        under-counted. `_record_failure` then writes the same absolute count (`row.attempts + 1`)
+        idempotently, so a live claimant's own failure accounting is unchanged. Re-anchoring the
+        lease to `deadline + accounting budget` (wall clock, not transaction now()) means a
+        production-valid claim cannot expire between admission and the failure/terminal write, so no
+        reclaimer sends a duplicate while the first attempt is still being accounted."""
         admitted = session.execute(
             text(
                 "UPDATE outbox SET attempts = attempts + 1, "
-                # GREATEST so admission only ever EXTENDS the claim — never shortens a healthy lease
-                # to the (smaller) attempt budget (re-audit `42e1c7d..b39b82a` F2). A near-expiry
-                # claim is extended to cover the send + accounting; a fresh 300s claim keeps its 300s.
+                # GREATEST so admission only ever EXTENDS the claim — never shortens a healthy lease to
+                # the (smaller) attempt budget. A near-expiry claim is extended to cover the send +
+                # accounting; a fresh 300s claim keeps its 300s.
                 "claim_lease_expires_at = GREATEST(claim_lease_expires_at, "
                 "clock_timestamp() + make_interval(secs => :budget)) "
                 "WHERE id = :id AND status = 'pending' AND claim_token = :token "
@@ -594,11 +589,11 @@ class OutboxPublisher:
 
         POC emails get no attempt row: they carry no wire digest, nothing reconciles them against
         a remote ledger, and their duplicate-on-retry behaviour is the documented at-least-once
-        property (A6) rather than a gap in evidence. They DO get the same presend admission
-        (re-audit `cbb783b` F5, `538e55e..42e1c7d` F1) — counted and lease-re-anchored before the
-        provider call, same as a callback's `_record_attempt` — because a stale claimant emailing a
-        token it cached before losing the row is a real side effect, and an admitted-then-crashed
-        email must not go under-counted either.
+        property (A6) rather than a gap in evidence. They DO get the same presend admission —
+        counted and lease-re-anchored before the provider call, same as a callback's
+        `_record_attempt` — because a stale claimant emailing a token it cached before losing the
+        row is a real side effect, and an admitted-then-crashed email must not go under-counted
+        either.
         """
         if kind == DECISION_CALLBACK:
             return self._deliver_decision_callback(payload, outbox_id=outbox_id, token=token)
@@ -633,10 +628,10 @@ class OutboxPublisher:
 
     def process_once(self) -> bool:
         """Claim and deliver one pending row of one (case, stream). Returns False when idle."""
-        # Circuit breaker (re-audit `8377440` F5): if detached wedged sends have hit the cap, do
-        # NOT claim another row — claiming would stage a new attempt whose thread/connection we
-        # cannot bound. Refusing to claim stalls delivery (surfaced as saturated) rather than
-        # leaking resources; it is the safe failure while an operator addresses the wedged endpoint.
+        # Circuit breaker: if detached wedged sends have hit the cap, do NOT claim another
+        # row — claiming would stage a new attempt whose thread/connection cannot be bounded.
+        # Refusing to claim stalls delivery (surfaced as saturated) rather than leaking
+        # resources; it is the safe failure while an operator addresses the wedged endpoint.
         if self.at_capacity():
             if not self._saturated:  # log the edge, not every poll
                 log.critical("outbox_delivery_saturated",
@@ -656,13 +651,13 @@ class OutboxPublisher:
             return False
         token = row.claim_token
 
-        # Domain floor (re-audit `8aba2df..2cee937` R3-F3): `outbox.attempts` is int4 with no >= 0
-        # constraint, so a malformed/corrupt import with a NEGATIVE count made the ceiling check
-        # (`attempts >= max`) practically unreachable and licensed sends past the limit (INT4_MIN ⇒
-        # ~2^31 sends). Fail closed BEFORE supersession, reconciliation, admission or any transport:
-        # a negative counter is not a sendable state. No increment, no send (POC body redacted). A
-        # DB CHECK `attempts >= 0` is specified for the next mutable migration (ROADMAP PR 10) as the
-        # durable backstop; this runtime guard holds until then and is the fail-closed authority.
+        # Domain floor: `outbox.attempts` is int4 with no >= 0 constraint, so a malformed/corrupt import
+        # with a NEGATIVE count made the ceiling check (`attempts >= max`) practically unreachable and
+        # licensed sends past the limit (INT4_MIN ⇒ ~2^31 sends). Fail closed BEFORE supersession,
+        # reconciliation, admission or any transport: a negative counter is not a sendable state. No
+        # increment, no send (POC body redacted). A DB CHECK `attempts >= 0` is planned with reserved
+        # revision 029's durable retry-limit checks; until then this runtime guard is the
+        # fail-closed authority.
         if row.attempts < 0:
             self._dead_letter_over_ceiling(
                 row, token, note="attempts is negative (malformed counter) — fail closed"
@@ -676,7 +671,7 @@ class OutboxPublisher:
         # sent it, or the case's current state is a MANUAL approval (run_id NULL, no
         # callback, no sequence — nothing here compares higher), this predicate is false
         # and the older callback IS sent — reverts that remain expected until
-        # 7b-activation's platform high-water (§5).
+        # ordering activation adds the platform high-water mark.
         if row.ordering_stream == "decision" and row.decision_sequence is not None:
             with uow(self.session_factory) as session:
                 superseded = session.execute(
@@ -690,21 +685,21 @@ class OutboxPublisher:
                 self._record_superseded(row, token)
                 return True
 
-        # Expired-claim RECONCILIATION before any new send (re-audit `42e1c7d..b39b82a` F1). A
-        # non-NULL prev_claim_token means the prior claim expired WITHOUT a terminal clearing it:
-        # the predecessor admitted an attempt (attempts already incremented, before its send) or
-        # crashed mid-cycle. Sending again here would make one more network call and could push
-        # real sends past outbox_max_attempts. Reconcile instead — dead-letter at/over max, else
-        # back off and release — and let a LATER fresh claim make the next attempt.
+        # Expired-claim RECONCILIATION before any new send. A non-NULL prev_claim_token means the prior
+        # claim expired WITHOUT a terminal clearing it: the predecessor admitted an attempt (attempts
+        # already incremented, before its send) or crashed mid-cycle. Sending again here would make one
+        # more network call and could push real sends past outbox_max_attempts. Reconcile instead —
+        # dead-letter at/over max, else back off and release — and let a LATER fresh claim make the next
+        # attempt.
         if row.prev_claim_token is not None:
             self._reconcile_expired_claim(row, token)
             return True
 
-        # Ceiling guard (re-audit `b39b82a..b53daf4` F2): never make another external call for a row
-        # whose DURABLE attempts already meet the CURRENT max. Reconciliation above covers an
-        # expired-but-uncleared claim; this covers a cleanly-released pending row left at/over the
-        # ceiling when an operator LOWERS outbox_max_attempts. Terminalise here, not in _CLAIM_SQL,
-        # so the row is dead-lettered rather than stranded pending forever.
+        # Ceiling guard: never make another external call for a row whose DURABLE attempts already meet
+        # the CURRENT max. Reconciliation above covers an expired-but-uncleared claim; this covers a
+        # cleanly-released pending row left at/over the ceiling when an operator LOWERS
+        # outbox_max_attempts. Terminalise here, not in _CLAIM_SQL, so the row is dead-lettered rather
+        # than stranded pending forever.
         if row.attempts >= self.settings.outbox_max_attempts:
             self._dead_letter_over_ceiling(row, token)
             return True
@@ -725,11 +720,11 @@ class OutboxPublisher:
         return True
 
     def _record_delivered(self, row, token, receipt: DeliveryReceipt | None = None) -> None:
-        # The requirement is the ROW'S, not the caller's (re-audit 4dfdf8a F1): a decision
-        # callback without a well-formed receipt writes NOTHING — not the terminal, not the run,
-        # not published_at. The row stays pending/claimed; the lease expires; a real delivery
-        # retries. A POC email is the only kind that completes without a wire receipt, and a
-        # receipt handed to one is the same caller bug in the other direction.
+        # The requirement is the ROW'S, not the caller's: a decision callback without a well-formed
+        # receipt writes NOTHING — not the terminal, not the run, not published_at. The row stays
+        # pending/claimed; the lease expires; a real delivery retries. A POC email is the only kind
+        # that completes without a wire receipt, and a receipt handed to one is the same caller bug
+        # in the other direction.
         if row.kind == DECISION_CALLBACK:
             reason = "missing receipt" if receipt is None else receipt.malformed()
             if reason is not None:
@@ -746,8 +741,9 @@ class OutboxPublisher:
             take_shared_fence(session)
             # The wire witness lands in the SAME fenced statement as the terminal: the digest is
             # only meaningful for the delivery it describes, so it must not be writable by a
-            # stale claimant whose UPDATE no longer matches. 7b-core never puts decision_sequence
-            # on the wire, so the encoding is always 'legacy' here; 014 introduces 'sequenced'.
+            # stale claimant whose UPDATE no longer matches. This release never puts
+            # decision_sequence on the wire, so the encoding is always 'legacy' here. Migration
+            # 014 added 'sequenced' to the vocabulary; nothing emits it until migration 025.
             redacted_payload = json.dumps({"redacted": True})
             applied = session.execute(
                 text(
@@ -758,18 +754,18 @@ class OutboxPublisher:
                     "ELSE payload_json END "
                     "WHERE id=:id AND status='pending' AND claim_token=:token "
                     "AND claim_lease_expires_at > clock_timestamp() "
-                    # A terminal digest asserts "these exact bytes were staged and accepted", so
-                    # it may only land when the matching attempt row — same claim, same digest,
-                    # same encoding — actually exists (re-audit 1f8412e F6). Without this, a
-                    # digest could be stamped for bytes no attempt ever recorded, and the
-                    # attempt-vs-terminal agreement the taxonomy rests on would be unverifiable.
+                    # A terminal digest asserts "these exact bytes were staged and accepted", so it
+                    # may only land when the matching attempt row — same claim, same digest, same
+                    # encoding — actually exists. Without this, a digest could be stamped for bytes no
+                    # attempt ever recorded, and the attempt-vs-terminal agreement the taxonomy rests
+                    # on would be unverifiable.
                     "AND (:needs_witness = false OR EXISTS ("
                     "  SELECT 1 FROM outbox_delivery_attempts a WHERE a.outbox_id=:id "
                     "  AND a.attempt_id=:attempt_id_probe "
                     "  AND a.claim_token=:token AND a.request_sha256=:sha_probe "
                     "  AND a.wire_version=:wire_version_probe "
                     # only an ADMITTED attempt underwrites a terminal — a pre-authority row's
-                    # staging claim is unproven (re-audit 15d875d F1)
+                    # staging claim is unproven
                     "  AND a.admission='admission_v1')) RETURNING id"
                 ),
                 # wire_version is decided in Python, not by a SQL CASE over :sha — reusing one
@@ -810,11 +806,11 @@ class OutboxPublisher:
         log.info("outbox_delivered", outbox_id=row.id, kind=row.kind, case_id=row.case_id)
 
     def _record_failure(self, row, error: str, token) -> None:
-        # `row.attempts` is the claim snapshot; admission already incremented the DB to exactly
-        # this value, so writing it back ABSOLUTELY (SET attempts=:a, never attempts+1) is
-        # idempotent with the count and never doubles it (re-audit `538e55e..42e1c7d` F1). This
-        # method still owns the count for a claimant that reaches it directly (the fencing tests
-        # drive it without admission), which is why the value is computed here too.
+        # `row.attempts` is the claim snapshot; admission already incremented the DB to exactly this
+        # value, so writing it back ABSOLUTELY (SET attempts=:a, never attempts+1) is idempotent
+        # with the count and never doubles it. This method still owns the count for a claimant that
+        # reaches it directly (the fencing tests drive it without admission), which is why the value
+        # is computed here too.
         attempts = row.attempts + 1
         dead = attempts >= self.settings.outbox_max_attempts
         delay = self._backoff_seconds(attempts)
@@ -868,11 +864,10 @@ class OutboxPublisher:
             log.warning("outbox_retry", outbox_id=row.id, kind=row.kind, attempts=attempts)
 
     def _backoff_seconds(self, attempts: int) -> int:
-        """Saturating exponential backoff via the ONE shared queue-backoff helper (re-audit
-        `5b0f0b8..b75a320` R4-F3), so the queue and outbox schedules cannot diverge and no attempt
-        count overflows timestamptz. base × 2**(attempts-1), capped; a zero base yields 0 (retry when
-        due). The outbox schedule carries no jitter (its ordering is per-row FIFO, not thundering-herd
-        sensitive)."""
+        """Saturating exponential backoff via the ONE shared queue-backoff helper, so the queue and
+        outbox schedules cannot diverge and no attempt count overflows timestamptz.
+        base × 2**(attempts-1), capped; a zero base yields 0 (retry when due). The outbox schedule
+        carries no jitter (its ordering is per-row FIFO, not thundering-herd sensitive)."""
         return saturating_backoff_seconds(
             self.settings.outbox_backoff_base_seconds, attempts, cap_seconds=_MAX_BACKOFF_SECONDS
         )
@@ -897,12 +892,11 @@ class OutboxPublisher:
 
     def _dead_letter_over_ceiling(self, row, token, note=None) -> None:
         """Fenced dead-letter a freshly-claimed row that is outside the sendable attempts domain,
-        before any transport: DURABLE attempts at/over the CURRENT outbox_max_attempts (re-audit
-        `b39b82a..b53daf4` F2), or a negative/malformed counter (re-audit `8aba2df..2cee937` R3-F3,
-        via the `note` argument). The expired-claim reconciliation only fires for a non-NULL
-        prev_claim_token; a cleanly-released pending row left outside the domain would otherwise take
-        the ordinary admit+send path and make one more external call. No increment, no send (POC body
-        redacted)."""
+        before any transport: DURABLE attempts at/over the CURRENT outbox_max_attempts, or a
+        negative/malformed counter (via the `note` argument). The expired-claim reconciliation
+        only fires for a non-NULL prev_claim_token; a cleanly-released pending row left outside
+        the domain would otherwise take the ordinary admit+send path and make one more external
+        call. No increment, no send (POC body redacted)."""
         if note is None:
             note = "attempts at/above max_attempts on claim (ceiling lowered)"
         with uow(self.session_factory) as session:
@@ -913,11 +907,10 @@ class OutboxPublisher:
         log.error("outbox_dead_letter", outbox_id=row.id, kind=row.kind, error=note)
 
     def _reconcile_expired_claim(self, row, token) -> None:
-        """Reconcile a row reclaimed from an EXPIRED-but-UNCLEARED claim WITHOUT sending again
-        (re-audit `42e1c7d..b39b82a` F1). The predecessor either admitted an attempt (attempts was
-        incremented BEFORE its send, so it is already counted) or crashed between claim and
-        admission (no attempt, attempts unchanged). Either way a fresh send here could exceed
-        outbox_max_attempts, so we only account:
+        """Reconcile a row reclaimed from an EXPIRED-but-UNCLEARED claim WITHOUT sending again. The
+        predecessor either admitted an attempt (attempts was incremented BEFORE its send, so it is
+        already counted) or crashed between claim and admission (no attempt, attempts unchanged).
+        Either way a fresh send here could exceed outbox_max_attempts, so this only accounts:
 
         - attempts >= max  → dead-letter, fenced, no send (redact POC body, same as _record_failure);
         - 0 < attempts < max → back off ONE boundary and release; a later fresh claim sends next;
@@ -1021,10 +1014,10 @@ class OutboxPublisher:
         log.info("outbox_publisher_started")
         while True:
             if self.at_capacity():
-                # Saturation is a SUPERVISOR-VISIBLE terminal state for the long-lived process, not
-                # an invisible forever-sleep (re-audit `538e55e..42e1c7d` F6). Exit nonzero (via the
-                # worker) so a supervisor restarts us; the fresh process drops the daemon attempts
-                # and reclaims their connections. process_pending (bounded) keeps its soft-stall.
+                # Saturation is a SUPERVISOR-VISIBLE terminal state for the long-lived process, not an
+                # invisible forever-sleep. Exit nonzero (via the worker) so a supervisor restarts the
+                # process; the fresh process drops the daemon attempts and reclaims their connections.
+                # process_pending (bounded) keeps its soft-stall.
                 log.critical("outbox_delivery_saturated_exit",
                              live_orphans=len(self._orphans), cap=_MAX_ORPHAN_SENDS)
                 raise OutboxSaturated(

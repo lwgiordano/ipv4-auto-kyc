@@ -62,15 +62,14 @@ from kyc_tool.validators.website import website_intent
 log = structlog.get_logger(__name__)
 
 # Room between the adapter-plan retry deadline and the job lease for the transition's DB writes
-# (results, checks, decision, completion) — the F2 bound is lease MINUS this, never the whole lease.
+# (results, checks, decision, completion) — the plan bound is lease MINUS this, never the whole lease.
 _ADAPTER_PLAN_MARGIN_SECONDS = 10.0
 
 
 def plan_budget_seconds(lease_seconds: float) -> float:
     """The adapter plan's wall-clock budget: STRICTLY below the lease at every accepted value
-    (re-audit `3db5f13..a7df17b` F5 — the old max(lease-10, 1) collapsed the margin to nothing for
-    leases ≤ 10s and returned ≥ the whole lease at lease ≤ 1). Full margin when the lease affords
-    it, else half the lease."""
+    (a plain max(lease-10, 1) would collapse the margin to nothing for leases ≤ 10s and return
+    ≥ the whole lease at lease ≤ 1). Full margin when the lease affords it, else half the lease."""
     return max(lease_seconds - _ADAPTER_PLAN_MARGIN_SECONDS, lease_seconds * 0.5)
 
 
@@ -106,9 +105,9 @@ class Pipeline:
         self.intent_builder = intent_builder or build_intents
         self.side_effects = side_effects if side_effects is not None else SideEffects(settings)
         self.rate_limiter = RateLimiter(settings.adapter_rate_limits)
-        # PR 6 (Task 7): in-process cache of flag-on resolved bundles, keyed by
-        # bundle_hash — avoids re-loading/re-parsing the same bundle on every
-        # job (see resolve_bundle below). Never populated flag-off.
+        # In-process cache of flag-on resolved bundles, keyed by bundle_hash —
+        # avoids re-loading/re-parsing the same bundle on every job (see
+        # resolve_bundle below). Never populated flag-off.
         self._bundle_cache: dict[str, PolicyBundle] = {}
 
     # ------------------------------------------------------------------ job
@@ -117,7 +116,7 @@ class Pipeline:
         """Resolve the policy bundle this run's transitions must use.
 
         Flag-off: always the process-loaded bundle — self.policy — so
-        behavior stays byte-identical to pre-PR6. Flag-on: the run's
+        behavior stays byte-identical to the behavior before bundle pinning existed. Flag-on: the run's
         creation-pin (run.policy_bundle_hash), loaded from policy_bundles; a
         miss raises BundleUnavailable rather than silently falling back to
         self.policy, so an unresolvable pin refuses instead of scoring under
@@ -179,8 +178,8 @@ class Pipeline:
             run = session.get(Run, run_id)
             bundle = self.resolve_bundle(session, run)
         for _ in range(32):  # hard bound; a run has ≤ ~8 transitions
-            # Revocation boundary (re-audit `3db5f13..a7df17b` F2): a claim the heartbeat marked
-            # lost stops HERE — before the next transition's reads, writes, or external calls.
+            # Revocation boundary: a claim the heartbeat marked lost stops HERE — before the next
+            # transition's reads, writes, or external calls.
             jobs.check_claim_live()
             state = self._current_state(run_id)
             if state in (RunState.PUBLISH_DECISION, RunState.COMPLETE, RunState.FAILED):
@@ -196,8 +195,8 @@ class Pipeline:
         if not run_id:
             return
         if session is not None:
-            # SAME-TXN path (re-audit `3db5f13..a7df17b` F3): the worker passes its fail/reap txn so
-            # the job terminal and the run-FAILED transition commit or roll back together.
+            # SAME-TXN path: the worker passes its fail/reap txn so the job terminal and the
+            # run-FAILED transition commit or roll back together.
             self._fail_run(session, job, run_id, error)
             return
         with uow(self.session_factory) as session:
@@ -241,7 +240,7 @@ class Pipeline:
 
     def _hop(self, session: Session, run_id: str, from_state: RunState, to_state: RunState) -> bool:
         """Guarded state move — the idempotency shield for retried transitions. Every hop first
-        PROVES the ambient claim nonce is still live INSIDE this transaction (F2): a stale claimant
+        PROVES the ambient claim nonce is still live INSIDE this transaction: a stale claimant
         raises StaleJobClaim here and the whole transaction (hop + everything committed with it,
         including the fused decide writes) rolls back instead of clobbering the new owner's run."""
         jobs.assert_live(session)
@@ -285,7 +284,7 @@ class Pipeline:
 
     def _resolve_inputs(self, run_id: str) -> None:
         with uow(self.session_factory) as session:
-            jobs.assert_live(session)  # HELD fence FIRST — lock order job → case → run (R9-F1)
+            jobs.assert_live(session)  # HELD fence FIRST — lock order job → case → run
             run, case, event = self._load(session, run_id)
             if not self._hop(session, run_id, RunState.RESOLVE_INPUTS, RunState.BROKER_GATE):
                 return
@@ -300,7 +299,7 @@ class Pipeline:
 
     def _broker_gate(self, run_id: str) -> None:
         with uow(self.session_factory) as session:
-            jobs.assert_live(session)  # HELD fence FIRST — lock order job → case → run (R9-F1)
+            jobs.assert_live(session)  # HELD fence FIRST — lock order job → case → run
             run, case, event = self._load(session, run_id)
             plan = plan_for(event.event_type)
             pinned = self._pinned_broker_status(session, run, case)
@@ -348,12 +347,12 @@ class Pipeline:
 
         # …fetch OUTSIDE any transaction, recording each result in its own txn.
         # ONE monotonic deadline for the WHOLE adapter plan, STRICTLY below the job lease minus a DB
-        # margin (re-audit `f2929f8..6a4cd87` F2; formula per `3db5f13..a7df17b` F5 — the old
-        # max(lease-10, 1) collapsed the margin to ~nothing for leases ≤ 10s): in-adapter retry
-        # sleeps and rate waits must never outlive the claim.
+        # margin (see plan_budget_seconds — a plain max(lease-10, 1) would collapse the margin to
+        # ~nothing for leases ≤ 10s): in-adapter retry sleeps and rate waits must never outlive
+        # the claim.
         plan_deadline = time.monotonic() + plan_budget_seconds(self.settings.job_lease_seconds)
         for adapter_id in plan.adapters:
-            # Revocation boundary (F2): a lost claim stops BEFORE the next permit/wire call.
+            # Revocation boundary: a lost claim stops BEFORE the next permit/wire call.
             jobs.check_claim_live()
             adapter = self.adapters.get(adapter_id)
             if adapter is None:
@@ -370,9 +369,9 @@ class Pipeline:
             try:
                 # The budget exists BEFORE the first permit and EVERY send — the first included —
                 # passes through the helper's single authority: deadline-aware permit → DB claim
-                # re-proof → remaining-deadline proof (re-audit `7d1c435..827bc0f` F5), then a
-                # streamed, byte-capped, absolute-deadline wire call (F3/F6). The budget travels
-                # via contextvar so adapter signatures stay unchanged.
+                # re-proof → remaining-deadline proof, then a streamed, byte-capped,
+                # absolute-deadline wire call. The budget travels via contextvar so adapter
+                # signatures stay unchanged.
                 with retry.budget_scope(
                     retry.RetryBudget(
                         deadline_monotonic=plan_deadline,
@@ -394,23 +393,23 @@ class Pipeline:
                     error=str(exc),
                 )
             latency_ms = int((time.monotonic() - started) * 1000)
-            # Post-external-call boundary (F2): a claim lost DURING the fetch must not stage object
+            # Post-external-call boundary: a claim lost DURING the fetch must not stage object
             # bytes or open the recording transaction.
             jobs.check_claim_live()
 
-            # Stage the raw bytes OUTSIDE the fenced transaction (re-audit `7d1c435..827bc0f` F1:
-            # never hold the job row lock over object-store I/O); the reference is attached only
-            # under the held in-txn fence below, and a stale fence orphan-cleans the staged object.
+            # Stage the raw bytes OUTSIDE the fenced transaction (never hold the job row lock over
+            # object-store I/O); the reference is attached only under the held in-txn fence below,
+            # and a stale fence orphan-cleans the staged object.
             raw_ref = None
             if output.raw is not None:
-                # adapter-raw/ NAMESPACE (R10-F8): staged-by-pipeline objects live under one
+                # adapter-raw/ NAMESPACE: staged-by-pipeline objects live under one
                 # prefix so the crash-window sweeper can enumerate ONLY them — platform-uploaded
                 # documents (uploads/…, arbitrary keys) are never sweep candidates.
                 key = f"adapter-raw/{case_id}/{run_id}/{adapter_id}/{uuid.uuid4().hex}"
                 raw_ref = self.object_store.put(key, output.raw)
             try:
                 with uow(self.session_factory) as session:
-                    # HELD in-txn fence (F1): assert_live locks the job row FIRST (lock order
+                    # HELD in-txn fence: assert_live locks the job row FIRST (lock order
                     # job → case → run/task) and PostgreSQL holds it through commit — the
                     # AdapterResult, partial flag, and every side effect (tasks, POC tokens/emails)
                     # commit only under an authority no reaper/claimant/recovery can overtake.
@@ -419,11 +418,11 @@ class Pipeline:
                         session, run_id, case_id, adapter_id, output, input_hash, raw_ref, latency_ms
                     )
             except Exception:
-                # EVERY pre-commit failure orphan-cleans the staged bytes, not just a stale fence
-                # (re-audit `750630c..ca85355` F8): the DB rolled back, so no reference exists —
-                # bytes surviving a side-effect/commit error would be untracked evidence. The
-                # crash window (process death between put and commit) is covered by the
-                # staged-evidence sweeper (ops/sweep_staged_evidence.py).
+                # EVERY pre-commit failure orphan-cleans the staged bytes, not just a stale fence:
+                # the DB rolled back, so no reference exists — bytes surviving a side-effect/commit
+                # error would be untracked evidence. The crash window (process death between put
+                # and commit) is covered by the staged-evidence sweeper
+                # (ops/sweep_staged_evidence.py).
                 if raw_ref is not None:
                     try:
                         self.object_store.delete(raw_ref)  # ref never committed
@@ -480,9 +479,9 @@ class Pipeline:
         `bundle` is this run's resolved policy bundle (Pipeline.resolve_bundle,
         called once at job entry — see handle_job). Flag-off it IS self.policy
         (same object), so scoring and provenance below stay byte-identical to
-        pre-PR6."""
+        the behavior before bundle pinning existed."""
         with uow(self.session_factory) as session:
-            # HELD fence FIRST (R9-F1): the job row lock is taken before the Case FOR UPDATE in
+            # HELD fence FIRST: the job row lock is taken before the Case FOR UPDATE in
             # _load — ONE lock order (job → case → run/task) across worker, reaper, and recovery —
             # and PostgreSQL holds it through this whole fused commit; the fenced complete() at the
             # end is then the second, terminal proof on the same locked row.
@@ -491,14 +490,14 @@ class Pipeline:
             if not self._hop(session, run_id, from_state, RunState.PUBLISH_DECISION):
                 return  # another attempt already decided
 
-            # PR 6 (Task 9): which engine build resolved/scored this run — paired
-            # with the run's IMMUTABLE creation-pin policy_bundle_hash (never
-            # written here). Stamped on every decide, flag on or off.
+            # Which engine build resolved/scored this run — paired with the run's
+            # IMMUTABLE creation-pin policy_bundle_hash (never written here).
+            # Stamped on every decide, flag on or off.
             run.engine_build_id = ENGINE_BUILD_ID
 
-            # Authoritative website-completion guard (PR 5b): the case is
-            # already FOR UPDATE from _load above, so locking the referenced
-            # ReviewTask here preserves a consistent case→task lock order.
+            # Authoritative website-completion guard: the case is already FOR
+            # UPDATE from _load above, so locking the referenced ReviewTask here
+            # preserves a consistent case→task lock order.
             # Evaluated once, unconditionally on from_state (VALIDATE or the
             # broker-blocked short-circuit DECIDE), from the PERSISTED event —
             # re-validated even though ingest already checked it, because an
@@ -550,7 +549,7 @@ class Pipeline:
                 intents=len(intents),
             )
 
-            # identity invalidation (item 5): stale identity-bound proof is
+            # identity invalidation: stale identity-bound proof is
             # superseded on an ORG-ID/POC change BEFORE new checks are written,
             # independent of whether the revalidation adapter succeeded
             checkstore.supersede_stale_identity_proof(
@@ -583,9 +582,9 @@ class Pipeline:
             # SCORE (logical stage) — from live checks only
             views = [checkstore.as_view(c) for c in checkstore.live_checks(session, case.id)]
             if self.settings.enforce_bundle_pinning:
-                # PR 6 (Task 8): re-price every live check from the pinned bundle's
-                # rubric so score, gates, and the callback all reflect it — not
-                # each check's stamped points/category from whatever era wrote it.
+                # Re-price every live check from the pinned bundle's rubric so score,
+                # gates, and the callback all reflect it — not each check's stamped
+                # points/category from whatever era wrote it.
                 views = scoring.rubric_scoring_views(views, bundle.rubric)
             breakdown = scoring.score(views)
             # A resumed/interleaved run must not inherit another run's case projection.
@@ -613,9 +612,9 @@ class Pipeline:
                 else hold_positive_for_manual_review(computed)
             )
             enforcement_held = result.decision is not computed.decision
-            # PR 7b-core: allocate this callback-emitting decision's per-case ordinal from
-            # the LOCKED counter (never max()+1). The Case is FOR UPDATE from _load above,
-            # so this single writer of the counter is race-free.
+            # Allocate this callback-emitting decision's per-case ordinal from the LOCKED
+            # counter (never max()+1). The Case is FOR UPDATE from _load above, so this single
+            # writer of the counter is race-free.
             case.last_decision_sequence = (case.last_decision_sequence or 0) + 1
             decision_sequence = case.last_decision_sequence
             decision_row = DecisionRow(
@@ -641,14 +640,14 @@ class Pipeline:
                     "reason": "positive_enforcement_disabled",
                 }
             # Encode LAST, after every optional field is in place, so validation covers the whole
-            # body rather than a prefix of it (Wave 0 gate finding 6). This is the only path to the
-            # wire: an unmodelled key is REFUSED here, so the emitter cannot publish a field the
-            # contract does not declare.
+            # body rather than a prefix of it. This is the only path to the wire: an unmodelled
+            # key is REFUSED here, so the emitter cannot publish a field the contract does not
+            # declare.
             body = encode_decision_callback(body)
             enqueue_decision_callback(session, body=body, decision_sequence=decision_sequence)
-            # job completion is atomic with the decision commit — and FENCED (PR 7a slice): a
-            # stale worker (reaped + reclaimed) must roll this whole decision back, not commit a
-            # duplicate the platform then has to reconcile.
+            # job completion is atomic with the decision commit — and FENCED: a stale worker
+            # (reaped + reclaimed) must roll this whole decision back, not commit a duplicate the
+            # platform then has to reconcile.
             if not jobs.complete(session, job):
                 raise jobs.StaleJobClaim(
                     f"job {job.id} claim nonce is no longer live — "
@@ -739,8 +738,8 @@ class Pipeline:
             ],
             "decided_at": datetime.now(UTC).isoformat(),
         }
-        # D1: the per-case ordinal of the triggering event, so the platform can
-        # order callbacks. Gated behind the M3 cutover flag until accepted.
+        # The per-case ordinal of the triggering event, so the platform can
+        # order callbacks. Gated behind the platform-cutover flag until accepted.
         if self.settings.callback_include_event_sequence:
             body["event_sequence"] = event.event_sequence
         return body

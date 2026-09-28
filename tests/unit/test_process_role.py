@@ -1,7 +1,6 @@
-"""Re-audit `03dbfab..bc325e7` R5-F1: the process-role authority. A DEV-ONLY role (fixture adapters)
-must never run in a production environment — even with an otherwise-hardened config — and it must
-refuse BEFORE any database/network/store creation. Every production entry point routes through the
-same authority."""
+"""The process-role authority. A DEV-ONLY role (fixture adapters) must never run in a production
+environment — even with an otherwise-hardened config — and it must refuse BEFORE any
+database/network/store creation. Every production entry point routes through the same authority."""
 
 import pytest
 from docs.contracts.authority import unarrived_sunset
@@ -81,9 +80,9 @@ def test_production_workers_validate_before_engine(monkeypatch, module, role):
 
 
 class TestCutoverStartGate:
-    """Re-audit `f2929f8..6a4cd87` F4: the attest-new-value cutover step is an EXECUTABLE start
-    gate — a publisher-bearing process whose live ceiling differs from the attested target refuses
-    to boot, in any environment; non-publisher roles and an unset target are unaffected."""
+    """The attest-new-value cutover step is an EXECUTABLE start gate — a publisher-bearing process
+    whose live ceiling differs from the attested target refuses to boot, in any environment;
+    non-publisher roles and an unset target are unaffected."""
 
     def test_mismatched_publisher_refuses_in_production(self):
         s = _hardened(outbox_max_attempts=8, outbox_max_attempts_attested=12)

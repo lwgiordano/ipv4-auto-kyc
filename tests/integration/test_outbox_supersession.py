@@ -1,4 +1,4 @@
-"""PR 7b-core: best-effort local superseded guard + A6 + honest residual risk."""
+"""Best-effort local superseded guard + A6 + honest residual risk."""
 
 import json
 
@@ -70,8 +70,8 @@ def _seed_callback_in_state(session_factory, case_id, seq, status, *, payload="{
                 "wire_version, request_sha256) VALUES (gen_random_uuid(), :o, :t, 'legacy', :s)"),
                 {"o": oid, "t": row.claim_token, "s": "a" * 64})
             # delivered_at is written BY the terminal transition, never rewound afterwards: a
-            # terminal row's timestamps are frozen from 018 on (re-audit `cbb783b` F2), which is
-            # exactly the resurrection surface this seeding used to imitate.
+            # terminal row's timestamps are frozen from 018 on, which is exactly the resurrection
+            # surface this seeding used to imitate.
             s.execute(text(
                 f"UPDATE outbox SET status='delivered', "
                 f"delivered_at={delivered_at_sql or 'now()'}, "
@@ -97,7 +97,7 @@ def _enqueue_cb(session_factory, case_id, seq):
 def test_higher_delivered_then_older_superseded_a6(
     session_factory, settings, publisher, callback_capture, clean_db
 ):
-    """A6 (F6) + local guard: the HIGHER callback (seq 2) is really SENT (>=1 HTTP) and stamps
+    """A6 + local guard: the HIGHER callback (seq 2) is really SENT (>=1 HTTP) and stamps
     published_at; the OLDER requeued callback (seq 1) is then claimed, SUPERSEDED with ZERO HTTP,
     its run reaches COMPLETE, published_at stays NULL, and an audit_log row records BOTH the
     superseded and the superseding sequence."""
@@ -147,7 +147,8 @@ def test_residual_risk_send_before_stamp_reverts_expected(
     in `_record_delivered` BEFORE its transaction leaves seq 2 pending/claimed and its decision
     UNSTAMPED (the real HTTP→terminal gap). seq 1 is requeued through the REAL UI endpoint; on the
     next pass its local guard predicate is false (seq 2 unstamped) and seq 1 IS sent (HTTP #2) —
-    the exact residual revert 7b-activation later turns into a platform high-water no-op."""
+    the exact residual revert that platform activation later turns into a platform high-water
+    no-op."""
     _seed_decisions(session_factory, "c3", [1, 2])  # decisions/runs at PUBLISH_DECISION, unstamped
     seq1_id = _seed_callback_in_state(session_factory, "c3", 1, "dead")  # older, lower id
     _enqueue_cb(session_factory, "c3", 2)  # seq 2 pending, higher id
@@ -186,7 +187,7 @@ def test_guard_predicate_only_unit(session_factory, settings, publisher, callbac
 
 
 def _superseded_callback(session_factory, case_id, *, resolved_at="now()"):
-    """Re-audit F8: 'superseded' is decision-only (lifecycle CHECK kind conjunct), so every
+    """The 'superseded' status is decision-only (lifecycle CHECK kind conjunct), so every
     fixture that needs a superseded row must build a VALID automatic decision+callback chain
     first — seq 1 on `case_id` via _seed_decisions — then insert its callback already
     superseded. Returns the outbox id."""
@@ -196,10 +197,10 @@ def _superseded_callback(session_factory, case_id, *, resolved_at="now()"):
 
 
 def test_retention_redacts_callback_bodies_and_prunes_poc_email(session_factory, clean_db):
-    """PR 7b-core durable ordering authority (re-review 6a408a3 F5/F1): retention keeps the
-    decision_callback ROW but destroys its BODY past the window, deletes the poc_email outright,
-    and leaves every field 7b-activation reconciles against intact — including the recorded wire
-    digest, which is what makes discarding the body safe."""
+    """Durable ordering authority: retention keeps the decision_callback ROW but destroys its
+    BODY past the window, deletes the poc_email outright, and leaves intact every field platform
+    activation reconciles against — including the recorded wire digest, which is what makes
+    discarding the body safe."""
     from kyc_tool.workers.retention import prune
 
     old = "now() - interval '3000 days'"
@@ -271,7 +272,7 @@ def test_retention_still_prunes_its_other_targets(session_factory, clean_db):
 
 
 def test_retention_leaves_pending_callback_body_alone(session_factory, clean_db):
-    """F8 requeue-safety property: an old PENDING decision_callback keeps its exact original body.
+    """Requeue-safety property: an old PENDING decision_callback keeps its exact original body.
     Redaction is scoped to status IN ('delivered','superseded') only — a still-requeueable row is
     never touched regardless of age, because a redacted body would make a legal requeue send
     `{"redacted": true}` to the platform instead of the real decision."""
@@ -345,7 +346,7 @@ def test_retention_leaves_a_RECENT_dead_callback_body_alone(session_factory, cle
 
 
 def test_retention_redaction_is_idempotent(session_factory, clean_db):
-    """F8: a second prune reports 0 for outbox_callback_redacted. Once a body is redacted, the
+    """A second prune reports 0 for outbox_callback_redacted. Once a body is redacted, the
     predicate's `payload_json <> '{"redacted": true}'::jsonb` guard excludes the row from being
     counted (or touched) again — the job is safe to run on every cron tick forever."""
     from kyc_tool.workers.retention import prune
@@ -378,14 +379,14 @@ def test_ui_requeue_409s_superseded(client, session_factory):
 
 def test_metrics_reports_superseded_out_of_the_alert_set(client, session_factory):
     """superseded is counted as terminal history, never in the pending/dead alert set — and the
-    endpoint stays bounded (F7): PR 7b-core never prunes decision callbacks, so `outbox` grows
-    without limit and a scan over the whole table would make this endpoint's cost grow with it.
+    endpoint stays bounded: decision callbacks are never pruned, so `outbox` grows without limit
+    and a scan over the whole table would make this endpoint's cost grow with it.
     `outbox_terminal_total_estimate` is derived from planner statistics (pg_class.reltuples),
     which reset to -1 on every TRUNCATE (including `clean_db`'s per-test reset) and only reflect
     just-inserted rows after an ANALYZE — so this test runs one explicitly, the way a real
     deployment's autovacuum eventually would, rather than asserting on a pre-ANALYZE value that
     is legitimately allowed to be 0."""
-    _superseded_callback(session_factory, "cm")  # a VALID superseded decision callback (F8)
+    _superseded_callback(session_factory, "cm")  # a VALID superseded decision callback
     with session_factory() as s:
         s.execute(text("INSERT INTO outbox (kind, case_id, ordering_stream, "
                        "status) VALUES ('poc_email','cm','email','pending')"))
@@ -406,7 +407,7 @@ def test_metrics_reports_superseded_out_of_the_alert_set(client, session_factory
 
 
 def test_outbox_terminal_estimate_within_tolerance_after_analyze(client, session_factory):
-    """F7: after ANALYZE, outbox_terminal_total_estimate (planner statistics minus the exact
+    """After ANALYZE, outbox_terminal_total_estimate (planner statistics minus the exact
     live count) lands within a sane tolerance of the true terminal count on a small seeded set
     — it is an ESTIMATE, not the exact count(*) the endpoint used to run. The cheapest honest
     proof that the endpoint issues no scan over the unfiltered/terminal outbox (short of a query
@@ -437,7 +438,7 @@ def test_outbox_terminal_estimate_within_tolerance_after_analyze(client, session
 
 
 def test_outbox_terminal_estimate_clamped_when_never_analyzed(client, session_factory):
-    """F7: reltuples is -1 on a relation that has never been ANALYZEd (true right after
+    """The planner's reltuples is -1 on a relation that has never been ANALYZEd (true right after
     `clean_db`'s TRUNCATE, verified empirically — TRUNCATE resets reltuples to -1, not 0, and a
     plain INSERT never updates it). The estimate must clamp at 0, never report a negative number.
     Stamping pg_class directly makes this deterministic instead of racing a shared cluster's
@@ -466,14 +467,15 @@ def test_outbox_terminal_estimate_clamped_when_never_analyzed(client, session_fa
 def test_manual_current_then_late_automatic_callback_sent_expected_pre_activation(
     client, session_factory, post_event, worker, publisher, callback_capture, sign
 ):
-    """Re-audit F4 — the THIRD honest residual, real end-to-end: ingest → worker drives an
-    automatic decision whose callback is ENQUEUED but NOT yet processed; a reviewer manual
-    approval then becomes the case's current state (manual rows: run_id NULL, no callback,
-    no decision_sequence); the publisher then runs. The local guard sees NO higher
+    """The THIRD honest residual, real end-to-end: ingest → worker drives an automatic
+    decision whose callback is ENQUEUED but NOT yet processed; a reviewer manual approval
+    then becomes the case's current state (manual rows: run_id NULL, no callback, no
+    decision_sequence); the publisher then runs. The local guard sees NO higher
     locally-published automatic sequence (manual allocates none), so the OLD automatic
     callback IS sent AFTER the manual approval — EXPECTED pre-activation behavior, closed
-    only by 7b-activation's platform high-water (the strengthened 014 acceptance makes an
-    unaccepted older callback a sticky no-op against a manual-current source)."""
+    only by the platform high-water added at platform activation (the strengthened 014
+    acceptance makes an unaccepted older callback a sticky no-op against a manual-current
+    source)."""
     post_event(
         "case-mc",
         "kyb.run_requested",

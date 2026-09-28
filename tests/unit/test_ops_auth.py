@@ -1,10 +1,10 @@
-"""PR 1 auth surface (offline). The read API and ops-console mutations reject
+"""Auth surface (offline). The read API and ops-console mutations reject
 unauthenticated callers when the corresponding config is on, and /ui is not
 mounted by default. All of these reject before any DB access, so the sentinel
 session factory (which raises if used) proves the guard fired first — no
 Postgres required.
 
-PR 6: create_app() now seeds+verifies the policy bundle at construction time
+At construction time create_app() seeds+verifies the policy bundle
 (kyc_tool.policy_store.repo.seed_and_verify/attest) — a real, intentional DB
 write that happens once, before any request. That is not what this file is
 about, so seed_and_verify/attest are stubbed out here; the sentinel session
@@ -25,7 +25,7 @@ def _boom_session_factory():
 
 def _app(policy, monkeypatch, **overrides):
     # return the SERVED policy's own hash so create_app's startup identity check
-    # (PR 6 audit) passes without a real DB write — the sentinel factory stays untouched
+    # passes without a real DB write — the sentinel factory stays untouched
     monkeypatch.setattr(app_module, "seed_and_verify", lambda *a, **k: policy.bundle_hash)
     monkeypatch.setattr(app_module, "attest", lambda **k: None)
     settings = Settings(environment="development", **overrides)

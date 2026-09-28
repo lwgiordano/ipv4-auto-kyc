@@ -64,9 +64,9 @@ def test_what_has_no_live_implementation_stays_fixture_in_both_modes(adapters):
 
 
 def test_the_production_registry_still_refuses_every_non_fixture_profile():
-    """T14 stopped at the governed production blocker (OPS.BLOCKER.PRODUCTION_PROVIDERS, proven
-    by executing this call): the live directory exists, but `build_adapters` may not offer it
-    until that reviewed claim is re-pinned by a human."""
+    """The live POC directory stops at the governed production blocker
+    (OPS.BLOCKER.PRODUCTION_PROVIDERS, proven by executing this call): the live directory exists,
+    but `build_adapters` may not offer it until that reviewed claim is re-pinned by a person."""
     # store is only handed to the OCR adapter, which never touches it at build time.
     adapters = build_adapters(config.Settings(environment="development"), None)
     assert type(adapters["rir_poc"].directory).__name__ == "FixturePocDirectory"

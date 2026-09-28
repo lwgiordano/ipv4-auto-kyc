@@ -1,4 +1,4 @@
-"""Static pins on the ops console's embedded JS (re-audits `15d875d` F6, `cbb783b` F6).
+"""Static pins on the ops console's embedded JS.
 
 The console is a single static file with no JS test harness, so the DOM's authority expressions
 are pinned at the source level. Whole-file substring presence is NOT enough — it passes when the
@@ -74,7 +74,7 @@ def test_case_detail_labels_live_evidence_as_not_the_decision():
 
 def test_case_detail_decision_card_sources_the_whole_tuple_from_one_row():
     """decision, score and buy enablement all read off `latest` (the pointed row) — never off
-    the case projection or the live score (re-audit `cbb783b` F6)."""
+    the case projection or the live score."""
     card = VIEW_CASE[VIEW_CASE.index("Recorded Decision"):]
     card = card[: card.index("Current Evidence Score")]
     for expr in ("latest.decision", "latest.score", "latest.buy_enablement"):
@@ -113,7 +113,7 @@ def test_case_list_separates_decision_score_from_live_evidence():
     assert "c.current_score" not in VIEW_CASES
 
 
-# --- manual provenance is visible for every state (re-audit `8377440` F6) ---------------------
+# --- manual provenance is visible for every state ---------------------------------------------
 
 def test_manual_provenance_has_a_distinct_pill_for_every_state():
     """A legacy-unresolved manual history must not render identically to 'no manual approval'.
@@ -280,8 +280,8 @@ def test_a_run_of_chips_is_spaced_by_gap_not_by_a_space():
 
 
 def test_no_state_is_encoded_in_an_opacity():
-    """Rule 9. `style="opacity:.55"` marked superseded evidence and survived three audits because
-    no seeded state renders a replaced check."""
+    """No state is encoded in `opacity`. `style="opacity:.55"` marked superseded evidence and
+    went unnoticed because no seeded state renders a replaced check."""
     live = _live_css()
     assert "opacity:.55" not in live and "opacity: .55" not in live
     css = CONSOLE[: CONSOLE.index("</style>")]
@@ -338,7 +338,8 @@ def test_the_header_drops_a_chip_that_repeats_the_decision():
 
 
 def test_every_pill_carries_its_raw_enum():
-    """Rule 12 was held by the callers that happened to pass a label, not by the component."""
+    """Every pill keeps its raw enum next to the readable name. That used to be guaranteed only by
+    the callers that happened to pass a label, not by the component."""
     fn = CONSOLE[CONSOLE.index("const pill=(k,label)=>"):]
     fn = fn[: fn.index("\n\n")]
     assert 'title="${esc(k)}"' in fn
@@ -366,7 +367,7 @@ def test_one_raised_button_per_screen():
     """Approving by hand is this screen's primary action; sending a test message is a utility. The
     elevation used to say the opposite.
 
-    `.warn` and `.primary` render identically by human decision, and share ONE rule so they cannot
+    `.warn` and `.primary` render identically by design, and share ONE rule so they cannot
     drift apart again -- which is what happened when `.warn` was declared separately and its
     comments went on describing a peach that was not there. The rule still has to raise it."""
     assert '<button id="sendbtn">' in VIEW_CASE
@@ -457,8 +458,8 @@ def test_the_five_rules_name_a_subject_not_a_verdict():
 # --- the states outside `.page` are measured too ---------------------------------------------
 
 def test_no_control_encodes_disabled_in_an_opacity():
-    """Rule 9, in the place the pattern was written first: the peach commit button rendered its
-    label at 2.08:1 for the whole duration of the POST."""
+    """The no-opacity rule also covers disabled controls, where the pattern first appeared: the
+    peach commit button rendered its label at 2.08:1 for the whole duration of the POST."""
     css = CONSOLE[: CONSOLE.index("</style>")]
     rule = re.search(r"^button:disabled\{([^}]*)\}", css, re.MULTILINE)
     assert rule, "button:disabled is gone"

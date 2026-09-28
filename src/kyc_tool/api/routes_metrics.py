@@ -1,5 +1,5 @@
-"""Operational metrics (JSON). Prometheus exposition is a deployment TODO —
-these counters are the dashboard's source: runs, decision distribution,
+"""Operational metrics, as JSON at /v1/metrics and Prometheus text at /v1/metrics.prom.
+These counters are the dashboard's source: runs, decision distribution,
 queue/outbox health (dead-letters alert!), review-queue depth, adapter latency.
 """
 
@@ -25,17 +25,17 @@ LIVE_OUTBOX_SQL = (
 
 @router.get("/v1/metrics")
 def metrics(request: Request) -> dict:
-    """Auth-gated HTTP metrics surface (re-audit `b39b82a..b53daf4` F4). Read auth
-    (`require_read_access` — off in dev, forced on in production) is checked BEFORE any DB access, so
-    an unauthenticated caller cannot even open a session against this business-sensitive endpoint.
-    The payload is built by `collect_metrics`, which the `/ui` overview reuses in-process."""
+    """Auth-gated HTTP metrics surface. Read auth (`require_read_access` — off in dev, forced on in
+    production) is checked BEFORE any DB access, so an unauthenticated caller cannot even open a
+    session against this business-sensitive endpoint. The payload is built by `collect_metrics`,
+    which the `/ui` overview reuses in-process."""
     require_read_access(request.app.state.settings, request)
     return collect_metrics(request)
 
 
 @router.get("/v1/metrics.prom")
 def metrics_prometheus(request: Request):
-    """The SAME gauges as /v1/metrics in Prometheus text exposition format (PR 10a), hand-rendered so
+    """The SAME gauges as /v1/metrics in Prometheus text exposition format, hand-rendered so
     no new dependency ships. Same read-auth gate, checked before any DB access. Scalar families only —
     the nested diagnostic blocks stay JSON-only; alert rules over these series live in docs/ALERTS.md."""
     from fastapi.responses import PlainTextResponse
@@ -50,8 +50,8 @@ def metrics_prometheus(request: Request):
         )
         lines.append(f"kyc_{name}{label_s} {float(value)}")
 
-    # runs_by_state zero-safe (re-audit `f2929f8..6a4cd87` F11): a FAILED-run alert needs the
-    # series present even when the count is zero, so absence is never ambiguous with health.
+    # runs_by_state zero-safe: a FAILED-run alert needs the series present even when the count is
+    # zero, so absence is never ambiguous with health.
     run_states = payload.get("runs_by_state", {})
     for state in sorted({"FAILED", "QUEUED", "PUBLISH_DECISION", *run_states}):
         gauge("runs", run_states.get(state, 0), {"state": state})
@@ -75,12 +75,11 @@ def collect_metrics(request: Request) -> dict:
     """Build the metrics payload. INTERNAL — performs NO auth of its own; the HTTP route above gates
     read auth before this runs, and the `/ui` overview reuses it in-process.
 
-    NOTE (re-audit `d569a15..4938840` F2/F3/F4): the shadow-mode `automation_readiness` gauge was
-    REMOVED from this payload. It was an unreleased, non-gating diagnostic that could not satisfy a
-    consumer contract — a history-unbounded query (F2), a mixed-era population that could mask a
-    current-engine regression (F3), and three statements under READ COMMITTED that were not one
-    snapshot (F4). It is rebuilt properly in the rollout observation unit (see ROADMAP) with a single
-    versioned population/denominator per metric and a snapshot-consistent read."""
+    NOTE: the shadow-mode `automation_readiness` gauge was REMOVED from this payload. It was an
+    unreleased, non-gating diagnostic that could not satisfy a consumer contract — a
+    history-unbounded query, a mixed-era population that could mask a current-engine regression,
+    and three statements under READ COMMITTED that were not one snapshot. A replacement needs a
+    single versioned population/denominator per metric and a snapshot-consistent read."""
     with request.app.state.session_factory() as session:
         adapter_latency = [
             {
@@ -118,17 +117,16 @@ def collect_metrics(request: Request) -> dict:
                 """
             )
         ).one()
-        # PR 7b-core: decision_callback rows are never pruned — retention redacts the body past
-        # the window but keeps the row itself, because the row is the durable ordering authority
-        # a later unit (7b-activation) reconciles the platform against. So `outbox` grows without
-        # bound for the life of the system.
+        # Decision-callback rows are never pruned — retention redacts the body past the window but
+        # keeps the row itself, because the row is the durable ordering authority the platform is
+        # later reconciled against. So `outbox` grows without bound for the life of the system.
         #
         # Live statuses (pending, dead) stay EXACT: they are what an operator acts on, and they
         # stay small. The predicate is served by migration 014's ix_outbox_live_status — 013's
         # claim indexes are partial to status='pending' ALONE, and Postgres cannot use a
         # pending-only partial index for an IN ('pending','dead') query, so without 014's index
-        # this exact count would seq-scan the ever-growing terminal history (re-audit 1f8412e
-        # F7). The EXPLAIN regression test pins the plan, not just the values.
+        # this exact count would seq-scan the ever-growing terminal history. The EXPLAIN
+        # regression test pins the plan, not just the values.
         # `outbox_by_status` and `outbox_alerting` used to each run this identical query — two
         # round-trips for one result — so it is computed once here and shared; both keys stay
         # published (each is part of the metrics surface).
@@ -181,9 +179,8 @@ def collect_metrics(request: Request) -> dict:
                 "SELECT task_type, count(*) FROM review_tasks WHERE status='open' GROUP BY task_type",
             ),
             "adapter_latency": adapter_latency,
-            # (Shadow-mode automation_readiness removed here — re-audit d569a15..4938840 F2/F3/F4;
-            #  rebuilt with a versioned contract in the rollout observation unit. See collect_metrics.)
-            # Latency aggregates cover a FIXED recent window (PR 10a): unbounded history made the
+            # (The shadow-mode automation_readiness gauge was removed; see collect_metrics.)
+            # Latency aggregates cover a FIXED recent window: unbounded history made the
             # percentiles progressively staler and the scans progressively slower as the immutable
             # tables grow (adapter_results/decisions are never pruned). The window is declared here
             # so a consumer can never mistake a 24h p95 for an all-time one.
@@ -192,11 +189,11 @@ def collect_metrics(request: Request) -> dict:
                 "avg": float(decision_latency.avg_s or 0),
                 "p95": float(decision_latency.p95_s or 0),
             },
-            # HMAC witness (PR 5a §6). v1_accepted is the DB-backed FAIL-CLOSED witness that gates the
-            # inbound sunset — it aggregates across replicas. The v2_accepted/rejected diagnostics are
-            # PROCESS-LOCAL (re-audit `d569a15..4938840` F1), exposed under a self-describing
-            # `auth_diagnostics` block — NOT bare top-level keys — so a legacy consumer cannot read
-            # this replica's counters as a fleet total (re-audit `8aba2df..2cee937` R3-F2).
+            # HMAC witness. v1_accepted is the DB-backed FAIL-CLOSED witness that gates the inbound
+            # sunset — it aggregates across replicas. The v2_accepted/rejected diagnostics are
+            # PROCESS-LOCAL, exposed under a self-describing `auth_diagnostics` block — NOT bare
+            # top-level keys — so a legacy consumer cannot read this replica's counters as a fleet
+            # total.
             "hmac": {
                 "v1_accepted": session.execute(
                     text("SELECT accepted_count FROM hmac_v1_observation WHERE id = 1")

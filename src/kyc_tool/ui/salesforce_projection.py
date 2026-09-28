@@ -129,7 +129,7 @@ def project_salesforce_fields(
     # derives from the POINTED decision row (the caller passes it), never from the
     # cases.latest_decision column — that projection goes stale after a record-only manual
     # approval, and when the pointer is unresolved (ambiguous pre-014 order) the honest action
-    # is NONE, not a guess (re-audit 0c46443 F6).
+    # is NONE, not a guess.
     if case.get("status") == "approved_manual":
         action = "Manual Approve"
     else:
@@ -139,7 +139,7 @@ def project_salesforce_fields(
 
     # Manual attribution is STICKY: a later automatic decision moves the pointer but must not
     # blank Manual_Approved_By/At while the case remains approved_manual. The caller passes the
-    # latest manual row as its own argument (re-audit 15d875d F6); falling back to the pointed
+    # latest manual row as its own argument; falling back to the pointed
     # row keeps old callers correct when the pointed row IS the manual one.
     manual = (
         latest_manual_decision
@@ -151,7 +151,7 @@ def project_salesforce_fields(
         "KYC_Status__c": KYC_STATUS_MAP.get(case.get("status", "")),
         # the POINTED decision's score — what was actually decided — never the live recomputed
         # case score, which can drift after the decision; None when the pointer is unresolved
-        # (ambiguous pre-014 order): an honest blank, not a guess (re-audit 15d875d F6)
+        # (ambiguous pre-014 order): an honest blank, not a guess
         "KYC_Score__c": (latest_decision or {}).get("score"),
         "Buy_Enablement_Status__c": BUY_STATUS_MAP.get(case.get("buy_status", "")),
         "Platform_Action_Taken__c": action,
@@ -164,9 +164,9 @@ def project_salesforce_fields(
         "Broker_Status__c": BROKER_MAP.get(case.get("broker_status", "")),
         # AUDIT:D-SF-NULL — ONLY an authoritative decision that actually evaluated the gate
         # may speak: absent tuple (drift / unresolved order) and bypassed gates (manual
-        # approval) both project NULL. The old default fabricated `False` — a definite "no
-        # hard conflict" — out of the gate never having been evaluated (re-audit `45cc215`
-        # F9). NULLABLE refines `salesforce_sync_fields.json`'s `boolean` (package frozen).
+        # approval) both project NULL. Defaulting to `False` would fabricate a definite "no
+        # hard conflict" out of a gate that was never evaluated. NULLABLE refines
+        # `salesforce_sync_fields.json`'s `boolean` (package frozen).
         "Hard_Conflict__c": (not gates["no_hard_conflict"] if "no_hard_conflict" in gates else None),
         "Review_Reason_Codes__c": "; ".join(reason_codes) if reason_codes else None,
         "Manual_Approved_By__c": (manual or {}).get("reviewer_id"),

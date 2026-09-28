@@ -8,8 +8,7 @@ from kyc_tool.outbox.emails import make_email_sender
 from kyc_tool.outbox.publisher import OutboxPublisher, OutboxSaturated
 
 # Nonzero exit code the process uses when the orphan-cap circuit breaker trips — distinct from a
-# generic crash so a supervisor's restart policy can recognise saturation (re-audit
-# `538e55e..42e1c7d` F6).
+# generic crash so a supervisor's restart policy can recognise saturation.
 SATURATION_EXIT_CODE = 3
 
 

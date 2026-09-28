@@ -1,11 +1,11 @@
-"""witness authority hardening: admission, immutability, deep validation (PR 7b-core)
+"""witness authority hardening: admission, immutability, deep validation
 
 Revision ID: 015
 Revises: 014
 
 `014` created the evidence tables and the first guards; this revision makes them an AUTHORITY —
-meaning the database itself refuses every fabrication path the re-audit (`4dfdf8a`) demonstrated,
-instead of trusting application discipline:
+meaning the database itself refuses every fabrication path demonstrated against `014`, instead of
+trusting application discipline:
 
 - **Attempt admission** (BEFORE INSERT): an attempt may only be recorded for a live-claimed,
   pending decision callback, under that row's exact claim token. `014`'s trigger protected

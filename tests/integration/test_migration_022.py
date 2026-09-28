@@ -1,8 +1,8 @@
-"""PR 7b-core revision 022: authority manifest + terminal/data invariants.
+"""Revision 022: authority manifest + terminal/data invariants.
 
-This is the owner-audit repair for 018-021. The prior repairs fixed real holes, but their
-preflights still accepted trigger surfaces that looked right by name while no longer enforcing
-anything in ordinary sessions.
+Revision 022 repairs 018-021. The earlier repairs fixed real holes, but their preflights still
+accepted trigger surfaces that looked right by name while no longer enforcing anything in
+ordinary sessions.
 """
 
 import json

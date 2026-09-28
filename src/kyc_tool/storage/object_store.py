@@ -11,9 +11,8 @@ from kyc_tool.authority import authorize_external_io
 
 
 class ObjectTooLarge(RuntimeError):
-    """A bounded read (`get_bounded`) refused an object over its byte cap BEFORE materializing it
-    (re-audit `750630c..ca85355` F7: production `.read()` had no cap — a huge stored document
-    could be pulled whole into a worker)."""
+    """A bounded read (`get_bounded`) refused an object over its byte cap BEFORE materializing it.
+    An uncapped `.read()` could pull a huge stored document whole into a worker."""
 
 
 class ObjectStore(Protocol):
@@ -88,7 +87,7 @@ class FsStore:
 
     def get_bounded(self, ref: str, *, max_bytes: int | None) -> bytes:
         path = self._ref_path(ref)
-        # TRANSITIVE authority (PR 10b slice 1): the store proves the ambient claim + deadline
+        # TRANSITIVE authority: the store proves the ambient claim + deadline
         # ITSELF — a caller that never heard of the authority still cannot read bytes under a
         # lost claim or spent budget. No ambient budget (direct/ops/unit callers) = no-op.
         authorize_external_io()

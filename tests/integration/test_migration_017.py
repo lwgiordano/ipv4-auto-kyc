@@ -1,6 +1,6 @@
-"""PR 7b-core authority-boundary revision 017 (re-audit `15d875d` F1/F3/F4/F5 + folded F2).
+"""Authority-boundary revision 017.
 
-`016` bound admission to provenance; `15d875d` walked the remaining lifecycle edges: an expired
+`016` bound admission to provenance but left the remaining lifecycle edges open: an expired
 claimant could still stage evidence, a delivered row could be born rather than earned, the
 ordering authority itself could be deleted or re-identified, and maintenance still reasoned
 about writer lock ORDER instead of sharing a fence with writers. `017` closes each at the
@@ -32,7 +32,7 @@ def _deliver_legally(conn, row, sha="a" * 64):
         "WHERE id=:i"), {"s": sha, "i": row.id})
 
 
-# --- F4: an expired lease is reclaimable, and a reclaimable claim stages NOTHING ---
+# --- An expired lease is reclaimable, and a reclaimable claim stages NOTHING ---
 
 def test_expired_lease_cannot_stage_evidence(pg):
     """The claim SQL already treats an expired lease as reclaimable; admission now agrees. The
@@ -69,7 +69,7 @@ def test_expired_lease_cannot_stage_evidence(pg):
     eng.dispose()
 
 
-# --- F1: delivered is EARNED, never born; and only from pending ---
+# --- Delivered is EARNED, never born; and only from pending ---
 
 def test_decision_callback_cannot_be_born_anywhere_but_pending(pg):
     """Every UPDATE guard is bypassable by INSERTing the end state directly — so the INSERT
@@ -121,7 +121,7 @@ def test_dead_to_delivered_is_closed(pg):
     eng.dispose()
 
 
-# --- F3: the ordering authority cannot be deleted or re-identified ---
+# --- The ordering authority cannot be deleted or re-identified ---
 
 def test_decision_callbacks_are_undeletable(pg):
     """Positive evidence (delivered + digest), negative evidence (attempt_v1, nothing staged),
@@ -207,7 +207,7 @@ def test_payload_immutable_while_sendable_redactable_once_terminal(pg):
     eng.dispose()
 
 
-# --- F5: ONE fence for maintenance and writers; quiescence is machine-checked ---
+# --- ONE fence for maintenance and writers; quiescence is machine-checked ---
 
 def test_upgrade_refuses_while_claims_are_live(pg):
     """The cutover's 'publishers drained' precondition is enforced, not assumed: a live
@@ -277,7 +277,7 @@ def test_017_downgrade_and_fenced_writer_never_deadlock(pg):
     eng.dispose()
 
 
-# --- F2 (folded part): full structural validation; functions resolve ONE schema ---
+# --- Full structural validation; functions resolve ONE schema ---
 
 def test_upgrade_refuses_on_structural_drift(pg):
     """The validator covers the complete structural surface BEFORE recreating any code: a

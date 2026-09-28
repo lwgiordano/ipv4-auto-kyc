@@ -20,7 +20,7 @@ def test_v013_backfill_contract_is_frozen():
     )
 
 
-# --- the migration FILE itself is frozen too (re-audit 1f8412e F1; provenance split 4dfdf8a F7) ---
+# --- the migration FILE itself is frozen too ---
 # 013 was once amended in place after being committed: the attempt-authority table was added to
 # the already-published revision, so a database stamped '013' by the original file would never
 # receive it — Alembic performs no work for a recorded revision, and fresh-database CI passes on
@@ -28,14 +28,14 @@ def test_v013_backfill_contract_is_frozen():
 # that mistake.
 #
 # TWO pins, because they freeze two different things and must fail independently:
-# - the UPGRADE BODY is byte-identical to the original committed revision (9092fdb) — this is
+# - the UPGRADE BODY is byte-identical to the original committed revision — this is
 #   what "restored" means, and any edit here re-creates the split-brain;
 # - the FULL FILE is the original upgrade body PLUS the approved downgrade-only compatibility
-#   guards (witness-in-use + amended-history refusals, 25 lines) added by the repair round. It is
-#   NOT byte-identical to 9092fdb, and describing it as such conflated the two artifacts.
+#   guards (witness-in-use + amended-history refusals, 25 lines) added with repair revision 014.
+#   It is NOT byte-identical to the original committed revision; the two are distinct artifacts.
 # ANY change to either must ship as a NEW revision (016+). NEVER re-pin.
 _MIGRATION_013 = REPO_ROOT / "alembic" / "versions" / "013_outbox_stream_separation.py"
-# exact 9092fdb upgrade body:
+# exact original upgrade body:
 MIGRATION_013_UPGRADE_BODY_SHA = "108e04a88fd36587f559b2d1ecb929cd9a6b459a4e5fa862146c0940b14d2465"
 # original upgrade + approved downgrade-only guards:
 MIGRATION_013_FULL_SHA = "4c0ead28c1a57a7ed1d726ea204c54ca41390d0cb4d8477a96c409376b9580aa"

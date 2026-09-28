@@ -413,10 +413,10 @@ class FloqerAdapter:
         if not name:
             return AdapterOutput(self.adapter_id, AdapterStatus.NOT_APPLICABLE)
         contact = case_snapshot.get("contact") or {}
-        # The provider-protocol delegate is external I/O (re-audit `750630c..ca85355` F7): the
-        # governed delegate proves the claim + deadline immediately before invoking it — a lost
-        # claim places ZERO Floqer calls. The live client's own wire calls additionally route
-        # through the governed transport (retry.request_with_retry).
+        # The provider-protocol delegate is external I/O: the governed delegate proves the
+        # claim + deadline immediately before invoking it — a lost claim places ZERO Floqer calls.
+        # The live client's own wire calls additionally route through the governed transport
+        # (retry.request_with_retry).
         record = retry.governed_delegate(
             self.client.enrich,
             name,

@@ -1,4 +1,4 @@
-"""Ops-command hardening (Codex re-audit `f495de8` F3/F4/F10), against real Postgres.
+"""Ops-command hardening, against real Postgres.
 
 Three properties, each proven through the REAL subprocess entry points:
 - a smuggled `search_path` (URL `?options=-csearch_path=shadow,public`) cannot redirect any
@@ -35,7 +35,7 @@ def _run(module, url, *args, timeout_env="60"):
 
 
 def _shadowed(url: str) -> str:
-    """The audit's exact vector: a URL whose options put a `shadow` schema first."""
+    """The attack vector: a URL whose options put a `shadow` schema first."""
     return url + ("&" if "?" in url else "?") + "options=" + quote("-csearch_path=shadow,public")
 
 
@@ -48,7 +48,7 @@ def _seed_shadow(engine):
 
 
 def test_shadow_search_path_cannot_redirect_reset_or_repair(pg):
-    """Audit repro: with `shadow` first, reset printed zero while a `public` claim survived and
+    """Reproduction: with `shadow` first, reset printed zero while a `public` claim survived and
     repair repaired `shadow.outbox_id_seq`. Bound commands must operate on `public` regardless."""
     url = _fresh_db(pg, "kyc_ops_shadow")
     command.upgrade(_config(url), "013")
@@ -114,7 +114,7 @@ def test_unbound_database_refuses_before_touching_anything(pg):
         assert "alembic_version" in proc.stderr or "alembic_version" in proc.stdout, module
 
 
-# verify runs on schema 012 (its exact-phase requirement, F12); the mutators on 013.
+# verify runs on schema 012 (its exact-phase requirement); the mutators on 013.
 @pytest.mark.parametrize("module,rev", [
     ("verify_pr7b_core_backfill", "012"),
     ("reset_interrupted_outbox_claims", "013"),
@@ -153,7 +153,7 @@ def test_conflicting_lock_refuses_with_sentinel_within_bound_and_changes_nothing
 
 
 def test_reset_fence_blocks_a_claimant_arriving_in_the_readback_window(pg):
-    """Audit F3's exact race, now impossible: a claim committed between the reset's zero
+    """The read-back race, now impossible: a claim committed between the reset's zero
     read-back and its commit made `reported_reset=1` a lie. Under the ACCESS EXCLUSIVE fence
     the late claimant BLOCKS until the reset commits; its claim lands strictly AFTER, so the
     reset's 'zero at commit' statement stays true."""
@@ -178,7 +178,7 @@ def test_reset_fence_blocks_a_claimant_arriving_in_the_readback_window(pg):
     late_done = threading.Event()
 
     def _barrier(conn, cursor, statement, params, context, executemany):
-        # pause the reset AFTER its zero read-back, INSIDE the window the audit exploited
+        # pause the reset AFTER its zero read-back, INSIDE the window the race exploits
         if "count(*) from public.outbox where claim_token is not null" in statement.lower():
             at_readback.set()
             release.wait(timeout=20)
@@ -230,9 +230,9 @@ def test_reset_fence_blocks_a_claimant_arriving_in_the_readback_window(pg):
 
 
 def test_bind_sets_statement_timeout_from_its_own_setting(pg):
-    """Re-audit `538e55e..42e1c7d` F11: statement_timeout is a SEPARATE governed budget SET BY
-    bind() from KYC_OPS_STATEMENT_TIMEOUT_SECONDS — not a constant derived from the lock, and (the
-    prior test's gap) actually exercised THROUGH bind(). Call bind(), read back SHOW
+    """The statement_timeout is a SEPARATE governed budget SET BY bind() from
+    KYC_OPS_STATEMENT_TIMEOUT_SECONDS — not a constant derived from the lock, and actually
+    exercised THROUGH bind(). Call bind(), read back SHOW
     statement_timeout, and prove a query past the bound is canceled (57014). Nothing mutated."""
     from sqlalchemy.exc import OperationalError
 
@@ -265,7 +265,7 @@ def test_bind_refuses_a_statement_budget_at_or_below_the_lock_budget(pg):
 
 
 def test_multi_head_alembic_version_refuses_instead_of_reading_one_arbitrary_row(pg):
-    """Re-audit `538e55e..42e1c7d` F4: bind() read one arbitrary row via .scalar(), so a multi-head
+    """Regression: bind() read one arbitrary row via .scalar(), so a multi-head
     `{012, 999}` satisfied an exact/floor check against whichever row returned (verify printed
     'schema-012 parity matrix clean' and exited 0). bind() now reads the FULL version set, requires
     cardinality one, and refuses — a governed sentinel, nonzero, no traceback, nothing certified."""
@@ -284,7 +284,7 @@ def test_multi_head_alembic_version_refuses_instead_of_reading_one_arbitrary_row
 
 
 def test_repair_and_restore_refuse_a_non_owner_before_mutating(pg):
-    """Re-audit `8377440` F13: ALTER SEQUENCE needs OWNERSHIP, not ALL privileges. A non-owner
+    """ALTER SEQUENCE needs OWNERSHIP, not ALL privileges. A non-owner
     with full grants must refuse at the preflight (before any DML/DDL), with the stable
     OPS_COMMAND_NOT_SEQUENCE_OWNER sentinel — not discover it mid-maintenance."""
     url = _fresh_db(pg, "kyc_ops_owner")
@@ -314,7 +314,7 @@ def test_repair_and_restore_refuse_a_non_owner_before_mutating(pg):
 
 
 def test_verify_refuses_any_phase_other_than_exactly_012(pg):
-    """Re-audit `8377440` F12: verify unconditionally printed 'schema-012 parity matrix clean'.
+    """Regression: verify unconditionally printed 'schema-012 parity matrix clean'.
     On 011 (too early) and 013/head (too late) it must refuse, not certify a phase it never
     checked. Only exactly 012 may print the success line."""
     from kyc_tool.ops import binding  # noqa: F401 (import proves module wiring is intact)
@@ -332,13 +332,13 @@ def test_verify_refuses_any_phase_other_than_exactly_012(pg):
         else:
             assert proc.returncode != 0, f"rev {rev} must refuse"
             assert "schema-012 parity matrix clean" not in proc.stdout, f"rev {rev} was certified"
-            # F4: a wrong-phase refusal is a GOVERNED sentinel, not a Python traceback
+            # A wrong-phase refusal is a GOVERNED sentinel, not a Python traceback
             assert "Traceback" not in proc.stderr, f"rev {rev} tracebacked instead of refusing"
             assert "OPS_COMMAND_SCHEMA_REFUSED" in proc.stderr, proc.stderr
 
 
 def test_ops_prerequisites_preflight_reports_role_and_phase_read_only(pg):
-    """Re-audit `538e55e..42e1c7d` F12: an operator must VERIFY role, sequence owner, schema phase,
+    """An operator must VERIFY role, sequence owner, schema phase,
     and timeout budgets BEFORE pausing service — a read-only preflight that needs NO maintenance
     stop and takes no ACCESS EXCLUSIVE lock. As the owning role it exits 0, reports ownership +
     phase + budgets, and mutates nothing (the sequence is untouched)."""
@@ -356,7 +356,7 @@ def test_ops_prerequisites_preflight_reports_role_and_phase_read_only(pg):
 
 
 def test_ops_prerequisites_preflight_refuses_the_wrong_phase(pg):
-    """Re-audit `42e1c7d..b39b82a` F5: the expected phase is part of the exit condition — on a 013
+    """The expected phase is part of the exit condition — on a 013
     DB (right owner, wrong phase for the restore path) the preflight REFUSES with a governed
     sentinel and never prints OK."""
     url = _fresh_db(pg, "kyc_ops_preflight_phase")
