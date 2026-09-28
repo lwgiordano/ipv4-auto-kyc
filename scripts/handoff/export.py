@@ -299,6 +299,16 @@ PROHIBITED_TEXT = (
     (re.compile(r"\b(?:agent[- ]substrate|superpowers)\b", re.IGNORECASE), "internal tooling"),
     (re.compile(r"\b(?:AI|agent) conversations?\b", re.IGNORECASE), "conversation history"),
     (re.compile(r"\b(?:independent review|re-audits?)\b", re.IGNORECASE), "review history"),
+    # Narration of how the code was reviewed, and asides that cast its author as other than a
+    # person. The comments that carried these are rewritten at source; ledgers get no exemption.
+    (
+        re.compile(
+            r"\b(?:adversarial[ \t]+review|audit[ \t]+round|by[ \t]+human[ \t]+decision"
+            r"|human-approved|my[ \t]+own[ \t]+fix|rebuttals?)\b|\(human,",
+            re.IGNORECASE,
+        ),
+        "process narration",
+    ),
     # Labels `remove_review_labels` strips from comments; anything left is in code or prose that
     # the export must not ship. `roadmap_unit` values are internal identifiers, never displayed.
     (

@@ -197,6 +197,21 @@ def test_archive_scan_refuses_review_labels_the_export_could_not_remove(exporter
         exporter.scan_package_text("docs/RUNBOOK.txt", b"Run the 7b-core diagnostic.\n")
 
 
+def test_archive_scan_refuses_review_process_narration_even_in_ledgers(exporter):
+    for path, text in (
+        ("tests/unit/test_email_sink.py", b'"""File email sink (audit round 2)."""\n'),
+        ("alembic/versions/021.py", b'"""Folds an adversarial review of the released `020`."""\n'),
+        ("alembic/versions/021.py", b"# which found that my own fix was worse\n"),
+        ("src/kyc_tool/ui/console.html", b"/* `.warn` renders as `.primary`, by human decision */\n"),
+        ("tests/unit/test_conformance_receive.py", b"# dropped the connection (human, 2026-09-19).\n"),
+        ("alembic/versions/018.py", b"# never prior history (rebuttal R2, as adjudicated)\n"),
+    ):
+        with pytest.raises(ValueError, match="process narration"):
+            exporter.scan_package_text(path, text)
+    exporter.scan_package_text("docs/RUNBOOK.txt", b"Treat the case as pending human review.\n")
+    exporter.scan_package_text("src/kyc_tool/ui/routes.py", b"# the audit row names the reviewer\n")
+
+
 def test_real_config_defaults_are_rebased_without_other_executable_changes(exporter):
     original = (REPO_ROOT / "src" / "kyc_tool" / "config.py").read_bytes()
 

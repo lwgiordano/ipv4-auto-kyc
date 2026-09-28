@@ -61,7 +61,7 @@ window.KYCTheme=(()=>{const valid=new Set(["system","light","dark"]);
   --r:4px; --pill:16px; --radius-inner:4px;
   --s0:2px; --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:64px;
   /* the marketplace's three elevations: card, raised control, floating panel */
-  /* The edge a clipping table paints. It is the ONLY thing satisfying rule 11 for up to
+  /* The edge a clipping table paints. It is the ONLY sign that a table clips, for up to
      545px of hidden columns, and at rgba(0,0,0,.12) it measured 1.30:1 in light and 1.05:1
      in dark -- two units of blue. Strong enough to clear 3:1 against its own card, and
      inverted in dark, where a black scrim on a navy card is nothing. */
@@ -426,8 +426,8 @@ button{font:var(--t-chip);text-transform:uppercase;letter-spacing:var(--track-ca
   transition:background-color var(--dur-2) var(--ease-standard),
   border-color var(--dur-2) var(--ease-standard),box-shadow var(--dur-2) var(--ease-standard)}
 button:hover{background:var(--accent-soft)}
-/* `.warn` renders as `.primary`, by human decision: the reviewer's action is the page's primary
-   and wears the filled accent, not the peach an earlier pass specified for it. They are ONE rule
+/* `.warn` renders as `.primary` by design: the reviewer's action is the page's primary
+   and wears the filled accent, not the peach an earlier design specified for it. They are ONE rule
    rather than two identical ones, so they cannot silently drift apart again -- which is exactly
    what happened when `.warn` was declared separately while its comments went on describing a
    peach that was not there. The weight the colour no longer carries is carried by the steps
@@ -444,11 +444,10 @@ button.sm{padding:0 var(--s3);font:var(--t-label);text-transform:uppercase;
    website Reject needs exactly the same treatment, so it is a class the two of them share. */
 button.neutral{border-color:var(--border-input);color:var(--text)}
 button.neutral:hover{background:var(--surface-muted)}
-/* Rule 9, in the place the pattern was first written. `opacity:.45` on the peach commit button
-   rendered its label at 2.08:1 for the whole duration of the POST -- a worse ratio than the
-   "not evaluated" state the rule was written about, on the control that commits an irreversible
-   approval. Three separate fixes to rule 9 removed an opacity from a component and none of them
-   re-read the base rule. */
+/* Never encode a state in `opacity`. `opacity:.45` on the peach commit button rendered its
+   label at 2.08:1 for the whole duration of the POST -- a worse ratio than the "not evaluated"
+   state, on the control that commits an irreversible approval. The disabled state is a colour
+   change, set once here on the base rule. */
 button:disabled{background:var(--surface-muted);color:var(--muted);border-color:var(--border);
   box-shadow:none;cursor:default;pointer-events:none}
 input,select,textarea{font:var(--t-body);background:var(--surface);color:var(--ink);
@@ -645,7 +644,7 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 /* This block exists because the page did not contain the company. Nine sections described what
    the engine did, and the legal name, registration number, jurisdiction, address, director and
    RIR handle -- the identity a reviewer is being asked to vouch for -- were a raw JSON dump at
-   the bottom of a 4200px page. Named column counts, not auto-fit (rule 20). */
+   the bottom of a 4200px page. Named column counts, not auto-fit: the set has a fixed size. */
 .idgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--s4) var(--s5)}
 @media(max-width:1180px){.idgrid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:720px){.idgrid{grid-template-columns:1fr}}
@@ -670,8 +669,8 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .gate>.ic{grid-column:1;grid-row:1;align-self:center}
 .gate .g-s{grid-column:2;grid-row:1;font:var(--t-body)}
 /* `--t-label` is uppercase + tracked everywhere else it is used. `.gate` set only the shorthand,
-   so the token printed as a second, untokened tuple on 22 elements — rule 14, on the component
-   §4 assigns the token to. Here it is the whole token, on the word it was made for. */
+   so the token printed as a second, untokened tuple on 22 elements, on the very component
+   the token was designed for. Here it is the whole token, on the word it was made for. */
 .gate .g-r{grid-column:2;grid-row:2;font:var(--t-label);text-transform:uppercase;
   letter-spacing:var(--track-caps)}
 .gate.ok{background:var(--green-soft);color:var(--green-ink)}
@@ -706,8 +705,8 @@ textarea{min-height:180px;padding:var(--s3);width:100%;
 .pipe-lab.cur{color:var(--accent-ink)}
 .pipe-lab.fail{color:var(--red)}
 
-/* A replaced check. This was `opacity:.55` — the mechanism rule 9 forbids, surviving three
-   audits because no seeded state renders a superseded check. Retired evidence keeps its shape
+/* A replaced check. This was `opacity:.55`, which encodes a state in opacity, and it went
+   unnoticed because no seeded state renders a superseded check. Retired evidence keeps its shape
    and loses its hue: the chip goes to the neutral ground, which is what "no longer counts"
    looks like in this system. */
 .was{color:var(--muted)}
@@ -1548,7 +1547,7 @@ const PILL={
   blocked:["p-red",I.cross,"Blocked Broker"],
 };
 const PROV_PILL={latest_decision_row:["live","Authoritative decision row"],unresolved_pointer_drift:["integrity_drift",undefined],unresolved_legacy_order:["missing","Order Unresolved (legacy records)"],no_decisions:["missing","No Decision Yet"],no_manual_decisions:["missing","No Manual Approval"],latest_manual_row:["manual","Approved Manually"],
-  // every MANUAL provenance state has its own pill (re-audit `8377440` F6): a legacy-unresolved
+  // every MANUAL provenance state has its own pill: a legacy-unresolved
   // manual history must NOT render identically to "no manual approval".
   latest_manual_row_manual:["manual","Manual Approval on Record"],unresolved_pointer_drift_manual:["integrity_drift","Manual Approval Record Conflict"],unresolved_legacy_order_manual:["missing","Manual Approval Order Unresolved"],no_manual_decisions_manual:["p-neutral","No Manual Approval"]};
 /* Status → chip, for the two projections that carry their own vocabulary. The list cell, the
@@ -1607,7 +1606,7 @@ const emptyRow=(cols,head,body)=>`<tr><td colspan="${cols}"><div class="empty"><
 
 async function sidebarBadge(){try{
   // Use the UI's own endpoint, NOT the platform-HMAC-gated /v1/metrics: the console sends no
-  // signature, so polling /v1/metrics under read-auth wrote a "rejected" row per poll (re-audit F1).
+  // signature, so polling /v1/metrics under read-auth wrote a "rejected" row per poll.
   const{body:o}=await j("/ui/api/overview");
   $("#envchip").innerHTML=o.config.auth_disabled
     ?pill("needs-config","Message authentication: Off")
@@ -1968,7 +1967,7 @@ async function viewCase(id,{background=false}={}){
   const hold=d.enforcement_hold||null;
   // The bar is LIVE EVIDENCE and is styled neutrally on purpose: colouring it by the published
   // decision, or captioning it "threshold met", made one visual read out of two different
-  // authority eras (re-audit cbb783b F6). The published tuple gets its own card below.
+  // authority eras. The published tuple gets its own card below.
   const liveGap=s.threshold-live;
   const liveNote=liveGap>0?`${liveGap} points below threshold`:`Threshold met`;
   const decisionColor=decision==="approve"||decision==="approve_buy_locked"?"var(--green)":
@@ -1977,8 +1976,8 @@ async function viewCase(id,{background=false}={}){
   // that are TEXT rather than an svg ("!" and "·") get read out otherwise, so the row announced
   // "·Not Yet Available: Company email verified".
   // All four states are a 16px drawn glyph. Two of them were text -- a 3.23px middot and an
-  // exclamation mark -- which is §9 finding 40 again, in the component 350px below the one it
-  // was fixed in.
+  // exclamation mark -- the text-glyph defect already fixed in the component 350px above
+  // this one.
   const sdot=st=>st==="pass"?`<span class="sdot g" aria-hidden="true">${I.check}</span>`:st==="fail"?`<span class="sdot r" aria-hidden="true">${I.cross}</span>`:
     st==="needs_review"?`<span class="sdot a" aria-hidden="true">${I.warn}</span>`:`<span class="sdot n" aria-hidden="true">${I.absent}</span>`;
   const contrib=s.items.map(it=>`<div class="crow">${sdot(it.status)}<span class="vh">${esc(say("status",it.status))}: </span>

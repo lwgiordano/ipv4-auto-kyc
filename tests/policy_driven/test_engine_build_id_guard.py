@@ -1,4 +1,4 @@
-"""Framed whole-tree engine drift guard (PR 6, item 7A).
+"""Framed whole-tree engine drift guard.
 
 Pins a sha256 over every `src/kyc_tool/**/*.py` file, framed as
 `relpath \\x00 len(bytes) \\x00 bytes` in sorted relative-path order. Framing
