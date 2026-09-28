@@ -1,10 +1,10 @@
-"""outbox authority manifest + terminal invariants (owner audit of 018-021)
+"""outbox authority manifest + terminal invariants for 018-021
 
 Revision ID: 022
 Revises: 021
 
-Repairs owner-audit findings against the released 018-021 range without editing any frozen
-published revision.
+Repairs defects in the released 018-021 range without editing any frozen published
+revision.
 
 * 020/021 checked trigger names only, so a same-name trigger that pointed at a no-op function, or
   a trigger switched to replica-only mode, was accepted and stamped as fresh authority. This

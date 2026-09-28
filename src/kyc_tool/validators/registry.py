@@ -4,7 +4,7 @@ Pass rule (03 §3): company active/current AND name + address + registration
 number match the submission exactly (normalized for case/punctuation — never
 fuzzy). One official_registry_match check regardless of which registry
 produced the evidence; candidates from all registry adapters are judged and
-the first exact match wins.
+an exact inactive match takes precedence over any exact active match.
 
 Fail-closed (remediation item 3): the pass rule requires every field on BOTH
 sides. A submission missing name/address/number, or a candidate missing
@@ -24,7 +24,7 @@ REQUIRED_CANDIDATE_FIELDS = ("legal_name", "company_number", "address", "status"
 
 
 def _judge_candidate(candidate: dict, submission: dict) -> tuple[str, list[str]]:
-    """→ (verdict, reasons) where verdict is 'pass' | 'fail' | 'incomplete'.
+    """→ (verdict, reasons) where verdict is pass/fail/inactive/incomplete.
 
     A candidate missing any pass-rule field is 'incomplete' — it can't be
     proven a match OR a mismatch, so it must not FAIL with a mismatch code."""
@@ -32,15 +32,21 @@ def _judge_candidate(candidate: dict, submission: dict) -> tuple[str, list[str]]
         return "incomplete", [ReasonCode.REGISTRY_EVIDENCE_INCOMPLETE.value]
 
     reasons: list[str] = []
-    if norm(candidate.get("status")) not in ACTIVE_STATUSES:
-        reasons.append(ReasonCode.REGISTRY_COMPANY_INACTIVE.value)
     if not norm_equal(candidate.get("legal_name"), submission.get("company_legal_name")):
         reasons.append(ReasonCode.REGISTRY_NAME_MISMATCH.value)
     if not norm_equal(candidate.get("company_number"), submission.get("registration_number")):
         reasons.append(ReasonCode.REGISTRY_NUMBER_MISMATCH.value)
     if not norm_equal(candidate.get("address"), submission.get("address")):
         reasons.append(ReasonCode.REGISTRY_ADDRESS_MISMATCH.value)
-    return ("pass" if not reasons else "fail"), reasons
+    if reasons:
+        return "fail", reasons
+
+    if norm(candidate.get("status")) not in ACTIVE_STATUSES:
+        return "inactive", [
+            ReasonCode.REGISTRY_COMPANY_INACTIVE.value,
+            ReasonCode.REGISTRY_EXACT_COMPANY_INACTIVE.value,
+        ]
+    return "pass", []
 
 
 def registry_intent(adapter_outputs: dict[str, dict], case_snapshot: dict) -> CheckIntent | None:
@@ -53,9 +59,7 @@ def registry_intent(adapter_outputs: dict[str, dict], case_snapshot: dict) -> Ch
     if not sources:
         return None
 
-    missing_submission = [
-        field for field in REQUIRED_SUBMISSION_FIELDS if not norm(case_snapshot.get(field))
-    ]
+    missing_submission = [field for field in REQUIRED_SUBMISSION_FIELDS if not norm(case_snapshot.get(field))]
     if missing_submission:
         # the pass rule can't be evaluated without the submitted values —
         # ingestible, but never a PASS (fail-closed)
@@ -69,24 +73,46 @@ def registry_intent(adapter_outputs: dict[str, dict], case_snapshot: dict) -> Ch
 
     mismatch_reasons: set[str] = set()
     any_incomplete = False
+    matched_active: tuple[str, dict] | None = None
+    matched_inactive: tuple[str, dict, tuple[str, ...]] | None = None
     for adapter_id, output in sources:
         for candidate in output.get("candidates", []):
             verdict, reasons = _judge_candidate(candidate, case_snapshot)
-            if verdict == "pass":
-                return CheckIntent(
-                    "official_registry_match",
-                    CheckStatus.PASS,
-                    source=adapter_id,
-                    source_detail={
-                        "registry": adapter_id,
-                        "legal_name": candidate.get("legal_name"),
-                        "company_number": candidate.get("company_number"),
-                    },
-                )
-            if verdict == "incomplete":
+            if verdict == "inactive" and matched_inactive is None:
+                matched_inactive = (adapter_id, candidate, tuple(reasons))
+            elif verdict == "pass" and matched_active is None:
+                matched_active = (adapter_id, candidate)
+            elif verdict == "incomplete":
                 any_incomplete = True
             else:
                 mismatch_reasons.update(reasons)
+
+    if matched_inactive is not None:
+        adapter_id, candidate, reasons = matched_inactive
+        return CheckIntent(
+            "official_registry_match",
+            CheckStatus.FAIL,
+            reason_codes=reasons,
+            source=adapter_id,
+            source_detail={
+                "registry": adapter_id,
+                "legal_name": candidate.get("legal_name"),
+                "company_number": candidate.get("company_number"),
+                "status": candidate.get("status"),
+            },
+        )
+    if matched_active is not None:
+        adapter_id, candidate = matched_active
+        return CheckIntent(
+            "official_registry_match",
+            CheckStatus.PASS,
+            source=adapter_id,
+            source_detail={
+                "registry": adapter_id,
+                "legal_name": candidate.get("legal_name"),
+                "company_number": candidate.get("company_number"),
+            },
+        )
 
     if any_incomplete:
         # an incomplete candidate might be the true match — a human decides;
@@ -94,9 +120,7 @@ def registry_intent(adapter_outputs: dict[str, dict], case_snapshot: dict) -> Ch
         return CheckIntent(
             "official_registry_match",
             CheckStatus.NEEDS_REVIEW,
-            reason_codes=tuple(
-                sorted({ReasonCode.REGISTRY_EVIDENCE_INCOMPLETE.value, *mismatch_reasons})
-            ),
+            reason_codes=tuple(sorted({ReasonCode.REGISTRY_EVIDENCE_INCOMPLETE.value, *mismatch_reasons})),
             source=sources[0][0],
         )
     return CheckIntent(

@@ -3,7 +3,7 @@
 from kyc_tool.adapters.companies_house import CompaniesHouseAdapter
 from kyc_tool.adapters.document_ocr import DocumentOcrAdapter
 from kyc_tool.adapters.email_verification import EmailVerificationAdapter
-from kyc_tool.adapters.floqer import FixtureFloqerClient, FloqerAdapter
+from kyc_tool.adapters.floqer import FloqerAdapter, make_floqer_client
 from kyc_tool.adapters.gleif import GleifAdapter
 from kyc_tool.adapters.ocr import JsonScanOcrEngine
 from kyc_tool.adapters.rir_poc import FixturePocDirectory, RirPocAdapter
@@ -33,29 +33,31 @@ from kyc_tool.storage.object_store import ObjectStore, make_object_store
 
 def _make_ocr_engine(name: str):
     """Select the OCR engine. Only the dev stub exists today; a non-stub value
-    fails loudly rather than silently falling back (real engine: item 12)."""
+    fails loudly rather than silently falling back. A real engine is listed in
+    PRODUCTION_READINESS."""
     if name == STUB_OCR_ENGINE:
         return JsonScanOcrEngine()
     raise NotImplementedError(
-        f"OCR engine {name!r} is not implemented yet (remediation item 12)"
+        f"OCR engine {name!r} is not implemented yet (see PRODUCTION_READINESS)"
     )
 
 
 def build_adapters(settings: Settings, store: ObjectStore) -> dict:
     """Adapter registry selected by settings.adapters_profile / ocr_engine.
 
-    TODO(integration) (AUDIT_FINDINGS §C4): the only implemented profile is the
-    fixture stub (Floqer fixture client, fixture POC directory, JSON-scan OCR).
+    TODO(integration): the only implemented profile is the
+    fixture stub (fixture POC directory, JSON-scan OCR). Floqer is real inside it
+    whenever a shortcut id is configured — the Shortcut API contract is settled.
     validate_for_production() refuses to boot a production worker on any stub;
-    the real providers land with the executable-contract work (item 12).
+    the real providers are listed in PRODUCTION_READINESS.
     """
     if settings.adapters_profile == STUB_ADAPTERS_PROFILE:
-        floqer_client = FixtureFloqerClient({})
+        floqer_client = make_floqer_client(settings)
         poc_directory = FixturePocDirectory({})
     else:
         raise NotImplementedError(
             f"adapters_profile {settings.adapters_profile!r} is not implemented yet "
-            "(remediation item 12)"
+            "(see PRODUCTION_READINESS)"
         )
     return {
         "email_verification": EmailVerificationAdapter(),

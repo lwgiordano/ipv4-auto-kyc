@@ -1,6 +1,5 @@
-"""v1 observation activation (PR 5a §6a): the post-cutover, idempotent
-compare-and-set that starts the witness clock. A rerun must never reset a live
-window."""
+"""v1 observation activation: the post-cutover, idempotent compare-and-set
+that starts the witness clock. A rerun must never reset a live window."""
 
 import pytest
 from sqlalchemy import text

@@ -1,4 +1,4 @@
-"""PR 10a: bounded metrics windows + the Prometheus exposition endpoint.
+"""Bounded metrics windows + the Prometheus exposition endpoint.
 
 The latency aggregates cover a FIXED, declared 24h window (unbounded history made the percentiles
 stale and the scans unbounded on never-pruned tables), and /v1/metrics.prom exposes the same gauges

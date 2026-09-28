@@ -1,19 +1,19 @@
-"""outbox transition authority: dual-table manifest, terminal finality, manual pointer (PR 7b-core)
+"""outbox transition authority: dual-table manifest, terminal finality, manual pointer
 
 Revision ID: 018
 Revises: 017
 
-Repairs the eight findings of re-audit `cbb783b`, which adjudicated the `017` rebuttals: R1
-ACCEPTED (no `terminal_v1` — a local bit cannot prove a network fact against an adversary holding
-the same database; the signed platform ledger is the terminating authority), R2 ACCEPTED **for
-unknowable prior execution history but NOT for observable present structure**. That carve-out is
-correct and is what this revision implements: PostgreSQL cannot prove what a function DID before
-the verifier ran, but columns, constraints, indexes, trigger wiring and current definitions are
-directly observable — and `017` only observed half of them.
+Repairs the gaps `017` left while keeping its declared boundary. There is still no `terminal_v1`:
+a local bit cannot prove a network fact against an adversary holding the same database; the signed
+platform ledger is the terminating authority. The boundary holds **for unknowable prior execution
+history but NOT for observable present structure**, and that carve-out is what this revision
+implements: PostgreSQL cannot prove what a function DID before the verifier ran, but columns,
+constraints, indexes, trigger wiring and current definitions are directly observable — and `017`
+only observed half of them.
 
 What this revision FIXES:
 
-- **The manifest covers BOTH authority tables (F1).** `017`'s validator checked columns,
+- **The manifest covers BOTH authority tables.** `017`'s validator checked columns,
   constraints and indexes for `outbox_delivery_attempts` only; for `outbox` it compared enabled
   trigger NAMES. Dropping `fk_outbox_decision_triple` or `ck_outbox_wire_witness_delivered` at
   `016` therefore upgraded cleanly, and a same-name no-op witness function passed and was silently
@@ -22,8 +22,8 @@ What this revision FIXES:
   definition, the complete enabled trigger set with exact `pg_get_triggerdef`, and each owned
   function's normalized-body digest plus its pinned `search_path`. Drift refuses with a stable
   sentinel BEFORE any DDL. This is ordinary partial-deploy drift — inside the boundary, not the
-  raw-DDL adversary R2 excludes.
-- **Terminal means terminal (F2).** `017`'s guard constrained only transitions INTO `delivered`,
+  raw-DDL adversary it excludes.
+- **Terminal means terminal.** `017`'s guard constrained only transitions INTO `delivered`,
   so a `superseded` callback accepted `status='pending', resolved_at=NULL` — becoming claimable and
   transmittable again — plus `superseded → dead`, terminal-timestamp rewrites, and the same
   resurrection for a legacy `delivered` row whose NULL digest left the write-once branch nothing to
@@ -33,13 +33,13 @@ What this revision FIXES:
   documented pending/retry/dead/delivered paths). On a terminal row, status, terminal timestamps,
   claim tuple, witness, identity, attempt counter and error text are all frozen; the ONLY permitted
   write is the governed payload redaction.
-- **The unsafe downgrade is unreachable (F3).** `017`'s witness-free downgrade recreated `016`'s
+- **The unsafe downgrade is unreachable.** `017`'s witness-free downgrade recreated `016`'s
   functions with their historical unqualified bodies and caller-controlled `search_path` — a clean
   rollback walked straight into shadow-relation vulnerability. `017` is published and is never
   edited, so `018` closes the walk instead: once installed it is forward-only, and the supported
   rollback is the prior compatible image on schema `018`. Unsafe historical text is not a
   compatibility requirement.
-- **`cases.latest_manual_decision_row_id` (F6).** `017` sourced sticky manual attribution with
+- **`cases.latest_manual_decision_row_id`.** `017` sourced sticky manual attribution with
   `ORDER BY decisions.id DESC` — and `decisions.id` is a random UUID hex, so the "latest" manual
   approval was the lexically largest one. Attribution now follows a trigger-maintained pointer,
   written under the same INSERT path as the automatic pointer; multi-manual legacy histories that
@@ -199,8 +199,8 @@ _OUTBOX_TRIGGERS = {
 
 # sha256 of each owned function's whitespace-normalized body exactly as `017` installed it. A
 # same-name no-op — the mutilation that walked past `017`'s name-only check — changes the digest.
-# These prove the OBSERVED PRESENT definition, never prior execution history (rebuttal R2, as
-# adjudicated): what a body did between migrations is not recorded anywhere in PostgreSQL.
+# These prove the OBSERVED PRESENT definition, never prior execution history: what a body did
+# between migrations is not recorded anywhere in PostgreSQL.
 _FUNCTION_BODY_SHA256 = {
     "outbox_attempts_admission":
         "6efacbd11eb8b2cc097d940013faead2e1af06adbb666b6e335cf6248bff28c7",
@@ -286,9 +286,8 @@ def _validate_relation(conn, rel: str, columns, constraints, indexes, triggers) 
 
 def _validate_authority_manifest(conn) -> None:
     """The complete OBSERVABLE authority surface of BOTH tables plus every owned function, checked
-    before any code is replaced (re-audit `cbb783b` F1). `017` validated the child table's shape
-    and the parent's trigger NAMES; a dropped parent FK/CHECK or a same-name no-op function walked
-    straight through."""
+    before any code is replaced. `017` validated the child table's shape and the parent's trigger
+    NAMES; a dropped parent FK/CHECK or a same-name no-op function walked straight through."""
     problems = _validate_relation(
         conn, "outbox_delivery_attempts",
         _ATTEMPT_COLUMNS, _ATTEMPT_CONSTRAINTS, _ATTEMPT_INDEXES, _ATTEMPT_TRIGGERS)
@@ -345,7 +344,7 @@ def upgrade() -> None:
             f"leases expire or run reset_interrupted_outbox_claims, then retry."
         )
 
-    # --- F6: the manual-attribution pointer, maintained the way the automatic one is -----------
+    # --- the manual-attribution pointer, maintained the way the automatic one is ---------------
     op.add_column("cases", sa.Column("latest_manual_decision_row_id", sa.Text(), nullable=True))
     op.create_foreign_key(
         "fk_cases_latest_manual_decision", "cases", "decisions",
@@ -381,7 +380,7 @@ def upgrade() -> None:
         "FOR EACH ROW EXECUTE FUNCTION cases_latest_manual_pointer()"
     )
 
-    # --- F2: ONE exhaustive per-kind transition matrix ------------------------------------------
+    # --- ONE exhaustive per-kind transition matrix ----------------------------------------------
     op.execute("DROP TRIGGER IF EXISTS trg_outbox_witness_guard ON outbox")
     op.execute("DROP FUNCTION IF EXISTS outbox_witness_guard()")
     op.execute(
@@ -492,11 +491,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # F3: `017`'s downgrade restores `016`'s functions with their historical UNQUALIFIED bodies and
+    # `017`'s downgrade restores `016`'s functions with their historical UNQUALIFIED bodies and
     # caller-controlled search_path, so a witness-free walk past this point lands on authority a
-    # shadow-first search path can redirect. `017` is published and is never edited (the rule this
-    # unit has followed five times), so the walk is closed here instead: once `018` is installed
-    # the supported rollback is the prior compatible IMAGE on schema `018`.
+    # shadow-first search path can redirect. `017` is published and is never edited, so the walk
+    # is closed here instead: once `018` is installed the supported rollback is the prior
+    # compatible IMAGE on schema `018`.
     raise RuntimeError(
         f"migration 018 downgrade refused: {_FORWARD_ONLY_SENTINEL} — 018 is forward-only once "
         f"installed. Walking below it would restore search-path-vulnerable authority functions "

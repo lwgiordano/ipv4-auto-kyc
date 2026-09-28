@@ -1,4 +1,4 @@
-"""Review-record trust rules (PR 5b).
+"""Review-record trust rules.
 
 Reviewer identity is platform-asserted via the signed envelope (HMAC v2). These
 helpers enforce that the asserted `actor` is a consistent, nonblank reviewer for

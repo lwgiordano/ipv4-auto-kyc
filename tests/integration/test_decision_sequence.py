@@ -1,4 +1,4 @@
-"""PR 7b-core: per-case decision_sequence allocation under the Case FOR UPDATE lock."""
+"""Per-case decision_sequence allocation under the Case FOR UPDATE lock."""
 
 import json
 import threading
@@ -27,7 +27,7 @@ def _seed_run_at_decide(session_factory, *, case_id, run_id, ev_seq):
                        "VALUES (:r,:c,:e,'DECIDE', CAST(:p AS jsonb))"),
                   {"r": run_id, "c": case_id, "e": run_id + "-ev",
                    "p": '{"company_legal_name":"X","jurisdiction":"GB"}'})
-        # the decide txn's jobs.complete() fences on the claim NONCE (R8 F1) — seed a live one
+        # the decide txn's jobs.complete() fences on the claim NONCE — seed a live one
         jid = s.execute(text("INSERT INTO jobs (kind, case_id, payload_json, status, locked_by) "
                              "VALUES ('run_transition',:c, CAST(:p AS jsonb), 'running', :n) "
                              "RETURNING id"),
@@ -38,7 +38,7 @@ def _seed_run_at_decide(session_factory, *, case_id, run_id, ev_seq):
 
 
 def test_concurrent_decides_serialize_via_case_lock(session_factory, pipeline, policy, monkeypatch):
-    """Deterministic lock-contention proof (F3). A `_load` wrapper keyed by run id: A takes the
+    """Deterministic lock-contention proof. A `_load` wrapper keyed by run id: A takes the
     Case FOR UPDATE (real `_load`), signals `a_has_case_lock` AFTER it returns, and is HELD before
     allocation/commit; B signals `b_entered_load` before its `_load` and `b_returned_from_load`
     only AFTER it returns. With the real FOR UPDATE, B must block INSIDE `_load` while A holds —
@@ -117,7 +117,16 @@ def test_concurrent_decides_serialize_via_case_lock(session_factory, pipeline, p
 
 
 def test_manual_approve_allocates_no_sequence(client, session_factory, post_event, worker, sign):
-    post_event("case-man", "kyb.run_requested", {"company_legal_name": "A", "jurisdiction": "GB"})
+    post_event(
+        "case-man",
+        "kyb.run_requested",
+        {
+            "company_legal_name": "A",
+            "jurisdiction": "GB",
+            "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"},
+            "platform_account_id": "acct-1",
+        },
+    )
     worker.run_until_idle()
     # ReviewerManualApprovePayload requires reviewer_id; review_guard requires actor.id == reviewer_id.
     body = json.dumps({
@@ -138,8 +147,8 @@ def test_manual_approve_allocates_no_sequence(client, session_factory, post_even
 
 
 def test_enqueue_decision_callback_requires_sequence_kwarg():
-    """Re-audit F10: the FINAL 013 signature makes decision_sequence a REQUIRED keyword —
-    omitting it fails at the Python boundary (TypeError), not late at commit on the
+    """The FINAL 013 signature makes decision_sequence a REQUIRED keyword — omitting it
+    fails at the Python boundary (TypeError), not late at commit on the
     ck_outbox_kind_stream_identity CHECK. (TypeError is raised at bind time, before the
     session argument is ever touched.)"""
     from kyc_tool.outbox.publisher import enqueue_decision_callback

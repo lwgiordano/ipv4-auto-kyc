@@ -1,4 +1,4 @@
-"""One saturating exponential-backoff schedule (re-audit `5b0f0b8..b75a320` R4-F3).
+"""One saturating exponential-backoff schedule.
 
 Shared by the job queue (`jobs.fail`) and the outbox publisher so the two schedules cannot diverge,
 and so neither can overflow PostgreSQL timestamp arithmetic: the shift is bounded BEFORE `2**shift`

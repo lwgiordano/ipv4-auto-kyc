@@ -26,9 +26,9 @@ POSITIVE_DECISIONS = (Decision.APPROVE, Decision.APPROVE_BUY_LOCKED)
 
 
 def hold_positive_for_manual_review(result: DecisionResult) -> DecisionResult:
-    """Emergency enforcement overlay (temporary — remove with remediation items
-    3–5). While the approval-grade validators are known-permissive, the tool
-    must not emit an auto-enforceable positive decision, so an approve /
+    """Deployment-controlled enforcement overlay.
+
+    Until a deployer explicitly activates positive decisions, an approve /
     approve_buy_locked outcome is downgraded to the manual-review holding state.
     Score, gates and buy-enablement are preserved unchanged; the true computed
     decision is recorded in the audit trail at the call site."""
@@ -65,9 +65,7 @@ def decide(
 
     # priority 2 — approve (all five gates AND a passed ORG-ID check)
     if gates.all_pass and org_id_passed:
-        return DecisionResult(
-            decision=Decision.APPROVE, score=total_score, gates=gates, buy_enablement=buy
-        )
+        return DecisionResult(decision=Decision.APPROVE, score=total_score, gates=gates, buy_enablement=buy)
 
     # priority 3 — approve with buying locked (all gates, no passed ORG-ID)
     if gates.all_pass and not org_id_passed:

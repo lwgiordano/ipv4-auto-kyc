@@ -1,4 +1,4 @@
-"""File email sink (audit round 2, F6).
+"""File email sink.
 
 Staging needs the POC token to complete the round-trip, and the logging stub
 deliberately hides it. The `file` provider appends each email as a JSON line;

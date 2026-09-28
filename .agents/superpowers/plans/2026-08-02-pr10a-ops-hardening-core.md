@@ -2,20 +2,21 @@
 
 **Split decision.** ROADMAP PR 10 bundles autonomous ops hardening with new product surfaces.
 Following the project's own precedent (PR 5 → 5a/5b, PR 7 → 7a/7b-core/7b-activation), this unit
-ships the core half now; **PR 10b** (own spec later) keeps: broker full-list snapshot migration +
-`runs.*` match columns, `recalculate.requested` broker gate + ADR-007, `evidence.refresh_requested`
+ships the core half now; **PR 10b** (own spec later) keeps: durable CHECKs and cutover-attestation,
+`recalculate.requested` broker gate + ADR-007, `evidence.refresh_requested`
 extension contract, the contracted M2 rollout-observation endpoint, and tree-wide `ruff format`
 adoption + CI format-check (deferred deliberately: a ~139-file mechanical churn commit would pollute
 the next audit's diff range; 10a's diff stays purely semantic).
 
 ## In scope (10a)
 
-1. ~~Migration 024 CHECKs~~ **MOVED to 10b (spec-time discovery):** `024` is contractually reserved
-   for 7b-activation (guard test `test_activation_live_contract_points_at_024_not_the_frozen_022` +
-   docs), and §C reserves `028` for PR 10's own migration. A 10a-only migration would steal a
+1. ~~Migration 024 CHECKs~~ **MOVED to 10b (spec-time discovery; reservations updated 2026-09-11):** `025` is reserved
+   for 7b-activation (guard test `test_activation_live_contract_points_at_025_not_frozen_owners` +
+   docs), and §C reserves `029` for PR 10's own migration. A 10a-only migration would steal a
    reserved number or fork the lineage against the reservation guards. The durable
    `outbox.attempts >= 0` / `jobs.attempts >= 0` / `jobs.max_attempts >= 1` CHECKs ride in 10b's
-   migration 028 alongside the broker-snapshot DDL. This keeps both recorded positions intact: the
+   migration 029. Broker snapshot DDL and per-run match provenance moved to PR Console
+   Configuration (024) by the approved 2026-09-11 design. This keeps the other debts intact: the
    R4/R5 release notes name the runtime fail-closed guards as the authority until the durable layer,
    and Codex's R5 verify confirmed the deferred CHECK is "real scheduled work, not a release
    blocker."

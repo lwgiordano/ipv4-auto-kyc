@@ -33,6 +33,12 @@ def test_domain_of_variants():
     assert domain_of("https://acme.example/about") == "acme.example"
     assert domain_of("ops@acme.example") == "acme.example"
     assert domain_of("ACME.EXAMPLE") == "acme.example"
+    # `www.` is a host prefix, not the domain: the first live run submitted
+    # `www.epsilontel.com` and LinkedIn reported `epsilontel.com`.
+    assert domain_of("www.acme.example") == "acme.example"
+    assert domain_of("https://www.acme.example/about") == "acme.example"
+    assert domain_of("ops@www.acme.example") == "acme.example"
+    assert domain_of("wwwacme.example") == "wwwacme.example"
 
 
 # --- email (AUDIT:D5) ------------------------------------------------------
@@ -52,10 +58,7 @@ def test_free_inbox_passes_only_any_email():
     intents = {i.check_type: i for i in email_intents(_email_norm("bob@gmail.com"), ACME)}
     assert intents["verified_email"].status is CheckStatus.PASS
     assert intents["verified_company_email"].status is CheckStatus.FAIL
-    assert (
-        ReasonCode.EMAIL_FREE_OR_DISPOSABLE_DOMAIN.value
-        in intents["verified_company_email"].reason_codes
-    )
+    assert ReasonCode.EMAIL_FREE_OR_DISPOSABLE_DOMAIN.value in intents["verified_company_email"].reason_codes
 
 
 def test_wrong_business_domain_fails_company_check():
@@ -94,6 +97,70 @@ def test_registry_inactive_company_fails():
     intent = registry_intent({"companies_house": inactive}, ACME)
     assert intent.status is CheckStatus.FAIL
     assert ReasonCode.REGISTRY_COMPANY_INACTIVE.value in intent.reason_codes
+    assert "registry_exact_company_inactive" in intent.reason_codes
+
+
+def test_registry_inactive_wrong_entity_is_only_a_mismatch():
+    inactive_other = {
+        "candidates": [
+            {
+                **CH_OK["candidates"][0],
+                "legal_name": "Other Networks Ltd",
+                "company_number": "99999999",
+                "status": "dissolved",
+            }
+        ]
+    }
+    intent = registry_intent({"companies_house": inactive_other}, ACME)
+    assert intent.status is CheckStatus.FAIL
+    assert ReasonCode.REGISTRY_NAME_MISMATCH.value in intent.reason_codes
+    assert ReasonCode.REGISTRY_NUMBER_MISMATCH.value in intent.reason_codes
+    assert "registry_exact_company_inactive" not in intent.reason_codes
+
+
+def test_registry_exact_inactive_wins_over_earlier_exact_active_candidate():
+    active = CH_OK["candidates"][0]
+    inactive = {**active, "status": "dissolved"}
+    for candidates in ([active, inactive], [inactive, active]):
+        intent = registry_intent(
+            {"companies_house": {"candidates": candidates}},
+            ACME,
+        )
+        assert intent.status is CheckStatus.FAIL
+        assert "registry_exact_company_inactive" in intent.reason_codes
+        assert intent.source == "companies_house"
+        assert intent.source_detail["status"] == "dissolved"
+
+
+def test_registry_exact_inactive_wins_across_sources_and_preserves_source():
+    active = CH_OK["candidates"][0]
+    inactive = {**active, "status": "retired"}
+    for inactive_source, adapter_outputs in (
+        (
+            "gleif",
+            {
+                "companies_house": {"candidates": [active]},
+                "gleif": {"candidates": [inactive]},
+            },
+        ),
+        (
+            "companies_house",
+            {
+                "companies_house": {"candidates": [inactive]},
+                "gleif": {"candidates": [active]},
+            },
+        ),
+    ):
+        intent = registry_intent(adapter_outputs, ACME)
+        assert intent.status is CheckStatus.FAIL
+        assert "registry_exact_company_inactive" in intent.reason_codes
+        assert intent.source == inactive_source
+        assert intent.source_detail == {
+            "registry": inactive_source,
+            "legal_name": "ACME NETWORKS LTD",
+            "company_number": "12345678",
+            "status": "retired",
+        }
 
 
 def test_registry_name_mismatch_fails_not_fuzzy():
@@ -158,7 +225,7 @@ def test_document_unreadable_fails():
 
 
 def test_document_name_only_never_passes():
-    # PR 3 fail-closed: a document showing only a matching name (no address/
+    # Fail-closed: a document showing only a matching name (no address/
     # number/jurisdiction) can never award legal proof — it routes to review
     intent = document_intent({"extracted": {"name": "ACME NETWORKS LTD"}}, ACME, ())
     assert intent.status is CheckStatus.NEEDS_REVIEW
@@ -166,8 +233,8 @@ def test_document_name_only_never_passes():
 
 
 def test_document_conflicting_with_registry_stamps_hard_conflict():
-    # PR 3 item 4: a document number contradicting the live registry record
-    # fails AND stamps HARD_CONFLICT so gate 5 fails
+    # A document number contradicting the live registry record fails AND
+    # stamps HARD_CONFLICT so gate 5 fails
     from kyc_tool.domain.models import CheckView
 
     registry = CheckView(
@@ -197,8 +264,8 @@ def test_document_conflicting_with_registry_stamps_hard_conflict():
 
 
 def test_website_reviewer_verdict_maps_to_check():
-    # reviewer_id is now the actor-derived trusted id (PR 5b), passed explicitly
-    # by the caller rather than read from the payload.
+    # reviewer_id is the actor-derived trusted id, passed explicitly by the
+    # caller rather than read from the payload.
     passed = website_intent({"result": "pass", "reviewer_id": "rev-1", "task_id": "t1"}, "rev-1")
     assert passed.status is CheckStatus.PASS
     assert passed.source == "reviewer:rev-1"
@@ -278,7 +345,7 @@ def test_poc_missing_token_digest_needs_review():
 
 
 def test_poc_without_association_target_needs_review():
-    # PR 3 fail-closed: a verified token with no ORG-ID/resource to vouch for
+    # Fail-closed: a verified token with no ORG-ID/resource to vouch for
     # can't award control proof — a human decides
     snap = {"poc": {"poc_handle": "JD123-ARIN", "rir": "arin"}}  # no org_handle, no resource
     intent = poc_token_intent(
@@ -288,7 +355,7 @@ def test_poc_without_association_target_needs_review():
     assert ReasonCode.POC_NO_ASSOCIATION_TARGET.value in intent.reason_codes
 
 
-# --- email domain-forgery (PR 3) ---------------------------------------------
+# --- email domain-forgery ----------------------------------------------------
 
 
 def test_email_payload_domain_conflict_fails_both_checks():
@@ -296,12 +363,40 @@ def test_email_payload_domain_conflict_fails_both_checks():
     # contradicts the address, so NEITHER check may pass
     normalized = {"verified": True, "email": "attacker@gmail.com", "domain": "company.example"}
     intents = {
-        i.check_type: i
-        for i in email_intents(normalized, {**ACME, "website": "https://company.example"})
+        i.check_type: i for i in email_intents(normalized, {**ACME, "website": "https://company.example"})
     }
     assert intents["verified_email"].status is CheckStatus.FAIL
     assert intents["verified_company_email"].status is CheckStatus.FAIL
-    assert (
-        ReasonCode.EMAIL_PAYLOAD_DOMAIN_CONFLICT.value
-        in intents["verified_email"].reason_codes
-    )
+    assert ReasonCode.EMAIL_PAYLOAD_DOMAIN_CONFLICT.value in intents["verified_email"].reason_codes
+
+
+def test_broker_gate_compares_domains_the_same_way_on_both_sides():
+    """A curated broker domain and a submitted website meet whether or not either carries `www.`:
+    both sides go through `domain_of`, so a `www.` entry cannot silently match nothing."""
+    from types import SimpleNamespace
+
+    from kyc_tool.domain.models import BrokerStatus
+    from kyc_tool.orchestration.broker_gate import match_brokers
+
+    def broker(domain):
+        return SimpleNamespace(
+            id="b1",
+            policy="blocked",
+            name="Larus",
+            aliases=[],
+            domains=[domain],
+            email_domains=[],
+            org_ids=[],
+            poc_handles=[],
+            asns=[],
+        )
+
+    for entry, website in (
+        ("www.larus.example", "https://larus.example/"),
+        ("larus.example", "https://www.larus.example/"),
+        ("www.larus.example", "https://www.larus.example/"),
+    ):
+        hit = match_brokers([broker(entry)], {"website": website})
+        assert (hit.status, hit.identifier_class) == (BrokerStatus.BLOCKED, "domains"), (entry, website)
+    clear = match_brokers([broker("larus.example")], {"website": "https://other.example/"})
+    assert clear.status is BrokerStatus.CLEAR

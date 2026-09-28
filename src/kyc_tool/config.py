@@ -42,7 +42,7 @@ def parse_sunset(iso: str) -> datetime | None:
 
 # Provider identifiers whose implementation is a dev/test stub. Selecting any of
 # these in production is refused at startup — the real providers land with the
-# executable-contract work (remediation item 12).
+# executable-contract work.
 STUB_OCR_ENGINE = "json_scan"
 STUB_EMAIL_PROVIDER = "logging"
 STUB_ADAPTERS_PROFILE = "fixture"
@@ -65,15 +65,14 @@ _MIN_HMAC_SECRET_LEN = 32
 OUTBOX_ATTEMPT_DEADLINE_PHASES = 4
 
 # PostgreSQL int4 (signed 32-bit) upper bound — the storage domain of counter columns like
-# outbox.attempts. Config ceilings that feed those columns must not exceed it (re-audit F6).
+# outbox.attempts. Config ceilings that feed those columns must not exceed it.
 PG_INT4_MAX = 2_147_483_647
 
 # MAX_HMAC_SKEW_SECONDS (the ONE governed replay window) lives in `security` — the module that
-# enforces it — and is imported above so the field domain and the verifier share a single source
-# (re-audit `5b0f0b8..b75a320` R4-F1).
+# enforces it — and is imported above so the field domain and the verifier share a single source.
 # Timestamp-safe ceilings for values that flow into `now() + interval 'N'` arithmetic: generous
 # operational maxima far below PostgreSQL timestamptz overflow, so a huge value refuses at config time
-# instead of raising DatetimeFieldOverflow deep inside a claim/mint (re-audit R4-F3).
+# instead of raising DatetimeFieldOverflow deep inside a claim/mint.
 _TS_SAFE_SECONDS = 30 * 24 * 3600  # 2_592_000 (30 days)
 _TS_SAFE_HOURS = 10 * 365 * 24  # 87_600 (10 years)
 _TS_SAFE_DAYS = 100 * 365  # 36_500 (100 years)
@@ -81,7 +80,7 @@ _TS_SAFE_DAYS = 100 * 365  # 36_500 (100 years)
 
 @dataclass(frozen=True)
 class NumericSetting:
-    """One numeric setting's authority (re-audit `5b0f0b8..b75a320` close-out #1): a unit, an inclusive
+    """One numeric setting's authority: a unit, an inclusive
     domain [floor, ceiling], the downstream SINK the value flows into (protocol window / destructive
     horizon / lease-poll-backoff / physical DB column), and the owning PROCESS. The Pydantic field
     carries the same bounds (declaration), `production_config_violations` re-checks the whole registry
@@ -129,13 +128,13 @@ NUMERIC_SETTINGS: tuple[NumericSetting, ...] = (
         _TS_SAFE_SECONDS,
         "jobs.claim lease expiry (now()+interval)",
         "queue worker/reaper",
-        # Floor 30 in production (re-audit `3db5f13..a7df17b` F4): the heartbeat runs at lease/4,
-        # so a 1-2s lease put the FIRST beat inside scheduler/DB jitter of the reaper — heartbeat
+        # Floor 30 in production: the heartbeat runs at lease/4,
+        # so a 1-2s lease puts the FIRST beat inside scheduler/DB jitter of the reaper — heartbeat
         # cadence, DB round-trip, and the adapter-plan DB margin all need real room.
         production_min=30,
     ),
     NumericSetting(
-        # Fixed bounded manual-recovery grant (re-audit `7d1c435..827bc0f` F4): the requeue CAS sets
+        # Fixed bounded manual-recovery grant: the requeue CAS sets
         # max_attempts = attempts + grant, so every exhaust/recover cycle grants EXACTLY this many
         # further attempts — never a doubling of whatever the ceiling had grown to.
         "job_recovery_attempt_grant",
@@ -147,7 +146,7 @@ NUMERIC_SETTINGS: tuple[NumericSetting, ...] = (
         production_min=1,
     ),
     NumericSetting(
-        # Governed adapter response containment (re-audit `7d1c435..827bc0f` F6): both the wire
+        # Governed adapter response containment: both the wire
         # bytes and the DECODED bytes of every governed upstream response are capped at this —
         # oversized Content-Length refuses preflight, chunked overflow and gzip expansion fail
         # closed mid-stream as non-retryable.
@@ -228,7 +227,7 @@ NUMERIC_SETTINGS: tuple[NumericSetting, ...] = (
         "POC token expiry (now()+interval)",
         "orchestration side-effects",
         production_exact=72,
-    ),  # security/platform contract: exactly 72h (re-audit R5-F8)
+    ),  # security/platform contract: exactly 72h
     NumericSetting(
         "ops_lock_timeout_seconds",
         "seconds",
@@ -296,7 +295,7 @@ def numeric_value_violation(ns: NumericSetting, value) -> str | None:
 
 def require_numeric_domain(name: str, value) -> None:
     """Fail closed on a direct-call value outside a registered domain — the CONSUMER layer a queue
-    claim, a retry, a poll or a token mint runs before it reaches PostgreSQL (re-audit R4-F3). Raises
+    claim, a retry, a poll or a token mint runs before it reaches PostgreSQL. Raises
     ValueError so the caller leaves its durable state unchanged."""
     violation = numeric_value_violation(numeric_domain_of(name), value)
     if violation:
@@ -318,7 +317,7 @@ def production_numeric_violations(settings: "Settings") -> list[str]:
     """Production-only numeric rules: an exact governed value (skew, TTL) or a production floor. Skips
     any setting the domain pass already rejected, so a malformed value (str/None/NaN supplied via
     model_copy) yields an aggregate ProductionConfigError rather than a raw TypeError from comparing
-    it to a floor (re-audit `03dbfab..bc325e7` R5-F11)."""
+    it to a floor."""
     out = []
     invalid = {ns.name for ns in NUMERIC_SETTINGS if numeric_value_violation(ns, getattr(settings, ns.name))}
     for ns in NUMERIC_SETTINGS:
@@ -335,14 +334,14 @@ def production_numeric_violations(settings: "Settings") -> list[str]:
     return out
 
 
-# Adapter rate limits are a NESTED numeric sink (dict[str, float]) the flat registry cannot see
-# (re-audit `03dbfab..bc325e7` R5-F6): a NaN/negative rate removes the cap, Infinity gives a zero
-# interval, and a tiny positive rate makes an effectively infinite sleep that dead-letters runs. The
-# reviewed domain is a finite, strictly-positive requests/second in [min, max].
+# Adapter rate limits are a NESTED numeric sink (dict[str, float]) the flat registry cannot see:
+# a NaN/negative rate removes the cap, Infinity gives a zero interval, and a tiny positive rate
+# makes an effectively infinite sleep that dead-letters runs. The allowed domain is a finite,
+# strictly-positive requests/second in [min, max].
 ADAPTER_RATE_MIN = 0.001
 ADAPTER_RATE_MAX = 10_000.0
 
-# The ONE canonical adapter registry (re-audit `f2929f8..6a4cd87` F8): rate keys are CLOSED against
+# The ONE canonical adapter registry: rate keys are CLOSED against
 # it, so a typo/case/whitespace variant ("companies_hose", "Companies_House", " gleif ") cannot pass
 # and silently leave the real adapter unlimited.
 ADAPTER_IDS = frozenset({
@@ -353,10 +352,10 @@ ADAPTER_IDS = frozenset({
 
 def adapter_rate_violations(rates) -> list[str]:
     """Violations for an adapter_rate_limits mapping (empty ⇒ valid). Shared by the field validator,
-    the production boundary, and the RateLimiter consumer. TOTAL over malformed input (re-audit
-    `f2929f8..6a4cd87` F8): a non-dict container is a violation, never an AttributeError.
+    the production boundary, and the RateLimiter consumer. TOTAL over malformed input: a non-dict
+    container is a violation, never an AttributeError.
 
-    `None` is a VIOLATION, not an empty mapping (re-audit `4f23f23..97deeae` F1). The field is
+    `None` is a VIOLATION, not an empty mapping. The field is
     `dict[str, float] = {}`, so `None` only arrives by `model_copy(update=...)` — and treating it
     as "no limits" is the exact fail-open that let `hmac_inbound_extra_keys=None` boot clean and
     then crash: `RateLimiter` clears this check and immediately calls `.items()` on it.
@@ -384,11 +383,11 @@ def adapter_rate_violations(rates) -> list[str]:
 
 
 class Settings(BaseSettings):
-    # hide_input_in_errors (re-audit `6feca36..4f23f23` F1): this class holds HMAC secrets, and
+    # hide_input_in_errors: this class holds HMAC secrets, and
     # Pydantic otherwise embeds the rejected `input_value` in ValidationError text. A deployment
     # typo in a rotation key id therefore printed a WORKING 32-character credential into startup
     # logs, CI output, and any incident transcript that captured the boot failure. Field names and
-    # our own violation messages carry key ids only, never secret material.
+    # this module's own violation messages carry key ids only, never secret material.
     model_config = SettingsConfigDict(
         env_prefix="KYC_", env_file=".env", extra="ignore", hide_input_in_errors=True
     )
@@ -397,13 +396,13 @@ class Settings(BaseSettings):
     @classmethod
     def _reject_bool_for_numeric(cls, data):
         # A Python bool is an int subclass; Pydantic coerces True/False to 1/0 for an int field,
-        # silently collapsing a programmatically-supplied numeric horizon (re-audit R5-F6). Reject it
+        # silently collapsing a programmatically-supplied numeric horizon. Reject it
         # at the raw-input stage; numeric env strings ("2555") are unaffected.
         if isinstance(data, dict):
             for ns in NUMERIC_SETTINGS:
                 if isinstance(data.get(ns.name), bool):
                     raise ValueError(f"{ns.name} must be a number, not a bool")
-            # Nested rate VALUES too (re-audit `f2929f8..6a4cd87` F8): Pydantic coerces a raw/env-JSON
+            # Nested rate VALUES too: Pydantic coerces a raw/env-JSON
             # True to 1.0 before the field validator sees it, silently minting a 1 req/s cap.
             rates = data.get("adapter_rate_limits")
             if isinstance(rates, dict):
@@ -424,7 +423,7 @@ class Settings(BaseSettings):
     @classmethod
     def _validate_active_key_ids(cls, v, info):
         """The ACTIVE key ids go through the same grammar as the rotation-map keys, at
-        CONSTRUCTION (re-audit `4f23f23..97deeae` F7).
+        CONSTRUCTION.
 
         Only rotation keys had a field validator, so `Settings(hmac_inbound_key_id=" padded ")`,
         a tab-only id, and a non-ASCII outbound id all constructed successfully and were caught
@@ -446,15 +445,15 @@ class Settings(BaseSettings):
         """Wrap every source that decodes text, so duplicate JSON keys are refused wherever the
         value came from.
 
-        The previous check read `os.environ` directly (re-audit `4f23f23..122cc67` finding 8),
-        which is the wrong place twice over: a duplicate in a `.env` file — the documented way to
-        configure this — sailed through, and an unrelated lower-precedence process variable could
-        be inspected instead of the value Pydantic actually selected. Decoding is the only moment
+        The previous check read `os.environ` directly, which is the wrong place twice over: a
+        duplicate in a `.env` file — the documented way to configure this — sailed through, and an
+        unrelated lower-precedence process variable could be inspected instead of the value
+        Pydantic actually selected. Decoding is the only moment
         the duplicate still exists; by the time a `dict` reaches a validator, JSON's last-key-wins
         has already discarded the earlier secret while the peer may still be signing with it.
 
         `file_secret_settings` was then left UNWRAPPED while this docstring claimed to cover every
-        text source (re-audit `4c3015a..cccd5f7` F2). That is not an exotic path: a secrets
+        text source. That is not an exotic path: a secrets
         directory is how containers and Kubernetes normally deliver credentials, so a file named
         `KYC_HMAC_INBOUND_EXTRA_KEYS` holding a repeated key id constructed cleanly and dropped one
         side of a live rotation in silence. Source ORDER is unchanged — wrapping patches each
@@ -470,7 +469,7 @@ class Settings(BaseSettings):
     @field_validator("hmac_inbound_extra_keys")
     @classmethod
     def _validate_hmac_extra_keys(cls, v, info):
-        # Declaration layer for rotation credentials (re-audit `82636da..9ac574f` F1). The active
+        # Declaration layer for rotation credentials. The active
         # key_id is validated against whatever this model already parsed; field order puts
         # hmac_inbound_key_id first, so the collision check has it in every real construction.
         active = (info.data or {}).get("hmac_inbound_key_id", "")
@@ -490,10 +489,10 @@ class Settings(BaseSettings):
     platform_hmac_secret: str = ""  # shared secret; empty only permitted when auth_disabled
     auth_disabled: bool = False  # test/dev escape hatch — never set in production
     # 1..MAX_HMAC_SKEW_SECONDS; production must equal 300 exactly (see NUMERIC_SETTINGS). An unbounded
-    # skew is a replay-window widener (re-audit R4-F1): a year-old signature verified under a 10y skew.
+    # skew is a replay-window widener: a year-old signature verified under a 10y skew.
     hmac_max_skew_seconds: int = Field(default=MAX_HMAC_SKEW_SECONDS, ge=1, le=MAX_HMAC_SKEW_SECONDS)
 
-    # HMAC v2 (PR 5a — path-bound canonical signing). Split inbound/outbound
+    # HMAC v2 (path-bound canonical signing). Split inbound/outbound
     # secrets + key_id; v1's shared platform_hmac_secret stays required until
     # BOTH v1 sunsets have passed (it verifies inbound v1 and signs the outbound
     # v1 dual-emit). extra_keys carries accepted-but-not-active keys
@@ -512,7 +511,7 @@ class Settings(BaseSettings):
     # production requires >= 1 (NUMERIC_SETTINGS production_min).
     hmac_v1_observation_window_days: int = Field(default=0, ge=0, le=_TS_SAFE_DAYS)
 
-    # M3 compatibility gate: don't emit the new `event_sequence` callback field
+    # Platform-cutover compatibility gate: don't emit the new `event_sequence` callback field
     # until the platform has agreed to consume it. Off until the cutover.
     callback_include_event_sequence: bool = False
 
@@ -523,7 +522,7 @@ class Settings(BaseSettings):
     read_auth_required: bool = False
     ui_admin_token: str = ""
 
-    # SAFETY OVERLAY (temporary — remove once remediation items 3–5 land):
+    # SAFETY OVERLAY (temporary — remove once the approval-grade validators in PRODUCTION_READINESS land):
     # while the approval-grade validators are known-permissive, the tool must
     # not emit an auto-enforceable positive decision. When False, decide()'s
     # approve / approve_buy_locked outcomes are held for manual review at
@@ -531,9 +530,9 @@ class Settings(BaseSettings):
     # callback carries an `enforcement_held` marker.
     enforce_positive_decisions: bool = False
 
-    # PR 6 (item 7A): when True, the pipeline worker loads each run's recorded
+    # When True, the pipeline worker loads each run's recorded
     # policy bundle by hash and scores under it, refusing if unloadable. Off by
-    # default; activated via a drained worker-pool cutover (docs/DEPLOYMENT.md §…).
+    # default; activated via a drained worker-pool cutover (docs/DEPLOYMENT.md §10).
     enforce_bundle_pinning: bool = False
 
     # Normative policy files (the spec package is the single source of truth)
@@ -549,31 +548,37 @@ class Settings(BaseSettings):
     # workers/outbox_worker.build_publisher (email); a non-stub value that is
     # not yet implemented fails loudly rather than silently using a stub.
     ocr_engine: str = STUB_OCR_ENGINE
-    email_provider: str = STUB_EMAIL_PROVIDER  # logging | file | (real: item 12)
+    email_provider: str = STUB_EMAIL_PROVIDER  # logging | file (a real provider is pending)
     adapters_profile: str = STUB_ADAPTERS_PROFILE  # fixture | real
+    # Floqer discovery over the Shortcut API: the key authorizes the account, the id names the
+    # ONE published shortcut the tool runs. Both required outside the fixture profile; the key
+    # comes from the secret manager / .env and is never logged or echoed into evidence.
+    floqer_api_key: str = ""
+    floqer_shortcut_id: str = ""
     # Sink path for email_provider="file" (closed staging/dev only): each token
     # email is appended as a JSON line so the POC round-trip is testable.
     email_file_path: Path = REPO_ROOT / ".substrate" / "state" / "poc-emails.log"
 
     # Queue / workers. Every bound below mirrors NUMERIC_SETTINGS (declaration layer); a non-finite or
     # negative poll can kill the idle worker, and a negative/overflowing lease defeats per-case
-    # serialization or raises DatetimeFieldOverflow at claim (re-audit R4-F3).
+    # serialization or raises DatetimeFieldOverflow at claim.
     worker_poll_seconds: float = Field(default=0.5, ge=0.01, le=300)
     job_lease_seconds: int = Field(default=120, ge=1, le=_TS_SAFE_SECONDS)
     # le=int4 max: jobs.max_attempts is a PostgreSQL int4 column, and enqueue() flushes this value
     # into it — a ceiling above int4 max makes a signed inbound event roll back with
-    # NumericValueOutOfRange instead of queuing (re-audit `8aba2df..2cee937` R3-F4, the queue sibling
-    # of the outbox R2 F6 bound). Bounded here AND in validate_for_production for unvalidated copies.
+    # NumericValueOutOfRange instead of queuing (the queue sibling of the outbox attempts bound).
+    # Bounded here AND in validate_for_production for unvalidated copies.
     job_max_attempts: int = Field(default=5, ge=1, le=PG_INT4_MAX)
-    # Fixed bounded manual-recovery grant (re-audit `7d1c435..827bc0f` F4) — see NUMERIC_SETTINGS.
+    # Fixed bounded manual-recovery grant — see NUMERIC_SETTINGS.
     job_recovery_attempt_grant: int = Field(default=5, ge=1, le=1000)
-    # Governed adapter response cap, wire AND decoded bytes (re-audit `7d1c435..827bc0f` F6).
+    # Governed adapter response cap, wire AND decoded bytes.
     adapter_max_response_bytes: int = Field(default=5_242_880, ge=1024, le=104_857_600)
-    # PR 10b slice 1: run every governed adapter fetch (real network transports only) in a
-    # fork-per-call child the worker TERMINATES at the absolute plan deadline — the
+    # Run every governed adapter fetch (real network transports only) in a
+    # spawned child the worker TERMINATES at the absolute plan deadline — the
     # unconditionally-killable occupancy bound the in-process header/chunk/EOF proofs cannot
-    # give. Off by default: fork-per-call is a real per-fetch cost; enable it where hostile-drip
-    # occupancy matters more than fetch latency.
+    # give. Off by default: every fetch starts a fresh interpreter (about 0.6-0.9 s under a
+    # worker, several seconds on a cold first call), charged to the plan deadline; enable it
+    # where hostile-drip occupancy matters more than fetch latency.
     adapter_hard_kill_boundary: bool = False
     # ge=0 (0 = retry-when-due dev value); ceiling timestamp-safe. The worker uses the shared
     # saturating backoff helper so no accepted value overflows timestamp arithmetic at high attempts.
@@ -589,10 +594,10 @@ class Settings(BaseSettings):
     # (DB trigger + publisher fence) refuses evidence from an expired claim, so a lease that
     # collapses toward zero would make every claim unable to deliver anything at all.
     #
-    # `le=3600` is declared here rather than silently clamped at the claim SQL (re-audit
-    # `cbb783b` F5: the claim used min(lease, 3600), so a configured 7200 became one hour and
-    # nothing said so). The upper bound is the outer limit on how long a crashed publisher can
-    # hold a row hostage; the lower bound that matters is enforced against the HTTP budget in
+    # `le=3600` is declared here rather than silently clamped at the claim SQL: a claim-side
+    # min(lease, 3600) would turn a configured 7200 into one hour and nothing would say so. The upper
+    # bound is the outer limit on how long a crashed publisher can hold a row hostage; the lower
+    # bound that matters is enforced against the HTTP budget in
     # `production_config_violations`, because a lease shorter than one delivery attempt makes
     # every claim expire mid-flight.
     outbox_lease_seconds: int = Field(default=300, ge=1, le=3600)
@@ -609,19 +614,18 @@ class Settings(BaseSettings):
     outbox_lease_margin_seconds: float = Field(default=1.0, ge=0, le=3600)
     # ge=1: at least one delivery attempt must be permitted. A row is dead-lettered without a send
     # once its durable attempts reach this ceiling — including a row left at/over the ceiling when
-    # this value is LOWERED (re-audit `b39b82a..b53daf4` F2). Each publisher enforces the ceiling it
-    # STARTED with; the ceiling is process-local, so ANY fleet-wide change — raise OR lower — is a
-    # DRAINED publisher cutover, never a rolling restart (re-audit `d3c0852..23e005e` F4 and
-    # `d569a15..4938840` F5: lowering can send once past the new value; raising lets an old lower-max
-    # publisher dead-letter — and irreversibly redact a POC token — before a new higher-max one
-    # supplies the extra attempts). See DEPLOYMENT §8.
+    # this value is LOWERED. Each publisher enforces the ceiling it STARTED with; the ceiling is
+    # process-local, so ANY fleet-wide change — raise OR lower — is a DRAINED publisher cutover,
+    # never a rolling restart (lowering can send once past the new value; raising lets an old
+    # lower-max publisher dead-letter — and irreversibly redact a POC token — before a new
+    # higher-max one supplies the extra attempts). See DEPLOYMENT §8.
     # le=int4 max: outbox.attempts is a PostgreSQL int4 column. A ceiling above int4 max would let a
     # row's attempts climb past the column domain, overflowing the admission increment mid-write and
-    # wedging the row claimed (re-audit `d569a15..4938840` F6). With the ceiling <= int4 max the
+    # wedging the row claimed. With the ceiling <= int4 max the
     # per-cycle "attempts >= ceiling ⇒ dead-letter before admission" check terminates the row at a
     # value that always fits, so no accepted config can overflow.
     outbox_max_attempts: int = Field(default=8, ge=1, le=PG_INT4_MAX)
-    # The drained-cutover START GATE (re-audit `f2929f8..6a4cd87` F4): during a
+    # The drained-cutover START GATE: during a
     # KYC_OUTBOX_MAX_ATTEMPTS cutover the operator sets this to the REVIEWED target in every new
     # task definition; a publisher-bearing process whose live ceiling differs then REFUSES TO BOOT,
     # so "attest every new task definition carries the exact value" is executable, not prose.
@@ -629,11 +633,11 @@ class Settings(BaseSettings):
     outbox_max_attempts_attested: int | None = Field(default=None, ge=1, le=PG_INT4_MAX)
     # ge=0: a zero base means "retry when due, no backoff growth" — a valid dev/test value that
     # production refuses below. Negative was accepted before and produced immediate unthrottled
-    # re-sends (re-audit `d3c0852..23e005e` F5). The publisher saturates the exponential schedule so
+    # re-sends. The publisher saturates the exponential schedule so
     # no accepted value can overflow PostgreSQL's timestamptz.
     outbox_backoff_base_seconds: int = Field(default=10, ge=0, le=_TS_SAFE_SECONDS)
 
-    # POC tokens. ge=1: a nonpositive TTL mints and emails a token that is already expired (R4-F3).
+    # POC tokens. ge=1: a nonpositive TTL mints and emails a token that is already expired.
     poc_token_ttl_hours: int = Field(default=72, ge=1, le=_TS_SAFE_HOURS)
 
     # One-shot ops commands: how long a maintenance lock may be awaited before the command
@@ -641,7 +645,7 @@ class Settings(BaseSettings):
     # hanging a window on an orphan transaction with no diagnosis.
     ops_lock_timeout_seconds: int = Field(default=60, ge=1, le=3600)
     # The SEPARATE ceiling on total statement time for a one-shot ops command (its own governed
-    # budget, not a constant derived from the lock — re-audit `538e55e..42e1c7d` F11). A statement
+    # budget, not a constant derived from the lock). A statement
     # may legitimately wait most of the lock budget and THEN run its bounded query, so this must
     # exceed ops_lock_timeout_seconds; `binding.bind()` refuses if it does not. A runaway query
     # then refuses with OPS_COMMAND_STATEMENT_TIMEOUT instead of hanging the window. Default 360 =
@@ -650,7 +654,7 @@ class Settings(BaseSettings):
 
     # Retention (compliance default: 7 years). ge=1 is LOAD-BEARING: retention prunes with a
     # `now() - interval 'N days'` cutoff, so a nonpositive N makes the cutoff the FUTURE and deletes
-    # CURRENT immutable audit/evidence rows (re-audit R4-F2). prune() re-checks this on direct call.
+    # CURRENT immutable audit/evidence rows. prune() re-checks this on direct call.
     retention_days: int = Field(default=7 * 365, ge=1, le=_TS_SAFE_DAYS)
 
     # Ops console (/ui): debug/ops tooling whose composer + requeue endpoints
@@ -665,23 +669,22 @@ class DuplicateKeyError(ValueError):
 
 
 # The fields whose raw JSON is duplicate-checked. CLOSED and declared, rather than "any value that
-# happens to start with `{`" (re-audit `4c3015a..cccd5f7` F2, which asked for the decoder to be
-# restricted to its intended field). It covers BOTH complex fields, not just the HMAC map: a
-# repeated key in `adapter_rate_limits` silently drops a throttle the same way. A test asserts this
-# set equals the model's complex fields exactly, so adding one forces a decision here instead of
-# quietly escaping the check.
+# happens to start with `{`", so the decoder stays restricted to its intended fields. It covers BOTH
+# complex fields, not just the HMAC map: a repeated key in `adapter_rate_limits` silently drops a
+# throttle the same way. A test asserts this set equals the model's complex fields exactly, so
+# adding one forces a decision here instead of quietly escaping the check.
 DUPLICATE_CHECKED_FIELDS = frozenset({"hmac_inbound_extra_keys", "adapter_rate_limits"})
 
 # Mapping-shaped settings fields deliberately EXEMPT from duplicate rejection, each with the reason.
 # Empty today. It exists so an exemption is a written decision rather than a field that quietly
-# escapes discovery (gate finding 7).
+# escapes discovery.
 DUPLICATE_EXEMPT_FIELDS: dict[str, str] = {}
 
 
 def mapping_shaped_fields(model) -> frozenset[str]:
     """Every settings field whose type can carry a JSON OBJECT, found recursively.
 
-    Gate finding 7. The first version tested `annotation.__origin__ in (dict, list)`, which sees
+    The first version tested `annotation.__origin__ in (dict, list)`, which sees
     only a bare `dict[...]`. A `dict[str, str] | None`, an `Annotated[dict[...], ...]`, an alias, or
     a nested union all have a different origin, so a future mapping field would satisfy the
     "closed set" guard while sitting outside it — the exact silently-exempt hole that scoping the
@@ -700,7 +703,7 @@ def mapping_shaped_fields(model) -> frozenset[str]:
 def _carries_mapping(annotation) -> bool:
     """True if a JSON object could validate against this annotation, at any depth."""
     origin = get_origin(annotation)
-    # Abstract mappings count (re-gate finding 6). `Mapping[str, str]` and `MutableMapping[...]`
+    # Abstract mappings count. `Mapping[str, str]` and `MutableMapping[...]`
     # have `collections.abc` origins, not `dict`, so a concrete-dict-shaped test left them outside
     # the "every mapping-shaped field" closure while JSON still parsed last-wins into them.
     if origin is not None and isinstance(origin, type) and issubclass(origin, abc.Mapping):
@@ -720,11 +723,11 @@ def _refuse_duplicate_json_keys(field_name: str, value) -> None:
         return
     if not isinstance(value, str):
         return
-    # ANY JSON root, not just objects (re-gate-3 finding 5). The per-object hook below sees every
+    # ANY JSON root, not just objects. The per-object hook below sees every
     # object wherever it nests, so a duplicate inside `[{"a":1,"a":2}]` is caught — the old
     # `startswith("{")` guard let an array root skip the check entirely while Pydantic parsed it
     # last-key-wins. A non-JSON string fails the parse and returns, as before.
-    # PER OBJECT, not across the whole parse (re-gate finding 7). Collecting every key from every
+    # PER OBJECT, not across the whole parse. Collecting every key from every
     # nested object into one list conflates independent objects: `{"a":{"x":1},"b":{"x":2}}` repeats
     # nothing, and the global version rejected it. That failure direction is the dangerous one for a
     # config check — it refuses a LEGAL deployment rather than merely admitting a bad one.
@@ -748,7 +751,7 @@ def _refuse_duplicate_json_keys(field_name: str, value) -> None:
 
 
 # Fields where a higher-precedence source REPLACES lower ones outright instead of deep-merging
-# into them. Deliberately just the credential map (gate finding 3).
+# into them. Deliberately just the credential map.
 #
 # Pydantic deep-merges dict fields between sources, so a secrets-directory entry survived an
 # explicit `{}` set higher up — meaning an operator who emptied the rotation map to RETIRE a key
@@ -814,13 +817,13 @@ def production_config_violations(settings: Settings) -> list[str]:
 
     Pure and side-effect-free so /readyz can report the same list a startup boot would reject on.
 
-    Totality is structural, not a claim about having audited every line (re-audit
-    `4f23f23..97deeae` F1). The individual validators below check exact built-in types before
-    calling `len`/`strip`/`==`/iteration, and this wrapper converts anything they still did not
-    anticipate into a FAIL-CLOSED violation. `model_copy(update=...)` bypasses Pydantic entirely,
-    so this function receives arbitrary objects on every field; an exception escaping here reaches
-    a boot path or `/readyz` as a 500, where a crash reads as an outage rather than as a refusal —
-    and a `/readyz` that cannot answer is indistinguishable from one that answered "unsafe".
+    Totality is structural, not a claim that every line anticipates every input. The individual
+    validators below check exact built-in types before calling `len`/`strip`/`==`/iteration, and
+    this wrapper converts anything they still did not anticipate into a FAIL-CLOSED violation.
+    `model_copy(update=...)` bypasses Pydantic entirely, so this function receives arbitrary
+    objects on every field; an exception escaping here reaches a boot path or `/readyz` as a 500,
+    where a crash reads as an outage rather than as a refusal — and a `/readyz` that cannot answer
+    is indistinguishable from one that answered "unsafe".
 
     Partial results are kept: whatever was diagnosed before the failure is still reported, so the
     operator sees the real violations alongside the one the checks could not classify.
@@ -829,7 +832,7 @@ def production_config_violations(settings: Settings) -> list[str]:
     try:
         _run_isolated_sections(settings, v)
     except Exception as exc:  # noqa: BLE001 — fail closed on ANY unanticipated value
-        # NO EXCEPTION TEXT (re-audit `4f23f23..122cc67` finding 6). `str(exc)` on a hostile value
+        # NO EXCEPTION TEXT. `str(exc)` on a hostile value
         # is that value's own `__str__`, and on a Pydantic/`len`/`strip` failure it routinely
         # interpolates the offending value — which for this model is a live credential, printed
         # into a startup log or a /readyz body. The type name alone is enough to diagnose a
@@ -844,7 +847,7 @@ def production_config_violations(settings: Settings) -> list[str]:
 def _run_isolated_sections(settings: Settings, v: list[str]) -> None:
     """Run each check group in its own failure domain.
 
-    One malformed field used to abort the whole aggregate (re-audit `4f23f23..122cc67` finding 6):
+    One malformed field used to abort the whole aggregate:
     a hostile value in an early section meant a genuinely broken `object_store` later in the list
     was never diagnosed, so the operator fixed one violation, rebooted, and met the next one.
     Isolating the groups means a single unanticipated value costs exactly its own section.
@@ -877,16 +880,16 @@ def _section_callback_url(settings: Settings, v: list[str]) -> None:
         v.append(f"platform_callback_url points at localhost ({settings.platform_callback_url!r})")
     raw_callback = settings.platform_callback_url or ""
     if "?" in raw_callback or "#" in raw_callback:
-        # We append /kyc/decision to this base; a query or fragment — even a bare
+        # /kyc/decision is appended to this base; a query or fragment — even a bare
         # "?"/"#" that urlparse reports as an empty component — would land the
-        # suffix inside it and misdirect the signed callback (audit finding 1/2).
+        # suffix inside it and misdirect the signed callback.
         v.append(
             f"platform_callback_url must not carry a query or fragment ({settings.platform_callback_url!r})"
         )
 
 
 def _section_providers_and_storage(settings: Settings, v: list[str]) -> None:
-    # Type first for every string-declared setting these identity checks read (F1): `!=`/`not`
+    # Type first for every string-declared setting these identity checks read: `!=`/`not`
     # are satisfied by a list or an object, so the check below is only meaningful once the value
     # is known to be a string.
     for name in ("object_store", "s3_bucket", "ocr_engine", "email_provider", "adapters_profile",
@@ -906,11 +909,16 @@ def _section_providers_and_storage(settings: Settings, v: list[str]) -> None:
         v.append("email_provider is the staging file sink (writes raw tokens to disk)")
     if settings.adapters_profile == STUB_ADAPTERS_PROFILE:
         v.append(f"adapters_profile is the fixture stub ({STUB_ADAPTERS_PROFILE!r})")
+    else:
+        # Outside the fixture profile the Floqer client is live: without both the key and the
+        # published shortcut id every case loses LinkedIn discovery silently.
+        for name in ("floqer_api_key", "floqer_shortcut_id"):
+            v.extend(string_setting_violations(getattr(settings, name), name))
 
     if not settings.read_auth_required:
         v.append("read_auth_required is False (the read API would be unauthenticated)")
-    # The token gates the ALWAYS-mounted /v1/ops requeue endpoints, not just the optional console
-    # (re-audit `f2929f8..6a4cd87` F3): production requires it unconditionally so the RUNBOOK's
+    # The token gates the ALWAYS-mounted /v1/ops requeue endpoints, not just the optional console:
+    # production requires it unconditionally so the RUNBOOK's
     # dead-letter recovery path exists in the secure configuration.
     if not settings.ui_admin_token:
         v.append(
@@ -920,7 +928,7 @@ def _section_providers_and_storage(settings: Settings, v: list[str]) -> None:
 
 
 def _section_hmac(settings: Settings, v: list[str]) -> None:
-    # HMAC v2 (PR 5a): split secrets/key_ids, both sunset dates, and a positive
+    # HMAC v2: split secrets/key_ids, both sunset dates, and a positive
     # observation window are all required in production — this is what enforces
     # the spec's "fixed sunset" (no dual-accept-forever) and the durable witness.
     v.extend(hmac_secret_violations(
@@ -928,12 +936,12 @@ def _section_hmac(settings: Settings, v: list[str]) -> None:
     v.extend(hmac_secret_violations(
         settings.hmac_outbound_secret, "hmac_outbound_secret (v2 callback signing)"))
     # Rotation keys are FULL verification credentials (api/auth.py resolves a v2 secret through
-    # them), so they carry the same floor as the active key (re-audit `82636da..9ac574f` F1: the
-    # boundary validated only the active pair, so a one-character secondary secret — or one under
-    # an empty key id — authenticated real requests while the kill switch stayed green). Re-checked
+    # them), so they carry the same floor as the active key (validating only the active pair would
+    # let a one-character secondary secret — or one under an empty key id — authenticate real
+    # requests while the kill switch stays green). Re-checked
     # HERE as well as at construction because an unvalidated model_copy(update=...) bypasses the
     # field validator.
-    # Both key ids go through the same total grammar (F2): a non-str or whitespace-only active id
+    # Both key ids go through the same total grammar: a non-str or whitespace-only active id
     # previously crashed this function or booted clean.
     v.extend(hmac_key_id_violations(settings.hmac_inbound_key_id, "hmac_inbound_key_id"))
     v.extend(hmac_key_id_violations(settings.hmac_outbound_key_id, "hmac_outbound_key_id"))
@@ -944,17 +952,17 @@ def _section_hmac(settings: Settings, v: list[str]) -> None:
         settings.hmac_v1_outbound_sunset_at, "hmac_v1_outbound_sunset_at"))
 
 def _section_numeric(settings: Settings, v: list[str]) -> None:
-    # Numeric-setting registry (re-audit `5b0f0b8..b75a320` R4-F1/F2/F3, close-out #1). The Field
+    # Numeric-setting registry. The Field
     # bounds enforce each domain at construction; these two calls re-check EVERY numeric setting at the
     # production boundary so an unvalidated model_copy(update=...) cannot bypass a bound, and apply the
     # production-only rules (exact 300s replay window; positive leases/TTLs/retention). This single
     # loop subsumes the former per-counter int4 checks.
     v.extend(numeric_domain_violations(settings))
     v.extend(production_numeric_violations(settings))
-    v.extend(adapter_rate_violations(settings.adapter_rate_limits))  # nested numeric sink (R5-F6)
+    v.extend(adapter_rate_violations(settings.adapter_rate_limits))  # nested numeric sink
     # Fields the domain pass rejected: every dependent cross-field rule below SKIPS them so a
     # malformed operand (str/None via model_copy) yields the aggregate diagnosis, never a raw
-    # TypeError mid-arithmetic (re-audit `f2929f8..6a4cd87` F8 extending R5-F11 to cross-field).
+    # TypeError mid-arithmetic (the production_numeric_violations skip, extended to cross-field rules).
     _invalid = {
         ns.name for ns in NUMERIC_SETTINGS
         if numeric_value_violation(ns, getattr(settings, ns.name))
@@ -969,8 +977,8 @@ def _section_numeric(settings: Settings, v: list[str]) -> None:
     # DETACHED attempt's late effect remains the at-least-once residual — see
     # OUTBOX_ATTEMPT_DEADLINE_PHASES.
     # A zero DB-accounting margin leaves no room between the send deadline and lease expiry for the
-    # failure/terminal write to land, so the admission budget would not actually cover accounting
-    # (re-audit `42e1c7d..b39b82a` F2). Production requires a positive margin.
+    # failure/terminal write to land, so the admission budget would not actually cover accounting.
+    # Production requires a positive margin.
     if "outbox_lease_margin_seconds" not in _invalid and settings.outbox_lease_margin_seconds <= 0:
         v.append(
             "outbox_lease_margin_seconds must be > 0 (a zero DB-accounting margin leaves no room "
@@ -978,8 +986,8 @@ def _section_numeric(settings: Settings, v: list[str]) -> None:
         )
 
     # A zero base is a valid dev/test value (retry-when-due) but in production it retries with no
-    # throttle growth, so a persistently failing endpoint is re-hit every cycle (re-audit
-    # `d3c0852..23e005e` F5). Production requires a positive base.
+    # throttle growth, so a persistently failing endpoint is re-hit every cycle. Production requires
+    # a positive base.
     if "outbox_backoff_base_seconds" not in _invalid and settings.outbox_backoff_base_seconds <= 0:
         v.append(
             "outbox_backoff_base_seconds must be > 0 in production (a zero base retries a failing "
@@ -1022,7 +1030,8 @@ def validate_for_production(settings: Settings) -> None:
 
 
 class ProcessRole(StrEnum):
-    """Every executable entry point's role. dev_worker is DEV-ONLY (it always wires fixture adapters);
+    """Every executable entry point's role. dev_worker is DEV-ONLY (fixture adapters, or live
+    registries when CH_API_KEY is set — never a production configuration);
     the rest are production roles."""
 
     API = "api"
@@ -1032,15 +1041,14 @@ class ProcessRole(StrEnum):
     DEV_WORKER = "dev_worker"
 
 
-# ── what each executable role can WRITE (gate audit `6c4f54a..91fbde3` finding 9) ─────────────
-# The canonical capability map. The O4 writer-matrix screen in docs/contracts/wire.py derives our
-# side's writer/non-writer stances from THIS, and construction ENFORCES it (re-audit
-# `1826661..b5c7a83` finding 5): every Worker/OutboxPublisher states the ProcessRole it runs
-# under and `require_role_capability` decides from this map — inside the constructor, so an
-# alias, a factory return, or a disposable new entry point hits the same refusal the named
-# classes do. dev_worker is the load-bearing row — its entry point constructs BOTH the pipeline
-# worker and the outbox publisher and runs them, so classifying it a non-writer would omit a
-# live decision/callback writer from every stop-and-attest inventory.
+# ── what each executable role can WRITE ───────────────────────────────────────────────────────
+# The canonical capability map. The O4 writer-matrix screen in docs/contracts/wire.py derives this
+# service's writer/non-writer stances from THIS, and construction ENFORCES it: every Worker and
+# OutboxPublisher states the ProcessRole it runs under and `require_role_capability` decides from
+# this map — inside the constructor, so an alias, a factory return, or a disposable new entry point
+# hits the same refusal the named classes do. dev_worker is the load-bearing row — its entry point
+# constructs BOTH the pipeline worker and the outbox publisher and runs them, so classifying it a
+# non-writer would omit a live decision/callback writer from every stop-and-attest inventory.
 CAP_DECISION_WRITE = "decision_write"
 CAP_CALLBACK_PUBLISH = "callback_publish"
 CAP_RETENTION = "retention"
@@ -1064,12 +1072,11 @@ class ProcessRoleCapabilityError(RuntimeError):
 
 
 class ProcessContext:
-    """The BOUND identity of a validated executable process (R-audit-3 finding 10; R-audit-4
-    finding 1).
+    """The BOUND identity of a validated executable process.
 
     A constructor argument is self-attestation, and the OBJECT is not the authority either —
-    a mutable attribute, a forged instance, or a context issued under different settings all
-    lied to the round-3 constructors. Issuance now records (context identity -> issued role,
+    a mutable attribute, a forged instance, or a context issued under different settings can
+    each lie to a constructor that trusts it. Issuance records (context identity -> issued role,
     validated settings) in a module-private registry, and consumption reads THE REGISTRY:
     mutating the object changes nothing the constructors trust, an unissued instance is
     refused outright, and a context only constructs against the exact Settings object it was
@@ -1089,7 +1096,7 @@ class ProcessContext:
 
 # context identity -> (issued role, weakref to the validated Settings, settings fingerprint,
 # issuance MAC). Weak keys: a context that dies releases its issuance; nothing accumulates.
-# The MAC is keyed inside a closure (R-audit-5 finding 1): the registry object itself is
+# The MAC is keyed inside a closure: the registry object itself is
 # importable, but an inserted or replayed record cannot produce the seal for a different
 # context identity, so tampering is DETECTED at consumption rather than trusted.
 _ISSUED_CONTEXTS: "weakref.WeakKeyDictionary[ProcessContext, tuple]" = (
@@ -1097,12 +1104,11 @@ _ISSUED_CONTEXTS: "weakref.WeakKeyDictionary[ProcessContext, tuple]" = (
 
 
 def _make_issuance_authority():
-    """Issue and verify issuance records over one closure-held key (R-audit-6 finding 1: a
-    module-level seal function was an ORACLE — a registry inserter could seal its own tuple).
-    Only these two functions can compute the MAC. Issuance RUNS the admission screen itself
-    (R-audit-7 finding 1: the raw issuer minted a fully-accepted context around the
-    production kill switch) — there is no importable mint that skips the screen. Scope
-    stated honestly: this detects tampered, replayed, or self-sealed REGISTRY RECORDS;
+    """Issue and verify issuance records over one closure-held key (a module-level seal function
+    would be an ORACLE — a registry inserter could seal its own tuple). Only these two functions
+    can compute the MAC. Issuance RUNS the admission screen itself (a raw issuer could mint a
+    fully-accepted context around the production kill switch) — there is no importable mint that
+    skips the screen. Scope: this detects tampered, replayed, or self-sealed REGISTRY RECORDS;
     forging one would require the closure key, which nothing exports."""
     import hmac as _hmac
     import secrets as _secrets
@@ -1114,7 +1120,7 @@ def _make_issuance_authority():
         return _hmac.new(key, message, "sha256").digest()
 
     def issue(role: ProcessRole, settings: "Settings") -> "ProcessContext":
-        # Canonical values FIRST, and admission judges THEM (R-audit-8 finding 1): the
+        # Canonical values FIRST, and admission judges THEM: the
         # screen and the eventual consumer see the same canonical values, so a conversion
         # hook that lies can only choose the value that is both admitted and executed —
         # never split them. Admission runs on an UNVALIDATED carrier of those values,
@@ -1154,7 +1160,7 @@ _KNOWN_ENVIRONMENTS = ("development", "test", "production")
 
 
 def exact_environment(settings: "Settings") -> str:
-    """The ONE environment predicate (R-audit-5 finding 1): exact `str` type, closed set. A
+    """The ONE environment predicate: exact `str` type, closed set. A
     malformed environment — an int, None, a hostile str subclass whose comparisons lie — is a
     REFUSAL, never "not production": classifying garbage as dev is how a production-shaped
     settings object issued the DEV-ONLY writer role."""
@@ -1168,10 +1174,9 @@ def exact_environment(settings: "Settings") -> str:
 
 
 def _settings_fingerprint(settings: "Settings") -> str:
-    """Total over the mutated-Settings threat model (R-audit-7 finding 3): a hostile value
-    whose repr or serialization raises is a GOVERNED capability refusal, never a raw
-    exception escaping mid-construction. Scope stated honestly (R-audit-8 finding 1): this
-    digest pins VALUES, not runtime types — a same-value subclass with hostile methods
+    """Total over the mutated-Settings threat model: a hostile value whose repr or serialization
+    raises is a GOVERNED capability refusal, never a raw exception escaping mid-construction.
+    Scope: this digest pins VALUES, not runtime types — a same-value subclass with hostile methods
     fingerprints equal. That is why consumers execute the canonical SNAPSHOT issuance
     built, never the live object this digest re-checks."""
     import hashlib as _hashlib
@@ -1188,7 +1193,7 @@ def _settings_fingerprint(settings: "Settings") -> str:
 
 
 def _canonical_execution_value(value: object) -> object:
-    """One value of the canonical execution snapshot (R-audit-8 finding 1): exact built-ins
+    """One value of the canonical execution snapshot: exact built-ins
     pass through, subclasses are rebuilt as exact built-ins from their RAW data (raw string
     buffer, raw dict items — never a method the value could override), containers recurse,
     and anything outside the closed set refuses. A subclass whose conversion hook lies can
@@ -1225,8 +1230,8 @@ def _canonical_execution_value(value: object) -> object:
 
 
 def _canonical_settings_dump(settings: "Settings") -> dict:
-    """Every Settings value rebuilt as an exact built-in from its raw data (R-audit-8
-    finding 1). Total: any value that cannot be canonicalized is a governed refusal."""
+    """Every Settings value rebuilt as an exact built-in from its raw data. Total: any value that
+    cannot be canonicalized is a governed refusal."""
     try:
         return {
             _canonical_execution_value(key): _canonical_execution_value(item)
@@ -1242,7 +1247,7 @@ def _canonical_settings_dump(settings: "Settings") -> dict:
 
 
 class _AdmittedSettings(Settings):
-    """The execution snapshot's TYPE (R-audit-9 finding 2): identical fields, validators,
+    """The execution snapshot's TYPE: identical fields, validators,
     and behavior to Settings, but FROZEN — the send boundary reads this object for the
     publisher's whole lifetime, so a post-construction field assignment must refuse, not
     quietly redirect the wire. Only `_canonical_execution_snapshot` constructs it."""
@@ -1251,10 +1256,10 @@ class _AdmittedSettings(Settings):
 
 
 def _canonical_execution_snapshot(canonical: dict) -> "Settings":
-    """The canonical, REVALIDATED, IMMUTABLE execution snapshot issuance owns (R-audit-8
-    finding 1: the fingerprint erases runtime types, so a same-value hostile subclass
-    passed the digest and the publisher dispatched its methods on the live object;
-    R-audit-9 finding 2: the snapshot must also refuse mutation at the send boundary).
+    """The canonical, REVALIDATED, IMMUTABLE execution snapshot issuance owns. The fingerprint
+    erases runtime types, so a same-value hostile subclass would pass the digest and the
+    publisher would dispatch its methods on the live object; the snapshot must also refuse
+    mutation at the send boundary.
     The canonical values are re-run through full Settings validation into a frozen
     instance; consumers execute THIS object, which nothing outside the issuance registry
     holds a reference to. Total: a set of values that cannot revalidate is a governed
@@ -1273,7 +1278,7 @@ _issue_context, _verify_issuance = _make_issuance_authority()
 
 
 class AdmittedProcess(NamedTuple):
-    """What a construction CONSUMES (R-audit-8 finding 1): the VERIFIED registry role and
+    """What a construction CONSUMES: the VERIFIED registry role and
     the canonical execution snapshot admission validated. The caller's live mutable object
     proves continuity (identity + fingerprint) and is then set aside — wire targets,
     signing inputs, and knobs all read the snapshot, so a post-check mutation of the live
@@ -1285,13 +1290,12 @@ class AdmittedProcess(NamedTuple):
 
 def require_role_capability(context: "ProcessContext", capability: str, construction: str,
                             *, settings: "Settings") -> AdmittedProcess:
-    """The construction-time side of the capability map (re-audit `1826661..b5c7a83` finding
-    5; R-audit-3 finding 10; R-audit-4 finding 1). Called INSIDE the writer constructors with
+    """The construction-time side of the capability map. Called INSIDE the writer constructors with
     the BOUND ProcessContext. The decision reads the ISSUANCE REGISTRY, never the object: the
     role consumed is the role validate_process_role recorded, a forged or subclassed instance
     was never recorded and refuses, and when the construction carries a Settings object it
     must be the EXACT object the context was validated with. Returns the verified role WITH
-    the admitted snapshot — the values the constructor must execute (R-audit-8 finding 1)."""
+    the admitted snapshot — the values the constructor must execute."""
     if type(context) is not ProcessContext:
         raise ProcessRoleCapabilityError(
             f"{construction} requires the ProcessContext issued by validate_process_role; a "
@@ -1300,8 +1304,8 @@ def require_role_capability(context: "ProcessContext", capability: str, construc
     if type(settings) is not Settings:
         raise ProcessRoleCapabilityError(
             f"{construction}: an exact Settings object is required — absent or malformed "
-            "settings cannot prove the validated environment (R-audit-6: an explicit None "
-            "was a role-only escape hatch)"
+            "settings cannot prove the validated environment (an explicit None would be a role-only "
+            "escape hatch)"
         )
     issued = _verify_issuance(context)
     if issued is None:
@@ -1352,12 +1356,13 @@ _KEY_ID_MAX_LEN = 128
 
 
 def hmac_key_id_violations(key_id: object, label: str) -> list[str]:
-    """One TOTAL grammar for every HMAC key id, active or rotation (re-audit `6feca36..4f23f23`
-    F2). Takes `object`, not `str`: `model_copy(update=...)` skips Pydantic, so the boundary
+    """One TOTAL grammar for every HMAC key id, active or rotation.
+
+    Takes `object`, not `str`: `model_copy(update=...)` skips Pydantic, so the boundary
     receives whatever the caller passed and must return violations rather than raise. A key id is
     matched verbatim against the X-KYC-Key-Id header, so it must be a non-blank, untrimmed,
     bounded, printable-ASCII string."""
-    # EXACT type, not isinstance (re-audit `4f23f23..122cc67` finding 6): a `str` subclass
+    # EXACT type, not isinstance: a `str` subclass
     # overriding `__eq__`/`strip` controls every operation below, so `isinstance` hands the
     # boundary's own logic to the value it is judging.
     if type(key_id) is not str:
@@ -1379,8 +1384,8 @@ def string_setting_violations(value: object, label: str) -> list[str]:
 
     Most checks on these fields are equality or truthiness — `ocr_engine == STUB_OCR_ENGINE`,
     `if not s3_bucket` — and a list, dict or object satisfies neither branch, so the boundary
-    certified it and the value crashed later inside the provider factory or the storage client
-    (re-audit `4f23f23..97deeae` F1). Identity checks cannot substitute for a type check.
+    certified it and the value crashed later inside the provider factory or the storage client.
+    Identity checks cannot substitute for a type check.
     """
     if type(value) is not str:
         return [f"{label} must be a string, got {type(value).__name__}"]
@@ -1392,7 +1397,7 @@ def string_setting_violations(value: object, label: str) -> list[str]:
 def hmac_secret_violations(secret: object, label: str) -> list[str]:
     """One TOTAL grammar for every HMAC secret — legacy, inbound, outbound, rotation.
 
-    Takes `object` and checks the exact built-in type FIRST (re-audit `4f23f23..97deeae` F1).
+    Takes `object` and checks the exact built-in type FIRST.
     `len()` was being called on whatever `model_copy(update=...)` put there: a 40-entry dict has
     `len` 40 and so cleared the 32-character floor, certifying the configuration, and the resolver
     then handed that dict to `sign_v2`, which raised `AttributeError` on `.encode` INSIDE signature
@@ -1432,21 +1437,22 @@ def hmac_sunset_violations(iso: object, label: str) -> list[str]:
 
 
 def hmac_extra_key_violations(extra: object, active_key_id: object) -> list[str]:
-    """Every rotation key must clear the SAME floor as the active key (re-audit
-    `82636da..9ac574f` F1). `api/auth._inbound_secret` resolves a v2 verification secret out of
+    """Every rotation key must clear the SAME floor as the active key.
+
+    `api/auth._inbound_secret` resolves a v2 verification secret out of
     this mapping, so a weak or blank-keyed entry is a live authentication credential, not
     inert configuration. Returns violations; empty means the mapping is safe to verify against.
 
     Checked in BOTH layers: the field validator refuses at construction, and
     `production_config_violations` re-checks so an unvalidated `model_copy(update=...)` cannot
     slip a mapping past the boundary."""
-    # TYPE FIRST, then emptiness (re-audit `4f23f23..97deeae` F1). This read `extra == {}` before
+    # TYPE FIRST, then emptiness. An earlier version read `extra == {}` before
     # the isinstance check, so an object with a hostile `__eq__` raised out of the comparison and
     # took the whole aggregate down before it could classify anything.
     #
     # ONLY {} is the empty map. `None` used to short-circuit here as "safe", but `_inbound_secret`
     # then called `.get` on it and raised AttributeError inside signature verification — a clean
-    # boot followed by a 500 on an authenticated request (re-audit `6feca36..4f23f23` F2).
+    # boot followed by a 500 on an authenticated request.
     if type(extra) is not dict:
         return [
             "hmac_inbound_extra_keys must be a mapping of key_id -> secret ({} when unused), got "
@@ -1494,8 +1500,8 @@ _PUBLISHER_ROLES = frozenset({ProcessRole.OUTBOX_WORKER, ProcessRole.DEV_WORKER}
 
 
 def _admission_checks(settings: Settings, role: ProcessRole) -> ProcessRole:
-    """The FULL admission screen, run by issuance itself (R-audit-7 finding 1: as a separate
-    pre-check, `_issue_context(DEV_WORKER, production_settings)` minted a fully-accepted
+    """The FULL admission screen, run by issuance itself (as a separate pre-check,
+    `_issue_context(DEV_WORKER, production_settings)` could mint a fully-accepted
     context around the production kill switch — the screen must be unskippable, not merely
     documented). Returns the coerced role; every refusal below raises before any context
     exists.
@@ -1506,18 +1512,18 @@ def _admission_checks(settings: Settings, role: ProcessRole) -> ProcessRole:
     production kill switch. Outside production only the cutover start gate applies — dev/staging
     may run any role."""
     role = ProcessRole(role)
-    # Cutover start gate (re-audit `f2929f8..6a4cd87` F4) — enforced in EVERY environment whenever
+    # Cutover start gate — enforced in EVERY environment whenever
     # the operator has set an attested target, because the drained cutover is rehearsed in staging
     # too. A publisher-bearing process whose live ceiling differs from the attested target would
     # recreate the mixed-ceiling extra-send / premature-dead-letter hazard the drained cutover
     # exists to prevent; it refuses BEFORE any engine/store access.
-    # SCOPE — PER-PROCESS MITIGATION, NOT FLEET ATTESTATION (re-audit `3db5f13..a7df17b` F6): both
+    # SCOPE — PER-PROCESS MITIGATION, NOT FLEET ATTESTATION: both
     # values here come from the SAME process environment, so this catches a task definition that
     # missed the reviewed pair or disagrees with itself — it CANNOT catch a fleet whose task
     # definitions are internally consistent but mutually different (old (8,8) next to new (12,12)
     # both boot). The independent authority — a DB CAS cutover record + orchestrator-inventory
     # receipt every publisher must match before claiming — needs a table and is reserved into
-    # migration 028 (PR 10b); the drained STOP/ATTEST-ZERO procedure remains the operative control
+    # migration 029; the drained STOP/ATTEST-ZERO procedure remains the operative control
     # until then.
     attested = settings.outbox_max_attempts_attested
     if (
@@ -1543,12 +1549,12 @@ def _admission_checks(settings: Settings, role: ProcessRole) -> ProcessRole:
 
 
 def validate_process_role(settings: Settings, role: ProcessRole) -> "ProcessContext":
-    """The single process-role authority (re-audit `03dbfab..bc325e7` R5-F1). Called by EVERY
-    executable entry point BEFORE it creates a database engine, network client, or object store.
+    """The single process-role authority. Called by EVERY executable entry point BEFORE it creates
+    a database engine, network client, or object store.
 
-    The admission screen itself lives in `_admission_checks` and is run BY issuance (R-audit-7
-    finding 1), so this entry point is a name for the guarantee, not the only path to it —
-    calling the issuer directly cannot skip the screen."""
+    The admission screen itself lives in `_admission_checks` and is run BY issuance, so this entry
+    point is a name for the guarantee, not the only path to it — calling the issuer directly
+    cannot skip the screen."""
     return _issue_context(role, settings)
 
 
@@ -1560,8 +1566,8 @@ def _sanitized_validation_report(error: ValidationError) -> str:
     """Location, type and message for each failure — and nothing else.
 
     `hide_input_in_errors=True` keeps the offending value out of `str()` and `repr()`, which is
-    where a traceback prints it. It does NOT remove it from `error.errors()` or `error.json()`
-    (re-audit `4f23f23..97deeae` F6), so anything that logs structured validation detail — a JSON
+    where a traceback prints it. It does NOT remove it from `error.errors()` or `error.json()`,
+    so anything that logs structured validation detail — a JSON
     log formatter, an error reporter, a CI annotation — still ships the live secret. This builds
     the report from three fields explicitly rather than filtering a dict, so a future Pydantic
     version that adds another value-bearing field cannot widen it by default.
@@ -1590,13 +1596,13 @@ def get_settings() -> Settings:
         # pydantic-settings wraps a source-decode failure in a message that names the field and
         # the source but drops the REASON, so a duplicated rotation key id reached the operator as
         # "error parsing value" with no hint what to fix. The cause is surfaced only when it is
-        # our own duplicate-key error, whose message names keys and never values.
+        # this module's own duplicate-key error, whose message names keys and never values.
         cause = error.__cause__
         report = (
             str(cause) if isinstance(cause, DuplicateKeyError)
             else f"{error} (the value itself is not shown)"
         )
-    # RAISED OUTSIDE THE except BLOCK, deliberately (re-audit `4f23f23..122cc67` finding 7).
+    # RAISED OUTSIDE THE except BLOCK, deliberately.
     # `raise ... from None` inside the handler suppresses the PRINTING of `__context__`, but the
     # raw Pydantic error stays attached — and its `.json()` still carries the live secret, which
     # structured error collectors read by walking cause/context chains. Leaving the block first

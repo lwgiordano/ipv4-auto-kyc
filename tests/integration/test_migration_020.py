@@ -1,4 +1,4 @@
-"""PR 7b-core redaction-uniformity revision 020 (adversarial review of the released `019`).
+"""Redaction-uniformity revision 020: completes a rule the released `019` only half-implemented.
 
 `019` stated "a body that can still be sent is immutable" and implemented only half of it: the
 rule keyed on `OLD.status`, never on what the row was BECOMING. This suite proves both ends are
@@ -201,8 +201,8 @@ def test_020_validates_the_whole_code_surface(pg):
 
 
 def test_the_poisoned_row_scenario_is_unreachable_end_to_end(session_factory, settings, clean_db):
-    """The review's measured impact, as a regression: a scrubbed POC email cannot re-enter the
-    claim path, so it cannot block its stream. Driven through the real publisher.
+    """Regression: a scrubbed POC email cannot re-enter the claim path, so it cannot block its
+    stream. Driven through the real publisher.
 
     NOTE (revision 021): the closing `sent == [...]` assertion is NOT the discriminating part —
     a dead row is invisible to `_CLAIM_SQL` on every revision. The `pytest.raises` in the middle

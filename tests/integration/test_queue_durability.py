@@ -1,9 +1,9 @@
-"""PR 7a migration-free slice, re-worked in the `3db5f13..a7df17b` fold: ownership is a per-claim
-NONCE (`locked_by='<worker>:<uuid4>'`), never the attempts counter — the supported ops requeue
-rewinds nothing, so recovery can no longer recycle a stale worker's identity (the ABA the audit
-witnessed). Loss of liveness REVOKES the handler: heartbeat miss/error sets `ClaimContext.lost`,
-every pipeline boundary checks it, and every committing transaction proves the live nonce inside
-itself. fail() returns a CLOSED result ('dead'/'requeued'/'stale') derived from the actual UPDATE."""
+"""Job-claim ownership is a per-claim NONCE (`locked_by='<worker>:<uuid4>'`), never the attempts
+counter — the supported ops requeue rewinds nothing, so recovery cannot recycle a stale worker's
+identity (the ABA hazard). Loss of liveness REVOKES the handler: heartbeat miss/error sets
+`ClaimContext.lost`, every pipeline boundary checks it, and every committing transaction proves the
+live nonce inside itself. fail() returns a CLOSED result ('dead'/'requeued'/'stale') derived from
+the actual UPDATE."""
 
 import threading
 import time
@@ -29,7 +29,7 @@ def _enqueue(session_factory, *, max_attempts=5, payload=None):
 
 
 def _seed_failed_run(session_factory, case_id="dur", run_id="dur-r"):
-    """A FAILED run recovery can verifiably bind to (R10-F6: the requeue refuses otherwise)."""
+    """A FAILED run recovery can verifiably bind to (the requeue refuses otherwise)."""
     with session_factory() as s:
         s.execute(text("INSERT INTO cases (id) VALUES (:c) ON CONFLICT DO NOTHING"), {"c": case_id})
         s.execute(
@@ -104,7 +104,7 @@ def test_stale_heartbeat_reports_lost(session_factory, clean_db):
         assert jobs.heartbeat(s, stale, 120) is False
 
 
-# ── R8-F1 RED: the audit's exact ABA witness, now impossible ──────────────────────────────────────
+# ── the exact ABA scenario, now impossible ────────────────────────────────────────────────────────
 def test_manual_requeue_cannot_recycle_a_dead_claims_ownership(session_factory, clean_db):
     """claim A (attempts=1, max_attempts=1) → expire/reap dead → ops requeue → claim B: A's
     complete/heartbeat/fail/assert_live must ALL affect zero rows while B completes exactly once,
@@ -121,7 +121,7 @@ def test_manual_requeue_cannot_recycle_a_dead_claims_ownership(session_factory, 
     requeue_dead_job(session_factory, jid, attempt_grant=1)  # the SUPPORTED recovery path
     with session_factory() as s:
         row = s.execute(text("SELECT status, attempts, max_attempts FROM jobs")).one()
-    # fresh budget, monotonic counter NOT rewound — the audit's ABA precondition is gone
+    # fresh budget, monotonic counter NOT rewound — the ABA precondition is gone
     assert (row.status, row.attempts, row.max_attempts) == ("queued", 1, 2)
 
     with uow(session_factory) as s:
@@ -135,7 +135,7 @@ def test_manual_requeue_cannot_recycle_a_dead_claims_ownership(session_factory, 
         assert jobs.heartbeat(s, a, 120) is False
     with uow(session_factory) as s:
         assert jobs.fail(s, a, "late boom", 5) == "stale"
-    # …including the in-transaction liveness proof the decide/adapter txns use (F2)
+    # …including the in-transaction liveness proof the decide/adapter txns use
     ctx = jobs.ClaimContext(job=a)
     with jobs.claim_scope(ctx), uow(session_factory) as s, pytest.raises(jobs.StaleJobClaim):
         jobs.assert_live(s)
@@ -150,7 +150,7 @@ def test_manual_requeue_cannot_recycle_a_dead_claims_ownership(session_factory, 
         assert s.execute(text("SELECT status FROM jobs")).scalar_one() == "done"
 
 
-# ── R8-F3 RED: a fenced fail() miss after recovery is honest and undoes nothing ───────────────────
+# ── a fenced fail() miss after recovery is honest and undoes nothing ──────────────────────────────
 def test_stale_fail_after_recovery_emits_no_dead_letter_and_leaves_the_job_queued(
     session_factory, clean_db
 ):
@@ -180,11 +180,12 @@ def test_stale_fail_after_recovery_emits_no_dead_letter_and_leaves_the_job_queue
     assert st.last_error is None  # A's late error was never written over the recovered row
 
 
-# ── R8-F2/F4 RED: a heartbeat ERROR revokes the handler at its next boundary ──────────────────────
+# ── a heartbeat ERROR revokes the handler at its next boundary ────────────────────────────────────
 def test_heartbeat_error_sets_lost_and_revokes_the_handler(session_factory, clean_db):
     """A beat that cannot PROVE the lease extended (DB error) must set ClaimContext.lost; a handler
     honoring the boundary check then raises StaleJobClaim. The claim itself is still live in the DB
-    (the outage was ours), so the fenced fail() honestly requeues the job for retry."""
+    (the outage was local to the heartbeat), so the fenced fail() honestly requeues the job for
+    retry."""
     _enqueue(session_factory)
     main_thread = threading.current_thread()
     beats_broken = threading.Event()
@@ -215,12 +216,12 @@ def test_heartbeat_error_sets_lost_and_revokes_the_handler(session_factory, clea
     assert st.attempts == 1
 
 
-# ── R9-F1 RED: the in-txn fence is HELD, not peeked ───────────────────────────────────────────────
+# ── the in-txn fence is HELD, not peeked ──────────────────────────────────────────────────────────
 def test_held_fence_serializes_takeover_behind_the_commit(session_factory, clean_db):
     """A's assert_live LOCKS the job row and PostgreSQL holds it to commit: the whole rival
     takeover path (expire → reap → reclaim) BLOCKS until A's transaction ends — 'B owns while A
     commits' is impossible. Downgrading the fence to a plain SELECT lets the rival finish while A
-    holds, which fails the ordering assertions below (the audit's prescribed mutation witness)."""
+    holds, which fails the ordering assertions below (the mutation witness)."""
     _enqueue(session_factory)
     with uow(session_factory) as s:
         a = jobs.claim(s, ["run_transition"], "worker-a", 120)
@@ -257,7 +258,7 @@ def test_held_fence_serializes_takeover_behind_the_commit(session_factory, clean
 
 
 def test_expired_lease_refuses_to_commit_even_before_the_reaper_runs(session_factory, clean_db):
-    """R9-F1: the fence includes lease_expires_at > clock_timestamp() — authority is time-bounded,
+    """The fence includes lease_expires_at > clock_timestamp() — authority is time-bounded,
     so an expired-but-unreaped claim rolls back instead of committing on a dead lease."""
     _enqueue(session_factory)
     with uow(session_factory) as s:
@@ -270,7 +271,7 @@ def test_expired_lease_refuses_to_commit_even_before_the_reaper_runs(session_fac
     assert ctx.lost.is_set()
 
 
-# ── R8-F2 RED: a reclaimed run commits nothing from the stale claimant ────────────────────────────
+# ── a reclaimed run commits nothing from the stale claimant ───────────────────────────────────────
 def test_lost_claim_stops_the_adapter_plan_and_commits_nothing(
     session_factory, pipeline, monkeypatch, clean_db
 ):
@@ -336,7 +337,7 @@ def test_lost_claim_stops_the_adapter_plan_and_commits_nothing(
         pipeline._run_adapters("r-f2")
 
     assert calls == ["p1"]  # the in-flight fetch finished; the LATER adapter never ran
-    # R9-F1 contract: bytes are STAGED outside the fenced txn (the job lock is never held over
+    # Contract: bytes are STAGED outside the fenced txn (the job lock is never held over
     # object-store I/O); the stale fence then orphan-cleans the staged object — net zero survive.
     assert len(puts) == 1 and deletes == [f"ref-{puts[0]}"]
     assert ctx.lost.is_set()
@@ -346,9 +347,9 @@ def test_lost_claim_stops_the_adapter_plan_and_commits_nothing(
     assert (n, state) == (0, "RUN_ADAPTERS")  # no adapter row, no state hop
 
 
-# ── R10-F5 RED: a heartbeat that waited on a lock still extends into the FUTURE ───────────────────
+# ── a heartbeat that waited on a lock still extends into the FUTURE ───────────────────────────────
 def test_heartbeat_extends_from_the_wall_clock_not_transaction_start(session_factory, clean_db):
-    """The audit's witness: `now()` is transaction-start time, so a heartbeat that blocked ~3s on
+    """Reproduction: `now()` is transaction-start time, so a heartbeat that blocked ~3s on
     the job row lock 'succeeded' while writing an expiry already in the past — and the reaper
     could reclaim a heartbeat-fresh job. clock_timestamp() makes the extension real."""
     _enqueue(session_factory)
@@ -361,7 +362,7 @@ def test_heartbeat_extends_from_the_wall_clock_not_transaction_start(session_fac
         with session_factory() as s:
             s.execute(text("SELECT 1 FROM jobs WHERE id=:i FOR UPDATE"), {"i": claimed.id})
             lock_held.set()
-            time.sleep(3.0)  # longer than the 2s lease we heartbeat with
+            time.sleep(3.0)  # longer than the 2s lease the heartbeat uses
             s.commit()
 
     holder = threading.Thread(target=hold_row_lock)
@@ -382,10 +383,10 @@ def test_heartbeat_extends_from_the_wall_clock_not_transaction_start(session_fac
         assert s.execute(text("SELECT status FROM jobs")).scalar_one() == "running"  # not reaped
 
 
-# ── R10-F8 RED: staged bytes are cleaned on EVERY pre-commit failure ──────────────────────────────
+# ── staged bytes are cleaned on EVERY pre-commit failure ──────────────────────────────────────────
 def test_any_recording_failure_cleans_the_staged_bytes(session_factory, pipeline, monkeypatch, clean_db):
-    """R9 cleaned staged objects only on StaleJobClaim; a side-effect/commit error after put()
-    left untracked raw evidence with no DB reference. Now every pre-commit failure orphan-cleans."""
+    """Cleaning staged objects only on StaleJobClaim would let a side-effect/commit error after
+    put() leave untracked raw evidence with no DB reference. Every pre-commit failure orphan-cleans."""
     from kyc_tool.adapters.base import AdapterOutput
     from kyc_tool.domain.models import AdapterStatus
     from kyc_tool.orchestration.triggers import RunPlan
@@ -446,15 +447,15 @@ def test_any_recording_failure_cleans_the_staged_bytes(session_factory, pipeline
     assert n == 0  # the rollback left no reference — and now no orphan bytes either
 
 
-# ── R9-F7: the budget probe runs through the REAL pipeline plumbing ───────────────────────────────
+# ── the budget probe runs through the REAL pipeline plumbing ──────────────────────────────────────
 def test_pipeline_wires_the_governed_budget_through_real_plumbing(
     session_factory, pipeline, monkeypatch, clean_db
 ):
-    """Replaces the vacuous unit probe the audit flagged: a probe adapter inside a REAL
-    `_run_adapters` invocation asserts the ambient budget exists, its deadline sits strictly below
-    the lease, and the send-authority hooks (deadline-aware permit, DB liveness proof, byte cap)
-    are wired. Deleting `budget_scope()` from the pipeline makes `current_budget()` None here and
-    this test fail — the mutation the old test survived."""
+    """A probe adapter inside a REAL `_run_adapters` invocation asserts the ambient budget exists,
+    its deadline sits strictly below the lease, and the send-authority hooks (deadline-aware permit,
+    DB liveness proof, byte cap) are wired. Deleting `budget_scope()` from the pipeline makes
+    `current_budget()` None here and this test fail — a mutation a unit-level probe would not
+    catch."""
     import time as _time
 
     from kyc_tool.adapters import retry as retry_mod

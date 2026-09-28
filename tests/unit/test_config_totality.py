@@ -1,8 +1,7 @@
 """The production configuration boundary is TOTAL: it never raises, on any value, on any field.
 
-Re-audit `4f23f23..97deeae` F1. `model_copy(update=...)` bypasses Pydantic entirely, so
-`production_config_violations` and everything it calls receive arbitrary objects. Two failure
-modes matter and they are opposites:
+`model_copy(update=...)` bypasses Pydantic entirely, so `production_config_violations` and
+everything it calls receive arbitrary objects. Two failure modes matter and they are opposites:
 
   * RAISING — a `TypeError` out of `len()` or `.strip()` escapes to a boot path or `/readyz`,
     where a 500 reads as an outage rather than as a refusal. A readiness probe that cannot answer
@@ -13,7 +12,7 @@ modes matter and they are opposites:
     authenticated request.
 
 So this file asserts both directions over a hostile-value matrix, field by field, rather than
-spot-checking the values that happened to be reported.
+spot-checking individual values.
 """
 
 import contextlib
@@ -112,9 +111,9 @@ def test_numeric_fields_never_raise():
             assert violations, f"{field}={value!r} was certified safe"
 
 
-# ── the two exact repros Codex reported ───────────────────────────────────────────────────────────
+# ── hostile values that slipped past the naive checks ─────────────────────────────────────────────
 def test_a_dict_secret_does_not_clear_the_length_floor():
-    """`len({...40 entries...})` is 40, so the old `len(secret) < 32` check passed it."""
+    """`len({...40 entries...})` is 40, so a bare `len(secret) < 32` check would pass it."""
     forty = {f"k{i}": "v" for i in range(40)}
     assert len(forty) == 40
     smuggled = hardened().model_copy(update={"hmac_inbound_secret": forty})
@@ -201,8 +200,9 @@ def test_a_malformed_active_secret_yields_401_not_500(value):
 @pytest.mark.parametrize("key_id", [" padded ", "\t", "  ", "kéy", "k" * 129, "with\x00null"])
 @pytest.mark.parametrize("field", ["hmac_inbound_key_id", "hmac_outbound_key_id"])
 def test_active_key_ids_are_refused_at_construction(field, key_id):
-    """Re-audit F7. These constructed cleanly and were caught only in production — so a rotation
-    rehearsed successfully in staging failed at the production cutover, which is backwards."""
+    """Checked only at the boundary, these would construct cleanly and be caught only in
+    production — so a rotation rehearsed successfully in staging would fail at the production
+    cutover, which is backwards."""
     with pytest.raises(ValidationError):
         hardened(**{field: key_id})
 
@@ -217,8 +217,8 @@ def test_the_unconfigured_default_still_constructs(field):
 # ── no credential reaches any rendering of a validation failure ────────────────────────────────────
 def test_no_rendering_of_a_load_failure_carries_the_secret(monkeypatch):
     """`hide_input_in_errors=True` cleans `str` and `repr`. It does NOT clean `errors()` or
-    `json()` (re-audit F6), so the loader converts the failure into a sanitized error and drops
-    the original from the exception chain."""
+    `json()`, so the loader converts the failure into a sanitized error and drops the original
+    from the exception chain."""
     monkeypatch.setenv("KYC_HMAC_INBOUND_KEY_ID", " padded ")
     monkeypatch.setenv("KYC_HMAC_INBOUND_EXTRA_KEYS", f'{{" padded ": "{SENTINEL}"}}')
 
@@ -238,7 +238,7 @@ def test_no_rendering_of_a_load_failure_carries_the_secret(monkeypatch):
     assert SENTINEL not in rendered, "the credential reaches a printed traceback"
     # The CHAIN, not just the printed form. `raise ... from None` inside the handler suppresses
     # printing while leaving the raw error attached to `__context__`, and structured collectors
-    # walk that chain (re-audit `4f23f23..122cc67` finding 7). So: nothing attached at all.
+    # walk that chain. So: nothing attached at all.
     assert error.__cause__ is None
     assert error.__context__ is None, "the raw secret-bearing error is still on the chain"
 
@@ -267,7 +267,7 @@ def test_the_raw_validation_error_would_have_leaked_it(monkeypatch):
         Settings()
     # str/repr are clean thanks to hide_input_in_errors...
     assert SENTINEL not in str(excinfo.value)
-    # ...and this is the hole F6 reported, which is why nothing may surface a raw one
+    # ...but json() still carries it, which is why nothing may surface a raw one
     assert SENTINEL in excinfo.value.json()
 
 
@@ -310,9 +310,8 @@ HOSTILE_SUBCLASSES = [EvilStr("x" * 40), EvilDict({"old": "s" * 32})]
 
 @pytest.mark.parametrize("value", HOSTILE_SUBCLASSES, ids=["EvilStr", "EvilDict"])
 def test_the_validators_survive_hostile_subclasses(value):
-    """`isinstance` accepts a subclass, so the value's own `strip`/`items`/`__eq__` ran INSIDE the
-    check meant to judge it (re-audit `4f23f23..122cc67` finding 6). Exact type checks refuse it
-    before touching it."""
+    """`isinstance` accepts a subclass, so the value's own `strip`/`items`/`__eq__` would run
+    INSIDE the check meant to judge it. Exact type checks refuse it before touching it."""
     for validator in (hmac_secret_violations, hmac_key_id_violations, hmac_sunset_violations):
         problems = validator(value, "field")
         assert isinstance(problems, list) and problems
@@ -402,8 +401,8 @@ def test_a_duplicate_key_in_the_process_environment_is_refused(monkeypatch):
 
 
 def test_a_duplicate_key_in_a_dotenv_file_is_refused(tmp_path, monkeypatch):
-    """The case the previous `os.environ` check missed entirely — and a `.env` file is the
-    documented way to configure this (re-audit `4f23f23..122cc67` finding 8)."""
+    """The case an `os.environ`-only check misses entirely — and a `.env` file is the documented
+    way to configure this."""
     monkeypatch.delenv("KYC_HMAC_INBOUND_EXTRA_KEYS", raising=False)
     env_file = tmp_path / ".env"
     env_file.write_text(f"KYC_HMAC_INBOUND_EXTRA_KEYS={DUPLICATE_JSON}\n")
@@ -436,8 +435,7 @@ def test_the_duplicate_check_reads_the_selected_source_not_the_process_environme
 
 
 def test_a_duplicate_key_in_a_secrets_directory_file_is_refused(tmp_path, monkeypatch):
-    """The source that was left unwrapped while the docstring claimed every text source was
-    covered (re-audit `4c3015a..cccd5f7` F2).
+    """A secrets-directory file is a text source too, and is covered like every other one.
 
     This is not an exotic path. A secrets directory is how containers and Kubernetes normally
     deliver credentials, so a file named for the rotation map is the NORMAL way to configure it in
@@ -472,15 +470,12 @@ def test_a_clean_secrets_directory_file_still_round_trips(tmp_path, monkeypatch)
 
 
 def test_an_empty_higher_precedence_map_REVOKES_a_lower_source_key(tmp_path, monkeypatch):
-    """Gate finding 3, and a correction of what this file previously ASSERTED.
+    """An empty higher-precedence map must be able to revoke a key from a lower source.
 
-    Pydantic deep-merges dict fields BETWEEN sources. An earlier version of this test recorded that
-    behaviour as expected and called it operationally interesting. It is not merely interesting: for
-    a CREDENTIAL ROTATION MAP it means revocation silently fails. An operator who sets
-    `KYC_HMAC_INBOUND_EXTRA_KEYS={}` to retire a key gets it back from a lower-precedence secrets
-    file, and `_inbound_secret` keeps authenticating requests signed with it. I found the merge,
-    documented it, and blessed it; the auditor was right that an empty higher-precedence map must be
-    able to revoke.
+    Pydantic deep-merges dict fields BETWEEN sources. For a CREDENTIAL ROTATION MAP that means
+    revocation silently fails: an operator who sets `KYC_HMAC_INBOUND_EXTRA_KEYS={}` to retire a key
+    gets it back from a lower-precedence secrets file, and `_inbound_secret` keeps authenticating
+    requests signed with it.
 
     So this field has WHOLE-FIELD REPLACEMENT semantics: the highest-precedence source that defines
     it wins outright, and lower sources contribute nothing to it.
@@ -544,13 +539,13 @@ def test_rate_limits_keep_their_merge_semantics(tmp_path, monkeypatch):
 
 
 def test_every_mapping_shaped_field_has_a_declared_duplicate_policy():
-    """The closure claim, now actually closed (gate finding 7).
+    """The closure claim: every mapping-shaped field is either checked or exempt.
 
-    The first version detected only annotations whose DIRECT `__origin__` was `dict` or `list`, so a
-    synthetic `dict[str, str] | None` satisfied the guard while sitting outside the checked set —
-    the silently-exempt hole that scoping the decoder was meant to avoid. Discovery is now recursive
-    through `get_origin`/`get_args`, and every mapping-shaped field must be either checked or
-    exempt-with-a-reason.
+    Detecting only annotations whose DIRECT `__origin__` is `dict` or `list` would let a synthetic
+    `dict[str, str] | None` satisfy the guard while sitting outside the checked set — the
+    silently-exempt hole that scoping the decoder was meant to avoid. Discovery is therefore
+    recursive through `get_origin`/`get_args`, and every mapping-shaped field must be either checked
+    or exempt-with-a-reason.
     """
     from kyc_tool.config import (
         DUPLICATE_CHECKED_FIELDS,
@@ -563,10 +558,10 @@ def test_every_mapping_shaped_field_has_a_declared_duplicate_policy():
 
 
 def _assert_duplicate_policy_partition(discovered, checked, exempt) -> None:
-    """The closure is a PARTITION, not a union (re-gate-3 finding 5). `checked | exempt` covering
-    the discovered set proved nothing about the sets themselves: a field in both was fine, and a
-    blank exemption reason satisfied the prose promise that every exemption carries one. Factored
-    out so the mutation tests below run THIS check, not a restatement of it."""
+    """The closure is a PARTITION, not a union. `checked | exempt` covering the discovered set
+    proves nothing about the sets themselves: a field in both would pass, and a blank exemption
+    reason would satisfy the prose promise that every exemption carries one. Factored out so the
+    mutation tests below run THIS check, not a restatement of it."""
     overlap = set(checked) & set(exempt)
     assert not overlap, f"field(s) both checked and exempt: {sorted(overlap)}"
     for field, reason in dict(exempt).items():
@@ -607,7 +602,7 @@ def test_a_blank_exemption_reason_is_refused():
     ("int | None", False),
 ])
 def test_mapping_discovery_sees_through_optional_annotated_and_unions(annotation, expected):
-    """Codex's synthetic specimens, plus the negative half. Lists must NOT be swept in: duplicate
+    """Synthetic specimens, plus the negative half. Lists must NOT be swept in: duplicate
     detection is a policy about repeated OBJECT KEYS, and a JSON array has none."""
     from typing import Annotated, Optional  # noqa: F401 — referenced by eval'd annotations
 
@@ -650,7 +645,7 @@ def test_the_helper_is_total_over_junk():
         _refuse_duplicate_json_keys("field", value)  # must not raise
 
 
-# ── re-gate finding 6: abstract mappings are mapping-shaped too ───────────────────────────────
+# ── abstract mappings are mapping-shaped too ──────────────────────────────────────────────────
 @pytest.mark.parametrize("label,annotation", [
     ("Mapping", "Mapping[str, str]"),
     ("MutableMapping", "MutableMapping[str, str]"),
@@ -660,8 +655,8 @@ def test_the_helper_is_total_over_junk():
     ("nested union Mapping", "str | Mapping[str, str] | None"),
 ])
 def test_abstract_mapping_annotations_are_discovered(label, annotation):
-    """The closure claimed "every mapping-shaped field" and detected concrete `dict` only, so
-    `Mapping`/`MutableMapping` fields would parse last-wins while sitting outside the checked set."""
+    """The closure promises "every mapping-shaped field". Detecting concrete `dict` only would let
+    `Mapping`/`MutableMapping` fields parse last-wins while sitting outside the checked set."""
     from collections.abc import Mapping, MutableMapping  # noqa: F401 — used by eval
     from typing import Annotated  # noqa: F401 — used by eval
 
@@ -672,7 +667,7 @@ def test_abstract_mapping_annotations_are_discovered(label, annotation):
 
 def test_a_synthetic_abstract_mapping_field_forces_a_policy_decision():
     """Mutating the REAL Settings subclass the closure assertion runs over, not `_carries_mapping`
-    in isolation — Codex asked for the assertion itself to bite."""
+    in isolation — so the assertion itself bites."""
     from collections.abc import Mapping
 
     from kyc_tool.config import (
@@ -690,7 +685,7 @@ def test_a_synthetic_abstract_mapping_field_forces_a_policy_decision():
     assert discovered - classified == {"future_abstract"}
 
 
-# ── re-gate finding 7: duplicates are per-object, not per-parse ───────────────────────────────
+# ── duplicates are per-object, not per-parse ──────────────────────────────────────────────────
 @pytest.mark.parametrize("label,payload,refused", [
     ("separate nested objects", '{"a": {"x": 1}, "b": {"x": 2}}', False),
     ("same nested object", '{"a": {"x": 1, "x": 2}}', True),
@@ -698,8 +693,8 @@ def test_a_synthetic_abstract_mapping_field_forces_a_policy_decision():
     ("same key different depths", '{"x": 1, "a": {"x": 2}}', False),
     ("deep separate objects", '{"a": {"b": {"x": 1}}, "c": {"d": {"x": 2}}}', False),
     ("deep same object", '{"a": {"b": {"x": 1, "x": 2}}}', True),
-    # Array roots (re-gate-3 finding 5): the old `startswith("{")` guard let a JSON array skip the
-    # check entirely, so a duplicate INSIDE `[{"a":1,"a":2}]` parsed last-key-wins unexamined.
+    # Array roots: a `startswith("{")` guard would let a JSON array skip the check entirely, so a
+    # duplicate INSIDE `[{"a":1,"a":2}]` would parse last-key-wins unexamined.
     ("array root, same object", '[{"a": 1, "a": 2}]', True),
     ("array root, sibling objects", '[{"a": 1}, {"a": 2}]', False),
     ("array nested in object", '{"outer": [{"a": 1, "a": 2}]}', True),
@@ -708,9 +703,9 @@ def test_a_synthetic_abstract_mapping_field_forces_a_policy_decision():
     ("non-JSON string", 'not json at all', False),
 ])
 def test_duplicate_detection_is_per_object(label, payload, refused):
-    """The global `object_pairs_hook` list conflated independent objects, so
-    `{"a":{"x":1},"b":{"x":2}}` — which repeats nothing — was REJECTED. Refusing a legal config is
-    the failure direction that breaks a deployment rather than merely admitting a bad one."""
+    """A global `object_pairs_hook` list would conflate independent objects, so
+    `{"a":{"x":1},"b":{"x":2}}` — which repeats nothing — would be REJECTED. Refusing a legal config
+    is the failure direction that breaks a deployment rather than merely admitting a bad one."""
     from kyc_tool.config import DuplicateKeyError, _refuse_duplicate_json_keys
 
     if refused:

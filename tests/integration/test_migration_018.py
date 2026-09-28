@@ -1,4 +1,4 @@
-"""PR 7b-core transition-authority revision 018 (re-audit `cbb783b` F1/F2/F3/F6).
+"""Transition-authority revision 018.
 
 `017` drew the authority boundary; this suite proves the three places it did not reach — a
 manifest that validated only the child table, an update guard that constrained only transitions
@@ -31,7 +31,7 @@ def _supersede_legally(conn, oid):
         "claim_token=NULL, claim_lease_expires_at=NULL, claimed_by=NULL WHERE id=:i"), {"i": oid})
 
 
-# --- F1: the manifest covers BOTH authority tables and every owned function -------------------
+# --- the manifest covers BOTH authority tables and every owned function -----------------------
 
 # Each mutation is applied at real `016`... `017`, then the 018 upgrade must refuse. Every one of
 # these walked straight through `017`, whose validator checked the child table's shape and the
@@ -47,7 +47,7 @@ _DRIFT = [
     ("child-index-dropped", "DROP INDEX ix_attempt_outbox"),
     ("child-check-dropped",
      "ALTER TABLE outbox_delivery_attempts DROP CONSTRAINT ck_attempt_admission_vocab"),
-    # the audit's exact mutilation: keep the NAME, gut the BODY
+    # a targeted mutilation: keep the NAME, gut the BODY
     ("function-body-gutted",
      "CREATE OR REPLACE FUNCTION outbox_witness_guard() RETURNS trigger LANGUAGE plpgsql "
      "AS $$ BEGIN RETURN NEW; END $$"),
@@ -108,7 +108,7 @@ def test_canonical_017_to_018_path_upgrades(pg):
     eng.dispose()
 
 
-# --- F2: the complete transition matrix — a terminal row is FINAL ----------------------------
+# --- the complete transition matrix — a terminal row is FINAL --------------------------------
 
 def test_superseded_callback_cannot_be_resurrected(pg):
     """THE resurrection: `017` constrained only transitions INTO `delivered`, so a superseded
@@ -262,7 +262,7 @@ def test_poc_email_can_never_be_superseded(pg):
     eng.dispose()
 
 
-# --- F3: the unsafe downgrade is unreachable --------------------------------------------------
+# --- the unsafe downgrade is unreachable ------------------------------------------------------
 
 def test_018_is_forward_only_even_on_an_unused_database(pg):
     """`017`'s witness-free downgrade recreates unqualified, search-path-vulnerable functions.
@@ -288,7 +288,7 @@ def test_018_is_forward_only_even_on_an_unused_database(pg):
 
 def test_recreated_authority_still_pins_its_search_path(pg):
     """018 recreates the witness guard; the recreation must carry the pin, or the fix would
-    reintroduce exactly what F3 is about."""
+    reintroduce the search-path vulnerability it closes."""
     url = _fresh_db(pg, "kyc_mig_018_pin")
     cfg = _config(url)
     command.upgrade(cfg, "head")
@@ -305,7 +305,7 @@ def test_recreated_authority_still_pins_its_search_path(pg):
     eng.dispose()
 
 
-# --- F6: manual attribution follows a pointer, never a UUID sort ------------------------------
+# --- manual attribution follows a pointer, never a UUID sort ----------------------------------
 
 def _manual_decision(conn, *, case_id, decision_id, reviewer, seq):
     """One manual decision row (run_id NULL, no sequence — exactly what the real handler writes)."""

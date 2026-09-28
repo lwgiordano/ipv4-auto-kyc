@@ -1,7 +1,7 @@
-"""Re-audit `750630c..ca85355` F4/F7 REDs: the governed authority is transitive — the object
-store + OCR engine (document_ocr) and provider-protocol delegates (floqer) prove the claim and
-deadline before ANY external call, document reads are byte-capped BEFORE materialization, and an
-unprovable claim fails closed instead of becoming upstream evidence."""
+"""The governed authority is transitive — the object store + OCR engine (document_ocr) and
+provider-protocol delegates (floqer) prove the claim and deadline before ANY external call,
+document reads are byte-capped BEFORE materialization, and an unprovable claim fails closed
+instead of becoming upstream evidence."""
 
 import pytest
 
@@ -23,7 +23,7 @@ class _RecordingStore:
         self.calls = []
 
     def get_bounded(self, ref, *, max_bytes):
-        retry.authorize_external_io()  # models the REAL stores' internal proof (PR 10b slice 1)
+        retry.authorize_external_io()  # models the REAL stores' internal proof
         self.calls.append((ref, max_bytes))
         if max_bytes is not None and len(self.data) > max_bytes:
             raise ObjectTooLarge(f"{ref} over {max_bytes}")
@@ -64,7 +64,7 @@ def test_lost_claim_places_zero_floqer_calls():
     calls = []
 
     class _SpyClient(FixtureFloqerClient):
-        def enrich(self, company_name, domain):
+        def enrich(self, company_name, domain, **contact):
             calls.append(company_name)
             return {}
 
@@ -104,9 +104,9 @@ def test_ungoverned_direct_call_still_works():
     assert store.calls == [("fs://uploads/doc.json", None)]  # uncapped, but same bounded surface
 
 
-# ── R11-F2: the store read and the OCR engine are two separate physical sends ─────────────────────
+# ── the store read and the OCR engine are two separate physical sends ─────────────────────────────
 def test_claim_lost_during_the_object_read_never_reaches_ocr():
-    """The audit's witness: the claim revoked DURING get_bounded still handed the bytes to the
+    """Reproduction: with the claim revoked DURING get_bounded, the bytes would still reach the
     OCR provider on the strength of the pre-read proof. The second proof between the two sends
     must refuse — removing it calls the engine and fails this test."""
     engine = _RecordingEngine()
@@ -145,7 +145,7 @@ def test_budget_spent_during_the_object_read_never_reaches_ocr():
     assert engine.calls == []
 
 
-# ── PR 10b slice 1: the authority is TRANSITIVE — the store itself proves ─────────────────────────
+# ── the authority is TRANSITIVE — the store itself proves ─────────────────────────────────────────
 def test_real_store_refuses_a_lost_claim_without_any_adapter_cooperation(tmp_path):
     """The injected-gateway property: a caller that never heard of the authority still cannot
     read bytes under a lost claim — FsStore.get_bounded proves the ambient authority INTERNALLY."""
@@ -171,7 +171,7 @@ def test_governed_delegate_proves_before_invoking():
 
 
 def test_prove_live_for_send_fails_closed_on_proof_error():
-    """R10-F4 unit witness: the proof's own DB error sets lost and raises StaleJobClaim — it must
+    """Unit witness: the proof's own DB error sets lost and raises StaleJobClaim — it must
     never escape as a generic exception for the pipeline's UPSTREAM_ERROR branch to swallow."""
     job = jobs.ClaimedJob(id=4, kind="k", case_id=None, payload={}, attempts=1, max_attempts=5,
                           claim_nonce="w:n")

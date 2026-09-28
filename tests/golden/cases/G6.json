@@ -9,13 +9,14 @@
         {"type": "official_registry_match", "status": "pass"},
         {"type": "website_verified", "status": "pass"},
         {"type": "linkedin_company_match", "status": "pass"},
+        {"type": "poc_verified", "status": "pass", "detail": {"org_handle": "ORG-OTHER-9"}},
         {"type": "org_id_match", "status": "pass", "detail": {"org_handle": "ORG-OTHER-9"}, "reasons": ["hard_conflict"]}
       ],
       "expect": {
         "decision": "manual_review_insufficient",
         "gates_all_pass": false,
         "gates": {"score_met": true, "no_hard_conflict": false},
-        "live_pass_types": ["verified_company_email", "verified_email", "official_registry_match", "website_verified", "linkedin_company_match", "org_id_match"]
+        "live_pass_types": ["verified_company_email", "verified_email", "official_registry_match", "website_verified", "linkedin_company_match", "poc_verified", "org_id_match"]
       }
     }
   ]

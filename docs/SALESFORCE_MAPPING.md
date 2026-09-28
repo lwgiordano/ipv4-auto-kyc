@@ -7,7 +7,21 @@ into the `salesforce_sync_fields.json` field set, including the resolution of
 audit finding **A5** (`approved_manual` has no `KYC_Status__c` value).
 
 Sources for every value below: the decision callback (`POST …/kyc/decision`),
-`GET /v1/cases/{case_id}` and `GET /v1/cases/{case_id}/checks?all=1`.
+`GET /v1/cases/{case_id}` and `GET /v1/cases/{case_id}/checks?all=1`; the
+mapped, destination-keyed view of all of them is
+`GET /v1/cases/{case_id}/salesforce-projection` (`PLATFORM_INTEGRATION.md` §7).
+
+After explicit live-configuration activation, the field names below remain the
+default destinations and stable source identities. The console edits destination
+names only (1–80 ASCII identifier characters, case-insensitively unique), not
+sources, types, or company values. Saves are shared server revisions, not previews.
+The platform reads the destination-keyed values, `mapping_revision`, and source
+identities from `GET /v1/cases/{case_id}/salesforce-projection`; the console's
+own case view shows the same mapping to operators. Subsequent projection reads
+use the saved mapping without rewriting old decisions or callback bytes. The
+platform must explicitly consume the projection for a mapping change to reach
+Salesforce.
+A mapping save neither writes Salesforce nor proves that the platform adopted it.
 
 ## KYC_Case__c fields
 
@@ -22,7 +36,7 @@ Sources for every value below: the decision callback (`POST …/kyc/decision`),
 | `Business_Document_Status__c` | live `business_document_verified` check | none → "None"; uploaded but unprocessed → "Uploaded"; `pass` → "Verified"; `fail` → "Failed" |
 | `Website_Review_Status__c` | review task / check | open task → "Open"; check `pass` → "Pass"; check `fail` → "Fail" |
 | `Broker_Status__c` | case `broker_status` | `clear` → "Clear"; `allowed_broker` → "Allowed Broker"; `blocked` → "Blocked" |
-| `Hard_Conflict__c` | callback `gates.no_hard_conflict` | **NULLABLE boolean**, negated when present (`no_hard_conflict: false` ⇒ `true`). NULL in exactly two conditions — no authoritative decision tuple (unresolved pointer/legacy order), or a MANUAL approval whose gates were bypassed and never evaluated. The platform sync MUST carry NULL through, never coerce it to `false`: a coerced `false` asserts "no hard conflict" from a gate nothing evaluated (AUDIT:D-SF-NULL). The normative `salesforce_sync_fields.json` says `boolean`; this nullable refinement is the recorded correction — the package is committed unmodified by rule. |
+| `Hard_Conflict__c` | callback `gates.no_hard_conflict` | **NULLABLE boolean**, negated when present (`no_hard_conflict: false` ⇒ `true`). `true` when a live check carries `hard_conflict`, `document_registry_conflict` or `registry_exact_company_inactive` — the last is the official registry reporting the exact company inactive, which on its own routes the case to manual review, never to rejection. NULL in exactly two conditions — no authoritative decision tuple (unresolved pointer/legacy order), or a MANUAL approval whose gates were bypassed and never evaluated. The platform sync MUST carry NULL through, never coerce it to `false`: a coerced `false` asserts "no hard conflict" from a gate nothing evaluated (AUDIT:D-SF-NULL). The normative `salesforce_sync_fields.json` says `boolean`; this nullable refinement is the recorded correction — the package is committed unmodified by rule. |
 | `Review_Reason_Codes__c` | union of live checks' `reason_codes` | delimited text / multi-select |
 | `Manual_Approved_By__c` / `Manual_Approved_At__c` | latest MANUAL decision row (sticky: a later automatic decision moves the latest-decision pointer but never blanks the manual attribution while the case stays `approved_manual`); platform initiated it; also in tool audit log | reviewer id, timestamp |
 

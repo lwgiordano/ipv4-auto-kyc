@@ -1,44 +1,75 @@
-# KYC Tool — release __VERSION__ (source handoff)
+# IPv4.Global KYC/KYB Tool
 
-This package is the source for the KYC/KYB tool, release `__VERSION__`, cut from commit
-`__COMMIT__`. It is a **staging** release: the production kill switch refuses to boot in production
-mode by design (the OCR engine, email provider, and adapter profile are stubs pending later
-work), so use this to stand up staging and to build production readiness — not to launch.
+Release `__VERSION__` · source commit `__COMMIT__`
 
-## What's in the box
+Supported environment: closed staging. Production use is not supported.
+Production provider wiring and callback ordering remain incomplete, and
+automatic approval must remain off in production.
 
-- `techcraft-deployment-guide.pdf` — the ops manual: one image, six commands, Postgres 14+, one
-  S3 bucket, configuration, health checks, cutovers.
-- The **Staging Handoff** document accompanying this package is the single read-first reference;
-  the **Platform Integration Contract PDF** and the runnable signer `kyc-signer-example.py`
-  accompany it too (both also ship inside this tree, under `docs/artifacts/` for the signer).
-- `docs/PLATFORM_BRIEFING.md` — orientation: what the tool is and how the staging plan runs.
-- `docs/DEPLOYMENT.md`, `docs/RUNBOOK.md`, `docs/ALERTS.md` — full procedures, failure
-  playbooks, the complete configuration table, alerting.
-- `src/`, `alembic/`, `KYC_Tool_Build_Package/` — the application, its migrations, and the
-  normative policy bundle the image ships with.
-- `Dockerfile`, `requirements.lock` — the image builds reproducibly:
-  `docker build -t kyc-tool:__VERSION__ .`
-- `tests/` and `./manage.sh` (`setup`, `doctor`, `test`, `lint`) to run the suite yourself.
-- `scripts/dev.sh` — a one-command local demo stack (throwaway Postgres, the API with its ops
-  console on `http://127.0.0.1:8080/ui`, a worker running canned data-source fixtures, and a
-  fake platform receiver) if you want to see a case flow end to end before touching staging.
+## Start here
 
-## First steps
+Read `INTEGRATION-SHEET.md` for the current staging boundary and the work split.
+The detailed contracts and procedures are below.
 
-1. Ops: read the deployment guide end to end — especially "Read this before provisioning
-   anything" — then stand up staging per sections 1–4. Configuration starts from
-   `.env.example`; a misconfigured boot prints every violation at once.
-2. Integration developers: build the event sender and the `/kyc/decision` callback receiver
-   against the contract. Verify your signing against its published test vector first.
-3. Secrets (HMAC keys both directions) move over an encrypted channel only — never email,
-   chat, or a ticket.
+1. Product and integration leads: Part 1 of `docs/TECHCRAFT_HANDOFF.md` defines
+   two required provider decisions and the numbered responsibilities in §8.
+2. Developers: use Part 2 for the event and callback contracts, including
+   signatures and read APIs.
+   The platform must commit a callback and its deduplication record before
+   returning 2xx. Until ordered delivery is activated, follow §4's rules for
+   conflicting decisions and manual approvals.
+3. Operators: use Part 3 and `docs/RUNBOOK.md` for a closed-staging installation.
+   Existing-database upgrades require the relevant maintenance procedures;
+   do not treat every migration as a rolling update.
+4. Before production: complete `docs/PRODUCTION_READINESS.md`. The staging
+   demo and test results do not replace that checklist.
 
-## Provenance
+## Files to use
 
-Cut from commit `__COMMIT__` (`__VERSION__`) by `scripts/package_handoff.sh` in the source
-repository. Relative to that commit, this package omits internal development, audit, and CI
-working files that are not needed to build, run, test, or operate the tool, replaces the
-repository's kit-backed `manage.sh` with the self-contained equivalent you have here (same
-commands, no kit), and adds this note plus the deployment guide PDF, which is generated from
-the same commit — its page footers say `source __COMMIT__`.
+`docs/TECHCRAFT_HANDOFF.pdf` and `docs/TECHCRAFT_HANDOFF.html` contain the
+combined guide. The plain-text files contain the same instructions and support
+direct command copying.
+
+| File or folder | Purpose |
+|---|---|
+| `INTEGRATION-SHEET.md` | Current-release scope, team responsibilities and staging acceptance |
+| `docs/TECHCRAFT_HANDOFF.md` | Combined briefing, integration guide and deployment instructions |
+| `docs/PLATFORM_BRIEFING.md` | Product overview, team responsibilities and required provider decisions |
+| `docs/PLATFORM_INTEGRATION.md` | Technical integration contract and staging test commands |
+| `docs/DEPLOYMENT.md` | Installation and upgrade procedures |
+| `docs/RUNBOOK.md` and `docs/ALERTS.md` | Recovery procedures and monitoring |
+| `docs/SALESFORCE_MAPPING.md` | Fields the platform reads and writes into Salesforce |
+| `docs/PRODUCTION_READINESS.md` | Remaining work and launch requirements |
+| `docs/artifacts/kyc-signer-example.py` | Runnable signing example. Verify its sha256 against its entry in `MANIFEST.json`; the Platform Integration Contract its header mentions is a separate document that prints the same digest |
+| `src/` and `alembic/` | Application source and database migrations |
+| `KYC_Tool_Build_Package/machine_readable/` | Runtime policy files, preserved from the release |
+| `Dockerfile`, `requirements.lock`, `.env.example` | Image build, pinned runtime dependencies and configuration template |
+| `tests/` and `manage.sh` | Product tests and local setup commands |
+| `MANIFEST.json` | Release identification, source provenance and file checksums |
+
+## Try it locally
+
+Install Python 3.11 or later and PostgreSQL 16, then run these commands from
+the extracted package directory:
+
+```sh
+./manage.sh setup
+./manage.sh doctor
+./manage.sh test
+bash scripts/dev.sh
+```
+
+The demo uses a throwaway database. It starts the API, console, workers and a
+sample callback receiver. Open `http://127.0.0.1:8080/ui`. The demo's configured
+data sources include development stand-ins; it is not proof that production
+providers are connected. Stop it with Ctrl-C.
+
+To build the deployment image:
+
+```sh
+docker build -t kyc-tool:__VERSION__ .
+```
+
+Keep credentials out of this folder when sharing it. Exchange signing keys
+through the agreed secret manager, never email, chat or a ticket. The included
+`.env.example` contains configuration examples, not production credentials.

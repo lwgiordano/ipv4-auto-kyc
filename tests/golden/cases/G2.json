@@ -9,13 +9,14 @@
         {"type": "official_registry_match", "status": "pass"},
         {"type": "website_verified", "status": "pass"},
         {"type": "linkedin_company_match", "status": "pass"},
+        {"type": "poc_verified", "status": "pass", "detail": {"resource": "192.0.2.0/24"}},
         {"type": "business_document_verified", "status": "pass"}
       ],
       "expect": {
         "decision": "approve_buy_locked",
         "buy_enablement": "locked_org_id_required",
         "gates_all_pass": true,
-        "live_pass_types": ["verified_company_email", "verified_email", "official_registry_match", "website_verified", "linkedin_company_match", "business_document_verified"]
+        "live_pass_types": ["verified_company_email", "verified_email", "official_registry_match", "website_verified", "linkedin_company_match", "poc_verified", "business_document_verified"]
       }
     }
   ]

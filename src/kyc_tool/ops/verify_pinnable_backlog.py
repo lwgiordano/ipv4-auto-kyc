@@ -1,4 +1,4 @@
-"""Deploy preflight (PR 6 §8.11): every runnable/requeueable `run_transition`
+"""Deploy preflight: every runnable/requeueable `run_transition`
 job must be scoreable once bundle pinning is enforced. A job is un-pinnable
 when its run's creation-pin `policy_bundle_hash` is NULL, absent from
 `policy_bundles`, or corrupt — any of those would dead-letter the job at

@@ -1,4 +1,4 @@
-"""PR 7b-core repair revision 014 (re-audit `1f8412e` F1/F2/F3).
+"""Repair revision 014.
 
 `013` was amended in place after it was committed, so two `013` histories exist in the wild:
 the canonical one (no attempt table) and the briefly-published amended one (attempt table
@@ -120,7 +120,7 @@ def test_014_adopts_a_valid_amended_013_table(pg):
             "'legacy', :s)"), {"o": oid, "s": "b" * 64})
     command.upgrade(cfg, "014")
     with eng.connect() as conn:
-        # data survived adoption, and the F2 backfill classified the attempt-bearing row
+        # data survived adoption, and the witness-generation backfill classified the attempt-bearing row
         assert conn.execute(text("SELECT count(*) FROM outbox_delivery_attempts")).scalar_one() == 1
         assert conn.execute(text(
             "SELECT witness_generation FROM outbox WHERE run_id='c14b-r1'")).scalar_one() == "attempt_v1"
@@ -156,7 +156,7 @@ def test_014_refuses_a_malformed_partial_table(pg, mutilate, must_name, db):
 
 
 def test_pre_authority_pending_and_dead_rows_are_legacy_not_not_accepted(pg):
-    """Re-audit F2 — THE false-assertion case. Before the attempt authority, the publisher sent
+    """THE false-assertion case. Before the attempt authority, the publisher sent
     HTTP before its delivered stamp, so a pre-014 pending/dead row may represent bytes the
     platform ACCEPTED. After the repair they must classify legacy_unwitnessed — never
     not_accepted, which asserts non-delivery — while a row created UNDER the attempt regime with
@@ -195,7 +195,7 @@ def test_pre_authority_pending_and_dead_rows_are_legacy_not_not_accepted(pg):
 
 
 def test_014_downgrade_refuses_when_an_attempt_is_the_sole_evidence(pg):
-    """Re-audit F3: an attempt-only pending row is exactly the send-before-stamp survivor; the
+    """An attempt-only pending row is exactly the send-before-stamp survivor; the
     attempt is its ONLY evidence. Downgrade must refuse with the stable sentinel."""
     url = _fresh_db(pg, "kyc_mig_014_f3a")
     cfg = _config(url)
@@ -258,7 +258,7 @@ def test_unused_database_round_trips_head_012_head(pg):
     evidence, not to an unused schema."""
     url = _fresh_db(pg, "kyc_mig_014_roundtrip")
     cfg = _config(url)
-    # 018 is forward-only once installed (re-audit `cbb783b` F3), so a round trip that
+    # 018 is forward-only once installed, so a round trip that
     # walks below its own revision is anchored at 017 — the top of the walkable chain.
     command.upgrade(cfg, "017")
     command.downgrade(cfg, "012")

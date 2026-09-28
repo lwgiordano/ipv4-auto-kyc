@@ -1,8 +1,8 @@
 """/v1/metrics surfaces the DB-backed v1 witness plus a self-describing, PROCESS-LOCAL
-auth-diagnostics block (PR 5a §6; re-audit `d569a15..4938840` F1 + `8aba2df..2cee937` R3-F2). The
-v2/rejected counters are process-local, not DB-backed, and are exposed under `auth_diagnostics` (with
-scope + process identity + zero-filled keys) so a legacy consumer cannot read them as fleet totals.
-The counters are driven through the REAL signed/invalid request paths, not a private bump."""
+auth-diagnostics block. The v2/rejected counters are process-local, not DB-backed, and are exposed
+under `auth_diagnostics` (with scope + process identity + zero-filled keys) so a legacy consumer
+cannot read them as fleet totals. The counters are driven through the REAL signed/invalid request
+paths, not a private bump."""
 
 import pytest
 

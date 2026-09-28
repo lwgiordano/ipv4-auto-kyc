@@ -1,4 +1,4 @@
-"""PR 7b-core poison-recovery revision 021 (adversarial review of the released `020`).
+"""Poison-recovery revision 021, correcting the released `020`.
 
 `020` closed a real hole and opened a worse one: its new arm asserted a STATE rather than a
 TRANSITION, so it fired on the CLAIM of an already-poisoned row. The claim has no exception
@@ -9,6 +9,7 @@ unbounded outage of every stream. A guard must stop the bad write, never strand 
 import httpx
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from kyc_tool.config import ProcessRole
@@ -29,7 +30,7 @@ def _poisoned_pending_poc(conn, case_id="cp"):
         f"('poc_email',:c,'email',{_REDACT},'pending') RETURNING id"), {"c": case_id}).scalar_one()
 
 
-# --- P1: an already-poisoned row must stay CLAIMABLE so it can drain itself -------------------
+# --- an already-poisoned row must stay CLAIMABLE so it can drain itself -----------------------
 
 def test_a_poisoned_row_can_still_be_claimed_and_dead_lettered(pg):
     """THE regression `020` introduced. Every one of these UPDATEs was refused at `020`, and the
@@ -145,8 +146,8 @@ def test_upgrade_refuses_when_a_poisoned_row_already_exists(pg, claimed):
         oid = _poisoned_pending_poc(conn, "cr")
         if claimed:
             # At 020 this corrupted state can only be present as a historical row that predates
-            # the stricter guard. Model that boundary explicitly; the production path being
-            # audited is the 021 preflight/remediation, not 020's known claim-time failure.
+            # the stricter guard. Model that boundary explicitly; the production path under
+            # test is the 021 preflight/remediation, not 020's known claim-time failure.
             conn.execute(text("ALTER TABLE outbox DISABLE TRIGGER trg_outbox_witness_guard"))
             conn.execute(text(
                 "UPDATE outbox SET claim_token=gen_random_uuid(), "
@@ -169,7 +170,9 @@ def test_upgrade_refuses_when_a_poisoned_row_already_exists(pg, claimed):
     command.upgrade(cfg, "head")
     with eng.connect() as conn:
         assert conn.execute(
-            text("SELECT version_num FROM alembic_version")).scalar_one() == "023"
+            text("SELECT version_num FROM alembic_version")).scalar_one() == (
+                ScriptDirectory.from_config(cfg).get_current_head()
+            )
     eng.dispose()
 
 

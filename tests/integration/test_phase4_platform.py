@@ -3,6 +3,7 @@ stability), and the full staging scenario G3 → G7a → G7b with website review
 and manual-approve interplay."""
 
 import json
+import re
 
 import httpx
 import pytest
@@ -55,7 +56,7 @@ def test_callback_retries_on_5xx_then_delivers(client, engine, post_event, worke
         ).one()
     assert status == "delivered"
     # attempts counts admitted transport calls, not just failures: two 500s + the delivering 200
-    # = 3 (each attempt is counted at admission, before its send — re-audit `538e55e..42e1c7d` F1).
+    # = 3 (each attempt is counted at admission, before its send).
     assert attempts == 3
     assert client.get(f"/v1/runs/{run_id}").json()["state"] == "COMPLETE"
 
@@ -89,11 +90,11 @@ def test_redelivery_carries_identical_dedupe_key(
 ):
     """At-least-once means duplicates happen; the platform dedupes on
     (case_id, run_id) — both fields must be identical across redeliveries.
-    PR 7b-core (re-audit F3): the old raw delivered→pending rewrite is impossible under
-    ck_outbox_status_lifecycle (it retained delivered_at), so this drives the REAL
-    send-before-stamp gap: HTTP #1 succeeds, the delivered-stamp raises BEFORE its
-    transaction, the row stays pending under its claim; the lease is expired; a reclaim
-    under a NEW token resends the identical dedupe body (HTTP #2) and stamps for real."""
+    The old raw delivered→pending rewrite is impossible under ck_outbox_status_lifecycle
+    (it retained delivered_at), so this drives the REAL send-before-stamp gap: HTTP #1
+    succeeds, the delivered-stamp raises BEFORE its transaction, the row stays pending
+    under its claim; the lease is expired; a reclaim under a NEW token resends the
+    identical dedupe body (HTTP #2) and stamps for real."""
     from kyc_tool.outbox.publisher import OutboxPublisher
 
     post_event("case-redeliver", "recalculate.requested", {})
@@ -125,8 +126,8 @@ def test_redelivery_carries_identical_dedupe_key(
     with engine.begin() as conn:  # expire ONLY the lease — the reclaim path, not a raw rewrite
         conn.execute(text("UPDATE outbox SET claim_lease_expires_at = now() - interval '1 second' "
                           "WHERE case_id='case-redeliver'"))
-    # F1 (`42e1c7d..b39b82a`): reclaiming an expired-but-uncleared claim RECONCILES the crashed
-    # attempt (backoff) — it does NOT resend in the same cycle (that could breach max_attempts).
+    # Reclaiming an expired-but-uncleared claim RECONCILES the crashed attempt (backoff) — it
+    # does NOT resend in the same cycle (that could breach max_attempts).
     publisher.process_pending()
     assert len(callback_capture.requests) == 1  # still just HTTP #1; the reclaim only reconciled
     with engine.begin() as conn:  # make the backed-off row due; a FRESH claim now resends
@@ -145,11 +146,12 @@ def test_redelivery_carries_identical_dedupe_key(
 
 
 def test_full_staging_scenario_g3_to_approval(
-    client, engine, post_event, phase3_worker, publisher, callback_capture, evidence_store, sign
+    client, engine, post_event, phase3_worker, publisher, callback_capture, evidence_store, sign,
+    email_sender,
 ):
     """The acceptance journey: registration-time KYB (insufficient) → evidence
     accumulates through the platform loop (registry, email, website reviewer,
-    document) → approve_buy_locked → ORG-ID passes → approve. Every decision
+    document) → verified POC → approve_buy_locked → ORG-ID passes → approve. Every decision
     flows through the callback with the audit trail intact."""
     case_id = "case-staging"
 
@@ -169,7 +171,7 @@ def test_full_staging_scenario_g3_to_approval(
     # human completes the website task through the review queue
     tasks = client.get("/v1/review-tasks?status=open").json()["tasks"]
     website_task = next(t for t in tasks if t["case_id"] == case_id and t["task_type"] == "website")
-    # review completion is the keyed website.review_completed event (PR 5a §4)
+    # review completion is the keyed website.review_completed event
     review_body = json.dumps(
         envelope(
             "website.review_completed",
@@ -195,6 +197,27 @@ def test_full_staging_scenario_g3_to_approval(
         ).encode(),
     )
     post_event(case_id, "document.uploaded", {"object_ref": doc_ref, "doc_type": "registration_certificate"})
+    phase3_worker.run_until_idle()
+    publisher.process_pending()
+
+    case = client.get(f"/v1/cases/{case_id}").json()
+    assert case["latest_decision"] == "manual_review_insufficient"
+
+    post_event(
+        case_id,
+        "poc.submitted",
+        {"rir": "arin", "poc_handle": "JD123-ARIN", "org_handle": "ORG-ACME-1"},
+    )
+    phase3_worker.run_until_idle()
+    publisher.process_pending()
+    body = email_sender.sent[-1]["body"]
+    token = re.search(r"token: (\S+)", body).group(1)
+    token_id = re.search(r"reference: (\S+)", body).group(1)
+    post_event(
+        case_id,
+        "poc.token_verified",
+        {"token_id": token_id, "verified_at": "2026-07-04T11:00:00Z", "token": token},
+    )
     phase3_worker.run_until_idle()
     publisher.process_pending()
 
@@ -260,7 +283,7 @@ def test_manual_approve_then_org_id_enables_buying(client, post_event, phase3_wo
     assert case["status"] == "approved_manual"  # sticky — platform enforced it
     assert case["buy_status"] == "buy_enabled"  # ORG-ID unlocked buying
 
-    # the Salesforce projection survives the LATER automatic decision (re-audit 15d875d F6):
+    # the Salesforce projection survives the LATER automatic decision:
     # the pointer honestly moves to the newer automatic row, while action + attribution keep
     # naming the manual act for as long as the case stays approved_manual
     full = client.get(f"/ui/api/cases/{case_id}/full").json()
@@ -271,11 +294,11 @@ def test_manual_approve_then_org_id_enables_buying(client, post_event, phase3_wo
     assert sf["Manual_Approved_At__c"] is not None
 
 
-# --- PR 5b final-review fix (spec §8.7): manual-approve actor-floor matrix --
+# --- Manual-approve actor-floor matrix ------------
 #
 # reviewer.manual_approve is enforced by the SAME reviewer_actor_reason floor
-# as website.review_completed (events/ingest.py:201-203), but until now only
-# the happy path above was tested. These mirror the website matrix in
+# as website.review_completed (the MANUAL_APPROVE branch in events/ingest.py). Beyond the happy
+# path above, these mirror the website matrix in
 # test_review_completed_event.py (test_wrong_actor_type_rejected_422 /
 # test_actor_id_mismatch_rejected_422). A fresh case_id per case keeps the
 # no-rows assertion in test_manual_approve_rejected_leaves_no_rows clean; no
@@ -349,7 +372,7 @@ def test_manual_approve_valid_reviewer_actor_persists_stripped_reviewer_id(clien
     """Happy path (keep/confirm): a valid reviewer actor still 200s and writes
     the manual decision row with the actor-derived reviewer id.
 
-    FIX 5: actor.id and payload.reviewer_id are the SAME raw string WITH a
+    Here actor.id and payload.reviewer_id are the SAME raw string WITH a
     trailing space — both pass the floor (reviewer_actor_reason strips both
     sides before comparing) — so the PERSISTED DecisionRow.reviewer_id must
     ALSO be stripped ("rev-9", not "rev-9 "), matching the website path's

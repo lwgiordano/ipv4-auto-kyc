@@ -7,20 +7,20 @@ Prunes, per compliance policy (default 7 years, KYC_RETENTION_DAYS):
 - expired, never-verified poc_tokens past retention
 
 Raw evidence objects and check rows are deliberately NOT pruned here — they are the
-decision record. PR 7b-core keeps the decision_callback ROW for the same reason — it is the
-durable ordering authority (id = order, status = local_status, plus the recorded wire digest)
-that 7b-activation reconciles the platform against, and deleting it would break that
+decision record. The decision_callback ROW is kept for the same reason — it is the durable
+ordering authority (id = order, status = local_status, plus the recorded wire digest) that the
+platform-ordering activation reconciles the platform against, and deleting it would break that
 reconciliation. Its BODY is a different matter: it carries checks[].source, which can be
 reviewer-derived (reviewer:<id>), so the body is destroyed (redacted in place) past the window
 rather than kept indefinitely. What survives is pseudonymous, not out of scope: case_id, run_id,
 decision_sequence, status, delivered_at/resolved_at and the recorded wire digest are internal
 ordinals plus a hash — still joinable back to the case (and, through it, the natural person it
-concerns) — kept because that is exactly what 7b-activation's reconciliation needs. Retaining
-that pseudonymous remainder past the window is a governed decision recorded in
-`AUDIT_FINDINGS.md` (D9), not a determination that it falls outside any regulation's scope —
-this module does not decide what is or is not personal data; it only bounds what it keeps and
-documents the bound. poc_email rows are deleted outright — their sensitive body (the raw POC
-token) is already destroyed at delivery by publisher._record_delivered.
+concerns) — kept because that is exactly what the platform-ordering reconciliation needs.
+Retaining that pseudonymous remainder past the window is a governed decision documented in
+`docs/RUNBOOK.md` ("Retention & compliance"), not a determination that it falls outside any
+regulation's scope — this module does not decide what is or is not personal data; it only bounds
+what it keeps and documents the bound. poc_email rows are deleted outright — their sensitive body
+(the raw POC token) is already destroyed at delivery by publisher._record_delivered.
 """
 
 import structlog
@@ -40,24 +40,23 @@ log = structlog.get_logger(__name__)
 
 
 def prune(session_factory, retention_days: int) -> dict[str, int]:
-    # Fail closed BEFORE opening a transaction (re-audit `5b0f0b8..b75a320` R4-F2): every statement
-    # below prunes with a `now() - make_interval(days => N)` cutoff, so a NONPOSITIVE, non-integer or
-    # boolean N makes the cutoff the FUTURE and deletes/redacts CURRENT immutable audit/evidence rows
-    # (audit_log, poc_email, callback bodies, attempts, tokens). The Pydantic field and production
-    # validation bound the setting, but prune() is called directly (tests, main()), so this destructive
-    # sink re-checks its own domain via the shared registry checker.
+    # Fail closed BEFORE opening a transaction: every statement below prunes with a
+    # `now() - make_interval(days => N)` cutoff, so a NONPOSITIVE, non-integer or boolean N makes
+    # the cutoff the FUTURE and deletes/redacts CURRENT immutable audit/evidence rows (audit_log,
+    # poc_email, callback bodies, attempts, tokens). The Pydantic field and production validation bound the
+    # setting, but prune() is called directly (tests, main()), so this destructive sink re-checks
+    # its own domain via the shared registry checker.
     violation = numeric_value_violation(numeric_domain_of("retention_days"), retention_days)
     if violation:
         raise ValueError(f"retention refuses to prune — {violation}")
     counts: dict[str, int] = {}
     with uow(session_factory) as session:
-        # FIRST statement of the transaction, before any DML (re-audit `cbb783b` F4): retention
-        # updates the parent `outbox` and then deletes from the child `outbox_delivery_attempts`,
-        # which is the exact opposite of a migration's child-then-parent lock order — a real
-        # 40P01 cycle, and one the live-claim preflight cannot see because retention holds no
-        # claim. Taking the shared maintenance fence here puts retention under the same global
-        # order as every other witness writer: a migration waiting at the exclusive fence simply
-        # queues until this transaction commits.
+        # FIRST statement of the transaction, before any DML: retention updates the parent `outbox`
+        # and then deletes from the child `outbox_delivery_attempts`, which is the exact opposite of
+        # a migration's child-then-parent lock order — a real 40P01 cycle, and one the live-claim
+        # preflight cannot see because retention holds no claim. Taking the shared maintenance fence
+        # here puts retention under the same global order as every other witness writer: a migration
+        # waiting at the exclusive fence simply queues until this transaction commits.
         take_shared_fence(session)
         counts["audit_log"] = session.execute(
             text("DELETE FROM audit_log WHERE at < now() - make_interval(days => :d)"),
@@ -74,14 +73,15 @@ def prune(session_factory, retention_days: int) -> dict[str, int]:
         # BODY does not. The body carried checks[].source, which can be reviewer-derived
         # (reviewer:<id>), so it is destroyed (redacted in place) past the window. What survives —
         # id (the order), case_id, run_id, decision_sequence, status, delivered_at and the recorded
-        # wire digest — is everything 7b-activation reconciles against. It is pseudonymous, not
-        # out of scope: a hash plus internal ordinals still joinable to a case. Retaining it past
-        # the window is a governed decision (AUDIT_FINDINGS.md D9), not a personal-data
-        # determination — this repo bounds what it keeps; it does not decide what the law calls it.
+        # wire digest — is everything the platform-ordering reconciliation checks against. It is
+        # pseudonymous, not out of scope: a hash plus internal ordinals still joinable to a case.
+        # Retaining it past the window is a governed decision (docs/RUNBOOK.md, "Retention &
+        # compliance"), not a personal-data determination — this repo bounds what it keeps; it
+        # does not decide what the law calls it.
         # `dead` is included from migration 020 on. A callback that exhausted its attempts is
         # the ordinary outcome of a platform outage, and its body carries the same
         # reviewer-derived `checks[].source` as any other — leaving it forever because delivery
-        # happened not to succeed inverted the policy this module states. A dead row has neither
+        # happened not to succeed would invert the policy this module states. A dead row has neither
         # `delivered_at` nor `resolved_at`, so it ages on `created_at`; the requeue endpoint
         # refuses a redacted row, so a scrubbed body cannot strand the claim path. Be precise
         # about what re-emission does and does not restore: `recalculate.requested` produces
@@ -89,7 +89,7 @@ def prune(session_factory, retention_days: int) -> dict[str, int]:
         # (status, points, source, reason codes) is not stored on `decisions` at all, and the
         # `enforcement_held.computed_decision` marker lives only in `audit_log`, which this
         # same prune deletes on the same clock. Past the window the original callback body is
-        # GONE, which is the governed intent (AUDIT_FINDINGS D9) — not a recoverable copy.
+        # GONE, which is the governed intent — not a recoverable copy.
         counts["outbox_callback_redacted"] = session.execute(
             text(
                 "UPDATE outbox SET payload_json = '{\"redacted\": true}'::jsonb "
@@ -130,7 +130,7 @@ def prune(session_factory, retention_days: int) -> dict[str, int]:
 
 def main() -> None:
     settings = get_settings()
-    # Process boundary (re-audit R4-F2, via the R5-F1 shared authority): a production retention run
+    # Process boundary (via the shared process-role authority): a production retention run
     # validates its whole configuration BEFORE it opens an engine — so an unsafe production config
     # (including a nonpositive/aliased retention) refuses to start rather than deleting evidence.
     validate_process_role(settings, ProcessRole.RETENTION)

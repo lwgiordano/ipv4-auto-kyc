@@ -64,8 +64,8 @@ def test_upgrade_downgrade_upgrade(pg: str):
     url = pg.rsplit("/", 1)[0] + "/kyc_migration_test"
     cfg = _config(url)
 
-    # 018 is forward-only by design (re-audit `cbb783b` F3 — walking below it would restore
-    # search-path-vulnerable authority functions), so the down-to-base leg runs from 017. The
+    # 018 is forward-only by design (walking below it would restore search-path-vulnerable
+    # authority functions), so the down-to-base leg runs from 017. The
     # 017->018->refusal path is proven separately in test_migration_018.py.
     alembic_command.upgrade(cfg, "017")
     engine = create_engine(url)
@@ -86,7 +86,7 @@ def test_upgrade_downgrade_upgrade(pg: str):
 
 
 def test_010_downgrade_refuses_after_cross_case_reuse(pg: str):
-    """PR 5a: once (case-a,key) and (case-b,key) coexist, the old global unique
+    """Once (case-a,key) and (case-b,key) coexist, the old global unique
     on events.idempotency_key cannot be recreated — 010's downgrade must refuse
     loudly rather than delete immutable audit events."""
     url = _fresh_db(pg, "kyc_migration_refuse_test")
@@ -200,11 +200,11 @@ def test_011_nonblank_checks_reject_blank(pg, surface, blank):
     with pytest.raises(IntegrityError) as exc, engine.begin() as conn:
         for stmt in sql.split("; "):
             conn.execute(text(stmt), {"blank": blank})  # extra param ignored where unused
-    assert constraint_name in str(exc.value)  # F3: the INTENDED btrim CHECK, not a 013 shape CHECK
+    assert constraint_name in str(exc.value)  # the INTENDED btrim CHECK, not a 013 shape CHECK
     engine.dispose()
 
 
-# P1 fix: migration 011 adds the three provenance CHECKs NOT VALID (metadata-only,
+# Migration 011 adds the three provenance CHECKs NOT VALID (metadata-only,
 # no scan); revision 012 VALIDATEs them separately (SHARE UPDATE EXCLUSIVE, does not
 # block concurrent writers). `pg_constraint.convalidated` is the ground truth for
 # "has this CHECK been proven against pre-existing rows yet".
@@ -320,7 +320,7 @@ def test_012_validate_does_not_block_writers(pg):
     engineB.dispose()
 
 
-# --- PR 7b-core: migration 013 (outbox stream separation + local decision ordering) ---
+# --- migration 013 (outbox stream separation + local decision ordering) ---
 
 def _seed_legacy_callback(
     conn, *, case_id, run_id, decision_id, ev_seq, status="pending", decided_at=None, payload=None
@@ -392,7 +392,7 @@ def test_013_upgrade_sets_stream_and_notnull_metadata(pg):
             for r in conn.execute(text("SELECT kind, ordering_stream FROM outbox"))
         }
         assert streams == {"decision_callback": "decision", "poc_email": "email"}
-        # real SET NOT NULL — the column metadata, not merely a value CHECK (F4)
+        # real SET NOT NULL — the column metadata, not merely a value CHECK
         meta = {
             r.column_name: r.is_nullable
             for r in conn.execute(
@@ -417,7 +417,7 @@ def test_013_up_down_up_clean_no_supersession(pg):
     alembic_command.upgrade(cfg, "013")  # clean re-upgrade on a no-superseded DB
 
 def test_013_claim_indexes_are_partial_to_the_claimable_set(pg):
-    """re-review 0ca264b F3: 013 makes decision_callback rows non-prunable, so `outbox` grows
+    """013 makes decision_callback rows non-prunable, so `outbox` grows
     without bound. Both claim indexes must therefore be PARTIAL to `status='pending'` — otherwise
     an ever-growing tail of delivered/superseded terminals enters the claim path's index and its
     plan. Pins the predicates from pg_indexes so a full index cannot creep back, and asserts the
@@ -448,17 +448,17 @@ def test_013_claim_indexes_are_partial_to_the_claimable_set(pg):
 
 # INSERT negatives: each row is otherwise valid; only the constrained column is bad. Each case
 # pins the constraint (or NOT NULL message) it is INTENDED to trip — same discipline as
-# _NONBLANK_SURFACES. Without the pin, a later-task constraint that rejects the row for an
-# unrelated reason (Task 4's kind/stream identity CHECK rejects every ('poc_email','decision')
+# _NONBLANK_SURFACES. Without the pin, a later constraint that rejects the row for an
+# unrelated reason (the kind/stream identity CHECK rejects every ('poc_email','decision')
 # shape) would keep these green while the constraint under test silently disappeared.
 _OUTBOX_LIFECYCLE_BAD = {
-    # PR 7b-core (Task 4): ck_outbox_kind_stream_identity's two OR-branches require the
+    # ck_outbox_kind_stream_identity's two OR-branches require the
     # (kind, ordering_stream) pair to be exactly one of the two valid shapes, so an
     # out-of-vocab kind or stream ALWAYS also violates identity — no seed-row shape can
     # isolate ck_outbox_kind_vocab / ck_outbox_ordering_stream_vocab from it anymore.
     # Postgres evaluates CHECK constraints in alphabetical-by-name order (verified against
     # real Postgres), and "ck_outbox_kind_stream_identity" sorts before both — so it is the
-    # one that deterministically fires now. Re-pinned to the constraint that ACTUALLY (and
+    # one that deterministically fires now. Pinned to the constraint that ACTUALLY (and
     # reproducibly) rejects the row post-013, per the still-exact-name-match discipline.
     "unknown_kind": ("ck_outbox_kind_stream_identity",
         "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
@@ -492,7 +492,7 @@ _OUTBOX_LIFECYCLE_BAD = {
         "INSERT INTO outbox (kind, case_id, ordering_stream, status, claimed_by) "
         "VALUES ('poc_email','c1','email','pending','w1')"),
     "superseded_null_resolved": ("ck_outbox_status_lifecycle",  # superseded ⇒ resolved_at NOT NULL
-        # (also trips the F8 decision-only conjunct; the dedicated F8 negatives below isolate it)
+        # (also trips the decision-only conjunct; the dedicated negatives below isolate it)
         "INSERT INTO outbox (kind, case_id, ordering_stream, status) "
         "VALUES ('poc_email','c1','email','superseded')"),
     "delivered_with_claim": ("ck_outbox_status_lifecycle",  # delivered ⇒ claim tuple all-NULL
@@ -543,7 +543,7 @@ def test_013_outbox_lifecycle_update_negative(pg):
 
 
 def test_013_superseded_is_decision_only_insert_negative(pg):
-    """Re-audit F8: a poc_email cannot be INSERTed as 'superseded' even with an otherwise
+    """A poc_email cannot be INSERTed as 'superseded' even with an otherwise
     VALID superseded shape (resolved_at set, claim tuple all-NULL) — only the decision-only
     kind conjunct of ck_outbox_status_lifecycle rejects it, asserted by name."""
     from sqlalchemy.exc import IntegrityError
@@ -562,7 +562,7 @@ def test_013_superseded_is_decision_only_insert_negative(pg):
 
 
 def test_013_superseded_is_decision_only_update_negative(pg):
-    """Re-audit F8 UPDATE variant: a live pending poc_email cannot be UPDATEd into
+    """UPDATE variant: a live pending poc_email cannot be UPDATEd into
     'superseded' even when resolved_at is set in the same statement (the future-bug /
     operator-UPDATE path that would silently zero-send an email AND make downgrade refuse)."""
     from sqlalchemy.exc import IntegrityError
@@ -583,7 +583,7 @@ def test_013_superseded_is_decision_only_update_negative(pg):
 
 
 def test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersession(pg, settings):
-    """Threaded inversion (rev-4 F1): B's txn starts FIRST and fixes its decided_at via
+    """Threaded inversion: B's txn starts FIRST and fixes its decided_at via
     SELECT now(); A then runs fully and enqueues its callback FIRST (lower outbox.id) with a
     LATER decided_at; only then is B released to enqueue (higher outbox.id). So
     B.decided_at < A.decided_at while A.outbox_id < B.outbox_id. The backfill must rank by
@@ -687,7 +687,7 @@ def test_013_backfill_orders_by_outbox_id_and_delivers_without_false_supersessio
     eng.dispose()
 
 
-# One invalid legacy state per parity check (schema 012). Imported by Task 7's CLI test so the
+# One invalid legacy state per parity check (schema 012). Imported by the backfill CLI's test so the
 # CLI and the migration are proven to refuse on the SAME matrix. Each is a complete INSERT set.
 _BAD_CASE = "INSERT INTO cases (id) VALUES ('c1')"
 _BAD_EV = ("INSERT INTO events (id, case_id, idempotency_key, payload_hash, event_type, actor_json, "
@@ -746,7 +746,7 @@ _PARITY_BAD_SEEDS: dict[str, list[str]] = {
         "policy_shas, manual) VALUES ('d','c1',NULL,'approve',0,'{}'::jsonb,'enabled','{}'::jsonb,false)"],
     # Legacy lifecycle rows (valid case/kind, no run) that pass every OTHER parity check but the
     # final ck_outbox_status_lifecycle rejects — the exact "step-0 green, migration fails mid-outage"
-    # gap (F2). Each targets invalid_legacy_outbox_lifecycle.
+    # gap. Each targets invalid_legacy_outbox_lifecycle.
     "lifecycle_pending_delivered_at": [_BAD_CASE,
         "INSERT INTO outbox (kind, case_id, payload_json, status, delivered_at) "
         "VALUES ('poc_email','c1','{}'::jsonb,'pending', now())"],
@@ -935,7 +935,7 @@ _DECISION_IDENTITY_BAD = {
         "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
         "policy_shas, manual, decision_sequence) VALUES ('d','c1',NULL,'approve',0,'{}'::jsonb,'enabled',"
         "'{}'::jsonb,false,1)"),
-    "auto_null_sequence": ("ck_decisions_manual_sequence",  # automatic row, run set, sequence NULL (F2 hole)
+    "auto_null_sequence": ("ck_decisions_manual_sequence",  # automatic row, run set, sequence NULL
         "INSERT INTO decisions (id, case_id, run_id, decision, score, gates_json, buy_enablement, "
         "policy_shas, manual) VALUES ('d','c1','rX','approve',0,'{}'::jsonb,'enabled','{}'::jsonb,false)"),
 }
@@ -966,7 +966,7 @@ def test_013_decision_identity_insert_negatives(pg, case):
 @pytest.mark.parametrize("bad", ["0", "NULL"], ids=["zero", "auto_null_sequence"])
 def test_013_decision_identity_update_negative(pg, bad):
     """UPDATE variants: a valid automatic decision cannot be UPDATEd into a zero OR NULL
-    sequence — ck_decisions_manual_sequence fires on UPDATE too (F2)."""
+    sequence — ck_decisions_manual_sequence fires on UPDATE too."""
     from sqlalchemy.exc import IntegrityError
 
     url = _fresh_db(pg, f"kyc_mig_013_di_upd_{bad.lower()}")  # Postgres folds unquoted "NULL" -> "null"
@@ -987,8 +987,8 @@ _OUTBOX_BINDING_BAD = {
     "callback_null_run": ("ck_outbox_kind_stream_identity",
         "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
         "VALUES ('decision_callback','c1',NULL,'decision',1,'pending')"),
-    # ck_outbox_kind_stream_identity, verified against REAL Postgres (see task-4-report.md
-    # follow-up fix): a callback row with decision_sequence 0 or negative structurally violates
+    # ck_outbox_kind_stream_identity, verified against REAL Postgres: a callback row with
+    # decision_sequence 0 or negative structurally violates
     # BOTH this CHECK and fk_outbox_decision_triple (no decisions row with a non-positive
     # sequence can ever exist, since ck_decisions_manual_sequence requires decision_sequence > 0
     # on every automatic row) — but Postgres validates CHECK/NOT NULL constraints synchronously
@@ -1006,7 +1006,7 @@ _OUTBOX_BINDING_BAD = {
     "callback_negative_seq": ("ck_outbox_kind_stream_identity",
         "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, decision_sequence, status) "
         "VALUES ('decision_callback','c1','rA','decision',-1,'pending')"),
-    "callback_null_sequence": ("ck_outbox_kind_stream_identity",  # callback, run set, sequence NULL (F2 hole)
+    "callback_null_sequence": ("ck_outbox_kind_stream_identity",  # callback, run set, sequence NULL
         "INSERT INTO outbox (kind, case_id, run_id, ordering_stream, status) "
         "VALUES ('decision_callback','c1','rA','decision','pending')"),
     "email_sequenced": ("ck_outbox_kind_stream_identity",  # email carrying a sequence
@@ -1080,7 +1080,7 @@ def test_013_outbox_binding_update_negative(pg):
 
 
 def test_013_outbox_callback_null_sequence_update_negative(pg):
-    """UPDATE variant (F2): a valid callback cannot be UPDATEd to a NULL decision_sequence —
+    """UPDATE variant: a valid callback cannot be UPDATEd to a NULL decision_sequence —
     ck_outbox_kind_stream_identity requires the sequence IS NOT NULL for a callback row."""
     from sqlalchemy.exc import IntegrityError
 
@@ -1101,7 +1101,7 @@ def test_013_outbox_callback_null_sequence_update_negative(pg):
 
 
 def _seed_two_cases_two_runs(conn):
-    """Re-audit F2 seed: two REAL cases with valid runs/decisions, plus a third run (rX,
+    """Seed: two REAL cases with valid runs/decisions, plus a third run (rX,
     under c1) that carries NO decision yet — so the composite-FK negatives below are
     otherwise valid (no uq_decisions_run_id / per-case-sequence collision can mask the FK)."""
     _mk_case(conn, "c1")
@@ -1116,7 +1116,7 @@ def _seed_two_cases_two_runs(conn):
 
 
 def test_013_decision_case_must_match_run_case_insert_negative(pg):
-    """Re-audit F2: fk_decisions_run_case binds decisions(run_id, case_id) → runs(id, case_id).
+    """The composite fk_decisions_run_case binds decisions(run_id, case_id) → runs(id, case_id).
     A decision citing run rX (which belongs to c1) under case c2 passes BOTH single-column FKs
     and every uniqueness constraint — only the composite FK rejects it, asserted BY NAME."""
     from sqlalchemy.exc import IntegrityError
@@ -1137,7 +1137,7 @@ def test_013_decision_case_must_match_run_case_insert_negative(pg):
 
 
 def test_013_decision_case_must_match_run_case_update_negative(pg):
-    """Re-audit F2 UPDATE variant: re-pointing a valid automatic decision at the OTHER real
+    """UPDATE variant: re-pointing a valid automatic decision at the OTHER real
     case (its run stays r1, which belongs to c1) must fail on fk_decisions_run_case — the
     seeds' distinct sequences guarantee no unique constraint can mask it."""
     from sqlalchemy.exc import IntegrityError
@@ -1155,7 +1155,7 @@ def test_013_decision_case_must_match_run_case_update_negative(pg):
 
 
 def test_013_orm_and_live_fk_parity(pg):
-    """Re-audit F2+F9: the named relational constraints exist BOTH in ORM metadata
+    """The named relational constraints exist BOTH in ORM metadata
     (Base.metadata is Alembic's comparison target — a live-only FK reports drift and hides
     dependency ordering) AND in the live migrated DB: fk_outbox_case_id,
     fk_outbox_decision_triple, fk_decisions_run_case, uq_runs_id_case_id."""
@@ -1183,7 +1183,7 @@ def test_013_orm_and_live_fk_parity(pg):
 
 def test_013_downgrade_refuses_with_superseded_row(pg):
     """Separate real refusal test: a seeded superseded row makes the real alembic downgrade
-    refuse byte-stably (RuntimeError with the stable message). Re-audit F8: superseded is
+    refuse byte-stably (RuntimeError with the stable message). Superseded is
     decision-only, so the seed is a VALID automatic decision+callback chain whose callback
     is superseded — a superseded poc_email is impossible by CHECK."""
     url = _fresh_db(pg, "kyc_mig_013_down_refuse")
@@ -1207,7 +1207,7 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
     after_cursor_execute barrier fired at its superseded preflight — which runs AFTER the
     production LOCK TABLE ... ACCESS EXCLUSIVE. A concurrent pending→superseded UPDATE must
     then FAIL with a lock timeout (SQLSTATE 55P03): it cannot slip between the preflight and
-    the DDL. The seed is a VALID pending decision callback (re-audit F8 — the concurrent
+    the DDL. The seed is a VALID pending decision callback (the concurrent
     supersession must be lifecycle-legal, or the mutation witness would be masked by the
     kind conjunct instead of proving the race). MUTATION: moving/removing the LOCK (so the
     preflight holds only ACCESS SHARE) lets that UPDATE COMMIT — the except-OperationalError
@@ -1256,7 +1256,7 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
         t.start()
         assert at_preflight.wait(timeout=15)  # paused right after the preflight
         connB = engineB.connect()
-        # Re-audit F5: begin B's transaction BEFORE any execute — SQLAlchemy 2 autobegin
+        # Begin B's transaction BEFORE any execute — SQLAlchemy 2 autobegin
         # would otherwise already own the transaction and connB.begin() would raise
         # InvalidRequestError before the test ever reached the lock. SET LOCAL is used
         # because the setting is now transaction-scoped by design.
@@ -1286,7 +1286,7 @@ def test_013_downgrade_lock_prevents_concurrent_supersede(pg):
     engine.dispose()
 
 def test_barrier_listener_never_leaks_when_thread_start_raises(pg, monkeypatch):
-    """F9: `Thread.join()` on a never-started thread raises RuntimeError. If cleanup joined
+    """Regression: `Thread.join()` on a never-started thread raises RuntimeError. If cleanup joined
     unconditionally, that raise would abort the `finally` BEFORE `event.remove()` and the
     process-wide barrier would contaminate every later test. Force the exact failure and prove
     registration is still undone."""
@@ -1325,11 +1325,11 @@ def test_barrier_listener_never_leaks_when_thread_start_raises(pg, monkeypatch):
     assert not t.is_alive()
 
 
-# The runbook's executable restore acceptance predicate (Task 9 Step 5, step 0.6c). POSITIVE and
+# The runbook's executable restore acceptance predicate (step 0.6c). POSITIVE and
 # fail-closed: it asserts the restored row EXISTS and matches every recorded component, and must
 # return EXACTLY ONE row. A negative "select the mismatches, expect zero rows" formulation is
 # prohibited — an absent row, or one restored under the wrong run_id, matches nothing and is then
-# indistinguishable from an exact match (re-review 0ca264b P2).
+# indistinguishable from an exact match.
 # EVERY schema-012 outbox column is recorded, restored and positively compared. The procedure runs
 # BEFORE 013, so it must not name a 013-only column: `resolved_at` and the claim tuple do not exist
 # yet, while `attempts`, `next_attempt_at`, `last_error` and `created_at` DO and are part of the row.
@@ -1352,14 +1352,14 @@ _RESTORE_ACCEPTANCE_SQL = text(
 # writer must already be PAST the restored id. is_called is load-bearing: on a never-called sequence
 # last_value is the id nextval will RETURN, not one already consumed. This never writes — a live
 # `setval(GREATEST(max(id), last_value))` can rewind the sequence under a concurrent nextval (a
-# non-transactional object; LOCK TABLE does not fence it) and is prohibited (re-review 0ca264b P1).
+# non-transactional object; LOCK TABLE does not fence it) and is prohibited.
 _SEQ_HIGH_WATER_SQL = text(
     "SELECT last_value + (CASE WHEN is_called THEN 1 ELSE 0 END) AS next_id FROM outbox_id_seq"
 )
 
 
 def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
-    """Re-audit F1 (+ re-review 0ca264b P1/P2) — the restore acceptance contract, on schema 012
+    """The restore acceptance contract, on schema 012
     with the REAL diagnostic CLI and the REAL 013 upgrade:
     (1) two callbacks (ids captured), full evidence tuples recorded (simulating the backup);
     (2) the OLDER callback is deleted (simulating a retention prune);
@@ -1381,8 +1381,8 @@ def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
     alembic_command.upgrade(cfg, "012")
     engine = create_engine(url)
     with engine.begin() as conn:
-        # A non-empty, NESTED, non-ASCII body: with '{}' the restore round-trip proved nothing,
-        # because any empty payload matches any other (re-review 6a408a3 F6). Non-ASCII also
+        # A non-empty, NESTED, non-ASCII body: with '{}' the restore round-trip would prove
+        # nothing, because any empty payload matches any other. Non-ASCII also
         # exercises the digest's UTF-8 handling.
         payload_a = json.dumps({
             "decision": "approve", "buy_enablement": "enabled",
@@ -1395,7 +1395,7 @@ def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
                                       ev_seq=2, status="pending")
         # A is a PREVIOUSLY RETRIED callback: without attempts/next_attempt_at/last_error/created_at
         # in the evidence tuple, a restore that silently reset its retry clock and error history
-        # would still pass the predicate (re-review 0ca264b F4).
+        # would still pass the predicate.
         conn.execute(text(
             "UPDATE outbox SET attempts=3, last_error='upstream 503', "
             "next_attempt_at=now() - interval '2 days' WHERE id=:i"), {"i": oid_a})
@@ -1433,8 +1433,8 @@ def test_012_restore_acceptance_rejects_default_id_then_accepts_original(pg):
         # the restored id, so the gap is safe to fill and NO sequence write is required.
         next_id = conn.execute(_SEQ_HIGH_WATER_SQL).scalar_one()
         assert next_id > ev["original_outbox_id"]
-        # (4) fail-closed on an ABSENT row: the pre-rev-10 negative predicate returned zero
-        # mismatches here and would have called this "accepted".
+        # (4) fail-closed on an ABSENT row: a negative predicate would return zero mismatches
+        # here and call this "accepted".
         assert _accepted(conn, ev) == []
 
     with engine.begin() as conn:  # (5) the PROHIBITED default-id restore

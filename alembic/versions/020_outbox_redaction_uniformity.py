@@ -3,9 +3,9 @@
 Revision ID: 020
 Revises: 019
 
-Folds an adversarial review of the released `019`. That review's headline was good — a byte-level
-`prosrc` diff and a 363-cell behavioural differential proved `019`'s recreation lost nothing of
-`018` — but it found two real defects in the new payload rule and one in the new preflight.
+Fixes two defects in `019`'s new payload rule and one in its new preflight. `019`'s recreation
+itself lost nothing of `018`: a byte-level `prosrc` diff and a 363-cell behavioural differential
+confirm it.
 
 **1. The rule keyed only on `OLD.status`, so a scrubbed body could become sendable again.** The
 stated invariant was "a body that can still be sent is immutable"; the implementation asked only
@@ -101,7 +101,7 @@ def _validate_code_surface(conn) -> None:
     """Every owned function and every enabled trigger — the complete surface this revision is
     responsible for. NOT the data shape: `018` validated columns/constraints/indexes when it ran,
     nothing here changes them, and re-claiming that check is precisely how `019` overstated its
-    own scope (the review found 13 of 14 drifts walking through it)."""
+    own scope (13 of 14 drifts walked straight through it)."""
     problems: list[str] = []
 
     procs = {

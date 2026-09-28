@@ -1,4 +1,4 @@
-"""DB-backed policy-bundle store (PR 6). Bundles are stored as base64-encoded raw
+"""DB-backed policy-bundle store. Bundles are stored as base64-encoded raw
 files keyed by content hash; ``store_bundle`` read-back-verifies on both the
 insert and ON CONFLICT paths, and ``load_bundle`` reconstructs + validates. The
 module's invariant: EVERY form of persisted-row corruption — bad base64, wrong
@@ -98,6 +98,6 @@ def seed_and_verify(session_factory, policy_dir) -> str:
         return h
 
 def attest(*, flag: bool, bundle_hash: str) -> None:
-    """Deployment witness (§8.18): only called after a successful seed_and_verify."""
+    """Deployment witness: only called after a successful seed_and_verify."""
     log.info("bundle_pinning_ready", flag=flag, bundle_hash=bundle_hash,
               engine_build_id=ENGINE_BUILD_ID)

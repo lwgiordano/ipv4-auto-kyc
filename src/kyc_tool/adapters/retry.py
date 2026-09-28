@@ -1,33 +1,32 @@
-"""Transient-vs-permanent classification for adapter HTTP calls (PR 10a, hardened in the
-`f2929f8..6a4cd87` fold: F2 lease/rate budget, F5 classifier semantics, F6 honest contract).
+"""Transient-vs-permanent classification for adapter HTTP calls, with a lease/rate budget.
 
-CONTRACT (F6): local retries are the ONLY retry this layer performs. When they exhaust, the pipeline
-records `UPSTREAM_ERROR` and the run completes as PARTIAL (G12 semantics) — the job queue does NOT
+CONTRACT: local retries are the ONLY retry this layer performs. When they exhaust, the pipeline
+records `UPSTREAM_ERROR` and the run completes as PARTIAL (partial-run semantics) — the job queue does NOT
 re-drive an exhausted adapter; recovery is the platform re-sending the evidence event. The transient
 window here is deliberately short; it absorbs blips, not outages.
 
-CLASSIFIER (F5): transient = connect/read/pool transport errors, 408, 429, and EVERY 5xx. Any other
+CLASSIFIER: transient = connect/read/pool transport errors, 408, 429, and EVERY 5xx. Any other
 status returns on the first attempt (permanent — the job layer must not hammer it). `Retry-After` is
 parsed as finite non-negative delta-seconds OR an IMF-fixdate against the injected wall clock;
 invalid/negative/past values fall back to the bounded exponential; every delay is clamped to
 [0, 30s].
 
-BUDGET (F2/`3db5f13..a7df17b` F5; unified into ONE send authority per re-audit `7d1c435..827bc0f`
-F3/F5/F6): the pipeline sets a per-plan `RetryBudget` BEFORE the first permit, and EVERY physical
-call — the first included — passes through `_authorize_send` immediately before the wire:
+BUDGET: the pipeline sets a per-plan `RetryBudget` BEFORE the first permit, and EVERY physical
+call — the first included — passes through ONE send authority, `_authorize_send`, immediately
+before the wire:
 1. acquire the deadline-aware rate permit (a permit that cannot fit refuses, BudgetExhausted);
 2. re-prove claim liveness against the DB (`prove_live`) — a permit wait may outlive the claim,
    and a revoked claim must not authorize another upstream call (StaleJobClaim propagates, it is
    NEVER converted into a retry or a partial);
 3. re-prove remaining wall-clock time, in that order.
-The wire call itself is CONTAINED (F3/F6): the body is STREAMED with the absolute plan deadline
+The wire call itself is CONTAINED: the body is STREAMED with the absolute plan deadline
 checked on every chunk — the deadline is total elapsed time including rate wait, headers, and body
 bytes, not an HTTPX phase field (phase timeouts are still applied, tighten-only, as the secondary
 inactivity bound) — and both wire and DECODED bytes are capped (`max_response_bytes`): oversized
 Content-Length refuses preflight; chunked overflow and gzip expansion fail closed mid-stream as
 non-retryable `UpstreamResponseTooLarge`. `BudgetExhausted` surfaces the last outcome — the run
-records UPSTREAM_ERROR and completes PARTIAL (G12); zero sends happen past the deadline. Without a
-budget (direct unit calls), retries stay bounded by `attempts` alone and responses buffer as before.
+records UPSTREAM_ERROR and completes PARTIAL; zero sends happen past the deadline. Without a
+budget (direct unit calls), retries stay bounded by `attempts` alone and responses are fully buffered.
 """
 
 import math
@@ -37,8 +36,8 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
-# The ambient authority moved to the DEPENDENCY-NEUTRAL kyc_tool.authority module (PR 10b slice 1:
-# the injected-gateway unification) so storage and provider layers prove through the SAME object
+# The ambient authority lives in the DEPENDENCY-NEUTRAL kyc_tool.authority module (the
+# injected-gateway unification) so storage and provider layers prove through the SAME object
 # without import knots. Re-exported here so every existing import keeps working; `noqa: F401` —
 # these names ARE this module's public surface.
 from kyc_tool.authority import (  # noqa: F401
@@ -59,14 +58,14 @@ _MAX_SHIFT = 10  # bounds the exponential fallback before clamping
 class UpstreamResponseTooLarge(RuntimeError):
     """A governed response exceeded the containment cap (declared Content-Length, streamed wire
     bytes, or DECODED bytes — gzip expansion counts). NON-RETRYABLE: re-fetching an oversized body
-    burns budget for the same outcome; the adapter records UPSTREAM_ERROR (partial, G12)."""
+    burns budget for the same outcome; the adapter records UPSTREAM_ERROR (partial run)."""
 
 
 def _authorize_send(budget: RetryBudget | None) -> float | None:
-    """THE send authority (re-audit `7d1c435..827bc0f` F5): invoked immediately before EVERY
-    physical call. Order is load-bearing — permit first (it may wait), then the DB claim proof
-    (the wait may have outlived the claim), then the remaining-deadline proof (the wait may have
-    consumed the budget). Returns the remaining seconds (None ⇒ ungoverned direct call)."""
+    """THE send authority: invoked immediately before EVERY physical call. Order is load-bearing —
+    permit first (it may wait), then the DB claim proof (the wait may have outlived the claim),
+    then the remaining-deadline proof (the wait may have consumed the budget). Returns the
+    remaining seconds (None ⇒ ungoverned direct call)."""
     if budget is None:
         return None
     if budget.acquire is not None:
@@ -108,19 +107,28 @@ def _retry_delay(response, attempt: int, backoff_seconds: float, now) -> float:
     return min(delta, _MAX_RETRY_AFTER_SECONDS)
 
 
-def get_with_retry(
+def request_with_retry(
     client: httpx.Client,
+    method: str,
     url: str,
     *,
     params: dict | None = None,
-    attempts: int = 3,
+    json: dict | None = None,
+    attempts: int | None = None,
     backoff_seconds: float = 0.5,
     sleep=time.sleep,
     now=time.time,
 ) -> httpx.Response:
-    """GET with bounded transient retries under the ambient RetryBudget (if any). Returns the final
-    response (transient-exhausted included — the caller's raise_for_status() reports it); re-raises
-    the final transport error. A permanent status returns on the FIRST attempt with zero sleeps."""
+    """One governed request with bounded transient retries under the ambient RetryBudget (if any).
+    Returns the final response (transient-exhausted included — the caller's raise_for_status()
+    reports it); re-raises the final transport error. A permanent status returns on the FIRST
+    attempt with zero sleeps.
+
+    `attempts=None` defaults to 3 for GET and 1 for every other method: a non-idempotent call (a
+    Floqer shortcut run is a PAID run) must not be replayed by this layer — a retried POST starts
+    a second run. A caller that knows its POST is idempotent passes `attempts` explicitly."""
+    if attempts is None:
+        attempts = 3 if method.upper() == "GET" else 1
     if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
         raise ValueError(f"attempts must be a positive int, got {attempts!r}")
     bad_backoff = not isinstance(backoff_seconds, (int, float)) or not math.isfinite(backoff_seconds)
@@ -132,10 +140,10 @@ def get_with_retry(
     for attempt in range(attempts):
         if attempt > 0:
             # Every RETRY is a NEW physical call: it must fit the plan deadline (sleeps must never
-            # consume the job lease) before we even sleep for it — F2.
+            # consume the job lease) before the sleep for it even starts.
             delay = _retry_delay(response, attempt - 1, backoff_seconds, now)
             if budget is not None and budget.clock() + delay >= budget.deadline_monotonic:
-                break  # surface the last outcome; the run records UPSTREAM_ERROR (partial, G12)
+                break  # surface the last outcome; the run records UPSTREAM_ERROR (partial run)
             sleep(delay)
         try:
             # ONE authority for every send, first attempt included: permit → liveness → deadline.
@@ -153,15 +161,17 @@ def get_with_retry(
                 from kyc_tool.adapters import executor  # lazy: executor imports this module
 
                 if executor.process_portable(client):
-                    # the unconditionally-killable boundary (PR 10b slice 1): the whole physical
-                    # fetch runs in a fork the parent TERMINATES at the absolute deadline
+                    # the unconditionally-killable boundary: the whole physical fetch runs in a
+                    # spawned child the parent TERMINATES at the absolute deadline
                     response = executor.supervised_fetch(
-                        client, url, params, budget, send_kwargs.get("timeout")
+                        client, method, url, params, json, budget, send_kwargs.get("timeout")
                     )
                 else:  # Mock/fixture transports cannot cross a process boundary
-                    response = _contained_get(client, url, params, budget, send_kwargs)
+                    response = _contained_request(client, method, url, params, json, budget,
+                                                  send_kwargs)
             else:
-                response = _contained_get(client, url, params, budget, send_kwargs)
+                response = _contained_request(client, method, url, params, json, budget,
+                                              send_kwargs)
             last_exc = None
         except httpx.TransportError as exc:  # connect/read/pool timeouts, DNS, resets
             last_exc = exc
@@ -173,31 +183,49 @@ def get_with_retry(
     return response  # transient-exhausted: caller's raise_for_status() surfaces it
 
 
-def _contained_get(
+def get_with_retry(
     client: httpx.Client,
     url: str,
+    *,
+    params: dict | None = None,
+    attempts: int = 3,
+    backoff_seconds: float = 0.5,
+    sleep=time.sleep,
+    now=time.time,
+) -> httpx.Response:
+    """GET through `request_with_retry` with the historical defaults."""
+    return request_with_retry(client, "GET", url, params=params, attempts=attempts,
+                              backoff_seconds=backoff_seconds, sleep=sleep, now=now)
+
+
+def _contained_request(
+    client: httpx.Client,
+    method: str,
+    url: str,
     params: dict | None,
+    json: dict | None,
     budget: RetryBudget | None,
     send_kwargs: dict,
 ) -> httpx.Response:
-    """The governed wire call (re-audit `7d1c435..827bc0f` F3/F6; hardened per `750630c..ca85355`
-    F2/F3). With a budget:
+    """The governed wire call. With a budget:
     - the absolute deadline is proved immediately AFTER the headers arrive and again AFTER EOF —
-      a header drip or a slow empty-body 200 cannot become a successful result past the deadline
-      (F2). HONEST BOUND: between individual header bytes only the tightened inactivity phase
+      a header drip or a slow empty-body 200 cannot become a successful result past the deadline.
+      HONEST BOUND: between individual header bytes only the tightened inactivity phase
       timeout applies (h11 additionally hard-caps header size), so worker OCCUPANCY during a
       hostile header drip is bounded but can exceed the deadline; nothing is RETURNED or
-      persisted from it. The unconditionally-killable boundary (supervised executor) is PR 10b.
-    - the body is read RAW and decoded INCREMENTALLY with a bounded decoder (F3): wire and
+      persisted from it. The unconditionally-killable boundary is the supervised executor
+      (`executor.supervised_fetch`, used when the budget sets `hard_kill` and the client is
+      process-portable).
+    - the body is read RAW and decoded INCREMENTALLY with a bounded decoder: wire and
       decoded caps apply BEFORE allocation (zlib max_length), so a decompression bomb cannot
       spike memory before the cap fires. Accept-Encoding is pinned to gzip; multiple/unsupported
       encodings are rejected; truncated/corrupt streams raise DecodingError.
     Without a budget (direct unit calls) the buffered path is unchanged."""
     if budget is None:
-        return client.get(url, params=params, **send_kwargs)
+        return client.request(method, url, params=params, json=json, **send_kwargs)
     cap = budget.max_response_bytes
     with client.stream(
-        "GET", url, params=params, headers={"Accept-Encoding": "gzip"}, **send_kwargs
+        method, url, params=params, json=json, headers={"Accept-Encoding": "gzip"}, **send_kwargs
     ) as streamed:
         _remaining_or_spent(budget, "header completion")  # a header drip cannot smuggle a result
         declared = streamed.headers.get("Content-Length", "")
@@ -235,7 +263,7 @@ def _contained_get(
                     piece = raw_chunk
                 else:
                     # decode at most (cap - decoded_total + 1) bytes: the bomb detonates into a
-                    # bounded buffer, never into memory (R10-F3 — iter_bytes() allocated the whole
+                    # bounded buffer, never into memory (iter_bytes() would allocate the whole
                     # decompressed chunk before any cap could look at it)
                     allowance = (cap - decoded_total + 1) if cap is not None else 0
                     piece = decoder.decompress(raw_chunk, allowance)
@@ -275,8 +303,8 @@ def _contained_get(
                 f"corrupt encoded body on the governed transport: {exc}",
                 request=streamed.request,
             ) from exc
-        # A response that COMPLETED at/after the deadline must not become evidence (F2: the slow
-        # empty-body 200 witness — zero body chunks meant zero deadline checks).
+        # A response that COMPLETED at/after the deadline must not become evidence (the slow
+        # empty-body 200 case — zero body chunks would mean zero deadline checks).
         _remaining_or_spent(budget, "response completion (EOF)")
         # Rebuild a buffered response for the caller. Content-Encoding/Length describe the WIRE
         # form; the chunks are already decoded, so those headers must not survive re-decoding.
@@ -296,7 +324,7 @@ def _contained_get(
 def _attempt_timeout(client: httpx.Client, remaining: float) -> httpx.Timeout | float:
     """Per-attempt HTTP phase timeouts = the client's own configured values capped at the remaining
     budget (TIGHTEN-only — a large budget never loosens a small configured timeout). SECONDARY to
-    the absolute streamed deadline in _contained_get: phases bound inactivity, not total time."""
+    the absolute streamed deadline in _contained_request: phases bound inactivity, not total time."""
     base = getattr(client, "timeout", None)
     if base is None:
         return remaining

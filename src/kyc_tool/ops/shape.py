@@ -1,5 +1,4 @@
-"""Immutable, operation-specific physical-shape contracts for the maintenance CLIs (re-audit
-`8aba2df..2cee937` R3-F7, completed under `5b0f0b8..b75a320` R4-F4).
+"""Immutable, operation-specific physical-shape contracts for the maintenance CLIs.
 
 A revision STAMP is not a physical schema: a DB stamped at a known descendant of a floor over a
 drifted shape passes lineage yet crashes mid-command. A `ShapeContract` is the SINGLE object a
@@ -10,9 +9,9 @@ traceback and NO mutation.
 What this layer asserts for every relation a command consumes:
 - **relkind** via `pg_class` — the relation is an ORDINARY TABLE (`relkind='r'`), so a VIEW/matview
   named `outbox`/`decisions` (which `information_schema.tables` happily lists) cannot certify a false
-  OK by filtering rows out of sight (re-audit R4-F4 repro d).
+  OK by filtering rows out of sight.
 - **each consumed column** — existence, normalized `information_schema` `data_type` (so an INTEGER
-  `outbox.status` or a TEXT `decisions.manual` is refused before the command compares it, repros a/c),
+  `outbox.status` or a TEXT `decisions.manual` is refused before the command compares it),
   and nullability where that is stable across the phase the command runs in.
 
 The outbox→`outbox_id_seq` binding and (where required) sequence ownership are enforced separately by
@@ -44,10 +43,9 @@ JSONB = "jsonb"
 class ColumnShape:
     """Required shape of one consumed column. `nullable`/`data_type` are asserted only when set —
     `None` means "do not assert" (a column whose nullability is revision-sensitive at this phase).
-    `deterministic_collation` (re-audit `03dbfab..bc325e7` R5-F4) requires the column NOT carry a
-    nondeterministic (e.g. case-insensitive) collation, so a value the command compares
-    case-sensitively (`kind='decision_callback'`, `status='pending'`) cannot match under a folded
-    collation."""
+    `deterministic_collation` requires the column NOT carry a nondeterministic (e.g.
+    case-insensitive) collation, so a value the command compares case-sensitively
+    (`kind='decision_callback'`, `status='pending'`) cannot match under a folded collation."""
 
     nullable: bool | None = None
     data_type: str | None = None
@@ -61,8 +59,8 @@ class ShapeContract:
 
     name: str
     relations: dict[str, dict[str, ColumnShape]] = field(default_factory=dict)
-    # The revisions this command is admitted to run against (re-audit `03dbfab..bc325e7` R5-F5):
-    # explicit, never inherited by column coincidence. Empty ⇒ the command's own min/exact gate
+    # The revisions this command is admitted to run against: explicit, never inherited by column
+    # coincidence. Empty ⇒ the command's own min/exact gate
     # governs (bind()); a non-empty set is additionally enforced by supported_revision_violation().
     supported_revisions: tuple[str, ...] = ()
     # Every relation the command reads/writes, in a canonical (sorted) order the mutator locks before
@@ -105,7 +103,7 @@ def shape_mismatches(session, contract: ShapeContract) -> list[str]:
             )
             continue
         # A partition child (relispartition) or an inheritance child (pg_inherits) has relkind='r'
-        # yet is a filtered slice of a larger table (re-audit R5-F4): reject it as the governed table.
+        # yet is a filtered slice of a larger table: reject it as the governed table.
         if rel.relispartition or rel.inherits:
             problems.append(
                 f"public.{relation} is a partition/inheritance child, not the standalone governed "
@@ -165,7 +163,7 @@ _BIGINT_MAX = 9_223_372_036_854_775_807
 
 
 def sequence_integrity_violations(session, *, table: str, column: str, sequence: str) -> list[str]:
-    """The exact behavior repair_outbox_sequence promises to fix (re-audit `03dbfab..bc325e7` R5-F3).
+    """The exact behavior repair_outbox_sequence promises to fix.
     Verifying only the sequence name/owner and a last_value read-back is a FALSE success: an arithmetic
     column default (`nextval(seq)+1000`) or a non-unit/negative increment lets repair report "next 1"
     while the real allocation is 1001 or collides. Bind the exact default expression and the sequence's
@@ -183,12 +181,12 @@ def sequence_integrity_violations(session, *, table: str, column: str, sequence:
         {"t": table, "col": column},
     ).scalar_one_or_none()
     norm = (default or "").strip()
-    # STRUCTURAL check (re-audit `f2929f8..6a4cd87` R6-F1): exactly one bare nextval node whose
-    # referenced sequence resolves to the SAME OID as the governed sequence. The previous substring
-    # containment certified `nextval('evil_outbox_id_seq'::regclass)` — `outbox_id_seq` is a
-    # substring — so repair reported next=1 while the column actually allocated from the evil
-    # sequence. A wrapper/cast/arithmetic form fails the fullmatch; a same-named sequence in another
-    # schema or an evil superstring name resolves to a different OID and is refused.
+    # STRUCTURAL check: exactly one bare nextval node whose referenced sequence resolves to the
+    # SAME OID as the governed sequence. A substring-containment check would certify
+    # `nextval('evil_outbox_id_seq'::regclass)` — `outbox_id_seq` is a substring — so repair would
+    # report next=1 while the column actually allocated from the evil sequence. A
+    # wrapper/cast/arithmetic form fails the fullmatch; a same-named sequence in another schema or
+    # an evil superstring name resolves to a different OID and is refused.
     m = re.fullmatch(r"nextval\('([^']+)'::regclass\)", norm)
     if m is None:
         problems.append(
@@ -236,7 +234,7 @@ def sequence_integrity_violations(session, *, table: str, column: str, sequence:
 # ── Operation contracts (the shared source of truth; commands import THESE constants) ──────────────
 
 # reset_interrupted_outbox_claims (schema 013). `status` is the NOT-NULL text lifecycle column it
-# filters on — an INTEGER status crashes the `status='pending'` comparison (R4-F4 repro a). The three
+# filters on — an INTEGER status crashes the `status='pending'` comparison. The three
 # claim columns MUST be nullable (the command sets them NULL) and carry their real types.
 RESET_OUTBOX_CLAIMS = ShapeContract(
     "reset_interrupted_outbox_claims",
@@ -251,11 +249,11 @@ RESET_OUTBOX_CLAIMS = ShapeContract(
     lock_relations=("outbox",),
 )
 
-# The 7b-core PRE-WINDOW diagnostics — verify_pr7b_ops_prerequisites and verify_pr7b_core_backfill —
+# The PRE-WINDOW diagnostics — verify_pr7b_ops_prerequisites and verify_pr7b_core_backfill —
 # both bind at exact revision 012 and read the decision→callback parity, so they import this SAME
 # object. It asserts the relations are TABLES and the parity's referenced columns exist with the right
 # types: a placeholder `decisions` with only `id` (missing run_id) or a TEXT `decisions.manual` are
-# refused before the parity SQL tracebacks (R4-F4 repros b/c/d). Nullability of case_id is NOT asserted
+# refused before the parity SQL tracebacks. Nullability of case_id is NOT asserted
 # here — migration 013 (not yet applied at this phase) flips it to NOT NULL.
 PR7B_CORE_PREWINDOW = ShapeContract(
     "pr7b_core_prewindow",
@@ -273,7 +271,7 @@ PR7B_CORE_PREWINDOW = ShapeContract(
             "id": ColumnShape(data_type=TEXT),
             "run_id": ColumnShape(data_type=TEXT),
             # NOT NULL boolean: a NULL `manual` makes `d.manual=false` UNKNOWN and the parity CHECK
-            # silently accepts it (re-audit R5-F4).
+            # silently accepts it.
             "manual": ColumnShape(nullable=False, data_type=BOOLEAN),
             "case_id": ColumnShape(data_type=TEXT),
         },
@@ -307,8 +305,8 @@ RESTORE_OUTBOX_CALLBACK = ShapeContract(
             "id": ColumnShape(data_type=TEXT),
             "case_id": ColumnShape(data_type=TEXT),
             "run_id": ColumnShape(data_type=TEXT),
-            # the acceptance predicate joins on `d.manual=false` (re-audit R5-F4): a TEXT/nullable
-            # manual passed the old profile then raised `text = boolean` mid-restore.
+            # the acceptance predicate joins on `d.manual=false`: a TEXT/nullable manual would pass a
+            # looser profile, then raise `text = boolean` mid-restore.
             "manual": ColumnShape(nullable=False, data_type=BOOLEAN),
         },
     },

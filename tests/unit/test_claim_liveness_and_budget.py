@@ -1,6 +1,6 @@
-"""Re-audit `3db5f13..a7df17b` unit-layer REDs: F4 heartbeat cadence strictly below lease/3 with a
-production lease floor; F5 the plan budget strictly below the lease at EVERY accepted value and a
-deadline-aware rate permit that refuses (without consuming the slot) what cannot fit; F2 the
+"""Claim liveness and budget at the unit layer: heartbeat cadence strictly below lease/3 with a
+production lease floor; the plan budget strictly below the lease at EVERY accepted value and a
+deadline-aware rate permit that refuses (without consuming the slot) what cannot fit; the
 in-process revocation boundary."""
 
 import time
@@ -16,17 +16,17 @@ from kyc_tool.queue import jobs
 from kyc_tool.queue.worker import heartbeat_cadence_seconds
 
 
-# ── F4: cadence strictly below lease/3, never clamped upward ──────────────────────────────────────
+# ── Cadence strictly below lease/3, never clamped upward ──────────────────────────────────────────
 @pytest.mark.parametrize("lease", [1, 2, 3, 4, 10, 30, 120, 3600])
 def test_heartbeat_cadence_is_strictly_below_a_third_of_every_accepted_lease(lease):
     cadence = heartbeat_cadence_seconds(lease)
-    assert cadence < lease / 3.0  # ROADMAP PR 7a ceiling, strict
+    assert cadence < lease / 3.0  # the heartbeat ceiling, strict
     assert cadence > 0
 
 
 def test_heartbeat_cadence_has_no_upward_clamp():
-    """The audit's F4 witness: max(lease/3, 1s) scheduled the FIRST beat at a 1s lease's expiry and
-    at lease/2 for a 2s lease. The cadence must scale down with the lease, floor-free."""
+    """Regression: max(lease/3, 1s) scheduled the FIRST beat at a 1s lease's expiry and at lease/2
+    for a 2s lease. The cadence must scale down with the lease, floor-free."""
     assert heartbeat_cadence_seconds(1) == 0.25
     assert heartbeat_cadence_seconds(2) == 0.5
 
@@ -41,15 +41,15 @@ def test_production_floors_the_job_lease():
     Settings(environment="development", job_lease_seconds=2)
 
 
-# ── F5: the plan budget is strictly below the lease at EVERY value ────────────────────────────────
+# ── The plan budget is strictly below the lease at EVERY value ────────────────────────────────────
 @pytest.mark.parametrize("lease", [1, 2, 10, 11, 30, 120])
 def test_plan_budget_is_strictly_below_every_lease(lease):
     budget = plan_budget_seconds(lease)
-    assert 0 < budget < lease  # the old max(lease-10, 1) returned >= lease for lease <= 1
+    assert 0 < budget < lease  # a plain max(lease-10, 1) returns >= lease for lease <= 1
     assert budget >= lease * 0.5  # and never collapses to nothing for small leases
 
 
-# ── F5: deadline-aware rate permits ───────────────────────────────────────────────────────────────
+# ── Deadline-aware rate permits ───────────────────────────────────────────────────────────────────
 def test_rate_permit_that_cannot_fit_refuses_fast_without_consuming_the_slot():
     limiter = RateLimiter({"gleif": 5.0})  # 0.2s spacing (a registered adapter id — closed set)
     limiter.acquire("gleif")  # slot 1: immediate
@@ -66,7 +66,7 @@ def test_unlimited_adapters_ignore_the_deadline():
     RateLimiter({}).acquire("anything", deadline_monotonic=time.monotonic() - 100)  # no-op, no raise
 
 
-# ── F2: the in-process revocation boundary ────────────────────────────────────────────────────────
+# ── The in-process revocation boundary ────────────────────────────────────────────────────────────
 def test_check_claim_live_raises_once_lost_is_set():
     job = jobs.ClaimedJob(id=1, kind="k", case_id=None, payload={}, attempts=1, max_attempts=5,
                           claim_nonce="w:abc")
@@ -94,6 +94,8 @@ def _hardened(**overrides) -> Settings:
         read_auth_required=True,
         ui_enabled=False,
         ui_admin_token="t" * 32,
+        floqer_api_key="floq_placeholder-not-a-real-key",
+        floqer_shortcut_id="00000000-0000-0000-0000-000000000000",
         hmac_inbound_key_id="kyc-platform-1",
         hmac_inbound_secret="i" * 40,
         hmac_outbound_key_id="kyc-tool-1",

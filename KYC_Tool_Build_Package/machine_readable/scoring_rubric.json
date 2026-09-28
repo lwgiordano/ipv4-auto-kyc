@@ -1,5 +1,5 @@
 {
-  "version": "2.0",
+  "version": "2.2",
   "threshold": 100,
   "hard_gates": {
     "score_met": "score >= 100",
@@ -8,11 +8,12 @@
     "broker_status_allowed": ["clear", "allowed_broker"],
     "hard_conflict_must_be_false": true
   },
+  "control_proof_rule": "a live passed poc_verified check; public email and ORG-ID matches remain supporting evidence only",
   "items": [
     {
       "check_type": "verified_company_email",
       "points": 25,
-      "category": "control_proof",
+      "category": "supporting",
       "mode": "automated",
       "source": "platform_email_verification",
       "pass_rule": "verified inbox AND business domain (not free/disposable) AND domain matches submitted company domain"
@@ -28,7 +29,7 @@
     {
       "check_type": "org_id_match",
       "points": 25,
-      "category": "control_proof",
+      "category": "supporting",
       "mode": "automated",
       "source": "direct_rir_rdap",
       "pass_rule": "exact handle exists AND org name matches company AND address materially matches AND no broker/rejected-entity conflict",
@@ -57,7 +58,7 @@
       "category": "supporting",
       "mode": "automated",
       "source": "floqer_discovery_plus_deterministic_match",
-      "pass_rule": "person name AND current company AND title AND company domain all match deterministically"
+      "pass_rule": "person name AND company identity match deterministically; company identity is the company domain, falling back to an exact company-name / alias match only when LinkedIn reports no domain; company name and title are recorded, not compared"
     },
     {
       "check_type": "website_verified",

@@ -11,13 +11,12 @@ import time
 
 # The ONE governed signed-request replay window (PLATFORM_INTEGRATION §skew). `config` imports this
 # for the setting domain; `verify`/`verify_v2` fail closed on any skew outside (0, MAX] so a widened
-# window cannot enlarge the acceptance window even on a direct call (re-audit `5b0f0b8..b75a320`
-# R4-F1, consumer layer).
+# window cannot enlarge the acceptance window even on a direct call (the consumer-layer check).
 MAX_HMAC_SKEW_SECONDS = 300
 
 
 def _skew_in_contract(max_skew_seconds) -> bool:
-    # EXACT type first, before any comparison (gate finding 2). `isinstance` admitted an `int`
+    # EXACT type first, before any comparison. `isinstance` admitted an `int`
     # SUBCLASS, and the very next line compared it — dispatching the subclass's `__ge__`/`__le__`,
     # which raised out of verification as a 500. `type(x) is int` also subsumes the old bool
     # exclusion, since `bool` is a subclass and no longer passes.
@@ -34,7 +33,7 @@ def sign(secret: str, timestamp: str, body: bytes) -> str:
 def _exact_text(*values) -> bool:
     """True only if every value is an EXACT built-in `str`.
 
-    `isinstance` is not sufficient at a verification boundary (re-audit `4c3015a..cccd5f7` F1). A
+    `isinstance` is not sufficient at a verification boundary. A
     `str` SUBCLASS satisfies isinstance while overriding `__eq__`, `__hash__`, `encode` or `strip`,
     so the very act of checking it dispatches to attacker-supplied code — and an exception raised
     there escapes as a 500 on a request that deserved a controlled 401. Exact-type gating is the
@@ -71,7 +70,7 @@ def verify(
     return hmac.compare_digest(expected, signature or "")
 
 
-# -- v2: path-bound canonical signing (PR 5a) --------------------------------
+# -- v2: path-bound canonical signing ----------------------------------------
 #
 # v1 signs only "{timestamp}.{body}", so case_id (in the URL path) is unsigned
 # and a captured signature can be redirected to another case. v2 binds the
@@ -116,7 +115,7 @@ def verify_v2(
 ) -> bool:
     # Every canonical field is gated before it reaches `canonical_v2`, which joins them and hashes
     # the body. A hostile `encode` on any one of them raised RuntimeError out of `sign_v2` and
-    # turned signature verification into a 500 (re-audit `4c3015a..cccd5f7` F1).
+    # turned signature verification into a 500.
     if not _exact_text(secret, signature):
         return False
     if set(fields) != {"key_id", "direction", "method", "path_qs", "timestamp", "slot", "body"}:

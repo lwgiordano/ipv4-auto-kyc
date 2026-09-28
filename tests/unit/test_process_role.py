@@ -1,7 +1,6 @@
-"""Re-audit `03dbfab..bc325e7` R5-F1: the process-role authority. A DEV-ONLY role (fixture adapters)
-must never run in a production environment — even with an otherwise-hardened config — and it must
-refuse BEFORE any database/network/store creation. Every production entry point routes through the
-same authority."""
+"""The process-role authority. A DEV-ONLY role (fixture adapters) must never run in a production
+environment — even with an otherwise-hardened config — and it must refuse BEFORE any
+database/network/store creation. Every production entry point routes through the same authority."""
 
 import pytest
 from docs.contracts.authority import unarrived_sunset
@@ -17,6 +16,8 @@ def _hardened(**overrides):
         s3_bucket="kyc-evidence", ocr_engine="tesseract", email_provider="ses",
         adapters_profile="real", read_auth_required=True, ui_enabled=False,
         ui_admin_token="t" * 32,
+        floqer_api_key="floq_placeholder-not-a-real-key",
+        floqer_shortcut_id="00000000-0000-0000-0000-000000000000",
         hmac_inbound_key_id="k-in", hmac_inbound_secret="i" * 40,
         hmac_outbound_key_id="k-out", hmac_outbound_secret="o" * 40,
         hmac_v1_inbound_sunset_at=unarrived_sunset(365),
@@ -79,9 +80,9 @@ def test_production_workers_validate_before_engine(monkeypatch, module, role):
 
 
 class TestCutoverStartGate:
-    """Re-audit `f2929f8..6a4cd87` F4: the attest-new-value cutover step is an EXECUTABLE start
-    gate — a publisher-bearing process whose live ceiling differs from the attested target refuses
-    to boot, in any environment; non-publisher roles and an unset target are unaffected."""
+    """The attest-new-value cutover step is an EXECUTABLE start gate — a publisher-bearing process
+    whose live ceiling differs from the attested target refuses to boot, in any environment;
+    non-publisher roles and an unset target are unaffected."""
 
     def test_mismatched_publisher_refuses_in_production(self):
         s = _hardened(outbox_max_attempts=8, outbox_max_attempts_attested=12)

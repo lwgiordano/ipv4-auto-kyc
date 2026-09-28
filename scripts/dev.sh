@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-command local stack: ephemeral Postgres → migrations → API (+ /ui ops
-# console) → dev worker (fixture adapters) → fake platform callback receiver.
+# console) → dev worker (fixtures, or live registries when CH_API_KEY is set) → fake platform
+# callback receiver.
 #
 #   bash scripts/dev.sh          # Ctrl-C tears everything down
 #
@@ -9,6 +10,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT"
+# Local secrets and overrides. .env is git-ignored; export every line of it so variables the
+# tool reads straight from the environment (CH_API_KEY, ARIN_API_KEY) reach the workers too —
+# the settings loader only reads the KYC_-prefixed ones from the file by itself. One KEY=value
+# per line; quote a value that contains spaces. Anything this script exports below still wins.
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || { echo "no .venv — run ./manage.sh setup first" >&2; exit 1; }
 
@@ -35,7 +41,9 @@ PIDS=()
 
 cleanup() {
   echo; echo "shutting down…"
-  for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
+  # ${PIDS[@]:-} on an empty array is an unbound-variable error under `set -u` in bash 3.2,
+  # which is what macOS ships -- and it aborts cleanup, leaving Postgres running.
+  for pid in ${PIDS[@]+"${PIDS[@]}"}; do kill "$pid" 2>/dev/null || true; done
   as_pg_user "$PGBIN/pg_ctl -D $PGDIR/data -m immediate stop" 2>/dev/null || true
   rm -rf "$PGDIR"
 }
@@ -61,10 +69,28 @@ export KYC_UI_ENABLED="${KYC_UI_ENABLED:-true}"
 echo "→ migrations"
 "$ROOT/.venv/bin/alembic" upgrade head >/dev/null
 
+# Scoring, brokers and Salesforce mappings are editable in the console only after the drained
+# activation production uses: bundle pinning epoch, then live configuration revision 1. A fresh
+# database with nothing running yet IS the drained state, so this stack activates on every
+# start. Every process below inherits the flag and the credential; the console sends the
+# credential with each save (the app's proxy pre-fills it; by hand, paste it under Options).
+export KYC_UI_ADMIN_TOKEN="${KYC_UI_ADMIN_TOKEN:-dev-admin}"
+export KYC_ENFORCE_BUNDLE_PINNING=true
+echo "→ live configuration (bundle pinning epoch, revision 1)"
+{ read -r BUNDLE_HASH; read -r ENGINE; } < <("$PY" -c 'from kyc_tool.config import get_settings
+from kyc_tool.domain.engine import ENGINE_BUILD_ID
+from kyc_tool.policy.loader import load_policy
+print(load_policy(get_settings().policy_dir).bundle_hash); print(ENGINE_BUILD_ID)')
+"$PY" -m kyc_tool.ops.seed_policy_bundle --expect-hash "$BUNDLE_HASH" >/dev/null
+"$PY" -m kyc_tool.ops.activate_bundle_pinning_epoch \
+  --expect-bundle-hash "$BUNDLE_HASH" --expect-engine "$ENGINE" >/dev/null
+"$PY" -m kyc_tool.ops.activate_live_configuration \
+  --apply --attest-writers-stopped --operator-label dev-stack >/dev/null
+
 echo "→ fake platform receiver on :$RECEIVER_PORT"
 "$PY" scripts/dev_receiver.py "$RECEIVER_PORT" & PIDS+=($!)
 
-echo "→ dev worker (fixture adapters: Acme Networks Ltd walks to approve)"
+echo "→ dev worker (fixtures unless CH_API_KEY is set: Acme Networks Ltd walks to approve)"
 "$PY" -m kyc_tool.workers.dev_worker & PIDS+=($!)
 
 echo "→ API + ops console on :$API_PORT"
@@ -78,6 +104,8 @@ cat <<EOF
   │  Ops console   http://127.0.0.1:$API_PORT/ui              │
   │  API           http://127.0.0.1:$API_PORT               │
   │  Callbacks     .substrate/state/callbacks.log        │
+  │  Editing       Scoring, Brokers, Mappings are live;  │
+  │                credential $KYC_UI_ADMIN_TOKEN        │
   │                                                     │
   │  Try: Composer → send kyb.run_requested (template   │
   │  is Acme) → open the case → watch checks/score/     │

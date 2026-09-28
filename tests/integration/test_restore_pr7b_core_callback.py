@@ -1,5 +1,4 @@
-"""The governed schema-012 restore CLI (Codex re-audit `f495de8` F1, hardened `538e55e..42e1c7d`
-F2/F3).
+"""The governed schema-012 restore CLI.
 
 The pasted-SQL restore procedure was circular: the diagnostic stayed red until the restore,
 the sequence repair was documented as reachable only after cutover step 2, and the repair knew
@@ -61,7 +60,7 @@ def _verify(url):
 def _seed_and_prune(url, tmp_path, *, gap_to: int | None = None):
     """One case with a delivered, previously-retried, nested-unicode callback; capture the
     evidence tuple exactly as the runbook prescribes (from the row = the backup), then prune it.
-    With `gap_to`, the pruned row's id is bumped ABOVE current max first — the F1 collision
+    With `gap_to`, the pruned row's id is bumped ABOVE current max first — the collision
     shape (original id above the sequence high-water)."""
     engine = create_engine(url)
     payload = json.dumps(
@@ -105,7 +104,7 @@ def _seed_and_prune(url, tmp_path, *, gap_to: int | None = None):
 
 
 def test_restore_above_high_water_floors_the_sequence_and_greens_the_diagnostic(pg, tmp_path):
-    """The audit's exact trigger: current max(id)=10-ish, authoritative missing id=100. The
+    """The collision trigger: current max(id)=10-ish, authoritative missing id=100. The
     restore must insert id 100, restart the sequence PAST it (101) in the same transaction,
     pass both read-backs, and turn the diagnostic green — no separate circular repair step."""
     url = _fresh_db(pg, "kyc_restore_gap")
@@ -151,7 +150,7 @@ def test_restore_above_high_water_floors_the_sequence_and_greens_the_diagnostic(
     {"decision_id": "d-nope"},            # no matching automatic decision
     {"case_id": "c-nope"},                # body tuple disagrees
     {"original_kind": "poc_email"},       # only decision_callback is restorable (schema Literal)
-    {"original_status": "pending"},       # F1: only DELIVERED (terminal) may be restored (Literal)
+    {"original_status": "pending"},       # only DELIVERED (terminal) may be restored (Literal)
     {"original_delivered_at": None},      # a delivered row must carry the timestamp
 ])
 def test_one_changed_evidence_component_refuses_and_writes_nothing(pg, tmp_path, mutation):
@@ -195,7 +194,7 @@ def test_expect_id_mismatch_wrong_revision_and_existing_row_all_refuse(pg, tmp_p
 
 
 def test_injected_sendable_callback_is_refused_at_the_root(pg, tmp_path):
-    """Re-audit `8377440` F1: the exploit was manufacturing a SENDABLE (pending) callback with an
+    """The exploit was manufacturing a SENDABLE (pending) callback with an
     attacker body from a self-consistent file. The versioned schema now closes `status` to a Literal
     `delivered` — a pending restore is refused at validation (schema layer), so no injected body can
     ever be claimed, signed, or sent, even before the manifest anchor is considered."""
@@ -226,9 +225,9 @@ def test_injected_sendable_callback_is_refused_at_the_root(pg, tmp_path):
 
 
 def test_dry_run_and_apply_agree_on_a_value_that_only_fails_deep(pg, tmp_path):
-    """Re-audit `8377440` F2 + `538e55e..42e1c7d` F3: a malformed timestamp used to pass DRY-RUN
-    and blow up under --apply with a traceback leaking payload_json. The versioned schema now
-    refuses it pre-DB in BOTH modes identically — no traceback, no payload in the output."""
+    """A malformed timestamp used to pass DRY-RUN and blow up under --apply with a traceback
+    leaking payload_json. The versioned schema now refuses it pre-DB in BOTH modes identically —
+    no traceback, no payload in the output."""
     url = _fresh_db(pg, "kyc_restore_parity")
     command.upgrade(_config(url), "012")
     evidence, path = _seed_and_prune(url, tmp_path)
@@ -251,7 +250,7 @@ def test_dry_run_and_apply_agree_on_a_value_that_only_fails_deep(pg, tmp_path):
 
 
 def test_apply_requires_the_manifest_digest(pg, tmp_path):
-    """F2: `--expect-manifest-digest` is mandatory — the file cannot self-certify. Omitting it is
+    """The `--expect-manifest-digest` flag is mandatory — the file cannot self-certify. Omitting it is
     an argparse error, so a restore can never run without the out-of-band anchor."""
     url = _fresh_db(pg, "kyc_restore_needs_manifest")
     command.upgrade(_config(url), "012")
@@ -263,7 +262,7 @@ def test_apply_requires_the_manifest_digest(pg, tmp_path):
 
 
 def test_stale_manifest_refuses_a_tampered_file(pg, tmp_path):
-    """F2 (Codex's exact repro): the file is NOT self-certifying. An attacker who rewrites the
+    """The file is NOT self-certifying. An attacker who rewrites the
     delivered body and recomputes the file's OWN body_digest cannot match the out-of-band integrity
     digest; passing the original integrity digest against the tampered file refuses before any DB
     work, so a falsified backup cannot be committed as immutable delivered evidence."""
@@ -323,18 +322,18 @@ def _corrupt_not_json(ev):
 
 
 def _corrupt_deep_payload(ev):
-    # F9: payload_json is valid JSON syntax but deeply nested — json.loads raises RecursionError,
+    # The payload_json is valid JSON syntax but deeply nested — json.loads raises RecursionError,
     # which must be translated to a payload-free refusal, not escape as a traceback.
     return json.dumps({**ev, "payload_json": "[" * 20000 + "]" * 20000})
 
 
 def _corrupt_deep_outer(ev):
-    # F9: the OUTER evidence JSON is deeply nested (and not an object) — same RecursionError boundary.
+    # The OUTER evidence JSON is deeply nested (and not an object) — same RecursionError boundary.
     return "[" * 20000 + "]" * 20000
 
 
 def _corrupt_oversize(ev):
-    # F9: the file exceeds the byte ceiling — refused before parsing, so nesting/parse cost is bounded.
+    # The file exceeds the byte ceiling — refused before parsing, so nesting/parse cost is bounded.
     return json.dumps({**ev, "original_last_error": "a" * (1 << 20)})
 
 
@@ -344,8 +343,8 @@ def _corrupt_oversize(ev):
     _corrupt_deep_payload, _corrupt_deep_outer, _corrupt_oversize,
 ])
 def test_malformed_evidence_refuses_cleanly_in_both_modes(pg, tmp_path, corruptor):
-    """F3 + F9: every malformed shape (non-object body, top-level array, naive timestamp, unknown
-    field, missing version, bad digest, non-JSON, deeply nested payload/outer JSON, oversize file) is
+    """Every malformed shape (non-object body, top-level array, naive timestamp, unknown field,
+    missing version, bad digest, non-JSON, deeply nested payload/outer JSON, oversize file) is
     a stable payload-free refusal in BOTH dry-run and apply — never a traceback (the old
     `payload_json="[]"` → AttributeError, or a deep-nesting RecursionError), never a DB change."""
     url = _fresh_db(pg, f"kyc_restore_bad_{corruptor.__name__[9:]}")
@@ -367,7 +366,7 @@ def test_malformed_evidence_refuses_cleanly_in_both_modes(pg, tmp_path, corrupto
 
 
 def test_restore_refuses_a_non_regular_evidence_input_without_blocking(pg, tmp_path):
-    """Re-audit `d3c0852..23e005e` F7: a FIFO/special input is refused BEFORE opening — an
+    """A FIFO/special input is refused BEFORE opening — an
     open-for-read would block forever with no writer. The subprocess returns boundedly (well within
     its timeout) with a governed refusal and no traceback."""
     import os
@@ -384,7 +383,7 @@ def test_restore_refuses_a_non_regular_evidence_input_without_blocking(pg, tmp_p
 
 
 def test_restore_refuses_a_symlinked_evidence_path(pg, tmp_path):
-    """Re-audit `d569a15..4938840` F10: the reader opens with O_NOFOLLOW and fstat's the SAME
+    """The reader opens with O_NOFOLLOW and fstat's the SAME
     descriptor, so a symlinked evidence path — the vector a stat()-then-open() TOCTOU relied on to
     swap a regular target to a FIFO after the check — is refused outright, with no swap window."""
     import os as _os
@@ -404,7 +403,7 @@ def test_restore_refuses_a_symlinked_evidence_path(pg, tmp_path):
 
 
 def test_schema_refusal_never_echoes_an_unknown_evidence_key(pg, tmp_path):
-    """Re-audit `d3c0852..23e005e` F8: an extra (unknown) JSON key is attacker-controlled; the schema
+    """An extra (unknown) JSON key is attacker-controlled; the schema
     refusal must COUNT it, never print it. Only declared field names may ever appear in a refusal."""
     url = _fresh_db(pg, "kyc_restore_key_leak")
     command.upgrade(_config(url), "012")
@@ -425,7 +424,7 @@ def test_schema_refusal_never_echoes_an_unknown_evidence_key(pg, tmp_path):
 
 
 def test_semantic_refusal_never_echoes_an_evidence_field_value(pg, tmp_path):
-    """F10: a digest-matched file whose decision_id carries a unique marker must refuse (no matching
+    """A digest-matched file whose decision_id carries a unique marker must refuse (no matching
     automatic decision) WITHOUT printing that marker — or any candidate evidence value — anywhere.
     An attacker controls the evidence fields; echoing them into the operator log is a leak and a
     log-injection vector. The refusal names only the failed invariant/fields."""

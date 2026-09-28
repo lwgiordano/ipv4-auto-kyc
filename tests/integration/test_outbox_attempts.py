@@ -1,4 +1,4 @@
-"""PR 7b-core: the pre-HTTP attempt authority, and the witness taxonomy it makes possible.
+"""The pre-HTTP attempt authority, and the witness taxonomy it makes possible.
 
 `outbox.callback_wire_sha256` is written in the fenced terminal transaction — one transaction too
 late to be evidence. This suite exercises the publisher's own documented residual (HTTP returns
@@ -24,10 +24,10 @@ from tests.integration.test_outbox_supersession import _enqueue_cb, _seed_decisi
 
 pytestmark = pytest.mark.postgres
 
-# Minimal but PRODUCTION-VALID outbox settings for the F1 accounting tests: the lease (int, ge=1)
-# must exceed 4 × http_timeout + margin = 4 × 0.1 + 0.5 = 0.9, and 1 does. This is the exact tuple
-# whose race Codex reproduced (`538e55e..42e1c7d` F1): a claim that is valid at claim time yet has
-# little lease left by the time the send starts.
+# Minimal but PRODUCTION-VALID outbox settings for the admission-accounting tests: the lease (int,
+# ge=1) must exceed 4 × http_timeout + margin = 4 × 0.1 + 0.5 = 0.9, and 1 does. This is the exact
+# tuple that reproduces the race: a claim that is valid at claim time yet has little lease left by
+# the time the send starts.
 _F1_SETTINGS = {
     "outbox_http_timeout_seconds": 0.1,
     "outbox_lease_margin_seconds": 0.5,
@@ -59,7 +59,7 @@ def _attempts(session_factory, run_id):
 def test_send_before_stamp_still_leaves_the_exact_request_digest(
     session_factory, publisher, callback_capture, monkeypatch, clean_db
 ):
-    """THE finding. 2xx received, terminal transaction faults → row stays pending with a NULL
+    """The core residual: 2xx received, terminal transaction faults → row stays pending with a NULL
     terminal digest, but the attempt row holds the digest of the exact bytes that were sent, and
     the row classifies as `send_intent_witnessed` rather than as never-delivered."""
     _seed_decisions(session_factory, "ca", [1])
@@ -253,8 +253,8 @@ def test_retention_never_prunes_the_only_evidence_a_row_was_sent(session_factory
 def test_attempt_rows_are_immutable_at_the_database(
     session_factory, publisher, monkeypatch, clean_db
 ):
-    """Re-audit F6: "insert-only" was a code-comment contract; now it is a trigger. UPDATE is
-    always refused; DELETE is refused while the attempt is the row's sole evidence."""
+    """The "insert-only" contract is a trigger, not just a code comment. UPDATE is always
+    refused; DELETE is refused while the attempt is the row's sole evidence."""
     _seed_decisions(session_factory, "ci", [1])
     _enqueue_cb(session_factory, "ci", 1)
 
@@ -278,8 +278,8 @@ def test_attempt_rows_are_immutable_at_the_database(
 
 
 def test_digest_cannot_land_on_an_undelivered_row(session_factory, clean_db):
-    """Re-audit F6: without the status binding, a raw digest on a pending row reads as
-    delivery_witnessed and licenses deleting its real attempts. The database now refuses."""
+    """Without the status binding, a raw digest on a pending row reads as delivery_witnessed and
+    licenses deleting its real attempts. The database now refuses."""
     _seed_decisions(session_factory, "cj", [1])
     _enqueue_cb(session_factory, "cj", 1)
     with session_factory() as s:
@@ -293,9 +293,9 @@ def test_digest_cannot_land_on_an_undelivered_row(session_factory, clean_db):
 
 
 def test_terminal_cannot_stamp_a_digest_no_attempt_recorded(session_factory, publisher, clean_db):
-    """Re-audit F6: `_record_delivered` must prove the matching attempt (same claim, same digest,
-    same encoding) exists before stamping a terminal digest. A terminal that cannot is a no-op —
-    the row stays pending rather than gaining a witness for bytes nothing ever staged."""
+    """`_record_delivered` must prove the matching attempt (same claim, same digest, same encoding)
+    exists before stamping a terminal digest. A terminal that cannot is a no-op — the row stays
+    pending rather than gaining a witness for bytes nothing ever staged."""
     _seed_decisions(session_factory, "ck", [1])
     _enqueue_cb(session_factory, "ck", 1)
     with session_factory() as s:  # claim the row by hand: live claim, but NO attempt row
@@ -322,10 +322,9 @@ def test_terminal_cannot_stamp_a_digest_no_attempt_recorded(session_factory, pub
 def test_death_after_attempt_commit_before_send_is_intent_not_transmission(
     session_factory, publisher, callback_capture, monkeypatch, clean_db
 ):
-    """Re-audit F9: kill the process after `_record_attempt` commits and before `http.send`
-    opens a socket. The attempt row exists, ZERO bytes moved — which is why the state is named
-    send_intent_witnessed and the reconciliation treats it as "ask the platform", never as
-    proof of transmission."""
+    """Kill the process after `_record_attempt` commits and before `http.send` opens a socket. The
+    attempt row exists, ZERO bytes moved — which is why the state is named send_intent_witnessed and
+    the reconciliation treats it as "ask the platform", never as proof of transmission."""
     _seed_decisions(session_factory, "cl", [1])
     _enqueue_cb(session_factory, "cl", 1)
 
@@ -344,9 +343,9 @@ def test_death_after_attempt_commit_before_send_is_intent_not_transmission(
 
 
 def test_live_metrics_query_never_scans_terminal_history(session_factory, clean_db):
-    """Re-audit F7: the exact endpoint SQL against 100k terminal rows must use 014's partial
-    live-status index, not a sequential scan of history that grows for the life of the system.
-    Pins the PLAN, not the values — the values were always right; the cost was the defect."""
+    """The exact endpoint SQL against 100k terminal rows must use 014's partial live-status index, not
+    a sequential scan of history that grows for the life of the system. Pins the PLAN, not the
+    values — the values were always right; the cost was the defect."""
     from kyc_tool.api.routes_metrics import LIVE_OUTBOX_SQL
 
     with session_factory() as s:
@@ -376,10 +375,10 @@ def test_live_metrics_query_never_scans_terminal_history(session_factory, clean_
 def test_decision_terminal_without_receipt_writes_nothing(
     session_factory, publisher, clean_db
 ):
-    """Re-audit 4dfdf8a F1 — THE bypass, closed at the kind. `_record_delivered(row, token)` on a
-    live-claimed decision callback used to stamp delivered/COMPLETE/published_at with no witness,
-    while the taxonomy called the same row not_accepted. The requirement is now the ROW's: no
-    receipt, no write of any kind."""
+    """The receipt bypass, closed at the kind. `_record_delivered(row, token)` on a live-claimed
+    decision callback used to stamp delivered/COMPLETE/published_at with no witness, while the
+    taxonomy called the same row not_accepted. The requirement is now the ROW's: no receipt, no
+    write of any kind."""
     _seed_decisions(session_factory, "cn", [1])
     _enqueue_cb(session_factory, "cn", 1)
     with session_factory() as s:
@@ -452,8 +451,8 @@ def test_every_delivered_decision_row_is_delivery_witnessed(
 def test_receipt_naming_a_different_attempt_writes_nothing(
     session_factory, publisher, callback_capture, monkeypatch, clean_db
 ):
-    """Re-audit 0c46443 F1: attempt_id is an AUTHORITY input now — a well-formed receipt whose id
-    names some OTHER attempt (right claim, right digest, wrong identity) is a no-op terminal."""
+    """`attempt_id` is an AUTHORITY input — a well-formed receipt whose id names some OTHER attempt
+    (right claim, right digest, wrong identity) is a no-op terminal."""
     from kyc_tool.outbox.publisher import DeliveryReceipt
 
     _seed_decisions(session_factory, "cr2", [1])
@@ -491,7 +490,7 @@ def test_receipt_naming_a_different_attempt_writes_nothing(
                          {"i": row.id}).scalar_one() == "delivered"
 
 
-# --- F1: attempt accounting is admission-timed, not send-timed (`538e55e..42e1c7d`) -----------
+# --- Attempt accounting is admission-timed, not send-timed ------------------------------------
 
 
 def test_attempt_is_counted_at_admission_before_the_send(session_factory, clean_db, settings):
@@ -578,10 +577,9 @@ def _admit_then_crash(pub, session_factory, prod, case):
 
 
 def test_max1_crash_reclaim_dead_letters_without_a_second_send(session_factory, clean_db, settings):
-    """Re-audit `42e1c7d..b39b82a` F1: with max_attempts=1, a publisher that admits (attempts=1)
-    then dies must NOT be re-sent by the reclaimer — a second network call would breach the send
-    ceiling. The reclaim RECONCILES the crashed attempt straight to dead-letter with ZERO new
-    sends and no second attempt row."""
+    """With max_attempts=1, a publisher that admits (attempts=1) then dies must NOT be re-sent by the
+    reclaimer — a second network call would breach the send ceiling. The reclaim RECONCILES the
+    crashed attempt straight to dead-letter with ZERO new sends and no second attempt row."""
     _seed_decisions(session_factory, "gm", [1])
     _enqueue_cb(session_factory, "gm", 1)
     prod = settings.model_copy(update={**_F1_SETTINGS, "outbox_max_attempts": 1})
@@ -604,9 +602,9 @@ def test_max1_crash_reclaim_dead_letters_without_a_second_send(session_factory, 
 def test_malformed_int4_max_attempts_row_dead_letters_with_no_send_no_overflow(
     session_factory, clean_db, settings
 ):
-    """Re-audit `d569a15..4938840` F6: a row whose attempts is already at the int4 boundary (only
-    reachable via a malformed import) is dead-lettered by the pre-admission ceiling check with ZERO
-    external sends and no `integer out of range` — it is NOT admitted, incremented and wedged."""
+    """A row whose attempts is already at the int4 boundary (only reachable via a malformed import) is
+    dead-lettered by the pre-admission ceiling check with ZERO external sends and no `integer out of
+    range` — it is NOT admitted, incremented and wedged."""
     from kyc_tool.config import PG_INT4_MAX
 
     _seed_decisions(session_factory, "ov", [1])
@@ -637,10 +635,10 @@ def test_malformed_int4_max_attempts_row_dead_letters_with_no_send_no_overflow(
 def test_negative_attempts_row_fails_closed_with_no_send(
     session_factory, clean_db, settings, bad_attempts
 ):
-    """Re-audit `8aba2df..2cee937` R3-F3: a malformed NEGATIVE attempts counter is not a sendable
-    state. `outbox.attempts` is int4 with no >= 0 floor, so a negative value made the ceiling check
-    (`attempts >= max`) practically unreachable and licensed sends past the limit (INT4_MIN ⇒ ~2^31).
-    The row is now dead-lettered before any transport, for both int4-min and -1."""
+    """A malformed NEGATIVE attempts counter is not a sendable state. `outbox.attempts` is int4 with
+    no >= 0 floor, so a negative value made the ceiling check (`attempts >= max`) practically
+    unreachable and licensed sends past the limit (INT4_MIN ⇒ ~2^31). The row is now dead-lettered
+    before any transport, for both int4-min and -1."""
     _seed_decisions(session_factory, "nv", [1])
     _enqueue_cb(session_factory, "nv", 1)
     with session_factory() as s:
@@ -666,8 +664,8 @@ def test_negative_attempts_row_fails_closed_with_no_send(
 
 
 def test_negative_attempts_poc_email_fails_closed_and_redacts(session_factory, clean_db, settings):
-    """R3-F3 (POC arm): a negative-attempts poc_email is dead-lettered with ZERO provider calls and
-    its raw-token body redacted — fail-closed, not sent."""
+    """A negative-attempts poc_email is dead-lettered with ZERO provider calls and its raw-token body
+    redacted — fail-closed, not sent."""
     from kyc_tool.outbox.publisher import enqueue_poc_email
 
     with session_factory() as s:
@@ -694,10 +692,9 @@ def test_negative_attempts_poc_email_fails_closed_and_redacts(session_factory, c
 def test_max2_crash_reclaim_backs_off_then_a_later_cycle_sends_attempt_2(
     session_factory, clean_db, settings
 ):
-    """Re-audit `42e1c7d..b39b82a` F1: with max_attempts=2 the reclaim of a crashed attempt only
-    RECONCILES + backs off (no same-cycle send); the crashed attempt stays counted (1); a LATER
-    due (fresh) claim alone sends attempt 2, and dead-letter is reached after exactly two real
-    sends."""
+    """With max_attempts=2 the reclaim of a crashed attempt only RECONCILES + backs off (no same-cycle
+    send); the crashed attempt stays counted (1); a LATER due (fresh) claim alone sends attempt 2,
+    and dead-letter is reached after exactly two real sends."""
     _seed_decisions(session_factory, "gn", [1])
     _enqueue_cb(session_factory, "gn", 1)
     prod = settings.model_copy(update={
@@ -730,8 +727,8 @@ def test_max2_crash_reclaim_backs_off_then_a_later_cycle_sends_attempt_2(
 
 
 def test_admission_never_shortens_a_healthy_claim(session_factory, clean_db, settings):
-    """Re-audit `42e1c7d..b39b82a` F2: admission EXTENDS, never SHORTENS. A healthy 300s claim
-    keeps its lease (GREATEST), rather than being cut to the ~0.9s attempt budget."""
+    """Admission EXTENDS, never SHORTENS. A healthy 300s claim keeps its lease (GREATEST), rather than
+    being cut to the ~0.9s attempt budget."""
     _seed_decisions(session_factory, "gh", [1])
     _enqueue_cb(session_factory, "gh", 1)
     prod = settings.model_copy(update={
@@ -754,16 +751,16 @@ def test_admission_never_shortens_a_healthy_claim(session_factory, clean_db, set
     assert after >= before  # healthy 300s lease not shortened to the smaller attempt budget
 
 
-# --- F2: lowering outbox_max_attempts must not permit one more send (`b39b82a..b53daf4`) --------
+# --- Lowering outbox_max_attempts must not permit one more send ---------------------------------
 
 
 def test_lowering_max_attempts_dead_letters_at_ceiling_without_a_send(
     session_factory, clean_db, settings
 ):
-    """Re-audit `b39b82a..b53daf4` F2: a cleanly-released pending row left at/over the ceiling when
-    an operator LOWERS outbox_max_attempts is dead-lettered on the next claim WITHOUT another
-    external call. The normal claim path (prev_claim_token NULL) skipped the ceiling before this fix
-    and would send once more past the new max — expired-claim reconciliation only covers a crash."""
+    """A cleanly-released pending row left at/over the ceiling when an operator LOWERS
+    outbox_max_attempts is dead-lettered on the next claim WITHOUT another external call. Without
+    the on-claim ceiling guard, the normal claim path (prev_claim_token NULL) would send once more
+    past the new max — expired-claim reconciliation only covers a crash."""
     _seed_decisions(session_factory, "gp", [1])
     _enqueue_cb(session_factory, "gp", 1)
     sends: list[int] = []
@@ -796,10 +793,11 @@ def test_lowering_max_attempts_dead_letters_at_ceiling_without_a_send(
 
 
 def test_backoff_saturates_below_timestamptz_overflow(session_factory, clean_db, settings):
-    """Re-audit `d3c0852..23e005e` F5: the backoff schedule (base × 2**(attempts-1)) is CAPPED so
+    """The backoff schedule (base × 2**(attempts-1)) is CAPPED so
     `now() + make_interval(secs => delay)` can never overflow PostgreSQL's timestamptz. Previously,
-    a production-valid `outbox_max_attempts=64` / base=10 reached ~10×2**62 s and faulted mid-write,
-    leaving the row pending, claimed and unredacted. One shared helper feeds failure AND reconcile."""
+    a production-valid `outbox_max_attempts=64` / base=10 reached ~10×2**62 s and faulted
+    mid-write, leaving the row pending, claimed and unredacted. One shared helper feeds failure AND
+    reconcile."""
     from kyc_tool.outbox.publisher import _MAX_BACKOFF_SECONDS
 
     prod = settings.model_copy(update={"outbox_backoff_base_seconds": 10, "outbox_max_attempts": 64})
@@ -834,9 +832,8 @@ class _RaisingEmail:
 def test_ceiling_dead_letter_redacts_a_poc_body_and_does_not_resend(
     session_factory, clean_db, settings
 ):
-    """Re-audit `b39b82a..b53daf4` F2 (POC arm): the on-claim ceiling dead-letter redacts a POC
-    email body (it carries the raw token) exactly like every other terminal, and calls the provider
-    ZERO more times."""
+    """The on-claim ceiling dead-letter redacts a POC email body (it carries the raw token) exactly
+    like every other terminal, and calls the provider ZERO more times."""
     from kyc_tool.outbox.publisher import enqueue_poc_email
 
     with session_factory() as s:

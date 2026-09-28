@@ -7,15 +7,25 @@ import httpx
 
 RECORDED = Path(__file__).parent.parent / "fixtures" / "recorded"
 
+# A case is ONE registrant, so every kyb.run_requested carries the contact and the platform's
+# account id for that person.
 ACME_KYB = {
     "company_legal_name": "Acme Networks Ltd",
     "address": "1 Main Street, London, EC1A 1AA",
     "registration_number": "12345678",
     "jurisdiction": "GB",
     "website": "https://acme.example",
+    "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example", "title": "Operations Lead"},
+    "platform_account_id": "acct-acme-1",
 }
 
-ACME_KYB_WITH_CONTACT = {**ACME_KYB, "contact": {"name": "Jane Doe", "title": "Director"}}
+# The registrant FLOQER_RECORDS discovered on LinkedIn. Only this contact matches that profile,
+# so the baseline above keeps the LinkedIn check failing exactly as it did before a contact was
+# required, and this one is the fixture for the match.
+ACME_KYB_WITH_CONTACT = {
+    **ACME_KYB,
+    "contact": {"name": "Jane Doe", "email": "jane.doe@acme.example", "title": "Director"},
+}
 
 POC_DIRECTORY = {
     "arin:JD123-ARIN": {

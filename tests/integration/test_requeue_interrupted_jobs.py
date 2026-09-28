@@ -1,6 +1,6 @@
-"""Cutover recovery one-shot (PR 5b §10 step 3): requeues every `running` job
-after all pipeline workers are confirmed stopped, without consuming the
-forced-stop attempt the claim already counted."""
+"""Cutover recovery one-shot: requeues every `running` job after all pipeline
+workers are confirmed stopped, without consuming the forced-stop attempt the
+claim already counted."""
 
 import pytest
 from sqlalchemy import text

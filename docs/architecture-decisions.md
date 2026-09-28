@@ -4,6 +4,32 @@ A running log of significant decisions and their rationale. Newest first.
 
 ---
 
+## ADR-009 — Shared configuration with future-run snapshots (2026-09-11)
+
+The approved console configuration design uses immutable database revisions and
+one active pointer, reusing the policy bundle store and per-run pinning. Each
+revision includes the full broker list (stable IDs and notes) and destination
+mappings. Admissions pin the active revision under the transaction lock; saves
+affect new runs, including new runs for existing companies, never prior runs or
+replays. Broker snapshots and per-run match provenance are pulled forward from
+PR 10 into configuration `024`; its remaining scope stays in `029`. Pending
+platform activation/revalidation/queue/evidence reservations are `025`–`028`.
+Nothing enables platform ordering or M2, or changes callback/manual semantics.
+
+Approved deviation `AUDIT:D-LIVE-CONFIG`: editable exact-integer points are 0–1000.
+ORG-ID and POC per-type caps follow their edited single-check weight, including
+matching derived description metadata, rather than retaining packaged 25-point
+caps. Each type still counts once; threshold, gates, and evidence rules are fixed.
+The normative package remains unmodified. Mapping saves affect destination keys
+on subsequent projection reads, not values or Salesforce itself.
+
+Activation is explicit and drained, requires pinning plus a nonempty admin token,
+and refuses unfinished legacy work or invalid baselines. Schema installation
+alone does not enable it. No historical broker snapshots are fabricated; recover
+settings with new revisions, not pointer resets. See `docs/DEPLOYMENT.md` §12 for
+the shipped CLI and recovery contract. Shared-token authentication and the entered
+operator label are recorded separately; neither proves an individual's identity.
+
 ## ADR-008 — Local delivery evidence vs platform authority (PR 7b)
 
 **Context.** PR 7b-core (migrations `013`-`023`) built an in-database witness

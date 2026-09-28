@@ -1,4 +1,4 @@
-"""Read-only ops PREREQUISITE preflight (PR 7b-core; re-audit `538e55e..42e1c7d` F12).
+"""Read-only ops PREREQUISITE preflight.
 
 Run this BEFORE pausing service. The governed maintenance commands (restore/repair) enforce
 sequence ownership only after their documented hard stop, so a wrong production credential is
@@ -29,9 +29,9 @@ def check_prerequisites(
     the governed schema, requires EXACTLY the phase the operator is preflighting for (the restore
     path is `012`; a 013 DB is a different governed problem), validates sequence backing, and sets
     the timeout budgets — it takes NO maintenance lock. `require_sequence_owner=False` so this
-    REPORTS ownership instead of refusing; we then read role/owner and roll back. The phase is part
-    of the exit condition (a wrong schema refuses via BindingRefused — re-audit `42e1c7d..b39b82a`
-    F5); exit 0 additionally requires the current role to OWN public.outbox_id_seq."""
+    REPORTS ownership instead of refusing; it then reads role/owner and rolls back. The phase is part
+    of the exit condition (a wrong schema refuses via BindingRefused); exit 0 additionally requires
+    the current role to OWN public.outbox_id_seq."""
     with session_factory() as s:
         binding.bind(s, lock_timeout_seconds=lock_timeout_seconds,
                      statement_timeout_seconds=statement_timeout_seconds,

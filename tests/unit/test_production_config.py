@@ -39,10 +39,10 @@ def test_hardened_config_has_no_violations():
         ({"adapters_profile": "fixture"}, "adapters_profile"),
         ({"read_auth_required": False}, "read_auth_required"),
         ({"ui_enabled": True, "ui_admin_token": ""}, "ui_admin_token is empty"),
-        ({"ui_admin_token": ""}, "ui_admin_token is empty"),  # required even with the UI off (F3)
-        # a zero backoff base retries a failing endpoint every cycle (re-audit F5)
+        ({"ui_admin_token": ""}, "ui_admin_token is empty"),  # required even with the UI off
+        # a zero backoff base retries a failing endpoint every cycle
         ({"outbox_backoff_base_seconds": 0}, "outbox_backoff_base_seconds"),
-        # HMAC v2 (PR 5a)
+        # HMAC v2
         ({"hmac_inbound_secret": ""}, "hmac_inbound_secret"),
         ({"hmac_outbound_secret": "short"}, "hmac_outbound_secret"),
         ({"hmac_inbound_key_id": ""}, "hmac_inbound_key_id"),
@@ -51,7 +51,7 @@ def test_hardened_config_has_no_violations():
         ({"hmac_v1_outbound_sunset_at": ""}, "hmac_v1_outbound_sunset_at"),
         ({"hmac_v1_observation_window_days": 0}, "observation window"),
         # malformed sunset dates must fail the kill switch at boot, not 500 at
-        # request/delivery time (audit finding 4): non-date and tz-naive.
+        # request/delivery time: non-date and tz-naive.
         ({"hmac_v1_inbound_sunset_at": "not-a-date"}, "timezone-aware ISO-8601"),
         ({"hmac_v1_outbound_sunset_at": "2026-10-01"}, "timezone-aware ISO-8601"),
     ],
@@ -64,17 +64,16 @@ def test_each_unsafe_condition_is_rejected(overrides, needle):
 
 
 def test_negative_backoff_base_is_rejected_at_construction():
-    """Re-audit `d3c0852..23e005e` F5: a negative backoff base produced immediate unthrottled
-    re-sends. It is now a construction-time validation error (Field ge=0), everywhere, not only in
-    production."""
+    """A negative backoff base would produce immediate unthrottled re-sends. It is a
+    construction-time validation error (Field ge=0), everywhere, not only in production."""
     with pytest.raises(ValidationError):
         hardened(outbox_backoff_base_seconds=-1)
 
 
 def test_max_attempts_above_int4_is_rejected_at_construction():
-    """Re-audit `d569a15..4938840` F6: outbox.attempts is a PostgreSQL int4 column. A ceiling above
-    int4 max is refused at construction (Field le=PG_INT4_MAX) so no accepted config can overflow the
-    admission write; the boundary value itself is accepted."""
+    """The `outbox.attempts` column is PostgreSQL int4. A ceiling above int4 max is refused at
+    construction (Field le=PG_INT4_MAX) so no accepted config can overflow the admission write; the
+    boundary value itself is accepted."""
     from kyc_tool.config import PG_INT4_MAX
 
     with pytest.raises(ValidationError):
@@ -83,10 +82,10 @@ def test_max_attempts_above_int4_is_rejected_at_construction():
 
 
 def test_job_max_attempts_above_int4_is_rejected_at_construction_and_in_production():
-    """Re-audit `8aba2df..2cee937` R3-F4: jobs.max_attempts is int4 and enqueue() flushes this value
-    into it, so a ceiling above int4 max would roll back a signed inbound event with
-    NumericValueOutOfRange. Refused at construction (Field le=PG_INT4_MAX); the boundary is accepted;
-    and an unvalidated model_copy above the bound is also caught by validate_for_production."""
+    """The `jobs.max_attempts` column is int4 and enqueue() flushes this value into it, so a ceiling
+    above int4 max would roll back a signed inbound event with NumericValueOutOfRange. Refused at
+    construction (Field le=PG_INT4_MAX); the boundary is accepted; and an unvalidated model_copy
+    above the bound is also caught by validate_for_production."""
     from kyc_tool.config import PG_INT4_MAX, production_config_violations
 
     with pytest.raises(ValidationError):
@@ -112,7 +111,7 @@ def test_bundle_pinning_flag_defaults_off_and_toggles():
 
 
 def test_production_allows_pinning_off():
-    # PR 6 is NOT boot-required in production; hardened() must still validate off.
+    # Bundle pinning is NOT boot-required in production; hardened() must still validate with it off.
     s = hardened(enforce_bundle_pinning=False)
     validate_for_production(s)   # must not raise
 
@@ -162,3 +161,21 @@ def test_lease_bound_is_declared_not_silently_clamped():
     The bound belongs to the settings layer, where exceeding it is an error the operator sees."""
     with pytest.raises(Exception, match="less than or equal to 3600|outbox_lease_seconds"):
         Settings(environment="development", outbox_lease_seconds=7200)
+
+
+def test_floqer_credentials_are_required_outside_the_fixture_profile():
+    """A live adapters profile runs the Floqer shortcut for real: without the key AND the
+    published shortcut id every case silently loses LinkedIn discovery. Inside the fixture
+    profile neither is needed — the fixture client places no call."""
+    blank = {"floqer_api_key": "", "floqer_shortcut_id": ""}  # explicit: the env must not decide
+    fixture = production_config_violations(hardened(adapters_profile="fixture", **blank))
+    assert not any("floqer" in v for v in fixture)
+
+    live = production_config_violations(hardened(**blank))
+    assert any("floqer_api_key" in v for v in live)
+    assert any("floqer_shortcut_id" in v for v in live)
+
+    configured = production_config_violations(
+        hardened(floqer_api_key="from-the-secret-manager", floqer_shortcut_id="shortcut-uuid")
+    )
+    assert not any("floqer" in v for v in configured)

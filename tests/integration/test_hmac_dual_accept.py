@@ -1,4 +1,4 @@
-"""HMAC dual-accept verifier (PR 5a §2/§3): v2 is sticky (any v2 header ⇒
+"""HMAC dual-accept verifier: v2 is sticky (any v2 header ⇒
 v2-only, no v1 fallback); v1 is accepted only before the inbound sunset."""
 
 import json
@@ -12,7 +12,8 @@ from tests.conftest import TEST_SECRET, envelope, sign_headers, sign_headers_v2
 
 pytestmark = pytest.mark.postgres
 
-KYB = {"company_legal_name": "Acme Networks Ltd", "jurisdiction": "GB"}
+KYB = {"company_legal_name": "Acme Networks Ltd", "jurisdiction": "GB",
+       "contact": {"name": "Robin Vale", "email": "robin.vale@acme.example"}, "platform_account_id": "acct-1"}
 
 
 def _client(settings, session_factory, policy):
@@ -26,7 +27,7 @@ def _body():
 def _green_witness(session_factory, *, days_ago: int = 30) -> None:
     """Drive the durable witness green — mirroring the real operator flow:
     observation active longer than the window, with NO v1 accepted inside it.
-    Only then may the inbound sunset take effect (audit finding 2)."""
+    Only then may the inbound sunset take effect."""
     with session_factory() as s:
         s.execute(
             text(
@@ -141,7 +142,7 @@ def test_v1_rejected_after_inbound_sunset_once_witness_green(
 def test_v1_still_accepted_after_sunset_date_when_witness_not_green(
     settings, session_factory, policy, clean_db
 ):
-    """Audit finding 2: the sunset date alone must never cut off v1. With the
+    """The sunset date alone must never cut off v1. With the
     witness inactive (clean_db seeds it so — observation never activated), a
     past sunset date STILL accepts v1, so a scheduled date cannot drop live
     traffic. Retirement waits for the green witness."""
@@ -153,7 +154,7 @@ def test_v1_still_accepted_after_sunset_date_when_witness_not_green(
 def test_present_but_empty_v2_header_still_locks_v2(
     dual_accept_settings, session_factory, policy, clean_db
 ):
-    """Audit finding 5: stickiness is by header PRESENCE. A valid v1 signature
+    """Stickiness is by header PRESENCE. A valid v1 signature
     plus a present-but-empty X-KYC-Signature-V2 must NOT fall back to v1."""
     c = _client(dual_accept_settings, session_factory, policy)
     body = _body()
@@ -165,7 +166,7 @@ def test_present_but_empty_v2_header_still_locks_v2(
 
 
 def test_v2_binds_raw_percent_encoded_path(dual_accept_settings, session_factory, policy, clean_db):
-    """Audit finding 6: the canonical path is the RAW request target, so a
+    """The canonical path is the RAW request target, so a
     percent-encoded case id, signed exactly as sent, authenticates (a
     framework-decoded canonicalization would reject it)."""
     c = _client(dual_accept_settings, session_factory, policy)

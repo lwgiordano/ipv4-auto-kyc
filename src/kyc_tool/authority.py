@@ -1,5 +1,4 @@
-"""The ambient EXTERNAL-CALL AUTHORITY (PR 10b slice 1 — the injected-gateway unification the
-`750630c..ca85355` re-audit reserved here).
+"""The ambient EXTERNAL-CALL AUTHORITY: the injected-gateway unification for every external call.
 
 One capability object (`RetryBudget`) carries every bound an external side effect must prove:
 the absolute monotonic deadline, the per-upstream rate permit, the DB claim-liveness re-proof,
@@ -12,9 +11,9 @@ EVERY layer that performs external I/O can prove through it without import knots
   heard of the authority still cannot read bytes under a lost claim or a spent budget;
 - provider protocols: `governed_delegate()` wraps any delegate callable in the same proof.
 
-The rule set is the audited one: proofs run immediately before the physical effect (permit →
-liveness → deadline); `remaining <= 0` is SPENT (exact equality included, single clock read);
-a revoked claim propagates StaleJobClaim and is never converted into upstream evidence."""
+The rule set: proofs run immediately before the physical effect (permit → liveness → deadline);
+`remaining <= 0` is SPENT (exact equality included, single clock read); a revoked claim
+propagates StaleJobClaim and is never converted into upstream evidence."""
 
 import time
 from contextlib import contextmanager
@@ -42,7 +41,7 @@ class RetryBudget:
     prove_live: object | None = None  # zero-arg callable: DB re-proof of the ambient claim
     max_response_bytes: int | None = None  # wire AND decoded cap for every governed payload
     # When True (settings.adapter_hard_kill_boundary), governed HTTP fetches on process-portable
-    # clients run in a fork-per-call subprocess the parent TERMINATES at the absolute deadline —
+    # clients run in a spawned child process the parent TERMINATES at the absolute deadline —
     # the unconditionally-killable occupancy bound the in-process checks cannot give.
     hard_kill: bool = False
 
@@ -64,10 +63,10 @@ def current_budget() -> RetryBudget | None:
 
 
 def remaining_or_spent(budget: RetryBudget, what: str) -> float:
-    """THE ONE deadline rule (re-audit `ddbff39..c3884bd` F3): remaining = deadline - clock, and
-    remaining <= 0 — exact equality included — is SPENT. Every boundary (pre-send, post-header,
-    mid-body, post-EOF, external I/O) proves through this helper with a single clock read, so no
-    site can drift back to a `>` comparison."""
+    """THE ONE deadline rule: remaining = deadline - clock, and remaining <= 0 — exact equality
+    included — is SPENT. Every boundary (pre-send, post-header, mid-body, post-EOF, external I/O)
+    proves through this helper with a single clock read, so no site can drift back to a `>`
+    comparison."""
     remaining = budget.deadline_monotonic - budget.clock()
     if remaining <= 0:
         raise BudgetExhausted(f"plan budget exhausted at {what} — refusing to proceed")
@@ -75,8 +74,8 @@ def remaining_or_spent(budget: RetryBudget, what: str) -> float:
 
 
 def authorize_external_io() -> float | None:
-    """Send-authority for NON-HTTP external I/O (re-audit `750630c..ca85355` F7: object-store
-    reads, OCR input fetches, provider-protocol delegates sat entirely outside the governed
+    """Send-authority for NON-HTTP external I/O (object-store reads, OCR input fetches and
+    provider-protocol delegates, which would otherwise sit entirely outside the governed
     helper). Same order as the HTTP send authority minus the rate permit: DB claim liveness
     re-proof, then the remaining-deadline proof. A lost/unprovable claim or a spent budget places
     ZERO external calls. No ambient budget = no-op (direct/unit callers). Returns remaining

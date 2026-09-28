@@ -1,4 +1,4 @@
-"""Seed a policy bundle into the durable store (PR 6 §8.11) — compute-then-
+"""Seed a policy bundle into the durable store — compute-then-
 compare-then-store, so a mismatched policy directory NEVER lands a row: the
 bundle is built from `policy_dir` and its hash compared against
 `--expect-hash` (the hash an operator names from a reviewed source, e.g. the

@@ -1,4 +1,4 @@
-"""PR 7b-core: stream-scoped fenced claim + fenced terminals (defect 3)."""
+"""Stream-scoped fenced claim + fenced terminals."""
 
 import json
 
@@ -125,7 +125,7 @@ def _expire_lease(session_factory, oid):
 def test_stale_poc_loser_touches_nothing_before_reclaimer_sends(
     session_factory, settings, publisher, clean_db
 ):
-    """Defect 3, POC: A claims (token A); A's lease expires; B RECLAIMS (token B) but does NOT
+    """POC email: A claims (token A); A's lease expires; B RECLAIMS (token B) but does NOT
     terminalize yet. A resuming with token A — through BOTH stale success and stale FINAL-attempt
     failure — must touch nothing: payload byte-identical, status pending, B's complete claim tuple
     + attempts + next_attempt_at unchanged, and it emits only outbox_stale_claim_completion (no
@@ -197,7 +197,7 @@ def test_final_poc_failure_dead_letters_and_redacts_atomically(
 def test_stale_decision_loser_cannot_stamp_run_or_published_at(
     session_factory, settings, publisher, callback_capture, clean_db
 ):
-    """Defect 3, decision callback: same A/B ordering. Stale A must change neither the outbox
+    """Decision callback: same A/B ordering. Stale A must change neither the outbox
     tuple nor runs.state (stays PUBLISH_DECISION) nor decisions.published_at (stays NULL). Then B
     alone stamps both (run COMPLETE, published_at set)."""
     from kyc_tool.outbox.publisher import enqueue_decision_callback
@@ -255,7 +255,7 @@ def test_stale_decision_loser_cannot_stamp_run_or_published_at(
 
 
 def test_expired_unreclaimed_owner_stages_no_attempt(session_factory, settings, clean_db):
-    """Re-audit 15d875d F4: between lease expiry and anyone reclaiming, the old owner's token
+    """Between lease expiry and anyone reclaiming, the old owner's token
     still matches and the row is still pending — only the CLOCK has ruled against it. The claim
     SQL already treats that row as reclaimable, so the attempt fence must agree: _record_attempt
     raises _StaleClaim BEFORE any transmission and commits nothing."""
@@ -314,10 +314,10 @@ def test_expired_unreclaimed_poc_success_cannot_terminalize(session_factory, set
     assert after.claim_token == row.claim_token and after.claimed_by == "A"
 
 
-# SUPERSEDED (Codex re-audit `45cc215` F4): `test_expired_unreclaimed_failure_cannot_retry_or_
-# dead_letter` pinned the live-lease predicate on BOTH `_record_failure` branches — and that
-# predicate made any failure landing after lease expiry unrecordable: attempts never bumped,
-# next_attempt_at stayed due, and the loop reclaimed and resent the same row immediately, with
+# SUPERSEDED: `test_expired_unreclaimed_failure_cannot_retry_or_dead_letter` pinned the
+# live-lease predicate on BOTH `_record_failure` branches — and that predicate made any failure
+# landing after lease expiry unrecordable: attempts never bumped, next_attempt_at stayed due, and
+# the loop reclaimed and resent the same row immediately, with
 # max_attempts unreachable (measured: two external sends, one accounted). A failure write is
 # bookkeeping, not a witness; the fence that matters is token ROTATION, which
 # `test_failure_from_a_rotated_out_claim_still_writes_nothing` (end of file) still pins. The
@@ -405,13 +405,13 @@ def _seed_decision_chain(session_factory, *, case_id, run_id, decision_id, seq, 
 def test_same_stream_fifo_holds_under_backoff(
     session_factory, settings, publisher, callback_capture, clean_db
 ):
-    """Re-audit F6: strict same-stream FIFO survives retry backoff. One case, decision
+    """Strict same-stream FIFO survives retry backoff. One case, decision
     stream: seq1 (older outbox id) sits in FUTURE backoff; seq2 (newer id) is due NOW.
     The claim's inner min(o2.id) head-of-stream subquery deliberately ignores due-time/
     lease eligibility, so the backed-off head BLOCKS its whole stream: process_once() is
     idle (False), ZERO HTTP occurred, and seq2 is untouched (still pending, no claim).
     Once seq1 is due again, delivery order is exactly [seq1, seq2].
-    MUTATION WITNESS (named, Step 5c): adding due/lease filtering (e.g.
+    MUTATION WITNESS: adding due/lease filtering (e.g.
     `AND o2.next_attempt_at <= now()`) to the INNER `min(o2.id)` subquery of _CLAIM_SQL
     lets seq2 leapfrog its backed-off elder — this test then FAILS."""
     from kyc_tool.outbox.publisher import enqueue_decision_callback
@@ -455,7 +455,7 @@ def test_same_stream_fifo_holds_under_backoff(
 
 
 def test_stale_retry_failure_cannot_touch_reclaimed_row(session_factory, settings, clean_db):
-    """Re-audit F7: the fenced NONTERMINAL (retry) failure branch, proven stale-winner/loser.
+    """The fenced NONTERMINAL (retry) failure branch, proven stale-winner/loser.
     outbox_max_attempts=3 so a failure is a RETRY, not dead. A claims; A's lease expires;
     B reclaims (and does NOT terminalize). A's stale _record_failure must leave B's ENTIRE
     claim tuple (claim_token, claim_lease_expires_at, claimed_by), attempts, next_attempt_at,
@@ -463,7 +463,7 @@ def test_stale_retry_failure_cannot_touch_reclaimed_row(session_factory, setting
     attempted="retry" (the nonterminal branch). Then B's OWN _record_failure increments
     attempts to rowB.attempts+1 (its claim snapshot), schedules backoff per the
     base*2^(attempts-1) formula, and clears ONLY B's claim tuple — status stays pending.
-    MUTATION WITNESS (named, Step 5d): removing `claim_token=:token` from ONLY the
+    MUTATION WITNESS: removing `claim_token=:token` from ONLY the
     nonterminal retry UPDATE in _record_failure lets stale A rewrite B's attempts/backoff/
     claim — this test then FAILS at the byte-for-byte assertion."""
     _seed_case(session_factory, "c1")
@@ -575,7 +575,7 @@ def test_stale_loser_cannot_supersede_reclaimed_row(session_factory, settings, p
 
 
 def test_stale_poc_claimant_sends_no_email(session_factory, settings, clean_db, monkeypatch):
-    """Re-audit `cbb783b` F5: the decision-callback path gets its presend check for free (the
+    """The decision-callback path gets its presend check for free (the
     fenced attempt INSERT), but a POC email staged no evidence and so called the provider with no
     ownership check at all. A publisher paused after claiming, whose lease then expires and whose
     row is reclaimed and delivered by B, must make ZERO provider calls when it resumes."""
@@ -636,7 +636,7 @@ def test_configured_lease_reaches_the_database_unclamped(session_factory, settin
     assert 1700 < float(delta) <= 1800, f"configured lease was not what landed: {delta}"
 
 
-# --- failure accounting survives lease expiry (Codex re-audit `45cc215` F4) -------------------
+# --- failure accounting survives lease expiry -------------------------------------------------
 # The terminal WITNESS writes are fenced on (token, live lease); the failure write is fenced on
 # the token alone. Requiring a live lease there made any failure that landed after expiry
 # unrecordable: attempts never bumped, next_attempt_at stayed due, and the loop reclaimed and
@@ -663,7 +663,7 @@ def _expired_claim(session_factory, *, case_id, attempts=0):
 
 
 def test_failure_after_lease_expiry_is_accounted_exactly_once(session_factory, settings, clean_db):
-    """The audit's measured loop: lease expires mid-delivery, the failure write matched zero
+    """The measured failure loop: lease expires mid-delivery, the failure write matched zero
     rows, and the same row was reclaimed and resent with no attempt recorded. The failure must
     account (attempts+1, future backoff, tuple cleared) even though the lease is gone."""
     from kyc_tool.outbox.publisher import OutboxPublisher

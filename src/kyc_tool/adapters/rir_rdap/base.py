@@ -30,6 +30,23 @@ def parse_vcard(vcard_array: list | None) -> dict:
     return {"name": name, "address": address}
 
 
+def vcard_emails(vcard_array: list | None) -> list[str]:
+    """RDAP jCard → the listed addresses of its `email` entries, in order
+    (RFC 9083: `["email", {...}, "text", "<address>"]`). A redacted card simply
+    has none, so the caller gets [] rather than a guess."""
+    if not vcard_array or len(vcard_array) < 2:
+        return []
+    return [
+        entry[3]
+        for entry in vcard_array[1]
+        if isinstance(entry, list)
+        and len(entry) >= 4
+        and entry[0] == "email"
+        and isinstance(entry[3], str)
+        and entry[3]
+    ]
+
+
 def parse_entity(payload: dict) -> dict:
     """Normalize an RDAP entity lookup response."""
     card = parse_vcard(payload.get("vcardArray"))
@@ -74,9 +91,9 @@ class RdapStrategy:
     def lookup_org(self, org_handle: str) -> tuple[bytes, dict]:
         """→ (raw upstream bytes, normalized dict). 404 = handle not found.
 
-        The wire call goes through the GOVERNED helper (re-audit `7d1c435..827bc0f` F3: this
-        adapter previously called `client.get` directly and bypassed the plan budget entirely —
-        no permit, no liveness proof, no deadline, no byte containment)."""
+        The wire call goes through the GOVERNED helper. Calling `client.get` directly would
+        bypass the plan budget entirely — no permit, no liveness proof, no deadline, no byte
+        containment."""
         response = get_with_retry(self.client, self.entity_path.format(handle=org_handle))
         if response.status_code == 404:
             return response.content, {"found": False, "org_handle": org_handle}
@@ -94,7 +111,7 @@ class RdapStrategy:
         `conflicting_entity` flag require per-RIR relationship analysis against
         live RDAP data. They are NOT computed here — only fixtures inject them —
         so those human-review routes are currently unreachable in production.
-        We deliberately do not fake the detection: guessing RIR semantics could
+        The detection is deliberately not faked: guessing RIR semantics could
         wrongly fail legitimate orgs. Exposure is bounded because org_id_match
         still requires positive name + address matching to PASS. Implementing
         the real detection is scoped to the RIR integration work (validators

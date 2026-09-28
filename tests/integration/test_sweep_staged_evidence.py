@@ -1,6 +1,6 @@
-"""Re-audit `750630c..ca85355` F8 (crash-window arm): the staged-evidence sweeper deletes
-`adapter-raw/` objects never adopted by adapter_results — and ONLY those. Adopted refs, fresh
-stages (possibly mid-transaction), and platform uploads outside the namespace all survive."""
+"""Crash-window cleanup: the staged-evidence sweeper deletes `adapter-raw/` objects never adopted
+by adapter_results — and ONLY those. Adopted refs, fresh stages (possibly mid-transaction), and
+platform uploads outside the namespace all survive."""
 
 import os
 import time

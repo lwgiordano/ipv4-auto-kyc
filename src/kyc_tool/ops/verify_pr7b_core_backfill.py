@@ -1,4 +1,4 @@
-"""Pre-window backfill diagnostic (PR 7b-core §Rollout step 0). Run BEFORE any outage, with
+"""Pre-window backfill diagnostic, the first rollout step. Run BEFORE any outage, with
 the retention schedule suspended AND every active retention task terminated (orchestrator-
 attested zero-running) — see docs/RUNBOOK.md. Schema-012-compatible: it runs the SAME shared
 parity matrix as migration 013 (kyc_tool.migration_contracts.v013_backfill), imports NO 013-only ORM.
@@ -30,17 +30,17 @@ def verify_backfill(session_factory, *, lock_timeout_seconds: int = 60,
     matrix, and NEVER writes (rolls back before returning)."""
     with session_factory() as s:
         # Governed-schema binding runs BEFORE the lock: its catalog reads establish that the
-        # `public.outbox` we are about to lock is the real object (a smuggled search_path
+        # `public.outbox` about to be locked is the real object (a smuggled search_path
         # otherwise redirects everything below), and touch no outbox DATA — the SHARE lock
         # still precedes every data SELECT, which is the property the retention-race test pins.
         # exact 012: this is the PRE-window diagnostic and its parity matrix is schema-012 shaped.
         # On a 013+ DB it would otherwise lock, run, and print "schema-012 parity matrix clean" —
-        # certifying a phase it never checked (re-audit `8377440` F12).
+        # certifying a phase it never checked.
         binding.bind(s, lock_timeout_seconds=lock_timeout_seconds,
                      statement_timeout_seconds=statement_timeout_seconds, exact_revision="012",
                      shape_contract=shape.PR7B_CORE_PREWINDOW)
-        # Lock EVERY relation the parity reads, not just outbox (re-audit `03dbfab..bc325e7` R5-F5):
-        # the parity joins decisions/cases/runs, so a concurrent ALTER decisions between bind() and
+        # Lock EVERY relation the parity reads, not just outbox: the parity joins
+        # decisions/cases/runs, so a concurrent ALTER decisions between bind() and
         # the read would otherwise crash the diagnostic. SHARE precedes every data SELECT.
         for relation in shape.PR7B_CORE_PREWINDOW.lock_relations:
             s.execute(text(f"LOCK TABLE public.{relation} IN SHARE MODE"))

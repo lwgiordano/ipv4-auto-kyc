@@ -1,7 +1,7 @@
-"""Re-audit `5b0f0b8..b75a320` R4-F2: a nonpositive/aliased retention makes the
-`now() - make_interval(days => N)` cutoff the FUTURE, so `prune()` would delete/redact CURRENT
-immutable audit/evidence. `prune()` fails closed BEFORE opening a transaction, and `main()` validates
-the production configuration BEFORE it opens an engine."""
+"""A nonpositive/aliased retention makes the `now() - make_interval(days => N)` cutoff the FUTURE,
+so `prune()` would delete/redact CURRENT immutable audit/evidence. `prune()` fails closed BEFORE
+opening a transaction, and `main()` validates the production configuration BEFORE it opens an
+engine."""
 
 import pytest
 from sqlalchemy import text
@@ -36,7 +36,7 @@ def test_prune_refuses_out_of_domain_retention_without_touching_rows(
 def test_negative_retention_is_the_exact_data_loss_that_is_now_refused(
     engine, session_factory, clean_db
 ):
-    """-1 is the reported P1: now() - interval '-1 day' is tomorrow, so every fresh row is 'past'
+    """-1 is the headline case: now() - interval '-1 day' is tomorrow, so every fresh row is 'past'
     retention. It must refuse and delete nothing."""
     _seed_fresh_audit_row(engine)
     with pytest.raises(ValueError):

@@ -2,9 +2,10 @@
 
 Confirms the POC handle's association and extracts the RIR-LISTED email (the
 token is never sent to a user-submitted address). The RIR directory lookup is
-behind an interface: Phase 2 ships the fixture-backed implementation; Phase 3
-wires it to the live RDAP clients. Token creation/sending is an orchestration
-side effect described in `normalized` — adapters never touch the database.
+behind an interface: `rir_rdap.poc.RdapPocDirectory` is the live one (RDAP,
+association verified on the authoritative record), `FixturePocDirectory` the
+dev/test one. Token creation/sending is an orchestration side effect described
+in `normalized` — adapters never touch the database.
 """
 
 import json
@@ -16,9 +17,18 @@ from kyc_tool.validators.normalize import canon_id
 
 
 class PocDirectory(Protocol):
-    def lookup(self, rir: str, poc_handle: str) -> dict:
+    def lookup(
+        self,
+        rir: str,
+        poc_handle: str,
+        *,
+        org_handle: str | None = None,
+        resource: str | None = None,
+    ) -> dict:
         """→ {found: bool, associated_org_handles: [..], resources: [..],
-        rir_listed_email: str|None} (resources optional)."""
+        rir_listed_email: str|None} (resources optional). The SUBMITTED targets
+        are passed in so a live directory can verify the association against the
+        authoritative org/resource record instead of trusting the POC record."""
         ...
 
 
@@ -28,7 +38,9 @@ class FixturePocDirectory:
     def __init__(self, records: dict[str, dict]) -> None:
         self.records = records  # key: f"{rir}:{poc_handle}"
 
-    def lookup(self, rir: str, poc_handle: str) -> dict:
+    def lookup(self, rir: str, poc_handle: str, **_targets) -> dict:
+        # canned records carry their own associations: the submitted org/resource
+        # only steer a live directory's authoritative lookups.
         return self.records.get(
             f"{rir}:{poc_handle}",
             {
@@ -55,7 +67,14 @@ class RirPocAdapter:
         if not poc.get("poc_handle"):
             return AdapterOutput(self.adapter_id, AdapterStatus.NOT_APPLICABLE)
 
-        record = self.directory.lookup(poc.get("rir", ""), poc["poc_handle"])
+        submitted_org = poc.get("org_handle")
+        submitted_resource = (poc.get("resource") or "").strip()
+        record = self.directory.lookup(
+            poc.get("rir", ""),
+            poc["poc_handle"],
+            org_handle=submitted_org,
+            resource=submitted_resource or None,
+        )
 
         # Fail-closed association (remediation item 3): the POC must be tied to
         # at least one VERIFIED target — the submitted ORG-ID appearing in the
@@ -63,8 +82,6 @@ class RirPocAdapter:
         # holdings. A submission with neither target, or a directory record
         # confirming neither, is NOT associated (the old rule treated a missing
         # submitted org as associated-by-default).
-        submitted_org = poc.get("org_handle")
-        submitted_resource = (poc.get("resource") or "").strip()
         directory_orgs = {canon_id(h) for h in record.get("associated_org_handles", [])}
         directory_resources = {
             str(r).strip().lower() for r in record.get("resources", []) if str(r).strip()

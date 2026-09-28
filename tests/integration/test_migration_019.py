@@ -1,4 +1,4 @@
-"""PR 7b-core payload-rule repair revision 019.
+"""Payload-rule repair revision 019.
 
 `017` permitted the governed payload redaction only on `delivered`/`superseded`, and `018`
 inherited that rule unchanged. The publisher scrubs a POC email's raw token in two places — after

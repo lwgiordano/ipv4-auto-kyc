@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from kyc_tool import __version__
+from kyc_tool.api.routes_events import install_event_contract_openapi
 from kyc_tool.api.routes_events import router as events_router
 from kyc_tool.api.routes_metrics import router as metrics_router
 from kyc_tool.api.routes_ops import router as ops_router
@@ -39,7 +40,7 @@ def create_app(
     policy: PolicyBundle | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
-    # Production kill switch via the shared process-role authority (re-audit R5-F1): refuse to boot on
+    # Production kill switch via the shared process-role authority: refuse to boot on
     # unsafe/stub configuration before any DB/store access.
     validate_process_role(settings, ProcessRole.API)
     if session_factory is None:
@@ -65,9 +66,7 @@ def create_app(
     else:  # DB-reconstructed injection: no directory to seed — require the exact hash present
         with session_factory() as session:
             if load_bundle(session, policy.bundle_hash) is None:
-                raise RuntimeError(
-                    f"selected policy {policy.bundle_hash} is not resolvable from the store"
-                )
+                raise RuntimeError(f"selected policy {policy.bundle_hash} is not resolvable from the store")
     attest(flag=settings.enforce_bundle_pinning, bundle_hash=policy.bundle_hash)
 
     app = FastAPI(title="IPv4.Global KYC Tool", version=__version__)
@@ -78,13 +77,17 @@ def create_app(
     app.include_router(events_router)
     app.include_router(read_router)
     app.include_router(metrics_router)
-    # ALWAYS mounted (re-audit `f2929f8..6a4cd87` F3): the RUNBOOK's dead-letter recovery must exist
-    # in the secure production configuration, where the optional /ui console is disabled.
+    # ALWAYS mounted: the RUNBOOK's dead-letter recovery must exist in the secure production
+    # configuration, where the optional /ui console is disabled.
     app.include_router(ops_router)
     if settings.ui_enabled:
+        from kyc_tool.ui.configuration_routes import router as configuration_router
+        from kyc_tool.ui.routes import page_router as ui_page_router
         from kyc_tool.ui.routes import router as ui_router  # deferred: reads console.html
 
+        app.include_router(ui_page_router)
         app.include_router(ui_router)
+        app.include_router(configuration_router)
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -101,13 +104,16 @@ def create_app(
         database is reachable and migrated to head, and (in S3 mode) the
         evidence bucket is accessible. 503 on any failing check."""
         checks: dict[str, dict] = {}
+
+        def unready(check: str, exc: Exception) -> dict:
+            # The probe is unauthenticated, and a driver's message can name hosts, users and
+            # buckets. Callers get the failing check and the error type; the log gets the rest.
+            structlog.get_logger().warning("readyz_check_failed", check=check, error=str(exc)[:500])
+            return {"ok": False, "error": type(exc).__name__}
+
         ready = True
 
-        violations = (
-            production_config_violations(settings)
-            if settings.environment == "production"
-            else []
-        )
+        violations = production_config_violations(settings) if settings.environment == "production" else []
         checks["config"] = {"ok": not violations, "violations": violations}
         ready = ready and not violations
 
@@ -126,7 +132,7 @@ def create_app(
             }
             ready = ready and current == head
         except Exception as exc:  # noqa: BLE001 — any failure means not-ready
-            checks["database"] = {"ok": False, "error": str(exc)[:200]}
+            checks["database"] = unready("database", exc)
             ready = False
 
         if settings.object_store == "s3":
@@ -139,12 +145,12 @@ def create_app(
                 store.verify_access()
                 checks["object_store"] = {"ok": True}
             except Exception as exc:  # noqa: BLE001
-                checks["object_store"] = {"ok": False, "error": str(exc)[:200]}
+                checks["object_store"] = unready("object_store", exc)
                 ready = False
 
-        # PR 6 (Task 10): UNCONDITIONALLY (regardless of enforce_bundle_pinning
-        # or the checks above) confirm the process's loaded policy bundle is
-        # durably resolvable — a missing/corrupt row means neither a flag-on
+        # UNCONDITIONALLY (regardless of enforce_bundle_pinning or the checks
+        # above) confirm the process's loaded policy bundle is durably
+        # resolvable — a missing/corrupt row means neither a flag-on
         # worker nor a bundle-pinning-epoch activation could resolve it.
         bundle_hash = app.state.policy.bundle_hash
         try:
@@ -153,11 +159,27 @@ def create_app(
             checks["policy_bundle"] = {"ok": pinnable, "bundle_hash": bundle_hash}
             ready = ready and pinnable
         except Exception as exc:  # noqa: BLE001 — any failure means not-ready
-            checks["policy_bundle"] = {"ok": False, "bundle_hash": bundle_hash, "error": str(exc)[:200]}
+            checks["policy_bundle"] = {**unready("policy_bundle", exc), "bundle_hash": bundle_hash}
             ready = False
 
-        return JSONResponse(
-            status_code=200 if ready else 503, content={"ready": ready, "checks": checks}
-        )
+        try:
+            from kyc_tool.configuration import repo as configuration_repo
 
+            with app.state.session_factory() as session:
+                active = configuration_repo.get_active(session)
+            valid = active is None or settings.enforce_bundle_pinning is True
+            checks["configuration"] = {
+                "ok": valid,
+                "active": active is not None,
+                "revision": str(active.revision) if active else None,
+                "pinning_enabled": settings.enforce_bundle_pinning is True,
+            }
+            ready = ready and valid
+        except Exception:  # noqa: BLE001 — corruption and unavailable authority are not-ready
+            checks["configuration"] = {"ok": False, "error": "Configuration authority unavailable."}
+            ready = False
+
+        return JSONResponse(status_code=200 if ready else 503, content={"ready": ready, "checks": checks})
+
+    install_event_contract_openapi(app)
     return app

@@ -244,7 +244,7 @@ FUTURE_UNITS = {
                     "ANSWER_ARTIFACT_SCHEMA, and rewrite the gate in the same change"),
         scope_heading="### PR 7b-inputs — Platform answer artifacts — FUTURE, reserved "
                       "unbuilt (audit fold `4c3015a..cccd5f7` F11)",
-        scope_digest="cfebec33c6e40758"),
+        scope_digest="ab7fa7d7f0647520"),
 }
 
 

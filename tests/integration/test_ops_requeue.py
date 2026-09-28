@@ -1,6 +1,6 @@
-"""Re-audit `f2929f8..6a4cd87` F3: the dead-letter recovery path exists in the SECURE production
-configuration — always-mounted /v1/ops requeue endpoints behind the operator bearer token, sharing
-the console's transactional service (UI disabled keeps /ui 404 while recovery still works)."""
+"""The dead-letter recovery path exists in the SECURE production configuration — always-mounted
+/v1/ops requeue endpoints behind the operator bearer token, sharing the console's transactional
+service (UI disabled keeps /ui 404 while recovery still works)."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -44,7 +44,7 @@ def test_ops_requeue_works_with_the_ui_disabled(settings, session_factory, polic
     r = tc.post(f"/v1/ops/requeue/job/{job_id}",
                 headers={"Authorization": f"Bearer {_TOKEN}"})
     assert r.status_code == 200
-    # attempts_granted = the fixed bounded recovery grant (R9-F4), default 5
+    # attempts_granted = the fixed bounded recovery grant, default 5
     assert r.json() == {"requeued": job_id, "run_reset": "rq-r", "attempts_granted": 5}
     with session_factory() as s:
         job = s.execute(text("SELECT status, attempts FROM jobs WHERE id=:i"), {"i": job_id}).one()
@@ -80,8 +80,8 @@ def test_ops_requeue_preserves_the_redaction_409(settings, session_factory, poli
 
 
 def test_ops_requeue_routes_are_mounted_with_the_ui_disabled(settings, session_factory, policy):
-    """F14: executable route semantics — with the UI disabled, the ops requeue routes ANSWER (401
-    for a bad token, not 404-absent) while the /ui variants are absent (404)."""
+    """Executable route semantics — with the UI disabled, the ops requeue routes ANSWER (401 for a
+    bad token, not 404-absent) while the /ui variants are absent (404)."""
     tc = _app(settings, session_factory, policy)
     assert tc.post("/v1/ops/requeue/job/1", headers={"Authorization": "Bearer wrong"}).status_code == 401
     assert tc.post("/v1/ops/requeue/outbox/1", headers={"Authorization": "Bearer wrong"}).status_code == 401

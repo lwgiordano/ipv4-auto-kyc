@@ -22,7 +22,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from kyc_tool.checkstore import repo as checkstore
-from kyc_tool.config import get_settings
+from kyc_tool.config import Settings, get_settings
+from kyc_tool.configuration import repo as configuration_repo
+from kyc_tool.configuration.models import ConfigurationUnavailable
 from kyc_tool.db.audit import audit
 from kyc_tool.db.session import uow
 from kyc_tool.db.tables import Case, DecisionRow, Event, ReviewTask, Run
@@ -46,7 +48,7 @@ class IngestOutcome:
 
 class _FloorReject(Exception):  # noqa: N818 — internal control-flow signal, not an *Error
     """Raised inside the ingest txn to reject an event and roll the txn back, so
-    a rejected completion leaves no orphan event row (PR 5a §4)."""
+    a rejected completion leaves no orphan event row."""
 
     def __init__(self, outcome: IngestOutcome) -> None:
         self.outcome = outcome
@@ -55,9 +57,9 @@ class _FloorReject(Exception):  # noqa: N818 — internal control-flow signal, n
 def _validate_website_review_completed(
     session: Session, case_id: str, actor: dict, payload: dict
 ) -> IngestOutcome | None:
-    """PR 5a §4 floor: a keyed `website.review_completed` must reference a real,
-    open, same-case website task. Runs AFTER replay resolution and BEFORE the
-    run/check. PR 5b adds the reviewer-actor trust floor: the signed envelope's
+    """Review-completion floor: a keyed `website.review_completed` must reference a
+    real, open, same-case website task. Runs AFTER replay resolution and BEFORE the
+    run/check. Also enforces the reviewer-actor trust floor: the signed envelope's
     actor must be a consistent, nonblank reviewer matching payload.reviewer_id."""
     if reviewer_actor_reason(actor, payload) is not None:
         return IngestOutcome(422, {"error": "invalid reviewer actor", "task_id": payload.get("task_id")})
@@ -85,7 +87,7 @@ def _scrub_secrets(event_type: str, payload: dict) -> dict:
     ingest_event), so scrubbing never affects replay/409 detection. A
     poc.token_verified carries a raw single-use token only in transit; the
     events table keeps its digest — what the validator matches on — never the
-    token itself (item 5).
+    token itself.
     """
     if event_type == "poc.token_verified" and payload.get("token"):
         scrubbed = dict(payload)
@@ -130,7 +132,9 @@ def ingest_event(
     case_id: str,
     idempotency_key: str,
     envelope: dict,
+    settings: Settings | None = None,
 ) -> IngestOutcome:
+    settings = settings if settings is not None else get_settings()
     digest = payload_hash(envelope)  # from the ORIGINAL envelope — before scrubbing
     event_type = envelope["event_type"]
     payload = _scrub_secrets(event_type, envelope.get("payload") or {})
@@ -138,6 +142,13 @@ def ingest_event(
 
     try:
         with uow(session_factory) as session:
+            # This SELECT is also the cutover fence when no active row exists.
+            # Keep its relation/shared-pointer lock until ALL admission writes commit.
+            configuration = configuration_repo.get_active(session, lock=True)
+            if configuration is not None:
+                if settings.enforce_bundle_pinning is not True:
+                    raise ConfigurationUnavailable("live configuration requires per-run pinning")
+                policy = configuration.bundle
             # lazy case creation (AUDIT:C1)
             session.execute(pg_insert(Case).values(id=case_id).on_conflict_do_nothing(index_elements=["id"]))
             # Lock the case BEFORE allocating a sequence — this serializes concurrent
@@ -165,7 +176,7 @@ def ingest_event(
 
             if inserted is None:
                 # replay (or key misuse) WITHIN this case — the sequence was NOT
-                # consumed. D3: the same key in another case never lands here.
+                # consumed. The same key in another case never lands here.
                 existing = session.execute(
                     select(Event).where(
                         Event.case_id == case_id,
@@ -193,6 +204,10 @@ def ingest_event(
                 "event.received",
                 case_id=case_id,
                 actor=str(actor.get("id", "platform")),
+                # WHICH kind of actor, beside the id: the same evidence can arrive from the
+                # platform or be recorded by a reviewer who was sent it directly, and the
+                # activity log has to be able to say which without re-reading the event row.
+                actor_type=actor.get("type"),
                 event_id=event.id,
                 event_type=event_type,
                 event_sequence=next_sequence,
@@ -207,7 +222,7 @@ def ingest_event(
                 event.processed_at = datetime.now(UTC)
                 return IngestOutcome(200, body)
 
-            # PR 5a §4 floor: reject an invalid review completion BEFORE the
+            # Review-completion floor: reject an invalid review completion BEFORE the
             # run/check; _FloorReject rolls the whole txn back (no orphan row).
             if event_type == "website.review_completed":
                 reject = _validate_website_review_completed(session, case_id, actor, payload)
@@ -218,6 +233,7 @@ def ingest_event(
                 case_id=case_id,
                 triggering_event_id=event.id,
                 policy_bundle_hash=policy.bundle_hash,
+                configuration_revision=configuration.revision if configuration else None,
                 input_snapshot_json=dict(new_snapshot),  # freeze the run's inputs
             )
             session.add(run)
@@ -228,7 +244,7 @@ def ingest_event(
                 "run_transition",
                 {"run_id": run.id},
                 case_id=case_id,
-                max_attempts=get_settings().job_max_attempts,
+                max_attempts=settings.job_max_attempts,
             )
             audit(session, "run.created", case_id=case_id, run_id=run.id, event_id=event.id)
 
@@ -237,6 +253,14 @@ def ingest_event(
             return IngestOutcome(202, body)
     except _FloorReject as fr:
         return fr.outcome
+    except ConfigurationUnavailable:
+        return IngestOutcome(
+            503,
+            {
+                "error": "configuration_unavailable",
+                "detail": "Configuration authority unavailable; retry safely.",
+            },
+        )
 
 
 def _handle_manual_approve(

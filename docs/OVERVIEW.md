@@ -52,14 +52,16 @@ platform ──POST event──► API ──(persist + queue)──► backgrou
             → push decision to platform via signed webhook
 ```
 
-Step by step, for one customer ("case"):
+Step by step, for one registrant ("case" — one person, applying on behalf of
+a company):
 
 1. **Event arrives.** The platform POSTs a signed event (e.g. "submitted
    company details," "verified email," "uploaded a document," "submitted an
    ORG-ID"). The tool records it, queues the work, and instantly returns a run
    ID; it does not block.
 2. **A worker picks it up.** A background worker claims the job. Events for the
-   same case are processed in order.
+   same case are processed in order; the delivery order of the resulting
+   callbacks is a separate contract (`docs/PLATFORM_INTEGRATION.md` §4).
 3. **Broker check first.** The company's identifiers are matched against the
    blocked-broker list. An exact match short-circuits everything → `reject`.
 4. **Gather evidence.** The tool calls the external sources it needs for
@@ -97,7 +99,7 @@ event, and records which policy version produced it).
 | `org_id_match` | +25 | control proof | RIR ORG-ID handle exists and matches the company, no broker conflict. |
 | `poc_verified` | +25 | control proof | Point-of-contact token sent to the RIR-listed email and verified. |
 | `business_document_verified` | +25 | legal proof | Uploaded document's name/address/number/jurisdiction match submission and registry. |
-| `linkedin_company_match` | +20 | supporting | Person name + company + title + domain all match deterministically. |
+| `linkedin_company_match` | +20 | supporting | Person name and company identity (the company domain) match deterministically; company name and title are recorded for the reviewer, not decisive. |
 | `website_verified` | +10 | supporting | Human reviewer confirms the company website is genuine. |
 | `verified_email` | +10 | account access | Any email inbox verified. |
 
@@ -149,8 +151,8 @@ authenticated:
 
 | Event | Payload |
 |---|---|
-| `kyb.run_requested` | **`company_legal_name`**, `address`, `jurisdiction`, `website`, `contact{name,title}`, `platform_account_id` |
-| `email.verified` | **`email`**, **`domain`**, **`verified_at`** |
+| `kyb.run_requested` | **`company_legal_name`**, **`contact{name,email}`** (the registrant, plus optional `title`, `first_name`, `last_name`), **`platform_account_id`**, `address`, `jurisdiction`, `website` |
+| `email.verified` | **`email`** (must be the registrant's `contact.email`), **`domain`**, **`verified_at`** |
 | `org_id.submitted` | **`rir`**, **`org_handle`** |
 | `poc.submitted` | **`rir`**, **`poc_handle`**, `org_handle`, `resource` |
 | `poc.token_verified` | **`token_id`**, **`verified_at`**, `token` |
@@ -191,7 +193,7 @@ gets an internal per-case `decision_sequence`, allocated under the case's `FOR U
 `superseded` guard**: an older requeued callback is suppressed only when a higher-sequence decision
 already carries a locally-stamped `published_at`. Each claim is fenced by a `claim_token` so a stale
 publisher cannot overwrite a reclaimer's terminal. **Boundary:** THREE residual reverts are NOT
-closed here and remain expected until 7b-activation (`024`) adds the platform high-water mark:
+closed here and remain expected until 7b-activation (`025`) adds the platform high-water mark:
 send-before-stamp; cross-replica; and a queued automatic callback delivered AFTER a later manual
 approval (manual approvals carry no run, no callback, and no sequence, so the local guard has no
 higher locally-published automatic sequence to compare). 7b-core does not claim exactly-once (see
@@ -260,9 +262,9 @@ end-to-end. A green draft PR carries the entire build.
 | `companies_house` | **Needs key** | UK registry; works unauthenticated, `CH_API_KEY` raises limits. |
 | `gleif` | **Live** | Global entity registry; public API, no key. |
 | `rir_rdap` | **Live** | ORG-ID / IP ownership; five RIR strategies (ARIN, RIPE, APNIC, LACNIC, AFRINIC). |
-| `rir_poc` | **Stub** | POC token machinery; email delivery handled by the platform (see §6). |
+| `rir_poc` | **Live lookup** | POC association verified on the RDAP org/resource record, RIR-listed email read from it; who delivers the token email is an open decision (§6). |
 | `document_ocr` | **Dev engine** | Reads structured test data today; production extraction is an open decision (§6). |
-| `floqer_company_enrichment` | **Stub** | Enrichment; account exists, workflow + API wiring pending (§6). |
+| `floqer_company_enrichment` | **Stub** | Contract fixed against a published shortcut; account exists, API key + wiring pending (§6). |
 | `website_manual_review` | **Manual** | Human review queue — by design, not an automated source. |
 
 ---
@@ -277,8 +279,8 @@ determine how rich the automated verification is at launch.
 | **Platform callback URL + HMAC credentials** | The endpoint the tool POSTs decisions to, plus the v1 legacy secret and the split v2 inbound/outbound secrets + key ids (`docs/PLATFORM_INTEGRATION.md` §2). | Platform team | **Yes** — the integration handshake. |
 | **Companies House key** | `CH_API_KEY` (optional; works without, key raises rate limits). | Hilco | Recommended |
 | **Document extraction** | Decide who reads uploaded documents (see §9). If the tool does it: pick an OCR engine (AWS Textract recommended). If the platform does it: it sends the four extracted fields as data. | Platform / Hilco | Decision needed |
-| **POC token email** | Resolved: the **platform's existing transactional email** delivers the POC token; nothing to procure. | Platform | Wire-up only |
-| **Floqer** | A Floqer *workflow* that returns the contact's LinkedIn match, plus the API key + trigger endpoint. Account already exists. | Hilco | **No** — fast-follow |
+| **POC token email** | Decide who sends it (see §9). If the tool does: an SES identity and sending domain. If the platform does: its existing transactional email plus a hand-off contract for the token and reference. | Platform / Hilco | Decision needed |
+| **Floqer** | The API key and the published shortcut id for IPv4.Global's own Floqer account; the shortcut contract is already fixed in the client. Account already exists. | Hilco | **No** — fast-follow |
 | **Hosting** | AWS environment: containers, Postgres, S3, secrets (see §8). | Platform / Hilco | **Yes** |
 
 ### Document extraction (OCR) — detail
@@ -299,26 +301,27 @@ bytes. Two ways to get the four fields the tool needs:
 
 Floqer feeds one supporting check (`linkedin_company_match`, +20) and never
 drives a decision on its own. Hilco has an account. Floqer is workflow-based
-rather than a plain REST API, so integration is two steps: (1) build a Floqer
-workflow that takes a company name + domain and returns the contact's LinkedIn
-match (name, title, company, domain); (2) trigger it over Floqer's HTTP API,
-which the tool's client (already stubbed behind a fixed interface) calls with
-the API key and endpoint. It is credit-metered per lookup. Fast-follow, not
-required for v1.
+rather than a plain REST API: a workflow published as a shortcut takes the
+company name + domain (and the contact's name, title, email and split names
+when the platform has them) and returns the contact's LinkedIn match (name,
+title, company, domain) plus how the profile was found; the tool's client calls
+it over Floqer's Shortcut API with the API key and shortcut id. It is
+credit-metered per lookup. Fast-follow, not required for v1.
 
 ---
 
 ## 7. What's NOT needed
 
+Not decided yet: who sends the POC email and who extracts document fields. If
+the platform does both, the tool needs neither an email provider nor an OCR
+provider; if the tool does, it needs an SES identity and an OCR provider. See
+`PLATFORM_INTEGRATION.md` §5 and §6.
+
 Deliberately out of scope:
 
-- **A new email provider.** The platform's existing transactional email sends
-  the POC token; no separate service to buy.
-- **The tool doing OCR.** If the platform extracts the document fields and sends
-  them as data, the tool needs no OCR engine at all.
 - **Floqer at launch.** It contributes only a supporting +20 signal and never
-  decides an outcome; the approval math clears 100 without it. A fast-follow,
-  not a launch dependency.
+  decides an outcome; the approval math clears 100 without it. A contract is
+  now in place; it stays a supporting signal, never a launch dependency.
 
 ---
 
@@ -416,6 +419,10 @@ hiding the controls, is the actual boundary for reviewer events.
    deferred to transaction time. The tool already supports this via the
    `approve_buy_locked` path; confirm the platform's tiers map to the four
    verdicts as intended.
+4. **Who sends the POC verification email — tool or platform?** If the tool
+   sends, it needs an SES identity and sending domain. If the platform sends,
+   the tool hands it the token and reference over a typed delivery contract
+   still to be written. Either way the token rules stay with the tool.
 
 ---
 

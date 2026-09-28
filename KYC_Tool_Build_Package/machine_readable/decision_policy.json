@@ -1,5 +1,5 @@
 {
-  "version": "2.0",
+  "version": "2.1",
   "decisions": [
     {
       "decision": "reject",
@@ -24,7 +24,7 @@
     {
       "decision": "manual_review_insufficient",
       "priority": 4,
-      "condition": "otherwise (score < 100 or a non-broker gate failing, with no hard block)",
+      "condition": "otherwise (score < 100 or a non-broker gate failing, including exact matched inactive official-registry evidence, with no hard block)",
       "platform_enforcement": "hold_account_pending",
       "auto_clear": true,
       "notes": "Holding state, not a human queue. Auto-clears when a recalculation satisfies approve/approve_buy_locked."

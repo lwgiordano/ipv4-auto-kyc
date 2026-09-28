@@ -1,4 +1,4 @@
-"""PR 2 (DB): per-run frozen input snapshots, per-case event sequence, and the
+"""Database tests: per-run frozen input snapshots, per-case event sequence, and the
 concurrency invariant — same-case ingestion and reviewer.manual_approve race
 without colliding on a sequence."""
 
@@ -146,7 +146,7 @@ def test_concurrent_ingest_and_manual_approve_do_not_collide(engine, session_fac
 def test_recorded_floqer_context_reseeded_on_resume(
     engine, post_event, session_factory, policy, settings
 ):
-    """Codex P1: a run resumed after Floqer already committed (crash/lease expiry
+    """A run resumed after Floqer already committed (crash/lease expiry
     before the website adapter) must still hand the website task Floqer's
     discovery context — reseeded from the recorded result, not lost."""
     resp, _ = post_event("resume-case", "kyb.run_requested", ACME_KYB_WITH_CONTACT)

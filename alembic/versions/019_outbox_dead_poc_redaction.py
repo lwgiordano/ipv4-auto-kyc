@@ -1,10 +1,10 @@
-"""outbox payload rule repair: a dead POC email must still scrub its token (PR 7b-core)
+"""outbox payload rule repair: a dead POC email must still scrub its token
 
 Revision ID: 019
 Revises: 018
 
-A latent defect introduced by `017`'s payload rule and inherited unchanged by `018`, found by
-self-review after `018` was released and confirmed against a real publisher run.
+A latent defect introduced by `017`'s payload rule and inherited unchanged by `018`, confirmed
+against a real publisher run.
 
 **What was broken.** The payload rule permitted the governed redaction only when
 `OLD.status IN ('delivered','superseded')`. The publisher scrubs a POC email's raw token in TWO
@@ -18,8 +18,7 @@ The consequences were worse than a refused UPDATE, because nothing caught the ex
 1. the refusal propagated out of `_record_failure`, so the whole terminal transaction rolled back:
    **the row never reached `dead` at all** and kept its claim history;
 2. **the raw POC token stayed at rest indefinitely** — the exact outcome the scrub exists to
-   prevent (`AUDIT_FINDINGS` fix #2), on the one path where the token is provably never going to
-   be delivered;
+   prevent, on the one path where the token is provably never going to be delivered;
 3. `_record_failure` is called from `process_once`'s own `except` handler, so the raise escaped
    the outbox worker's loop and the row was retried into the same crash forever.
 
@@ -32,15 +31,15 @@ so scrubbing it destroys nothing recoverable. Everything else `018` froze stays 
 row's status, timestamps, claim tuple, witness, identity, attempt counter and error text are all
 still immutable, and a `pending` body still cannot change at all.
 
-**Also folded here (same function, same recreation).** `outbox.id` joins the immutable-identity
+**Also fixed here (same function, same recreation).** `outbox.id` joins the immutable-identity
 block. It is the ordering authority the rest of the system actually reads — retention documents
 "id = order", `013`'s legacy `decision_sequence` backfill orders by it, and `_CLAIM_SQL` selects
 the per-stream FIFO head with `min(id)` — yet `017` and `018` froze every other identity field and
 left this one rewritable, so a row's position in the order could be rewritten in place. The child
 FK is not a backstop: retention deletes attempt rows once a callback carries a digest.
 
-`018` is published and is therefore not edited (the rule this unit has followed seven times); this
-revision recreates the one function that was wrong. Like `018`, it is forward-only.
+`018` is published and is therefore not edited; this revision recreates the one function that was
+wrong. Like `018`, it is forward-only.
 """
 
 import hashlib

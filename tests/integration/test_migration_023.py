@@ -1,4 +1,4 @@
-"""PR 7b-core revision 023: cross-table authority FK/pointer validation."""
+"""Revision 023: cross-table authority FK/pointer validation."""
 
 import pytest
 from alembic import command

@@ -473,7 +473,7 @@ def test_pending_claims_render_as_pending(contract_text):
     assert "NOT BUILT" in flat
     assert "POST-ACTIVATION" in flat
     for schema_ish in ("schema_version", "high_water_run_id", "latest_run_id"):
-        assert schema_ish not in flat, "a draft 024 schema is back on the page"
+        assert schema_ish not in flat, "a draft 025 schema is back on the page"
 
 
 # ── mutation: each bypass Codex demonstrated must fail the SAME verifier ──────────────────────────

@@ -3,8 +3,8 @@
 ## Context
 
 PR 7b was split (user decision, 2026-07-22) into **7b-core** (this doc, migrations
-`013`-`023`, shipped local hardening/repair) and **7b-activation** (migration `024`,
-`down_revision='023'` — the platform-authoritative cutover: bootstrap, wire emission,
+`013`-`023`, shipped local hardening/repair) and **7b-activation** (migration `025`,
+`down_revision='024'` — the platform-authoritative cutover: bootstrap, wire emission,
 phase state machine). The split isolates the intricate platform-coordination into its
 own unit and lets this self-contained hardening land and reach REVIEW-CLEAN on its own. Both remain
 ahead of PR 6b; 6b's *activation* still waits on 7b-activation.
@@ -85,10 +85,10 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   actually sent are **unrecoverable** for historical rows. `013` therefore does **NOT** backfill a
   digest: computing one from the normalized payload would fabricate a witness for bytes nobody can
   reconstruct, which is precisely the defect F1 identified. Pre-`013` deliveries are **un-witnessed by
-  construction**, and the activation (`024`) bootstrap must seed their high-water from `decision_sequence` +
+  construction**, and the activation (`025`) bootstrap must seed their high-water from `decision_sequence` +
   `local_status` without a digest comparison rather than pretend otherwise.
-  This is what lets retention destroy the body while activation (`024`) keeps a witness — see the durable-authority
-  contract in §Rollout — and it is why activation (`024`) never re-encodes a stored payload.
+  This is what lets retention destroy the body while activation (`025`) keeps a witness — see the durable-authority
+  contract in §Rollout — and it is why activation (`025`) never re-encodes a stored payload.
   **Rev 10-11 rejected a stored digest column and this supersedes that**, without contradicting its
   reasoning: the objection was that a column duplicating a fact still derivable from `payload_json`
   creates a drift class. Once retention deliberately destroys the body, the digest is **no longer
@@ -173,7 +173,7 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   theoretical one. Its **only** sanctioned use is backup→restore **semantic equality**, where both
   sides are Postgres. It must never be exported as, compared against, or described as a
   received-body witness: a platform that hashes the bytes it actually accepted would disagree, and
-  one that merely echoes our SQL value proves nothing. Activation's (`024`) wire digest is a separate, versioned
+  one that merely echoes our SQL value proves nothing. Activation's (`025`) wire digest is a separate, versioned
   codec — see the activation spec's `callback_wire_sha256`.
 - **Fenced claim:** `outbox.{claim_lease_expires_at TIMESTAMPTZ NULL, claim_token UUID NULL,
   claimed_by TEXT NULL}`, claim tuple treated **all-three-together** (below).
@@ -183,7 +183,7 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   actual per-case ordering invariant (a plain PG UNIQUE; manual rows keep `decision_sequence=NULL`, so
   multiple NULLs stay legal). *Without this the namespace is not unique:* since `run_id` is already
   unique, `UNIQUE(run_id, case_id, decision_sequence)` adds **no** per-case uniqueness — `(run=A,
-  case=C, seq=1)` and `(run=B, case=C, seq=1)` satisfy it, and after activation (`024`) the second to reach the
+  case=C, seq=1)` and `(run=B, case=C, seq=1)` satisfy it, and after activation (`025`) the second to reach the
   platform is a high-water no-op that **silently discards a distinct decision**. Keep also
   `UNIQUE decisions(run_id, case_id, decision_sequence)` (the exact **triple-FK target**), the triple
   FK `outbox(run_id, case_id, decision_sequence) → decisions(...)`, and the partial `UNIQUE
@@ -235,7 +235,7 @@ orchestrator level (engines set no `application_name`, `session.py:16-17`); the 
   decision/run ids** on any missing, orphan, or duplicate mapping (the decide path writes decision +
   callback in one transaction, so a missing row means retention/corruption and its safe order **cannot
   be guessed** — fail closed; recovery is **restore-from-authoritative-backup or remain on 012 in
-  `BLOCKED_NO_AUTHORITATIVE_MAPPING`** (§Rollout step 0; activation `024` is downstream and cannot repair this),
+  `BLOCKED_NO_AUTHORITATIVE_MAPPING`** (§Rollout step 0; activation `025` is downstream and cannot repair this),
   never a `decided_at` fallback); (2) `decision_sequence = row_number() OVER (PARTITION BY decision.case_id
   ORDER BY outbox.id)`, copy it to the matching outbox row, seed `last_decision_sequence = per-case
   max`; manual stays NULL. Other preflight refusals (raise, roll back): `>1` callback per run,
@@ -338,7 +338,7 @@ that manual approval: trigger = automatic decide enqueues its callback → the c
 processed → `reviewer.manual_approve` becomes the case's current state → the publisher claims the
 queued callback and the local guard sees **no higher locally-published automatic sequence**
 (manual has none) → the old automatic callback IS sent. All three are documented as expected
-pre-activation and are turned into platform-high-water no-ops only in 024 (whose acceptance is
+pre-activation and are turned into platform-high-water no-ops only in 025 (whose acceptance is
 strengthened so an unaccepted pending/dead callback older than a manual-current platform source
 cannot replace it). PR 6b may **build** on 7b-core's sequence primitive but
 not activate until 7b-activation is `active`.
@@ -381,8 +381,8 @@ while the schedule stays suspended and the zero-running attestation holds**. **O
 — before stopping service** (no outage begun). **Recovery — restore-or-block (user-confirmed decision,
 2026-07-23):** the only valid success path is to **restore the exact callback row from authoritative
 backup and rerun the diagnostic clean**; otherwise **remain on 012 in `BLOCKED_NO_AUTHORITATIVE_MAPPING`**
-(the exact sentinel — one token, no whitespace). **activation (`024`) is downstream and cannot
-repair this** — no activation (`024`) command is a substitute. There is **no** pre-013 reconciliation unit in this
+(the exact sentinel — one token, no whitespace). **activation (`025`) is downstream and cannot
+repair this** — no activation (`025`) command is a substitute. There is **no** pre-013 reconciliation unit in this
 approved core design (the user considered and declined it). Backup availability is an **operator
 prerequisite**, not a consequence of the retention setting. Never fabricate a callback, delete an
 immutable decision, or fall back to `decided_at`. The CLI contract on this path: **nonzero exit, the
@@ -460,13 +460,13 @@ success proceed.
 
 **Durable ordering authority — retention destroys the callback BODY on schedule and keeps only
 non-personal ordering evidence (rev 12, re-review `6a408a3` F5 + F1).** The restore path above repairs *history*; this clause prevents *recurrence*, and it is the
-storage/ownership decision activation (`024`) depends on. Before rev 10 an exact restore was self-defeating: it
+storage/ownership decision activation (`025`) depends on. Before rev 10 an exact restore was self-defeating: it
 reinstates the original 7-year-old `delivered_at`, so `retention.py:29-35`
 (`status='delivered' AND delivered_at < now() - interval`) re-deleted the row on its very next run,
-and the tool then had no way to derive activation's (`024`) per-callback `(wire digest, local_status)` from the
+and the tool then had no way to derive activation's (`025`) per-callback `(wire digest, local_status)` from the
 immutable `decisions` row. 013 therefore establishes the **`outbox` row itself** as the durable
 authority for a decision callback's identity, order, body, and local status:
-- **What activation (`024`) actually consumes is the DIGEST, not the body.** Its manifest entry is
+- **What activation (`025`) actually consumes is the DIGEST, not the body.** Its manifest entry is
   `(case_id, run_id, decision_sequence, callback_wire_sha256, local_status)`. Nothing downstream needs
   `payload_json` itself. Rev 10-11 kept the whole body forever only because the manifest re-derived
   the digest from it at bootstrap time — an implementation detail, not a requirement.
@@ -492,7 +492,7 @@ authority for a decision callback's identity, order, body, and local status:
   accountable role is the deployer's data controller, and that pre-redaction backups age out
   on their own schedule. `KYC_RETENTION_DAYS` bounds what the body can carry; it does not
   discharge governance of the pseudonymous remainder, and this spec no longer claims it does.
-- **It also removes activation's (`024`) ability to get history wrong.** Because the digest is recorded at send
+- **It also removes activation's (`025`) ability to get history wrong.** Because the digest is recorded at send
   time, activation never re-encodes a stored payload — so its `decision_sequence` payload backfill
   cannot change a digest, which was the whole of F1's reachable failure. `wire_version` is a
   recorded fact rather than a rule for reconstructing one. `013` backfills **no** historical
@@ -542,7 +542,7 @@ pipeline, outbox, `dev_worker`, retention, and every writer; (3) **while 013 sti
 `reset_interrupted_outbox_claims` and verify zero claim tuples; (4) **with `018` through `022`
 installed, `alembic downgrade` is not the rollback path** — these revisions are forward-only once
 installed (latest sentinel `MIGRATION_022_DOWNGRADE_REFUSED_FORWARD_ONLY`), so rollback is
-**redeploying the prior reviewed `023`-compatible image on the schema it is already on** — an older publisher
+**redeploying the prior reviewed `024`-compatible image on the schema it is already on** — an older publisher
 lacks the receipt/terminal contract and must not run against preserved evidence. Historically,
 before `018` shipped, a schema
 walk existed (`017 → 016 → 015 → 014 → 013 → 012`, each revision preflighting byte-stably: `017`/`016`
@@ -685,7 +685,7 @@ rely on the operator remembering that the forward drain also applies backward.
 - **Residual-risk (F2 — pins the honest boundary):** fake receiver; single publisher; seq 2 sent,
   fault injected **after HTTP 2xx but before `_record_delivered` commits**; restart, requeue seq 1 →
   the guard's `published_at` predicate is false and seq 1 **is** sent — assert the revert is
-  **expected pre-activation** (the future 024 activation test turns the same replay into a
+  **expected pre-activation** (the future 025 activation test turns the same replay into a
   high-water no-op).
 - **Fenced claim (defect 3) — both kinds, winner/loser (rev-2 F1):** barrier publisher A after claim;
   expire its lease; B reclaims. **Decision:** B delivers; release A into **both** success and

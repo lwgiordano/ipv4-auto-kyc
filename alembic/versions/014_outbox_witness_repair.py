@@ -1,14 +1,14 @@
-"""outbox witness repair: attempt authority, generation marker, read pointer (PR 7b-core)
+"""outbox witness repair: attempt authority, generation marker, read pointer
 
 Revision ID: 014
 Revises: 013
 
-This revision exists because `013` was amended in place after it had been committed
-(`9092fdb` → `50293ba`): the attempt-authority table was added to an already-published
-revision, so any database stamped `013` by the original file would never receive it —
-Alembic performs no work for a recorded revision, and fresh-database CI structurally
-cannot detect the split. `013` is restored to its committed shape and frozen by hash;
-everything the amend added, plus the re-audit (`1f8412e`) repairs, lands here instead.
+This revision exists because `013` was amended in place after it had been committed: the
+attempt-authority table was added to an already-published revision, so any database stamped
+`013` by the original file would never receive it — Alembic performs no work for a recorded
+revision, and fresh-database CI structurally cannot detect the split. `013` is restored to its
+committed shape and frozen by hash; everything the amend added, plus the follow-up repairs,
+lands here instead.
 
 Content:
 - `outbox_delivery_attempts` — created when absent; when present (a database that ran
@@ -192,7 +192,7 @@ def upgrade() -> None:
         "FOR EACH ROW EXECUTE FUNCTION outbox_attempts_guard()"
     )
 
-    # --- witness generation marker (re-audit F2) ---
+    # --- witness generation marker ---
     # 'legacy' rows predate the attempt authority: the publisher then sent HTTP before any
     # durable record, so a legacy pending/dead row may well have reached the platform, and
     # the absence of an attempt proves NOTHING about it. Only an 'attempt_v1' row — created
@@ -211,7 +211,7 @@ def upgrade() -> None:
         "(SELECT 1 FROM outbox_delivery_attempts a WHERE a.outbox_id = outbox.id)"
     )
 
-    # --- a terminal digest belongs to a delivered row, and nowhere else (re-audit F6) ---
+    # --- a terminal digest belongs to a delivered row, and nowhere else ---
     # Without this, a raw digest UPDATE on a pending row reads as delivery_witnessed and
     # licenses the deletion of its real attempts.
     op.create_check_constraint(
@@ -219,7 +219,7 @@ def upgrade() -> None:
         "callback_wire_sha256 IS NULL OR status = 'delivered'",
     )
 
-    # --- atomic latest-decision authority (re-audit F4) ---
+    # --- atomic latest-decision authority ---
     # now() is transaction-start time, so decided_at can invert against the lock-serialized
     # commit order (013's backfill orders by outbox.id for exactly this reason). The read
     # API must therefore never pick "latest" by decided_at. The pointer is set by a trigger
@@ -281,7 +281,7 @@ def upgrade() -> None:
         "FOR EACH ROW EXECUTE FUNCTION kyc_set_latest_decision_row()"
     )
 
-    # --- live-status index matching the exact alerting predicate (re-audit F7) ---
+    # --- live-status index matching the exact alerting predicate ---
     # 013's claim indexes are partial to status='pending' alone; Postgres cannot use a
     # pending-only partial index for `status IN ('pending','dead')`, so the exact live
     # query could seq-scan terminal history that grows for the life of the system.

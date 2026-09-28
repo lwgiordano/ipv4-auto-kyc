@@ -1,6 +1,6 @@
 """Hand-rolled durable Postgres job queue.
 
-Design (validated in the architecture review):
+Design:
 - Claim = short transaction: FOR UPDATE SKIP LOCKED + lease columns; work runs
   OUTSIDE any transaction; completion happens inside the handler's commit txn.
 - Per-case FIFO: a job with a case_id is claimable only when it is the OLDEST
@@ -62,9 +62,9 @@ class ClaimedJob:
     payload: dict
     attempts: int
     max_attempts: int
-    # The claim NONCE (re-audit `3db5f13..a7df17b` F1): `locked_by = '<worker>:<uuid4>'`, unique per
-    # claim. `attempts` alone had an ABA hole — the supported ops requeue reset it, recycling the
-    # generation — so ownership is the nonce; attempts stays as the monotonic retry counter.
+    # The claim NONCE: `locked_by = '<worker>:<uuid4>'`, unique per claim. `attempts` alone is not a
+    # safe fence: an ops requeue that reset it would recycle the generation (ABA). Ownership is
+    # therefore the nonce, and attempts stays a monotonic retry counter the requeue never rewinds.
     claim_nonce: str = ""
 
 
@@ -76,8 +76,8 @@ def enqueue(
     case_id: str | None = None,
     max_attempts: int = 5,
 ) -> Job:
-    # Consumer-layer domain guard (re-audit `03dbfab..bc325e7` R5-F7): jobs.max_attempts is int4 with
-    # no DB CHECK yet, so a negative/zero/bool max_attempts would otherwise commit an invalid budget.
+    # Consumer-layer domain guard: jobs.max_attempts is int4 with no DB CHECK yet, so a
+    # negative/zero/bool max_attempts would otherwise commit an invalid budget.
     # Refuse before add/flush; the row is never created.
     require_numeric_domain("job_max_attempts", max_attempts)
     job = Job(kind=kind, case_id=case_id, payload_json=payload, max_attempts=max_attempts)
@@ -88,12 +88,12 @@ def enqueue(
 
 def claim(session: Session, kinds: list[str], worker_id: str, lease_seconds: int) -> ClaimedJob | None:
     """Claim one runnable job. Caller owns the (short) transaction."""
-    # Consumer-layer domain re-check (re-audit R4-F3): a nonpositive lease mints an ALREADY-EXPIRED
-    # claim the reaper immediately requeues — a second worker then claims the same case job,
-    # defeating per-case serialization; an overflowing lease raises DatetimeFieldOverflow inside
-    # make_interval, outside the handler boundary. Refuse before the UPDATE, leaving the row untouched.
+    # Consumer-layer domain re-check: a nonpositive lease mints an ALREADY-EXPIRED claim the reaper
+    # immediately requeues — a second worker then claims the same case job, defeating per-case
+    # serialization; an overflowing lease raises DatetimeFieldOverflow inside make_interval, outside
+    # the handler boundary. Refuse before the UPDATE, leaving the row untouched.
     require_numeric_domain("job_lease_seconds", lease_seconds)
-    claim_nonce = f"{worker_id}:{uuid.uuid4().hex}"  # unique per CLAIM, not per worker (F1)
+    claim_nonce = f"{worker_id}:{uuid.uuid4().hex}"  # unique per CLAIM, not per worker
     row = session.execute(
         _CLAIM_SQL, {"claim_nonce": claim_nonce, "lease_seconds": lease_seconds, "kinds": kinds}
     ).first()
@@ -112,9 +112,9 @@ def claim(session: Session, kinds: list[str], worker_id: str, lease_seconds: int
 
 @dataclass
 class ClaimContext:
-    """The live claim capability (re-audit `3db5f13..a7df17b` F2): the worker publishes it for the
-    duration of the handler; heartbeat loss/error sets `lost`, and every transition/adapter boundary
-    plus every committing transaction proves liveness through it. A stale claimant is REVOKED at the
+    """The live claim capability: the worker publishes it for the duration of the handler;
+    heartbeat loss/error sets `lost`, and every transition/adapter boundary plus every committing
+    transaction proves liveness through it. A stale claimant is REVOKED at the
     next boundary instead of running to completion on side effects."""
 
     job: ClaimedJob
@@ -145,14 +145,14 @@ def check_claim_live() -> None:
 
 
 def assert_live(session: Session) -> None:
-    """In-TRANSACTION liveness AUTHORITY (F2; hardened per re-audit `7d1c435..827bc0f` F1): a HELD
-    fence, not a peek. `FOR UPDATE` takes the job ROW LOCK under the exact nonce + running status +
-    an UNEXPIRED lease, and PostgreSQL holds that lock until this transaction ends — the reaper, a
-    rival claim, and manual recovery all mutate this same row, so they serialize BEHIND the commit
-    this proof authorizes; "proved live" cannot go stale between the check and the commit. A miss
-    (reaped/reclaimed/recovered/EXPIRED — an expired-but-unreaped claim has no authority either)
-    raises StaleJobClaim so the whole transaction rolls back. No ambient claim = no-op (direct/
-    manual callers own their own fencing).
+    """In-TRANSACTION liveness AUTHORITY: a HELD fence, not a peek. `FOR UPDATE` takes the job ROW
+    LOCK under the exact nonce + running status + an UNEXPIRED lease, and PostgreSQL holds that lock
+    until this transaction ends — the reaper, a rival claim, and manual recovery all mutate this
+    same row, so they serialize BEHIND the commit this proof authorizes; "proved live" cannot go
+    stale between the check and the commit. A miss (reaped/reclaimed/recovered/EXPIRED — an
+    expired-but-unreaped claim has no authority either) raises StaleJobClaim so the whole
+    transaction rolls back. No ambient claim = no-op (direct/manual callers own their own
+    fencing).
 
     LOCK ORDER: call this FIRST in the transaction, before any Case/Run/Task lock — the one order
     everywhere is job → case → run/task. Never hold this lock over network or object-store I/O."""
@@ -177,12 +177,12 @@ def assert_live(session: Session) -> None:
 
 
 def prove_live_for_send(session_factory) -> None:
-    """SEND authorization (re-audit `7d1c435..827bc0f` F5): a cheap, lock-free DB re-proof of the
-    ambient claim invoked immediately before every physical upstream call (after the rate permit,
-    which may have waited a long time). Unlike assert_live this holds NOTHING — it authorizes an
-    external side effect, not a commit — so a stale worker stops calling upstreams at the next
-    send even though revocation of its writes still rests on the held in-txn fence. A miss sets
-    `lost` and raises StaleJobClaim; no ambient claim = no-op (direct unit calls)."""
+    """SEND authorization: a cheap, lock-free DB re-proof of the ambient claim invoked immediately
+    before every physical upstream call (after the rate permit, which may have waited a long time).
+    Unlike assert_live this holds NOTHING — it authorizes an external side effect, not a commit — so
+    a stale worker stops calling upstreams at the next send even though revocation of its writes
+    still rests on the held in-txn fence. A miss sets `lost` and raises StaleJobClaim; no ambient
+    claim = no-op (direct unit calls)."""
     check_claim_live()
     ctx = _CURRENT_CLAIM.get()
     if ctx is None:
@@ -199,9 +199,9 @@ def prove_live_for_send(session_factory) -> None:
     except StaleJobClaim:
         raise
     except Exception as exc:
-        # FAIL CLOSED (re-audit `750630c..ca85355` F4): "cannot prove the claim is live" is an
-        # AUTHORITY failure, not evidence about the upstream — it must never be converted into
-        # AdapterStatus.UPSTREAM_ERROR / a partial run by the pipeline's generic handler.
+        # FAIL CLOSED: "cannot prove the claim is live" is an AUTHORITY failure, not evidence about
+        # the upstream — it must never be converted into AdapterStatus.UPSTREAM_ERROR / a partial
+        # run by the pipeline's generic handler.
         ctx.lost.set()
         raise StaleJobClaim(
             f"job {ctx.job.id}: claim authority UNAVAILABLE "
@@ -215,15 +215,15 @@ def prove_live_for_send(session_factory) -> None:
 class StaleJobClaim(RuntimeError):
     """This worker's claim generation is no longer the live one (the reaper requeued the job and
     another worker claimed it). The caller MUST let its transaction roll back — a stale worker's
-    decision/write must never commit (PR 7a fencing, migration-free slice)."""
+    decision/write must never commit."""
 
 
 def complete(session: Session, job: ClaimedJob) -> bool:
     """Fenced completion — call inside the handler's commit transaction so job completion is atomic
-    with the work it performed. The fence is the CLAIM GENERATION: `attempts` increments on every
-    claim, so a worker that lost its lease (reaped + reclaimed) matches zero rows here and returns
+    with the work it performed. The fence is the CLAIM NONCE: `locked_by` is unique per claim, so
+    a worker that lost its lease (reaped + reclaimed) matches zero rows here and returns
     False — the decide transaction must then abort via StaleJobClaim rather than commit a duplicate
-    decision (PR 7a, migration-free slice; the dedicated lease_token column lands with migration 026)."""
+    decision (a dedicated lease_token column is planned for migration 027)."""
     applied = session.execute(
         text(
             "UPDATE jobs SET status='done', updated_at=now() "
@@ -236,17 +236,17 @@ def complete(session: Session, job: ClaimedJob) -> bool:
 
 def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: int) -> str:
     """Record a failure under the claim-nonce fence. Returns a CLOSED result derived from the actual
-    UPDATE (re-audit `3db5f13..a7df17b` F3 — never from the caller's stale snapshot):
+    UPDATE (never from the caller's stale snapshot):
     'dead' (this call dead-lettered it), 'requeued' (retry scheduled), or 'stale' (fence miss — the
     claim was reaped/recovered/reclaimed; NOTHING was written and the caller must NOT dead-letter
     the run or emit any terminal side effect)."""
-    # Consumer-layer domain re-check (re-audit R4-F3): a negative base makes run_after the PAST so the
-    # job requeues immediately with no throttle; a large base × high attempts overflowed
-    # make_interval. Refuse before any write so the job's state is unchanged on a bad base.
+    # Consumer-layer domain re-check: a negative base makes run_after the PAST so the job requeues
+    # immediately with no throttle; a large base × high attempts would overflow make_interval.
+    # Refuse before any write so the job's state is unchanged on a bad base.
     require_numeric_domain("job_backoff_base_seconds", backoff_base_seconds)
-    # Both failure writebacks carry the SAME claim-generation fence as complete() (PR 7a slice): an
-    # unfenced fail() from a stale worker would requeue/dead-letter a job another worker now owns,
-    # clobbering the live claim. Zero rows updated = stale; leave the live claim untouched.
+    # Both failure writebacks carry the SAME claim-generation fence as complete(): an unfenced
+    # fail() from a stale worker would requeue/dead-letter a job another worker now owns, clobbering
+    # the live claim. Zero rows updated = stale; leave the live claim untouched.
     if job.attempts >= job.max_attempts:
         applied = session.execute(
             text(
@@ -276,17 +276,16 @@ def fail(session: Session, job: ClaimedJob, error: str, backoff_base_seconds: in
 
 
 def heartbeat(session: Session, job: ClaimedJob, lease_seconds: int) -> bool:
-    """Extend the live claim's lease under the SAME claim-nonce fence (PR 7a slice). Returns
-    False when the claim was lost (reaped/reclaimed) — the caller stops heartbeating; the fenced
-    complete()/fail() then guarantee the stale worker commits nothing.
+    """Extend the live claim's lease under the SAME claim-nonce fence. Returns False when the claim
+    was lost (reaped/reclaimed) — the caller stops heartbeating; the fenced complete()/fail() then
+    guarantee the stale worker commits nothing.
 
-    LOCK-THEN-EXTEND (re-audit `750630c..ca85355` F5): `now()` is transaction-start time, so a
-    heartbeat that waited on the row lock longer than the lease "succeeded" while writing an
-    expiry already in the past — and even `clock_timestamp()` in a single UPDATE's SET list is
-    projected BEFORE a lock wait (EvalPlanQual re-checks quals, not volatile SET expressions;
-    measured on real Postgres). The fenced SELECT FOR UPDATE absorbs the wait first; the UPDATE
-    then starts fresh, so its `clock_timestamp()` is genuinely post-wait and the extension is
-    real no matter how long the beat blocked."""
+    LOCK-THEN-EXTEND: `now()` is transaction-start time, so a heartbeat that waited on the row lock
+    longer than the lease would "succeed" while writing an expiry already in the past — and even
+    `clock_timestamp()` in a single UPDATE's SET list is projected BEFORE a lock wait (EvalPlanQual
+    re-checks quals, not volatile SET expressions; measured on real Postgres). The fenced SELECT FOR
+    UPDATE absorbs the wait first; the UPDATE then starts fresh, so its `clock_timestamp()` is
+    genuinely post-wait and the extension is real no matter how long the beat blocked."""
     require_numeric_domain("job_lease_seconds", lease_seconds)
     held = session.execute(
         text(
@@ -311,7 +310,7 @@ def reap_expired(session: Session) -> list[ClaimedJob]:
     the ones already out of attempts. Returns the dead-lettered jobs so the
     caller can fail their runs — the crash-safety invariant that a dead job's
     run is FAILED."""
-    # clock_timestamp() (R10-F5): expiry is judged against the WALL clock, matching how leases are
+    # clock_timestamp(): expiry is judged against the WALL clock, matching how leases are
     # minted/extended — a reaper transaction that waited on locks must not judge with stale now().
     session.execute(
         text(

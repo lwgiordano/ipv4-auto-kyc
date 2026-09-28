@@ -1,5 +1,5 @@
-"""HMAC v2 canonical signing (PR 5a): binds method + path so a captured
-signature cannot be redirected to another case. v1 stays intact."""
+"""HMAC v2 canonical signing: binds method + path so a captured signature
+cannot be redirected to another case. v1 stays intact."""
 
 import hashlib
 

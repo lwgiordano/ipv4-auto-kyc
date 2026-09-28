@@ -59,8 +59,8 @@ class FileEmailSender:
 
 def make_email_sender(provider: str, *, file_path: Path | None = None) -> EmailSender:
     """Select the outbound email provider. Only dev/staging senders exist today;
-    a non-stub value fails loudly rather than silently logging (real provider,
-    e.g. SES: remediation item 12)."""
+    a non-stub value fails loudly rather than silently logging. A real provider,
+    such as SES, is listed in PRODUCTION_READINESS."""
     if provider == "logging":
         return LoggingEmailSender()
     if provider == "file":
@@ -68,5 +68,5 @@ def make_email_sender(provider: str, *, file_path: Path | None = None) -> EmailS
             raise ValueError("email provider 'file' requires a sink path")
         return FileEmailSender(file_path)
     raise NotImplementedError(
-        f"email provider {provider!r} is not implemented yet (remediation item 12)"
+        f"email provider {provider!r} is not implemented yet (see PRODUCTION_READINESS)"
     )

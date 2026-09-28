@@ -7,12 +7,12 @@ any two produces a reconciliation that is confidently wrong rather than usefully
   terminal transaction committed a digest that matched an admitted attempt under the live claim,
   which is the strongest statement this database can make. It is NOT proof of a receiver fact.
   The database cannot observe a socket; it observes that its own publisher process said so, and
-  a publisher is application code. This is the same boundary rebuttal R1 draws for tampering
-  (re-audit `cbb783b` F7): a local column — this one, or the `terminal_v1` bit R1 declined — can
-  never settle what a remote party holds. **The terminating authority is the platform's signed
-  accepted-request ledger**, so 7b-activation reconciles every `delivery_witnessed` row against
-  it and requires digest/encoding agreement before platform authority is declared; a mismatch is
-  a fail-closed `integrity_mismatch`, never "nothing to reconcile".
+  a publisher is application code. The same boundary applies to tampering: a local column —
+  this one, or a `terminal_v1` bit (deliberately not added) — can never settle what a remote
+  party holds. **The terminating authority is the platform's signed accepted-request ledger**, so
+  the platform-ordering activation reconciles every `delivery_witnessed` row against it and
+  requires digest/encoding agreement before platform authority is declared; a mismatch is a
+  fail-closed `integrity_mismatch`, never "nothing to reconcile".
 - ``send_intent_witnessed`` — the exact bytes were durably committed to an ADMITTED attempt
   row (``admission = 'admission_v1'`` — stamped only by the database's admission trigger,
   never by the writer) under a live claim, before any transmission was tried. An attempt
@@ -22,8 +22,8 @@ any two produces a reconciliation that is confidently wrong rather than usefully
   accepted — the send-before-stamp residual) or the process may have died before the socket ever
   opened. Local evidence CANNOT tell those apart, which is why this state is named for what it
   proves — staged intent — and not "attempt_witnessed" or "transmitted": there is no atomic
-  boundary between a database commit and the network, and pretending one exists is how the
-  previous two designs went wrong. Only the platform's accepted-request ledger settles this row.
+  boundary between a database commit and the network, and pretending one exists produces a
+  confidently wrong reconciliation. Only the platform's accepted-request ledger settles this row.
 - ``legacy_unwitnessed`` — created before the attempt authority existed (``witness_generation =
   'legacy'``), in ANY status. A legacy `delivered` row's digest is unrecoverable by construction
   (``payload_json`` is jsonb and normalizes key order — a digest computed now would be a

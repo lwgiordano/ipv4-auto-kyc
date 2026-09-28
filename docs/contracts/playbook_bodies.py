@@ -212,7 +212,10 @@ BUNDLE_PINNING_BODY = (
         "   never stopped — only the worker pool is drained here).\n"
         "\n"
         "**Activate the epoch.** Once the cutover is verified stable, write the\n"
-        "durable activation record:\n"
+        "durable activation record. Run this only for the first activation, when\n"
+        "no activation row exists. An existing activation epoch is a historical\n"
+        "boundary: do not reset or recreate it to deploy a later engine build.\n"
+        "For a new first activation under this release:\n"
         "",
         commands=(
             Command(('python', '-m', 'kyc_tool.ops.verify_pinnable_backlog')),
@@ -223,13 +226,13 @@ BUNDLE_PINNING_BODY = (
         commands=(
         Command((
             'python', '-m', 'kyc_tool.ops.activate_bundle_pinning_epoch', '--expect-bundle-hash', '<sha256>',
-            '--expect-engine', 'eng-1',
+            '--expect-engine', 'eng-2',
         )),
         ),
         wraps=(
             (
                 'python -m kyc_tool.ops.activate_bundle_pinning_epoch \\',
-                '    --expect-bundle-hash <sha256> --expect-engine eng-1',
+                '    --expect-bundle-hash <sha256> --expect-engine eng-2',
             ),
         ),
     ),
@@ -282,7 +285,7 @@ PR7B_CORE_BODY = (
         ":\n"
         "    restore from authoritative backup the EXACT callback row, OR remain on 012 in\n"
         "    `BLOCKED_NO_AUTHORITATIVE_MAPPING`. Backup availability is an operator prerequisite. Activation "
-        "(`024`) is\n"
+        "(`025`) is\n"
         "    downstream and cannot repair this. Never fabricate a callback, delete a decision, or fall back t"
         "o\n"
         "    `decided_at`. On EVERY abort path, explicitly re-enable OR deliberately keep-frozen retention.\n"
@@ -465,7 +468,7 @@ PR7B_CORE_BODY = (
         "      (`MIGRATION_013_DOWNGRADE_REFUSED_WITNESS_IN_USE`), or the attempt table under a bare `013`\n"
         "      stamp (`MIGRATION_013_DOWNGRADE_REFUSED_AMENDED_HISTORY`).\n"
         "R5. ROLLBACK OUTCOME A — downgrade REFUSED (any sentinel above): the DB stays on the\n"
-        "    witness-authority schema, so KEEP or redeploy the reviewed **`023`-COMPATIBLE image** digest —\n"
+        "    witness-authority schema, so KEEP or redeploy the reviewed **`024`-COMPATIBLE image** digest —\n"
         "    an older publisher lacks the receipt/terminal contract and MUST NOT run against preserved\n"
         "    evidence; PROHIBIT the pre-7b image outright. Rollback after first witness use is a\n"
         "    FLAG/IMAGE rollback on the compatible schema, never a schema downgrade. A pre-7b image is\n"

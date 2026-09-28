@@ -1,9 +1,9 @@
-"""Retiring POST /v1/review-tasks/{id}/complete (PR 5a §4): review completion is
+"""Retiring POST /v1/review-tasks/{id}/complete: review completion is
 now the keyed `website.review_completed` event, gated by a validation floor that
 rejects an invalid task BEFORE any run/check — and rolls back so no orphan event
 row survives (the _FloorReject design).
 
-PR 5b adds the AUTHORITATIVE decide-txn guard
+The AUTHORITATIVE decide-txn guard backs this up
 (`review_guard.evaluate_website_completion`): the ingest floor above is a fast
 reject at write time, but the guard re-validates the PERSISTED event's actor
 inside the decide txn, under the task's `FOR UPDATE` lock, so an event that was
@@ -133,13 +133,13 @@ def test_valid_reviewer_actor_accepted(client, engine, clean_db, post_event):
     assert resp.status_code == 202
 
 
-# --- PR 5b: authoritative decide-txn guard ----------------------------------
+# --- authoritative decide-txn guard -----------------------------------------
 #
 # The tests above exercise the ingest-time floor only. The tests below drive
 # an event all the way through the decide txn, so they need a worker — built
 # here rather than reused from tests/conftest.py's `worker`/`pipeline`
 # fixtures because _seed_completion_run bypasses post_event/client entirely
-# (it seeds the event+run rows directly, as a PR 5a-era write path would have
+# (it seeds the event+run rows directly, as an earlier write path would have
 # left them), mirroring the phase2/phase3 `*_worker.run_until_idle()` pattern
 # used throughout tests/integration/test_phase2_adapters.py.
 
@@ -147,11 +147,11 @@ def test_valid_reviewer_actor_accepted(client, engine, clean_db, post_event):
 def _seed_completion_run(engine, case_id: str, task_id: str, *, actor: dict, payload: dict) -> str:
     """Insert a website.review_completed event + run + queued run_transition
     job DIRECTLY — bypassing ingest_event's reviewer-actor floor entirely —
-    reproducing an event admitted under PR 5a (before the floor existed) that
-    only now reaches the decide-txn guard added in PR 5b. Lazily creates the
-    case row (AUDIT:C1 semantics) so `case_id` need not equal `task_id`'s
-    owning case — the wrong_case skip_reason test drives a run whose case
-    never had a task of its own."""
+    reproducing an event admitted before the floor existed that only now
+    reaches the decide-txn guard. Lazily creates the case row (AUDIT:C1
+    semantics) so `case_id` need not equal `task_id`'s owning case — the
+    wrong_case skip_reason test drives a run whose case never had a task of
+    its own."""
     event_id = uuid.uuid4().hex
     run_id = uuid.uuid4().hex
     with engine.begin() as conn:
@@ -278,11 +278,11 @@ def _latest_decision(session, case_id: str) -> DecisionRow | None:
 def test_pre_upgrade_bad_actor_skipped_at_decide(
     engine, clean_db, session_factory, policy, settings, tmp_path
 ):
-    """A website.review_completed admitted UNDER PR 5a (no actor floor) with a
+    """A website.review_completed admitted by an earlier release (no actor floor) with a
     system actor must be SKIPPED by the decide-txn guard: no check, task stays
     open, completion_skipped audited, run still completes."""
     task_id = _seed_task(engine, "case-x")
-    # seed the event+run directly, bypassing the floor (as a PR 5a-era API would)
+    # seed the event+run directly, bypassing the floor (as an earlier API would)
     run_id = _seed_completion_run(engine, "case-x", task_id,
                                   actor={"type": "system", "id": "sys"},
                                   payload={"task_id": task_id, "result": "pass", "reviewer_id": "sys"})
@@ -399,7 +399,7 @@ def test_persists_actor_derived_reviewer_not_payload(
         assert dec.manual is False and dec.reviewer_id is None
 
 
-# --- PR 5b Task 3: broker-blocked short-circuit + concurrency/dead-letter ---
+# --- broker-blocked short-circuit + concurrency/dead-letter -----------------
 
 
 def test_blocked_broker_completion_closes_task_and_writes_check(
@@ -465,7 +465,7 @@ def test_winner_deadletters_then_second_wins(
         assert task.status == "done" and task.result == "fail"  # seq-2 legitimately closed it
 
 
-# --- PR 5b final-review fix (spec §8.5): decide-txn rollback-then-retry -----
+# --- decide-txn rollback-then-retry ----------------------------------------
 
 
 def test_decide_txn_rollback_then_retry_completes_exactly_once(
@@ -502,7 +502,7 @@ def test_decide_txn_rollback_then_retry_completes_exactly_once(
     def flaky_enqueue(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise RuntimeError("simulated decide-txn fault (PR 5b fix brief FIX 2)")
+            raise RuntimeError("simulated decide-txn fault")
         return real_enqueue(*args, **kwargs)
 
     monkeypatch.setattr(pipeline_module, "enqueue_decision_callback", flaky_enqueue)

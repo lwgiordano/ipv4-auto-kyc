@@ -1,9 +1,9 @@
-"""Re-audit `d569a15..4938840` F1: a REJECTED (401) request must not synchronously open a database
-session or persist telemetry. The previous "zero-DB" test was vacuous — its `_boom()` sentinel raised
-inside `_bump()` and was swallowed by a blanket `except`, so it passed BECAUSE the forbidden write
-happened. This test uses a NON-RAISING session-factory spy and asserts the rejected path opens ZERO
-sessions (no diagnostic write, no protected query), while the diagnostic counter still advances
-in-process. If the DB-backed rejected bump were reintroduced, `spy.calls` would be > 0 and this fails.
+"""A REJECTED (401) request must not synchronously open a database session or persist telemetry.
+The previous "zero-DB" test was vacuous — its `_boom()` sentinel raised inside `_bump()` and was
+swallowed by a blanket `except`, so it passed BECAUSE the forbidden write happened. This test uses
+a NON-RAISING session-factory spy and asserts the rejected path opens ZERO sessions (no diagnostic
+write, no protected query), while the diagnostic counter still advances in-process. If the
+DB-backed rejected bump were reintroduced, `spy.calls` would be > 0 and this fails.
 """
 
 import datetime as dt
@@ -66,16 +66,16 @@ def test_rejected_read_auth_opens_no_session_and_persists_nothing(
         "/v1/metrics", headers={"X-KYC-Key-Id": "k", "X-KYC-Signature-V2": "bad"}
     ).status_code == 401
 
-    assert spy.calls == 0, "a rejected request opened a DB session — the F1 write amplifier is back"
+    assert spy.calls == 0, "a rejected request opened a DB session — the write amplifier is back"
     # the diagnostic signal is preserved, but IN-PROCESS (no DB write)
     assert auth.diagnostic_counts().get("rejected", 0) == before + 2
 
 
 def test_invalid_v1_opens_no_db_regardless_of_sunset(settings, session_factory, policy, clean_db):
-    """Re-audit `8aba2df..2cee937` R3-F1: an invalid/unsigned v1 request must open ZERO sessions
-    whether the sunset is future OR past. Previously a PAST sunset drove the durable zero-witness
-    SELECT before `security.verify()`, so an unauthenticated flood could amplify DB reads once the
-    date passed. Moving the witness read ahead of verification again makes spy.calls > 0 here."""
+    """An invalid/unsigned v1 request must open ZERO sessions whether the sunset is future OR past.
+    Previously a PAST sunset drove the durable zero-witness SELECT before `security.verify()`, so an
+    unauthenticated flood could amplify DB reads once the date passed. Moving the witness read ahead
+    of verification again makes spy.calls > 0 here."""
     for sunset in (_FUTURE_SUNSET, _PAST_SUNSET):
         spy = _SpyFactory(session_factory)
         tc = _read_auth_app(
@@ -85,7 +85,7 @@ def test_invalid_v1_opens_no_db_regardless_of_sunset(settings, session_factory, 
         spy.calls = 0
         r = tc.get("/v1/metrics", headers={"X-KYC-Timestamp": "1", "X-KYC-Signature": "bad"})
         assert r.status_code == 401
-        assert spy.calls == 0, f"invalid v1 opened a DB session (sunset={sunset}) — F1 amplifier back"
+        assert spy.calls == 0, f"invalid v1 opened a DB session (sunset={sunset}): write amplifier is back"
 
 
 def test_valid_v1_is_retired_only_after_verification_with_a_green_witness(

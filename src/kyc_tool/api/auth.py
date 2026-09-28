@@ -1,10 +1,10 @@
 """Inbound request authentication — HMAC signed bearer.
 
-Dual-accept (PR 5a): v2 is path-bound and STICKY — if a request carries any v2
+Dual-accept: v2 is path-bound and STICKY — if a request carries any v2
 header (`X-KYC-Signature-V2` or `X-KYC-Key-Id`) it is evaluated v2-only, with NO
 fallback to the path-unbound v1 scheme. A request with no v2 header may still
 authenticate with v1, but only before `hmac_v1_inbound_sunset_at`, and every
-accepted v1 request is recorded in the fail-closed durable witness (§6).
+accepted v1 request is recorded in the fail-closed durable witness (`api/hmac_witness.py`).
 
 v1 headers:  X-KYC-Timestamp, X-KYC-Signature = HMAC(secret, "{ts}.{body}")
 v2 headers:  X-KYC-Timestamp, X-KYC-Key-Id, X-KYC-Signature-V2 = HMAC(secret,
@@ -23,14 +23,20 @@ from kyc_tool.api import hmac_witness
 from kyc_tool.config import _TS_SAFE_DAYS as _MAX_OBSERVATION_WINDOW_DAYS
 from kyc_tool.config import Settings, parse_sunset
 
-# Process-local diagnostic counters (v2_accepted | rejected). Deliberately NOT database-backed
-# (re-audit `d569a15..4938840` F1): a rejected (401) request must not open a session or persist
-# telemetry, or an unauthenticated caller — and the browser sidebar polling unsigned — could drive
-# synchronous DB writes on the rejection path. Nothing reads these yet; a future metrics endpoint may
-# expose them. The distinct FAIL-CLOSED v1-acceptance witness (`_record_v1`) stays durable.
+IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
+TIMESTAMP_HEADER = "X-KYC-Timestamp"
+V1_SIGNATURE_HEADER = "X-KYC-Signature"
+KEY_ID_HEADER = "X-KYC-Key-Id"
+V2_SIGNATURE_HEADER = "X-KYC-Signature-V2"
+
+# Process-local diagnostic counters (v2_accepted | rejected). Deliberately NOT database-backed:
+# a rejected (401) request must not open a session or persist telemetry, or an unauthenticated
+# caller — and the browser sidebar polling unsigned — could drive synchronous DB writes on the
+# rejection path. Nothing reads these yet; a future metrics endpoint may expose them. The distinct
+# FAIL-CLOSED v1-acceptance witness (`_record_v1`) stays durable.
 _DIAGNOSTIC_COUNTS: Counter = Counter()
 # Process identity + start epoch so a reader can never mistake this replica's counters for a fleet
-# total (re-audit `8aba2df..2cee937` R3-F2). datetime.now at import time is the process start.
+# total. datetime.now at import time is the process start.
 _PROCESS_STARTED_AT = datetime.now(UTC)
 
 # The ONLY environments in which an empty admin token may mean "console open".
@@ -39,18 +45,18 @@ _DEV_OPEN_ENVIRONMENTS = frozenset({"development", "test"})
 
 
 def _sunset_passed(iso: str, now: datetime) -> bool:
-    # Exact-type gate BEFORE the parser sees it (re-audit `4c3015a..cccd5f7` F1). A correctly
-    # signed v1 request reaches this line, so anything raised here is a 500 on an AUTHENTICATED
-    # request — the worst place to be non-total. A hostile `str` subclass reaching `parse_sunset`
-    # dispatches its `strip`/`__eq__` inside the parser; a non-str reaches a comparison that has no
-    # defined answer. Neither is a sunset that has passed, so both mean "not passed".
+    # Exact-type gate BEFORE the parser sees it. A correctly signed v1 request reaches this line,
+    # so anything raised here is a 500 on an AUTHENTICATED request — the worst place to be
+    # non-total. A hostile `str` subclass reaching `parse_sunset` dispatches its `strip`/`__eq__`
+    # inside the parser; a non-str reaches a comparison that has no defined answer. Neither is a
+    # sunset that has passed, so both mean "not passed".
     if type(iso) is not str:
         return False
     try:
         dt = parse_sunset(iso)
     except ValueError:
-        # A malformed date fails the production kill switch at boot; in dev we
-        # must not 500 mid-request — treat an unparseable date as "not passed".
+        # A malformed date fails the production kill switch at boot; in dev a request
+        # must not 500 — treat an unparseable date as "not passed".
         return False
     return dt is not None and now >= dt
 
@@ -76,12 +82,12 @@ def _inbound_v1_zero(session_factory, window_days: int, now: datetime) -> bool:
     write, which 503s if the DB is genuinely down."""
     if session_factory is None:
         return False
-    # The window must be READABLE before it can prove anything (re-gate finding 2). A malformed
-    # numeric — True, 0.5, -1, 0 — is "numeric enough" for the witness comparisons and collapses
-    # the window, so `(now - started).days < window` and `accepted_within_window` both go false and
+    # The window must be READABLE before it can prove anything. A malformed numeric — True, 0.5,
+    # -1, 0 — is "numeric enough" for the witness comparisons and collapses the window, so
+    # `(now - started).days < window` and `accepted_within_window` both go false and
     # the predicate returns "zero proven". A valid v1 request is then RETIRED. That is the outage
-    # the availability policy exists to prevent, reached from the opposite side: Wave 0 hardened
-    # the direction that accepts and left the direction that refuses.
+    # the availability policy exists to prevent, reached from the opposite side: hardening only the
+    # direction that accepts would leave the direction that refuses exposed.
     #
     # Unreadable evidence is not proof, so this is False — the request stays served and recorded.
     if type(window_days) is not int or not 1 <= window_days <= _MAX_OBSERVATION_WINDOW_DAYS:
@@ -95,15 +101,14 @@ def _inbound_v1_zero(session_factory, window_days: int, now: datetime) -> bool:
 
 def _inbound_secret(settings: Settings, key_id: str) -> str:
     """Resolve the v2 verification secret for a presented key id. FAILS CLOSED to '' on any
-    malformed rotation mapping (re-audit `6feca36..4f23f23` F2): an unvalidated
-    `model_copy(update={...: None})` used to raise AttributeError here, turning a signature check
-    into a 500 instead of a controlled 401."""
-    # EVERY operand is exact-type gated BEFORE it is compared, hashed, or looked up (re-audit
-    # `4c3015a..cccd5f7` F1). The previous version gated the returned secret but still compared the
-    # presented key id against `settings.hmac_inbound_key_id` with `==`, so a hostile `__eq__` on
-    # either side ran attacker code during the comparison and escaped as a RuntimeError — a 500
-    # where 401 is the honest answer. `isinstance` cannot help here: a `str` subclass passes it and
-    # is exactly the thing being defended against.
+    malformed rotation mapping: an unvalidated `model_copy(update={...: None})` used to raise
+    AttributeError here, turning a signature check into a 500 instead of a controlled 401."""
+    # EVERY operand is exact-type gated BEFORE it is compared, hashed, or looked up. The previous
+    # version gated the returned secret but still compared the presented key id against
+    # `settings.hmac_inbound_key_id` with `==`, so a hostile `__eq__` on either side ran attacker
+    # code during the comparison and escaped as a RuntimeError — a 500 where 401 is the honest
+    # answer. `isinstance` cannot help here: a `str` subclass passes it and is exactly the thing
+    # being defended against.
     if type(key_id) is not str or not key_id:
         return ""
     active_id = settings.hmac_inbound_key_id
@@ -126,9 +131,9 @@ def _session_factory(request):
 
 
 def _bump(key: str) -> None:
-    """Diagnostic v2/rejected counter — process-local, NO database access (re-audit
-    `d569a15..4938840` F1). Incrementing an in-memory counter cannot be turned into an
-    unauthenticated write amplifier the way the previous session+commit could."""
+    """Diagnostic v2/rejected counter — process-local, NO database access. Incrementing an
+    in-memory counter cannot be turned into an unauthenticated write amplifier the way the
+    previous session+commit could."""
     _DIAGNOSTIC_COUNTS[key] += 1
 
 
@@ -138,11 +143,10 @@ def diagnostic_counts() -> dict[str, int]:
 
 
 def diagnostics_snapshot() -> dict:
-    """Namespaced, self-describing auth-diagnostics block (re-audit `8aba2df..2cee937` R3-F2). The
-    counters moved from durable fleet totals to process-local under the SAME key names, so exposing
-    them bare let a legacy consumer read a per-replica value as the fleet total. This block carries
-    an explicit scope, this process's identity + start epoch, and zero-filled keys, so it can only be
-    read as what it is."""
+    """Namespaced, self-describing auth-diagnostics block. The counters moved from durable fleet
+    totals to process-local under the SAME key names, so exposing them bare let a legacy consumer
+    read a per-replica value as the fleet total. This block carries an explicit scope, this
+    process's identity + start epoch, and zero-filled keys, so it can only be read as what it is."""
     return {
         "scope": "process_local",
         "process_id": os.getpid(),
@@ -170,13 +174,13 @@ def _record_v1(session_factory) -> None:
 def _dev_environment(settings: Settings) -> bool:
     """True only when `environment` is an EXACT string naming a documented dev environment.
 
-    THE one predicate every dev-open state consults (re-gate-3 finding 1). The three permissive
-    switches — `auth_disabled=True`, `read_auth_required=False`, and the empty admin token — each
-    open a surface, and each was fixed in a different round: the admin token got an environment
-    gate while the two siblings still treated their exact boolean as sufficient by itself. Under
-    this module's threat model (a mutated `Settings` reaching request-time consumers), "the boot
-    validator would have refused this combination" is not a defense, so every dev escape requires
-    the environment to agree — from THIS helper, so the three gates cannot drift apart again.
+    THE one predicate every dev-open state consults. The three permissive switches —
+    `auth_disabled=True`, `read_auth_required=False`, and the empty admin token — each open a
+    surface. Previously the admin token had an environment gate while the two siblings still
+    treated their exact boolean as sufficient by itself. Under this module's threat model (a
+    mutated `Settings` reaching request-time consumers), "the boot validator would have refused
+    this combination" is not a defense, so every dev escape requires the environment to agree —
+    from THIS helper, so the three gates cannot drift apart again.
 
     Exact type before membership: `in frozenset` hashes the value, so a hostile `__hash__` would
     run during the test itself. An unknown, malformed, or hostile environment is not a dev
@@ -189,10 +193,10 @@ def _dev_environment(settings: Settings) -> bool:
 def _authentication_is_disabled(settings: Settings) -> bool:
     """ONLY exact built-in `True`, in an exact dev environment, disables authentication.
 
-    Gate finding 1 fixed the truthiness half: `if settings.auth_disabled:` accepted an unsigned
-    request for `1`, `{"x": 1}`, or the string `"false"`. Re-gate-3 finding 1 fixed the half that
-    fix left open: exact `True` was still sufficient on a PRODUCTION-shaped object, which is the
-    same environment-blind dev escape the admin token had.
+    Both halves are required. Truthiness: a plain `if settings.auth_disabled:` would accept an
+    unsigned request for `1`, `{"x": 1}`, or the string `"false"`. Environment: exact `True` alone
+    would be sufficient on a PRODUCTION-shaped object, the same environment-blind dev escape the
+    admin token once had.
     """
     return settings.auth_disabled is True and _dev_environment(settings)
 
@@ -212,24 +216,24 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
     headers = request.headers
     session_factory = _session_factory(request)
     # slot: idempotency key for event POSTs, else empty (reads/callbacks).
-    slot = headers.get("Idempotency-Key", "")
+    slot = headers.get(IDEMPOTENCY_KEY_HEADER, "")
 
-    if "X-KYC-Signature-V2" in headers or "X-KYC-Key-Id" in headers:
+    if V2_SIGNATURE_HEADER in headers or KEY_ID_HEADER in headers:
         # v2 asserted by PRESENCE of any v2 header ⇒ v2-only, no fallback to the
         # path-unbound v1 scheme — a present-but-empty v2 header still locks v2
         # (the contract is header presence, not a truthy value).
-        key_id = headers.get("X-KYC-Key-Id", "")
+        key_id = headers.get(KEY_ID_HEADER, "")
         secret = _inbound_secret(settings, key_id)
         path_qs = _raw_path_qs(request)
         ok = bool(secret) and security.verify_v2(
             secret,
-            headers.get("X-KYC-Signature-V2", ""),
+            headers.get(V2_SIGNATURE_HEADER, ""),
             max_skew_seconds=settings.hmac_max_skew_seconds,
             key_id=key_id,
             direction=security.DIRECTION_INBOUND,
             method=request.method,
             path_qs=path_qs,
-            timestamp=headers.get("X-KYC-Timestamp", ""),
+            timestamp=headers.get(TIMESTAMP_HEADER, ""),
             slot=slot,
             body=body,
         )
@@ -239,24 +243,23 @@ def require_valid_signature(settings: Settings, request, body: bytes) -> None:
         _bump("v2_accepted")
         return
 
-    # v1 path. VERIFY THE SIGNATURE BEFORE ANY DATABASE ACCESS (re-audit `8aba2df..2cee937` R3-F1):
-    # the durable zero-witness read must never be reachable by an unauthenticated caller. Previously,
-    # once the sunset date had passed, an unsigned/invalid v1 request drove the witness SELECT (and
-    # even received "retired" without its signature being checked) — an unauthenticated DB-availability
-    # amplifier that survived the F1 diagnostics fix. So: reject an unconfigured secret, then verify;
-    # an invalid signature is refused with ZERO DB access.
+    # v1 path. VERIFY THE SIGNATURE BEFORE ANY DATABASE ACCESS: the durable zero-witness read must
+    # never be reachable by an unauthenticated caller. Previously, once the sunset date had passed,
+    # an unsigned/invalid v1 request drove the witness SELECT (and even received "retired" without
+    # its signature being checked) — an unauthenticated DB-availability amplifier that the
+    # process-local diagnostic counters did not address. So: reject an unconfigured secret, then
+    # verify; an invalid signature is refused with ZERO DB access.
     # Exact-type gate the legacy secret before it is truth-tested or hashed. An int reached
-    # `sign`'s `.encode()` and raised AttributeError (re-audit `4c3015a..cccd5f7` F1); a `str`
-    # subclass would run its own `__bool__` on the line below. A secret that is not exactly a
-    # string is not a configured secret.
+    # `sign`'s `.encode()` and raised AttributeError; a `str` subclass would run its own `__bool__`
+    # on the line below. A secret that is not exactly a string is not a configured secret.
     legacy_secret = settings.platform_hmac_secret
     if type(legacy_secret) is not str or not legacy_secret:
         raise HTTPException(status_code=401, detail="authentication not configured")
     if not security.verify(
         legacy_secret,
-        headers.get("X-KYC-Timestamp", ""),
+        headers.get(TIMESTAMP_HEADER, ""),
         body,
-        headers.get("X-KYC-Signature", ""),
+        headers.get(V1_SIGNATURE_HEADER, ""),
         max_skew_seconds=settings.hmac_max_skew_seconds,
     ):
         _bump("rejected")
@@ -280,11 +283,40 @@ def require_read_access(settings: Settings, request, body: bytes = b"") -> None:
     production — the caller must present a valid platform signature. Reads carry
     an empty v2 slot (no idempotency key)."""
     # Exactly `False`, in an exact dev environment, opens this. A malformed falsey value is not
-    # the documented dev state (gate finding 1), and exact `False` on a production-shaped object
-    # is the same environment-blind escape the admin token had (re-gate-3 finding 1).
+    # the documented dev state, and exact `False` on a production-shaped object is the same
+    # environment-blind escape the admin token had.
     if settings.read_auth_required is False and _dev_environment(settings):
         return
     require_valid_signature(settings, request, body)
+
+
+def require_operator_or_signed_read(settings: Settings, request) -> None:
+    """Gate a read that both the operator console and the platform make.
+
+    The console reads with the operator's Bearer credential and cannot sign; the platform reads
+    signed. `require_read_access` alone served neither: where signed reads were enforced it
+    refused a logged-in operator, and in a dev environment with them off it checked nothing at
+    all -- even with an operator credential configured, while every other console read required
+    that credential. So:
+
+    - no operator credential configured (exact `""`) -> the platform read rule is the whole rule,
+      which keeps tokenless local development open and signed platform reads working;
+    - one configured and presented as a Bearer -> `require_admin` judges it, constant-time;
+    - one configured but not presented -> only a valid platform signature may read.
+
+    A non-`str` or whitespace-only credential is a misconfiguration and denies, as configuration
+    writes already do: the safe reading of a misconfigured credential is "deny", not "open".
+    """
+    token = settings.ui_admin_token
+    if type(token) is not str or (token and not token.strip()):
+        raise HTTPException(status_code=401, detail="invalid or missing admin credential")
+    if token == "":
+        require_read_access(settings, request)
+        return
+    if _exact_str(request.headers.get("Authorization", "")).startswith("Bearer "):
+        require_admin(settings, request.headers)
+        return
+    require_valid_signature(settings, request, b"")
 
 
 def require_admin(settings: Settings, headers) -> None:
@@ -296,7 +328,7 @@ def require_admin(settings: Settings, headers) -> None:
     only mean dev/test, matching the console's prior local trust model."""
     if _authentication_is_disabled(settings):
         return
-    # Gate finding 1. This endpoint MUTATES, so a malformed token must never resolve to "open".
+    # This endpoint MUTATES, so a malformed token must never resolve to "open".
     # `if not token` opened the console for an int, a dict, `None`, and anything with a hostile
     # `__bool__`; only an EXACT empty string is the documented unconfigured dev state. A non-str
     # token is a misconfiguration, and the safe reading of a misconfigured credential is "deny",
@@ -306,9 +338,9 @@ def require_admin(settings: Settings, headers) -> None:
         raise HTTPException(status_code=401, detail="invalid or missing admin credential")
     if token == "":
         # An empty token is the documented UNCONFIGURED DEV state, and that is only meaningful in
-        # a dev environment (re-gate finding 1). The previous rule was environment-blind, so a
-        # production-shaped Settings — including `ui_enabled=True` — opened the `/ui` mutation
-        # surface on an empty token. Normal construction forbids that combination, but the whole
+        # a dev environment. The previous rule was environment-blind, so a production-shaped
+        # Settings — including `ui_enabled=True` — opened the `/ui` mutation surface on an empty
+        # token. Normal construction forbids that combination, but the whole
         # threat model here is a mutated object reaching consumers, and `/ui` calls this directly
         # rather than through the ops wrapper. Exact dev vocabulary only; production and any
         # malformed environment deny.

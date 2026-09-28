@@ -195,7 +195,7 @@ _FACT_SOURCE = {
     ),
     "release_protocol_state": (
         "can the manual-release protocol be exercised today?",
-        {"post_024_only": ("POST-024 ONLY",), "live": ("live today",)},
+        {"post_025_only": ("POST-025 ONLY",), "live": ("live today",)},
     ),
     "ordering_ordinal": (
         "do both per-case ordinals order decisions?",

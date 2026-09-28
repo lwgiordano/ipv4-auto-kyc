@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "review_workflow": "When a canonical source or public copy changes, review the rendered public document against every listed source, preserve the operational contract, then update the source and copy digests in the same reviewed change. Packaging refuses stale, changed, missing, or unlisted copies.",
+  "documents": [
+    {
+      "public_path": "docs/ALERTS.md",
+      "copy_path": "scripts/handoff/docs/ALERTS.md",
+      "source_paths": ["docs/ALERTS.md"],
+      "source_sha256": {
+        "docs/ALERTS.md": "251df5f4cfdb5fbe2ce3aaf3faa81336555f7fc9f27fc20c4e757ff605bc548e"
+      },
+      "copy_sha256": "5e28477ccbdebaf9edca54e7611e32483c19617c472ede0e0c41c40c34b141d9",
+      "rationale": "Publishes the operational alerts while removing internal release-history labels."
+    },
+    {
+      "public_path": "docs/DEPLOYMENT.md",
+      "copy_path": "scripts/handoff/docs/DEPLOYMENT.md",
+      "source_paths": ["docs/DEPLOYMENT.md"],
+      "source_sha256": {
+        "docs/DEPLOYMENT.md": "290fd91483375890fd7b7ff01483e195dd852a25cc33742b45967ec5d665c9af"
+      },
+      "copy_sha256": "d60201b52679cd2fca661acbc28e211168dceac1efea04dd4b6f41473d707240",
+      "rationale": "Keeps the complete deployment and cutover procedures while removing internal review history."
+    },
+    {
+      "public_path": "docs/PLATFORM_BRIEFING.md",
+      "copy_path": "scripts/handoff/docs/PLATFORM_BRIEFING.md",
+      "source_paths": ["docs/PLATFORM_BRIEFING.md"],
+      "source_sha256": {
+        "docs/PLATFORM_BRIEFING.md": "79474023a9e9b9a15c5495fdd50497af5289602284306ea3795d461907ad1c85"
+      },
+      "copy_sha256": "1bd0415f135a80e701aa3972ad7a9e96758cdf54097d92297caedac0e4637ca0",
+      "rationale": "Publishes a self-contained platform briefing with package-local paths and references."
+    },
+    {
+      "public_path": "docs/PLATFORM_INTEGRATION.md",
+      "copy_path": "scripts/handoff/docs/PLATFORM_INTEGRATION.md",
+      "source_paths": ["docs/PLATFORM_INTEGRATION.md"],
+      "source_sha256": {
+        "docs/PLATFORM_INTEGRATION.md": "ce6379c19c3aa107c914dc56848f0634af6412bc9f2a8845f0ba7213fe84b968"
+      },
+      "copy_sha256": "e92c78bfa14b13e3941f327ea67482fd0b36c2889c3b3bb46106d4034f9098eb",
+      "rationale": "Preserves the integration contract while using neutral product wording and removing conversational narration."
+    },
+    {
+      "public_path": "docs/RUNBOOK.md",
+      "copy_path": "scripts/handoff/docs/RUNBOOK.md",
+      "source_paths": ["docs/RUNBOOK.md"],
+      "source_sha256": {
+        "docs/RUNBOOK.md": "aa9f062a428927c07611dc2ca945c03276fcacc992699eb9580bab4f63ff542f"
+      },
+      "copy_sha256": "6fa741fa59e7754a687396387fb6cf9bf9afc6cdde0e41a5aa1c4704de1446e9",
+      "rationale": "Keeps the full operator procedure while replacing internal governance references with self-contained rules."
+    },
+    {
+      "public_path": "docs/SALESFORCE_MAPPING.md",
+      "copy_path": "scripts/handoff/docs/SALESFORCE_MAPPING.md",
+      "source_paths": ["docs/SALESFORCE_MAPPING.md"],
+      "source_sha256": {
+        "docs/SALESFORCE_MAPPING.md": "5d779f76ab664c302668ec0c109c245803ddf89a36b2fe62f85b3fc05e062df1"
+      },
+      "copy_sha256": "59760ef1394b9f9a0ea75f132193cb0be28138df35f5aa5468f67b648341d0b4",
+      "rationale": "Publishes the corrected nullable-field and interim ordering rules without internal issue labels."
+    },
+    {
+      "public_path": "docs/PRODUCTION_READINESS.md",
+      "copy_path": "scripts/handoff/docs/PRODUCTION_READINESS.md",
+      "source_paths": [
+        "docs/PLATFORM_BRIEFING.md",
+        "docs/superpowers/specs/2026-09-12-production-readiness-design.md"
+      ],
+      "source_sha256": {
+        "docs/PLATFORM_BRIEFING.md": "79474023a9e9b9a15c5495fdd50497af5289602284306ea3795d461907ad1c85",
+        "docs/superpowers/specs/2026-09-12-production-readiness-design.md": "4242f0b3e9e63ea295e3afbd3b0328a48f506e4e5854d0c528556c024be535cf"
+      },
+      "copy_sha256": "dca8005e5f2a6cd4fe39c0f7497a78ca7680da5caa34e84acd6a210161513a61",
+      "rationale": "Combines the production gate with the current platform gaps into a neutral public readiness checklist."
+    }
+  ]
+}

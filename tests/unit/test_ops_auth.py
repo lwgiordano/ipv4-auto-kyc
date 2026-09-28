@@ -1,10 +1,10 @@
-"""PR 1 auth surface (offline). The read API and ops-console mutations reject
+"""Auth surface (offline). The read API and ops-console mutations reject
 unauthenticated callers when the corresponding config is on, and /ui is not
 mounted by default. All of these reject before any DB access, so the sentinel
 session factory (which raises if used) proves the guard fired first — no
 Postgres required.
 
-PR 6: create_app() now seeds+verifies the policy bundle at construction time
+At construction time create_app() seeds+verifies the policy bundle
 (kyc_tool.policy_store.repo.seed_and_verify/attest) — a real, intentional DB
 write that happens once, before any request. That is not what this file is
 about, so seed_and_verify/attest are stubbed out here; the sentinel session
@@ -25,7 +25,7 @@ def _boom_session_factory():
 
 def _app(policy, monkeypatch, **overrides):
     # return the SERVED policy's own hash so create_app's startup identity check
-    # (PR 6 audit) passes without a real DB write — the sentinel factory stays untouched
+    # passes without a real DB write — the sentinel factory stays untouched
     monkeypatch.setattr(app_module, "seed_and_verify", lambda *a, **k: policy.bundle_hash)
     monkeypatch.setattr(app_module, "attest", lambda **k: None)
     settings = Settings(environment="development", **overrides)
@@ -39,11 +39,10 @@ def test_ui_not_mounted_by_default(policy, monkeypatch):
 
 
 def test_read_endpoints_reject_unauthenticated_when_required(policy, monkeypatch):
-    client = TestClient(
-        _app(policy, monkeypatch, read_auth_required=True, platform_hmac_secret="s" * 40)
-    )
+    client = TestClient(_app(policy, monkeypatch, read_auth_required=True, platform_hmac_secret="s" * 40))
     assert client.get("/v1/cases/anything").status_code == 401
     assert client.get("/v1/cases/anything/checks").status_code == 401
+    assert client.get("/v1/cases/anything/salesforce-projection").status_code == 401
     assert client.get("/v1/runs/anything").status_code == 401
     assert client.get("/v1/review-tasks").status_code == 401
 
@@ -60,9 +59,7 @@ def test_ui_mutations_require_admin_token(policy, monkeypatch):
     client = TestClient(_app(policy, monkeypatch, ui_enabled=True, ui_admin_token="admin-secret"))
     assert client.post("/ui/api/requeue/job/1").status_code == 401
     assert (
-        client.post("/ui/api/requeue/outbox/1", headers={"Authorization": "Bearer wrong"})
-        .status_code
-        == 401
+        client.post("/ui/api/requeue/outbox/1", headers={"Authorization": "Bearer wrong"}).status_code == 401
     )
 
 

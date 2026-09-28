@@ -201,7 +201,7 @@ def test_document_match_awards_legal_proof(client, post_event, phase2_worker, ev
 
 
 def test_review_complete_rejects_unsigned_request(client):
-    # Review completion (the keyed website.review_completed event, PR 5a §4) must
+    # Review completion (the keyed website.review_completed event) must
     # require HMAC like every other write — an unsigned post is rejected.
     from tests.conftest import envelope
 
@@ -221,7 +221,7 @@ def test_website_review_completion_writes_check_and_rescore(client, post_event, 
     tasks = client.get("/v1/review-tasks?status=open").json()["tasks"]
     task = next(t for t in tasks if t["case_id"] == "case-web" and t["task_type"] == "website")
 
-    # review completion is the keyed website.review_completed event (PR 5a §4)
+    # review completion is the keyed website.review_completed event
     wrc = {"task_id": task["id"], "result": "pass", "reviewer_id": "rev-7"}
     complete, rc_key = post_event(
         "case-web", "website.review_completed", wrc, actor={"type": "reviewer", "id": "rev-7"}
@@ -290,7 +290,7 @@ def test_poc_token_round_trip(client, engine, post_event, phase2_worker, publish
             text("SELECT verified_at, consumed_at FROM poc_tokens WHERE case_id='case-poc'")
         ).one()
     assert verified.verified_at is not None
-    assert verified.consumed_at is not None  # single-use stamp (item 5)
+    assert verified.consumed_at is not None  # single-use stamp
 
 
 def test_poc_resend_supersedes_old_token(client, engine, post_event, phase2_worker, publisher, email_sender):

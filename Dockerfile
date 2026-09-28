@@ -1,6 +1,6 @@
 # One image for every process. The API is the default command; migrations and
 # the workers run the same image with the command overridden (see bottom).
-# Base pinned by digest (PR 10a supply-chain): the tag stays for readability, the digest is the
+# Base pinned by digest for supply-chain safety: the tag stays for readability, the digest is the
 # authority — a re-tagged upstream image cannot silently change the build. Refresh deliberately.
 FROM python:3.11-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba
 
@@ -12,7 +12,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     KYC_POLICY_DIR=/app/KYC_Tool_Build_Package/machine_readable \
     KYC_OBJECT_STORE=fs \
-    KYC_OBJECT_STORE_ROOT=/data/evidence
+    KYC_OBJECT_STORE_ROOT=/data/evidence \
+    KYC_EMAIL_FILE_PATH=/data/poc-emails.log
 
 WORKDIR /app
 
@@ -24,7 +25,7 @@ RUN useradd --system --create-home --uid 10001 app \
 # /app and alembic's prepend_sys_path=src works. [s3] adds boto3 for prod S3.
 COPY pyproject.toml alembic.ini requirements.lock ./
 COPY src/ ./src/
-# requirements.lock is a CONSTRAINTS file (PR 10a): pyproject declares WHAT installs, the lock pins
+# requirements.lock is a CONSTRAINTS file: pyproject declares WHAT installs, the lock pins
 # the exact versions, so two builds of the same commit resolve identical dependency trees.
 # Regenerate with: .venv/bin/pip freeze --exclude-editable > requirements.lock
 RUN pip install --no-cache-dir -e '.[s3]' -c requirements.lock

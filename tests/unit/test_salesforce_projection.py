@@ -36,8 +36,7 @@ def project(**overrides):
         "open_task_types": [],
         "poc_token_outstanding": False,
         # the projection derives the non-manual action AND the score from the POINTED decision
-        # row's own values (re-audits 0c46443 F6, 15d875d F6) — the fixture carries them like
-        # the real pointer row does
+        # row's own values — the fixture carries them like the real pointer row does
         "latest_decision": {"decision": "approve", "score": 105,
                             "gates_json": {"no_hard_conflict": True}, "manual": False},
     }
@@ -57,8 +56,7 @@ def test_approve_maps_core_fields():
 
 def test_unresolved_pointer_projects_honest_blanks_not_live_guesses():
     """When the pre-014 decision order is ambiguous the pointer is NULL: the projection must
-    say NOTHING about score or action — the live recomputed case score is not what was decided
-    (re-audit 15d875d F6)."""
+    say NOTHING about score or action — the live recomputed case score is not what was decided."""
     fields = project(latest_decision=None)
     assert fields["KYC_Score__c"] is None  # NOT case.current_score (105)
     assert fields["Platform_Action_Taken__c"] is None
@@ -67,8 +65,7 @@ def test_unresolved_pointer_projects_honest_blanks_not_live_guesses():
 def test_manual_attribution_survives_a_later_automatic_decision():
     """The pointer follows the newest decision; manual attribution must not. After manual
     approve → later automatic run, the case is still approved_manual: action stays Manual
-    Approve, By/At name the manual act, and the score is the POINTED (automatic) row's
-    (re-audit 15d875d F6)."""
+    Approve, By/At name the manual act, and the score is the POINTED (automatic) row's."""
     fields = project(
         case={**BASE_CASE, "status": "approved_manual"},
         latest_decision={"decision": "manual_review_insufficient", "score": 40,
@@ -101,8 +98,8 @@ def test_hard_conflict_is_negated_gate():
 
 
 def test_hard_conflict_is_null_when_the_gate_was_never_evaluated():
-    """AUDIT:D-SF-NULL — only a decision that actually evaluated the gate may speak (re-audit
-    `45cc215` F9; the governance tag lives here and at salesforce_projection.py).
+    """AUDIT:D-SF-NULL — only a decision that actually evaluated the gate may speak (the
+    governance tag lives here and at salesforce_projection.py).
 
     The old default fabricated `False` — a definite "no hard conflict" — for BOTH shapes below,
     turning "we don't know" into a clean bill of health in the Salesforce mirror.

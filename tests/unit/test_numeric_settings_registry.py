@@ -1,10 +1,10 @@
-"""Re-audit `5b0f0b8..b75a320` close-out #1: the numeric-setting registry is the single authority
-for every numeric config domain. This guard proves (a) EVERY numeric Settings field is registered —
-so a new numeric setting cannot ship without a declared domain; (b) the DECLARATION layer (Pydantic
-Field) rejects out-of-domain values at construction; (c) the BOUNDARY layer
-(`numeric_domain_violations`) catches an unvalidated `model_copy` that bypassed the field; and (d) the
-production-only rules (exact replay window, positive leases/TTLs/retention) hold. Per-consumer
-(direct-call) layers are proven in the F1/F2/F3 suites.
+"""The numeric-setting registry is the single authority for every numeric config domain. This
+guard proves (a) EVERY numeric Settings field is registered — so a new numeric setting cannot ship
+without a declared domain; (b) the DECLARATION layer (Pydantic Field) rejects out-of-domain values
+at construction; (c) the BOUNDARY layer (`numeric_domain_violations`) catches an unvalidated
+`model_copy` that bypassed the field; and (d) the production-only rules (exact replay window,
+positive leases/TTLs/retention) hold. Per-consumer (direct-call) layers are proven in their own
+suites.
 """
 
 import pytest
@@ -77,7 +77,7 @@ def test_production_requires_the_exact_governed_replay_window():
 
 
 def test_production_config_violations_surfaces_a_negative_retention():
-    """The retention data-loss value (R4-F2) is refused by the whole production kill switch, not just
+    """The retention data-loss value is refused by the whole production kill switch, not just
     the numeric helper — deleting the registry wiring from production_config_violations is visible."""
     prod = _hardened().model_copy(update={"retention_days": -1})
     assert any("retention_days" in m for m in production_config_violations(prod))

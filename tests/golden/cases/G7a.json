@@ -1,6 +1,6 @@
 {
   "id": "G7a",
-  "description": "AUDIT:B1 - dynamic loop from G3, corrected so the arithmetic actually crosses the threshold WITHOUT ORG-ID: each event supersedes/rescores until approve_buy_locked. (The spec's G7 sequence tops out at 95.)",
+  "description": "AUDIT:B1 - dynamic loop from G3: supporting and legal evidence cross the threshold WITHOUT ORG-ID, then verified POC independently proves control and yields approve_buy_locked.",
   "steps": [
     {
       "checks": [
@@ -19,15 +19,23 @@
     },
     {
       "checks": [{"type": "verified_company_email", "status": "pass"}],
-      "expect": {"decision": "manual_review_insufficient", "gates": {"control_proof": true, "score_met": false}}
+      "expect": {"decision": "manual_review_insufficient", "gates": {"control_proof": false, "score_met": false}}
     },
     {
       "checks": [{"type": "linkedin_company_match", "status": "pass"}],
       "expect": {
+        "decision": "manual_review_insufficient",
+        "gates_all_pass": false,
+        "gates": {"control_proof": false, "score_met": true}
+      }
+    },
+    {
+      "checks": [{"type": "poc_verified", "status": "pass", "detail": {"resource": "192.0.2.0/24"}}],
+      "expect": {
         "decision": "approve_buy_locked",
         "buy_enablement": "locked_org_id_required",
         "gates_all_pass": true,
-        "live_pass_types": ["verified_email", "website_verified", "business_document_verified", "official_registry_match", "verified_company_email", "linkedin_company_match"]
+        "live_pass_types": ["verified_email", "website_verified", "business_document_verified", "official_registry_match", "verified_company_email", "linkedin_company_match", "poc_verified"]
       }
     }
   ]
