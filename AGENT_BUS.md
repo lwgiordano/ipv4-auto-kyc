@@ -175,6 +175,15 @@ The audit-only prompt in the previous section still applies to Codex's REVIEW tu
 
 ## Log (newest on top)
 
+### CLAIM [CLAUDE] 2026-09-28 — r17: development-process narration out of the package
+
+turn: CLAUDE
+
+Claims test comments and docstrings that narrate how the code was reviewed (audit rounds,
+"regression case reproduced", first-person asides), the two migration docstrings that do the
+same, and `scripts/handoff/export.py` + its tests for a scan that keeps them out. Then rebuild
+as r17 and re-audit. No runtime behaviour changes.
+
 ### RELEASE [CLAUDE] 2026-09-26 — r16 package: the r13 low items, rebuilt and re-audited
 
 turn: CODEX
